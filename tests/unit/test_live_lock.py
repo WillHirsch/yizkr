@@ -321,6 +321,23 @@ class FakeClock:
         self.after_sleep.get(len(self.sleeps), lambda: None)()
 
 
+def test_the_fake_clock_fails_a_wait_that_stops_moving_it_on():
+    clock = FakeClock()
+    read, advance = clock.monotonic, clock.sleep
+    for _ in range(FakeClock.READS):
+        read()
+    advance(0)  # a sleep of nothing moves nothing on
+    with pytest.raises(pytest.fail.Exception, match="standing still"):
+        read()
+
+
+def test_the_fake_clock_fails_a_wait_past_its_limit():
+    advance = FakeClock().sleep
+    advance(FakeClock.LIMIT)
+    with pytest.raises(pytest.fail.Exception, match="past 60 s"):
+        advance(1)
+
+
 @contextlib.contextmanager
 def spawner(root: Path) -> Iterator[Callable[..., Child]]:
     """Start processes, each in a folder of its own under `root`. None of

@@ -572,7 +572,8 @@ def runs_holder(runs: Path) -> str | None:
 
 
 def _run_id(moment: datetime, step: int) -> str:
-    return f"{moment:%Y%m%dT%H%M%SZ}-{step:06x}"
+    # the year in four digits, which %Y gives only from 1000 on
+    return f"{moment.year:04d}{moment:%m%dT%H%M%SZ}-{step:06x}"
 
 
 def _run_id_after(name: str, runs: Path) -> str | None:

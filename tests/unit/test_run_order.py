@@ -9,6 +9,7 @@ the real clock or waits.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -146,10 +147,24 @@ class TestNewRunIds:
         has no run id after it: a new run is refused, naming the entry,
         rather than given an id that sorts before it or is its own."""
         (runs / name).mkdir()
-        with pytest.raises(scratch.ScratchRefused, match=name):
+        refused = re.escape(str(runs / name)) + ".*move it out of the runs"
+        with pytest.raises(scratch.ScratchRefused, match=refused):
             scratch.new_run_id(runs, clock=Clock())
-        with pytest.raises(scratch.ScratchRefused, match=name):
+        with pytest.raises(scratch.ScratchRefused, match=refused):
             scratch.choose_run(runs, new=True, clock=Clock())
+
+    def test_a_year_before_1000_keeps_four_digits(self, runs):
+        """An id from a clock that reads a year before 1000 keeps the run
+        id's form, so that it sorts as the others do and the next one
+        sorts after it."""
+        clock = Clock(datetime(500, 1, 1, tzinfo=UTC))
+        (runs / "05000101T000000Z-000001").mkdir()
+        first = scratch.new_run_id(runs, clock=clock)
+        assert first == "05000101T000000Z-000002"
+        (runs / first).mkdir()
+        assert scratch.new_run_id(runs, clock=clock) == (
+            "05000101T000000Z-000003"
+        )
 
     def test_an_earlier_microsecond_of_9999_still_has_one_after(self, runs):
         (runs / "99991231T235959Z-0f423e").mkdir()

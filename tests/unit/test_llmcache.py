@@ -1480,6 +1480,7 @@ class TestForks:
             thread.join(timeout=HANG_GUARD)
             assert not thread.is_alive()
         assert replayed == [True]
+        assert at_lock.arrivals >= 6
         assert kinds(engine).count(OPEN) == 1
         assert kinds(engine).count(FORK) == 6
 
