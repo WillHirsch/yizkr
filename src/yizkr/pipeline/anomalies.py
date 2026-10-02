@@ -1167,21 +1167,29 @@ class _SliceWatch:
 
     def _fire(self, scope: str, token: object) -> None:
         """A pending timer's end: its slice is looked at, unless a later
-        look has put another timer in its place. A look that fails is an
-        `anomaly-error` event, and leaves a timer pending (_look)."""
+        look has put another timer in its place. The timer has waited its
+        full wait, on the clock it waits on, so the look takes the time to
+        be at least the time it was due (_judge): a slice whose pause the
+        timer was armed to time out is aborted, whatever the checks' clock
+        reads. A look that fails is an `anomaly-error` event, and leaves a
+        timer pending (_look)."""
         try:
             with self._lock:
                 watched = self._slices.get(scope)
                 if watched is None or watched.token is not token:
                     return
+                due = watched.due
                 watched.pending = watched.token = watched.due = None
-                self._look(scope, watched)
+                self._look(scope, watched, reached=due)
         except Exception as exc:
             _report(self.run, "timer", exc)
 
-    def _look(self, scope: str, watched: _Watched) -> None:
+    def _look(
+        self, scope: str, watched: _Watched, reached: datetime | None = None
+    ) -> None:
         """Look at a slice, and see that its next look is pending, whether
-        a timer or a check makes the look and whether it succeeds or fails.
+        a timer or a check makes the look and whether it succeeds or fails;
+        `reached` is the time a timer that makes the look was due (_judge).
         A timer is started when none is, or when this look wants one
         sooner than the pending one is due, which is then cancelled. The
         looks agree on when a pause is due, so a sooner one comes only when
@@ -1191,7 +1199,7 @@ class _SliceWatch:
         raises, and leaves a timer a timeout later when none is pending, so
         that the slice never goes unwatched."""
         try:
-            due = self._judge(scope, watched)
+            due = self._judge(scope, watched, reached)
             if watched.pending is not None and (
                 watched.due is not None and watched.due <= due
             ):
@@ -1212,15 +1220,27 @@ class _SliceWatch:
         _cancel(watched.pending)
         watched.pending, watched.token, watched.due = pending, token, due
 
-    def _judge(self, scope: str, watched: _Watched) -> datetime:
+    def _judge(
+        self, scope: str, watched: _Watched, reached: datetime | None = None
+    ) -> datetime:
         """Abort the slice when a pause of the checks alone stands on it
         and the timeout has passed since its origin; when the slice is to
         be looked at again: when a pause standing short of the timeout
         reaches it, or else when the checks' request would reach it, or,
         that past, a timeout from now; and a second more, since the
-        control file stamps its requests in whole seconds."""
+        control file stamps its requests in whole seconds.
+
+        The time is the checks' clock, or `reached` when that is later:
+        the time a timer was due that has run its full wait. The timer
+        waits on a monotonic clock and the checks' clock is the wall
+        clock, which can step back or fall behind while the timer waits;
+        a timer armed for when a pause reaches its timeout then still
+        aborts it, rather than finding the timeout not yet reached and
+        looking again."""
         margin = timedelta(seconds=watched.timeout + 1)
         now = watched.now()
+        if reached is not None and reached > now:
+            now = reached
         with _locked_control(self.run.path / CONTROL) as requests:
             state, stretches = _fold_scopes(requests)
             since, ours = stretches.get(scope, (None, False))

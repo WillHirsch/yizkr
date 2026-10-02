@@ -177,14 +177,20 @@ def clock(monkeypatch) -> Clock:
 
 
 class Timers:
-    """The timers the checks start, recorded instead of started: `fire`
-    runs each one neither run nor cancelled yet, as a real timer runs once
-    when its time has come, and `waiting` lists them. While `refuse` is
-    above 0, a timer cannot start, as when no thread can, and each refusal
-    counts it down."""
+    """The timers the checks start, recorded instead of started. Each
+    waits on `clock`, the checks' clock once checks are made with these
+    timers (make_checks, checks_of): `fire` runs each one neither run nor
+    cancelled yet whose wait has run out on it, as a real timer runs once
+    when its time has come, and `run_out` runs every such one whatever
+    the clock reads, as a real timer runs once its wait has run out on the
+    monotonic clock while the wall clock lags. `waiting` lists them. While
+    `refuse` is above 0, a timer cannot start, as when no thread can, and
+    each refusal counts it down."""
 
-    def __init__(self) -> None:
+    def __init__(self, clock=None) -> None:
+        self.clock = clock
         self.started: list[RecordedTimer] = []
+        self._due: dict[int, datetime] = {}
         self._run: set[int] = set()
         self.refuse = 0
 
@@ -193,6 +199,10 @@ class Timers:
             self.refuse -= 1
             raise RuntimeError("can't start new thread")
         self.started.append(RecordedTimer(seconds, callback))
+        if self.clock is not None:
+            self._due[id(self.started[-1])] = self.clock() + timedelta(
+                seconds=seconds
+            )
         return self.started[-1]
 
     def waiting(self) -> list[RecordedTimer]:
@@ -204,8 +214,21 @@ class Timers:
 
     def fire(self) -> None:
         for timer in self.waiting():
+            due = self._due.get(id(timer))
+            if due is None or due <= self.clock():
+                self._run.add(id(timer))
+                timer.callback()
+
+    def run_out(self) -> None:
+        for timer in self.waiting():
             self._run.add(id(timer))
             timer.callback()
+
+    def on(self, clock):
+        """These timers, waiting on `clock` unless they wait on another."""
+        if self.clock is None:
+            self.clock = clock
+        return self
 
 
 def make_checks(tmp_path, overrides=None, pages=None, clock=None, timers=None):
@@ -213,8 +236,8 @@ def make_checks(tmp_path, overrides=None, pages=None, clock=None, timers=None):
     checks = AnomalyChecks(
         run,
         load_config(overrides=overrides or {}),
-        now=clock or Clock(),
-        timer=timers if timers is not None else Timers(),
+        now=(clock := clock or Clock()),
+        timer=(timers if timers is not None else Timers()).on(clock),
         page_count=pages or (lambda source: None),
     )
     return run, checks
@@ -1721,7 +1744,7 @@ def checks_of(run: RunDir, clock, timers=None) -> AnomalyChecks:
         run,
         load_config(),
         now=clock,
-        timer=timers if timers is not None else Timers(),
+        timer=(timers if timers is not None else Timers()).on(clock),
         page_count=lambda source: None,
     )
 
@@ -1984,6 +2007,44 @@ class TestFailFastPauses:
         checks.poll()
         assert run.control().stopped(kind="media") == "kind:media aborted"
 
+    @pytest.mark.parametrize("lag", [1, 600, 1801, 3600])
+    def test_a_timer_that_has_run_its_full_wait_aborts_whatever_the_clock(
+        self, tmp_path, clock, lag
+    ):
+        """The timer waits on the monotonic clock, the checks read the wall
+        clock: a timer armed for the pause's timeout that has run its full
+        wait aborts the slice even when the wall clock has fallen behind it
+        or stepped back meanwhile (#432), rather than finding the timeout
+        not yet reached and looking again."""
+        timers = Timers()
+        run, _checks = paused_media(tmp_path, clock=clock, timers=timers)
+        (first,) = timers.waiting()
+        # due a timeout and a second after the request's whole-second stamp
+        assert 1800 < first.seconds <= 1801
+        clock.advance(first.seconds - lag)
+        timers.run_out()
+        assert run.control().stopped(kind="media") == "kind:media aborted"
+        abort = requests(run)[-1]
+        assert (abort["action"], abort["by"], abort["check"]) == (
+            "abort",
+            "anomaly",
+            "kind-failures",
+        )
+        # the slice stays watched, by one timer
+        assert len(timers.waiting()) == 1
+
+    def test_a_check_on_a_lagging_clock_does_not_abort(self, tmp_path, clock):
+        """Only a timer's full wait stands for the time it was due: a
+        check's look reads the clock as it is, and a pause short of its
+        timeout on it stands, its timer still pending."""
+        timers = Timers()
+        run, checks = paused_media(tmp_path, clock=clock, timers=timers)
+        (first,) = timers.waiting()
+        clock.advance(1799)
+        checks.poll()
+        assert run.control().stopped(kind="media") == "kind:media paused"
+        assert timers.waiting() == [first]
+
     def test_the_timer_runs_on_a_thread_of_its_own(self, tmp_path):
         """With the real timer and clock: an abort that no later check
         makes. The pause stands when the check that asked for it ends, and
@@ -2099,6 +2160,8 @@ class TestFailFastPauses:
         run.start()
         carry(run, carried)
         assert run.control().stopped(kind="media") == "kind:media paused"
+        # the next look, the pending timer's
+        clock.advance(1801 - delay % 1801)
         timers.fire()
         assert run.control().stopped(kind="media") == "kind:media aborted"
         assert [r["action"] for r in requests(run)] == [
@@ -2112,21 +2175,22 @@ class TestFailFastPauses:
     def test_a_pause_carried_after_a_look_between_start_and_carry(
         self, tmp_path, clock
     ):
-        """The timer looks just after the driver's start marker has
-        cleared the pause and just before the carry asks for it again: the
-        slice stays watched, its next look comes when the checks' request
-        reaches the timeout, and the carried pause is aborted then."""
+        """The new invocation's checks look just after the driver's start
+        marker has cleared the pause and just before the carry asks for it
+        again: the slice stays watched, its next look comes when the
+        checks' request reaches the timeout, and the carried pause is
+        aborted then."""
         timers = Timers()
         paused_media(tmp_path, clock=clock, timers=timers)
+        (first,) = timers.waiting()
         clock.advance(600)
         run = RunDir(tmp_path / "run")
         carried = standing(run)
         run.start()
-        timers.fire()
+        checks_of(run, clock, timers).poll()
         assert run.control().stopped(kind="media") is None
-        (pending,) = timers.waiting()
-        # the request's own timeout, not one from this look (1801 s)
-        assert 1200 < pending.seconds <= 1201
+        # the request's own timeout, not one from this look (1801 s later)
+        assert timers.waiting() == [first]
         carry(run, carried)
         clock.advance(1199)
         timers.fire()
@@ -2164,6 +2228,7 @@ class TestFailFastPauses:
             (pending,) = timers.waiting()
             assert pending.seconds == 1801
         # the disk has room again, and the next look aborts
+        clock.advance(1801)
         timers.fire()
         assert run.control().stopped(kind="media") == "kind:media aborted"
 

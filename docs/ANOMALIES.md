@@ -371,7 +371,15 @@ asked for it, appends the abort. When such a pause stands short of the
 timeout, the next look comes when it is due; otherwise the next look
 comes when the checks' request would reach the timeout, or, that past, a
 timeout later. A slice has one pending timer at a time, cancelled when a
-look needs a sooner one. The look holds the lock the control file's
+look needs a sooner one. The timer waits on the monotonic clock, while
+the looks read the wall clock, which also stamps the control file: a
+timer that has run its full wait looks as at the time it was due, or at
+the wall clock's time when that is later. So a pause the timer was armed
+to time out is aborted when the timer runs, even when the wall clock
+stepped back or fell behind while it waited (a virtual machine's clock
+resynchronised under load, say), rather than found short of its timeout
+and looked at again. A check's look reads the wall clock as it is. The
+look holds the lock the control file's
 appenders take (rundir's `_append_line`) from its read to its abort, so
 no other process appends a request in between: an operator's resume
 lands before the look, and is seen, or after the abort. The lock is
@@ -394,7 +402,7 @@ times it from the checks' own request, which the watch keeps, never from
 the carry's new time. So a pause carried through one re-invocation after
 another is still aborted once the timeout has passed since the checks
 asked for it, whether or not any check runs in the new invocation, and
-even when the timer looks between the start marker and the carry. A
+even when a look comes between the start marker and the carry. A
 pause whose timeout passes during the wait is aborted there, and the
 driver carries the abort instead; a pause carried from a reading of the
 file older than the checks' abort is aborted again at the next look. The
