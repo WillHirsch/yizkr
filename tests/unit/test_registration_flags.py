@@ -799,3 +799,63 @@ def test_the_instance_read_is_kept_current_with_the_files(tmp_path):
     assert registrar._read().files == fresh.files
     assert len(fresh.files) == 3
     assert registrar._read().unhashed == fresh.unhashed == set()
+
+
+def test_an_excerpts_write_raises_its_pdfs_flags_on_the_excerpt(tmp_path):
+    """An excerpt's write registers each PDF that places it, with the
+    images it places: a flag of any of these new items is an alert on the
+    excerpt. Its `medium` is the new item's own: the excerpt's for its
+    own derived medium, the PDF's for the PDF (docs/ANOMALIES.md)."""
+    from yizkr.pipeline.orchestrate import ExcerptRun
+    from yizkr.pipeline.presentation import (
+        EmbeddedMedium,
+        PresentationContent,
+        Slide,
+        record_derived_media,
+    )
+
+    pdf_bytes = b"%PDF synthetic family history of 2008"
+    wiki = FakeWiki()
+    orchestrator, _ = TestStepRegister.orchestrator(
+        tmp_path, wiki, [("family-history-2008.pdf", pdf_bytes)]
+    )
+    (pdf,) = orchestrator.documents()
+    record = record_derived_media(
+        PresentationContent(
+            slides=[Slide(number=1, text="")],
+            media=[EmbeddedMedium(name="image1.png", data=IMAGE, slides=[1])],
+        ),
+        source_sha1=pdf.sha1,
+        title=pdf.state.title,
+        directory=pdf.dir,
+    )
+    orchestrator._placed_images = lambda doc: record
+    (medium,) = record.media.values()
+    excerpt = ExcerptRun(sha1(IMAGE), pdf, medium, tmp_path / "state")
+    # the PDF's file and the image's label, each on an item with no hash
+    old_pdf = unhashed(
+        wiki, pdf.state.title, "File:Family-history-2008.pdf", pdf_bytes
+    )
+    old_image = unhashed(
+        wiki, f"{pdf.state.title} — image1.png", "File:Shop.png", OTHER_IMAGE
+    )
+
+    qid = orchestrator._step_register(excerpt)
+
+    alerts = orchestrator.rundir.alerts()
+    assert {alert["subject"] for alert in alerts} == {excerpt.sha1[:12]}
+    by_medium = {}
+    for alert in alerts:
+        by_medium.setdefault(alert["medium"], []).append(
+            (alert["check"], alert["others"])
+        )
+    assert by_medium == {
+        pdf.sha1[:12]: [(SHARED_FILE, [old_pdf]), (UNHASHED_TITLE, [old_pdf])],
+        excerpt.sha1[:12]: [(UNHASHED_TITLE, [old_image])],
+    }
+    assert pdf.sha1 != excerpt.sha1
+    assert {
+        alert["artifact"]
+        for alert in alerts
+        if alert["medium"] == excerpt.sha1[:12]
+    } == {qid}

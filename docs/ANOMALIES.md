@@ -310,13 +310,16 @@ the thresholds: they have no keys, cannot be turned off and pause
 nothing. Each flags a new item registration made, an artifact or a
 derived medium, that may be an artifact registered before content
 hashing; the new item is made all the same, and nothing is adopted or
-changed. Stage `write`; subject, the document being written (for an
-excerpt, the images its PDFs place are registered with those PDFs); value
-`true`; always new; no `limit` or `config`. Fields: `artifact`, the new
-item's QID; `others`, the QIDs of the items it is flagged against;
-`medium`, the first 12 hex digits of the new item's media SHA-1, which
-for a derived medium is not the document's. One alert per new item and
-check, so a deck may raise one for itself and one for each image.
+changed. Stage `write`; subject, the document being written (an
+excerpt's write registers each PDF that places it and every image those
+PDFs place, so their flags carry the excerpt as subject); value `true`;
+always new; no `limit` or `config`. Fields: `artifact`, the new item's
+QID; `others`, the QIDs of the items it is flagged against; `medium`,
+the first 12 hex digits of the new item's media SHA-1. It is the
+subject's own unless the new item is one registered with the document:
+a deck's or PDF's image or, for an excerpt, a PDF that places it or
+another image that PDF places. One alert per new item and check, so a
+deck may raise one for itself and one for each image.
 
 **`shared-file`**: the new item's upload is a file that `others` already
 name as their `media file` (MediaWiki answered that it holds these
