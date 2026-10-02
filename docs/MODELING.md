@@ -1125,7 +1125,9 @@ not a signal to grow the schema on.
   unknown value of its item and property, as the export does not read
   which one it gave (it does not reproduce Wikibase's blank-node
   labels). A reference or value node that a kept statement uses too
-  stays, its excerpt included.
+  stays, its excerpt included, once, in the first kept entity's block
+  that uses it, where the query service's munger reads it (ADR-0020, as
+  amended by #412).
 - **Who is a person fails closed too** (ADR-0020, as amended by #344).
   An item is a person when it has any person evidence, read at every
   rank, deprecated included: a `human` type; a statement of a property

@@ -1281,6 +1281,42 @@ def statements_left_out(
     return left_out, gone - kept
 
 
+# How the query service's munger reads a dump: entity by entity, in
+# blocks. A line of an entity's data node (``Special:EntityData/Q1``)
+# starts a block when any line of another subject came since the last one
+# began, and so does a redirect's ``owl:sameAs``; a line of the dump's
+# header (``wikibase:Dump``) is of no block; every other line is of the
+# block it falls in. Within a block, the munger keeps a statement, value
+# or reference node's lines only when a line of that block names it.
+_DUMP_HEADER = "<http://wikiba.se/ontology#Dump>"
+_SAME_AS = "<http://www.w3.org/2002/07/owl#sameAs>"
+
+
+class _Blocks:
+    """Count a dump's lines into the munger's blocks, as they are read."""
+
+    def __init__(self) -> None:
+        self.index = 0  # the block the lines read fall in
+        self.open = False  # whether a line of no data node came since
+
+    def read(self, line: str) -> bool:
+        """Count `line` in; True when it starts a new block."""
+        subject, predicate = line.split(" ", 2)[:2]
+        if subject == _DUMP_HEADER:
+            return False
+        data = "/Special:EntityData/" in subject
+        if not data and not (
+            predicate == _SAME_AS and _ENTITY.fullmatch(subject)
+        ):
+            self.open = True
+            return False
+        starts = self.open
+        if starts:
+            self.index += 1
+        self.open = not data
+        return starts
+
+
 # The properties whose snaks the export drops, wherever one is written:
 # the extractor's judgement notes (ADR-0035), its remarks on its own
 # reading, which are no information on anyone. Keys of the model manifest;
@@ -1327,12 +1363,28 @@ def filter_nonprivileged_export(
     descriptions and aliases of the items kept, their statements' values,
     and the excerpts of the references their statements keep.
 
-    Returns (kept, dropped) line counts. Streams the gzipped dump four
-    times (three when `excluded` is empty). It holds in memory the nodes
-    of the statements that go, the truthy triples that go with them and
-    the hashes of the provenance nodes kept; and, while it reads which
-    statements go, each statement's entity, property and value, and the
-    statements deprecated.
+    The lines kept leave in the dump's order, but for the provenance
+    nodes. The query service's munger reads a dump entity by entity, in
+    blocks (``_Blocks``), and keeps a value or reference node's lines only
+    in the block of an entity whose statements name it. dumpRdf.php
+    writes each such shared node once, in the block of the first entity
+    that uses it; when that entity, or its statement, goes, the node's
+    lines would sit in a block that does not name it, and the munger
+    would drop them from the statements that keep it. So each kept node
+    leaves once, all its lines together, at the end of the first block
+    whose kept lines name it: a line of no provenance node, or a kept
+    node placed in that block (a value node that only a reference names
+    goes with the reference). A node's line repeated in the dump leaves
+    once.
+
+    Returns (kept, dropped) line counts: a node's line written counts as
+    kept, a repeat of one as dropped. Streams the gzipped dump five times
+    (four when `excluded` is empty). It holds in memory the nodes of the
+    statements that go, the truthy triples that go with them, the hashes
+    of the provenance nodes kept, the kept nodes' lines and the block
+    each is placed in; and, while it reads which statements go, each
+    statement's entity, property and value, and the statements
+    deprecated.
     """
     dropped_predicates = tuple(f"/{pid}>" for pid in dropped_pids)
     left_out, truthy_left_out = (
@@ -1406,8 +1458,63 @@ def filter_nonprivileged_export(
             if subject is not None and subject in needed:
                 needed.update(_PROVENANCE_NODE.findall(line.split(" ", 1)[1]))
 
-    # pass 2: write everything that survives
+    # pass 2: each kept node's lines, once each, and the block it sits in;
+    # and the first block that each node is named in by a kept line of
+    # no provenance node
+    nodes: dict[str, dict[str, None]] = {}
+    sits: dict[str, int] = {}
+    placed: dict[str, int] = {}
+    blocks = _Blocks()
+    with dump_lines() as source:
+        for line in source:
+            if suppressed(line):
+                continue
+            subject = subject_hash(line)
+            if subject is not None:
+                if subject in needed:
+                    nodes.setdefault(subject, {})[line] = None
+                    sits.setdefault(subject, blocks.index)
+                continue
+            blocks.read(line)
+            for node in _PROVENANCE_NODE.findall(line):
+                placed.setdefault(node, blocks.index)
+    # a node a kept node names goes in that node's block when it is the
+    # earlier one; a node named by no line placed sits where it is
+    names = {
+        node: {
+            named
+            for line in lines
+            for named in _PROVENANCE_NODE.findall(line.split(" ", 1)[1])
+            if named in nodes and named != node
+        }
+        for node, lines in nodes.items()
+    }
+    moved = True
+    while moved:
+        moved = False
+        for node, named in names.items():
+            if node not in placed:
+                continue
+            for other in named:
+                if placed[node] < placed.get(other, placed[node] + 1):
+                    placed[other] = placed[node]
+                    moved = True
+    ends: dict[int, list[str]] = {}
+    for node, lines in nodes.items():
+        ends.setdefault(placed.get(node, sits[node]), []).extend(lines)
+
+    # pass 3: write everything that survives, each node at the end of its
+    # block
     kept = dropped = 0
+    node_lines = 0
+
+    def flush(block: int) -> None:
+        nonlocal kept
+        for line in ends.pop(block, ()):
+            sink.write(line)
+            kept += 1
+
+    blocks = _Blocks()
     with (
         dump_lines() as source,
         gzip.open(
@@ -1425,9 +1532,17 @@ def filter_nonprivileged_export(
             ):
                 dropped += 1
                 continue
+            if subject is not None:
+                node_lines += 1
+                continue
+            if blocks.read(line):
+                flush(blocks.index - 1)
             sink.write(line)
             kept += 1
-    return kept, dropped
+        for block in sorted(ends):
+            flush(block)
+    written = sum(len(lines) for lines in nodes.values())
+    return kept, dropped + node_lines - written
 
 
 # ---------------------------------------------------------------------------

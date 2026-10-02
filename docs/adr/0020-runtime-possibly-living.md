@@ -153,6 +153,18 @@ kept and the reason on one line and exit 1, with no traceback. A live
 test runs the query service's own munger (wikibase/wdqs:2, no network)
 over the export and the full dump, and requires that it logs no error
 and drops no entity (§4). The body's earlier names stand as written.
+Amended by #412 (2026-10-02): the export keeps what the query service
+can load. Its munger reads the dump entity by entity and keeps a value
+or reference node only in the block of an entity whose lines name it;
+dumpRdf.php writes each such shared node once, in the first entity's
+block that uses it, so a node a kept statement shares with one left out
+could sit in a block that does not name it, and the munger would drop
+it from the kept statement. The filter leaves out exactly what it left
+out before, and moves each kept node, once, all its lines together, to
+the end of the first kept block that names it (a value node that only a
+reference names goes with the reference). Unit tests check every
+export they write against an offline mirror of the munger's blocks, and
+so does the live test, before the munger runs.
 
 ## Context
 

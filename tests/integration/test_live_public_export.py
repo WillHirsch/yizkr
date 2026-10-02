@@ -98,7 +98,11 @@ reads the full dump: it exits 0, logs no error, warning or dropped
 statement, and munges every entity the export has entity data for,
 naming none of those the export leaves out. The same run over the full
 dump is the control: a failure there is the stack's, not the filter's.
-The munger tests skip when docker, its daemon or the image is missing.
+The munger tests skip when docker, its daemon or the image is missing;
+an offline mirror of the munger's blocks (tests/munger_blocks.py) reads
+both dumps without docker, and names each line the munger would drop:
+each value and reference node must sit in the block of an entity whose
+lines name it (#412).
 
 Like every live test it writes fictional data to the one instance, so
 the session that runs it ends by clearing the recorded instance-contents
@@ -118,6 +122,7 @@ from urllib.parse import urlparse
 import pytest
 from wikibaseintegrator.wbi_enums import WikibaseRank
 
+from tests.munger_blocks import misplaced_in
 from yizkr.backup import (
     FAMILY,
     LINKED_LEFT_OUT,
@@ -1023,6 +1028,14 @@ def assert_munges(docker, config, dump: Path, work: Path, what: str) -> str:
         f"the munger drops entities of {what}: {sorted(about - versioned)}"
     )
     return text
+
+
+@pytest.mark.parametrize("name", ["full.nt.gz", "nonprivileged.nt.gz"])
+def test_each_node_sits_in_a_block_that_names_it(exported, name):
+    """The munger's blocks, read offline (tests/munger_blocks.py), with no
+    docker: a failure names each line the munger would drop, and the
+    entity whose block it falls in."""
+    assert misplaced_in(exported / name) == []
 
 
 def test_the_query_service_munges_the_full_dump(

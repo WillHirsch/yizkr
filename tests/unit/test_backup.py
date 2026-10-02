@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.munger_blocks import blocks, misplaced, misplaced_in
 from tests.unit.test_privacy import (
     BIRTHS,
     CASES,
@@ -945,9 +946,24 @@ class TestWhatTheFilterReads:
         with gzip.open(public, "rt", encoding="utf-8", newline="\n") as handle:
             return kept, dropped, handle.read().split("\n")[:-1]
 
+    @staticmethod
+    def in_blocks(lines: list[str]) -> list[str]:
+        """`lines` as the filter writes them, all of one block: each
+        reference node's lines together at the block's end, in the order
+        the nodes first come (#412)."""
+        nodes: dict[str, list[str]] = {}
+        rest = []
+        for line in lines:
+            subject = line.split(" ", 1)[0]
+            if subject.startswith(f"<{W}/reference/"):
+                nodes.setdefault(subject, []).append(line)
+            else:
+                rest.append(line)
+        return rest + [line for node in nodes.values() for line in node]
+
     def test_text_leaves_as_it_is_and_the_notes_go(self, tmp_path):
         kept, dropped, lines = self.filter(tmp_path, {"P21", "P22"})
-        assert lines == self.READABLE
+        assert lines == self.in_blocks(self.READABLE)
         assert (kept, dropped) == (
             len(self.READABLE),
             len(self.NOTES) + len(self.UNREADABLE),
@@ -959,7 +975,7 @@ class TestWhatTheFilterReads:
         # with no property dropped, the notes leave, and only the lines it
         # cannot read go: the one a carriage return runs through as one
         kept, dropped, lines = self.filter(tmp_path, frozenset())
-        assert lines == self.READABLE + self.NOTES
+        assert lines == self.in_blocks(self.READABLE + self.NOTES)
         assert dropped == len(self.UNREADABLE)
 
     def test_no_property_of_the_vocabulary_takes_a_link(self):
@@ -975,6 +991,409 @@ class TestWhatTheFilterReads:
             f"<{ONTOLOGY}{rdf_type(datatype)}>"
             for datatype in READABLE_DATATYPES
         } == backup._MODEL_TYPES
+
+
+# -- each kept node leaves in a block that names it (#412) --------------------
+
+CALENDAR = "<http://www.wikidata.org/entity/Q1985727>"
+REF_LETTER = "9" * 40  # the 1958 letter, which Nina's and Rudolf's cite
+VALUE_1958 = "a1" * 20  # the letter's date, a value node only it names
+VALUE_DEATH = "b2" * 20  # Rudolf's death, 6 March 1941
+REF_TALK = "c3" * 20  # the 2002 interview, which Gustav's and Leopold's cite
+VALUE_2002 = "d4" * 20  # the interview's date, a value node only it names
+
+
+def entity_block(qid: str, label: str) -> list[str]:
+    """An entity's first lines as dumpRdf.php writes them, under `W`:
+    its data node, which starts its block, its type and its label."""
+    data = f"<{W}/wiki/Special:EntityData/{qid}>"
+    return [
+        f"{data} {RDF_TYPE} <http://schema.org/Dataset> .",
+        f"{data} <http://schema.org/about> <{W}/entity/{qid}> .",
+        f'{data} <http://schema.org/version> "{qid[1:]}"^^<{XSD}integer> .',
+        f"<{W}/entity/{qid}> {RDF_TYPE} <{ONTOLOGY}Item> .",
+        f'<{W}/entity/{qid}> {RDFS_LABEL} "{nt(label)}"@en .',
+    ]
+
+
+OWL = "http://www.w3.org/2002/07/owl#"
+PREDICATES = {
+    "claim": "prop",
+    "statementProperty": "prop/statement",
+    "statementValue": "prop/statement/value",
+    "qualifier": "prop/qualifier",
+    "qualifierValue": "prop/qualifier/value",
+    "reference": "prop/reference",
+    "referenceValue": "prop/reference/value",
+    "directClaim": "prop/direct",
+}
+
+
+def property_declarations(base: str, pid: str) -> list[str]:
+    """A property's predicates as dumpRdf.php declares them in its block:
+    each named by the property and typed an owl:ObjectProperty, and its
+    "no value" class, under `base`."""
+    novalue = f"<{base}/prop/novalue/{pid}>"
+    return [
+        *(
+            f"<{base}/entity/{pid}> <{ONTOLOGY}{term}> <{base}/{path}/{pid}> ."
+            for term, path in PREDICATES.items()
+        ),
+        f"<{base}/entity/{pid}> <{ONTOLOGY}novalue> {novalue} .",
+        *(
+            f"<{base}/{path}/{pid}> {RDF_TYPE} <{OWL}ObjectProperty> ."
+            for path in PREDICATES.values()
+        ),
+        f"{novalue} {RDF_TYPE} <{OWL}Class> .",
+        f"{novalue} <{OWL}complementOf> _:novalue{pid} .",
+        f"_:novalue{pid} {RDF_TYPE} <{OWL}Restriction> .",
+        f"_:novalue{pid} <{OWL}onProperty> <{base}/prop/direct/{pid}> .",
+        f"_:novalue{pid} <{OWL}someValuesFrom> <{OWL}Thing> .",
+    ]
+
+
+def time_value(node: str, day: str) -> list[str]:
+    """A time value node as dumpRdf.php writes one, to the day."""
+    value = f"<{W}/value/{node}>"
+    return [
+        f"{value} {RDF_TYPE} <{ONTOLOGY}TimeValue> .",
+        f'{value} <{ONTOLOGY}timeValue> "{day}T00:00:00Z"{TIME} .',
+        f'{value} <{ONTOLOGY}timePrecision> "11"^^<{XSD}integer> .',
+        f'{value} <{ONTOLOGY}timeTimezone> "0"^^<{XSD}integer> .',
+        f"{value} <{ONTOLOGY}timeCalendarModel> {CALENDAR} .",
+    ]
+
+
+def source(node: str, excerpt: str, day: str, dated: str) -> list[str]:
+    """A reference node with an excerpt (P8) and its source's date
+    (P577), the date's value node `dated` beside it."""
+    reference = f"<{W}/reference/{node}>"
+    return [
+        f"{reference} {RDF_TYPE} <{ONTOLOGY}Reference> .",
+        f'{reference} <{W}/prop/reference/P8> "{nt(excerpt)}" .',
+        f'{reference} <{W}/prop/reference/P577> "{day}T00:00:00Z"{TIME} .',
+        f"{reference} <{W}/prop/reference/value/P577> <{W}/value/{dated}> .",
+        *time_value(dated, day),
+    ]
+
+
+class TestEachNodeLeavesInABlockThatNamesIt:
+    """The query service's munger reads a dump entity by entity, and keeps
+    a value or reference node only in the block of an entity whose lines
+    name it; dumpRdf.php writes each such node once, in the block of the
+    first entity that uses it. When the export leaves that entity, or its
+    statement, out, the node moves to the first block kept that names it,
+    once (#412). `tests/munger_blocks.py` mirrors the munger.
+
+    Koshnovka (Q510), where Rudolf Löbig (Q501) lived, comes first. Nina
+    Sartina (Q502, of no known dates, left out) wrote to Leopold in 1958
+    (REF_LETTER) as the widow of his late brother Rudolf: her spouse
+    statement, ended by his death on 6 March 1941 (VALUE_DEATH), is the
+    first to cite the letter and to name that day, so dumpRdf.php writes
+    both in her block; Rudolf's death, from the same letter, follows in
+    his. Gustav Löbig (Q506) was "Dad" to Nicholas Lobig (Q507, left
+    out), as the interview Nicholas gave in 2002 (REF_TALK) says; it
+    names Leopold Löbig (Q505) "Dad's cousin Leopold" too, a relative
+    (P1038) of Gustav as a cousin (P1039). Gustav's appellation, whose
+    perspective is Nicholas, is the first to cite the interview, and goes
+    whole; Leopold's statement keeps it."""
+
+    EXCERPT_LETTER = "вдова Вашего покойного брата Рудольфа"
+    PLACE = entity_block("Q510", "Koshnovka")
+    NINA = [
+        *entity_block("Q502", "Nina Sartina"),
+        *statement(
+            "Q502",
+            "aaaa",
+            "P26",
+            f"<{W}/entity/Q501>",
+            qualifiers=[
+                ("P582", "", f'"1941-03-06T00:00:00Z"{TIME}'),
+                ("P582", "value/", f"<{W}/value/{VALUE_DEATH}>"),
+            ],
+            reference=REF_LETTER,
+        ),
+        *time_value(VALUE_DEATH, "1941-03-06"),
+        *source(REF_LETTER, EXCERPT_LETTER, "1958-12-25", VALUE_1958),
+    ]
+    RUDOLF = [
+        *entity_block("Q501", "Rudolf Löbig"),
+        *statement(
+            "Q501",
+            "aaaa",
+            "P570",
+            f'"1941-03-06T00:00:00Z"{TIME}',
+            reference=REF_LETTER,
+        ),
+        f"<{W}/entity/statement/Q501-aaaa> <{W}/prop/statement/value/P570> "
+        f"<{W}/value/{VALUE_DEATH}> .",
+    ]
+    GUSTAV = [
+        *entity_block("Q506", "Gustav Löbig"),
+        *statement(
+            "Q506",
+            "aaaa",
+            "P1810",
+            '"Dad"@en',
+            qualifiers=[("P1811", "", f"<{W}/entity/Q507>")],
+            reference=REF_TALK,
+        ),
+        *source(REF_TALK, "Dad's cousin Leopold", "2002-01-01", VALUE_2002),
+    ]
+    LEOPOLD = [
+        *entity_block("Q505", "Leopold Löbig"),
+        *statement(
+            "Q505",
+            "aaaa",
+            "P1038",
+            f"<{W}/entity/Q506>",
+            qualifiers=[("P1039", "", '"cousin"@en')],
+            reference=REF_TALK,
+        ),
+    ]
+    HEADER = [
+        f"<{ONTOLOGY}Dump> {RDF_TYPE} <http://schema.org/Dataset> .",
+        f'<{ONTOLOGY}Dump> <http://schema.org/softwareVersion> "1.0.0" .',
+    ]
+    LINES = [*HEADER, *PLACE, *NINA, *RUDOLF, *GUSTAV, *LEOPOLD]
+    EXCLUDED = {"Q502", "Q507"}
+
+    @staticmethod
+    def nodes(*hashes: str) -> list[str]:
+        """The lines of the provenance nodes `hashes` in the dump."""
+        return [
+            line
+            for line in TestEachNodeLeavesInABlockThatNamesIt.LINES
+            if any(
+                line.split(" ", 1)[0].endswith(f"/{node}>") for node in hashes
+            )
+        ]
+
+    def filter(self, tmp_path: Path) -> tuple[int, int, list[str]]:
+        full = tmp_path / "full.nt.gz"
+        public = tmp_path / "nonprivileged.nt.gz"
+        with gzip.open(full, "wt", encoding="utf-8") as handle:
+            handle.write("\n".join(self.LINES) + "\n")
+        kept, dropped = filter_nonprivileged_export(
+            full, public, self.EXCLUDED
+        )
+        with gzip.open(public, "rt", encoding="utf-8", newline="\n") as handle:
+            return kept, dropped, handle.read().split("\n")[:-1]
+
+    @staticmethod
+    def block_of(lines: list[str], qid: str) -> list[str]:
+        (block,) = (
+            block
+            for block in blocks(lines)
+            if f"<{W}/wiki/Special:EntityData/{qid}> " in block[0]
+        )
+        return block
+
+    def test_the_dump_is_as_the_munger_reads_it(self):
+        # the control: dumpRdf.php's layout, each node once, in the block
+        # of the first entity that names it
+        assert misplaced(self.LINES) == []
+        assert len(self.nodes(VALUE_DEATH, REF_LETTER, VALUE_1958)) == 14
+        assert len(self.nodes(REF_TALK, VALUE_2002)) == 9
+        assert set(self.nodes(VALUE_DEATH, REF_LETTER)) <= set(self.NINA)
+        assert set(self.nodes(REF_TALK, VALUE_2002)) <= set(self.GUSTAV)
+
+    def test_the_munger_would_keep_every_line_of_the_export(self, tmp_path):
+        _, _, lines = self.filter(tmp_path)
+        assert misplaced(lines) == []
+
+    def test_a_node_first_written_for_one_left_out_moves(self, tmp_path):
+        # the letter, its date and Rudolf's death leave in his block, as
+        # one line each, and nothing of Nina's leaves
+        _, _, lines = self.filter(tmp_path)
+        moved = self.nodes(VALUE_DEATH, REF_LETTER, VALUE_1958)
+        rudolf = self.block_of(lines, "Q501")
+        assert set(moved) <= set(rudolf)
+        assert all(lines.count(line) == 1 for line in moved)
+        assert not any("Q502" in line for line in lines)
+        assert not any(self.EXCERPT_LETTER in line for line in self.PLACE)
+        assert set(self.block_of(lines, "Q510")) == set(self.PLACE)
+
+    def test_a_node_whose_first_statement_goes_moves_to_the_next(
+        self, tmp_path
+    ):
+        # the interview and its date leave in Leopold's block, once, not in
+        # Gustav's, whose statement citing it went whole
+        _, _, lines = self.filter(tmp_path)
+        moved = self.nodes(REF_TALK, VALUE_2002)
+        assert set(moved) <= set(self.block_of(lines, "Q505"))
+        assert not set(moved) & set(self.block_of(lines, "Q506"))
+        assert all(lines.count(line) == 1 for line in moved)
+        assert not any("Q506-aaaa" in line for line in lines)
+
+    @classmethod
+    def gone(cls) -> list[str]:
+        """The lines the export leaves out: Nina's, and the appellation's,
+        with the truthy triple it gave."""
+        return [
+            line for line in cls.LINES if "Q502" in line or "Q506-aaaa" in line
+        ] + [f'<{W}/entity/Q506> <{W}/prop/direct/P1810> "Dad"@en .']
+
+    def test_the_lines_kept_are_those_left_in_place(self, tmp_path):
+        # only where the nodes' lines leave changes: the export keeps every
+        # line but Nina's, and the appellation's, with the truthy triple it
+        # gave, and counts each line once
+        kept, dropped, lines = self.filter(tmp_path)
+        gone = self.gone()
+        assert set(gone) <= set(self.LINES)
+        assert sorted(lines) == sorted(set(self.LINES) - set(gone))
+        assert (kept, dropped) == (len(lines), len(self.LINES) - len(lines))
+
+    def test_a_node_that_sits_in_a_block_that_names_it_stays_there(
+        self, tmp_path
+    ):
+        # with no one left out, each node stays in the block it sits in,
+        # at its end, and every line leaves
+        full = tmp_path / "full.nt.gz"
+        public = tmp_path / "nonprivileged.nt.gz"
+        with gzip.open(full, "wt", encoding="utf-8") as handle:
+            handle.write("\n".join(self.LINES) + "\n")
+        assert filter_nonprivileged_export(full, public, set()) == (
+            len(self.LINES),
+            0,
+        )
+        assert misplaced_in(public) == []
+        with gzip.open(public, "rt", encoding="utf-8") as handle:
+            lines = handle.read().split("\n")[:-1]
+        nina = self.block_of(lines, "Q502")
+        assert nina[
+            -len(self.nodes(VALUE_DEATH, REF_LETTER, VALUE_1958)) :
+        ] == (self.nodes(VALUE_DEATH, REF_LETTER, VALUE_1958))
+        assert sorted(lines) == sorted(self.LINES)
+
+    def test_a_node_repeated_in_the_dump_leaves_once(self, tmp_path):
+        # a node's lines that the dump repeats in a later block leave once,
+        # the repeats counted as dropped
+        full = tmp_path / "full.nt.gz"
+        public = tmp_path / "nonprivileged.nt.gz"
+        repeated = self.nodes(REF_TALK, VALUE_2002)
+        with gzip.open(full, "wt", encoding="utf-8") as handle:
+            handle.write("\n".join(self.LINES + repeated) + "\n")
+        kept, dropped = filter_nonprivileged_export(full, public, set())
+        with gzip.open(public, "rt", encoding="utf-8") as handle:
+            lines = handle.read().split("\n")[:-1]
+        assert (kept, dropped) == (len(self.LINES), len(repeated))
+        assert misplaced(lines) == []
+        assert set(repeated) <= set(self.block_of(lines, "Q506"))
+
+    def test_a_full_dump_of_the_fixture_is_as_the_munger_reads_it(
+        self, tmp_path, vocabulary
+    ):
+        # the control for TestExportNonprivileged, which checks each
+        # export it writes
+        dump = export_dump(vocabulary)
+        assert misplaced_in(dump.write(tmp_path / "full.nt.gz")) == []
+        # ...and the checker finds what a dump lays out wrong: a statement
+        # node, and a reference, in another entity's block
+        assert misplaced(dump.lines)
+
+    def test_the_checker_finds_each_node_left_where_it_sat(self):
+        # the kept lines in dump order, nothing moved: the letter, its date
+        # and Rudolf's death sit in Koshnovka's block, which names none of
+        # them, and the interview and its date in Gustav's, whose statement
+        # citing it went; the munger would drop each of their lines
+        gone = set(self.gone())
+        unmoved = [line for line in self.LINES if line not in gone]
+        letter = self.nodes(VALUE_DEATH, REF_LETTER, VALUE_1958)
+        talk = self.nodes(REF_TALK, VALUE_2002)
+        assert sorted(misplaced(unmoved)) == sorted(
+            [f"<{W}/entity/Q510>: {line}" for line in letter]
+            + [f"<{W}/entity/Q506>: {line}" for line in talk]
+        )
+
+
+class TestTheMungerBlockChecker:
+    """`tests/munger_blocks.py` flags, one rule at a time, what the munger
+    would drop, and keeps what it would keep (#412)."""
+
+    VALUE = f"<{W}/value/{VALUE_1958}>"
+    REFERENCE = f"<{W}/reference/{REF_LETTER}>"
+    NODE = f"<{W}/entity/statement/Q501-aaaa>"
+
+    def lines(self, first: list[str], second: list[str]) -> list[str]:
+        """Rudolf's block, then Leopold's, each with lines of its own."""
+        return [
+            *entity_block("Q501", "Rudolf Löbig"),
+            *first,
+            *entity_block("Q505", "Leopold Löbig"),
+            *second,
+        ]
+
+    def statement(self, *more: str) -> list[str]:
+        return [
+            f"<{W}/entity/Q501> <{W}/prop/P570> {self.NODE} .",
+            f'{self.NODE} <{W}/prop/statement/P570> "1941-03-06T00:00:00Z"'
+            f"{TIME} .",
+            *more,
+        ]
+
+    def test_a_property_block_declaring_its_predicates_is_kept(self):
+        lines = [
+            *entity_block("P577", "publication date"),
+            *property_declarations(W, "P577"),
+        ]
+        assert misplaced(lines) == []
+
+    def test_a_value_named_only_by_a_reference_elsewhere_is_flagged(self):
+        reference = self.statement(
+            f"{self.NODE} {DERIVED_FROM} {self.REFERENCE} .",
+            f"{self.REFERENCE} <{W}/prop/reference/value/P577> {self.VALUE} .",
+        )
+        value = time_value(VALUE_1958, "1958-12-25")
+        assert misplaced(self.lines(reference, value)) == [
+            f"<{W}/entity/Q505>: {line}" for line in value
+        ]
+        assert misplaced(self.lines(reference + value, [])) == []
+
+    def test_a_reference_named_only_by_a_statement_elsewhere_is_flagged(
+        self,
+    ):
+        cited = self.statement(
+            f"{self.NODE} {DERIVED_FROM} {self.REFERENCE} ."
+        )
+        reference = [
+            f"{self.REFERENCE} {RDF_TYPE} <{ONTOLOGY}Reference> .",
+            f'{self.REFERENCE} <{W}/prop/reference/P8> "вдова" .',
+        ]
+        assert misplaced(self.lines(cited, reference)) == [
+            f"<{W}/entity/Q505>: {line}" for line in reference
+        ]
+        assert misplaced(self.lines(cited + reference, [])) == []
+
+    def test_a_statement_no_entity_names_is_flagged(self):
+        statement = self.statement()
+        assert misplaced(self.lines(statement[1:], [])) == [
+            f"<{W}/entity/Q501>: {statement[1]}"
+        ]
+
+    def test_a_normalized_quantity_is_kept_beside_its_value(self):
+        normalized = f"<{W}/value/{VALUE_2002}>"
+        quantity = self.statement(
+            f"{self.NODE} <{W}/prop/statement/value/P1100> {self.VALUE} .",
+            f"{self.VALUE} {RDF_TYPE} <{ONTOLOGY}QuantityValue> .",
+            f"{self.VALUE} <{ONTOLOGY}quantityNormalized> {normalized} .",
+            f"{normalized} {RDF_TYPE} <{ONTOLOGY}QuantityValue> .",
+        )
+        assert misplaced(self.lines(quantity, [])) == []
+        assert misplaced(self.lines(quantity[:-1], quantity[-1:])) == [
+            f"<{W}/entity/Q505>: {quantity[-1]}"
+        ]
+
+    def test_a_reference_of_a_statement_no_entity_names_is_kept(self):
+        # the munger registers a reference a statement node derives from
+        # before it knows the statement; the statement alone it drops
+        statement = self.statement(
+            f"{self.NODE} {DERIVED_FROM} {self.REFERENCE} .",
+            f"{self.REFERENCE} {RDF_TYPE} <{ONTOLOGY}Reference> .",
+        )
+        assert misplaced(self.lines(statement[1:], [])) == [
+            f"<{W}/entity/Q501>: {line}" for line in statement[1:3]
+        ]
 
 
 class TestPruning:
@@ -1009,6 +1428,13 @@ def entity(qid: str) -> str:
 
 def dated(year: int) -> str:
     return f'"{year}-01-01T00:00:00Z"^^<{XSD}dateTime>'
+
+
+# the entity a line's subject is of: its data node, itself or its
+# statement's node
+OWNER = re.compile(
+    r"/(?:wiki/Special:EntityData/|entity/(?:statement/)?)([QP][1-9]\d*)\b"
+)
 
 
 class Dump:
@@ -1119,9 +1545,34 @@ class Dump:
             f"{entity(target)} ."
         )
 
+    def shaped(self) -> list[str]:
+        """The lines as dumpRdf.php lays them out: the header, then each
+        entity's block, in the order the entities first come: its data
+        node, its own lines and its statements' (#412). A reference's
+        snaks go with the statement that cites it first, as one line each
+        however many statements cite it."""
+        header: list[str] = []
+        blocks: dict[str | None, list[str]] = {}
+        seen: set[str] = set()
+        owner = None
+        for line in self.lines:
+            subject = line.split(" ", 1)[0]
+            if subject == f"<{ONTOLOGY}Dump>":
+                header.append(line)
+                continue
+            if found := OWNER.search(subject):
+                owner = found.group(1)
+            elif "/reference/" in subject:
+                if line in seen:
+                    continue
+                seen.add(line)
+            blocks.setdefault(owner, []).append(line)
+        return header + [line for block in blocks.values() for line in block]
+
     def write(self, path: Path, lines=None) -> Path:
+        """The dump, as `shaped` lays it out unless `lines` are given."""
         with gzip.open(path, "wt", encoding="utf-8") as sink:
-            sink.write("\n".join(lines or self.lines) + "\n")
+            sink.write("\n".join(lines or self.shaped()) + "\n")
         return path
 
 
@@ -1251,10 +1702,11 @@ def export_dump(vocabulary) -> Dump:
             aliases=spec.aliases,
             kind="Property",
         )
-        dump.lines.append(
+        dump.lines += [
             f"{entity(pid)} <{ONTOLOGY}propertyType> "
-            f"<{ONTOLOGY}{rdf_type(spec.datatype)}> ."
-        )
+            f"<{ONTOLOGY}{rdf_type(spec.datatype)}> .",
+            *property_declarations(CONCEPT, pid),
+        ]
     for key, qid in items.items():
         spec = manifest.items[key]
         dump.entity(
@@ -2271,8 +2723,11 @@ class TestExportNonprivileged:
 
     @staticmethod
     def public(tmp_path) -> tuple[str, set[str]]:
+        """The export's text and the QIDs it mentions; and the query
+        service's munger would keep every line of it (#412)."""
         with gzip.open(tmp_path / "nonprivileged.nt.gz", "rt") as handle:
             text = handle.read()
+        assert misplaced(text.split("\n")[:-1]) == []
         return text, set(re.findall(r"Q[1-9]\d*\b", text))
 
     def test_only_released_people_leave(self, tmp_path, vocabulary):
@@ -3683,7 +4138,7 @@ class TestTheBackupsNonprivilegedExport:
         def dumped(name):
             def write(deploy_dir, out_path, compose_files=None):
                 if name == "rdf":
-                    dump.write(out_path, dump.lines + extra)
+                    dump.write(out_path, dump.shaped() + extra)
                 else:
                     out_path.write_bytes(b"fictional")
 
