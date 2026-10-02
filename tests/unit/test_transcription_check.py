@@ -20,7 +20,7 @@ import json
 import re
 import shutil
 import subprocess
-import time
+import sys
 
 import pytest
 
@@ -78,6 +78,17 @@ from yizkr.pipeline.transcription_check import (
     require_valid_transcription,
     text_char_count,
 )
+
+# seconds a test waits for an event before it fails as hung (#437)
+HANG_GUARD = 60
+
+# a child that checks `argv[1]` repeated `argv[2]` times, then an "x"
+CHECK_REPEATED = """
+import sys
+from yizkr.pipeline.transcription_check import check_transcription
+check_transcription(sys.argv[1] * int(sys.argv[2]) + "x")
+print("checked")
+"""
 
 # (signature expected to fire, invented engine output)
 FAILURES = [
@@ -477,19 +488,20 @@ class TestSignatures:
         check = caught(text, pages=2)
         assert check.signature == "media-unreadable"
 
-    @pytest.mark.parametrize(
-        "text",
-        ["first and " * 4000 + "x", "Let me read the image, " * 4000 + "x"],
-    )
-    def test_long_repetitive_text_checks_quickly(self, text):
+    @pytest.mark.parametrize("unit", ["first and ", "Let me read the image, "])
+    def test_long_repetitive_text_checks_quickly(self, unit):
         # no pattern backtracks across a long run of list words, or of
-        # announcement-like phrases on one line. The limit is on this
-        # process's CPU time, which other load on the machine does not
-        # inflate, and is far above a linear check's milliseconds while
-        # far below a backtracking one's minutes (#223)
-        started = time.process_time()
-        check_transcription(text)
-        assert time.process_time() - started < 5.0
+        # announcement-like phrases on one line (#223). A linear check of
+        # this text takes about a second; a backtracking one, hours. The
+        # check runs in a child, since a regex search holds the
+        # interpreter until it ends, so a backtracking pattern meets the
+        # hang guard and fails rather than hanging the suite (#437)
+        command = [sys.executable, "-c", CHECK_REPEATED, unit, "20000"]
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=HANG_GUARD
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == "checked\n"
 
     def test_page_that_could_not_be_read_fails_even_in_a_letter(self):
         # a page named as unread fails anywhere: a silent partial

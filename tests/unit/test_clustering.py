@@ -1097,7 +1097,7 @@ class TestNames:
 # -- dates --------------------------------------------------------------------
 
 
-def time(year, month=None, precision=None) -> TimeValue:
+def when(year, month=None, precision=None) -> TimeValue:
     return TimeValue(year=year, month=month, precision=precision)
 
 
@@ -1107,11 +1107,11 @@ def qualifier(prop: str, value) -> SimpleNamespace:
 
 class TestDates:
     def test_a_date_covers_its_precision_never_narrower(self):
-        assert date_interval(time(1919, 7), [], 5) == Interval(1919, 1919)
-        assert date_interval(time(1890, precision="decade"), [], 5) == (
+        assert date_interval(when(1919, 7), [], 5) == Interval(1919, 1919)
+        assert date_interval(when(1890, precision="decade"), [], 5) == (
             Interval(1890, 1899)
         )
-        assert date_interval(time(1801, precision="century"), [], 5) == (
+        assert date_interval(when(1801, precision="century"), [], 5) == (
             Interval(1801, 1900)
         )
 
@@ -1125,20 +1125,20 @@ class TestDates:
             ),
         )
         # Cäcilie, c. 1833
-        assert date_interval(time(1833), [circa], 5) == Interval(1828, 1838)
+        assert date_interval(when(1833), [circa], 5) == Interval(1828, 1838)
         # Klara left between 1938 and 1939
         between = [
-            qualifier("earliest_date", time(1938)),
-            qualifier("latest_date", time(1939)),
+            qualifier("earliest_date", when(1938)),
+            qualifier("latest_date", when(1939)),
         ]
-        assert date_interval(time(1938), between, 5) == Interval(1938, 1939)
+        assert date_interval(when(1938), between, 5) == Interval(1938, 1939)
         # Rahel died after 1945; the firm was gone before 1926
         after = date_interval(
-            time(1945), [qualifier("earliest_date", time(1945))], 5
+            when(1945), [qualifier("earliest_date", when(1945))], 5
         )
         assert after.start == 1945 and after.end == float("inf")
         before = date_interval(
-            time(1926), [qualifier("latest_date", time(1926))], 5
+            when(1926), [qualifier("latest_date", when(1926))], 5
         )
         assert before.start == float("-inf") and before.end == 1926
         assert after.overlaps(Interval(1960, 1960))

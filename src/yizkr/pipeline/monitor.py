@@ -2672,9 +2672,15 @@ class TerminalKeys:
     line typed at a prompt, with echo; the terminal's settings are put
     back on the way out, however the loop ends."""
 
-    def __init__(self, stream: TextIO, out: TextIO) -> None:
+    def __init__(
+        self,
+        stream: TextIO,
+        out: TextIO,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self.fd = stream.fileno()
         self.out = out
+        self._sleep = sleep
         self._saved: list | None = None
 
     def __enter__(self) -> TerminalKeys:
@@ -2701,7 +2707,7 @@ class TerminalKeys:
         data = os.read(self.fd, 64)
         if not data:
             # the input has closed: wait out the interval instead
-            time.sleep(max(0.0, timeout))
+            self._sleep(max(0.0, timeout))
             return None
         return data.decode("utf-8", errors="replace")[:1]
 

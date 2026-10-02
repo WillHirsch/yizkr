@@ -23,7 +23,6 @@ import random
 import re
 import shutil
 import threading
-import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime, timedelta
@@ -103,6 +102,9 @@ FIRST = "a1b2c3d4e5f6"  # killed mid-stage: no end recorded
 SECOND = "0f1e2d3c4b5a"  # running
 T0 = datetime(2026, 9, 27, 10, 0, tzinfo=UTC)
 NOW = T0 + timedelta(minutes=10)
+# the bound on a wait that an event ends, so that a hang fails rather than
+# blocks the suite; no test waits it out (#437)
+HANG_GUARD = 60
 
 # what free text says that no view may show: a failure's message and an
 # attention reason's details can quote a document, and so can the other
@@ -1885,12 +1887,12 @@ class TestLogsThatCannotBeRead:
             daemon=True,
         )
         reader.start()
-        reader.join(30)
+        reader.join(timeout=HANG_GUARD)
         if reader.is_alive():
             # it waits in open() for a writer: one that comes and goes
             # frees it
             os.close(os.open(events, os.O_WRONLY | os.O_NONBLOCK))
-            reader.join(30)
+            reader.join(timeout=HANG_GUARD)
             pytest.fail("the monitor opened the FIFO")
         (summary,) = summaries
         assert not summary.events_unreadable
@@ -2118,8 +2120,9 @@ class TestIncrementalReading:
 
     def test_a_long_run(self, tmp_path, monkeypatch):
         """Thousands of documents and tens of thousands of events read in
-        one refresh; then one appended line, which the next refresh folds
-        alone."""
+        one refresh, each event folded once; then one appended line, which
+        the next refresh folds alone. The cost is counted in folds, not
+        timed (#437)."""
         path = tmp_path / "run"
         path.mkdir()
         shas = [
@@ -2163,7 +2166,6 @@ class TestIncrementalReading:
             "_fold_event",
             lambda self, event: folded.append(1) or original(self, event),
         )
-        started = time.monotonic()
         watcher = RunMonitor(path)
         watcher.refresh()
         assert len(folded) == len(lines)
@@ -2173,7 +2175,7 @@ class TestIncrementalReading:
         assert summary.stage("critique").pending == 3000
         assert len(render_lines(summary, width=100, height=40)) <= 40
         render_html(summary)
-        assert time.monotonic() - started < 20
+        assert len(folded) == len(lines)
         append(
             path,
             [
@@ -3251,20 +3253,53 @@ class TestTerminalKeys:
                 before = termios.tcgetattr(follower)
                 out = io.StringIO()
                 with monitor.TerminalKeys(stream, out) as keys:
-                    assert keys.wait(0) is None
-                    # a key arrives without Enter: the line is not buffered
+                    # a key arrives without Enter: the line is not buffered;
+                    # it is written before the wait, so the wait returns at
+                    # once
                     os.write(leader, b"q")
-                    assert keys.wait(1) == "q"
+                    assert keys.wait(HANG_GUARD) == "q"
                     # a prompt takes a whole line, and returns to single keys
                     os.write(leader, b"pause stage critique\n")
                     assert keys.prompt("command> ") == "pause stage critique"
                     assert "command> " in out.getvalue()
                     os.write(leader, b":")
-                    assert keys.wait(1) == ":"
+                    assert keys.wait(HANG_GUARD) == ":"
                 assert termios.tcgetattr(follower) == before
         finally:
             os.close(leader)
             os.close(follower)
+
+    def test_no_key_is_read_before_one_is_typed(self):
+        """A wait of 0 is a poll: with nothing typed it returns at once,
+        with no key."""
+        pty = pytest.importorskip("pty")
+        leader, follower = pty.openpty()
+        try:
+            with (
+                open(follower, closefd=False) as stream,
+                monitor.TerminalKeys(stream, io.StringIO()) as keys,
+            ):
+                assert keys.wait(0) is None
+        finally:
+            os.close(leader)
+            os.close(follower)
+
+    def test_a_closed_input_waits_out_the_interval(self):
+        """At the end of its input there is no key to wait for: the
+        interval is slept instead, on the sleep it is given, so the loop
+        does not spin."""
+        reading, writing = os.pipe()
+        os.close(writing)
+        slept = []
+        try:
+            with open(reading, closefd=False) as stream:
+                keys = monitor.TerminalKeys(
+                    stream, io.StringIO(), sleep=slept.append
+                )
+                assert keys.wait(HANG_GUARD) is None
+        finally:
+            os.close(reading)
+        assert slept == [HANG_GUARD]
 
 
 def test_main_requests_and_watches_once(run, capsys):

@@ -92,6 +92,8 @@ START = 1_790_000_000.0
 HOUR = 3600.0
 # what the critic answers when it finds nothing to flag
 CRITIQUE_ANSWER = '{"done": true, "findings_emitted": 0}'
+# seconds a test waits for an event before it fails as hung (#437)
+HANG_GUARD = 60
 
 
 def stamp(seconds: float) -> str:
@@ -609,15 +611,22 @@ class TestAskingAgain:
         assert clock.slept == []
 
     def test_closing_the_client_wakes_a_call_that_waits(
-        self, cli, monkeypatch
+        self, cli, clock, monkeypatch
     ):
+        """A call waiting out a rate limit waits on the client's stop
+        event: the fake sleep waits on nothing else, so only close() can
+        wake it, and the hang guard fails a wait it never wakes."""
         waiting = threading.Event()
+        woken = []
 
         def sleep(seconds, stop):
             waiting.set()
-            return llm._sleep(seconds, stop)
+            woken.append(stop.wait(HANG_GUARD))
+            return not woken[-1]
 
-        monkeypatch.setattr(llm, "_PACER", llm._Pacer(sleep=sleep))
+        monkeypatch.setattr(
+            llm, "_PACER", llm._Pacer(clock=clock, sleep=sleep)
+        )
         client = ClaudeCodeClient()
         cli.script = [RATE_LIMITED]
         reasons = []
@@ -630,10 +639,11 @@ class TestAskingAgain:
 
         thread = threading.Thread(target=call)
         thread.start()
-        assert waiting.wait(30)
+        assert waiting.wait(HANG_GUARD)
         client.close()
-        thread.join(30)
+        thread.join(timeout=HANG_GUARD)
         assert not thread.is_alive()
+        assert woken == [True]
         assert reasons == [CLOSED]
 
 
