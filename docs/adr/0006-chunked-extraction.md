@@ -21,6 +21,11 @@ limit (`max_tokens`) is cut off, sentinel or no, and so is a call the
 claude CLI gave up on at that limit, which a fallback tier takes as
 answered; a cut-off answer is rejected in the cache as one without its
 sentinel is (§3, §5).
+Amended by #390 (2026-10-02): a manifest or segmentation attempt the
+claude CLI gave up on at the output limit is kept in the cache, as a
+refused answer is, so a later run replays the same fallback; a cached
+chunk answer whose entry records a `max_tokens` stop is rejected as a
+fresh one is (§5; ADR-0032 §4, §5).
 
 ## Context
 
@@ -216,7 +221,8 @@ run whenever the batch is made again (in a fresh state directory, or on
 `--refresh extract`; `ingest run` otherwise reuses the batch view,
 ADR-0032 §1), so a fix to them costs no model call for any response the
 old code accepted. A chunk cut off, at the output limit or before its
-sentinel (§3), is rejected in the cache: it is kept aside for inspection
+sentinel (§3), is rejected in the cache, the stop reason its entry
+keeps telling a kept answer cut off at the limit (#390): it is kept aside for inspection
 and never served again, so the retry, or the next run, asks the engine
 anew, and a parser fix does not recover a response the old parser
 rejected. A chunk the claude CLI gave up on stored nothing, and is asked
@@ -224,9 +230,9 @@ anew as well. The entity manifest and the segmentation are asked in two
 attempts each, keyed apart in the cache, and a refused answer is kept,
 so a later run replays the same attempts and takes the same fallback
 (ADR-0032 §5). An attempt the claude CLI gave up on at the output limit
-is the exception: it stores nothing, so a later run asks it again, and
-its fallback repeats only if the engine gives up again (#390 is to have
-it replay). When a fork misses behind a cached manifest, the
+is kept alike, as a give-up: a later run gives up on it again from the
+cache, without asking the engine, and takes the same fallback (#390).
+When a fork misses behind a cached manifest, the
 conversation is resumed exactly from the session the cache
 kept for the manifest it serves; a replay that answers differently starts
 the extraction over from the new answer (ADR-0032 §6). A cut-off chunk
