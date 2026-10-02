@@ -78,6 +78,7 @@ TEMPLATE = """\
 2 DATE FROM BET 1956 AND 1957 TO BET 1974 AND 1984
 2 PLAC Integration Town {marker}
 1 FAMS @F1@
+1 FAMS @F2@
 0 @I2@ INDI
 1 NAME Gedcom Spouse /Tester {marker}/
 1 DEAT Y
@@ -453,11 +454,19 @@ def test_gedcom_divorce_without_a_wedding_is_of_a_marriage(
     assert {v["id"] for v in _claim_values(client, union_qid, "ended_by")} == {
         divorce_qid
     }
-    roles = [
-        _qualifier_values(client, statement, "object_has_role")
+    couple = sorted(
+        (
+            statement["mainsnak"]["datavalue"]["value"]["id"],
+            _qualifier_values(client, statement, "object_has_role"),
+        )
         for statement in _statements(client, union_qid, "participant")
-    ]
-    assert roles == [[items["spouse"]], [items["spouse"]]]
+    )
+    assert couple == sorted(
+        [
+            (write.created_items["i1"], [items["spouse"]]),
+            (write.created_items["i3"], [items["spouse"]]),
+        ]
+    )
     assert [
         v["time"] for v in _claim_values(client, divorce_qid, "point_in_time")
     ] == ["+1970-00-00T00:00:00Z"]

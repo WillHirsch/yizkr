@@ -90,16 +90,25 @@ never narrow or guess.
   "'Muckel'"), and one with none left goes whole. Leaving a placeholder
   out can give two people one label ("Eugen ? /Löbig/" and "Eugen
   /Löbig/" are both "Eugen Löbig"), as exact namesakes already share one.
-- **A typed name with a placeholder gives no typed claim.** A NAME with a
-  TYPE, or a `_MARNM`, whose value or parts held a placeholder gives no
-  typed-name claim, counted (`typed NAME with a placeholder`): "Eugen
-  /?/" + TYPE birth is no complete birth name. Its forms stay aliases.
+- **A typed name with a placeholder gives no typed claim** (decision K).
+  A NAME with a TYPE that held a placeholder anywhere, in its value
+  (inside its brackets too: "Eugen (?) /Löbig/", "Eugen /(?)/"), its
+  quotes, or its GIVN, SURN, NPFX, NSFX or SPFX ("GIVN Agnes (?)"),
+  gives no typed-name claim, counted (`typed NAME with a placeholder`):
+  a tree writes "(?)" to say it is unsure of the name, and the claim
+  would narrow it (rule 5). A NICK's placeholder does not block it, as a
+  NICK is no part of the typed name. A `_MARNM` whose slashes still hold
+  a surname but that held a placeholder gives none either. Their forms
+  stay aliases.
 - **The label falls back, tier by tier, to any word.** A person's label
   is the first name form a NAME gives. Where none gives one, it is the
   first of: a NAME value's brackets that hold a word ("(Peppi)", so that
   `1 NAME (Peppi)` then `1 NAME Ida /Sörne/` is labelled "Ida Sörne",
-  with "Peppi" an alias); a GIVN's quoted or bracketed part (`GIVN
-  (Peppi)` gives "Peppi"); a NICK; a `_MARNM`. A person with any word in
+  with "Peppi" an alias); a GIVN's quoted or bracketed part; a NICK; a
+  `_MARNM`. Each such label keeps the source's marks as written (`GIVN
+  (Peppi)` gives "(Peppi)", `GIVN 'Peppi'` "'Peppi'", `NICK 'Muckel'`
+  "'Muckel'"), so that a person known only so meets no one whose name is
+  the bare word (decision L). A person with any word in
   any name keeps an entity and its claims. A person none of these gives
   a word is skipped with the adapter's warning, as one whose NAME is
   empty is, and counted (`person without a name`): the writer finds an
@@ -129,10 +138,20 @@ never narrow or guess.
   bracket a nickname, to follow the owner's bracket rule (§6, 2026-09-29:
   a bracket may hold a maiden name, a later name or a note as well as a
   nickname). Either still gives the label of a person no other name
-  gives one, as the tier above says. A bracket within a bracket is read by the outermost pair
-  ("(Pep(pi))" gives "Peppi"), and a bracket never closed is none. A
-  bracket name keeps an NPFX or NSFX beside it as a title or suffix, its
-  full form an alias ("Frau Peppi").
+  gives one, as the tier above says; a GIVN's quoted part also gives a
+  nickname claim cited to its NAME, as a NICK does, and its bracketed
+  part none. A bracket within a bracket is read by the outermost pair
+  ("(Pep(pi))" gives "Peppi"); a '(' never closed or a ')' never opened
+  is left out, counted. A quote whose only content is a bracket ("Ida
+  '(Peppi)'") is the bracket, its marks no placeholder. A bracket name
+  keeps an NPFX or NSFX beside it as a title or suffix, its full form an
+  alias ("Frau Peppi").
+- **Connectors** (decision M). A dash or "&" between two words is a
+  connector, kept as written ("Ida /Löbig - Sörne/" keeps the surname
+  "Löbig - Sörne"); standing as a whole part or value, it is a
+  placeholder.
+- **Particles.** An SPFX goes on each piece of a SURN of several pieces
+  ("von" + "Löbig, Sörne" gives "von Löbig" and "von Sörne").
 - **Language.** A HEAD.LANG of `und` is taken as it is, uncounted.
 
 **Decided by the owner (2026-09-29):**
@@ -1049,9 +1068,10 @@ into "fix first, and measure in run 1": under the pre-baseline exception
   TYPE values (`_NAME_TYPE_PROPERTY` in `pipeline/gedcom.py`), PLAC's order of
   jurisdictions and HEAD.LANG's language names. With them, the tree
   keepers' inline convention: a quote marks a nickname, a bracket an
-  untyped form (§6). An initial in an export keys as written, and meets
-  only the same form; a placeholder with no letter or digit ("?") is no
-  key at all, since the adapter leaves it out (#408's 2026-10-02 line). A title an export writes in a
+  untyped form (§6). An initial or a lettered stand-in ("N.N.") in an
+  export keys as written, and meets only the same form; a placeholder
+  with no letter or digit ("?") is no key at all, since the adapter
+  leaves it out (#408's 2026-10-02 line). A title an export writes in a
   NAME's given part with no NPFX ("Dr.") keys as a given name: an
   accepted limitation.
 - GEDCOM dates: month names beyond the standard's abbreviations come from

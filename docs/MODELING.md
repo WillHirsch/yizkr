@@ -606,9 +606,11 @@ Names are modelled in **two layers**:
   that holds no letter or digit ("?", "_", "()") is a placeholder, in a
   value, a bracket, a quote, a part or a NICK: it names nothing, so it
   is counted, not placed ("Eugen /?/" is labelled "Eugen"), and a typed
-  name that held one gives no typed claim. Where no NAME gives a name,
-  the label falls back to brackets that hold a word ("(Peppi)"), then a
-  GIVN's quotes or brackets, then a NICK, then a `_MARNM`; a person with
+  name that held one anywhere but in a NICK gives no typed claim; a dash
+  or "&" between two words is a connector, kept. Where no NAME gives a
+  name, the label falls back, marks and all, to brackets that hold a word
+  ("(Peppi)"), then a GIVN's quotes or brackets, then a NICK, then a
+  `_MARNM`; a person with
   none of these words is skipped and counted, as one with an empty NAME
   is. The adapter's texts are in the export's language (HEAD.LANG,
   mapped to BCP 47), or undetermined (`und`) where it states none.
