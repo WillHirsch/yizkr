@@ -486,7 +486,13 @@ is strictly safer, since the determination is now absence-of-death only.
   name them (#363). A kept item may so lose a statement whose own value
   is kept: an appellation whose perspective is a possibly living person,
   or a type whose qualifier names an untyped item, and with it the
-  truthy triple, unless another kept statement gives the same value. An
+  truthy triple, unless another kept statement gives the same value.
+  While every family is left out, a released person's `member of`
+  statement naming a family goes whole too, with its dates and
+  references, and so does an appellation from a family's perspective. A
+  statement of unknown value that goes takes every truthy triple of
+  unknown value of its item and property, a kept statement's included,
+  whose node stays. An
   event goes when a participant it leaves out is named only in a
   qualifier of a `participant` statement, as an identity judgement on a
   participant of unknown value names one.
