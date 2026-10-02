@@ -6452,3 +6452,15 @@ class TestRound5:
         )
         assert parts(eugen.structure)["unsplit"] == ["Eugen Löbig"]
         assert outcomes["NAME part without a word"] == 1
+
+    def test_a_connector_beside_an_emptied_bracket_in_a_nick(self):
+        text = person("I1", "Eugen /Löbig/", "2 NICK Muckel - (?) Cilli")
+        eugen, outcomes = record_of(text, "i1")
+        assert parts(eugen.structure)["nicknames"] == ["Muckel Cilli"]
+        assert outcomes["NAME part without a word"] == 2
+
+    def test_a_givn_connector_before_its_bracket_joins_nothing(self):
+        text = person("I1", "Eugen Ida /Löbig/", "2 GIVN Eugen - (Peppi) Ida")
+        eugen, outcomes = record_of(text, "i1")
+        assert parts(eugen.structure)["given"] == ["Eugen", "Ida"]
+        assert outcomes["NAME part without a word"] == 1
