@@ -852,7 +852,9 @@ def table(results: list[Result]) -> str:
 
 class Harness:
     """Runs the mutations of one spec, one at a time. `monotonic` and
-    `sleep` time each run, its --timeout and its --grace."""
+    `sleep` time each run, its --timeout and the --grace that pytest has
+    to exit after a SIGINT. The reaping of pytest after the SIGKILL that
+    follows is a real wait, which --grace also bounds."""
 
     def __init__(
         self,

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import fcntl
 import importlib.util
+import inspect
 import json
 import os
 import py_compile
@@ -37,6 +38,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from stat import S_IMODE
 from types import SimpleNamespace
@@ -1072,11 +1074,94 @@ def test_a_timeout_is_an_error_that_stops_all_the_tests_started(
         )
         [entry] = json.loads(report.read_text())["mutations"]
         assert entry["seconds"] == round(clock.now, 3)
+        # pytest ended as interrupted: hang() took the SIGINT
+        assert entry["returncode"] == pytest.ExitCode.INTERRUPTED
         assert snapshot(calc) == before
         until_ended(pids)
     finally:
         cue.close()
         kill_leftovers(pids)
+
+
+def test_a_timeout_waits_out_the_grace_on_the_clock_for_tests_that_ignore_it(
+    repo, tmp_path, monkeypatch, capsys
+):
+    """The twin of the timeout test above, with a stubborn hang(): pytest
+    and its grandchild ignore the harness's SIGINT, so the harness waits
+    out the whole grace, on the fake clock, before SIGKILL to the group
+    stops them all. A grace waited out on the real clock instead leaves
+    the fake one where the SIGINT found it."""
+    calc = repo / "calc.py"
+    before = snapshot(calc)
+    spec = repo.parent / "spec.toml"
+    spec.write_text(
+        mutation("sum hangs", "return a + b", "return hang(stubborn=True)")
+    )
+    cue = Cue(tmp_path / "cue")
+    pids = []
+    runs = []
+    waiting = mutate.Harness._wait
+    signalling = mutate.signal_group
+    interrupted = []
+
+    def noting_the_sigint(child, signum):
+        if signum == signal.SIGINT:
+            interrupted.append(clock.now)
+        signalling(child, signum)
+
+    def noting_the_run(self, child, deadline):
+        runs.append(child)
+        return waiting(self, child, deadline)
+
+    def cued():
+        ended = pidfd(runs[-1].pid)
+        try:
+            cued = cue.receive(ended=ended)
+        finally:
+            if ended is not None:
+                os.close(ended)
+        assert cued is not None, "pytest ended before hang() sent its cue"
+        pids.extend(map(int, cued.split()))
+
+    clock = Clock(limit=TIMEOUT + mutate.DEFAULT_GRACE + 1, ready=cued)
+    monkeypatch.setattr(mutate.Harness, "_wait", noting_the_run)
+    monkeypatch.setattr(mutate, "signal_group", noting_the_sigint)
+    for key, value in GIT_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("CALC_CUE", str(cue.path))
+    monkeypatch.chdir(repo)
+    try:
+        status = mutate.main(
+            [str(spec), "--no-baseline", "--timeout", str(TIMEOUT)],
+            monotonic=clock.read,
+            sleep=clock.advance,
+        )
+        captured = capsys.readouterr()
+        assert status == 2, captured.out + captured.err
+        assert len(pids) == 3
+        [halted_at] = interrupted
+        assert halted_at >= TIMEOUT
+        # the grace was waited out on the fake clock, after the SIGINT
+        assert clock.now >= halted_at + mutate.DEFAULT_GRACE
+        row = results(captured.out)["sum hangs"]
+        assert (row["result"], row["detail"]) == (
+            "error",
+            f"timed out after {TIMEOUT} s",
+        )
+        assert snapshot(calc) == before
+        until_ended(pids)
+    finally:
+        cue.close()
+        kill_leftovers(pids)
+
+
+def test_the_harness_defaults_to_the_real_clock():
+    """main, Harness and exited time their waits on the real clock unless
+    they are given another."""
+    for waits in (mutate.main, mutate.Harness, mutate.exited):
+        parameters = inspect.signature(waits).parameters
+        assert parameters["monotonic"].default is time.monotonic
+        assert parameters["sleep"].default is time.sleep
 
 
 def test_main_times_the_harness_on_the_clock_it_is_given(
