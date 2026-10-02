@@ -153,9 +153,10 @@ def for_attempt(client: Any, number: int) -> Any:
     A caller that asks again when it cannot use an answer, and falls back
     to something else after the last attempt, asks through this: behind
     the LLM cache each attempt is then answered, and kept, on its own, so
-    the whole sequence, fallback included, replays as it went. Any other
-    client makes every attempt itself."""
-    if number and isinstance(client, AttemptingLlmClient):
+    the whole sequence, fallback included, replays as it went, an attempt
+    the engine gave up on at its output limit (OutputLimitReached) among
+    them. Any other client makes every attempt itself."""
+    if isinstance(client, AttemptingLlmClient):
         return client.attempt(number)
     return client
 
@@ -1003,8 +1004,11 @@ class OutputLimitReached(RuntimeError):
     at the limit, not a failure of the engine: a caller handles it as it
     handles an answer cut off (at_output_limit), with nothing of it to
     keep, and the anomaly checks count it as a truncation, never as a
-    failed call. Like any error, it leaves the LLM cache nothing to keep,
-    so the next call asks the engine again."""
+    failed call. Behind the LLM cache, an attempt asked through
+    `for_attempt` keeps it under the attempt's key, as it keeps a refused
+    answer, so a later run raises it again without asking the engine and
+    takes the same fallback; any other call keeps nothing of it, so the
+    next call asks the engine again."""
 
     def __init__(self, message: str = CUT_OFF_AT_LIMIT) -> None:
         super().__init__(message)
@@ -1031,11 +1035,13 @@ def at_output_limit(client: Any, response: str) -> bool:
     pinned claude CLI gives no such answer: the call raises
     OutputLimitReached, which its callers handle alike. An answer the LLM
     cache gave from an entry (a hit, an adoption among them) was made by no
-    call of the engine's now, and the entry keeps no stop reason: it is
-    judged by its text alone. So is the answer of a client that reports no
-    stop reason."""
+    call of the engine's now: it is judged by the stop reason the entry
+    keeps (its `stop_reason`), so a kept answer the engine cut off is cut
+    off when served again, and is rejected as a fresh one is. An entry
+    that keeps no stop reason, and the answer of a client that reports
+    none, are judged by their text alone."""
     if getattr(response, "hit", False):
-        return False
+        return getattr(response, "stop_reason", None) == OUTPUT_LIMIT
     reporter = client
     for _ in range(_REPORTERS):
         last_report = getattr(reporter, "last_report", None)

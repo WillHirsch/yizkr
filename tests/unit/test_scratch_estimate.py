@@ -53,6 +53,7 @@ from tests.unit.test_scratch import (  # noqa: F401
 from yizkr import cli
 from yizkr.core.corpus import ExclusionConfigError, ExclusionList
 from yizkr.pipeline import estimate, llm, scratch
+from yizkr.pipeline.chunking import parse_chunk_response, parse_chunk_unread
 from yizkr.pipeline.estimate import FIRST_TURNS, Estimator, StageCalls
 from yizkr.pipeline.llmcache import CacheRefused
 from yizkr.pipeline.rundir import RunDir, RunSettingsConflict
@@ -646,6 +647,36 @@ class TestCounts:
         assert made["extraction"] <= (
             extraction.engine_calls + extraction.more
         )
+
+    def test_a_give_up_the_cache_kept_is_a_hit(self, tmp_path, engine):
+        """The manifest's first attempt is a give-up the cache kept
+        (#390): a hit, which the extraction takes as a refused answer, as
+        the run does, so the second attempt is the engine's."""
+        corpus = one_letter(tmp_path)
+        run(tmp_path, corpus, engine)
+        cache = tmp_path / "cache"
+        (first,) = entries(cache, call="open", attempt=0)
+        entry = json.loads(first.read_text())
+        entry |= {"response": "", "gave_up": True}
+        first.write_text(json.dumps(entry))
+        before = tree(cache)
+        counted = estimate_of(tmp_path, corpus, engine, new=True)
+        assert tree(cache) == before
+        extraction = counted.stages["extraction"]
+        assert (extraction.hits, extraction.known) == (1, 1)
+        assert extraction.more == FIRST_TURNS - 2
+        made = run(tmp_path, corpus, engine, new=True)
+        assert extraction.known <= made["extraction"]
+        assert made["extraction"] <= (
+            extraction.engine_calls + extraction.more
+        )
+
+    def test_the_empty_chunk_is_the_sentinel_alone(self):
+        """The answer the estimate gives a chunk the cache cannot answer
+        is the chunk prompt's terminal sentinel and nothing else (#390)."""
+        assert json.loads(estimate.EMPTY_CHUNK) == {"done": True}
+        assert parse_chunk_response(estimate.EMPTY_CHUNK) == []
+        assert parse_chunk_unread(estimate.EMPTY_CHUNK) == []
 
     def test_a_refresh_is_known_to_every_call_of_its_role(
         self, tmp_path, engine

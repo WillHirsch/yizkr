@@ -256,9 +256,25 @@ cache answered, in all and per role; hits and misses by reason; resumes,
 replays (and those that answered otherwise), rejections and adoptions;
 and what the engine's call events say: outcomes, errors by exception
 class, engine time, waits for the subscription, attempts a limit
-refused, why calls were held, and the model the engine reported for each
-call. The calls that reached the engine are the cache's misses and
-replays; a run made without the cache (`ingest run --no-cache`) has no
+refused, why calls were held, the model the engine reported for each
+call, and per stage the calls stopped at the output limit: answers cut
+off there (stop reason `max_tokens`) and calls the engine gave up on
+(error `OutputLimitReached`, told by the error alone as the truncations
+check tells it), as counts only (#390), in `report.json`'s
+`aggregate.calls.output_limit_stops` (stage to `cut_off` and `gave_up`).
+A run whose call events carry no stop reason, no API error and no
+give-up has
+`{"recorded": false}` there, and reads `not recorded: the run's call
+events carry no stop reason`, never `none`, which says the stops were
+recorded and there were none. Three kinds of run read so: one made
+before the engine recorded why a call stopped; one on the Anthropic API
+engine, whose calls give the report no stop reason; and one that made
+no call, every answer coming from the cache. A give-up an attempt replays from the
+cache makes no call, so it is no stop: its `cache-hit` says `gave_up:
+true`, and the cache's lines count those hits per stage of their role,
+as `give-ups replayed from the cache` (`aggregate.calls.give_ups_replayed`,
+counts only). The calls that reached the engine are the cache's misses
+and replays; a run made without the cache (`ingest run --no-cache`) has no
 cache events, so its engine calls are its call events, as the monitor
 counts them.
 

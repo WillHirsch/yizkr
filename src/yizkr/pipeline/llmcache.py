@@ -75,10 +75,16 @@ reported, the CLI version, the client's config hash and the time; a fork
 also records how its session was obtained and the opening answer it was
 made on. Only a response the engine returned with some text in it is
 stored: an error, a timeout, a pause (PassPaused) or an empty answer
-stores nothing. An entry is published whole, by a link that fails where
-the key already has one, so a reader sees an entry whole or not at all,
-and the cache deletes nothing: an entry a caller rejects, and any entry
-a newer one displaces (a refresh's, a racing call's, or one damaged), is
+stores nothing. The one exception is an attempt asked through
+llm.for_attempt that the engine gave up on at its output limit
+(llm.OutputLimitReached): it is kept under the attempt's key as a give-up
+(``gave_up``, with an empty response), as a refused answer is kept, and a
+call served it raises OutputLimitReached again without asking the engine,
+so a later run takes the same fallback; a refresh asks it again. An
+entry is published whole, by a link that fails where the key already has
+one, so a reader sees an entry whole or not at all, and the cache
+deletes nothing: an entry a caller rejects, and any entry a newer one
+displaces (a refresh's, a racing call's, or one damaged), is
 moved aside under a name no lookup reads, and kept for inspection. An
 answer the engine did not give (an archived transcription) is adopted
 for the call it stands for (seed), with the provenance it is given, or,
@@ -97,8 +103,11 @@ lock reads the folder moved aside (CacheAsIs.kept_session).
 
 An entry of an answer the engine gave also keeps, in its provenance,
 what the call's stream reported of it, where the engine reports it: the
-session it ran in, the tokens it used, its turns and how it ended. None
-of it is keyed.
+session it ran in, the tokens it used, its turns, how it ended, its stop
+reason and any API error's class. None of it is keyed. An answer served
+from an entry carries the stop reason the entry keeps (CachedResponse),
+so one the engine cut off at its output limit is cut off when served
+again (llm.at_output_limit), and is rejected as a fresh one is.
 
 docs/LLM_CACHE.md describes the cache, its events and the run directory.
 """
@@ -132,6 +141,7 @@ from yizkr.pipeline.llm import (
     OPEN,
     ConversationalLlmClient,
     ConversationChanged,
+    OutputLimitReached,
     PassPaused,
     engine_client,
 )
@@ -180,7 +190,14 @@ RECOMPUTED = "recomputed"
 
 # what an entry keeps of its call's stream report (llm.stream_report),
 # besides the model and the CLI version every entry records
-STREAM_REPORT = ("session_id", "usage", "num_turns", "subtype")
+STREAM_REPORT = (
+    "session_id",
+    "usage",
+    "num_turns",
+    "subtype",
+    "stop_reason",
+    "api_error",
+)
 
 # a key, or the SHA-256 of the opening answer a kept session holds
 _KEY = re.compile(r"^[0-9a-f]{64}$")
@@ -218,7 +235,8 @@ def _dump(entry: Mapping[str, Any]) -> str:
 
 
 def _read(path: Path, key: str) -> dict | None:
-    """The entry at `path` if it is a whole entry for `key`, else None."""
+    """The entry at `path` if it is a whole entry for `key`, else None.
+    An entry whose ``gave_up`` is there but no boolean is damaged."""
     try:
         entry = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -227,6 +245,7 @@ def _read(path: Path, key: str) -> dict | None:
         not isinstance(entry, dict)
         or entry.get("key") != key
         or not isinstance(entry.get("response"), str)
+        or not isinstance(entry.get("gave_up", False), bool)
     ):
         return None
     return entry
@@ -1131,12 +1150,15 @@ class CachedResponse(str):
     in every other respect it is the text. An answer the cache adopted,
     which no engine gave this call, says what made it (`made_by`): the
     model identifier its provenance names, else the adoption's reason;
-    None for the engine's answers. It copies and pickles with all
-    three."""
+    None for the engine's answers. A hit carries the stop reason its
+    entry keeps (`stop_reason`, None when it keeps none), which
+    llm.at_output_limit judges it by. It copies and pickles with all
+    four."""
 
     key: str
     hit: bool
     made_by: str | None
+    stop_reason: str | None
 
     def __new__(
         cls,
@@ -1144,15 +1166,26 @@ class CachedResponse(str):
         key: str,
         hit: bool = False,
         made_by: str | None = None,
+        stop_reason: str | None = None,
     ) -> CachedResponse:
         response = super().__new__(cls, text)
         response.key = key
         response.hit = hit
         response.made_by = made_by
+        response.stop_reason = stop_reason
         return response
 
     def __getnewargs__(self) -> tuple[str, str]:
         return str(self), self.key
+
+
+def _stop_reason(entry: Mapping[str, Any]) -> str | None:
+    """The stop reason an entry's provenance keeps, if it keeps one."""
+    provenance = entry.get("provenance")
+    kept = (
+        provenance.get("stop_reason") if isinstance(provenance, dict) else None
+    )
+    return kept if isinstance(kept, str) else None
 
 
 def _made_by(entry: Mapping[str, Any]) -> str:
@@ -1244,6 +1277,9 @@ class CachingClient:
         self.role = role
         self._events = events
         self._attempt = 0
+        # whether calls are asked as attempts (llm.for_attempt), whose
+        # give-ups at the output limit are kept
+        self._attempted = False
         # None or "": the engine runs a default model of its own
         if getattr(engine, "model", "unnamed") in (None, ""):
             cache.warn_unpinned(role)
@@ -1254,9 +1290,12 @@ class CachingClient:
 
     def attempt(self, number: int) -> CachingClient:
         """This client for attempt `number` of the same call: each attempt
-        is keyed, and kept, apart (llm.for_attempt)."""
+        is keyed, and kept, apart (llm.for_attempt), a give-up at the
+        output limit included (_serve). Attempt 0 is keyed as this client's
+        own calls are."""
         sibling = copy.copy(self)
         sibling._attempt = number
+        sibling._attempted = True
         return sibling
 
     # -- keys ---------------------------------------------------------------
@@ -1348,24 +1387,33 @@ class CachingClient:
         provenance of its own; it is given the function that emits the
         miss, and calls it just before it asks the engine, so that a call
         that fails before then (a fork without a session) is no miss.
-        Whatever `ask` raises propagates, and nothing is stored."""
+        Whatever `ask` raises propagates, and nothing is stored, but for
+        an attempt's give-up at the output limit (OutputLimitReached),
+        which is kept as a give-up entry (_gave_up_entry). A hit on a
+        give-up entry, whose event says ``gave_up``, raises
+        OutputLimitReached, as the engine did, and asks nothing."""
         key = call_key(components)
         refresh = self.cache.refreshing(self.role, key)
         if not refresh:
             entry = self.cache.get(key)
             if entry is not None:
                 origin = entry.get("origin", ENGINE)
+                gave_up = entry.get("gave_up") is True
                 self._emit(
                     HIT,
                     call=call,
                     key=key,
                     reason=KEY_MATCH if origin == ENGINE else origin,
+                    **({"gave_up": True} if gave_up else {}),
                 )
+                if gave_up:
+                    raise OutputLimitReached()
                 return CachedResponse(
                     entry["response"],
                     key,
                     hit=True,
                     made_by=None if origin == ENGINE else _made_by(entry),
+                    stop_reason=_stop_reason(entry),
                 ), False
         if refresh:
             reason = REFRESH
@@ -1373,9 +1421,16 @@ class CachingClient:
             reason = REJECTED
         else:
             reason = ABSENT
-        response, provenance = ask(
-            lambda: self._emit(MISS, call=call, key=key, reason=reason)
-        )
+        try:
+            response, provenance = ask(
+                lambda: self._emit(MISS, call=call, key=key, reason=reason)
+            )
+        except OutputLimitReached:
+            if self._attempted:
+                self.cache.put(key, self._gave_up_entry(key, components))
+                if refresh:
+                    self.cache.refreshed(key)
+            raise
         if str(response).strip():
             self.cache.put(
                 key, self._entry(key, components, response, provenance)
@@ -1393,33 +1448,65 @@ class CachingClient:
     ) -> dict[str, Any]:
         """A new entry for a response the engine has just returned, with
         what the call's stream reported of it (llm.stream_report: the
-        session, the usage, the turns and the subtype, beside the model and
-        the CLI version) where the engine reports it. None of it is in the
-        key's components, which are the call's alone."""
+        session, the usage, the turns, the subtype, the stop reason and any
+        API error's class, beside the model and the CLI version) where the
+        engine reports it. None of it is in the key's components, which are
+        the call's alone."""
         last_report = getattr(self._engine, "last_report", None)
         report = last_report() if callable(last_report) else {}
+        return self._recorded(key, components, str(response)) | {
+            "provenance": self._provenance(components, report) | provenance
+        }
+
+    def _gave_up_entry(
+        self, key: str, components: dict[str, Any]
+    ) -> dict[str, Any]:
+        """A new entry for an attempt the engine has just given up on at
+        its output limit: no response (an empty one), ``gave_up``, and in
+        its provenance what the call's stream reported of it
+        (``last_stream``, the engine's report of a call answered or not:
+        its stop reason and its API error among them)."""
+        last_stream = getattr(self._engine, "last_stream", None)
+        report = last_stream() if callable(last_stream) else {}
+        return self._recorded(key, components, "") | {
+            "gave_up": True,
+            "provenance": self._provenance(components, report),
+        }
+
+    @staticmethod
+    def _recorded(
+        key: str, components: dict[str, Any], response: str
+    ) -> dict[str, Any]:
+        """What every entry the engine's call makes holds, but for its
+        provenance (_provenance)."""
         return {
             "format": FORMAT,
             "key": key,
             "components": components,
-            "response": str(response),
+            "response": response,
             "origin": ENGINE,
-            "provenance": {
-                "role": self.role,
-                "call": components["call"],
-                "engine": components["engine"],
-                "model": report.get("model"),
-                "cli_version": report.get("cli_version")
-                or getattr(self._engine, "cli_version", None),
-                "config_hash": components["config"],
-                "model_identifier": self._engine.model_identifier,
-                "at": _now(),
-                **{
-                    name: report[name]
-                    for name in STREAM_REPORT
-                    if report.get(name) is not None
-                },
-                **provenance,
+        }
+
+    def _provenance(
+        self, components: dict[str, Any], report: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """An entry's provenance: the call's, and what the engine's
+        `report` of it gives of STREAM_REPORT, beside the model and the
+        CLI version."""
+        return {
+            "role": self.role,
+            "call": components["call"],
+            "engine": components["engine"],
+            "model": report.get("model"),
+            "cli_version": report.get("cli_version")
+            or getattr(self._engine, "cli_version", None),
+            "config_hash": components["config"],
+            "model_identifier": self._engine.model_identifier,
+            "at": _now(),
+            **{
+                name: report[name]
+                for name in STREAM_REPORT
+                if report.get(name) is not None
             },
         }
 
