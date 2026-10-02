@@ -120,6 +120,17 @@ class TestPeople:
         )
         assert normalize_aliases("Xxx Yyyß", ["XXX YYYSS"], record) == []
 
+    def test_a_spelling_variant_in_capitals_stays(self):
+        """'GUSTAV LOBIG' is the plain spelling in capitals: its parts are
+        read in any case, so it keeps the spelling the label lacks."""
+        record = person(
+            given=[{"written": "Gustav"}],
+            surnames=[{"written": "Löbig"}, {"written": "Lobig"}],
+        )
+        assert normalize_aliases("Gustav Löbig", ["GUSTAV LOBIG"], record) == [
+            "GUSTAV LOBIG"
+        ]
+
     def test_the_rescue_prefers_a_holder_that_gives_a_name(self):
         """Of the forms holding her title, the one that also gives a name
         part stays ('Frau Löbig'), before a role phrase or a bare title;
