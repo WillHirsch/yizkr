@@ -6586,3 +6586,35 @@ class TestRound6:
         _, outcomes = record_of(text, "i1")
         assert stated(text, "i1", "birth_name") == []
         assert outcomes["typed NAME with a placeholder"] == 1
+
+    def test_a_quote_glued_after_the_surname_is_a_quote(self):
+        text = person("I1", "Eugen /Löbig/'Muckel'")
+        eugen, _ = record_of(text, "i1")
+        assert parts(eugen.structure)["nicknames"] == ["Muckel"]
+        assert stated(text, "i1", "nickname") == [("Muckel", [])]
+
+    def test_a_givn_quoted_bracket_after_a_comma_is_read(self):
+        text = person("I1", "Agnes /Löbig/", "2 TYPE birth",
+                      "2 GIVN Agnes,'(Peppi)'")  # fmt: skip
+        _, outcomes = record_of(text, "i1")
+        assert stated(text, "i1", "birth_name") == [("Agnes Löbig", [])]
+        assert "NAME part without a word" not in outcomes
+
+    @pytest.mark.parametrize("nick", ["„Cilli", "'Cilli", "Cilli“"])
+    def test_a_nick_with_one_quote_mark_keeps_it(self, nick):
+        text = person("I2", "Cäcilie /Tarle/", f"2 NICK {nick}")
+        caecilie, _ = record_of(text, "i2")
+        assert parts(caecilie.structure)["nicknames"] == [nick]
+
+    def test_a_suffix_stated_only_across_two_brackets_gives_a_form(self):
+        # the brackets are two forms, so neither restates the suffix whole
+        text = "\n".join([
+            "0 @I1@ INDI",
+            "1 NAME (Peppi) (Peppi)", "2 NSFX 'Peppi' Peppi",
+            "1 NAME", "2 GIVN Eugen",
+            "0 TRLR", "",
+        ])  # fmt: skip
+        eugen, outcomes = record_of(text, "i1")
+        assert eugen.label == "Eugen"
+        assert "Peppi Peppi 'Peppi' Peppi" in eugen.aliases
+        assert outcomes["NAME parts not restated"] == 1

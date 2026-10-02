@@ -738,11 +738,9 @@ def _parts_text(pieces: dict[str, list[str]]) -> str:
 
 
 def _paired_slots(pieces: dict[str, list[str]]) -> bool:
-    """Whether a NAME's SPFX and SURN pair slot by slot: both are written,
-    with as many comma-separated slots each, empty ones included."""
-    return bool(pieces["SPFX"] and pieces["SURN"]) and len(
-        pieces["SPFX slots"]
-    ) == len(pieces["SURN slots"])
+    """Whether a NAME's SPFX and SURN pair slot by slot: they have as many
+    comma-separated slots each, empty ones included."""
+    return len(pieces["SPFX slots"]) == len(pieces["SURN slots"])
 
 
 def _with_particle(pieces: dict[str, list[str]]) -> list[str]:
@@ -1066,9 +1064,20 @@ def read_name(name: Record) -> NameReading:
         # field whether the value restates it or not; the name an
         # unrestated one completes is a name form of the person's,
         # counted, less the words of the name that the prefixes already
-        # write. A particle is counted as one with no surname.
-        prefixes = [p for p in pieces["NPFX"] if not _restated(p, named)]
-        suffixes = [p for p in pieces["NSFX"] if not _restated(p, named)]
+        # write. A particle is counted as one with no surname. A part is
+        # restated only where one name form holds it whole: the display,
+        # or else one bracket, as each bracket is a form of its own.
+        written = [display] if display else brackets
+        prefixes = [
+            p
+            for p in pieces["NPFX"]
+            if not any(_restated(p, form) for form in written)
+        ]
+        suffixes = [
+            p
+            for p in pieces["NSFX"]
+            if not any(_restated(p, form) for form in written)
+        ]
         reading.titles += pieces["NPFX"]
         reading.suffixes += pieces["NSFX"]
         if prefixes or suffixes:
