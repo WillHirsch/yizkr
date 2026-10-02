@@ -348,7 +348,14 @@ futile, and explain itself afterwards.
   label, or with a page fragment under it, whichever is written first
   (amended by #444, 2026-10-02): a GEDCOM written after the artifact
   makes its media object an item of its own, never the artifact or its
-  fragment, and its write raises the flag.
+  fragment, and its write raises the flag; one whose label and tagged
+  label registered items both hold is refused, with its claims, before
+  the first write, and raised against the item under the tagged label.
+  A scratch run writes each document once on a reset instance, so its
+  alert counts do not depend on which of the two writes again where one
+  write registers the artifact; where several do (excerpts of two PDFs
+  placing one image), the count depends on how many come before the
+  GEDCOM, which is accepted (ADR-0010, AL).
 - **Per-slice fail-fast pauses.** A slice is a stage or a source kind. A
   check marked fail-fast pauses only its slice, through the run's control
   file, and other slices keep running. If the operator does not resume

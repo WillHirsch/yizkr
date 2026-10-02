@@ -59,19 +59,47 @@ Per batch, the writer:
    those of an entity an approved equivalence names go on before any
    claim is written. A kind the vocabulary lacks is recorded for no
    item, minted or found: the result's `warnings` name each entity that
-   gives one, found before the first write. An artifact-kind entity,
-   such as the GEDCOM import's media object, is never matched by its
-   label to an item registration made (ADR-0010): an artifact, which
-   carries a `media SHA-1`, or an artifact's page fragment, `part of`
-   one. Its item is found, or made, under its label with
-   MEDIA_OBJECT_TAG at its end (`media_object_label`), and the result's
-   `flags` name, against it, as unhashed-title, the artifact holding
-   its label (the fragment's whole, for a fragment) and every artifact
-   registered under its label with a content tag at its end, or whose
-   fragment is (_registered_under), as the registrar flags each when
-   the registration comes second (yizkr.pipeline.registrar), on every
-   write that finds them so. An item with no hash under its label is
-   matched as any other is;
+   gives one, found before the first write.
+   An item is reused by its label only on the entity's own side
+   (ADR-0010, "What is still matched by label"): an artifact or a part
+   of one (`is_artifact_item`: an item with a `media SHA-1` or a `media
+   file`, or an `instance of` an artifact kind or of artifact fragment)
+   is never any other entity's item, and an artifact-kind entity, such
+   as the GEDCOM import's media object, reuses only such an item, and
+   never one registration made (_registered): an artifact, which
+   carries a `media SHA-1`, or its page fragment, `part of` one. An
+   artifact-kind entity so reuses an artifact registered before content
+   hashing, another media object's item, or a fragment of an artifact
+   with no hash. An entity that may not reuse the item under its label
+   is found, or made, under its tagged label (`tagged_label`): its label
+   with MEDIA_OBJECT_TAG at its end for an artifact kind
+   (`media_object_label`), and with its kind, " [human]" say, for any
+   other, its own label then an alias of the item. Where a media object
+   does not take its label, the result's `flags` name, against the
+   media object's item, as unhashed-title, every artifact registered
+   under the label, whatever item holds it: the artifact under it (the
+   fragment's whole, for a fragment) and every artifact under it with
+   one content tag in it, at its end or before a fragment's ", page
+   <n>" (_registered_under), in the order of their items, as the
+   registrar flags each when the registration comes second
+   (yizkr.pipeline.registrar), on every write that finds them so; a dry
+   run names the item's placeholder. Where each entity's item is found
+   or made is settled before the first write (_plan), in a dry run too,
+   with the labels the batch itself makes items under: the entities not
+   of an artifact kind are placed first, so of a person and a media
+   object of one batch under a label no item holds, the person takes
+   it, whichever the batch names first. An entity that may reuse
+   neither the item under its label nor the one under its tagged label,
+   as when registered artifacts hold both labels of a media object, is
+   refused then, with every claim that names it: the result's `refused`
+   names those claims and a warning names the entity by its local id,
+   its claims by their claim ids and the two items by QID, and the rest
+   of the batch is written. For a refused artifact-kind entity the
+   `flags` name, against the item under its tagged label, each artifact
+   registered under its label; a refusal with no such pair, as of a
+   person, place or other entity, or of a media object with no artifact
+   registered under its label, is the warning and `refused` alone
+   (ADR-0010);
 3. writes each claim as a statement at NORMAL rank (the contract has
    no rank field — ADR-0002) with TWO references (ADR-0003):
    * stated in -> artifact, with page number / region / excerpt
@@ -403,15 +431,19 @@ class WriteResult:
     # unless the review corrected it) of each claim refused whole because
     # the instance cannot hold its own text as it is (over TEXT_LIMIT,
     # with a line break, a tab or whitespace at either end, or with a
-    # character it cleans up into U+FFFD), in batch order; a warning says
-    # why for each (the module docstring)
+    # character it cleans up into U+FFFD), or because it names an entity
+    # that may reuse neither the item under its label nor the one under
+    # its tagged label (step 2 of the module docstring), in batch order;
+    # a warning says why (the module docstring)
     refused: list[str] = field(default_factory=list)
     # each registered artifact under the label of an artifact-kind entity
     # of the batch, such as a GEDCOM media object, as it is or content-
     # tagged, its own or a fragment's: the entity's item is never that
     # artifact or fragment, and the pair is flagged unhashed-title, as the
-    # registrar flags it, for a person to look at (step 2 of the module
-    # docstring; yizkr.pipeline.registrar.RegistrationFlag)
+    # registrar flags it, for a person to look at, against the entity's
+    # item, its placeholder in a dry run, or, for an entity refused, the
+    # item under its tagged label (step 2 of the module docstring;
+    # yizkr.pipeline.registrar.RegistrationFlag)
     flags: list[RegistrationFlag] = field(default_factory=list)
 
 
@@ -701,12 +733,115 @@ def media_object_label(label: str) -> str:
     return _cut(label, TERM_LIMIT - len(MEDIA_OBJECT_TAG)) + MEDIA_OBJECT_TAG
 
 
+def tagged_label(label: str, kind: str | None) -> str:
+    """The label of the item for an entity of the kind `kind` whose label
+    `label` (as the writer sends a label, _term_text) names an item it
+    may not join (step 2 of the module docstring): for an artifact kind,
+    `media_object_label`; for any other kind, `label`, cut to leave room
+    (_cut), then " [", the kind's manifest key with each underscore a
+    space, or "entity" for an entity with no kind, and "]". It depends on
+    the label and the kind alone, so a re-run finds the item again
+    (ADR-0010)."""
+    if kind in artifact_kinds():
+        return media_object_label(label)
+    tag = f" [{(kind or 'entity').replace('_', ' ')}]"
+    return _cut(label, TERM_LIMIT - len(tag)) + tag
+
+
 def artifact_kinds() -> frozenset[str]:
     """The manifest keys of the artifact kinds: artifact, and each class
     the manifest makes a `subclass_of` it."""
     from yizkr.pipeline.transcription_record import artifact_classes
 
     return frozenset({"artifact", *artifact_classes()})
+
+
+def is_artifact_item(
+    claims: Mapping[str, list],
+    properties: Mapping[str, str],
+    items: Mapping[str, str],
+) -> bool:
+    """Is the item whose statements, as the API gives them, are `claims`
+    an artifact or a part of one: does it carry a `media SHA-1`, name a
+    `media file`, or is it an `instance of` an artifact kind
+    (artifact_kinds) or of artifact fragment? `properties` and `items`
+    map the manifest's keys to the instance's ids. Registration makes
+    each such item, but an artifact registered before content hashing and
+    a GEDCOM media object's item (ADR-0010)."""
+    from yizkr.pipeline.registrar import _file_key
+
+    def values(key: str) -> list:
+        pid = properties.get(key)
+        return [
+            ((statement.get("mainsnak") or {}).get("datavalue") or {}).get(
+                "value"
+            )
+            for statement in (claims.get(pid) or [] if pid else [])
+        ]
+
+    if any(isinstance(value, str) and value for value in values("media_sha1")):
+        return True
+    if any(
+        isinstance(value, str) and _file_key(value)
+        for value in values("media_file")
+    ):
+        return True
+    kinds = {
+        items[key]
+        for key in (*artifact_kinds(), "artifact_fragment")
+        if key in items
+    }
+    return any(
+        isinstance(value, dict) and value.get("id") in kinds
+        for value in values("instance_of")
+    )
+
+
+@dataclass(frozen=True)
+class _Placement:
+    """Where step 2 of the module docstring puts a local entity: `label`,
+    the label its item is found or made under; `alias`, its own label,
+    kept as an alias of that item when `label` is tagged (tagged_label);
+    `held`, each registered artifact (artifact, SHA-1) flagged against
+    its item (BatchWriter._registered_under); and `blocked`, for an
+    entity refused because it may join neither the item under its label
+    nor the one under its tagged label, those two items' QIDs, "" for an
+    item the batch makes."""
+
+    label: str
+    alias: str = ""
+    held: tuple[tuple[str, str], ...] = ()
+    blocked: tuple[str, str] | None = None
+
+
+class _FoundLabels:
+    """The item each label names on the instance, as the writer finds an
+    item by its label (`WikiClient.find_item_by_label`), each label asked
+    once: the plan reads them before the first write (BatchWriter._plan),
+    and nothing it reads changes until then."""
+
+    def __init__(self, client: WikiClient) -> None:
+        self._client = client
+        self._found: dict[str, str | None] = {}
+
+    def get(self, label: str, default: str | None = None) -> str | None:
+        if label not in self._found:
+            self._found[label] = self._client.find_item_by_label(label)
+        return self._found[label] or default
+
+
+def _local_refs(claim: Claim) -> list[LocalRef]:
+    """The local refs of `claim`, in the order the writer resolves them:
+    its subject, its value, then its qualifiers' values."""
+    refs = [claim.subject]
+    if isinstance(claim.value, ItemValue):
+        refs.append(claim.value.value)
+    refs.extend(
+        qualifier.value.value
+        for qualifier in claim.qualifiers
+        if isinstance(qualifier.value, ItemValue)
+    )
+    return [ref for ref in refs if isinstance(ref, LocalRef)]
 
 
 def _terms(texts: list[str]) -> list[str]:
@@ -797,6 +932,9 @@ class BatchWriter:
         self._mentions: dict[str, str] = {}
         self._minted: set[str] = set()
         self._ref_kinds: dict[str, list[tuple[str, str]]] = {}
+        # per write_batch call: local id -> where step 2 puts its item,
+        # settled before the first write (_plan)
+        self._placements: dict[str, _Placement] = {}
 
     # -- artifact resolution (content-addressed sources) -------------------
 
@@ -886,33 +1024,17 @@ class BatchWriter:
                 f"whitespace; cannot create an item for it (resolve it to "
                 f"a QID or add a label)"
             )
+        # where its item is found or made, settled before the first write
+        # (_plan): under its label, or under its tagged label when it may
+        # not join the item its label names (step 2 of the module
+        # docstring), its own label then an alias
+        placement = self._placements[ref.local_id]
+        label = placement.label
+        if placement.alias:
+            aliases = [placement.alias, *aliases]
         existing = self.client.find_item_by_label(label)
-        # an artifact-kind entity, such as a GEDCOM media object, is never
-        # joined by its label to an item registration made, an artifact or
-        # its fragment (ADR-0010): it takes an item of its own under its
-        # tagged label (media_object_label), found again by it, and each
-        # artifact registered under its label is flagged against it, on
-        # every write, for a person to look at
-        held: list[tuple[str, str]] = []
-        if (
-            existing
-            and instance_of in artifact_kinds()
-            and self._registered(existing)
-        ):
-            held = self._registered_under(label)
-        if held:
-            label = media_object_label(label)
-            existing = self.client.find_item_by_label(label)
-            if existing and self._registered(existing):
-                raise RuntimeError(
-                    f"entity {ref.local_id!r}: its label and its tagged "
-                    f"label both name items registered by the SHA-1 of "
-                    f"their media, and an artifact is never matched by its "
-                    f"label (ADR-0010): no item was made for it"
-                )
         if existing:
-            for registered in held:
-                self._flag_title(registered, existing, result)
+            self._flag_held(placement, existing, result)
             if aliases:
                 self._ensure_aliases(existing, aliases)
             if record is None and instance_of and source_artifact_qid:
@@ -940,7 +1062,10 @@ class BatchWriter:
                 f"an item whose label and description are the same"
             )
         if self.dry_run:
+            # the pair a write would flag is reported against the item's
+            # placeholder
             result.created_items[ref.local_id] = f"(new:{ref.local_id})"
+            self._flag_held(placement, f"(new:{ref.local_id})", result)
             return result.created_items[ref.local_id]
         item = self.client.wbi.item.new()
         item.labels.set("en", label)
@@ -982,8 +1107,7 @@ class BatchWriter:
             )
             self._append(item, hint)
             item.write(summary="ingest: type hint (unclassified entity)")
-        for registered in held:
-            self._flag_title(registered, qid, result)
+        self._flag_held(placement, qid, result)
         result.created_items[ref.local_id] = qid
         return qid
 
@@ -1031,21 +1155,191 @@ class BatchWriter:
                 return whole, sha1
         return None
 
+    def _artifact_item(self, qid: str) -> bool:
+        """Is the item `qid` an artifact or a part of one
+        (is_artifact_item)?"""
+        claims = self._entity(qid).get_json().get("claims") or {}
+        return is_artifact_item(claims, self.properties, self.items)
+
+    def _joins(
+        self,
+        label: str,
+        artifact: bool,
+        labels: _FoundLabels,
+        planned: Mapping[str, bool],
+    ) -> bool:
+        """May an entity, of an artifact kind when `artifact`, take the
+        item under `label`, as the instance holds its items' labels
+        (`labels`) and the batch makes items under the labels `planned`
+        (label -> whether an entity of an artifact kind makes it)? A label
+        nobody holds is free. An entity of an artifact kind joins an item
+        registration did not make (_registered) that is an artifact or a
+        part of one (_artifact_item): an artifact registered before
+        content hashing, another media object's item, or a fragment of an
+        artifact with no hash. Any other entity joins an item that is
+        neither. Each joins an item the batch makes for an entity of its
+        own side."""
+        qid = labels.get(label)
+        if qid is None:
+            return planned.get(label, artifact) == artifact
+        if artifact:
+            return self._registered(qid) is None and self._artifact_item(qid)
+        return not self._artifact_item(qid)
+
+    def _place(
+        self,
+        label: str,
+        kind: str | None,
+        labels: _FoundLabels,
+        planned: dict[str, bool],
+    ) -> _Placement:
+        """Where the item of an entity with the label `label` and the kind
+        `kind` is found or made (_Placement): under its label when it may
+        join the item there (_joins), and otherwise under its tagged label
+        (tagged_label), when it may join the item there; and when neither,
+        it is blocked. An entity of an artifact kind that does not take
+        its label is flagged against every artifact registered under it
+        (_registered_under), whatever item holds the label: an artifact
+        registered while a person held it is content-tagged under it all
+        the same. `planned` gains the label the batch makes an item
+        under."""
+        artifact = kind in artifact_kinds()
+        if self._joins(label, artifact, labels, planned):
+            planned.setdefault(label, artifact)
+            return _Placement(label)
+        holder = labels.get(label, "")
+        held: tuple[tuple[str, str], ...] = ()
+        if artifact:
+            held = tuple(self._registered_under(label))
+        tagged = tagged_label(label, kind)
+        if self._joins(tagged, artifact, labels, planned):
+            planned.setdefault(tagged, artifact)
+            return _Placement(tagged, label, held)
+        return _Placement(
+            tagged, label, held, blocked=(holder, labels.get(tagged, ""))
+        )
+
+    def _plan(
+        self,
+        batch: ClaimBatch,
+        refused: Collection[int],
+        labels: _FoundLabels,
+    ) -> dict[str, _Placement]:
+        """Where step 2 puts the item of each local entity of `batch`
+        (_place), for the claims the writer writes, all but those at the
+        places `refused`: an entity's label and kind are its manifest
+        record's or, without one, its first ref's, in the order the writer
+        resolves their refs (_local_refs). Every entity not of an artifact
+        kind is placed first, then every entity of one, each in that
+        order, so that of two entities of the batch under one label that
+        no item holds, the person, place or other entity takes it and the
+        artifact-kind one its tagged label, whichever ref comes first. An
+        entity an approved equivalence names, or with no label the
+        instance keeps, has none. `labels` finds the items under the
+        labels, before the first write."""
+        entities: dict[str, tuple[str, str | None]] = {}
+        for index, claim in enumerate(batch.claims):
+            if index in refused:
+                continue
+            for ref in _local_refs(claim):
+                if ref.local_id in entities:
+                    continue
+                record = self._entity_records.get(ref.local_id)
+                if record and record.qid:
+                    continue
+                label = _term_text(
+                    (record.label if record else ref.label) or ""
+                )
+                if not label:
+                    continue
+                kind = record.kind if record else ref.instance_of
+                entities[ref.local_id] = (label, kind)
+        planned: dict[str, bool] = {}
+        placements: dict[str, _Placement] = {}
+        for artifact in (False, True):
+            for local_id, (label, kind) in entities.items():
+                if (kind in artifact_kinds()) == artifact:
+                    placements[local_id] = self._place(
+                        label, kind, labels, planned
+                    )
+        return placements
+
+    def _blocked(
+        self, batch: ClaimBatch, refusals: Mapping[int, str]
+    ) -> tuple[dict[int, str], list[str], list[RegistrationFlag]]:
+        """The entities of `batch` that may join neither the item under
+        their label nor the one under their tagged label (_place), each
+        refused with every claim that names it, before the first write;
+        the claims the writer refuses already are at the places
+        `refusals`. Returns the places of the claims so refused, each
+        with the entity's local id; a warning for each entity, naming its
+        claims by their claim ids and the two items by QID; and, for each
+        artifact registered under such an entity's label, an
+        unhashed-title flag against the item under its tagged label. The
+        plan is made again without the refused claims until no other
+        entity is blocked (_plan), and settles `_placements`."""
+        refused = set(refusals)
+        labels = _FoundLabels(self.client)
+        stopped: dict[int, str] = {}
+        warnings: list[str] = []
+        flags: list[RegistrationFlag] = []
+        while True:
+            placements = self._plan(batch, refused, labels)
+            blocked = {
+                local_id: placement
+                for local_id, placement in placements.items()
+                if placement.blocked
+            }
+            if not blocked:
+                break
+            for local_id, placement in blocked.items():
+                named = [
+                    index
+                    for index, claim in enumerate(batch.claims)
+                    if index not in refused
+                    and local_id
+                    in {ref.local_id for ref in _local_refs(claim)}
+                ]
+                for index in named:
+                    stopped[index] = local_id
+                refused.update(named)
+                plain, tagged = (
+                    qid or "an item this batch makes"
+                    for qid in placement.blocked
+                )
+                warnings.append(
+                    f"entity {local_id!r} is refused, with the claims "
+                    f"that name it "
+                    f"({', '.join(claim_id(batch.claims[i]) for i in named)})"
+                    f", and nothing of them is written: it may join neither "
+                    f"the item under its label ({plain}) nor the one under "
+                    f"its tagged label ({tagged}) (ADR-0010)"
+                )
+                against = placement.blocked[1]
+                for held in placement.held if against else ():
+                    self._flag(held, against, flags)
+        self._placements = placements
+        return stopped, warnings, flags
+
     def _registered_under(self, label: str) -> list[tuple[str, str]]:
         """Every artifact (_registered) whose item, or a fragment of which,
-        has the label `label` as it is or with a content tag at its end, "
-        [" and the first 8 hex digits of a SHA-1 and "]", as registration
-        tags a label another item holds (yizkr.pipeline.registrar): the
+        has the label `label` as it is or with one content tag in it, " ["
+        and the first 8 hex digits of a SHA-1 and "]", as registration
+        tags a label another item holds (yizkr.pipeline.registrar), at its
+        end or, for a fragment of a content-tagged artifact, before ",
+        page <n>": a label is one when taking out one such tag, wherever
+        it is, leaves `label`, so a title that holds a bracketed run of 8
+        hex digits of its own, as a date can be, is compared whole. The
         artifacts registered under that title, in the order of their
         items, each once."""
-        _, item_labels = self.client.label_index()
+        _, labels = self.client.label_index()
         found: list[tuple[str, str]] = []
         for other, qid in sorted(
-            item_labels.items(), key=lambda pair: int(pair[1][1:])
+            labels.items(), key=lambda pair: int(pair[1][1:])
         ):
-            if other != label and not (
-                other.startswith(label)
-                and _CONTENT_TAG.fullmatch(other[len(label) :])
+            if other != label and not any(
+                other[: tag.start()] + other[tag.end() :] == label
+                for tag in _CONTENT_TAG.finditer(other)
             ):
                 continue
             registered = self._registered(qid)
@@ -1053,18 +1347,28 @@ class BatchWriter:
                 found.append(registered)
         return found
 
-    def _flag_title(
-        self, held: tuple[str, str], qid: str, result: WriteResult
+    @staticmethod
+    def _flag(
+        held: tuple[str, str], qid: str, flags: list[RegistrationFlag]
     ) -> None:
-        """Flag the registered artifact `held`, (item, SHA-1), registered
-        under the label of the batch's entity whose item, found or made, is
-        `qid`, as the registrar flags an artifact registered under the
-        label of an item with no hash: unhashed-title, once a write."""
+        """Gather in `flags` the registered artifact `held`, (item,
+        SHA-1), registered under the label of the batch's entity whose
+        item, found, made or blocking it, is `qid`, as the registrar flags
+        an artifact registered under the label of an item with no hash:
+        unhashed-title, once a write."""
         from yizkr.pipeline.registrar import UNHASHED_TITLE, RegistrationFlag
 
         flag = RegistrationFlag(UNHASHED_TITLE, held[0], held[1], (qid,))
-        if flag not in result.flags:
-            result.flags.append(flag)
+        if flag not in flags:
+            flags.append(flag)
+
+    def _flag_held(
+        self, placement: _Placement, qid: str, result: WriteResult
+    ) -> None:
+        """Flag each artifact the placement holds against the item `qid`,
+        found or made for it, or its placeholder in a dry run (_flag)."""
+        for held in placement.held:
+            self._flag(held, qid, result.flags)
 
     def _ensure_aliases(self, qid: str, aliases: list[str]) -> None:
         """Append this document's name variants to an existing item.
@@ -1601,17 +1905,8 @@ class BatchWriter:
         for index, claim in enumerate(batch.claims):
             if index in refused:
                 continue
-            refs = [claim.subject]
-            if isinstance(claim.value, ItemValue):
-                refs.append(claim.value.value)
-            refs.extend(
-                qualifier.value.value
-                for qualifier in claim.qualifiers
-                if isinstance(qualifier.value, ItemValue)
-            )
-            for ref in refs:
-                if isinstance(ref, LocalRef):
-                    kinds.setdefault(ref.local_id, ref.instance_of)
+            for ref in _local_refs(claim):
+                kinds.setdefault(ref.local_id, ref.instance_of)
         return [
             f"entity {local_id!r} has the kind {kind!r}, which the "
             f"vocabulary lacks: no kind is recorded for it"
@@ -1702,7 +1997,9 @@ class BatchWriter:
         its row approval (the module docstring), in a dry run too. A
         claim whose own text the instance cannot hold raises nothing: it
         is refused alone, and the rest of the batch is written (the
-        module docstring)."""
+        module docstring); so is an entity that may reuse neither the
+        item under its label nor the one under its tagged label, refused
+        with the claims that name it (step 2 of the module docstring)."""
         unapproved = unapproved_depicts(batch)
         if unapproved:
             raise UnapprovedDepictsError(unapproved)
@@ -1725,11 +2022,21 @@ class BatchWriter:
         # whose own text the instance cannot hold, which the loop below
         # leaves out whole
         refusals = self._refusals(batch)
+        # settled before the first write too: where each entity's item is
+        # found or made, and the entities that may join neither the item
+        # under their label nor the one under their tagged label, refused
+        # with the claims that name them (step 2 of the module docstring)
+        stopped, blocked, flags = self._blocked(batch, refusals)
+        refused = {*refusals, *stopped}
         # found before the first write too: the kinds the vocabulary lacks,
         # of the claims the writer writes, and the type hints the instance
         # cannot hold, each skipped wherever the writer would record it
-        warnings = self._unknown_kinds(batch, refusals)
-        warnings += [*refusals.values(), *self._type_hints_over_limit()]
+        warnings = self._unknown_kinds(batch, refused)
+        warnings += [
+            *refusals.values(),
+            *blocked,
+            *self._type_hints_over_limit(),
+        ]
         # reviewed equivalences (ADR-0007): resolve replaced these
         # entities' refs with QIDs, so materialization never sees them —
         # contribute the document's aliases to the existing items here
@@ -1740,10 +2047,10 @@ class BatchWriter:
                         record.qid, [record.label, *record.aliases]
                     )
         result = WriteResult(
-            run_qid=self.ensure_run_item(batch), warnings=warnings
+            run_qid=self.ensure_run_item(batch), warnings=warnings, flags=flags
         )
         for index, claim in enumerate(batch.claims):
-            if index in refusals:
+            if index in refused:
                 # before any of its refs resolves: an item only a refused
                 # claim mentions is never minted
                 result.refused.append(claim_id(claim))

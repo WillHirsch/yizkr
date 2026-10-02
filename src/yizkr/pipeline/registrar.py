@@ -49,8 +49,8 @@ holds its bytes (``shared-file``; every such file, as MediaWiki lists
 them by their SHA-1), or its title, its own label before its content
 tag, or the label one of its page fragments has before its content tag,
 is the label of an item with no hash, as it is or with the tag the
-writer gives a media object's item under a registered artifact's or
-fragment's label (``unhashed-title``). An item
+writer gives a media object's item under a label it may not take
+(``unhashed-title``). An item
 with no hash has no `media SHA-1` and either names a `media file`, as an
 artifact registered before content hashing does, or is an `instance of`
 an artifact kind, as the item the GEDCOM import makes for a media object
@@ -71,16 +71,20 @@ with `media SHA-1`, shared-file is never raised: an item naming a file
 that holds these bytes carries this SHA-1, as an upload never overwrites
 a file, and is this item. Unhashed-title is raised there only for an
 artifact or derived medium registered under exactly the label of a media
-object's item that the GEDCOM import made, or an artifact one of whose
-page fragments has that label, in either order of the writes. A GEDCOM
-written after the artifact never joins its media object to it, or to
-its fragment, by that label: the writer makes the media object an item
-of its own under the label with a tag at its end (`media_object_label`
-in yizkr.pipeline.writer) and flags the pair itself, the artifact
-against the media object's item, as registration flags it, and with it
-every artifact registered under that label with a content tag at its
-end; and registration compares each title with that tagged label too,
-so the flag is raised on every later write of either.
+object, or an artifact one of whose page fragments has that label, in
+either order of the writes. A GEDCOM written after the artifact never
+joins its media object to it, or to its fragment, by that label: the
+writer makes the media object an item of its own under the label with a
+tag at its end (`media_object_label` in yizkr.pipeline.writer) and
+flags the pair itself, the artifact against the media object's item, as
+registration flags it, and with it every artifact registered under that
+label with one content tag in it, at its end or before a fragment's ",
+page <n>"; and registration compares each title with that tagged label
+too, so the flag is raised on every later write of either. The writer
+also raises it for a media object it refuses, as registered items hold
+both its label and its tagged label: each artifact registered under the
+label, against the item under the tagged label, which is then a
+registered item with a hash, not one without.
 
 Provenance: an artifact asserts its own kind and its own composition by
 existing, so its `instance of`, `media file` and `media SHA-1`, and its
@@ -340,7 +344,10 @@ class RegistrationFlag:
     `kind` is SHARED_FILE when the `others` name as their `media file` a
     wiki file that holds the item's bytes, and UNHASHED_TITLE when its
     title, or its own label before its content tag, is the label of the
-    `others`, items with no hash (`_Instance.unhashed`). `artifact` is
+    `others`, items with no hash (`_Instance.unhashed`); the writer
+    raises it too for a media object it refuses, the `others` then the
+    item under the media object's tagged label, a registered item with a
+    hash (BatchWriter._blocked in yizkr.pipeline.writer). `artifact` is
     the item, and `sha1` the SHA-1 of its media. Every field is an id or
     a hash, none a title or a file name, so a flag can be raised as an
     alert as it is."""

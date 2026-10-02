@@ -21,13 +21,34 @@ fictional scan registered under exactly its media object's title:
 * the scan registered first with two pages, the export's media object
   titled as its first page's fragment: the media object is an item of
   its own, never the fragment, and the write flags the scan's item
-  against it.
+  against it;
+* a scan under the media object's title and another under that title
+  tagged as the writer tags it: the media object is refused, with its
+  claim, before the first write, the rest of the export (Hildegard and
+  her wedding portrait) is written, and the write flags the first scan
+  against the second (decision AK);
+* the media object titled with the person's name: the person is the
+  item under the name, the media object an item of its own under its
+  tagged label, unflagged (decision AM);
+* a scan registered under the person's name first: the person is an
+  item of its own under its name tagged with its kind, its name an
+  alias, the scan's item unchanged, and resolve's labels leave the
+  scan out (decision AN);
+* Sebastian's portrait titled with Hildegard's name, his claim naming
+  it before hers names her: the people are placed first, so she keeps
+  her name and the portrait takes its tagged label (decision AN);
+* Sebastian written, then a scan registered under his name, then an
+  export whose media object is titled with his name: the scan is
+  content-tagged, the media object takes its tagged label, and the
+  write flags the scan against it, as registration would in the other
+  order.
 
-Fictional synthetic data only (docs/EXAMPLES.md): Sebastian Löbig and the
-Löbig family's studio portrait of the 1890s. Every title, name and file
+Fictional synthetic data only (docs/EXAMPLES.md): Sebastian and
+Hildegard Löbig, the Löbig family's studio portrait of the 1890s and
+the 1905 wedding portrait. Every title, name and file
 carries a marker, eight hex digits of a hash over the fixture and over
-the source of the registrar, the writer, the GEDCOM adapter and the wiki
-client, so each version of the fixture and of that code meets the
+the source of the registrar, the writer, resolve, the GEDCOM adapter and
+the wiki client, so each version of the fixture and of that code meets the
 fixture as a first write does. Like every live test it writes fictional
 data to the one instance, so the session that runs it ends by clearing
 the recorded instance-contents key (docs/AGENT_PROTOCOL.md §5).
@@ -42,10 +63,12 @@ import pytest
 
 from yizkr.claims import ArtifactRef
 from yizkr.core import wiki
-from yizkr.pipeline import gedcom, registrar, writer
+from yizkr.pipeline import gedcom, registrar, resolve, writer
 from yizkr.pipeline.gedcom import adapt_gedcom
 from yizkr.pipeline.registrar import UNHASHED_TITLE, Registrar
-from yizkr.pipeline.writer import BatchWriter, media_object_label
+from yizkr.pipeline.resolve import resolvable_labels
+from yizkr.pipeline.review import claim_id
+from yizkr.pipeline.writer import BatchWriter, media_object_label, tagged_label
 
 from .conftest import fictional_png
 
@@ -57,13 +80,20 @@ FIXTURE = (
     "#444: Sebastian Löbig's export, its media object the 1890s studio "
     "portrait, and a scan of the portrait under the media object's title, "
     "the scan registered first, then the export written first, each twice, "
-    "and a two-page scan before an export titled as its first page"
+    "and a two-page scan before an export titled as its first page; "
+    "scans under the title and the tagged title before an export with "
+    "Hildegard's wedding portrait too, written twice; an export whose "
+    "media object is titled with Sebastian's name, written twice; and a "
+    "scan under Sebastian's name before the export, written twice; an "
+    "export whose Sebastian's portrait is titled with Hildegard's name, "
+    "written twice; and Sebastian written, a scan under his name, then "
+    "an export whose media object is titled with his name"
 )
 MARK = hashlib.sha256(
     FIXTURE.encode()
     + b"".join(
         Path(module.__file__).read_bytes()
-        for module in (registrar, writer, gedcom, wiki)
+        for module in (registrar, writer, resolve, gedcom, wiki)
     )
 ).hexdigest()[:8]
 
@@ -77,8 +107,21 @@ TEMPLATE = (
 )
 
 
+# Hildegard and her wedding portrait, to add before the export's TRLR
+HILDEGARD = (
+    "0 @I2@ INDI\n1 NAME Hildegard /Löbig {order} {mark}/\n1 OBJE @O2@\n"
+    "0 @O2@ OBJE\n1 FILE wedding-1905.jpg\n"
+    "2 TITL Integration-test wedding portrait, {order} {mark}\n"
+)
+
+
 def export(order: str) -> str:
     return TEMPLATE.format(order=order, mark=MARK)
+
+
+def person(order: str) -> str:
+    """The label the export gives Sebastian for `order`."""
+    return f"Sebastian Löbig {order} {MARK}"
 
 
 def title(order: str) -> str:
@@ -100,14 +143,23 @@ def write_file(tmp_path, name: str, data: bytes) -> Path:
     return path
 
 
-def register_scan(client, tmp_path, order: str, pages: int = 0):
+def register_scan(
+    client, tmp_path, order: str, pages: int = 0, named: str | None = None
+):
+    """The scan for `order`, registered under `named`, by default the
+    media object's title for `order`; another name gives other bytes."""
+    data = scan_bytes(order if named is None else f"{order}, {named}")
     path = write_file(
         tmp_path,
-        f"integration-test-portrait-{order}-{MARK}.png",
-        scan_bytes(order),
+        f"integration-test-portrait-{hashlib.sha1(data).hexdigest()[:8]}.png",
+        data,
     )
     return Registrar(client).register_artifact(
-        path, "photograph", title(order), description=DESCRIPTION, pages=pages
+        path,
+        "photograph",
+        title(order) if named is None else named,
+        description=DESCRIPTION,
+        pages=pages,
     )
 
 
@@ -238,3 +290,140 @@ def test_an_export_after_the_scan_never_joins_its_fragment(client, tmp_path):
     flag = (UNHASHED_TITLE, artifact, sha1(scan_bytes(order)), (media_object,))
     assert flagged(written) == [flag]
     assert flagged(register_scan(client, tmp_path, order)) == [flag]
+
+
+def test_a_media_object_whose_two_labels_are_registered_is_refused(
+    client, tmp_path
+):
+    order = "both labels"
+    first = register_scan(client, tmp_path, order).artifact_qid
+    second = register_scan(
+        client, tmp_path, order, named=media_object_label(title(order))
+    ).artifact_qid
+    assert label(client, second) == media_object_label(title(order))
+    text = export(order).replace(
+        "0 TRLR\n", HILDEGARD.format(order=order, mark=MARK) + "0 TRLR\n"
+    )
+    batch = adapt_gedcom(text, artifact=ArtifactRef.from_bytes(text.encode()))
+    named = [
+        claim_id(claim)
+        for claim in batch.batch.claims
+        if claim.value.value.local_id == "md1"
+    ]
+    before = {qid: entity(client, qid)["lastrevid"] for qid in (first, second)}
+
+    for _ in range(2):
+        written = write_export(client, tmp_path, order, text)
+
+        assert written.refused == named
+        assert {"i1", "md1"}.isdisjoint(written.created_items)
+        assert values(client, written.created_items["i2"], "image") == [
+            written.created_items["md2"]
+        ]
+        assert flagged(written) == [
+            (UNHASHED_TITLE, first, sha1(scan_bytes(order)), (second,))
+        ]
+        (warning,) = [w for w in written.warnings if "'md1'" in w]
+        assert first in warning and second in warning
+        assert MARK not in warning
+    assert {
+        qid: entity(client, qid)["lastrevid"] for qid in (first, second)
+    } == before
+
+
+def test_a_portrait_titled_as_its_sitter_is_an_item_of_its_own(
+    client, tmp_path
+):
+    order = "sitter"
+    _, items = client.vocabulary()
+    text = export(order).replace(
+        f"2 TITL {title(order)}\n", f"2 TITL {person(order)}\n"
+    )
+
+    written = write_export(client, tmp_path, order, text)
+
+    sebastian = written.created_items["i1"]
+    media_object = written.created_items["md1"]
+    assert sebastian != media_object
+    assert label(client, sebastian) == person(order)
+    assert label(client, media_object) == media_object_label(person(order))
+    assert items["artifact"] not in values(client, sebastian, "instance_of")
+    assert values(client, sebastian, "image") == [media_object]
+    assert flagged(written) == []
+    again = write_export(client, tmp_path, order, text)
+    assert again.created_items == written.created_items
+
+
+def test_a_person_under_a_scans_label_is_an_item_of_its_own(client, tmp_path):
+    order = "person after scan"
+    scan = register_scan(client, tmp_path, order, named=person(order))
+    artifact = scan.artifact_qid
+    before = entity(client, artifact)
+
+    written = write_export(client, tmp_path, order)
+
+    sebastian = written.created_items["i1"]
+    assert sebastian != artifact
+    assert label(client, sebastian) == tagged_label(person(order), "human")
+    aliases = entity(client, sebastian).get("aliases", {}).get("en", [])
+    assert [alias["value"] for alias in aliases] == [person(order)]
+    after = entity(client, artifact)
+    assert after["lastrevid"] == before["lastrevid"]
+    assert label(client, artifact) == person(order)
+    assert flagged(written) == []
+    labels = resolvable_labels(client)
+    assert person(order) not in labels
+    assert labels[tagged_label(person(order), "human")] == sebastian
+    again = write_export(client, tmp_path, order)
+    assert again.created_items["i1"] == sebastian
+
+
+def test_a_portrait_titled_with_another_persons_name_leaves_her_it(
+    client, tmp_path
+):
+    order = "portrait of another"
+    hildegard = f"Hildegard Löbig {order} {MARK}"
+    text = (
+        export(order)
+        .replace(f"2 TITL {title(order)}\n", f"2 TITL {hildegard}\n")
+        .replace(
+            "0 TRLR\n", HILDEGARD.format(order=order, mark=MARK) + "0 TRLR\n"
+        )
+    )
+
+    written = write_export(client, tmp_path, order, text)
+
+    her, portrait = (written.created_items[i] for i in ("i2", "md1"))
+    assert her != portrait
+    assert label(client, her) == hildegard
+    assert label(client, portrait) == media_object_label(hildegard)
+    assert values(client, written.created_items["i1"], "image") == [portrait]
+    assert flagged(written) == []
+    again = write_export(client, tmp_path, order, text)
+    assert again.created_items == written.created_items
+
+
+def test_a_scan_under_a_persons_name_is_flagged_against_the_media_object(
+    client, tmp_path
+):
+    order = "person, scan, export"
+    first = write_export(client, tmp_path, order)
+    sebastian = first.created_items["i1"]
+    scan = register_scan(client, tmp_path, order, named=person(order))
+    artifact = scan.artifact_qid
+    data = sha1(scan_bytes(f"{order}, {person(order)}"))
+    assert label(client, artifact) == f"{person(order)} [{data[:8]}]"
+    assert flagged(scan) == []
+    text = export(order).replace(
+        f"2 TITL {title(order)}\n", f"2 TITL {person(order)}\n"
+    )
+
+    written = write_export(client, tmp_path, f"{order}, again", text)
+
+    media_object = written.created_items["md1"]
+    assert written.created_items["i1"] == sebastian
+    assert label(client, sebastian) == person(order)
+    assert label(client, media_object) == media_object_label(person(order))
+    assert flagged(written) == [
+        (UNHASHED_TITLE, artifact, data, (media_object,))
+    ]

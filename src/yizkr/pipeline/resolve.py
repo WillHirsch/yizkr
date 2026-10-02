@@ -11,7 +11,11 @@ A ref of an artifact kind (artifact, or a class the manifest makes a
 there is one and otherwise by its own `instance_of`, is never resolved by
 its label: an artifact is never matched by its title or label (ADR-0010),
 and the writer decides what such a ref becomes (yizkr.pipeline.writer,
-step 2).
+step 2). Nor is any other ref resolved to an artifact or a part of one
+(`is_artifact_item` in yizkr.pipeline.writer): the labels a batch is
+resolved against are the instance's item labels without those items'
+(`resolvable_labels`), so such a ref stays local and the writer gives
+it an item of its own (ADR-0010).
 
 Unresolved local refs are left in place: the writer creates new items
 for them at write time.
@@ -21,7 +25,24 @@ from __future__ import annotations
 
 from yizkr.claims import Claim, ClaimBatch, ItemValue, LocalRef, QidRef
 from yizkr.pipeline.review import entity_records
-from yizkr.pipeline.writer import artifact_kinds
+from yizkr.pipeline.writer import artifact_kinds, is_artifact_item
+
+
+def resolvable_labels(client) -> dict[str, str]:
+    """The item labels of the instance `client` reads (`label_index`),
+    label -> QID, that a ref is resolved against: every item's but an
+    artifact's or a part of one's (is_artifact_item), which no ref is
+    resolved to by its label (the module docstring)."""
+    properties, items = client.vocabulary()
+    _, labels = client.label_index()
+    artifacts = {
+        qid
+        for qid, entity in client.iter_entities("labels|claims")
+        if is_artifact_item(entity.get("claims") or {}, properties, items)
+    }
+    return {
+        label: qid for label, qid in labels.items() if qid not in artifacts
+    }
 
 
 def _resolve_ref(ref, label_to_qid: dict[str, str], is_artifact):

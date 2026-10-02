@@ -1911,7 +1911,7 @@ class Orchestrator:
             read_approved_equivalences,
             read_reviewed_aliases,
         )
-        from yizkr.pipeline.resolve import resolve_batch
+        from yizkr.pipeline.resolve import resolvable_labels, resolve_batch
 
         if doc.equivalences_reviewed.exists():
             approved = read_approved_equivalences(doc.equivalences_reviewed)
@@ -1921,8 +1921,7 @@ class Orchestrator:
                 read_reviewed_aliases(doc.equivalences_reviewed),
             )
             self.log(f"  applied {len(approved)} approved equivalences")
-        _, item_labels = self.client.label_index()
-        return resolve_batch(batch, item_labels)
+        return resolve_batch(batch, resolvable_labels(self.client))
 
     def _step_export_review(self, doc: DocumentRun, batch: ClaimBatch) -> int:
         from yizkr.pipeline.review import export_review_csv
@@ -2051,7 +2050,9 @@ class Orchestrator:
         )
         # a registered artifact under the label of an artifact-kind entity
         # of the batch, such as a GEDCOM media object, flagged as
-        # registration flags the two (yizkr.pipeline.writer, step 2)
+        # registration flags the two, against the entity's item or, for an
+        # entity the writer refused, the item under its tagged label
+        # (yizkr.pipeline.writer, step 2)
         self._raise_flags(doc, result.flags)
         for warning in result.warnings:
             self.log(f"  {doc.source.name}: {warning}", file=sys.stderr)

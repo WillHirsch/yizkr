@@ -433,7 +433,7 @@ def cmd_extract(args) -> int:
 
 
 def cmd_resolve(args) -> int:
-    from yizkr.pipeline.resolve import resolve_batch
+    from yizkr.pipeline.resolve import resolvable_labels, resolve_batch
 
     batch = _load_batch(args.batch)
     if args.equivalences:
@@ -448,8 +448,7 @@ def cmd_resolve(args) -> int:
             batch, approved, read_reviewed_aliases(args.equivalences)
         )
         print(f"applied {len(approved)} approved equivalences")
-    _, item_labels = _client(args).label_index()
-    resolved = resolve_batch(batch, item_labels)
+    resolved = resolve_batch(batch, resolvable_labels(_client(args)))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(resolved.model_dump_json(indent=2))
     print(f"wrote {args.out}")

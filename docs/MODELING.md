@@ -315,6 +315,14 @@ artifact a new QID, changes neither.
   the label, but makes it an item of its own, labelled `"<label> [media
   object]"`, and its write raises the flag, on every artifact registered
   under that label, content-tagged or not (ADR-0010).
+- **An item is matched by its label on its own side only** (ADR-0010 as
+  amended by #444). A media object, or any artifact-kind entity, joins
+  by its label only an item with no hash that is an artifact or a part
+  of one; a person, a place or any other entity never joins an artifact
+  or a part of one. An entity that may not join the item under its label
+  takes an item of its own under its label tagged `" [media object]"`,
+  or with its kind (`" [human]"`), its name an alias; one that may join
+  neither label's item is refused, with its claims, before the write.
 - **A page fragment is keyed by its artifact.** The fragment for page
   *n* is the item that is an `instance of artifact fragment` and `part
   of` the artifact with `page number` *n*, whatever its label. A new one
