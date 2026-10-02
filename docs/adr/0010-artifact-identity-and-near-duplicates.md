@@ -35,6 +35,10 @@ MediaWiki takes as it is, every letter kept, within MediaWiki's 240-byte
 limit with room for the content tag, and the description registration
 writes is cut to the 250 characters Wikibase takes (§1, "Two writes" and
 "File names MediaWiki takes").
+Amended by #371 (2026-10-02): a new item whose upload is a file another
+item names, or whose title is the label of an item with no hash, is
+flagged for review as an alert of the write, and still never adopted
+(§1, "Registration at write time", and "Media files").
 
 ## Context
 
@@ -103,6 +107,18 @@ never by name (amended by #103, 2026-09-29):
 - **hash miss →** mint a new item. A title never finds an item: one that
   carries the title but not this hash is another artifact, whatever hash
   it carries, and even with no hash and a file that holds these bytes.
+  Such a new item is flagged, never adopted (amended by #371,
+  2026-10-02): when its upload is a file another item names as its
+  `media file` (`shared-file`), or its title is the label of an item
+  with no hash (`unhashed-title`), one that names a `media file` and has
+  no `media SHA-1`, as an artifact registered before content hashing
+  does. `ingest run` raises each flag as an alert of the write, naming
+  the new item and the others by QID alone (docs/ANOMALIES.md), for a
+  person to decide whether the two are one artifact. The flag changes
+  nothing registration finds or writes. An item that names no file, such
+  as a GEDCOM media object's (ADR-0021), is not unhashed: registration
+  writes `media file` and `media SHA-1` together, and nothing else
+  writes `media file`, so on a reset instance no flag is ever raised.
   When the title is already another item's label, the new item's label
   takes a short content tag (`"<title> [<sha1[:8]>]"`), so labels stay
   unique (the wiki client's label index; #94 would scope that rule away
@@ -227,7 +243,8 @@ now, one for the registrar and for derived media:
   its bytes (MediaWiki's own SHA-1 of each file). The item is found by
   its hash alone (amended by #103): an item with the title and no hash
   is never adopted, even when its file holds the same bytes, so a new
-  item with its own `media SHA-1` then shares that file. A file that no
+  item with its own `media SHA-1` then shares that file, and is flagged
+  for it (amended by #371, 2026-10-02). A file that no
   longer holds its item's bytes (overwritten before this rule) is not
   trusted: the item gains a `media file` that does hold them, and the
   earlier statement stays (CLAUDE.md rule 3).
@@ -456,7 +473,10 @@ the hash key above is built to carry them. Tracked in #162.
   the content hash, with a title and no hash, is never adopted: its
   bytes, registered again, make an item of their own that shares its
   file. In the development stage every instance is reset (ADR-0025), so
-  no such item exists there.
+  no such item exists there. On a kept instance such a registration is
+  flagged, as is a new item under the older item's title (amended by
+  #371, 2026-10-02): the run's alerts list both items for a person to
+  look at, and the graph holds both until a curator links or ranks them.
 - **Not solved yet:** re-encodes, re-scans, crops/uncrops, and the
   corroboration-inflation they cause remain until parts 2 & 3 land. The
   inconsistency report and galleries treat them as distinct artifacts

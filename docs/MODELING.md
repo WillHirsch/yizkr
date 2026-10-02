@@ -294,6 +294,18 @@ artifact a new QID, changes neither.
   media. Nothing before the write has an artifact item, and a write that
   runs again (a changed review, say) registers again, finding by SHA-1
   what the earlier write registered.
+- **A new item that may be an older artifact is flagged, never adopted**
+  (ADR-0010 as amended by #371). An item with no hash names a `media
+  file` and has no `media SHA-1`, as an artifact registered before
+  content hashing does. When registration makes a new artifact or
+  derived medium whose upload is a file another item names
+  (`shared-file`), or whose title is an unhashed item's label
+  (`unhashed-title`), the new item is made as any other, and `ingest
+  run` raises the flag as an alert of the write naming both items by
+  QID, for a person to look at. Neither item is changed. Registration
+  writes `media file` and `media SHA-1` together, and a GEDCOM media
+  object's item names neither, so a reset instance has no unhashed item
+  and raises no flag.
 - **A page fragment is keyed by its artifact.** The fragment for page
   *n* is the item that is an `instance of artifact fragment` and `part
   of` the artifact with `page number` *n*, whatever its label. A new one

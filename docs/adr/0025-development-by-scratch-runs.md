@@ -73,6 +73,11 @@ names the instance's newest revision and log entry, so any write the
 scratch write stage did not make voids it, a manual edit included; §1,
 §6 and §8 are amended in place.
 
+Amended by #371 (2026-10-02): registration's flags, a new item that may
+be an artifact registered before content hashing (ADR-0010), are alerts
+of the write; on a reset instance none is ever raised. §3 is amended in
+place.
+
 ## Context
 
 ADR-0024 §7 set up a *development stage*: until the owner declares a
@@ -323,7 +328,11 @@ futile, and explain itself afterwards.
   output) or *carried* (on a reused one). Thresholds live in one
   documented config, and changing them re-evaluates stored outputs
   without recomputing any stage. Alerts are signals for the operator and
-  the report. They never alter or drop a claim (ADR-0002).
+  the report. They never alter or drop a claim (ADR-0002). Registration
+  raises alerts of the write too (amended by #371): a new item whose
+  file another item names, or whose title is an unhashed item's label
+  (ADR-0010). Every item a reset instance holds that names a file
+  carries its hash, so a scratch run raises none.
 - **Per-slice fail-fast pauses.** A slice is a stage or a source kind. A
   check marked fail-fast pauses only its slice, through the run's control
   file, and other slices keep running. If the operator does not resume

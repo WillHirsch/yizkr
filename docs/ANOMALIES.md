@@ -69,7 +69,7 @@ Each alert is a line of `alerts.jsonl` in the run directory
 | Field | What it holds |
 |---|---|
 | `at`, `invocation` | when, and which invocation raised it |
-| `stage` | `transcription`, `extraction`, `critique` or `gedcom`; `run` for `anomaly-config` |
+| `stage` | `transcription`, `extraction`, `critique` or `gedcom`; `run` for `anomaly-config`; `write` for registration's flags |
 | `check` | the check's name (below) |
 | `subject` | the document: the first 12 hex digits of its SHA-1 (empty for `anomaly-config`) |
 | `value` | the measured value: a number, a language code (`language-unexpected`), a model id (`model-mismatch`), or `true` for a check that measures a presence |
@@ -301,6 +301,36 @@ only: it pauses nothing.
 be used (below). The run goes on under the defaults, and this alert, with
 a logged warning, says why (`problem`); its `config` is the defaults'
 digest.
+
+### Registration
+
+The write raises these as it registers a document
+(`Orchestrator._step_register`; ADR-0010 as amended by #371), outside
+the thresholds: they have no keys, cannot be turned off and pause
+nothing. Each flags a new item registration made, an artifact or a
+derived medium, that may be an artifact registered before content
+hashing; the new item is made all the same, and nothing is adopted or
+changed. Stage `write`; subject, the document being written (for an
+excerpt, the images its PDFs place are registered with those PDFs); value
+`true`; always new; no `limit` or `config`. Fields: `artifact`, the new
+item's QID; `others`, the QIDs of the items it is flagged against;
+`medium`, the first 12 hex digits of the new item's media SHA-1, which
+for a derived medium is not the document's. One alert per new item and
+check, so a deck may raise one for itself and one for each image.
+
+**`shared-file`**: the new item's upload is a file that `others` already
+name as their `media file` (MediaWiki answered that it holds these
+bytes, under this name or another).
+
+**`unhashed-title`**: the new item's title (for a derived medium, its
+label before any content tag) is the label of `others`, items with no
+hash: each names a `media file` and has no `media SHA-1`.
+
+Registration writes `media file` and `media SHA-1` together, and an
+upload never overwrites a file, so on a reset instance, a scratch run's,
+neither is ever raised. The monitor shows them by name; the run
+report's aggregates count them as `other`, and a document's own alerts
+name them.
 
 ## Thresholds
 
