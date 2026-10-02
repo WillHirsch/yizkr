@@ -308,8 +308,8 @@ artifact a new QID, changes neither.
   older item. A new item is made as any other, and neither item is
   changed. Registration writes `media file` and `media SHA-1` together,
   so a reset instance never raises `shared-file`; it raises
-  `unhashed-title` only for a document registered under exactly a
-  GEDCOM media object's title.
+  `unhashed-title` only for an artifact or derived medium registered
+  under exactly a GEDCOM media object's label.
 - **A page fragment is keyed by its artifact.** The fragment for page
   *n* is the item that is an `instance of artifact fragment` and `part
   of` the artifact with `page number` *n*, whatever its label. A new one

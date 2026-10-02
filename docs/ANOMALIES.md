@@ -338,16 +338,17 @@ no `media SHA-1` and either names a `media file`, as an artifact
 registered before content hashing does, or is an `instance of` an
 artifact kind, as the GEDCOM import's item for a media object is (a
 label, no file). An artifact fragment, a run item, a person or any item
-of another kind is never one.
+of another kind is never one unless it names a `media file`.
 
 On a reset instance, a scratch run's, registration alone writes `media
 file`, always with `media SHA-1`, and an upload never overwrites a file,
 so `shared-file` is never raised there. A scratch run imports the GEDCOM,
-though (ADR-0025 §1), so `unhashed-title` is raised there when a document
-is registered under exactly the title of a media object's item, against
-that item, and on every write of that document while the two share it;
-with no such homonym a scratch run raises no registration flag. The
-monitor shows them by name; the run report's aggregates count them by
+though (ADR-0025 §1), so `unhashed-title` is raised there when an
+artifact or derived medium is registered under exactly the label of a
+media object's item (its title, or without one its file's name or a
+fallback), against that item, and on every write that registers it while
+the two share it; with no such homonym a scratch run raises no
+registration flag. The monitor shows them by name; the run report's aggregates count them by
 check (`shared-file`, `unhashed-title`) and under the stage `write`, as
 counts only, and a document's own alerts in report.json and report.html
 name them with their items by QID.

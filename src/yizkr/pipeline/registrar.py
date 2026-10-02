@@ -51,19 +51,19 @@ tag, is the label of an item with no hash (``unhashed-title``). An item
 with no hash has no `media SHA-1` and either names a `media file`, as an
 artifact registered before content hashing does, or is an `instance of`
 an artifact kind, as the item the GEDCOM import makes for a media object
-is (a label, no file); an artifact fragment, a run item or a person is
-never one. So a flag is raised again on every run until a curator acts,
-by hashing, merging or relabelling the older item, and a run cut short
-before it raised one raises it on the next. A flag changes nothing
-registration finds or writes: the item is made, and labelled, as any
-other, and the older item is left as it is.
+is (a label, no file); an artifact fragment, a run item or a person
+naming no file is never one. So a flag is raised again on every run
+until a curator acts, by hashing, merging or relabelling the older item,
+and a run cut short before it raised one raises it on the next. A flag
+changes nothing registration finds or writes: the item is made, and
+labelled, as any other, and the older item is left as it is.
 
 On a reset instance, where only registration writes `media file`, always
 with `media SHA-1`, shared-file is never raised: an item naming a file
 that holds these bytes carries this SHA-1, as an upload never overwrites
 a file, and is this item. Unhashed-title is raised there only for an
-artifact registered under exactly the label of a media object's item
-that the GEDCOM import made.
+artifact or derived medium registered under exactly the label of a media
+object's item that the GEDCOM import made.
 
 Provenance: an artifact asserts its own kind and its own composition by
 existing, so its `instance of`, `media file` and `media SHA-1`, and its

@@ -12,8 +12,8 @@ kind, as a GEDCOM media object's item is. A flag changes nothing
 registration finds or writes, and `ingest run` raises it as an alert of
 the write. On an instance that only registration and the GEDCOM import
 have filled, as every scratch instance is, shared-file is never raised,
-and unhashed-title only for a scan registered under exactly a GEDCOM
-media object's title.
+and unhashed-title only for a scan or derived medium registered under
+exactly a GEDCOM media object's label.
 
 The in-memory wiki, its fictional media and the helpers come from
 tests/unit/test_registrar.py. The flow is verified live too
@@ -484,6 +484,41 @@ class TestArtifactFlags:
         assert flag_tuples(fresh.flags) == expected
         assert wiki.entities == entities
         assert wiki.entities[old] == before
+
+    def test_a_registrar_gathers_each_kind_of_flag_on_an_item(self, tmp_path):
+        """One registrar registers the same bytes twice: under its first
+        title the item is flagged shared-file alone, and under a GEDCOM
+        media object's label, found by its SHA-1, unhashed-title too. The
+        registrar gathers each kind once, the second kind included."""
+        wiki = FakeWiki()
+        other = wiki.item(
+            "a Löbig portrait, catalogued",
+            ("instance_of", ITEMS["photograph"], None),
+            ("media_file", "File:Portrait-1890s.png", None),
+            ("media_sha1", "0" * 40, None),
+        )
+        wiki.media.store("Portrait-1890s.png", PORTRAIT)
+        media_object = gedcom_media_object(wiki, MEDIA_OBJECT_TITLE)
+        registrar = Registrar(wiki)
+        first = registrar.register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", TITLE
+        )
+        new = first.artifact_qid
+        assert flag_tuples(first.flags) == [
+            (SHARED_FILE, new, sha1(PORTRAIT), (other,))
+        ]
+
+        second = registrar.register_artifact(
+            scan(tmp_path, PORTRAIT, "copy.png", "copy"),
+            "photograph",
+            MEDIA_OBJECT_TITLE,
+        )
+
+        assert second.artifact_qid == new
+        assert flag_tuples(registrar.flags) == [
+            (SHARED_FILE, new, sha1(PORTRAIT), (other,)),
+            (UNHASHED_TITLE, new, sha1(PORTRAIT), (media_object,)),
+        ]
 
     @pytest.mark.parametrize(
         "cleared", ["relabelled", "hashed", "file unnamed", "merged"]
@@ -1017,6 +1052,30 @@ class TestScratchInstance:
         # found under another title, its label still the media object's
         assert flag_tuples(again.flags) == expected
 
+    def test_a_medium_under_a_media_objects_label_raises_that_alone(
+        self, tmp_path
+    ):
+        """A derived medium whose first label is exactly a GEDCOM media
+        object's label raises unhashed-title too, against that item, as a
+        scan under it does: an artifact or a derived medium can raise it on
+        a scratch instance."""
+        wiki = FakeWiki()
+        media_object = gedcom_media_object(wiki, "Deck A — image1.png")
+        registrar = Registrar(wiki)
+        deck = deck_file(tmp_path, "a")
+        container = registrar.register_artifact(deck, "presentation", "Deck A")
+        record, directory = recorded(
+            tmp_path, deck, "Deck A", [("image1.png", IMAGE, [1])]
+        )
+
+        derived = registrar.register_derived_media(record, directory)
+
+        assert container.flags == []
+        assert flag_tuples(registrar.flags) == [
+            (UNHASHED_TITLE, derived[sha1(IMAGE)], sha1(IMAGE),
+             (media_object,))
+        ]  # fmt: skip
+
 
 def wiki_bytes(wiki, page: str) -> bytes:
     """The fictional bytes the in-memory wiki holds under `page`."""
@@ -1233,7 +1292,11 @@ def test_every_page_of_the_file_listing_is_read():
         "aisha1": sha1(PORTRAIT),
         "ailimit": "max",
     }
-    assert client.asked[1]["aicontinue"] == "Portrait-b.png"
+    # a continued listing asks the same SHA-1, from the cursor on
+    assert client.asked[1] == {
+        **client.asked[0],
+        "aicontinue": "Portrait-b.png",
+    }
 
 
 def test_a_listing_without_files_is_none():

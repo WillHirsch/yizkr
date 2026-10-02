@@ -76,8 +76,9 @@ scratch write stage did not make voids it, a manual edit included; §1,
 Amended by #371 (2026-10-02): registration's flags, an item that may be
 an artifact registered before content hashing or a GEDCOM media
 object's item (ADR-0010), are alerts of the write; on a reset instance
-the only one raised is `unhashed-title`, for a document registered under
-exactly a GEDCOM media object's title. §3 is amended in place.
+the only one raised is `unhashed-title`, for an artifact or derived
+medium whose title, or own label before its content tag, is exactly a
+GEDCOM media object's label. §3 is amended in place.
 
 ## Context
 
@@ -335,9 +336,10 @@ futile, and explain itself afterwards.
   item with no hash (ADR-0010), on every write while that holds. Every
   item a reset instance holds that names a file carries its hash, so a
   scratch run never raises `shared-file`; it imports the GEDCOM, whose
-  media objects' items have no hash, so it raises `unhashed-title` for a
-  document registered under exactly such an item's title, and no other
-  registration flag.
+  media objects' items have no hash, so it raises `unhashed-title` for an
+  artifact or derived medium whose title (a derived medium's first
+  label), or own label before its content tag, is exactly such an item's
+  label.
 - **Per-slice fail-fast pauses.** A slice is a stage or a source kind. A
   check marked fail-fast pauses only its slice, through the run's control
   file, and other slices keep running. If the operator does not resume

@@ -45,9 +45,10 @@ report's aggregates count the flags by check and under the stage
 `write` (Z2); shared-file names every item whose `media file` holds the
 bytes, by MediaWiki's list of the files of its SHA-1 (Z3); and a
 GEDCOM media object's item, an artifact kind with no file and no hash,
-is an item with no hash, so a scratch run raises unhashed-title for a
-document registered under exactly its title (Z4). An artifact's label
-longer than Wikibase takes is cut to fit, as a derived medium's is.
+is an item with no hash, so a scratch run raises unhashed-title for an
+artifact or derived medium registered under exactly its label (Z4). An
+artifact's label longer than Wikibase takes is cut to fit, as a derived
+medium's is.
 
 ## Context
 
@@ -124,7 +125,8 @@ never by name (amended by #103, 2026-09-29):
   with no hash has no `media SHA-1` and names a `media file`, as an
   artifact registered before content hashing does, or is an `instance
   of` an artifact kind, as a GEDCOM media object's item is (ADR-0021: a
-  label, no file); never a fragment, a run item or a person. `ingest
+  label, no file); a fragment, a run item or a person naming no file is
+  never one. `ingest
   run` raises each flag as an alert of the write, naming the item and
   the others by QID alone (docs/ANOMALIES.md), for a person to decide
   whether they are one artifact, on every write that registers the
@@ -134,8 +136,10 @@ never by name (amended by #103, 2026-09-29):
   file` and `media SHA-1` together, and nothing else writes `media
   file`, so on a reset instance `shared-file` is never raised; a
   scratch run imports the GEDCOM, so `unhashed-title` is raised there
-  for a document registered under exactly a media object's title, and
-  for no other.
+  for an artifact or derived medium whose title (a derived medium's
+  first label), or own label before its content tag, is exactly a media
+  object's label: its title, or without one a fallback such as its
+  file's name (ADR-0021).
   When the title is already another item's label, the new item's label
   takes a short content tag (`"<title> [<sha1[:8]>]"`), so labels stay
   unique (the wiki client's label index; #94 would scope that rule away
