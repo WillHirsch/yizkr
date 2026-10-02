@@ -12,6 +12,18 @@ placed within its text-layer pages is read on its own: see Amendments.
 Amended by #397 (2026-09-29): each image placed within a PDF's text-layer
 pages that has a reading of its own is extracted as a document of its
 own, an excerpt, and the write registers the images: see Amendments.
+Amended by #389 (2026-09-29): every page of a transcription carries the
+transcription record's fields (ADR-0037): a page read by vision takes
+them from its reading's record, merged into one page where the image
+shows several; a page read from its text layer is `transcribed`, with no
+printed page number, languages or notes; a page with nothing to read is
+`blank`. A PDF read whole has the pages its record gives, each read by
+vision, and its `document_class`; a PDF read page by page gives none,
+since no call saw it whole.
+Amended by #369 (2026-09-29): labels are compared and set by the one rule
+the writer keeps labels by: see Amendments (#103's).
+Amended by #403 (2026-09-29): that rule makes U+FFFE and U+FFFF U+FFFD
+once it has trimmed a label, as Wikibase does: see Amendments (#103's).
 Amended by #373 (2026-10-02): a derived medium's file name keeps its
 container's title, in the form MediaWiki takes and cut to fit its limit:
 see Amendments.
@@ -437,12 +449,14 @@ time"):
   archive holds under several names are one medium: the first name
   labels it (`"<deck title> — <name>"`), and the
   others are its aliases. Labels are compared and set in the form
-  Wikibase stores them in (separators and control characters trimmed at
-  either end, each run of control characters inside made one space, then
-  NFC). A deck title that would push its images' or its slides' labels,
-  or its slides' descriptions, past the 250 characters Wikibase takes is
-  cut there, ending in "…", since those only display it; so is the list
-  of slides in an image's description;
+  Wikibase stores them in, by the rule the writer keeps labels by (each
+  run of control characters and line or paragraph separators made one
+  space, the separators and the Mongolian vowel separator trimmed at
+  either end, then U+FFFE and U+FFFF made U+FFFD, then NFC; ADR-0010,
+  #369, #403). A deck title that would push its images' or its slides'
+  labels, or its slides' descriptions, past the 250 characters Wikibase
+  takes is cut there, ending in "…", since those only display it; so is
+  the list of slides in an image's description;
 - an image the never-ingest list names, by any of its names or by its
   SHA-1, is left out: neither registered nor uploaded. The deck's own
   file is uploaded as it is, with whatever it embeds (the owner's
@@ -499,7 +513,7 @@ did so on 2026-09-29, in the review of its PR.
   view), is never read from the text layer: its page is read by vision,
   which reads what the page shows. Were a text layer ever given without
   such text, `[redacted]` would stand where it lies, never nothing, as
-  the owner decided; #389's transcription record is to carry the mark
+  the owner decided; #389's transcription record carries the mark
   through what the vision engine writes too. Each of these is the
   owner's decision.
 - **Known limits of hidden text** (from the review of #176): text hidden
@@ -611,9 +625,22 @@ the compilation's.
 - A curator's correction of a PDF's transcription
   (`transcription.corrected.txt`) replaces the PDF's own text only: its
   excerpts come from the record its reading kept.
-- **The transcription record (#389).** Excerpts take their language and
-  class from the kept reading's record once #389's record lands; until
-  then, py3langid and the wording check apply.
+- **The transcription record (#389, ADR-0037).** An excerpt's
+  transcription is the kept reading, so its class and its pages are the
+  reading's record's, never its kind's; its language is the one that
+  holds most of the record's text (resolution `record`), and py3langid
+  guesses it only for a reading with no record; and its flag is the one
+  the check made now raises on the reading, not the one stored with it.
+  The kept reading is judged by the record check, as any vision reading
+  is.
+- **An image that shows no page of a document is no excerpt.** An image
+  whose kept reading's record calls every page `blank` (a photograph with
+  no writing) or `not-a-document-page` (a scanner's colour chart) passes
+  the check and is kept, but holds nothing to extract, so it is no
+  excerpt; the write still registers it as the PDF's image. An image the
+  record calls `illegible` is an excerpt, so that a reader sees it was
+  there, and so is one with a transcribed page beside a blank one (an
+  open book's written page and its blank verso).
 - **Decided by default** (the owner may override): an excerpt's status
   is independent of its PDF's; an excerpt's write may register its PDF's
   item (its identity, no claims) before the PDF's own review is

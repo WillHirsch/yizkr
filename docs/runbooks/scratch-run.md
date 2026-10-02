@@ -47,7 +47,10 @@ and `yizkr.reset` for the reset.
   run, with the run's `--cache`, `--extract-effort`, `$YIZKR_LLM_MODEL`
   and claude CLI, which its keys name: after a CLI update, run it again.
   A transcription the check fails is rejected and the run reads its scan
-  afresh; `--leave-out` gives the start of the SHA-1 of each scan to read
+  afresh. The vision engine now answers the transcription record
+  (ADR-0037), with a prompt no archived transcription was made with, so
+  an archive an `ingest run` left before the record gives nothing to
+  adopt, and the run transcribes the corpus afresh; `--leave-out` gives the start of the SHA-1 of each scan to read
   afresh anyway, and withdraws, for good, any adoption the cache serves
   for it. It prints what it did with each scan's transcriptions and the
   counts (imported, rejected, excluded, left out, skipped): local output,

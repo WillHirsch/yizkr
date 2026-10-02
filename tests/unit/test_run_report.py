@@ -696,7 +696,8 @@ def views() -> dict[str, dict[str, object]]:
                 },
             ],
             "extraction/coverage.json": coverage(3, 3, rejected=2, unread=1),
-            "detail": {"code": "de", "source": "detected", "confidence": 1},
+            # a vision transcription's language, from its record (#389)
+            "detail": {"code": "de", "source": "record", "confidence": None},
         },
         DIRECTORY: {
             "transcription.json": transcription(
@@ -1614,7 +1615,8 @@ class TestContent:
             "pptx-adapter": 1,
         }
         assert documents["language_resolved"] == {
-            "detected": 3,
+            "record": 1,
+            "detected": 2,
             "override": 2,
             "fallback": 1,
         }

@@ -41,6 +41,7 @@ from tests.unit.test_no_wiki_before_write import PORTRAIT as STUDIO
 from tests.unit.test_upload_warnings import FakeMediaWiki, FakeUploadClient
 from yizkr.core.corpus import ExclusionList
 from yizkr.core.wiki import WikiClient
+from yizkr.pipeline import registrar, writer
 from yizkr.pipeline.presentation import (
     EmbeddedMedium,
     PresentationContent,
@@ -439,8 +440,9 @@ class Untouchable:
 def stored(term: str) -> str:
     """A term as Wikibase stores it, emulated from the Unicode categories
     its trimming names: separators (Z) and controls (Cc) trimmed at either
-    end, each run of controls inside made one space, and the whole in
-    NFC."""
+    end, each run of controls inside made one space, then the
+    noncharacters U+FFFE and U+FFFF made U+FFFD as its cleanUp makes them
+    (#403), and the whole in NFC."""
 
     def control(char: str) -> bool:
         return unicodedata.category(char) == "Cc"
@@ -457,7 +459,8 @@ def stored(term: str) -> str:
         " " if is_control else "".join(run)
         for is_control, run in itertools.groupby(term[start:end], control)
     )
-    return unicodedata.normalize("NFC", inner)
+    cleaned = inner.translate(dict.fromkeys((0xFFFE, 0xFFFF), 0xFFFD))
+    return unicodedata.normalize("NFC", cleaned)
 
 
 class StoringWiki(FakeWiki):
@@ -1127,6 +1130,52 @@ class TestTermsInTheStoredForm:
         media = [("\x01", IMAGE, [1]), ("image3.png", IMAGE, [1])]
         _, derived = register_deck(wiki, tmp_path, "a", SHOP, media)
         assert label_of(wiki, derived[sha1(IMAGE)]) == f"{SHOP} — image3.png"
+
+    def test_titles_and_labels_share_the_writers_rule(self):
+        # one rule for the terms both write, and one limit (#369)
+        assert registrar._stored_term is writer.stored_term
+        assert registrar.TERM_LIMIT == writer.TERM_LIMIT
+
+    @pytest.mark.parametrize(
+        ("title", "kept"),
+        [
+            (f"\u180e{TITLE}\u180e", TITLE),
+            (TITLE.replace(" of", "\N{LINE SEPARATOR}of"), TITLE),
+            (f"{TITLE}\uffff", f"{TITLE}\ufffd"),
+        ],
+        ids=[
+            "a Mongolian vowel separator at either end",
+            "a line separator inside",
+            "U+FFFF at its end",
+        ],
+    )
+    def test_a_title_is_kept_as_the_writer_keeps_a_label(
+        self, tmp_path, title, kept
+    ):
+        # (#369, #403) set as the writer sets a label, and compared so: a
+        # second registration of the portrait finds its label taken by
+        # the title and writes nothing, no alias among it
+        wiki = StoringWiki()
+        path = scan(tmp_path, PORTRAIT)
+        first = register(wiki, path, title)
+        assert label_of(wiki, first.artifact_qid) == kept
+        writes = wiki.writes
+        again = register(wiki, path, title)
+        assert again.artifact_qid == first.artifact_qid
+        assert wiki.writes == writes
+        assert not wiki.entities[first.artifact_qid].get("aliases")
+
+    def test_a_description_is_sent_as_it_is_kept(self, tmp_path):
+        # sent as the writer sends a term, which Wikibase keeps as it is
+        # sent: a line separator inside, which Wikibase would refuse, made
+        # a space (#369)
+        wiki = StoringWiki()
+        given = FROM_FILE.replace(" from", "\N{LINE SEPARATOR}from")
+        result = register_artifact(
+            wiki, scan(tmp_path, PORTRAIT), "photograph", TITLE, f" {given}\n"
+        )
+        descriptions = wiki.entities[result.artifact_qid]["descriptions"]
+        assert descriptions["en"]["value"] == FROM_FILE
 
 
 class TestLongDeckTitles:

@@ -73,31 +73,14 @@ from pathlib import Path, PurePosixPath
 from yizkr.core.corpus import ExclusionList, file_sha1, is_excluded
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.presentation import IMAGE_SUFFIXES, DerivedMediaRecord
-from yizkr.pipeline.writer import _is_mark
 
-# the most characters Wikibase takes in a label, a description or an alias
-# (its default limit on a term's length)
-TERM_LIMIT = 250
-
-# how Wikibase trims a term before it stores it: the separators and control
-# characters at either end go, and each run of control characters inside
-# becomes one space. `\s` holds every separator and the controls that are
-# whitespace; the other controls are named.
-_TERM_EDGES = re.compile(r"^[\s\x00-\x1f\x7f-\x9f]+|[\s\x00-\x1f\x7f-\x9f]+$")
-_TERM_CONTROLS = re.compile(r"[\x00-\x1f\x7f-\x9f]+")
-
-
-def _stored_term(term: str) -> str:
-    """`term` in the form Wikibase stores a label, a description or an
-    alias in: the separators and control characters at either end
-    trimmed, each run of control characters inside made one space, and the
-    whole in Unicode NFC. The reading of the instance holds labels in that
-    form, so a title is compared with it, and set, in that form too: in any
-    other, a label another item holds would look free, and an alias the
-    item has would look missing."""
-    trimmed = _TERM_CONTROLS.sub(" ", _TERM_EDGES.sub("", term))
-    return unicodedata.normalize("NFC", trimmed)
-
+# a title is compared with the instance's labels, and set, in the form
+# Wikibase stores a label, a description or an alias in, by the writer's
+# rule (_stored_term), and TERM_LIMIT is the most characters it takes in
+# one: in any other form, a label another item holds would look free, and
+# an alias the item has would look missing
+from yizkr.pipeline.writer import TERM_LIMIT, _is_mark
+from yizkr.pipeline.writer import stored_term as _stored_term
 
 # the zero-width joiner, which joins the characters either side of it
 # into one, and the regional indicators, two of which make one flag

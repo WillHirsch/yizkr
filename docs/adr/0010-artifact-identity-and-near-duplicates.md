@@ -21,6 +21,15 @@ write time").
 Amended by #397 (2026-09-29): a written excerpt, an image a PDF places
 read as a document of its own (ADR-0008), seeds content dedup across
 runs as a written document does (§1).
+Amended by #369 (2026-09-29): titles are compared and set by the one rule
+the writer keeps labels by, which the registrar imports from it, and an
+artifact's description is sent in that form too (§1).
+Amended by #403 (2026-09-29): that rule cleans a term up as Wikibase
+does after trimming it, U+FFFE and U+FFFF made U+FFFD (§1). It follows
+UtfNormal 4.0.0, which MediaWiki pins: a Wikibase Suite upgrade that
+brings a newer UtfNormal must check the rule again, as UtfNormal's later
+code also puts U+25CC before a combining mark with no base character
+before it (prependIsolatedCombining).
 Amended by #373 (2026-10-02): a file is uploaded under a name in the form
 MediaWiki takes as it is, every letter kept, within MediaWiki's 240-byte
 limit with room for the content tag, and the description registration
@@ -101,11 +110,15 @@ never by name (amended by #103, 2026-09-29):
   is a stopgap until #94, and which of two homonyms bears it depends on
   the order they are registered in, so nothing may key on an artifact's
   label: its key is its `media SHA-1`. Titles and labels are compared
-  and set in the form Wikibase stores terms in (separators and control
-  characters trimmed at either end, each run of control characters
-  inside made one space, then NFC), so a title in another form never
-  passes for a free label. A label longer than the 250 characters
-  Wikibase takes, as it is or once tagged, is refused before anything is
+  and set in the form Wikibase stores terms in, by the rule the writer
+  keeps labels by (its `stored_term`): each run of control characters
+  and line or paragraph separators made one space, the separators and
+  the Mongolian vowel separator trimmed at either end, then U+FFFE and
+  U+FFFF made U+FFFD, then NFC. So a title in another form never passes
+  for a free label, and a title and a label the instance keeps alike are
+  alike to the registrar and the writer. An artifact's description goes
+  in that form too. A label longer than the 250 characters Wikibase
+  takes, as it is or once tagged, is refused before anything is
   uploaded or written;
 - **no media to hash →** refused: there is nothing to find an artifact
   by.
