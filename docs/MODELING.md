@@ -606,8 +606,12 @@ Names are modelled in **two layers**:
   that holds no letter or digit ("?", "_", "()") is a placeholder, in a
   value, a bracket, a quote, a part or a NICK: it names nothing, so it
   is counted, not placed ("Eugen /?/" is labelled "Eugen"), and a typed
-  name that held one anywhere but in a NICK gives no typed claim; a dash
-  or "&" between two words is a connector, kept. Where no NAME gives a
+  name that held one anywhere but in a NICK, a stray bracket included,
+  gives no typed claim; a single dash or "&" between two words of one
+  field is a connector, kept, and one against a slash, a bracket or a
+  quote, a "+" or a run ("--") is a placeholder. As many SPFX pieces as
+  SURN pieces pair in order. German low quotes and guillemets mark a
+  nickname as other quotes do. Where no NAME gives a
   name, the label falls back, marks and all, to brackets that hold a word
   ("(Peppi)"), then a GIVN's quotes or brackets, then a NICK, then a
   `_MARNM`; a person with

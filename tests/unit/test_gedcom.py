@@ -6128,3 +6128,278 @@ class TestRound4:
         # deliberate: decision E reads the first HUSB and the first WIFE
         text = family().replace("1 WIFE @I17@", "\n".join(wives))
         assert unions(adapt_gedcom(text, artifact=EXPORT).batch) == union
+
+
+class TestRound5:
+    """Re-review 4: a quote around a bracket opens and closes a word; a
+    connector joins words of one field only, so one at a slash, a bracket
+    or a quote is a placeholder (decisions M, Y); '+' and runs join
+    nothing (decision W); SPFX pieces pair with SURN pieces (decision X).
+    """
+
+    TWO_NICKNAMES = {
+        "given": ["Eugen"],
+        "surnames": [("Löbig", "other")],
+        "nicknames": ["Muckel", "Cilli"],
+        "unsplit": ["Peppi"],
+    }
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Eugen 'Muckel' (Peppi) 'Cilli' /Löbig/",
+            'Eugen "Muckel" (Peppi) "Cilli" /Löbig/',
+            "Eugen ‘Muckel’ (Peppi) ‘Cilli’ /Löbig/",
+        ],
+    )
+    def test_a_bracket_between_two_quotes_joins_neither(self, name):
+        text = person("I1", name)
+        eugen, outcomes = record_of(text, "i1")
+        assert parts(eugen.structure) == self.TWO_NICKNAMES
+        assert eugen.label == name.replace(" (Peppi)", "").replace("/", "")
+        assert eugen.aliases == ["Peppi"]
+        assert [value for value, _ in stated(text, "i1", "nickname")] == [
+            "Muckel",
+            "Cilli",
+        ]
+        assert outcomes["NAME bracketed part"] == 1
+
+    def test_a_bracket_between_two_givn_quotes_joins_neither(self):
+        text = person(
+            "I1", "Eugen /Löbig/", "2 GIVN Eugen 'Muckel' (Peppi) 'Cilli'"
+        )
+        eugen, _ = record_of(text, "i1")
+        assert parts(eugen.structure) == self.TWO_NICKNAMES
+        assert eugen.aliases == ["Muckel", "Cilli", "Peppi"]
+        assert [value for value, _ in stated(text, "i1", "nickname")] == [
+            "Muckel",
+            "Cilli",
+        ]
+
+    def test_a_bracket_between_two_quotes_after_the_surname(self):
+        text = person("I1", "Eugen /Löbig/ 'Muckel' (Peppi) 'Cilli'")
+        eugen, _ = record_of(text, "i1")
+        assert parts(eugen.structure) == self.TWO_NICKNAMES
+        assert eugen.label == "Eugen Löbig 'Muckel' 'Cilli'"
+
+    def test_a_bracket_between_two_quotes_of_a_typed_name(self):
+        text = person(
+            "I7", "Ida 'Muckel' (Peppi) 'Cilli' /Sörne/", "2 TYPE birth"
+        )
+        assert stated(text, "i7", "birth_name") == [
+            ("Ida 'Muckel' 'Cilli' Sörne", [])
+        ]
+        assert [value for value, _ in stated(text, "i7", "nickname")] == [
+            "Muckel",
+            "Cilli",
+        ]
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Ida ‘(Peppi)’ /Sörne/",
+            "Ida ' (Peppi) ' /Sörne/",
+            "Ida '(Peppi)'/Sörne/",
+            "Ida „(Peppi)“ /Sörne/",
+        ],
+    )
+    def test_each_quote_form_around_a_bracket_is_no_placeholder(self, name):
+        text = person("I7", name, "2 TYPE birth")
+        ida, outcomes = record_of(text, "i7")
+        assert stated(text, "i7", "birth_name") == [("Ida Sörne", [])]
+        assert "NAME part without a word" not in outcomes
+        assert ida.aliases == ["Peppi"]
+
+    def test_an_empty_bracket_in_a_quote_is_counted_once(self):
+        _, outcomes = record_of(person("I7", "Ida '()' /Sörne/"), "i7")
+        assert outcomes["NAME part without a word"] == 1
+
+    def test_a_quoted_bracket_without_slashes_leaves_no_mark(self):
+        ida, _ = record_of(person("I7", "Ida '(Peppi)' Sörne"), "i7")
+        assert ida.label == "Ida Sörne"
+        assert parts(ida.structure)["unsplit"] == ["Peppi", "Ida Sörne"]
+
+    def test_two_givn_quotes_give_two_claims(self):
+        text = person("I7", "Ida /Sörne/", "2 GIVN Ida 'Peppi' 'Cilli'")
+        assert [value for value, _ in stated(text, "i7", "nickname")] == [
+            "Peppi",
+            "Cilli",
+        ]
+
+    @pytest.mark.parametrize(
+        ("name", "lines", "label", "prop"),
+        [
+            ("Ida /-/ Wwe.", ["2 TYPE married"], "Ida Wwe.", "married_name"),
+            ("Leopold /-/ Jr.", ["2 TYPE birth"], "Leopold Jr.",
+             "birth_name"),
+            ("Agnes - /Löbig/", ["2 TYPE married"], "Agnes Löbig",
+             "married_name"),
+            ("Agnes /- Löbig/", ["2 TYPE married"], "Agnes Löbig",
+             "married_name"),
+            ("Agnes & /Löbig/", ["2 TYPE married"], "Agnes Löbig",
+             "married_name"),
+            ("Agnes /Löbig -/", ["2 TYPE married"], "Agnes Löbig",
+             "married_name"),
+            ("Ida 'Peppi' - /Sörne/", ["2 TYPE birth"], "Ida 'Peppi' Sörne",
+             "birth_name"),
+            ("Ida - (Peppi) /Sörne/", ["2 TYPE birth"], "Ida Sörne",
+             "birth_name"),
+            ("Eugen + Ida /Löbig/", ["2 TYPE birth"], "Eugen Ida Löbig",
+             "birth_name"),
+            ("Eugen /Löbig/", ["2 TYPE birth", "2 GIVN Eugen -"],
+             "Eugen Löbig", "birth_name"),
+        ],
+    )  # fmt: skip
+    def test_a_connector_at_a_fields_edge_is_a_placeholder(
+        self, name, lines, label, prop
+    ):
+        # decisions M and Y: a dash or '&' joins two words of one field;
+        # against a slash, a bracket or a quote it stands for nothing
+        text = person("I1", name, *lines)
+        entity, outcomes = record_of(text, "i1")
+        assert entity.label == label
+        assert stated(text, "i1", prop) == []
+        assert outcomes["typed NAME with a placeholder"] == 1
+        assert outcomes["NAME part without a word"] == 1
+
+    def test_a_married_name_with_an_edge_dash_is_blocked(self):
+        text = person("I1", "Agnes /Löbig/", "1 _MARNM Agnes - /Löbig/")
+        agnes, outcomes = record_of(text, "i1")
+        assert stated(text, "i1", "married_name") == []
+        assert outcomes["typed NAME with a placeholder"] == 1
+        assert outcomes["NAME part without a word"] == 1
+        assert parts(agnes.structure)["surnames"] == [
+            ("Löbig", "other"),
+            ("Löbig", "married"),
+        ]
+
+    def test_a_married_name_with_a_dash_beside_its_bracket_is_blocked(self):
+        text = person(
+            "I1", "Agnes /Löbig/", "1 _MARNM Agnes - (Peppi) /Löbig/"
+        )
+        agnes, outcomes = record_of(text, "i1")
+        assert stated(text, "i1", "married_name") == []
+        assert agnes.aliases == ["Agnes Peppi Löbig"]
+        assert outcomes["NAME part without a word"] == 1
+
+    @pytest.mark.parametrize(
+        ("name", "label"),
+        [
+            ("? - Ida /Löbig/", "Ida Löbig"),
+            ("Eugen - ? /Löbig/", "Eugen Löbig"),
+            ("Ida /Löbig -- Sörne/", "Ida Löbig Sörne"),
+            ("Ida /Löbig -& Sörne/", "Ida Löbig Sörne"),
+            ("Löbig - /Sörne/", "Löbig Sörne"),
+        ],
+    )
+    def test_a_connector_beside_no_word_or_a_run_is_dropped(self, name, label):
+        entity, outcomes = record_of(person("I1", name), "i1")
+        assert entity.label == label
+        assert outcomes["NAME part without a word"] == (
+            2 if "?" in name else 1
+        )
+
+    @pytest.mark.parametrize(
+        ("name", "label", "surname"),
+        [
+            ("Ida /Löbig - Sörne/", "Ida Löbig - Sörne", "Löbig - Sörne"),
+            ("Ida /Löbig – Sörne/", "Ida Löbig – Sörne", "Löbig – Sörne"),
+            ("Ida /Löbig & Sörne/", "Ida Löbig & Sörne", "Löbig & Sörne"),
+        ],
+    )
+    def test_a_single_dash_or_and_within_a_surname_stays(
+        self, name, label, surname
+    ):
+        text = person("I7", name, "2 TYPE birth")
+        ida, outcomes = record_of(text, "i7")
+        assert ida.label == label
+        assert parts(ida.structure)["surnames"] == [(surname, "birth")]
+        assert stated(text, "i7", "birth_name") == [(label, [])]
+        assert "NAME part without a word" not in outcomes
+
+    def test_a_connector_within_a_quote_or_a_bracket_stays(self):
+        text = person("I1", "Eugen 'Muckel - Cilli' (Peppi & Cilli) /Löbig/")
+        eugen, outcomes = record_of(text, "i1")
+        assert eugen.label == "Eugen 'Muckel - Cilli' Löbig"
+        assert eugen.aliases == ["Peppi & Cilli"]
+        assert parts(eugen.structure)["nicknames"] == ["Muckel - Cilli"]
+        assert "NAME part without a word" not in outcomes
+
+    @pytest.mark.parametrize("lines", [[], ["2 TYPE aka"]])
+    def test_a_givn_connector_is_no_given_name(self, lines):
+        text = person("I1", "Eugen /Löbig/", *lines, "2 GIVN Eugen & Ida")
+        eugen, outcomes = record_of(text, "i1")
+        field = "nicknames" if lines else "given"
+        assert parts(eugen.structure)[field] == ["Eugen", "Ida"]
+        assert "NAME part without a word" not in outcomes
+
+    @pytest.mark.parametrize(
+        ("name", "lines"),
+        [
+            ("Eugen) /Löbig/", []),
+            ("Eugen /Löbig/", ["2 SURN Löbig)"]),
+            ("Eugen (Peppi ()) /Löbig/", []),
+            ("Eugen /Löbig/", ["2 GIVN Eugen (Peppi ())"]),
+        ],
+    )
+    def test_a_stray_or_a_nested_empty_bracket_blocks(self, name, lines):
+        text = person("I1", name, "2 TYPE birth", *lines)
+        eugen, outcomes = record_of(text, "i1")
+        assert stated(text, "i1", "birth_name") == []
+        assert outcomes["typed NAME with a placeholder"] == 1
+        assert outcomes["NAME part without a word"] >= 1
+        assert ")" not in eugen.label
+
+    def test_a_glued_stray_bracket_parts_its_words(self):
+        ida, outcomes = record_of(person("I7", "Ida(Pep /Sörne/"), "i7")
+        assert ida.label == "Ida Pep Sörne"
+        assert outcomes["NAME part without a word"] == 1
+
+    @pytest.mark.parametrize(
+        ("spfx", "surn", "surnames", "counted"),
+        [
+            ("von, de", "Löbig, Sörne", ["von Löbig", "de Sörne"], False),
+            ("von", "Löbig", ["von Löbig"], False),
+            ("von", "Löbig, Sörne", ["von Löbig", "von Sörne"], True),
+            ("von, de", "Löbig", ["von de Löbig"], True),
+        ],
+    )
+    def test_spfx_pieces_pair_with_surn_pieces(
+        self, spfx, surn, surnames, counted
+    ):
+        # decision X
+        text = person("I1", "", "2 GIVN Eugen", f"2 SPFX {spfx}",
+                      f"2 SURN {surn}")  # fmt: skip
+        eugen, outcomes = record_of(text, "i1")
+        assert [s for s, _ in parts(eugen.structure)["surnames"]] == surnames
+        assert eugen.label == " ".join(["Eugen", *surnames])
+        assert (
+            "SPFX particles not matching SURN pieces" in outcomes
+        ) is counted
+
+    def test_a_particle_without_a_surname_stays_in_the_label(self):
+        text = person("I1", "", "2 GIVN Eugen", "2 SPFX von")
+        eugen, outcomes = record_of(text, "i1")
+        assert eugen.label == "Eugen von"
+        assert outcomes["SPFX without a surname"] == 1
+
+    @pytest.mark.parametrize(
+        ("quoted", "nick"),
+        [("„Peppi“", "‚Cilli‘"), ("»Peppi«", "«Cilli»")],
+    )
+    def test_german_quotes_and_guillemets_mark_nicknames(self, quoted, nick):
+        text = person("I7", f"Ida {quoted} /Sörne/", f"2 NICK {nick}")
+        ida, _ = record_of(text, "i7")
+        assert parts(ida.structure)["given"] == ["Ida"]
+        assert parts(ida.structure)["nicknames"] == ["Peppi", "Cilli"]
+        assert ida.label == f"Ida {quoted} Sörne"
+
+    def test_a_prefix_holding_the_whole_name_is_not_written_twice(self):
+        text = person("I1", "Eugen /Löbig/", "2 NPFX Dr. Eugen Löbig Jr.")
+        eugen, _ = record_of(text, "i1")
+        assert eugen.aliases == ["Dr. Eugen Löbig Jr."]
+
+    def test_a_nick_holding_a_quoted_bracket_keeps_the_bracket(self):
+        text = person("I1", "Eugen /Löbig/", "2 NICK Muckel '(Peppi)'")
+        eugen, _ = record_of(text, "i1")
+        assert parts(eugen.structure)["nicknames"] == ["Muckel (Peppi)"]

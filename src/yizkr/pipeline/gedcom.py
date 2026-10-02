@@ -519,12 +519,26 @@ def _sub_brackets(text: str, replace: Callable[[str], str]) -> str:
     return "".join([*out, text[last:]])
 
 
-# a quote whose only content is a bracket ("'(Peppi)'"): the bracket is
-# read, and the quote marks around it are no placeholder
-_QUOTED_BRACKET = re.compile(r"[‘'\"“]\s*(\([^()]*\))\s*[’'\"”]")
-# a word with no letter or digit that joins the words beside it ('Löbig -
-# Sörne', 'Eugen & Ida'), kept as written where it stands between two
-_CONNECTOR = re.compile(r"[-‐‑‒–—&+]+")
+# The marks that open a quote and those that close one: straight, curly,
+# German low ('„Peppi“', '‚Peppi‘') and guillemets ('»Peppi«', '«Peppi»').
+_OPENING = "‘'\"“„‚»«"
+_CLOSING = "’'\"”“‘«»"
+_QUOTES = "".join(dict.fromkeys(_OPENING + _CLOSING))
+# a quote whose only content is a bracket ("'(Peppi)'"), opening and
+# closing a word as a quoted part does (_QUOTED_NAME), or beside a slash
+# ("Ida '(Peppi)'/Sörne/"): the bracket is read, and the quote marks
+# around it are no placeholder
+_QUOTED_BRACKET = re.compile(
+    rf"(?:(?<=[\s/])|^)[{_OPENING}]\s*(\([^()]*\))\s*[{_CLOSING}](?=[\s/]|$)"
+)
+# a single dash or '&' that joins the words beside it within one part
+# ('Löbig - Sörne', 'Eugen & Ida'), kept as written where it stands
+# between two; '+', which a tree may write for a death, and a run ('--')
+# join nothing
+_CONNECTOR = re.compile(r"[-‐‑‒–—&]")
+# the mark _worded_count sets between a NAME's fields, at a slash and at
+# each edge of a bracket or a quote: never kept and never counted
+_EDGE = "/"
 
 
 def _unquote_brackets(text: str) -> str:
@@ -554,7 +568,9 @@ def _stray_brackets(text: str) -> tuple[str, int]:
 
 def _kept_words(words: list[str]) -> list[str]:
     """`words` less each that holds no letter or digit, save a connector
-    between two that do ('Löbig - Sörne')."""
+    between two that do ('Löbig - Sörne'). An edge (_EDGE) between two
+    fields is never kept, so a connector beside one is a placeholder
+    ('Agnes - /Löbig/')."""
     return [
         word
         for index, word in enumerate(words)
@@ -568,25 +584,53 @@ def _kept_words(words: list[str]) -> list[str]:
     ]
 
 
+def _field_words(text: str) -> list[str]:
+    """`text`'s words, each slash an edge (_EDGE) between its fields."""
+    return text.replace("/", f" {_EDGE} ").split()
+
+
+def _kept_count(text: str) -> tuple[list[str], int]:
+    """`text`'s words left (_kept_words), and how many of its words, its
+    edges aside, they leave out."""
+    words = _field_words(text)
+    kept = _kept_words(words)
+    return kept, len(words) - words.count(_EDGE) - len(kept)
+
+
+def _nested_unnamed(text: str) -> int:
+    """How many brackets nested in another ('(Peppi ())', '(Peppi (?))')
+    hold no word: each is a placeholder, which _brackets leaves out."""
+    outermost = set(_bracket_spans(text))
+    return sum(
+        1
+        for start, end in _bracket_pairs(text)
+        if (start, end) not in outermost
+        and not _has_word(text[start + 1 : end - 1])
+    )
+
+
 def _worded_count(text: str) -> tuple[str, int]:
     """`text`, cleaned, less each of its words that holds no letter or
     digit ('Eugen ?' -> 'Eugen') and each stray bracket, and how many it
-    leaves out. A connector between two words stays ('Löbig - Sörne'). A
-    bracket or a quote keeps its marks around the words left in it
-    ('(Peppi ?)' -> '(Peppi)'), and one with none left goes whole ('(?)',
-    "'?'", '()'), counted once at least; the quote marks around a bracket
-    that is a quote's only content are left out, uncounted."""
+    leaves out. A connector between two words of one field stays ('Löbig -
+    Sörne'), and one at a field's edge, a slash, a bracket or a quote, is
+    a placeholder ('Agnes - /Löbig/'). A bracket or a quote keeps its marks
+    around the words left in it ('(Peppi ?)' -> '(Peppi)'), and one with
+    none left goes whole ('(?)', "'?'", '()'), counted once at least, as
+    is a bracket with no word nested in another ('(Peppi ())'); the quote
+    marks around a bracket that is a quote's only content are left out,
+    uncounted."""
     text, dropped = _stray_brackets(_unquote_brackets(text))
+    dropped += _nested_unnamed(text)
 
     def within(held: str, opening: str, closing: str) -> str:
         nonlocal dropped
-        words = _clean_name(held).split()
-        kept = _kept_words(words)
+        kept, count = _kept_count(held)
         if not kept:
-            dropped += max(len(words), 1)
-            return " "
-        dropped += len(words) - len(kept)
-        return f" {opening}{' '.join(kept)}{closing} "
+            dropped += max(count, 1)
+            return f" {_EDGE} "
+        dropped += count
+        return f" {_EDGE} {opening}{' '.join(kept)}{closing} {_EDGE} "
 
     text = _sub_brackets(text, lambda held: within(held, "(", ")"))
     text = _QUOTED_NAME.sub(
@@ -595,9 +639,8 @@ def _worded_count(text: str) -> tuple[str, int]:
         ),
         text,
     )
-    words = _clean_name(text).split()
-    kept = _kept_words(words)
-    return " ".join(kept), dropped + len(words) - len(kept)
+    kept, count = _kept_count(text)
+    return " ".join(kept), dropped + count
 
 
 def _worded(text: str) -> str:
@@ -642,6 +685,7 @@ def _givn_inline(name: Record) -> tuple[list[str], list[str], int]:
     dropped = 0
     for part in name.all("GIVN"):
         value = _unquote_brackets(part.value)
+        dropped += _nested_unnamed(value)
         unbracketed = _sub_brackets(value, lambda held: " ")
         for found, inline in (
             (bracketed, _brackets(value)),
@@ -677,15 +721,21 @@ def _parts_text(pieces: dict[str, list[str]]) -> str:
 
 
 def _with_particle(pieces: dict[str, list[str]]) -> list[str]:
-    """Each SURN piece whole with the SPFX particle before it, unless it
-    holds it already ('von' + 'Löbig, Sörne' -> 'von Löbig', 'von
-    Sörne')."""
-    particle = " ".join(pieces["SPFX"])
+    """Each SURN piece whole with its SPFX particle before it, unless it
+    holds it already. As many SPFX pieces as SURN pieces pair in order
+    ('von, de' + 'Löbig, Sörne' -> 'von Löbig', 'de Sörne'); otherwise
+    the SPFX pieces together are the particle of each ('von' + 'Löbig,
+    Sörne' -> 'von Löbig', 'von Sörne'), which read_name counts."""
+    surnames = pieces["SURN"]
+    if len(pieces["SPFX"]) == len(surnames):
+        particles = pieces["SPFX"]
+    else:
+        particles = [" ".join(pieces["SPFX"])] * len(surnames)
     return [
         surname
         if not particle or _restated(particle, surname)
         else f"{particle} {surname}"
-        for surname in pieces["SURN"]
+        for particle, surname in zip(particles, surnames, strict=True)
     ]
 
 
@@ -696,7 +746,9 @@ def _with_particle(pieces: dict[str, list[str]]) -> list[str]:
 # Sörne", "(geb. Laudler)"), so it is kept as an alias and an unsplit
 # form, typed as nothing. A quote opens a word and closes one, so an
 # apostrophe inside a name ("O'Neil") is no quote.
-_QUOTED_NAME = re.compile(r"(?:(?<=\s)|^)[‘'\"“]([^‘’'\"“”]+)[’'\"”](?=\s|$)")
+_QUOTED_NAME = re.compile(
+    rf"(?:(?<=\s)|^)[{_OPENING}]([^{_QUOTES}]+)[{_CLOSING}](?=\s|$)"
+)
 # a NAME value's given part, its surname between slashes, and what follows
 _SLASHED_NAME = re.compile(r"^([^/]*)/([^/]*)/([^/]*)$")
 
@@ -774,18 +826,18 @@ def _prefix_length(prefix: str, words: list[str]) -> int:
 
 def _stated_lead(prefixes: list[str], display: str) -> int:
     """How many of the display form's first words the prefixes already
-    write, at their start ('Dr.' of 'Dr. med.' in 'Dr. Eugen Löbig') or at
-    their end ('Eugen' of 'Dr. Eugen' in 'Eugen Löbig', all of 'Eugen
-    Löbig' in 'Dr. Eugen Löbig'), so that the form an unrestated prefix
-    completes does not write them twice."""
+    write, anywhere in them ('Dr.' of 'Dr. med.' in 'Dr. Eugen Löbig',
+    'Eugen' of 'Dr. Eugen' in 'Eugen Löbig', all of 'Eugen Löbig' in 'Dr.
+    Eugen Löbig' or in 'Dr. Eugen Löbig Jr.'), so that the form an
+    unrestated prefix completes does not write them twice."""
     wanted = _words(" ".join(prefixes))
     words = display.split()
     lead = 0
     for length in range(1, len(words) + 1):
         stated = _words(" ".join(words[:length]))
-        if stated and stated in (
-            wanted[: len(stated)],
-            wanted[len(wanted) - len(stated) :],
+        if stated and any(
+            wanted[start : start + len(stated)] == stated
+            for start in range(len(wanted) - len(stated) + 1)
         ):
             lead = length
     return lead
@@ -824,9 +876,17 @@ def read_name(name: Record) -> NameReading:
       counted instead. So is a particle with no surname.
     * A word that holds no letter or digit ('?', '-', '_'), in the value,
       a bracket, a quote, a part or a NICK, is a placeholder: it names
-      nothing, so it is left out and counted. A typed NAME that held one
-      in its value or parts gives no typed-name claim, counted, since the
-      name left would read as the whole of what the source types.
+      nothing, so it is left out and counted, as is a stray bracket. A
+      single dash or '&' between two words of one field stays ('Löbig -
+      Sörne'); at a field's edge, a slash, a bracket or a quote, it is a
+      placeholder ('Agnes - /Löbig/'). A typed NAME that held a
+      placeholder in its value, its brackets or quotes or its parts, a
+      stray bracket included, gives no typed-name claim, counted: the
+      source is unsure of the name it types, and the name left would read
+      as the whole of it. A NICK is no part of that name, so its
+      placeholders block nothing.
+    * As many SPFX pieces as SURN pieces pair in order; other counts are
+      read as one particle before each surname, counted.
     """
     reading = NameReading()
     value, strays = _stray_brackets(_unquote_brackets(name.value))
@@ -847,7 +907,7 @@ def read_name(name: Record) -> NameReading:
 
     # the placeholders of the value's brackets and the GIVN's quotes and
     # brackets, which count against a typed claim as the value's do
-    unnamed = 0
+    unnamed = _nested_unnamed(value)
     brackets: list[str] = []
     for held in _brackets(value):
         text, count = _worded_count(held)
@@ -924,7 +984,12 @@ def read_name(name: Record) -> NameReading:
                 )
 
     # the parts, each a piece of its field
-    parts_given = [word for piece in pieces["GIVN"] for word in piece.split()]
+    parts_given = [
+        word
+        for piece in pieces["GIVN"]
+        for word in piece.split()
+        if _has_word(word)
+    ]
     particle = " ".join(pieces["SPFX"])
     parts_surnames = _with_particle(pieces)
     # a particle the value's surname holds has its surname there
@@ -932,6 +997,11 @@ def read_name(name: Record) -> NameReading:
         pieces["SURN"] or (surname and _restated(particle, surname))
     ):
         reading.counts.append("SPFX without a surname")
+    elif pieces["SURN"] and len(pieces["SPFX"]) not in (
+        0,
+        len(pieces["SURN"]),
+    ):
+        reading.counts.append("SPFX particles not matching SURN pieces")
     parts_text = _parts_text(pieces)
     # each part as its field holds it, a surname with its particle
     held = [
@@ -1007,7 +1077,16 @@ def read_name(name: Record) -> NameReading:
 
 
 # the quotes that may enclose a NICK's value, opening -> closing
-_QUOTE_PAIRS = {"'": "'", '"': '"', "‘": "’", "“": "”"}
+_QUOTE_PAIRS = {
+    "'": "'",
+    '"': '"',
+    "‘": "’",
+    "“": "”",
+    "„": "“",
+    "‚": "‘",
+    "»": "«",
+    "«": "»",
+}
 
 
 def _nick_count(value: str) -> tuple[str, int]:
@@ -1042,8 +1121,10 @@ def read_married_name(marnm: Record) -> NameReading:
     placeholder`), while one whose surname was a placeholder ('Agnes
     /?/') is unsplit, counted as without a surname."""
     unbracketed = _sub_brackets(marnm.value, lambda held: f" {held} ")
-    display, placeholders = _worded_count(unbracketed)
-    reading = NameReading(display=display)
+    worded, placeholders = _worded_count(marnm.value)
+    reading = NameReading(
+        display=" ".join(re.sub(r"[()]", "", worded).split())
+    )
     reading.counts += ["NAME part without a word"] * placeholders
     if not reading.display:
         return reading

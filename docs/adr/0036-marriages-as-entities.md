@@ -53,8 +53,8 @@ not of a partnership. A family whose HUSB and WIFE name one person has
 no couple, as two HUSBs naming one person have none.
 
 Amended by #408 (2026-10-02; decided by the orchestrator, the owner may
-override): **one person as HUSB and WIFE.** A family whose HUSB and WIFE
-name the same person gives no union and no parent claim for its
+override): **one person as HUSB and WIFE.** A family whose first HUSB and
+first WIFE name the same person gives no union and no parent claim for its
 children, counted as `FAM one person as HUSB and WIFE`: one person as
 both father and mother is a reading the record cannot mean, so it is not
 guessed.

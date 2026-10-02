@@ -109,8 +109,9 @@ never narrow or guess.
 - **A typed name with a placeholder gives no typed claim** (decision K).
   A NAME with a TYPE that held a placeholder anywhere, in its value
   (inside its brackets too: "Eugen (?) /Löbig/", "Eugen /(?)/"), its
-  quotes, or its GIVN, SURN, NPFX, NSFX or SPFX ("GIVN Agnes (?)"),
-  gives no typed-name claim, counted (`typed NAME with a placeholder`):
+  quotes, or its GIVN, SURN, NPFX, NSFX or SPFX ("GIVN Agnes (?)"), a
+  stray bracket ("Eugen) /Löbig/") or an empty bracket nested in another
+  ("(Peppi ())") included, gives no typed-name claim, counted (`typed NAME with a placeholder`):
   a tree writes "(?)" to say it is unsure of the name, and the claim
   would narrow it (rule 5). A NICK's placeholder does not block it, as a
   NICK is no part of the typed name. A `_MARNM` whose slashes still hold
@@ -123,8 +124,9 @@ never narrow or guess.
   with "Peppi" an alias); a GIVN's quoted or bracketed part; a NICK; a
   `_MARNM`. Each such label keeps the source's marks as written (`GIVN
   (Peppi)` gives "(Peppi)", `GIVN 'Peppi'` "'Peppi'", `NICK 'Muckel'`
-  "'Muckel'"), so that a person known only so meets no one whose name is
-  the bare word (decision L). A person with any word in
+  "'Muckel'"), so that, where the source wrote any marks, a person known
+  only so meets no one whose name is the bare word (decision L); an
+  unmarked `NICK Muckel` still gives the label "Muckel". A person with any word in
   any name keeps an entity and its claims. A person none of these gives
   a word is skipped with the adapter's warning, as one whose NAME is
   empty is, and counted (`person without a name`): the writer finds an
@@ -159,15 +161,37 @@ never narrow or guess.
   part none. A bracket within a bracket is read by the outermost pair
   ("(Pep(pi))" gives "Peppi"); a '(' never closed or a ')' never opened
   is left out, counted. A quote whose only content is a bracket ("Ida
-  '(Peppi)'") is the bracket, its marks no placeholder. A bracket name
+  '(Peppi)'") is the bracket, its marks no placeholder; such a quote
+  opens and closes a word as any quote does, so a bracket between two
+  quotes ("Eugen 'Muckel' (Peppi) 'Cilli' /Löbig/") leaves both
+  nicknames, Muckel and Cilli. German low quotes ("„Peppi“", "‚Peppi‘")
+  and guillemets ("»Peppi«", "«Peppi»") mark a nickname as the others
+  do. A malformed nest ("Ida (Pep(pi) /Sörne/") is read by the pair that
+  closes ("(pi)" an alias, "Pep" a given name) and its stray '(' counted:
+  the adapter does not guess which bracket the tree meant. A bracket name
   keeps an NPFX or NSFX beside it as a title or suffix, its full form an
   alias ("Frau Peppi").
-- **Connectors** (decision M). A dash or "&" between two words is a
-  connector, kept as written ("Ida /Löbig - Sörne/" keeps the surname
-  "Löbig - Sörne"); standing as a whole part or value, it is a
-  placeholder.
-- **Particles.** An SPFX goes on each piece of a SURN of several pieces
-  ("von" + "Löbig, Sörne" gives "von Löbig" and "von Sörne").
+- **Connectors** (decisions M, W, Y). A single dash (of any width) or
+  "&" between two words of one field is a connector, kept as written
+  ("Ida /Löbig - Sörne/" keeps the surname "Löbig - Sörne"). Its
+  neighbours are read within its own field, before the slashes become
+  spaces: at a field's edge, against a slash, a bracket or a quote
+  ("Agnes - /Löbig/", "Agnes /- Löbig/", "Ida - (Peppi) /Sörne/",
+  `_MARNM Agnes - /Löbig/`), or standing as a whole part or value
+  ("/-/"), it is a placeholder, dropped, counted and blocking a typed
+  claim (K) (decision Y). "+" and runs such as "--" are never
+  connectors (decision W): a word made only of them is a placeholder,
+  since in German trees "+" often marks a death, which is no part of a
+  name.
+- **Particles** (decision X). As many SPFX pieces (comma-separated) as
+  SURN pieces pair in order ("von, de" + "Löbig, Sörne" gives "von
+  Löbig" and "de Sörne"). Otherwise the SPFX pieces together go on each
+  SURN piece ("von" + "Löbig, Sörne" gives "von Löbig" and "von
+  Sörne"), and the mismatch is counted (`SPFX particles not matching
+  SURN pieces`).
+- **A prefix that holds the whole name.** An NPFX that writes the name
+  the value gives anywhere within it ("Dr. Eugen Löbig Jr." beside
+  "Eugen /Löbig/") is that form whole, the name not written twice.
 - **Language.** A HEAD.LANG of `und` is taken as it is, uncounted.
 
 **Decided by the owner (2026-09-29):**
@@ -1093,7 +1117,7 @@ into "fix first, and measure in run 1": under the pre-baseline exception
   untyped form (§6). An initial or a lettered stand-in ("N.N.") in an
   export keys as written, and meets only the same form; a placeholder
   with no letter or digit ("?") is no key at all, since the adapter
-  leaves it out (#408's 2026-10-02 line). A title an export writes in a
+  leaves it out (the 2026-10-02 amendment above). A title an export writes in a
   NAME's given part with no NPFX ("Dr.") keys as a given name: an
   accepted limitation.
 - GEDCOM dates: month names beyond the standard's abbreviations come from
