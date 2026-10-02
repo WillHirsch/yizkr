@@ -248,9 +248,10 @@ directory under `var/backups/` containing:
   item is left out only as untyped, or, in an event of no person kind
   (a subclass a curator makes of one counts as one), as a family or other
   group with recorded members all released, read through its member
-  groups, each of which names a member and was not held back by the
-  check; one that names no member, or a participant of unknown value,
-  takes it too; a union, or an item typed human and not a family, is
+  groups (and through the people named a `member of`, whose own
+  standing counts too), each of which names a member and, if it has
+  person evidence, was released; one that names no member, or a
+  participant of unknown value, takes it too; a union, or an item typed human and not a family, is
   no event for this), every
   person event that names no participant, every event that has
   participant statements, all of an unknown value or none, and the

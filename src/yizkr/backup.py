@@ -53,15 +53,16 @@ closed:
   a person, as the value or a qualifier's value, whatever the property;
   a union is no event (ADR-0036), nor is an item typed human at normal
   or preferred rank, unless typed a family too. An item it drops only as
-  untyped, or as a released group, takes no event that merely names it.
-  A released group, a family (or any item named a `member of`) that
-  names members, read through the groups among them, each of which
-  names a member, has no participant of unknown value and was not held
-  back by the check, and whose members it all released, takes no event
-  it took part in either, unless of a person kind (a class the dump
-  makes a subclass of one included), which is its members' own, however
-  it names the group. A person named a `member of` is a member, never a
-  group to read through. It drops every event
+  untyped, or as a released group, takes no event of no person kind
+  that merely names it. A released group, a family (or any item named a
+  `member of`) that names members, read through the groups among them,
+  each of which names a member, has no participant of unknown value and,
+  if it has person evidence, was released, and whose members it all
+  released, takes no event it took part in either, unless of a person
+  kind (a class the dump makes a subclass of one included), which is its
+  members' own, however it names the group. A person named a `member
+  of` is a member whose standing counts, and whose own members are read
+  too; a person is never a released group. It drops every event
   of a person kind that names no participant, and every event that has
   participant statements all of unknown value, as whom it happened to is
   unknown; and the events that start and end a union it drops, a
@@ -799,9 +800,10 @@ def public_exclusions(
       that item is a released group (a family, or any item named a
       `member of`, that names at least one member, read through the groups
       among its members, each of which names a member, has no participant
-      of unknown value and is not one the check held back, all of them
-      released, and no participant of unknown value; a person among its
-      members is a member, never a group), which takes part harmlessly,
+      of unknown value and, if it has person evidence, was released, all
+      of them released, and no participant of unknown value; a person
+      among its members is a member whose standing counts, and whose own
+      members are read too), which takes part harmlessly,
       except in a person kind of event, which is its members' own
       (``PARTICIPANT_LEFT_OUT``, naming them); each event that a statement
       of it names an item it drops, as its value or a qualifier's,
@@ -850,14 +852,16 @@ def public_exclusions(
     groups = reading.families | set(reading.members)
 
     # a person named a group, a household recorded under its head, say, is
-    # a member whose standing counts, never a group to read through
+    # a member whose standing counts, and whose own members are read too;
+    # a person is never a released group
     walked = groups - (people - reading.families)
 
     def released(group: str) -> bool:
         """Whether `group` names at least one member, read through the
         groups among its members, and the check released every one: each
         group so read names a member, has no participant of unknown value
-        and, if the check assessed it, was released."""
+        and, if it has person evidence, was released. A person among them
+        counts as a member, and their own members are read too."""
         seen, stack, found = set(), [group], set()
         while stack:
             current = stack.pop()
@@ -873,9 +877,9 @@ def public_exclusions(
                 return False
             for member in members:
                 member = target(member)
-                if member in walked:
+                if member in groups:
                     stack.append(member)
-                else:
+                if member not in walked:
                     found.add(member)
         return bool(found) and found <= report.included
 

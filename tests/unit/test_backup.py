@@ -3026,7 +3026,10 @@ class TestExportPublic:
             ("nested-only-an-unknown-participant", True),
             ("nested-family-participant-possibly-living", True),
             ("nested-family-of-its-participant", False),
-            ("a-released-person-named-a-group", False),
+            ("a-released-person-named-a-group", True),
+            ("a-released-person-named-a-group-nested", True),
+            ("a-released-person-named-a-group-through-a-redirect", True),
+            ("a-released-person-named-a-group-deprecated", True),
         ],
     )
     def test_a_groups_members_are_read_through_its_groups(
@@ -3043,9 +3046,12 @@ class TestExportPublic:
         # assessed (it took part in a migration), one that names no one,
         # or one with a participant of unknown value, takes the event with
         # it. Florence named a group (Gustav a member of her) is a member
-        # all the same, never a group to read through, and so is Gustav
-        # (Florence a member of him), whose standing alone counts. A family
-        # known by its type and its participant alone, Gustav, is released
+        # all the same, whose standing counts; and Gustav, released, named a
+        # group (Florence a member of him, a household under its head, in
+        # Q446 or in Q491 within it, through his redirect Q418, or at
+        # deprecated rank), has his own members read too, so Florence keeps
+        # the family unreleased. A family known by its type and its
+        # participant alone, Gustav, is released
         _, items = vocabulary
         dump = export_dump(vocabulary)
         family = entity("Q446")
@@ -3055,9 +3061,17 @@ class TestExportPublic:
         elif case == "a-person-named-a-group":
             dump.says("Q405", "member_of", family)
             dump.says("Q401", "member_of", entity("Q405"))
-        elif case == "a-released-person-named-a-group":
-            dump.says("Q401", "member_of", family)
-            dump.says("Q405", "member_of", entity("Q401"))
+        elif case.startswith("a-released-person-named-a-group"):
+            if case.endswith("-nested"):
+                dump.entity("Q491", "the Lobig cousins", revision=491)
+                dump.says("Q491", "instance_of", entity(items["family"]))
+                dump.says("Q491", "member_of", family)
+                dump.says("Q401", "member_of", entity("Q491"))
+            else:
+                dump.says("Q401", "member_of", family)
+            head = "Q418" if case.endswith("-redirect") else "Q401"
+            rank = "Deprecated" if case.endswith("-deprecated") else "Normal"
+            dump.says("Q405", "member_of", entity(head), rank=rank)
         else:
             dump.entity("Q491", "the Lobig cousins", revision=491)
             dump.says("Q491", "member_of", family)
@@ -3139,6 +3153,44 @@ class TestExportPublic:
         text, mentioned = self.public(tmp_path)
         assert "Q497" not in mentioned
         assert dated(1975) not in text
+
+    @pytest.mark.parametrize("case", ["naming-no-one", "a-participant"])
+    def test_a_curator_subclass_of_a_person_kind_is_one_everywhere(
+        self, tmp_path, vocabulary, case
+    ):
+        # "Passage of Nina Lobig" (Q494), typed Q495, a class a curator made
+        # a subclass of Q492, a redirect to Q493, a subclass of migration:
+        # a person kind, two hops and a redirect down. Naming no
+        # participant, it is unattended; its participant Q498, typed only
+        # with a curator's class (Q499), has person evidence the check never
+        # assessed, and is left out with it
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.entity("Q493", "a passage", revision=493)
+        dump.says("Q493", "subclass_of", entity(items["migration"]))
+        dump.redirect("Q492", "Q493")
+        dump.entity("Q495", "a sea passage", revision=495)
+        dump.says("Q495", "subclass_of", entity("Q492"))
+        dump.entity("Q494", "Passage of Nina Lobig", revision=494)
+        dump.says("Q494", "instance_of", entity("Q495"))
+        dump.says("Q494", "point_in_time", dated(1975))
+        if case == "a-participant":
+            dump.entity("Q499", "a traveller", revision=499)
+            dump.entity("Q498", "Q498", revision=498)
+            dump.says("Q498", "instance_of", entity("Q499"))
+            dump.says("Q494", "participant", entity("Q498"))
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert "Q494" not in mentioned
+        assert dated(1975) not in text
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )["excluded"]
+        if case == "naming-no-one":
+            assert exclusions["Q494"] == backup.UNATTENDED
+        else:
+            assert "Q498" not in mentioned
+            assert exclusions["Q498"] == NOT_ASSESSED
 
     @pytest.mark.parametrize(
         ("case", "goes"),

@@ -1112,12 +1112,17 @@ not a signal to grow the schema on.
   names it (as a participant or, say, `carried out by`). Members are
   read through the groups among them, through redirects, ending on
   cycles: a member group with a member not released, that names no
-  one, or that the check assessed and did not release makes the outer
-  group take events with it, and so does a `participant` of unknown
-  value. A person named a `member of` (a household recorded under its
-  head) is a member whose standing counts, never a group read through.
-  A class the dump makes a subclass of a person kind of event is a
-  person kind too, everywhere in the export. An
+  one, or that has person evidence and was not released by the check
+  makes the outer group take events with it, and so does a
+  `participant` of unknown value. A person named a `member of` (a
+  household recorded under its head) is a member whose standing
+  counts, and whose own members are read too; a person is never a
+  released group. An untyped item with members is judged as a group,
+  on its members. A class the dump makes a subclass of a person kind of
+  event is a person kind too, everywhere in the export's reading of the
+  dump; the check's own selection of people does not follow such
+  classes, so a participant of one that the dump alone makes a person is
+  left out as not assessed, failing closed. An
   event is an item typed `event`, a subclass of it or a person kind of
   event, or an item with a `participant` statement, but never a union (a
   partnership or a marriage, or a subclass of one), whose events go with
