@@ -26,6 +26,7 @@ import random
 import re
 import shutil
 import tracemalloc
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -2636,9 +2637,11 @@ class TestCallsAndTime:
 
     def test_stops_of_the_api_engine_are_recorded(self, tmp_path, monkeypatch):
         """A run on the Anthropic API engine records why its answered calls
-        stopped, as its responses said: an answer cut off at the output
-        limit is counted, and the stops do not read not recorded (#441)."""
-        from tests.unit.test_stream_events import api_engine
+        stopped and the model that answered them, as its responses said:
+        an answer cut off at the output limit is counted, a refusal is a
+        recorded stop but no cut-off, and neither the stops nor the models
+        read not recorded (#441)."""
+        from tests.fixtures.fake_anthropic import api_engine
 
         stops: list = []
 
@@ -2652,9 +2655,11 @@ class TestCallsAndTime:
             monkeypatch,
             ("Sebastian Löbig, Hutmacher", "max_tokens"),
             ("Sebastian Löbig, Hutmacher, Flörburg", "end_turn"),
+            ("I cannot help with that.", "refusal"),
             ConnectionError("the network is down"),
         )
         client = llm.observed_client(engine, role="extract", events=emit)
+        client.complete("Extract the claims.")
         client.complete("Extract the claims.")
         client.complete("Extract the claims.")
         with pytest.raises(ConnectionError):
@@ -2668,6 +2673,10 @@ class TestCallsAndTime:
             "Stops at the output limit by stage: extraction: 1 cut off, 0 "
             "given up"
         ) in render_markdown(aggregate)
+        before = build(record(tmp_path / "before", STREAM), now=NOW)
+        models = Counter(aggregate["calls"]["engine_calls"]["models"])
+        models.subtract(before["aggregate"]["calls"]["engine_calls"]["models"])
+        assert +models == {"claude-sonnet-5-20260901": 3}
 
     def test_stops_not_recorded_are_not_read_as_none(self, made):
         """A run whose call events carry no stop reason (one made before

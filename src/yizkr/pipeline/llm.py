@@ -38,9 +38,10 @@ without the wrapper it runs unchanged, calling the engine directly.
 `observed_client` reports every call that reaches the engine as an
 event, with what the call's stream reported of it (the model it ran on,
 the tokens it used, how it ended: `stream_report`), or, from the Anthropic
-API's client, why the model stopped an answered call; a run's clients have
-it with or without the cache, beneath the cache when there is one, so a
-run's record of its engine calls does not depend on the cache.
+API's client, the model that answered a call and why it stopped; a run's
+clients have it with or without the cache, beneath the cache when there
+is one, so a run's record of its engine calls does not depend on the
+cache.
 """
 
 from __future__ import annotations
@@ -251,18 +252,20 @@ class AnthropicClient:
         return prompt
 
     def last_report(self) -> dict[str, Any]:
-        """What the API reported about the calling thread's last request:
-        the model that answered it, and why the model stopped
-        (`stop_reason`: end_turn, or max_tokens for an answer cut off at
-        MAX_TOKENS, which at_output_limit and so the LLM cache's callers
-        reject as cut off) when the response says so as a plain token.
-        Every request clears it first, so a request that gave no answer
-        (the API raised, or answered with no text) leaves it empty and
-        nothing of an earlier request is read as its own: the stop reason
-        an ObservedClient puts in a call's event is that call's or none."""
+        """What the API reported about the calling thread's last call: the
+        model that answered it (`model`) and why the model stopped
+        (`stop_reason`, verbatim: end_turn, max_tokens for an answer cut
+        off at MAX_TOKENS, which at_output_limit and so the LLM cache's
+        callers reject as cut off, refusal, pause_turn, stop_sequence...),
+        each when the response gives it as a plain token. Every call
+        clears it first, so a call that gave no answer (it failed before
+        its request, the API raised, or answered with no text) leaves it
+        empty and nothing of an earlier call is read as its own: what an
+        ObservedClient puts in a call's event is that call's or none."""
         return dict(getattr(self._reports, "value", {}))
 
     def complete(self, prompt: str, image_paths: Sequence[Path] = ()) -> str:
+        self._reports.value = {}
         content: list[dict] = []
         for path in image_paths:
             media_type = mimetypes.guess_type(path.name)[0] or "image/jpeg"
@@ -291,12 +294,19 @@ class AnthropicClient:
         )
         if not text.strip():
             raise RuntimeError("the Anthropic API returned no text")
-        report = {"model": getattr(response, "model", None)}
-        stop_reason = _token(
-            getattr(response, "stop_reason", None), _STOP_REASON
-        )
-        if stop_reason is not None:
-            report["stop_reason"] = stop_reason
+        report = {
+            name: value
+            for name, value in (
+                ("model", _token(getattr(response, "model", None), _MODEL_ID)),
+                (
+                    "stop_reason",
+                    _token(
+                        getattr(response, "stop_reason", None), _STOP_REASON
+                    ),
+                ),
+            )
+            if value is not None
+        }
         self._reports.value = report
         return text
 
@@ -2732,8 +2742,8 @@ PAUSED = "paused"
 INTERRUPTED = "interrupted"
 # what a call event carries of its streams' report (stream_report): all of
 # it but the session, which names a session of the account; of an engine
-# with no streams, the stop reason its report gives of an answered call
-# (ObservedClient)
+# with no streams, the model and the stop reason its report gives of an
+# answered call (ENGINE_REPORT, ObservedClient)
 CALL_STREAM_FIELDS = (
     "model",
     "cli_version",
@@ -2743,6 +2753,9 @@ CALL_STREAM_FIELDS = (
     "stop_reason",
     "api_error",
 )
+# what a call event carries of the report of an engine with no streams,
+# each field kept only as the plain token its pattern takes whole
+ENGINE_REPORT = {"model": _MODEL_ID, "stop_reason": _STOP_REASON}
 # the stage each role's calls are made in (yizkr.pipeline.orchestrate)
 ROLE_STAGES = {
     "transcribe": "transcription",
@@ -2772,11 +2785,12 @@ class ObservedClient:
     is max_output_tokens when the CLI gave up on the answer at that limit
     (the call's `error` is then OutputLimitReached). From an engine that
     reports only its answered calls (`last_report`, as the Anthropic API's
-    client does), it adds the `stop_reason` its report gives of the call
-    when the call answered, max_tokens for an answer cut off at the output
-    limit, and nothing of it when the call failed, as that report may be
-    an earlier call's; nothing else of that report, which is no stream's,
-    is taken. The session a call ran in is never in its event: it names a
+    client does), it adds the `model` and the `stop_reason` its report
+    gives of the call when the call answered, the stop reason verbatim
+    (max_tokens for an answer cut off at the output limit), and nothing
+    of the report when the call did not answer, as it may be an earlier
+    call's; nothing else of that report, which is no stream's, is
+    taken. The session a call ran in is never in its event: it names a
     session of the account, and the event log is what the monitor and the
     run report read; the LLM cache keeps it beside the answer. A replay of
     a conversation's opening turn is marked `replay`. A field with nothing
@@ -2900,10 +2914,12 @@ class ObservedClient:
     def _stream(self, outcome: str) -> Mapping[str, Any]:
         """What the engine reported of the call just made: its streams'
         report (`last_stream`) from an engine that has one, whatever the
-        call's outcome; else, from an engine that reports only its answered
-        calls (`last_report`), the stop reason of an answered call alone,
-        since such a report of a call that failed may be an earlier call's.
-        Nothing else of that report is taken: it is no stream's."""
+        call's outcome and even when it reports nothing; else, from an
+        engine that reports only its answered calls (`last_report`), the
+        model and the stop reason of an answered call alone, each as a
+        plain token (ENGINE_REPORT), since such a report of a call that did
+        not answer may be an earlier call's. Nothing else of that report is
+        taken: it is no stream's."""
         last_stream = getattr(self.client, "last_stream", None)
         if callable(last_stream):
             return last_stream()
@@ -2913,7 +2929,10 @@ class ObservedClient:
         report = last_report()
         if not isinstance(report, Mapping):
             return {}
-        return {"stop_reason": report.get("stop_reason")}
+        return {
+            name: _token(report.get(name), pattern)
+            for name, pattern in ENGINE_REPORT.items()
+        }
 
 
 class ObservedConversationalClient(ObservedClient):

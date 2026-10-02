@@ -31,6 +31,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures.fake_anthropic import api_engine
 from tests.unit.test_chunking import (
     DOC_REF,
     claim,
@@ -1254,36 +1255,16 @@ class TestCutOffChunks:
 # -- the Anthropic API engine -------------------------------------------------
 
 
-def api_engine(monkeypatch, *answers):
-    """The Anthropic API engine's client over a fake SDK that gives each
-    next request, in order, its answer and the stop reason of its model, as
-    the API puts them on its response; an answer may be an exception the
-    request raises instead. The real SDK is never imported."""
-    queue = list(answers)
-
-    class Messages:
-        def create(self, **request):
-            answer = queue.pop(0)
-            if isinstance(answer, BaseException):
-                raise answer
-            text, stop_reason = answer
-            block = types.SimpleNamespace(type="text", text=text)
-            return types.SimpleNamespace(
-                model=RESOLVED, content=[block], stop_reason=stop_reason
-            )
-
-    package = types.ModuleType("anthropic")
-    package.Anthropic = lambda: types.SimpleNamespace(messages=Messages())
-    monkeypatch.setitem(sys.modules, "anthropic", package)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "a-test-key")
-    return llm.AnthropicClient(model=MODEL)
+# the bound on a wait that a synchronisation ends, never a time waited out
+HANG_GUARD = 30
 
 
 class TestApiCallEvents:
-    """A call event on the Anthropic API engine carries why its model
-    stopped an answered call, as its response said (#441): max_tokens for
-    an answer cut off at the output limit, which the run report counts and
-    the LLM cache's callers reject, as on the claude-code engine."""
+    """A call event on the Anthropic API engine carries the model that
+    answered and why it stopped, as its response said (#441): the stop
+    reason verbatim, max_tokens for an answer cut off at the output limit,
+    which the run report counts and the LLM cache's callers reject, as on
+    the claude-code engine."""
 
     def test_an_answered_call_carries_its_stop_reason(self, monkeypatch):
         seen, emit = recorder()
@@ -1302,17 +1283,77 @@ class TestApiCallEvents:
             ("ok", "end_turn"),
         ]
 
-    def test_it_carries_nothing_else_of_the_engines_report(self, monkeypatch):
-        """The report names the model that answered, but it is no stream's:
-        the event takes its stop reason alone."""
+    def test_it_carries_the_model_and_nothing_else(self, monkeypatch):
+        """The event takes the model the API says answered (a dated one,
+        not the name asked for) and the stop reason, and nothing else of
+        the engine's report, which is no stream's."""
         seen, emit = recorder()
         engine = api_engine(monkeypatch, ("an answer", "end_turn"))
+        engine.complete = functools.partial(self._reported, engine)
         observed_client(engine, role="critique", events=emit).complete(
             "Critique the batch."
         )
         (event,) = seen
-        assert engine.last_report()["model"] == RESOLVED
-        assert set(llm.CALL_STREAM_FIELDS) & event.keys() == {"stop_reason"}
+        assert set(llm.CALL_STREAM_FIELDS) & event.keys() == {
+            "model",
+            "stop_reason",
+        }
+        assert (event["model"], event["stop_reason"]) == (RESOLVED, "end_turn")
+
+    @staticmethod
+    def _reported(engine, prompt, image_paths=()):
+        """The engine's answer, its report widened by a field that is no
+        API response's, as a stream's report would have it."""
+        answer = llm.AnthropicClient.complete(engine, prompt, image_paths)
+        engine._reports.value = {
+            **engine._reports.value,
+            "cli_version": "2.1.237",
+            "num_turns": 1,
+        }
+        return answer
+
+    def test_the_model_calls_are_counted_by(self, monkeypatch):
+        """The model the API says answered is the one the event names, so
+        the run report counts the call under it."""
+        seen, emit = recorder()
+        engine = api_engine(monkeypatch, ("an answer", "end_turn"))
+        observed_client(engine, role="extract", events=emit).complete(
+            "Extract the claims."
+        )
+        assert engine.last_report() == {
+            "model": RESOLVED,
+            "stop_reason": "end_turn",
+        }
+        assert seen[0]["model"] == RESOLVED != MODEL
+
+    @pytest.mark.parametrize(
+        "resolved", ["claude sonnet five", "", None, 5], ids=repr
+    )
+    def test_a_model_in_no_plain_form_is_left_out(self, monkeypatch, resolved):
+        seen, emit = recorder()
+        engine = api_engine(
+            monkeypatch, ("an answer", "end_turn"), resolved=resolved
+        )
+        observed_client(engine, role="extract", events=emit).complete(
+            "Extract the claims."
+        )
+        assert engine.last_report() == {"stop_reason": "end_turn"}
+        assert "model" not in seen[0]
+        assert seen[0]["stop_reason"] == "end_turn"
+
+    @pytest.mark.parametrize(
+        "stop_reason",
+        ["end_turn", "max_tokens", "refusal", "pause_turn", "stop_sequence"],
+    )
+    def test_every_stop_reason_is_carried_verbatim(
+        self, monkeypatch, stop_reason
+    ):
+        seen, emit = recorder()
+        engine = api_engine(monkeypatch, ("an answer", stop_reason))
+        observed_client(engine, role="extract", events=emit).complete(
+            "Extract the claims."
+        )
+        assert seen[0]["stop_reason"] == stop_reason
 
     @pytest.mark.parametrize("stop_reason", ["Max Tokens", None])
     def test_a_stop_reason_in_no_plain_form_is_left_out(
@@ -1347,6 +1388,129 @@ class TestApiCallEvents:
         assert seen[0]["stop_reason"] == "max_tokens"
         assert seen[1]["outcome"] == "error"
         assert "stop_reason" not in seen[1]
+
+    def test_a_failed_fork_carries_no_earlier_calls_stop_reason(
+        self, monkeypatch
+    ):
+        """A fork that gave no answer, after one cut off at the output
+        limit in the same conversation: its event says nothing of why a
+        model stopped, and the engine's report of it is empty."""
+        seen, emit = recorder()
+        engine = api_engine(
+            monkeypatch,
+            ("the document", "end_turn"),
+            ("chunk 1", "max_tokens"),
+            ConnectionError("the network is down"),
+        )
+        client = observed_client(engine, role="extract", events=emit)
+        _, handle = client.open_conversation("Read the document.")
+        client.fork(handle, "Extract chunk 1.")
+        with pytest.raises(ConnectionError):
+            client.fork(handle, "Extract chunk 2.")
+        assert engine.last_report() == {}
+        assert [(e["call"], e.get("stop_reason")) for e in seen] == [
+            ("open", "end_turn"),
+            ("fork", "max_tokens"),
+            ("fork", None),
+        ]
+
+    def test_a_call_that_fails_before_its_request_leaves_no_report(
+        self, monkeypatch, tmp_path
+    ):
+        """A call whose image cannot be read sends no request, and the
+        engine's report keeps nothing of the call before it."""
+        engine = api_engine(monkeypatch, ("an answer", "max_tokens"))
+        engine.complete("Transcribe the page.")
+        with pytest.raises(FileNotFoundError):
+            engine.complete("Transcribe the page.", [tmp_path / "gone.png"])
+        assert engine.last_report() == {}
+
+    def test_threads_sharing_the_engine_each_get_their_own_report(
+        self, monkeypatch
+    ):
+        """Two threads ask one engine at once, and both have their answers
+        before either's event is made: each event carries its own call's
+        stop reason, and only the cut-off answer is judged cut off."""
+        seen, emit = recorder()
+        engine = api_engine(
+            monkeypatch,
+            by_prompt={
+                "Extract chunk 1.": ("chunk 1", "max_tokens"),
+                "Extract chunk 2.": ("chunk 2", "end_turn"),
+            },
+        )
+        both_answered = threading.Barrier(2)
+
+        def last_pacing():
+            both_answered.wait(timeout=HANG_GUARD)
+            return {}
+
+        engine.last_pacing = last_pacing
+        client = observed_client(engine, role="extract", events=emit)
+        judged = {}
+
+        def ask(prompt):
+            answer = client.complete(prompt)
+            judged[answer] = at_output_limit(client, answer)
+
+        threads = [
+            threading.Thread(target=ask, args=(f"Extract chunk {n}.",))
+            for n in (1, 2)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=HANG_GUARD)
+        assert sorted(e["stop_reason"] for e in seen) == [
+            "end_turn",
+            "max_tokens",
+        ]
+        assert judged == {"chunk 1": True, "chunk 2": False}
+
+    def test_a_report_in_no_plain_form_gives_nothing(self):
+        """An engine with no streams whose report gives a model or a stop
+        reason in no plain form: the event takes neither, and so is still
+        one the event log can hold."""
+
+        class Untidy:
+            model_identifier = "fake-model"
+
+            def complete(self, prompt, image_paths=()):
+                return "answer"
+
+            def last_report(self):
+                return {"model": object(), "stop_reason": "Max Tokens"}
+
+        seen, emit = recorder()
+        observed_client(Untidy(), role="extract", events=emit).complete(
+            "Extract."
+        )
+        assert seen[0]["outcome"] == "ok"
+        assert not set(llm.CALL_STREAM_FIELDS) & seen[0].keys()
+
+    def test_a_streams_empty_report_is_never_filled_from_the_engines(self):
+        """An engine with streams whose streams reported nothing of an
+        answered call: its event carries nothing, whatever the engine's
+        report of its last answered call says."""
+
+        class Streamed:
+            model_identifier = "fake-model"
+
+            def complete(self, prompt, image_paths=()):
+                return "answer"
+
+            def last_stream(self):
+                return {}
+
+            def last_report(self):
+                return {"model": RESOLVED, "stop_reason": "max_tokens"}
+
+        seen, emit = recorder()
+        observed_client(Streamed(), role="extract", events=emit).complete(
+            "Extract."
+        )
+        assert seen[0]["outcome"] == "ok"
+        assert not set(llm.CALL_STREAM_FIELDS) & seen[0].keys()
 
     def test_a_failed_call_of_a_client_whose_report_lags_carries_none(self):
         """A client that reports only its answered calls and keeps the
