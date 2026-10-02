@@ -53,8 +53,9 @@ closed:
   a person, as the value or a qualifier's value, whatever the property;
   a union is no event (ADR-0036), nor is an item typed human at normal
   or preferred rank. An item it drops only as untyped, or as a family
-  that names members and whose members it all released, protects no one
-  and takes no event with it. It drops every event
+  (or any item named a `member of`) that names members and whose members
+  it all released, protects no one and takes no event with it, nor does
+  it take one it took part in, unless of a person kind. It drops every event
   of a person kind that names no participant, and every event that has
   participant statements all of unknown value, as whom it happened to is
   unknown; and the events that start and end a union it drops, a
@@ -375,7 +376,10 @@ class DumpReading:
     `links`, the items that each event's statements name, as their value
     or a qualifier's, at every rank, whatever the property; `members`, the
     items each item is named a `member of` by, at every rank, through
-    redirects;
+    redirects; `takers`, the values of each item's own `participant`
+    statements, at every rank, its qualifiers aside; `names`, the items
+    that each item's statements name, as their value or a qualifier's, at
+    every rank, whatever the item;
     `unattended`, every event of a person kind whose `participant`
     statements name no item as their value, and every item whose
     `participant` statements all hold an unknown value or none; `bounds`,
@@ -392,6 +396,8 @@ class DumpReading:
     participants: dict[str, set[str]] = field(default_factory=dict)
     links: dict[str, set[str]] = field(default_factory=dict)
     members: dict[str, set[str]] = field(default_factory=dict)
+    takers: dict[str, set[str]] = field(default_factory=dict)
+    names: dict[str, set[str]] = field(default_factory=dict)
     unattended: set[str] = field(default_factory=set)
     bounds: dict[str, set[str]] = field(default_factory=dict)
     redirects: dict[str, str] = field(default_factory=dict)
@@ -635,13 +641,19 @@ def read_dump(
     # at normal or preferred rank, is never an event for the participant,
     # link or unattended rule
     humans = typed_as({human}, ranked=True)
+    reading.families = typed_as({items[FAMILY_CLASS]}, ranked=True)
     reading.unattended = (person_events | set(events.values())) - (
         set(reading.participants) | humans
     )
-    for person in humans:
+    reading.takers = {
+        item: set(parts) for item, parts in reading.participants.items()
+    }
+    # a family stays a family, a human type beside it notwithstanding
+    persons = humans - reading.families
+    for person in persons:
         reading.participants.pop(person, None)
     for statement, names in qualified.items():
-        if statement in events and events[statement] not in humans:
+        if statement in events and events[statement] not in persons:
             reading.participants.setdefault(events[statement], set()).update(
                 names
             )
@@ -694,6 +706,9 @@ def read_dump(
     for statement, event in owners.items():
         if event in linked and statement in named:
             reading.links.setdefault(event, set()).update(named[statement])
+    for statement, owner in owners.items():
+        if statement in named:
+            reading.names.setdefault(owner, set()).update(named[statement])
     deaths = typed_as({items["death"]})
     for statement, event in bounds.items():
         if statement in unions and event not in deaths:
@@ -705,7 +720,6 @@ def read_dump(
         - typed_as(None, ranked=True)
         - classes
     )
-    reading.families = typed_as({items[FAMILY_CLASS]}, ranked=True)
     return reading
 
 
@@ -763,9 +777,11 @@ def public_exclusions(
       of it names an item it drops, as its value or a qualifier's,
       whatever the property, unless it drops that item only as untyped, or
       as a family that names members, all of whom it released, which
-      protects no one: an
-      item that may be a person, through redirects, or that the participant
-      or unattended rule drops too, is not dropped only so
+      protects no one: an item that may be a person, through redirects,
+      that the participant or unattended rule drops too, a statement of
+      which names an item that protects people, or that is named a
+      `member of` with a member not released or with none, is not
+      dropped only so; such a group takes part in an event harmlessly
       (``LINKED_LEFT_OUT``, naming them); and each event that
       starts or ends a union it drops (``BOUND_LEFT_OUT``, naming the
       union), read through redirects; and so on until no more go, as an
@@ -796,24 +812,26 @@ def public_exclusions(
     # what is left out only as untyped or as a family protects no one, so an
     # event that merely names it stays (the statement naming it goes): not
     # an item that may be a person, read through redirects, nor one the
-    # unattended rule leaves out, nor a family that names no member (its
-    # participants, and those named a member of it) or one the check did
-    # not release; and the participant rule's are read in the loop below
+    # unattended rule leaves out, nor a group (a family, or any item named
+    # a member of) that names no member, its participant statements' values
+    # and those named a member of it, or one with a member the check did
+    # not release; and what names an item left out, in the loop below
     unreleased = {target(qid) for qid in people} - report.included
-    released_families = {
-        family
-        for family in reading.families
+    groups = reading.families | set(reading.members)
+    released_groups = {
+        group
+        for group in groups
         if (
             members := {
                 target(member)
-                for member in reading.members.get(family, set())
-                | reading.participants.get(family, set())
+                for member in reading.members.get(group, set())
+                | reading.takers.get(group, set())
             }
         )
         and members <= report.included
     }
-    impersonal = (reading.untyped | released_families) - (
-        unreleased | reading.unattended
+    impersonal = (reading.untyped | reading.families) - (
+        (groups - released_groups) | unreleased | reading.unattended
     )
 
     excluded = {}
@@ -840,6 +858,19 @@ def public_exclusions(
             if target(qid) not in impersonal
             or reading.participants.get(target(qid), set()) & left_out
         }
+        # and what names an item that protects people protects them too
+        while grow := {
+            qid
+            for qid in left_out - shielding
+            if reading.names.get(target(qid), set()) & shielding
+        }:
+            shielding |= grow
+        # a group whose members are all released takes part harmlessly
+        harmless = {
+            qid
+            for qid in left_out - shielding
+            if target(qid) in released_groups
+        }
         gone = {
             event: LINKED_LEFT_OUT.format(
                 ", ".join(sorted(named & shielding, key=_order))
@@ -851,11 +882,13 @@ def public_exclusions(
             (
                 event,
                 PARTICIPANT_LEFT_OUT.format(
-                    ", ".join(sorted(parts & left_out, key=_order))
+                    ", ".join(
+                        sorted(parts & (left_out - harmless), key=_order)
+                    )
                 ),
             )
             for event, parts in reading.participants.items()
-            if event not in left_out and parts & left_out
+            if event not in left_out and parts & (left_out - harmless)
         )
         for union, bounds in reading.bounds.items():
             if union in left_out:

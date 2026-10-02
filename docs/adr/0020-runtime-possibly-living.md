@@ -65,25 +65,37 @@ no event with it; the statement naming it still goes whole, so a
 released person's birth at an untyped place, or a released person's
 migration that a family carried out, stays without that statement. An
 untyped item or a family that the participant or unattended rule would
-also leave out, or that may be a person (read through redirects), is
-not left out only as untyped or as a family. And an item typed human, at
+also leave out, that may be a person (read through redirects), or a
+statement of which names an item left out to protect people, is not
+left out only as untyped or as a family. And an item typed human, at
 normal or preferred rank, is never an event for the participant, link or
 unattended rule (§4).
-Amended by #364, orchestrator decision J (2026-10-02, privacy first): a
-family protects people, and so takes with it an event that names it,
-unless every one of its members is released. Its members are read from
-the dump: the family's own `participant` statements, and the `member
-of` statements that name it, through redirects, at any rank. So
-"Departure of the Lobigs, 1975", carried out by a family with a
-possibly-living member, goes whole; a family whose members are all
-released, or that names none, is left out only as a family and takes no
-event with it, as decision I says (§4).
-Amended by #364, orchestrator correction to decision J (2026-10-02,
-unknown means excluded): a family shields events unless it has at least
-one recorded member and every recorded member is released. A family
-whose members the dump does not name cannot be confirmed released, so it
-shields: "Departure of the Lobigs, 1975", carried out by a family with
-no recorded member, goes whole (§4).
+Amended by #364, orchestrator decision J (2026-10-02, privacy first;
+corrected the same day, unknown means excluded): a family protects
+people, and so takes with it an event that names it, unless it names at
+least one member and every member it names is released. Its members are
+read from the dump: the values of the family's own `participant`
+statements (never what their qualifiers name, a role or a place), and
+the items its `member of` statements name it, through redirects, at any
+rank. So "Departure of the Lobigs, 1975", carried out by a family with a
+possibly-living member, or with no recorded member, whose members cannot
+be confirmed released, goes whole; a family that names members, all of
+them released, is left out only as a family and takes no event with it,
+as decision I says. A family stays a family, a `human` type beside its
+`family` type notwithstanding (§4).
+Amended by #364, orchestrator decisions Q and R (2026-10-02): an item
+that anyone names with `member of` is a group for decision J, whatever
+its type or whether it is typed at all, so stating less type information
+never protects less; an untyped organization with a possibly-living
+member takes events with it, an over-drop accepted, failing closed (Q).
+And J applies to the participant rule too: a group that names at least
+one member, all of them released, is a harmless participant, like a
+released person, so "Emigration of the Lobigs" with Gustav and such a
+family as participants stays; a group with a member not released, or
+with no recorded member, still takes the event (`PARTICIPANT_LEFT_OUT`),
+and a person kind of event (a migration) keeps its person rules, under
+which a family taking part is a person the check never assessed (R)
+(§4).
 
 ## Context
 
@@ -418,8 +430,11 @@ keeps of the items it keeps follows:
   with at least one recorded member, all of them released (decision J,
   as corrected), takes no event with it,
   though the statement naming it goes whole. An untyped item or a family
-  that may be a person (read through redirects), or that the
-  participant or unattended rule leaves out too, is not left out only so.
+  that may be a person (read through redirects), that the participant
+  or unattended rule leaves out too, or a statement of which names an
+  item left out to protect people, is not left out only so; nor is an
+  item named a `member of` with a member not released, or with none
+  (decision Q).
   An
   event is an item typed `event`, a subclass of it (the manifest's, or
   the dump's at any rank), or a person kind of event, at any rank, or an
