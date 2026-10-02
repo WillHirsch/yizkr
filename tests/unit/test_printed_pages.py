@@ -17,6 +17,7 @@ printed as page 4.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -71,6 +72,7 @@ from yizkr.pipeline.transcribe import (
 from yizkr.pipeline.transcription_record import (
     UNCLASSIFIED,
     TranscriptionRecord,
+    prompt_text,
 )
 from yizkr.pipeline.writer import BatchWriter
 
@@ -272,6 +274,33 @@ class TestThePromptText:
         assert lines.index("[Page 6]") < lines.index(MARKED)
         own = transcription.pages[5].start - 1  # the newline after it
         assert transcription.text[own - len("[Page 6]") : own] == "[Page 6]"
+
+    def test_only_a_marker_on_a_line_of_its_own_is_the_page_s(self):
+        """Before page 2's text, a line that holds its marker and more is
+        not its marker line; the line that is only the marker is."""
+        text = "[Page 1]\nTitle\n\nx [Page 2]\n[Page 2] y\n[Page 2]\nBody"
+        pages = [
+            SimpleNamespace(page=1, start=9, end=14, printed_page=None),
+            SimpleNamespace(
+                page=2, start=len(text) - 4, end=len(text), printed_page="4"
+            ),
+        ]
+        assert prompt_text(text, pages).splitlines()[3:6] == [
+            "x [Page 2]",
+            "[Page 2] y",
+            '[Page 2] (printed page number "4")',
+        ]
+
+    def test_a_page_whose_marker_is_not_before_its_text_shows_none(self):
+        """The marker is looked for only before the page's own text: a
+        page without one there shows no printed number, even where its
+        text quotes its marker."""
+        text = "[Page 1]\nTitle\n\nquoted:\n[Page 2]\n"
+        pages = [
+            SimpleNamespace(page=1, start=9, end=14, printed_page=None),
+            SimpleNamespace(page=2, start=16, end=len(text), printed_page="4"),
+        ]
+        assert prompt_text(text, pages) == text
 
     @pytest.mark.parametrize(
         "printed, shown",
