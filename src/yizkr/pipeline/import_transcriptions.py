@@ -69,8 +69,9 @@ media's transcriptions, in turn:
   adopted only while the run sends that prompt. One in the current format
   does not say which prompt it was made with, and is not adopted.
 * **Checked**: the transcription check judges it as the run judges an
-  answer (yizkr.pipeline.transcription_check), with its scan's page
-  count, whatever the cache holds for the call. One it fails is not
+  answer (yizkr.pipeline.transcription_check.check_answer), with its
+  scan's page count, whatever the cache holds for the call: a text that
+  is not the transcription record (ADR-0037) fails it. One it fails is not
   adopted: the entry the cache serves for the call with that text, an
   adoption or the engine's own answer, is moved aside as rejected with
   the check's reason; with none, the text is recorded as an answer
@@ -688,7 +689,8 @@ class _Adopter:
         or record it as rejected under the call's key."""
         from yizkr.pipeline.transcription_check import (
             TranscriptionCheckFailed,
-            check_transcription,
+            check_answer,
+            is_pdf,
             media_page_count,
         )
 
@@ -706,7 +708,11 @@ class _Adopter:
         key, components = keyed
         record = media.chosen
         text = str(record.text)
-        check = check_transcription(text, pages=media_page_count(media.scan))
+        check, _record = check_answer(
+            text,
+            pages=media_page_count(media.scan),
+            whole_pdf=is_pdf(media.scan),
+        )
         provenance = _provenance(record, sha1, check)
         live = self.cache.get(key)
         same = live is not None and live.get("response") == text

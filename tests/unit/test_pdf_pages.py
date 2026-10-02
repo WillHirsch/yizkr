@@ -23,7 +23,8 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import example_universe as u
-from tests.fixtures import pdfs
+from tests.fixtures import pdfs, records
+from tests.fixtures.records import page_text, record_answer, record_page
 from tests.unit.test_llmcache import (
     CachedRun,
     Engine,
@@ -41,6 +42,7 @@ from tests.unit.test_scratch_estimate import run as run_scratch
 from yizkr.claims import ClaimBatch
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import llm, transcribe, transcription_check
+from yizkr.pipeline.language import detect_language
 from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
     FAILED,
@@ -90,6 +92,13 @@ LETTER_IMAGE = pdfs.gray(300, 120)
 LETTER_SHA1 = hashlib.sha1(png(300, 120, 1, LETTER_IMAGE.data)).hexdigest()
 # an engine's refusal, which the transcription check fails
 REFUSAL = "I'm sorry, but I can't transcribe this document."
+
+
+class Raw(str):
+    """A reading the scripted engine answers as it stands, rather than as
+    the record of a page holding it."""
+
+
 TEXT_LAYER = "pdf-pages:pdf-text-layer/1"
 
 
@@ -141,7 +150,9 @@ class Reader(Engine):
     """The scripted engine, reading the file each vision call gives it
     from `readings`, by the file's name or stem: a whole PDF by its name, a
     page by ``page-<n>``, and an image by its SHA-1. A reading given as a
-    list is given in turn, its last one from then on. `read` logs each file
+    list is given in turn, its last one from then on. A reading is the
+    engine's answer, the transcription record, or text, which it answers
+    as the record of one page holding it. `read` logs each file
     read, by name, with the SHA-1 of its bytes."""
 
     def __init__(self, readings: dict[str, str | list[str]], **kwargs):
@@ -159,7 +170,12 @@ class Reader(Engine):
         (path,) = (Path(path) for path in image_paths)
         self.read.append((path.name, sha1_file(path)))
         readings = self.readings.get(path.name) or self.readings[path.stem]
-        return readings.pop(0) if len(readings) > 1 else readings[0]
+        reading = readings.pop(0) if len(readings) > 1 else readings[0]
+        # a reading given as text is the record of one page holding it
+        if isinstance(reading, Raw) or reading.startswith("{"):
+            return str(reading)
+        language, _confidence = detect_language(reading)
+        return record_answer(reading, languages=[language or "en"])
 
     def names(self) -> list[str]:
         return [name for name, _sha1 in self.read]
@@ -322,16 +338,19 @@ class TestTheRoute:
     def test_a_scanned_pdf_is_read_whole(self, tmp_path):
         """A PDF none of whose pages reads from its text layer is read by
         the one vision call it was always read with: the PDF itself. Its
-        view carries no page provenance."""
+        view's pages are its record's, each read by that call."""
         corpus = folder(tmp_path, birth_extract_1938=extract())
         reader = Reader({"birth-extract-1938.pdf": EXTRACT})
         doc = document(run(tmp_path, corpus, reader), "birth-extract-1938.pdf")
         assert reader.names() == ["birth-extract-1938.pdf"]
         assert reader.read[0][1] == doc.sha1
         stored = json.loads(doc.transcription.read_text())
-        assert stored["text"] == EXTRACT
+        assert stored["text"] == page_text(EXTRACT)
         assert stored["engine"] == "llm-vision:scripted/model-a"
-        assert "pages" not in stored
+        assert [
+            (page["page"], page["status"], page["provenance"]["method"])
+            for page in stored["pages"]
+        ] == [(1, "transcribed", "vision")]
         assert not (doc.dir / DERIVED_MEDIA).exists()
 
     def test_a_mixed_pdf_reads_each_page_by_its_method(self, tmp_path):
@@ -356,6 +375,79 @@ class TestTheRoute:
         assert transcription.text == f"[Page 1]\n{first}\n\n[Page 2]\n{SECOND}"
         # the scan's OCR layer is no part of it
         assert "Standesamt" not in transcription.text
+
+    def test_each_page_carries_the_record_s_fields(self, tmp_path):
+        """A page read by vision takes the fields of its reading's record
+        (#389); a page read from its text layer is transcribed, with no
+        printed number, languages or notes, since no engine read it."""
+        corpus = folder(tmp_path, family_history=history(scanned()))
+        reading = json.dumps(
+            {
+                "document_class": "unclassified",
+                "pages": [
+                    record_page(
+                        1,
+                        SECOND,
+                        printed_page="2",
+                        notes="a coffee ring in the margin",
+                    )
+                ],
+            }
+        )
+        reader = Reader({"page-2": reading})
+        doc = document(run(tmp_path, corpus, reader), "family-history.pdf")
+        transcription = transcription_of(doc)
+        typed_page, scanned_page = transcription.pages
+        assert (
+            typed_page.status,
+            typed_page.printed_page,
+            typed_page.languages,
+            typed_page.notes,
+        ) == ("transcribed", None, [], "")
+        assert (
+            scanned_page.status,
+            scanned_page.printed_page,
+            scanned_page.languages,
+            scanned_page.notes,
+        ) == ("transcribed", "2", ["en"], "a coffee ring in the margin")
+        assert transcription.printed_pages() == {2: "2"}
+        # no call saw the PDF whole, so it has no class
+        assert transcription.document_class is None
+
+    def test_a_page_with_nothing_to_read_is_blank(self, tmp_path):
+        corpus = folder(tmp_path, booklet=booklet())
+        reader = Reader({LETTER_SHA1: EXCERPT})
+        doc = document(run(tmp_path, corpus, reader), "booklet.pdf")
+        pages = transcription_of(doc).pages
+        assert [(p.provenance.method, p.status) for p in pages[1:5]] == [
+            ("text-layer", "transcribed"),
+            ("none", "blank"),
+            ("none", "blank"),
+            ("none", "blank"),
+        ]
+
+    def test_a_flagged_vision_page_flags_the_pdf(self, tmp_path):
+        """The flag of a vision page's reading, here from its notes, is
+        the transcription's."""
+        corpus = folder(tmp_path, family_history=history(scanned()))
+        reading = json.dumps(
+            {
+                "document_class": "unclassified",
+                "pages": [
+                    record_page(1, SECOND, notes="No image was provided.")
+                ],
+            }
+        )
+        reader = Reader({"page-2": reading})
+        doc = document(run(tmp_path, corpus, reader), "family-history.pdf")
+        transcription = transcription_of(doc)
+        assert transcription.flag == "media-missing"
+        assert transcription.pages[1].notes == "No image was provided."
+        # reused, the page's notes flag it again
+        again = run(tmp_path, corpus, reader)
+        assert set_asides(again) == []
+        assert again._transcription(doc).flag == "media-missing"
+        assert flag_alerts(again) == ["transcription-flag"]
 
     def test_a_garbled_text_layer_is_read_by_vision(self, tmp_path):
         """The second page's font extracts as private-use characters: the
@@ -391,7 +483,7 @@ class TestTheRoute:
         self, tmp_path
     ):
         corpus = folder(tmp_path, family_history=history(scanned()))
-        reader = Reader({"page-2": REFUSAL})
+        reader = Reader({"page-2": Raw(REFUSAL)})
         orchestrator = run(tmp_path, corpus, reader)
         doc = document(orchestrator, "family-history.pdf")
         assert doc.state.status == FAILED
@@ -457,7 +549,9 @@ class TestTheRoute:
         reader = Reader({"scan.pdf": EXTRACT})
         doc = document(run(tmp_path, corpus, reader), "scan.pdf")
         assert reader.names() == ["scan.pdf"]
-        assert transcription_of(doc).pages is None
+        transcription = transcription_of(doc)
+        assert transcription.engine == "llm-vision:scripted/model-a"
+        assert transcription.text == page_text(EXTRACT)
 
 
 class TestImages:
@@ -486,7 +580,7 @@ class TestImages:
             derived_transcription(doc.dir, LETTER_SHA1).read_text()
         )
         assert kept.artifact.sha1 == LETTER_SHA1
-        assert kept.text == EXCERPT
+        assert kept.text == page_text(EXCERPT)
         assert kept.language == "de"
         # and the image is recorded as the booklet's derived medium
         record = read_derived_media(doc.dir)
@@ -555,7 +649,7 @@ class TestImages:
         so in the stage's attention; the booklet's own text goes on to its
         batch."""
         corpus = folder(tmp_path, booklet=booklet())
-        reader = Reader({LETTER_SHA1: REFUSAL})
+        reader = Reader({LETTER_SHA1: Raw(REFUSAL)})
         orchestrator = run(tmp_path, corpus, reader)
         doc = document(orchestrator, "booklet.pdf")
         assert doc.state.status == AWAITING_CLAIMS
@@ -566,7 +660,7 @@ class TestImages:
         ]
         (reason,) = done["attention"]
         assert reason.startswith(f"page 6, image 1 (sha1 {LETTER_SHA1[:12]})")
-        assert "(refusal)" in reason
+        assert "(not-a-record)" in reason
         assert not derived_transcription(doc.dir, LETTER_SHA1).exists()
         assert LETTER_SHA1 in read_derived_media(doc.dir).media
 
@@ -609,7 +703,7 @@ class TestImages:
         reading = transcription.reading
         (image,) = reading.images
         assert image.path.read_bytes() == png(300, 120, 1, LETTER_IMAGE.data)
-        assert image.transcription.text == EXCERPT
+        assert image.transcription.text == page_text(EXCERPT)
         reading.close()
         assert not image.path.exists()
 
@@ -642,7 +736,7 @@ class TestAScratchRun:
         assert transcription.engine == TEXT_LAYER
         assert transcription.pages[5].images == [LETTER_SHA1]
         kept = derived_transcription(doc.dir, LETTER_SHA1)
-        assert json.loads(kept.read_text())["text"] == EXCERPT
+        assert json.loads(kept.read_text())["text"] == page_text(EXCERPT)
         assert doc.critique.exists()
 
     def test_the_call_estimate_counts_it_and_writes_nothing(
@@ -735,14 +829,37 @@ class TestAScratchRun:
 
 def stricter_check(monkeypatch, phrase: str) -> None:
     """Make the transcription check stricter, as a change to it would:
-    `phrase` becomes a failure's signature."""
-    signature = transcription_check._signature(
-        "stricter", transcription_check.TOOL_FAILURE, re.escape(phrase)
-    )
+    a text holding `phrase` fails (records.stricter_check)."""
+    records.stricter_check(monkeypatch, re.escape(phrase))
+
+
+def without_signature(monkeypatch, name: str) -> None:
+    """The transcription check without the signature `name`, as a
+    change to it would leave it."""
     monkeypatch.setattr(
         transcription_check,
         "SIGNATURES",
-        (*transcription_check.SIGNATURES, signature),
+        tuple(s for s in transcription_check.SIGNATURES if s.name != name),
+    )
+
+
+def flag_alerts(orchestrator: CachedRun) -> list[str]:
+    """The transcription-flag alerts of this run."""
+    return [
+        event["check"]
+        for event in this_run(orchestrator, "alert")
+        if event.get("check") == "transcription-flag"
+    ]
+
+
+def unseen(text: str = SECOND) -> str:
+    """The record of one page holding `text`, whose note says the
+    engine saw no image: flagged media-missing."""
+    return json.dumps(
+        {
+            "document_class": "unclassified",
+            "pages": [record_page(1, text, notes="No image was provided.")],
+        }
     )
 
 
@@ -778,6 +895,220 @@ class TestReuse:
         )
         assert (doc.dir / "transcription.superseded-1.json").exists()
 
+    @pytest.mark.parametrize(
+        "status", ["blank", "illegible", "not-a-document-page"]
+    )
+    def test_a_vision_page_with_nothing_to_read_is_reused(
+        self, tmp_path, status
+    ):
+        """A page the record of its reading calls blank, illegible or not
+        a document page needs no text when it is made, and is checked on
+        reuse as it was then: three runs read it once, and set nothing
+        aside."""
+        corpus = folder(tmp_path, family_history=history(scanned()))
+        reading = json.dumps(
+            {
+                "document_class": "unclassified",
+                "pages": [record_page(1, "", status=status)],
+            }
+        )
+        reader = Reader({"page-2": reading})
+        for _run in range(3):
+            again = run(tmp_path, corpus, reader)
+            assert set_asides(again) == []
+        assert reader.names() == ["page-2.jpg"]
+        doc = document(again, "family-history.pdf")
+        assert transcription_of(doc).pages[1].status == status
+        assert not (doc.dir / "transcription.superseded-1.json").exists()
+
+    def test_a_record_s_wording_fails_no_reused_page(self, tmp_path):
+        """A vision page whose record's text reads as an announcement is
+        a source's sentence when made and on every reuse: three runs read
+        it once and set nothing aside."""
+        corpus = folder(tmp_path, family_history=history(scanned()))
+        line = "I will bring the documents to Stupfield."
+        reader = Reader({"page-2": record_answer(line)})
+        for _run in range(3):
+            again = run(tmp_path, corpus, reader)
+            assert set_asides(again) == []
+        assert reader.names() == ["page-2.jpg"]
+        doc = document(again, "family-history.pdf")
+        assert again._transcription(doc).flag == "narration-only"
+
+    @pytest.mark.parametrize("whole", [False, True])
+    def test_a_stored_flag_the_check_raises_no_more_is_dropped(
+        self, tmp_path, monkeypatch, whole
+    ):
+        """Made flagged, a view reused once the check no longer raises
+        its flag carries none, and raises no alert, in a run's reuse and
+        in the anomaly recheck alike."""
+        from yizkr.pipeline.anomalies import recheck
+
+        if whole:
+            read_whole(monkeypatch)
+        corpus = folder(tmp_path, family_history=history(scanned()))
+        whole_record = json.dumps(
+            {
+                "document_class": "unclassified",
+                "pages": [
+                    record_page(1, FIRST),
+                    record_page(2, SECOND, notes="No image was provided."),
+                ],
+            }
+        )
+        reader = Reader(
+            {"page-2": unseen(), "family-history.pdf": whole_record}
+        )
+        first = run(tmp_path, corpus, reader)
+        doc = document(first, "family-history.pdf")
+        assert transcription_of(doc).flag == "media-missing"
+        assert flag_alerts(first) == ["transcription-flag"]
+
+        def rechecked():
+            return [
+                alert["check"]
+                for alert in recheck(tmp_path / "state")
+                if alert["check"] == "transcription-flag"
+            ]
+
+        assert rechecked() == ["transcription-flag"]
+        without_signature(monkeypatch, "media-missing")
+        again = run(tmp_path, corpus, reader)
+        assert set_asides(again) == []
+        assert (
+            again._transcription(document(again, doc.source.name)).flag is None
+        )
+        assert flag_alerts(again) == []
+        assert rechecked() == []
+        assert len(reader.names()) == 1
+
+    def test_the_first_flagged_vision_page_flags_the_pdf(self, tmp_path):
+        """Two vision pages flagged by two signatures: the first page's
+        flag is the PDF's, when made and on reuse."""
+        corpus = folder(
+            tmp_path, scans=pdfs.pdf([typed(FIRST), scanned(), scanned()])
+        )
+        reader = Reader(
+            {
+                "page-2": unseen(),
+                "page-3": record_answer("Let me take a look at the image."),
+            }
+        )
+        made = run(tmp_path, corpus, reader)
+        assert transcription_of(document(made, "scans.pdf")).flag == (
+            "media-missing"
+        )
+        again = run(tmp_path, corpus, reader)
+        assert set_asides(again) == []
+        assert again._transcription(document(again, "scans.pdf")).flag == (
+            "media-missing"
+        )
+
+    def test_a_text_file_s_flag_is_the_check_s_made_now(
+        self, tmp_path, monkeypatch
+    ):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        (corpus / "reply.txt").write_text(
+            "I'm sorry, but I can't help with that.\n"
+        )
+        reader = Reader({})
+        made = run(tmp_path, corpus, reader)
+        assert transcription_of(document(made, "reply.txt")).flag == (
+            "refusal-short"
+        )
+        without_signature(monkeypatch, "refusal-short")
+        again = run(tmp_path, corpus, reader)
+        assert set_asides(again, "text") == []
+        assert again._transcription(document(again, "reply.txt")).flag is None
+        assert flag_alerts(again) == []
+
+    @pytest.mark.parametrize("whole", [False, True])
+    def test_the_flag_is_the_one_the_check_raises_now(
+        self, tmp_path, monkeypatch, whole
+    ):
+        """A reused transcription carries the flag of the check made now:
+        one the check now raises is added, and one it raises no more is
+        dropped. The flag is no part of the content, so nothing is made
+        again, and the transcription-flag alert follows it."""
+        if whole:
+            read_whole(monkeypatch)
+        corpus = folder(tmp_path, family_history=history(scanned()))
+        reader = Reader(
+            {
+                "page-2": SECOND,
+                "family-history.pdf": record_answer(FIRST, SECOND),
+            }
+        )
+
+        def flags(orchestrator):
+            doc = document(orchestrator, "family-history.pdf")
+            alerts = [
+                event["check"]
+                for event in this_run(orchestrator, "alert")
+                if event.get("check") == "transcription-flag"
+            ]
+            return orchestrator._transcription(doc).flag, alerts
+
+        assert flags(run(tmp_path, corpus, reader)) == (None, [])
+        with monkeypatch.context() as patch:
+            flagging = transcription_check._signature(
+                "flagged-now",
+                transcription_check.TOOL_FAILURE,
+                r"followed her in 1939",
+            )
+            patch.setattr(
+                transcription_check,
+                "SIGNATURES",
+                (*transcription_check.SIGNATURES, flagging),
+            )
+            again = run(tmp_path, corpus, reader)
+            assert set_asides(again) == []
+            assert flags(again) == ("flagged-now", ["transcription-flag"])
+        again = run(tmp_path, corpus, reader)
+        assert set_asides(again) == []
+        assert flags(again) == (None, [])
+        assert len(reader.names()) == 1
+
+    def test_an_image_reading_kept_without_its_record_is_made_again(
+        self, tmp_path
+    ):
+        corpus = folder(tmp_path, booklet=booklet())
+        reader = Reader({LETTER_SHA1: EXCERPT})
+        doc = document(run(tmp_path, corpus, reader), "booklet.pdf")
+        kept = derived_transcription(doc.dir, LETTER_SHA1)
+        view = json.loads(kept.read_text())
+        del view["document_class"]
+        kept.write_text(json.dumps(view))
+        again = run(tmp_path, corpus, reader)
+        (aside,) = set_asides(again)
+        assert "(not-a-record)" in aside["reason"]
+        assert aside["reason"].endswith(f"(image {LETTER_SHA1[:12]})")
+        assert "document_class" in json.loads(kept.read_text())
+
+    def test_a_pdf_read_whole_is_checked_for_its_page_count_on_reuse(
+        self, tmp_path, monkeypatch
+    ):
+        """A reused record of a PDF read whole that gives more pages than
+        the PDF has fails the check, as it would when made."""
+        read_whole(monkeypatch)
+        corpus = folder(tmp_path, family_history=history())
+        reading = record_answer(FIRST, SECOND, SECOND)
+        reader = Reader(
+            {"family-history.pdf": [reading, record_answer(FIRST, SECOND)]}
+        )
+        # transcribe holds its own name for the count: both are set, so
+        # the count is unknown when the reading is made even where
+        # pdfinfo is installed
+        for module in (transcription_check, transcribe):
+            monkeypatch.setattr(module, "media_page_count", lambda path: None)
+        run(tmp_path, corpus, reader)
+        for module in (transcription_check, transcribe):
+            monkeypatch.setattr(module, "media_page_count", lambda path: 2)
+        again = run(tmp_path, corpus, reader)
+        (aside,) = set_asides(again)
+        assert "(pages-extra)" in aside["reason"]
+
     def test_text_read_from_a_text_layer_is_never_checked(
         self, tmp_path, monkeypatch
     ):
@@ -810,16 +1141,18 @@ class TestReuse:
         assert aside["reason"].endswith(f"(image {LETTER_SHA1[:12]})")
         assert reader.names() == [f"{LETTER_SHA1}.png"] * 2
         kept = derived_transcription(doc.dir, LETTER_SHA1)
-        assert json.loads(kept.read_text())["text"] == "Liebes Pünktchen!"
+        assert json.loads(kept.read_text())["text"] == page_text(
+            "Liebes Pünktchen!"
+        )
         superseded = kept.with_name(
             f"{LETTER_SHA1}.transcription.superseded-1.json"
         )
-        assert json.loads(superseded.read_text())["text"] == EXCERPT
+        assert json.loads(superseded.read_text())["text"] == page_text(EXCERPT)
         # the excerpt's transcription, the image's reading, is made again
         # from the new one
         (aside,) = set_asides(again, "excerpt")
         excerpt = excerpt_of(again, LETTER_SHA1)
-        assert transcription_of(excerpt).text == "Liebes Pünktchen!"
+        assert transcription_of(excerpt).text == page_text("Liebes Pünktchen!")
 
     def test_every_image_on_a_page_is_checked_again(
         self, tmp_path, monkeypatch
@@ -883,8 +1216,9 @@ class TestReuse:
 
 
 class TestTheView:
-    def test_a_view_made_whole_is_written_as_it_always_was(self):
-        """No `pages` key: every transcription made whole keeps its bytes."""
+    def test_a_view_without_pages_is_written_as_it_always_was(self):
+        """No `pages`, `document_class` or `flag` key: a transcription
+        without a record (a text file's, say) keeps its bytes."""
         from yizkr.claims import ArtifactRef
 
         transcription = Transcription(
@@ -905,6 +1239,7 @@ class TestTheView:
                 page=number,
                 start=start,
                 end=end,
+                status="transcribed",
                 provenance=PageProvenance(method="text-layer", engine="m"),
             )
 
@@ -928,24 +1263,31 @@ class TestTheView:
 
     def test_provenance_is_no_part_of_the_content(self):
         """How a page was read is provenance, as the engine is, and is left
-        out of the content hash; where a page's text lies, and the images it
-        names, are content, as the text is (#389 hashes what extraction
-        reads of a page)."""
+        out of the content hash, as is the check's flag; where a page's text
+        lies, the images it names and the record's fields are content, as
+        the text is (#389 hashes what extraction reads of a page)."""
         from yizkr.claims import ArtifactRef
 
         ref = ArtifactRef(sha1="a" * 40)
         text = "[Page 1]\nRahel"
 
-        def made(method, made_by, *, end=14, annotations=0):
+        def made(
+            method, made_by, *, end=14, annotations=0, flag=None, **record
+        ):
             return Transcription(
                 artifact=ref,
                 text=text,
                 engine=made_by,
+                flag=flag,
                 pages=[
                     TranscribedPage(
                         page=1,
                         start=9,
                         end=end,
+                        status=record.get("status", "transcribed"),
+                        printed_page=record.get("printed_page"),
+                        languages=record.get("languages", []),
+                        notes=record.get("notes", ""),
                         provenance=PageProvenance(
                             method=method,
                             engine=made_by,
@@ -966,6 +1308,22 @@ class TestTheView:
             made("vision", "llm-vision:scripted/model-a", annotations=2)
         )
         assert hashed(read) != hashed(made("text-layer", TEXT_LAYER, end=13))
+        assert hashed(read) == hashed(
+            made("text-layer", TEXT_LAYER, flag="refusal-short")
+        )
+        for field in (
+            {"printed_page": "12"},
+            {"status": "illegible"},
+            {"languages": ["de"]},
+            {"notes": "water damage"},
+        ):
+            assert hashed(read) != hashed(
+                made("text-layer", TEXT_LAYER, **field)
+            )
+        # the document's class is content too
+        letter = read.model_copy(update={"document_class": "letter"})
+        certificate = read.model_copy(update={"document_class": "certificate"})
+        assert len({hashed(read), hashed(letter), hashed(certificate)}) == 3
 
 
 # -- the keys -----------------------------------------------------------------
@@ -1084,7 +1442,7 @@ class TestKeys:
             )
             assert client.seed(
                 key,
-                reading,
+                record_answer(reading, document_class="certificate"),
                 {"model_identifier": "archived/model-z", "backfilled": True},
             )
         seeder._close_engines()
@@ -1095,7 +1453,7 @@ class TestKeys:
             "cache-hit: adopted": 1
         }
         stored = json.loads(scan.transcription.read_text())
-        assert stored["text"] == EXTRACT
+        assert stored["text"] == page_text(EXTRACT)
         assert stored["engine"] == "llm-vision:archived/model-z"
         typed_pages = document(after, "family-history-2008.pdf")
         assert calls_for(after, typed_pages, "transcribe") == {}

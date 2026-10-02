@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from tests.fixtures.records import record_answer
 from yizkr.claims import (
     ArtifactRef,
     ClaimBatch,
@@ -157,11 +158,12 @@ class TestTranscribe:
         assert result.engine.startswith("text-file:")
 
     def test_llm_vision_engine_passes_image(self, tmp_path):
-        llm = FakeLlm("The transcribed text")
+        llm = FakeLlm(record_answer("The transcribed text"))
         image = tmp_path / "scan.png"
         image.write_bytes(MEDIA)
         result = LlmVisionTranscriber(llm).transcribe(image)
-        assert result.text == "The transcribed text"
+        assert result.text == "[Page 1]\nThe transcribed text"
+        assert result.document_class == "letter"
         assert result.engine == "llm-vision:fake-model"
         assert result.artifact == MEDIA_REF
         assert "exactly as written" in llm.prompts[0]

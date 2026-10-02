@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import example_universe as u
+from tests.fixtures.records import record_answer
 from tests.unit.test_no_wiki_before_write import (  # noqa: F401
     build_deck,
     refusals,
@@ -123,7 +124,7 @@ class Engine:
         if image_paths:
             name = Path(image_paths[0]).name
             number = self._call("vision", name)
-            return (
+            return record_answer(
                 self.fakes.corpus.texts[name]
                 + f"\n[read by {self.config_hash}, answer {number}]"
             )
@@ -859,7 +860,7 @@ class TestCounts:
         no extraction or critique follows it, in the run or the count."""
         corpus = small(tmp_path)
         (corpus.folder / "e-note.txt").write_text(
-            "As an AI model I cannot read this."
+            "pdftoppm: command not found"
         )
         counted = estimate_of(tmp_path, corpus, engine)
         assert counted.stages["transcription"].failing == 1

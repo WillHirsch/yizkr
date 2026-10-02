@@ -151,10 +151,13 @@ Every statement carries at least one reference with:
   canvas+xywh URI (W2)
 - optional short transcription excerpt supporting human verification,
   tagged with the language it is written in (BCP-47). `yizkr ingest run`
-  detects each document's language from its transcription by default
-  (`--language auto`, ADR-0015), so a mixed-language folder tags each
-  excerpt correctly; the extractor may still tag individual excerpts in
-  their own language (a quoted passage in another tongue)
+  takes each document's language from its transcription by default
+  (`--language auto`, ADR-0015): from the transcription record the vision
+  engine fills, which names the languages each page is written in
+  (ADR-0037), and otherwise by detection from the text outside its
+  editorial marks. So a mixed-language folder tags each excerpt
+  correctly; the extractor may still tag individual excerpts in their own
+  language (a quoted passage in another tongue)
 
 Machine-written statements add a second reference:
 - inferred from extraction run → extraction-run item
@@ -515,7 +518,11 @@ and reference the artifact itself or the producing run.
   image's item, after the PDF, before any claim that cites it (ADR-0008
   as amended by #397). The same image in several PDFs is one item and
   one excerpt; an image whose bytes a document of the corpus has is that
-  document. An image placed within a page read by vision is read with
+  document. An image whose reading's record calls every page blank or
+  not a document page (a photograph with no writing, a colour chart) is
+  registered but is no excerpt; an illegible one is an excerpt, so that
+  a reader sees it was there. An excerpt's language and class are its
+  reading's record's (ADR-0037). An image placed within a page read by vision is read with
   that page, as the compilation's.
 - A claim cites the witness that asserts it. A claim read from the
   compilation's own text cites the compilation, with its page as the

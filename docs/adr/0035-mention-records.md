@@ -28,6 +28,13 @@ less `judgement_`. An entity's record or note that fails validation is
 set aside and counted in `coverage.json` (`records`, `notes`), and a
 claim whose note fails is a counted reject.
 
+Amended by #389 (2026-09-29): the transcription check, the stream
+assembly and language detection no longer read wording (§10): the check
+reads the transcription record (ADR-0037), and no wording fails a
+record, so its English signatures only flag one; the answer is the text
+after the last tool result; and detection reads a text outside its
+editorial marks.
+
 **Decided by the owner (2026-09-29):**
 
 - Before scratch run 1 (#145), extraction hands over the structure of
@@ -950,14 +957,14 @@ into "fix first, and measure in run 1": under the pre-baseline exception
   any other language gives no claim and a warning, as now.
 - #361's date thresholds (`circa-years`, `max-corroborating-years`):
   numbers, not wording.
-- The transcription check knows failure text by English phrases
-  (`pipeline/transcription_check.py:172-528`), so a refusal worded
-  otherwise passes, and the stream assembly keeps an engine's narration
-  ahead of its answer (`pipeline/llm.py:2475-2500`).
-- Language detection reads a transcription with its editorial marks
-  (`pipeline/transcribe.py:212-214`, `pipeline/language.py:109-128`),
-  which can mislead it on a short text, and the language anomaly checks
-  read its result (`pipeline/anomalies.py:424-489`, 649-666).
+- The transcription check's English phrases only flag a transcription
+  (ADR-0037, #389): it fails on the record's structure, so a refusal in
+  any language, which is not the record, fails. The stream assembly takes
+  the answer after the last tool result.
+- Language detection reads a text that has no transcription record
+  outside its editorial marks, and a vision transcription's language
+  comes from its record (ADR-0037, #389); the language anomaly checks
+  read the result.
 - The critic's axis is read from its target's grammar
   (`pipeline/critique.py:26-41`, `pipeline/orchestrate.py:1555-1579`,
   `pipeline/report.py:942-950`): a grammar the prompt sets, not a
