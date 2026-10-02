@@ -233,13 +233,16 @@ directory under `var/backups/` containing:
   docs/MODELING.md, "Living persons and privacy"); *unknown means
   excluded*. Every triple that mentions an excluded person is dropped —
   including other people's claims about them and orphaned provenance
-  nodes. Who counts as a person fails closed as well: every item with
+  nodes — and a statement whose value or a qualifier's value is an item
+  left out goes whole, with its dates, qualifiers and references, even
+  on an item kept. Who counts as a person fails closed as well: every item with
   person evidence in the dump, at any rank (a `human` type, a birth,
   kinship, a part in a death...), is dropped unless the check released
   it, and so is every item that states no type, no `instance of` at
   normal or preferred rank that names an item (the vocabulary and the
   classes items are typed with aside), every family, whose people may
-  include a living person, every event that any of these took part in,
+  include a living person, every event that any of these took part in
+  (named as a participant, or in a participant statement's qualifier),
   every person event that names no participant, and the events that
   start and end a union it leaves out. Everything else leaves as it is,
   text included: whatever is recorded about a released person (their

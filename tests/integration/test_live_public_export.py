@@ -27,7 +27,15 @@ fixture's content (test_live_privacy.py's write_fixture):
   The letter is the source of their birth, and the excerpt of the
   released person's death names them too;
 * a birth, labelled for "Named In Text" and dated 1990, that names no
-  participant, as a claim refused or cut short leaves one.
+  participant, as a claim refused or cut short leaves one;
+* two statements of the released person that name "Named In Text": a
+  spouse statement whose value is them, dated by a 1938 start time, and
+  an appellation ("referred to as") whose `perspective` qualifier is
+  them, each with an excerpt of its own (#364);
+* a talk, an event of no person kind dated 1938, whose one participant
+  statement is of unknown value, with a `said to be the same as`
+  qualifier naming "Named In Text" (added through WikibaseIntegrator, as
+  the writer writes no unknown value).
 
 The two whose type a curator deprecated or outranked carry a religion
 beside it, which is no person evidence, so that their type is what marks
@@ -42,7 +50,11 @@ person, but a `human` type at any rank does. An item that states no type
 is left out, whatever else it holds, and a redirect goes with the item it
 redirects to. An event that one of those left out takes part in is left
 out too: the migration, for its vessel typed human, and the birth; so is
-a person event that names no participant, the unrecorded birth. Every
+a person event that names no participant, the unrecorded birth, and an
+event whose one participant left out is named only in a qualifier, the
+talk. A statement of the released person whose value, or a qualifier's
+value, is an item left out goes whole: its node, its dates, its
+qualifiers, its reference and the truthy triple it gave (#364). Every
 text about what the export keeps stays, one naming a possibly living
 person included (owner, 2026-09-29).
 
@@ -153,7 +165,15 @@ ENTITIES = {
         kind="birth",
         label=f"Birth of {NAMED}, participant unrecorded",
     ),
+    # an event of no person kind whose one participant, of unknown value,
+    # a qualifier says is "Named In Text"
+    "talk": local("talk", kind="event"),
 }
+# the excerpts and the appellation of the released person's statements
+# that name "Named In Text", which go whole with them
+WEDDING = "the export fixture's father wed in 1938"
+APPELLATION = "Export Fixture Papa"
+CALLED = "the export fixture's father, as his child called him"
 # the roles public.nt.gz mentions; every other one (the item with a label
 # only, and the redirect a merge leaves, too) it leaves out
 PRESENT = {"released", "vessel", "letter", "letter page"}
@@ -176,12 +196,16 @@ def claim(
     value: dict,
     artifact,
     excerpt: str = "fictional export fixture",
+    qualifiers=(),
 ) -> dict:
     return {
         "subject": ENTITIES[subject],
         "property": prop,
         "value": value,
-        "qualifiers": [],
+        "qualifiers": [
+            {"property": key, "value": qualifier}
+            for key, qualifier in qualifiers
+        ],
         "source": {
             "artifact": artifact.model_dump(mode="json"),
             "page_number": "1",
@@ -272,6 +296,45 @@ def add_type(
         action_if_exists=ActionIfExists.FORCE_APPEND,
     )
     entity.write(summary="integration test: a curator's type")
+
+
+def add_unknown_participant(
+    client, event: str, named: str, artifact_qid: str
+) -> None:
+    """A participant of unknown value in `event`, with a `said to be the
+    same as` qualifier naming `named`, stated in the artifact
+    `artifact_qid` (rule 1): the writer writes no unknown value, so it is
+    added here. Idempotent."""
+    from wikibaseintegrator.datatypes import Item
+    from wikibaseintegrator.models import Qualifiers, Reference, References
+    from wikibaseintegrator.wbi_enums import ActionIfExists, WikibaseSnakType
+
+    properties, _ = client.vocabulary()
+    entity = client.wbi.item.get(event)
+    unknown = WikibaseSnakType.UNKNOWN_VALUE
+    if any(
+        statement.mainsnak.snaktype == unknown
+        for statement in entity.claims.get(properties["participant"])
+    ):
+        return
+    qualifiers = Qualifiers()
+    qualifiers.add(
+        Item(prop_nr=properties["said_to_be_the_same_as"], value=named)
+    )
+    reference = Reference()
+    reference.add(Item(prop_nr=properties["stated_in"], value=artifact_qid))
+    references = References()
+    references.add(reference)
+    entity.claims.add(
+        Item(
+            prop_nr=properties["participant"],
+            snaktype=unknown,
+            qualifiers=qualifiers,
+            references=references,
+        ),
+        action_if_exists=ActionIfExists.FORCE_APPEND,
+    )
+    entity.write(summary="integration test: a participant of unknown value")
 
 
 def redirects_to(client, target: str) -> set[str]:
@@ -383,6 +446,36 @@ def fixture_graph(client, config):
                 {"type": "time", "year": 1990},
                 source.ref,
             ),
+            claim(
+                "released",
+                "spouse",
+                {"type": "item", "value": ENTITIES["named in text"]},
+                source.ref,
+                excerpt=WEDDING,
+                qualifiers=[("start_time", {"type": "time", "year": 1938})],
+            ),
+            claim(
+                "released",
+                "referred_to_as",
+                {
+                    "type": "monolingual",
+                    "value": {"text": APPELLATION, "language": "en"},
+                },
+                source.ref,
+                excerpt=CALLED,
+                qualifiers=[
+                    (
+                        "perspective",
+                        {"type": "item", "value": ENTITIES["named in text"]},
+                    )
+                ],
+            ),
+            claim(
+                "talk",
+                "point_in_time",
+                {"type": "time", "year": 1938},
+                source.ref,
+            ),
         ],
     )
     qids = {
@@ -405,6 +498,9 @@ def fixture_graph(client, config):
         "human",
         WikibaseRank.DEPRECATED,
         source.qid,
+    )
+    add_unknown_participant(
+        client, qids["talk"], qids["named in text"], source.qid
     )
     qids["label only"] = label_only(client)
     wait_for_query_service(config, client, list(qids.values()))
@@ -457,6 +553,15 @@ def test_the_fixture_takes_the_shapes_the_truthy_type_missed(
     # the unrecorded birth names no participant
     unrecorded = client.wbi.item.get(fixture_graph["unrecorded birth"])
     assert unrecorded.claims.get(properties["participant"]) == []
+    # the talk's one participant is of unknown value, and a qualifier
+    # names the person the export leaves out
+    talk = client.wbi.item.get(fixture_graph["talk"])
+    (taking_part,) = talk.claims.get(properties["participant"])
+    assert taking_part.mainsnak.snaktype.value == "somevalue"
+    (same_as,) = taking_part.qualifiers.get(
+        properties["said_to_be_the_same_as"]
+    )
+    assert same_as.datavalue["value"]["id"] == fixture_graph["named in text"]
     # the texts name the person the export leaves out: an event's label, a
     # family's and a released person's description, a letter's title and
     # its page's label and description
@@ -501,10 +606,12 @@ def test_the_exclusions_name_whom_the_export_drops(fixture_graph, exported):
     assert exclusions["excluded"][fixture_graph["merged away"]] == (
         f"a redirect to {target}: {exclusions['excluded'][target]}"
     )
-    # an event goes with a participant the export leaves out
+    # an event goes with a participant the export leaves out, one named
+    # only in a qualifier of a participant of unknown value included
     for event, part in (
         ("birth of named in text", "named in text"),
         ("migration", "vessel typed human"),
+        ("talk", "named in text"),
     ):
         assert exclusions["excluded"][fixture_graph[event]] == (
             PARTICIPANT_LEFT_OUT.format(fixture_graph[part])
@@ -552,6 +659,40 @@ def test_what_is_kept_leaves_with_its_text(
     _, items = client.vocabulary()
     human = f"<{config.concept_uri}/entity/{items['human']}>"
     assert f'{human} {TERMS[0]} "human"@en .' in lines
+
+
+def test_a_statement_naming_one_left_out_goes_whole(
+    config, client, fixture_graph, exported
+):
+    # the released person's spouse statement, whose value is "Named In
+    # Text", and their appellation, whose perspective qualifier is: each
+    # goes with its node, its rank and qualifiers (the 1938 start time),
+    # its reference, and the truthy triple it gave, though its node
+    # carries the released person's QID (#364)
+    properties, _ = client.vocabulary()
+    lines = public_lines(exported)
+    text = "\n".join(lines)
+    released = client.wbi.item.get(fixture_graph["released"])
+    named = fixture_graph["named in text"]
+    concept = config.concept_uri
+    for key, qualifier in (
+        ("spouse", "start_time"),
+        ("referred_to_as", "perspective"),
+    ):
+        (statement,) = released.claims.get(properties[key])
+        assert statement.qualifiers.get(properties[qualifier])
+        node = f"<{concept}/entity/statement/{statement.id.replace('$', '-')}>"
+        assert not [line for line in lines if node in line]
+        for reference in statement.references.references:
+            assert f"<{concept}/reference/{reference.hash}>" not in text
+        truthy = f"<{concept}/entity/{fixture_graph['released']}> <{concept}/prop/direct/{properties[key]}> "  # noqa: E501
+        assert not [line for line in lines if line.startswith(truthy)]
+    (spouse,) = released.claims.get(properties["spouse"])
+    assert spouse.mainsnak.datavalue["value"]["id"] == named
+    for excerpt in (WEDDING, CALLED, APPELLATION):
+        assert excerpt not in text
+    # the released person stays, with the rest of what is recorded
+    assert f'"the father of {NAMED} died in 1995"@en' in text
 
 
 def test_the_site_badges_whom_the_export_drops(

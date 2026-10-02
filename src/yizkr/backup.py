@@ -13,9 +13,11 @@ everything needed to rebuild the instance, plus a non-privileged export:
   possibly-living person (R7, docs/MODELING.md "Living persons and
   privacy"). Nothing about a possibly-living person leaves the instance
   in it: every triple that mentions an excluded person — as subject,
-  statement node, or object of someone else's claim — is dropped. All
-  else leaves as it is, text included: whatever is recorded about a
-  person the check releases, and about the other items it keeps.
+  statement node, or object of someone else's claim — is dropped, and a
+  statement whose value or a qualifier's value names an item left out
+  goes whole, with its rank, dates, qualifiers and references. All else
+  leaves as it is, text included: whatever is recorded about a person
+  the check releases, and about the other items it keeps.
 
 Exclusion is CONSERVATIVE by design and computed at RUNTIME — there is
 no stored "living" flag (ADR-0020). A person is excluded unless the graph
@@ -42,9 +44,11 @@ closed:
   vocabulary and the classes its items are typed with are kept.
 * It drops every family too, released or not: a family stands for its
   people, any of whom may be living (``privacy.FAMILY_CLASS``).
-* It drops every event that an item it drops took part in, at any rank:
-  what the event records, its date and place, is that participant's too.
-  So it drops every event of a person kind that names no participant,
+* It drops every event that an item it drops took part in, at any rank,
+  as a `participant` statement's value or as an item a qualifier of that
+  statement names, whatever its value, an unknown one included: what the
+  event records, its date and place, is that participant's too. So it
+  drops every event of a person kind that names no participant,
   as whom it happened to is unknown, and the events that start and end
   a union it drops (ADR-0036), a partner's own death aside.
 * It drops the extractor's judgement notes, its remarks on its own
@@ -330,9 +334,11 @@ class DumpReading:
     `untyped`, every item that states no type, the vocabulary and classes
     aside, and `families`, every item typed as a family (``read_dump``);
     `participants`, the items that take part in each event, at every
-    rank; `unattended`, every event of a person kind that names no item
-    taking part; `bounds`, the events that start and end each union, a
-    partner's own death aside; `redirects`, each redirect's target;
+    rank, those a qualifier of a `participant` statement names included;
+    `unattended`, every event of a person kind whose `participant`
+    statements name no item as their value; `bounds`, the events that
+    start and end each union, a partner's own death aside; `redirects`,
+    each redirect's target;
     `revisions`, the revision of every item and property that is not a
     redirect; `property_types`, each property's type as the dump names it;
     and `sitelinks`, every entity that a sitelink is about."""
@@ -394,12 +400,16 @@ def read_dump(
 
     The items that take part in each event are read at every rank,
     whatever the event's type: every item a `participant` statement's
-    value names. An event of a person kind that names none (no
-    `participant` statement, or only one whose value is unknown) is
-    unattended. So are read, at every rank, the events that start and end
-    each union (``UNION_BOUNDS``), but a `death` event, which is a
-    partner's own; and each property's type, and every sitelink, whose
-    page is anything but an entity's data node.
+    value names, and every item a qualifier of such a statement names,
+    whatever its value, an unknown one included. Taking part so is no
+    person evidence of its own (a role such a qualifier gives is
+    vocabulary), and attends no event: an event of a person kind whose
+    `participant` statements name no item as their value (none, or only
+    ones whose value is unknown, however qualified) is unattended. So are
+    read, at every rank, the events that start and end each union
+    (``UNION_BOUNDS``), but a `death` event, which is a partner's own; and
+    each property's type, and every sitelink, whose page is anything but
+    an entity's data node.
 
     Lines are read as they end, at a newline alone."""
     instance_of = properties["instance_of"]
@@ -421,6 +431,7 @@ def read_dump(
     kinds: dict[str, str] = {}  # statement -> the type it gives
     events: dict[str, str] = {}  # statement -> the event it is part of
     participants: dict[str, str] = {}  # statement -> the participant
+    qualified: dict[str, set[str]] = {}  # statement -> items qualifiers name
     unions: dict[str, str] = {}  # statement -> the union it bounds
     bounds: dict[str, str] = {}  # statement -> the event it points to
     deprecated: set[str] = set()  # statements a curator deprecated
@@ -492,6 +503,7 @@ def read_dump(
             if pid in value_links:
                 reading.people.add(item)
             if role == "qualifier":
+                qualified.setdefault(subject, set()).add(item)
                 continue
             if pid == instance_of:
                 kinds[subject] = item
@@ -535,7 +547,15 @@ def read_dump(
     for statement, part in participants.items():
         if statement in events:
             reading.participants.setdefault(events[statement], set()).add(part)
+    # an event is attended by its participant statements' values alone; an
+    # item a qualifier names takes part all the same, but a role names no
+    # one who was there
     reading.unattended = person_events - set(reading.participants)
+    for statement, named in qualified.items():
+        if statement in events:
+            reading.participants.setdefault(events[statement], set()).update(
+                named
+            )
     deaths = typed_as({items["death"]})
     for statement, event in bounds.items():
         if statement in unions and event not in deaths:
@@ -593,7 +613,8 @@ def public_exclusions(
     * each family (``FAMILY``), whatever it holds, released or not;
     * each event of a person kind that names no participant
       (``UNATTENDED``): whom it happened to is unknown;
-    * each event that an item it drops takes part in, at any rank
+    * each event that an item it drops takes part in, at any rank, as a
+      `participant` statement's value or named in its qualifiers
       (``PARTICIPANT_LEFT_OUT``, naming them), and each event that starts
       or ends a union it drops (``BOUND_LEFT_OUT``, naming the union),
       read through redirects; and so on until no more go, as an event
@@ -826,6 +847,96 @@ _TRIPLE = re.compile(
     rf"(?:@[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*|\^\^{_IRI})?) \."
 )
 
+# The statement links the export reads to tell which statements go whole:
+# a statement's value (``ps:``) and its normalized value (``psn:``), a
+# qualifier's value (``pq:``), and the truthy triples of a best-ranked
+# statement (``wdt:``, ``wdtn:``), each with its property.
+_CLAIM_NORMALIZED = re.compile(
+    r"<[^<>]*/prop/statement/value-normalized/(P[1-9]\d*)>"
+)
+_TRUTHY = re.compile(r"<[^<>]*/prop/direct(-normalized)?/(P[1-9]\d*)>")
+
+
+def _statement_link(predicate: str) -> tuple[str, str] | None:
+    """What a predicate links a statement to, with its property: "claim"
+    (an item to its statement), "value", "normalized", "qualifier" or
+    "rank"; None for anything else."""
+    if predicate == _RANK:
+        return "rank", ""
+    for role, pattern in (
+        ("claim", _CLAIM),
+        ("value", _CLAIM_VALUE),
+        ("normalized", _CLAIM_NORMALIZED),
+        ("qualifier", _QUALIFIER_VALUE),
+    ):
+        if match := pattern.fullmatch(predicate):
+            return role, match.group(1)
+    return None
+
+
+def statements_left_out(
+    full_dump: Path, excluded: set[str]
+) -> tuple[set[str], set[tuple[str, str, str, str]]]:
+    """The statements of the dump that go whole, and the truthy triples
+    that go with them.
+
+    A statement goes whole when its value, or the value of any of its
+    qualifiers, is an item of `excluded`, at any rank: its node and all
+    it holds (the returned statement node IRIs). A truthy triple of an
+    item goes with such a statement when the statement gave it: when its
+    value (or its normalized value, for a normalized truthy triple) is the
+    one a statement left out of that item and property holds, and no kept
+    statement of theirs, at normal or preferred rank, holds it too. Each
+    is returned as (item, property, "" or "-normalized", value as the
+    dump writes it).
+
+    The lines may come in any order: each statement is joined to its item
+    once the whole dump is read."""
+    owners: dict[str, tuple[str, str]] = {}  # statement -> item, property
+    values: dict[tuple[str, str], str] = {}  # (statement, form) -> value
+    deprecated: set[str] = set()
+    left_out: set[str] = set()
+    links: dict[str, tuple[str, str] | None] = {}
+    with gzip.open(full_dump, "rt", encoding="utf-8", newline="\n") as source:
+        for line in source:
+            triple = _TRIPLE.fullmatch(line.removesuffix("\n"))
+            if triple is None:
+                continue
+            subject, predicate, value = triple.groups()
+            if predicate not in links:
+                links[predicate] = _statement_link(predicate)
+            link = links[predicate]
+            if link is None:
+                continue
+            role, pid = link
+            if role == "rank":
+                if value == _DEPRECATED:
+                    deprecated.add(subject)
+            elif role == "claim":
+                if item := _item(subject):
+                    owners[value] = (item, pid)
+            else:
+                if role in ("value", "qualifier") and _item(value) in excluded:
+                    left_out.add(subject)
+                if role in ("value", "normalized"):
+                    form = "" if role == "value" else "-normalized"
+                    values[(subject, form)] = value
+
+    def truthy(kept: bool) -> set[tuple[str, str, str, str]]:
+        return {
+            (*owners[statement], form, value)
+            for (statement, form), value in values.items()
+            if statement in owners
+            and (
+                statement not in left_out and statement not in deprecated
+                if kept
+                else statement in left_out
+            )
+        }
+
+    return left_out, truthy(False) - truthy(True)
+
+
 # The properties whose snaks the export drops, wherever one is written:
 # the extractor's judgement notes (ADR-0035), its remarks on its own
 # reading, which are no information on anyone. Keys of the model manifest;
@@ -839,7 +950,7 @@ def filter_public_export(
     excluded: set[str],
     dropped_pids: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[int, int]:
-    """Produce the export's dump: four filters over N-triples. `excluded`
+    """Produce the export's dump: five filters over N-triples. `excluded`
     holds every item to drop: for the export, every item with person
     evidence that the check did not release, and the rest
     ``public_exclusions`` names. `dropped_pids` holds the properties whose
@@ -849,13 +960,20 @@ def filter_public_export(
        (``_TRIPLE``): what the filter cannot read, it does not pass on.
        Lines end at a newline alone.
     2. Drop every triple that mentions an excluded entity: entity URIs,
-       statement node URIs (entity/statement/Q76-...), and object
-       references all carry the QID as a delimited token, so token
-       matching catches a person wherever they appear — including in
-       other people's claims.
-    3. Drop every triple of a property of `dropped_pids`, in any form: a
+       statement node URIs (entity/statement/Q76-...) of its own
+       statements, and object references all carry the QID as a
+       delimited token, so token matching catches a person wherever they
+       appear — including in other people's claims.
+    3. Drop whole every statement whose value, or a qualifier's value,
+       is an excluded item (``statements_left_out``): a statement node
+       carries its subject's QID, not its value's, so a kept item's
+       statement about an excluded one would otherwise keep its rank,
+       its qualifiers (a wedding's date, say) and its references. Every
+       triple whose subject or object is such a node goes, and so does a
+       truthy triple that only such a statement gave.
+    4. Drop every triple of a property of `dropped_pids`, in any form: a
        statement's value, a qualifier's, a reference's, or a truthy one.
-    4. Sweep orphaned provenance nodes. Reference/value nodes are
+    5. Sweep orphaned provenance nodes. Reference/value nodes are
        shared, content-addressed resources; once the statements using
        them are dropped, their triples would still leak what those
        statements recorded about an excluded person. Only nodes still
@@ -865,10 +983,15 @@ def filter_public_export(
     descriptions and aliases of the items kept, their statements' values,
     and the excerpts of the references their statements keep.
 
-    Returns (kept, dropped) line counts. Streams the gzipped dump three
-    times, holding only node-hash sets in memory.
+    Returns (kept, dropped) line counts. Streams the gzipped dump four
+    times, holding in memory node-hash sets and, while it reads which
+    statements go, each statement's item, property and value.
     """
     dropped_predicates = tuple(f"/{pid}>" for pid in dropped_pids)
+    left_out, truthy_left_out = (set(), set())
+    if excluded:
+        left_out, truthy_left_out = statements_left_out(full_dump, excluded)
+    truthy_links: dict[str, re.Match | None] = {}
 
     def suppressed(line: str) -> bool:
         triple = _TRIPLE.fullmatch(line.removesuffix("\n"))
@@ -878,7 +1001,24 @@ def filter_public_export(
             token in excluded for token in _QID_TOKEN.findall(line)
         ):
             return True
-        predicate = triple.group(2)
+        subject, predicate, value = triple.groups()
+        if subject in left_out or value in left_out:
+            return True
+        if truthy_left_out:
+            if predicate not in truthy_links:
+                truthy_links[predicate] = _TRUTHY.fullmatch(predicate)
+            truthy = truthy_links[predicate]
+            if (
+                truthy is not None
+                and (
+                    _item(subject),
+                    truthy.group(2),
+                    truthy.group(1) or "",
+                    value,
+                )
+                in truthy_left_out
+            ):
+                return True
         return "/prop/" in predicate and predicate.endswith(dropped_predicates)
 
     def subject_hash(line: str) -> str | None:

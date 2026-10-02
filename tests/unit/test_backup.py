@@ -7,7 +7,10 @@ item with any that the check did not release, and every item that states
 no type; and it refuses to run while the query service, where the check
 runs, lags the dump. It drops every event that an item it drops took
 part in, and the judgement notes, and keeps every text about what it
-keeps: it is a non-privileged view (#363; the owner, 2026-09-29)."""
+keeps: it is a non-privileged view (#363; the owner, 2026-09-29). A
+statement that names an item it drops, as its value or a qualifier's,
+goes whole, and an item a participant statement's qualifier names takes
+part in the event (#364)."""
 
 import datetime
 import gzip
@@ -170,6 +173,8 @@ REF_TEXT = "e" * 40  # a reference with a page number and an excerpt
 REF_RUN = "1" * 40  # a run's reference, with a judgement note
 TIME = "^^<http://www.w3.org/2001/XMLSchema#dateTime>"
 W = "http://w.lan"
+RDF_TYPE = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"
+ONTOLOGY = "http://wikiba.se/ontology#"
 RDFS_LABEL = "<http://www.w3.org/2000/01/rdf-schema#label>"
 PREF_LABEL = "<http://www.w3.org/2004/02/skos/core#prefLabel>"
 ALT_LABEL = "<http://www.w3.org/2004/02/skos/core#altLabel>"
@@ -308,6 +313,244 @@ class TestPublicFilter:
         assert (kept, dropped) == (len(self.LINES), 0)
 
 
+def statement(
+    subject: str,
+    node: str,
+    pid: str,
+    value: str,
+    rank: str = "Normal",
+    qualifiers=(),
+    reference: str | None = None,
+    normalized: str | None = None,
+) -> list[str]:
+    """A statement as dumpRdf.php writes one, under `W`: its link, types
+    and rank, its value (and normalized value), its qualifiers as
+    (property, predicate form, value) triples, its reference, and the
+    truthy triples a best-ranked one gives."""
+    item = f"<{W}/entity/{subject}>"
+    node = f"<{W}/entity/statement/{subject}-{node}>"
+    best = rank != "Deprecated"
+    lines = [
+        f"{item} <{W}/prop/{pid}> {node} .",
+        f"{node} {RDF_TYPE} <{ONTOLOGY}Statement> .",
+        *([f"{node} {RDF_TYPE} <{ONTOLOGY}BestRank> ."] if best else []),
+        f"{node} <{ONTOLOGY}rank> <{ONTOLOGY}{rank}Rank> .",
+        f"{node} <{W}/prop/statement/{pid}> {value} .",
+        *(
+            [
+                f"{node} <{W}/prop/statement/value-normalized/{pid}> "
+                f"{normalized} ."
+            ]
+            if normalized
+            else []
+        ),
+        *(
+            f"{node} <{W}/prop/qualifier/{form}{qualifier}> {qualified} ."
+            for qualifier, form, qualified in qualifiers
+        ),
+        *(
+            [f"{node} {DERIVED_FROM} <{W}/reference/{reference}> ."]
+            if reference
+            else []
+        ),
+    ]
+    if best:
+        lines.append(f"{item} <{W}/prop/direct/{pid}> {value} .")
+        if normalized:
+            lines.append(
+                f"{item} <{W}/prop/direct-normalized/{pid}> {normalized} ."
+            )
+    return lines
+
+
+REF_WEDDING = "2" * 40  # the reference of a wedding statement alone
+VALUE_EXCERPT = "3" * 40  # a value node only that reference names
+VALUE_1938 = "4" * 40  # a date a kept statement holds too
+VALUE_1941 = "5" * 40  # a date only the wedding statement holds
+REF_RUDI = "6" * 40  # a reference kept and left-out statements share
+VALUE_1916 = "7" * 40  # a kept statement's date
+REF_DEPRECATED = "8" * 40  # the reference of a deprecated statement alone
+
+
+class TestAStatementGoesWhole:
+    """A statement whose value, or a qualifier's value, is an item left out
+    goes whole: its node, rank, qualifiers and references, and the truthy
+    triples only it gave (#364). Its node carries its subject's QID, not
+    its value's, so the token filter alone would keep all but its value.
+
+    Rudolf "Rudi" (Q501, released) married Nina Sartina (Q502, possibly
+    living) in 1938; Q503 is another possibly living person, Q504 a
+    redirect to Q502, and Q505 the Stupfield register office's opening,
+    an event kept."""
+
+    TIME_1938 = f'"1938-01-01T00:00:00Z"{TIME}'
+    TIME_1941 = f'"1941-01-01T00:00:00Z"{TIME}'
+    WEDDING = [
+        *statement(
+            "Q501",
+            "aaaa",
+            "P26",
+            f"<{W}/entity/Q502>",
+            qualifiers=[
+                ("P580", "", TIME_1938),
+                ("P580", "value/", f"<{W}/value/{VALUE_1938}>"),
+                ("P582", "", TIME_1941),
+                ("P582", "value/", f"<{W}/value/{VALUE_1941}>"),
+            ],
+            reference=REF_WEDDING,
+        ),
+        f'<{W}/reference/{REF_WEDDING}> <{W}/prop/reference/P8> "Rudi = Nina, 1938"@en .',  # noqa: E501
+        f"<{W}/reference/{REF_WEDDING}> <{W}/prop/reference/value/P9> <{W}/value/{VALUE_EXCERPT}> .",  # noqa: E501
+        f'<{W}/value/{VALUE_EXCERPT}> <{ONTOLOGY}timeValue> "1938-06-11T00:00:00Z"{TIME} .',  # noqa: E501
+        f'<{W}/value/{VALUE_1941}> <{ONTOLOGY}timeValue> "1941-01-01T00:00:00Z"{TIME} .',  # noqa: E501
+    ]
+    # a kept main value, with a qualifier naming Nina: "Rudi", as she
+    # called him, and an identifier she gave, with its normalized form
+    NAMED_BY_HER = [
+        *statement(
+            "Q501",
+            "bbbb",
+            "P60",
+            '"Rudi"@en',
+            qualifiers=[("P61", "", f"<{W}/entity/Q502>")],
+            reference=REF_RUDI,
+        ),
+        *statement(
+            "Q501",
+            "cccc",
+            "P70",
+            '"R-0815"',
+            qualifiers=[("P61", "", f"<{W}/entity/Q502>")],
+            normalized="<http://id.example/R-0815>",
+        ),
+    ]
+    # a deprecated statement naming Q503, and one naming Q504, a redirect
+    # to Nina
+    OTHERS_LEFT_OUT = [
+        *statement(
+            "Q501",
+            "dddd",
+            "P26",
+            f"<{W}/entity/Q503>",
+            rank="Deprecated",
+            reference=REF_DEPRECATED,
+        ),
+        f'<{W}/reference/{REF_DEPRECATED}> <{W}/prop/reference/P8> "Rudi, Hamburg 1937"@en .',  # noqa: E501
+        *statement("Q501", "eeee", "P40", f"<{W}/entity/Q504>"),
+    ]
+    KEPT = [
+        f'<{W}/entity/Q501> {RDFS_LABEL} "Rudolf"@en .',
+        # his birth, under the reference the statement naming Nina uses
+        *statement(
+            "Q501",
+            "ffff",
+            "P569",
+            f'"1916-01-01T00:00:00Z"{TIME}',
+            reference=REF_RUDI,
+        ),
+        f"<{W}/entity/statement/Q501-ffff> <{W}/prop/statement/value/P569> <{W}/value/{VALUE_1916}> .",  # noqa: E501
+        f'<{W}/value/{VALUE_1916}> <{ONTOLOGY}timeValue> "1916-01-01T00:00:00Z"{TIME} .',  # noqa: E501
+        f'<{W}/reference/{REF_RUDI}> <{W}/prop/reference/P8> "Rudolf, 1916"@en .',  # noqa: E501
+        # the office's opening, dated 1938 by the same value node
+        *statement("Q505", "aaaa", "P585", TIME_1938),
+        f"<{W}/entity/statement/Q505-aaaa> <{W}/prop/statement/value/P585> <{W}/value/{VALUE_1938}> .",  # noqa: E501
+        f'<{W}/value/{VALUE_1938}> <{ONTOLOGY}timeValue> "1938-01-01T00:00:00Z"{TIME} .',  # noqa: E501
+        # another item called "Rudi" by the same property, unqualified
+        *statement("Q506", "aaaa", "P60", '"Rudi"@en'),
+    ]
+    EXCLUDED = {"Q502", "Q503", "Q504"}
+
+    def lines(self) -> list[str]:
+        return [
+            *self.WEDDING,
+            *self.NAMED_BY_HER,
+            *self.OTHERS_LEFT_OUT,
+            *self.KEPT,
+        ]
+
+    @staticmethod
+    def filter(tmp_path: Path, lines, excluded) -> tuple[int, int, list[str]]:
+        full = tmp_path / "full.nt.gz"
+        public = tmp_path / "public.nt.gz"
+        with gzip.open(full, "wt") as handle:
+            handle.write("\n".join(lines) + "\n")
+        kept, dropped = filter_public_export(full, public, excluded)
+        with gzip.open(public, "rt") as handle:
+            return kept, dropped, handle.read().splitlines()
+
+    def test_a_statement_whose_value_is_left_out_goes_whole(self, tmp_path):
+        # its link, types, rank, dates (a pqv value node only it uses
+        # included), its reference and what only that names
+        _, _, public = self.filter(tmp_path, self.lines(), self.EXCLUDED)
+        text = "\n".join(public)
+        assert "Q501-aaaa" not in text
+        assert self.TIME_1941 not in text
+        assert "1938-06-11" not in text
+        assert "Rudi = Nina" not in text
+        for node in (REF_WEDDING, VALUE_EXCERPT, VALUE_1941):
+            assert node not in text
+
+    def test_a_qualifier_naming_one_left_out_takes_the_statement(
+        self, tmp_path
+    ):
+        # its kept main value goes, and the truthy triples it gave, the
+        # normalized one included; another item's same value stays
+        _, _, public = self.filter(tmp_path, self.lines(), self.EXCLUDED)
+        text = "\n".join(public)
+        assert "Q501-bbbb" not in text and "Q501-cccc" not in text
+        rudi = f'<{W}/prop/direct/P60> "Rudi"@en .'
+        assert f"<{W}/entity/Q501> {rudi}" not in text
+        assert "R-0815" not in text
+        assert f"<{W}/entity/Q506> {rudi}" in public
+
+    def test_a_deprecated_statement_or_one_naming_a_redirect_goes(
+        self, tmp_path
+    ):
+        _, _, public = self.filter(tmp_path, self.lines(), self.EXCLUDED)
+        text = "\n".join(public)
+        assert "Q501-dddd" not in text and "Q501-eeee" not in text
+        assert REF_DEPRECATED not in text
+        assert "Hamburg 1937" not in text
+
+    def test_what_a_kept_statement_uses_stays(self, tmp_path):
+        # a reference and a value node shared with a statement left out
+        # stay with the kept one, and every kept line leaves as it is
+        _, _, public = self.filter(tmp_path, self.lines(), self.EXCLUDED)
+        assert set(public) == set(self.KEPT)
+
+    def test_the_lines_may_come_in_any_order(self, tmp_path):
+        # a statement's value, qualifiers, rank and truthy triple before
+        # the link to its subject
+        forward = self.filter(tmp_path, self.lines(), self.EXCLUDED)
+        backward = self.filter(tmp_path, self.lines()[::-1], self.EXCLUDED)
+        assert set(backward[2]) == set(forward[2]) == set(self.KEPT)
+        assert backward[:2] == forward[:2]
+
+    @pytest.mark.parametrize(
+        ("rank", "stays"), [("Normal", True), ("Deprecated", False)]
+    )
+    def test_a_truthy_triple_a_kept_statement_gives_stays(
+        self, tmp_path, rank, stays
+    ):
+        # a kept statement of the same item and property with the same
+        # value gives it too, unless deprecated, which gives none
+        truthy = f'<{W}/entity/Q501> <{W}/prop/direct/P60> "Rudi"@en .'
+        twin = [
+            line
+            for line in statement("Q501", "9999", "P60", '"Rudi"@en', rank)
+            if line != truthy
+        ]
+        _, _, public = self.filter(
+            tmp_path, [*self.lines(), *twin], self.EXCLUDED
+        )
+        assert (truthy in public) is stays
+        assert set(twin) <= set(public)
+
+    def test_nothing_goes_without_exclusions(self, tmp_path):
+        kept, dropped, public = self.filter(tmp_path, self.lines(), set())
+        assert (kept, dropped) == (len(self.lines()), 0)
+
+
 class TestWhatTheFilterReads:
     """The filter reads each line as a triple dumpRdf.php writes, and drops
     a line it cannot read (#363). Text leaves as it is: whatever is
@@ -429,8 +672,6 @@ class TestPruning:
 
 # -- the public export keeps only released people (#344) --------------------
 
-RDF_TYPE = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"
-ONTOLOGY = "http://wikiba.se/ontology#"
 DATA = f"{CONCEPT}/wiki/Special:EntityData/"
 
 
@@ -966,6 +1207,63 @@ class TestReadDump:
         assert found.unattended == {"Q452", "Q453"}
         # every person event of the fixture names someone
         assert self.reading(tmp_path, vocabulary).unattended == set()
+
+    def test_an_item_a_participant_qualifier_names_takes_part(
+        self, tmp_path, vocabulary
+    ):
+        # whatever the participant statement's value, an unknown one
+        # included, and at any rank; an item named so is no person on that
+        # alone (#364)
+        _, items = vocabulary
+
+        def build(dump):
+            for qid in ("Q452", "Q453", "Q454", "Q455"):
+                dump.entity(qid, qid)
+            dump.says("Q452", "instance_of", entity(items["event"]))
+            dump.says(
+                "Q452",
+                "participant",
+                "_:genid9",
+                qualifiers=[("perspective", entity("Q453"))],
+            )
+            dump.says("Q454", "instance_of", entity(items["birth"]))
+            dump.says(
+                "Q454",
+                "participant",
+                entity("Q450"),
+                rank="Deprecated",
+                qualifiers=[("perspective", entity("Q455"))],
+            )
+
+        found = self.one(tmp_path, vocabulary, build)
+        assert found.participants == {
+            "Q452": {"Q453"},
+            "Q454": {"Q450", "Q455"},
+        }
+        assert "Q450" in found.people
+        assert not {"Q453", "Q455"} & found.people
+
+    def test_a_role_names_no_one_who_was_there(self, tmp_path, vocabulary):
+        # a person event whose one participant is of unknown value, with
+        # the role it had, is still unattended, and the role no person
+        # (#364)
+        _, items = vocabulary
+        principal = items["principal"]
+
+        def build(dump):
+            dump.entity("Q452", "Q452")
+            dump.says("Q452", "instance_of", entity(items["death"]))
+            dump.says(
+                "Q452",
+                "participant",
+                "_:genid9",
+                qualifiers=[("object_has_role", entity(principal))],
+            )
+
+        found = self.one(tmp_path, vocabulary, build)
+        assert found.unattended == {"Q452"}
+        assert found.participants == {"Q452": {principal}}
+        assert principal not in found.people
 
     def test_the_events_that_start_and_end_a_union(self, tmp_path, vocabulary):
         # by started_by and ended_by (ADR-0036), at every rank, once the
@@ -1552,6 +1850,72 @@ class TestExportPublic:
             (tmp_path / "public-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q470"] == backup.UNATTENDED
+
+    def test_a_statement_naming_one_left_out_goes_whole(
+        self, tmp_path, vocabulary
+    ):
+        # Gustav (Q401, released) married Q405, whom the export leaves
+        # out, in 1942: the statement goes with its date and its reference,
+        # though its node carries Gustav's QID; so does the occupation
+        # type of Q413, whose qualifier names Q462, left out, and the
+        # truthy type it gave (#364)
+        properties, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.says(
+            "Q401",
+            "spouse",
+            entity("Q405"),
+            qualifiers=[("start_time", dated(1942))],
+            reference=[
+                ("stated_in", entity("Q466")),
+                ("transcription_excerpt", '"Gustav weds, 1942"@en'),
+            ],
+        )
+        self.export_of(tmp_path, dump, vocabulary)
+        text, _ = self.public(tmp_path)
+        assert dated(1942) not in text
+        assert "Gustav weds, 1942" not in text
+        wedding = next(
+            line.split(" ")[2]
+            for line in dump.lines
+            if line.endswith(f"{dated(1942)} .")
+        )
+        assert wedding not in text
+        typing = (
+            f"{entity('Q413')} <{CONCEPT}/prop/direct/"
+            f"{properties['instance_of']}> "
+        )
+        assert typing not in text
+        assert f"{entity('Q413')} {RDFS_LABEL} " in text
+
+    def test_an_event_whose_participant_is_named_in_a_qualifier_goes(
+        self, tmp_path, vocabulary
+    ):
+        # a talk in 1938 whose participant is of unknown value, said to be
+        # Q405 by a qualifier: it goes with its date, as a participant
+        # named in its value would take it (#364)
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.entity("Q470", "A talk in Stupfield", revision=470)
+        dump.says("Q470", "instance_of", entity(items["event"]))
+        dump.says("Q470", "point_in_time", dated(1938))
+        dump.says(
+            "Q470",
+            "participant",
+            "_:genid7",
+            qualifiers=[("said_to_be_the_same_as", entity("Q405"))],
+        )
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert "Q470" not in mentioned
+        assert "A talk in Stupfield" not in text
+        assert dated(1938) not in text
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )
+        assert exclusions["excluded"]["Q470"] == (
+            backup.PARTICIPANT_LEFT_OUT.format("Q405")
+        )
 
     def test_the_judgement_notes_never_leave(self, tmp_path, vocabulary):
         # the extractor's remark on its own reading, in a run's reference

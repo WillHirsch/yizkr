@@ -31,6 +31,14 @@ participant, and the events that start and end a union it leaves out.
 It drops the extractor's judgement notes and any line it cannot read,
 and refuses a dump that holds a sitelink or a property of a type the
 model does not use (§4, Ruling 6).
+Amended by #364 (2026-09-29): a statement whose value, or any
+qualifier's value, is an item the export leaves out is left out whole:
+its node, rank, qualifiers (a wedding's date among them) and references,
+and the truthy triple only it gave, even on an item the export keeps.
+An item named in a qualifier of an event's `participant` statement,
+whatever its value, an unknown one included, takes part in that event
+for the event rule, without being person evidence or attending a person
+event on that alone (§4, Ruling 6).
 
 ## Context
 
@@ -147,7 +155,9 @@ is renamed **`critique_notes`** to reflect its now-single role (ADR-0013).
   signals above, reads births with the shared module's query, and calls
   the shared predicate; every triple mentioning an excluded person is
   still dropped. (Amended by #363: the export is a non-privileged view,
-  and an excerpt leaves with the statement it attests; see below.)
+  and an excerpt leaves with the statement it attests; see below.
+  Amended by #364: a statement naming an item left out, as its value or
+  a qualifier's, goes whole.)
 - **Private static site** (`yizkr publish-site`): includes everyone but
   badges each subject the export would drop ("possibly living — never in
   public exports"), computed at render time with the same births query
@@ -308,7 +318,22 @@ keeps of the items it keeps follows:
   participants it all keeps. Families and untyped items stay out, as
   above. A transcription excerpt leaves with the statement it attests,
   and goes with a statement dropped: a reference that no statement kept
-  derives from is swept. The consequence: free text about a released
+  derives from is swept.
+- **A statement that names an item left out goes whole** (#364). A
+  statement of a kept item whose value, or any qualifier's value, is an
+  item the export leaves out (a redirect to one included), at any rank,
+  is left out with its node, rank, qualifiers and references: a released
+  person's spouse statement naming a possibly living partner takes its
+  start time (the wedding's date) and its excerpt with it, and an
+  appellation whose `perspective` is a person left out goes, its kept
+  text value included. Its node carries its subject's QID, not its
+  value's, so it is read apart (`backup.statements_left_out`). A
+  reference or value node that a kept statement uses too stays with it.
+  A truthy triple goes with the statement that gave it, unless a kept
+  statement of the same item and property, at normal or preferred rank,
+  holds the same value. An item named only in a reference's snak of a
+  kept statement loses that snak alone, and `public-exclusions.json`
+  lists items only. The consequence: free text about a released
   person, or a document's title, can name a possibly living relative,
   and it is visible in the non-privileged view. A public copy would need
   rules of its own (#163).
@@ -316,9 +341,10 @@ keeps of the items it keeps follows:
   those who took part in it, as a family stands for its people: its
   date and place are theirs, and its label is written after them ("Death
   of" and the person's label, ADR-0021). So the export leaves out every
-  item with a `participant` statement, at any rank, whose value is an
-  item it leaves out, a redirect to one included, whatever the event's
-  kind (`public-exclusions.json`: "a participant the export leaves out
+  item with a `participant` statement, at any rank, whose value, or a
+  qualifier's value, is an item it leaves out, a redirect to one
+  included, whatever the statement's value, an unknown one included
+  (#364), and whatever the event's kind (`public-exclusions.json`: "a participant the export leaves out
   (the QIDs): what this event records is theirs too";
   `PARTICIPANT_LEFT_OUT`). An event so left out may itself be a
   participant, so the rule applies again until no more go, and a
@@ -328,7 +354,8 @@ keeps of the items it keeps follows:
   excluded, Ruling 2). An event of a person kind (`PERSON_EVENTS`) with
   no `participant` statement, or only one of unknown value, as a claim
   refused, left unconfirmed or cut short after the type leaves it,
-  records a birth, a death or a marriage of someone unknown, who may be
+  however qualified (an item a qualifier names, a role such as
+  `principal` included, attends no event, #364), records a birth, a death or a marriage of someone unknown, who may be
   living (`public-exclusions.json`: "an event of a person kind that
   names no participant: unknown means excluded"; `UNATTENDED`). Once
   #385's participant roles land, the stronger form is that a person
@@ -400,7 +427,10 @@ is strictly safer, since the determination is now absence-of-death only.
    it drops took part in, every person event that names no participant,
    the events that start and end a union it drops, and the judgement
    notes; and it refuses a dump that holds a sitelink or a property of
-   another type than the model's (amended by #363).
+   another type than the model's (amended by #363). A statement whose
+   value or a qualifier's value is an item it drops goes whole, and an
+   item a participant statement's qualifier names takes part in the
+   event (amended by #364).
 
 ## Consequences
 
@@ -429,14 +459,22 @@ is strictly safer, since the determination is now absence-of-death only.
   #363; the owner, 2026-09-29): every text recorded about a released
   person or another item it keeps leaves with it, a source's excerpt
   included, so a text can name a possibly living relative. A person
-  event that names no participant is left out, whatever else it records. An event with
-  a participant left out goes whole: a marriage of a released person and
-  a possibly living one, and, while every family is left out, every
+  event that names no participant is left out, whatever else it records.
+  An event with a participant left out goes whole: a marriage of a
+  released person and a possibly living one, and, while every family is left out, every
   event a family took part in. An item that is no event but carries a
   `participant` statement goes by the same rule. A dump that holds a
   sitelink or a property of another type than the model's makes the
   export refuse until it is removed: the backup keeps its other dumps and
   records the refusal.
+- A released person's statement that names an item left out goes whole
+  (amended by #364): their spouse statement naming a possibly living
+  partner leaves out its dates, qualifiers and references too, so the
+  view shows neither the partner nor the wedding's date. A kept item may
+  so lose a statement whose own value is kept: an appellation whose
+  perspective is a possibly living person, or a type whose qualifier
+  names an untyped item, and with it the truthy triple, unless another
+  kept statement gives the same value.
 - Docs move with the code: MODELING.md "Living persons and privacy",
   `deploy/README.md`, and `pipeline/README.md` are updated in the same
   change; ADR-0018's exclusion note now points here.

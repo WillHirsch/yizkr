@@ -971,7 +971,16 @@ not a signal to grow the schema on.
   `DEFAULT_CUTOFF_YEARS` in `yizkr.core.privacy`). **Unknown means
   excluded.** Exclusion removes every mention (other people's claims
   about them, orphaned provenance nodes), and a transcription excerpt —
-  a raw source quotation — leaves only with a statement it attests.
+  a raw source quotation — leaves only with a statement it attests. A
+  statement whose value, or any qualifier's value, is an item left out
+  goes whole, on a kept item too, with its rank, qualifiers and
+  references (ADR-0020, as amended by #364): a released person's spouse
+  statement naming a possibly living partner takes its start time, the
+  wedding's date, and its excerpt with it, and an appellation whose
+  `perspective` is left out goes, its text included. Its truthy triple
+  goes too, unless a kept statement of the same property at normal or
+  preferred rank gives the same value; a provenance node a kept
+  statement shares stays.
 - **Who is a person fails closed too** (ADR-0020, as amended by #344).
   An item is a person when it has any person evidence, read at every
   rank, deprecated included: a `human` type; a statement of a property
@@ -1019,10 +1028,14 @@ not a signal to grow the schema on.
   #363). An event's date and place are its participants' too, and its
   label is written after them, so the export leaves out every event,
   whatever its kind, that has a `participant` statement at any rank
-  whose value it leaves out, a redirect to one included. An event so
-  left out may itself be a participant, and the rule applies again. An
-  event of a person kind that names no participant (none, or only one of
-  unknown value) is left out too: whom it happened to is unknown. And
+  whose value it leaves out, a redirect to one included, or one with a
+  qualifier naming such an item, whatever the statement's value, an
+  unknown one included (#364). An event so left out may itself be a
+  participant, and the rule applies again. An event of a person kind
+  that names no participant (none, or only one of unknown value, however
+  qualified: an item a qualifier names, a role included, is no person
+  evidence and attends no event on that alone) is left out too: whom it
+  happened to is unknown. And
   the events that start and end a union it leaves out go with the union
   (`started_by`, `ended_by`; ADR-0036 §6), a partner's own death aside.
 - **Everything about a released person stays, text included** (ADR-0020,
