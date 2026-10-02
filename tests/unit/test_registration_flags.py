@@ -1,15 +1,19 @@
-"""Offline tests for the flags registration raises on a new item that may
+"""Offline tests for the flags registration raises on an item that may
 be an older artifact (#371; ADR-0010, "Registration at write time").
 
 Registration finds an artifact by the SHA-1 of its media alone, and a
-title never finds an item. Two kinds of new item are flagged, never
-adopted: one whose upload is a file another item already names
-(`shared-file`), and one whose title is the label of an item with no
-hash, which names a `media file` and has no `media SHA-1`
-(`unhashed-title`). A flag changes nothing registration finds or
-writes, and `ingest run` raises it as an alert of the write. On an
-instance that only registration has filled, as every scratch instance
-is, nothing is unhashed and no flag is ever raised.
+title never finds an item. An item is flagged, never adopted, on every
+registration, made or found, while either condition holds: another item
+names a wiki file that holds its bytes (`shared-file`; every such file,
+as MediaWiki lists them by their SHA-1), or its title is the label of an
+item with no hash (`unhashed-title`). An item with no hash has no `media
+SHA-1` and names a `media file`, or is an `instance of` an artifact
+kind, as a GEDCOM media object's item is. A flag changes nothing
+registration finds or writes, and `ingest run` raises it as an alert of
+the write. On an instance that only registration and the GEDCOM import
+have filled, as every scratch instance is, shared-file is never raised,
+and unhashed-title only for a scan registered under exactly a GEDCOM
+media object's title.
 
 The in-memory wiki, its fictional media and the helpers come from
 tests/unit/test_registrar.py. The flow is verified live too
@@ -28,11 +32,13 @@ import pytest
 from tests.unit.test_registrar import (
     IMAGE,
     ITEMS,
+    LONG,
     OTHER_IMAGE,
     PORTRAIT,
     RESCAN,
     TITLE,
     FakeWiki,
+    P,
     StoringWiki,
     TestStepRegister,
     WriteRefused,
@@ -53,8 +59,10 @@ from yizkr.pipeline.registrar import (
     UNHASHED_TITLE,
     Registrar,
     RegistrationFlag,
+    _ensure_referenced,
     _file_key,
     _Instance,
+    _string_claim,
 )
 
 # fictional sources (docs/EXAMPLES.md): Rudolf's Soviet death certificate,
@@ -69,6 +77,9 @@ MARRIAGE = b"%PDF synthetic scan of the 1905 civil marriage certificate"
 MARRIAGE_TITLE = "marriage-cert-1905"
 # a GEDCOM import's item, the one every media object's item is stated in
 GEDCOM_TITLE = "example-family.ged"
+GEDCOM = b"0 HEAD synthetic GEDCOM export of the Loebig family tree"
+# a media object's title in that GEDCOM, which no scan below takes
+MEDIA_OBJECT_TITLE = "Löbig family, Flörburg, about 1895"
 
 
 def unhashed(wiki, label, page, data, *, kind="photograph"):
@@ -81,6 +92,33 @@ def unhashed(wiki, label, page, data, *, kind="photograph"):
     if kind is not None:
         statements.insert(0, ("instance_of", ITEMS[kind], None))
     return wiki.item(label, *statements)
+
+
+def gedcom_media_object(wiki, label: str) -> str:
+    """An item as the GEDCOM import makes one for a media object: `label`,
+    `instance of artifact`, no `media file` and no `media SHA-1`, stated in
+    the GEDCOM's own item, which registration made with its hash."""
+    gedcom = wiki.item(
+        GEDCOM_TITLE,
+        ("instance_of", ITEMS["genealogical_report"], None),
+        ("media_sha1", sha1(GEDCOM), None),
+    )
+    return wiki.item(
+        label, ("instance_of", ITEMS["artifact"], None), stated_in=gedcom
+    )
+
+
+def hash_item(wiki, qid: str, data: bytes) -> None:
+    """Give the item `qid` a `media SHA-1`, stated in itself, as a curator
+    would hash an older artifact."""
+    item = wiki.wbi.item.get(qid)
+    _ensure_referenced(
+        item,
+        _string_claim(P["media_sha1"], sha1(data), P["stated_in"], qid),
+        P["stated_in"],
+        qid,
+    )
+    item.write()
 
 
 def flag_tuples(flags) -> list[tuple]:
@@ -112,20 +150,56 @@ class TestTheInstanceAsRead:
     @pytest.mark.parametrize(
         "statements",
         [
-            # a GEDCOM import's media object: a kind and no file, stated
-            # in the GEDCOM
-            [("instance_of", ITEMS["artifact"], None)],
             # a hash and no file
             [("media_sha1", "0" * 40, None)],
+            # an artifact kind and a hash, no file
+            [
+                ("instance_of", ITEMS["artifact"], None),
+                ("media_sha1", "0" * 40, None),
+            ],
             # an item the writer minted: a label alone
             [],
+            # a page fragment, a run item: kinds no artifact has
+            [("instance_of", ITEMS["artifact_fragment"], None)],
+            [("instance_of", ITEMS["extraction_run"], None)],
+            # a blank `media file` names no file
+            [("media_file", "File:", None)],
+            [("media_file", "  ", None)],
         ],
-        ids=["gedcom media object", "hash without a file", "label alone"],
+        ids=[
+            "hash without a file",
+            "artifact kind with a hash",
+            "label alone",
+            "artifact fragment",
+            "run item",
+            "blank file",
+            "blank value",
+        ],
     )
-    def test_an_item_naming_no_file_is_not_unhashed(self, statements):
+    def test_an_item_naming_no_file_of_no_artifact_kind_is_not_unhashed(
+        self, statements
+    ):
         wiki = FakeWiki()
         wiki.item(TITLE, *statements)
-        assert _Instance.read(wiki, *wiki.vocabulary()).unhashed == set()
+        instance = _Instance.read(wiki, *wiki.vocabulary())
+        assert instance.unhashed == set()
+        assert instance.files == {}
+
+    @pytest.mark.parametrize(
+        "kind",
+        ["artifact", "photograph", "certificate", "genealogical_report"],
+    )
+    def test_an_artifact_kind_without_a_hash_is_unhashed(self, kind):
+        """A GEDCOM media object's item names no file: an `instance of`
+        an artifact kind with no `media SHA-1` is unhashed all the same."""
+        wiki = FakeWiki()
+        gedcom = wiki.item(GEDCOM_TITLE)
+        qid = wiki.item(
+            TITLE, ("instance_of", ITEMS[kind], None), stated_in=gedcom
+        )
+        instance = _Instance.read(wiki, *wiki.vocabulary())
+        assert instance.unhashed == {qid}
+        assert instance.files == {}
 
     @pytest.mark.parametrize(
         "page",
@@ -144,6 +218,29 @@ class TestTheInstanceAsRead:
             "Letter to sipkje 1952.png"
         )
         assert _file_key("File:") == ""
+
+    def test_a_file_is_keyed_in_nfc(self):
+        decomposed = "File:Lo\u0308big portrait.png"
+        assert _file_key(decomposed) == "Löbig portrait.png"
+        assert _file_key(decomposed) == _file_key("File:Löbig_portrait.png")
+
+    @pytest.mark.parametrize(
+        "mark", ["\u200e", "\u200f", "\u202a", "\u202b", "\u202c", "\u202d",
+                 "\u202e"],
+    )  # fmt: skip
+    def test_the_bidi_marks_mediawiki_strips_are_left_out(self, mark):
+        assert _file_key(f"File:{mark}Löbig{mark} portrait.png") == (
+            "Löbig portrait.png"
+        )
+
+    @pytest.mark.parametrize("mark", ["\u2066", "\u2067", "\u2068", "\u2069"])
+    def test_an_isolate_is_kept_as_mediawiki_keeps_it(self, mark):
+        """MediaWiki 1.45's title parser strips U+200E, U+200F and
+        U+202A-U+202E alone (TitleParser::splitTitleString): a name with
+        an isolate is another file."""
+        assert _file_key(f"File:Löbig{mark} portrait.png") == (
+            f"Löbig{mark} portrait.png"
+        )
 
     def test_letters_after_the_first_keep_their_case(self):
         """MediaWiki titles differ by case after the first letter, so two
@@ -314,23 +411,37 @@ class TestArtifactFlags:
             (UNHASHED_TITLE, (old,))
         ]
 
-    @pytest.mark.parametrize(
-        "statements",
-        [
-            [("instance_of", ITEMS["artifact"], None)],
-            [],
-        ],
-        ids=["gedcom media object", "writer-minted item"],
-    )
-    def test_a_label_of_an_item_naming_no_file_raises_nothing(
-        self, tmp_path, statements
+    def test_a_gedcom_media_objects_title_raises_unhashed_title(
+        self, tmp_path
     ):
-        """An item the GEDCOM import made for a media object, or one the
-        writer minted, has the title and names no file: the new item's
-        label is tagged, as for any taken label, and nothing is flagged."""
+        """The GEDCOM import's item for a media object has the title, an
+        artifact kind and no hash: a scan registered under exactly that
+        title is flagged against it, never adopted. The new item is made
+        with its own hash and a tagged label, and the media object's item
+        is left as it is."""
+        wiki = FakeWiki()
+        media_object = gedcom_media_object(wiki, TITLE)
+        before = copy.deepcopy(wiki.entities[media_object])
+        registrar = Registrar(wiki)
+        result = registrar.register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", TITLE
+        )
+        new = result.artifact_qid
+        assert result.created and new != media_object
+        assert flag_tuples(result.flags) == [
+            (UNHASHED_TITLE, new, sha1(PORTRAIT), (media_object,))
+        ]
+        assert registrar.flags == result.flags
+        assert label_of(wiki, new) == f"{TITLE} [{sha1(PORTRAIT)[:8]}]"
+        assert wiki.entities[media_object] == before
+
+    def test_a_writer_minted_label_raises_nothing(self, tmp_path):
+        """An item the writer minted has the title, no kind of artifact
+        and no file: the new item's label is tagged, as for any taken
+        label, and nothing is flagged."""
         wiki = FakeWiki()
         gedcom = wiki.item(GEDCOM_TITLE)
-        wiki.item(TITLE, *statements, stated_in=gedcom)
+        wiki.item(TITLE, stated_in=gedcom)
         registrar = Registrar(wiki)
         result = registrar.register_artifact(
             scan(tmp_path, PORTRAIT), "photograph", TITLE
@@ -341,17 +452,24 @@ class TestArtifactFlags:
         )
         assert result.flags == [] and registrar.flags == []
 
-    def test_a_re_run_finds_the_item_and_raises_nothing(self, tmp_path):
-        """Registered again, by the same registrar or a new one, the bytes
-        find the item they made by their SHA-1: no item is made, no flag
-        is raised again, and the older item is still left as it is."""
+    def test_a_re_run_flags_the_found_item_again(self, tmp_path):
+        """Registered again, the bytes find the item they made by their
+        SHA-1: no item is made, and while the conditions hold it is
+        flagged again, each run as the first was. One registrar gathers a
+        kind of flag on an item once; each run's registrar gathers it
+        anew. The older item is still left as it is."""
         wiki = FakeWiki()
         old = unhashed(wiki, TITLE, "File:Portrait-1890s.png", PORTRAIT)
         before = copy.deepcopy(wiki.entities[old])
         path = scan(tmp_path, PORTRAIT)
         registrar = Registrar(wiki)
         first = registrar.register_artifact(path, "photograph", TITLE)
-        assert len(first.flags) == 2
+        new = first.artifact_qid
+        expected = [
+            (SHARED_FILE, new, sha1(PORTRAIT), (old,)),
+            (UNHASHED_TITLE, new, sha1(PORTRAIT), (old,)),
+        ]
+        assert flag_tuples(first.flags) == expected
         entities = copy.deepcopy(wiki.entities)
 
         again = registrar.register_artifact(path, "photograph", TITLE)
@@ -360,11 +478,194 @@ class TestArtifactFlags:
 
         for result in (again, anew):
             assert not result.created
-            assert result.artifact_qid == first.artifact_qid
-            assert result.flags == []
-        assert registrar.flags == first.flags and fresh.flags == []
+            assert result.artifact_qid == new
+            assert flag_tuples(result.flags) == expected
+        assert flag_tuples(registrar.flags) == expected
+        assert flag_tuples(fresh.flags) == expected
         assert wiki.entities == entities
         assert wiki.entities[old] == before
+
+    @pytest.mark.parametrize(
+        "cleared", ["relabelled", "hashed", "file unnamed", "merged"]
+    )
+    def test_no_flag_once_its_condition_clears(self, tmp_path, cleared):
+        """A curator acts on the older item: relabelled, it no longer has
+        the title; hashed, it is no longer unhashed; once it names the
+        file no more, or is merged away, nothing shares the file. The flag
+        that condition raised is raised no more."""
+        wiki = FakeWiki()
+        old = unhashed(wiki, TITLE, "File:Portrait-1890s.png", PORTRAIT)
+        path = scan(tmp_path, PORTRAIT)
+        first = Registrar(wiki).register_artifact(path, "photograph", TITLE)
+        assert len(first.flags) == 2
+        if cleared == "relabelled":
+            wiki.entities[old]["labels"]["en"]["value"] = "the Löbig portrait"
+        elif cleared == "hashed":
+            hash_item(wiki, old, b"\x89PNG synthetic: another scan")
+        elif cleared == "file unnamed":
+            del wiki.entities[old]["claims"][P["media_file"]]
+        else:
+            del wiki.entities[old]
+
+        registrar = Registrar(wiki)
+        again = registrar.register_artifact(path, "photograph", TITLE)
+
+        assert again.artifact_qid == first.artifact_qid
+        left = {
+            "relabelled": [SHARED_FILE],
+            "hashed": [SHARED_FILE],
+            "file unnamed": [UNHASHED_TITLE],
+            "merged": [],
+        }[cleared]
+        assert [flag.kind for flag in again.flags] == left
+        assert registrar.flags == again.flags
+
+    def test_the_alias_path_flags_once_a_registration(self, tmp_path):
+        """The same bytes registered under another title and file name
+        find the item, which takes the title as an alias: while its
+        conditions hold it is flagged, once for each kind in each
+        registration, under its own label as well as the title given."""
+        wiki = FakeWiki()
+        old = unhashed(wiki, TITLE, "File:Portrait-1890s.png", PORTRAIT)
+        registrar = Registrar(wiki)
+        first = registrar.register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", TITLE
+        )
+        other = "the Löbig family, 1890s"
+        copy_path = scan(tmp_path, PORTRAIT, "loebig-family.png", "copy")
+
+        again = registrar.register_artifact(copy_path, "photograph", other)
+        fresh = Registrar(wiki)
+        anew = fresh.register_artifact(copy_path, "photograph", other)
+
+        new = first.artifact_qid
+        expected = [
+            (SHARED_FILE, new, sha1(PORTRAIT), (old,)),
+            (UNHASHED_TITLE, new, sha1(PORTRAIT), (old,)),
+        ]
+        for result in (again, anew):
+            assert result.artifact_qid == new and not result.created
+            assert flag_tuples(result.flags) == expected
+        assert flag_tuples(registrar.flags) == expected
+        assert flag_tuples(fresh.flags) == expected
+        aliases = wiki.entities[new]["aliases"]["en"]
+        assert [alias["value"] for alias in aliases] == [other]
+
+    def test_the_alias_path_flags_nothing_without_a_condition(self, tmp_path):
+        wiki = FakeWiki()
+        gedcom_media_object(wiki, MEDIA_OBJECT_TITLE)
+        unhashed(wiki, "the Snylsjum letter", "File:Snylsjum.png", LETTER)
+        first = Registrar(wiki).register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", TITLE
+        )
+        registrar = Registrar(wiki)
+        again = registrar.register_artifact(
+            scan(tmp_path, PORTRAIT, "loebig-family.png", "copy"),
+            "photograph",
+            "the Löbig family, 1890s",
+        )
+        assert first.flags == []
+        assert again.artifact_qid == first.artifact_qid
+        assert again.flags == [] and registrar.flags == []
+
+    def test_a_hashed_item_naming_the_file_raises_shared_file(self, tmp_path):
+        """An item that names the file and carries another hash (its file
+        overwritten before uploads stopped overwriting) is not unhashed,
+        but it names a file that holds these bytes: shared-file."""
+        wiki = FakeWiki()
+        other = wiki.item(
+            "a Löbig portrait, catalogued",
+            ("instance_of", ITEMS["photograph"], None),
+            ("media_file", "File:Portrait-1890s.png", None),
+            ("media_sha1", "0" * 40, None),
+        )
+        wiki.media.store("Portrait-1890s.png", PORTRAIT)
+        assert _Instance.read(wiki, *wiki.vocabulary()).unhashed == set()
+
+        result = Registrar(wiki).register_artifact(
+            scan(tmp_path, PORTRAIT, "loebig.png"), "photograph", TITLE
+        )
+
+        assert result.created and result.artifact_qid != other
+        assert flag_tuples(result.flags) == [
+            (SHARED_FILE, result.artifact_qid, sha1(PORTRAIT), (other,))
+        ]
+
+    def test_every_file_holding_the_bytes_is_shared(self, tmp_path):
+        """The bytes are in two wiki files, each named by an item with no
+        hash, and the upload is one of them: both items are named, as
+        MediaWiki lists every file of these bytes. An item naming a file
+        of other bytes is not."""
+        wiki = FakeWiki()
+        first = unhashed(
+            wiki, "a Löbig portrait", "File:Portrait-1890s-a.png", PORTRAIT
+        )
+        second = unhashed(
+            wiki, "the Löbig portrait, again", "File:Portrait-1890s-b.png",
+            PORTRAIT,
+        )  # fmt: skip
+        unhashed(wiki, "the re-scan", "File:Portrait-rescan.png", RESCAN)
+
+        result = Registrar(wiki).register_artifact(
+            scan(tmp_path, PORTRAIT, "loebig.png"), "photograph", TITLE
+        )
+
+        assert result.file_page == "File:Portrait-1890s-a.png"
+        assert flag_tuples(result.flags) == [
+            (SHARED_FILE, result.artifact_qid, sha1(PORTRAIT), (first, second))
+        ]
+
+    def test_a_file_holding_the_bytes_counts_without_the_upload(
+        self, tmp_path
+    ):
+        """The found item's own file holds its bytes, and so does another
+        file, which an unhashed item names: MediaWiki's listing finds it,
+        though no upload answered with it."""
+        wiki = FakeWiki()
+        result = Registrar(wiki).register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", TITLE
+        )
+        wiki.media.store("Portrait-catalogued.png", PORTRAIT)
+        old = unhashed(
+            wiki, "a Löbig portrait", "File:Portrait-catalogued.png", PORTRAIT
+        )
+        again = Registrar(wiki).register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", TITLE
+        )
+        assert again.artifact_qid == result.artifact_qid
+        assert flag_tuples(again.flags) == [
+            (SHARED_FILE, result.artifact_qid, sha1(PORTRAIT), (old,))
+        ]
+
+    @pytest.mark.parametrize("first", [9, 99])
+    def test_others_are_in_the_order_of_their_numbers(self, tmp_path, first):
+        """Q9 before Q10, and Q99 before Q100: by number, not as text."""
+        wiki = FakeWiki()
+        wiki._next_qid = first
+        a = unhashed(wiki, TITLE, "File:Portrait-1890s.png", PORTRAIT)
+        b = unhashed(wiki, TITLE, "File:Portrait-1890s.png", PORTRAIT)
+        assert (a, b) == (f"Q{first}", f"Q{first + 1}")
+        result = Registrar(wiki).register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", TITLE
+        )
+        assert [flag.others for flag in result.flags] == [(a, b), (a, b)]
+
+    def test_a_250_character_title_an_unhashed_item_holds(self, tmp_path):
+        """The title, of the 250 characters Wikibase takes, is an unhashed
+        item's label: the new item's tagged label is cut to fit, and the
+        item is made and flagged, never refused."""
+        wiki = StoringWiki()
+        title = LONG[:250]
+        old = unhashed(wiki, title, "File:Portrait-1890s.png", RESCAN)
+        result = Registrar(wiki).register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", title
+        )
+        tag = f" [{sha1(PORTRAIT)[:8]}]"
+        assert result.created
+        assert label_of(wiki, result.artifact_qid) == title[:238] + "…" + tag
+        assert flag_tuples(result.flags) == [
+            (UNHASHED_TITLE, result.artifact_qid, sha1(PORTRAIT), (old,))
+        ]
 
     def test_flags_gather_over_a_registrars_artifacts(self, tmp_path):
         wiki = FakeWiki()
@@ -472,6 +773,8 @@ class TestDerivedMediaFlags:
         assert_labels_unique(wiki)
 
     def test_a_second_container_finds_the_flagged_medium(self, tmp_path):
+        """A second deck embedding the image finds the medium by its SHA-1
+        and, while the older item still names its file, flags it again."""
         wiki = FakeWiki()
         old = unhashed(
             wiki, "the shop front at Brunnenring 35", "File:Shop.png", IMAGE
@@ -480,15 +783,37 @@ class TestDerivedMediaFlags:
             wiki, tmp_path, "a", "Deck A", [("image1.png", IMAGE, [1])]
         )
         registrar = Registrar(wiki)
-        # a second deck embedding the image finds it: nothing flagged
         deck = deck_file(tmp_path, "b")
         registrar.register_artifact(deck, "presentation", "Deck B")
         record, directory = recorded(
             tmp_path, deck, "Deck B", [("image1.png", IMAGE, [2])]
         )
         assert registrar.register_derived_media(record, directory) == derived
-        assert registrar.flags == []
+        assert flag_tuples(registrar.flags) == [
+            (SHARED_FILE, derived[sha1(IMAGE)], sha1(IMAGE), (old,))
+        ]
         assert old not in derived.values()
+
+    def test_a_medium_is_flagged_under_its_first_name_alone(self, tmp_path):
+        """A medium of two names is labelled by its first: an unhashed
+        item labelled with the deck's title and its second name is not its
+        title, and raises nothing."""
+        wiki = FakeWiki()
+        unhashed(
+            wiki, "Deck A — shop.png", "File:Shop-retouched.png", OTHER_IMAGE
+        )
+        deck = deck_file(tmp_path, "a")
+        registrar = Registrar(wiki)
+        registrar.register_artifact(deck, "presentation", "Deck A")
+        record, directory = recorded(
+            tmp_path,
+            deck,
+            "Deck A",
+            [("image1.png", IMAGE, [1]), ("shop.png", IMAGE, [2])],
+        )
+        derived = registrar.register_derived_media(record, directory)
+        assert label_of(wiki, derived[sha1(IMAGE)]) == "Deck A — image1.png"
+        assert registrar.flags == []
 
     def test_a_shared_file_medium_is_flagged_once(self, tmp_path):
         wiki = FakeWiki()
@@ -505,9 +830,13 @@ class TestDerivedMediaFlags:
         assert flag_tuples(registrar.flags) == [
             (SHARED_FILE, derived[sha1(IMAGE)], sha1(IMAGE), (old,))
         ]
-        # the same record again: found, nothing flagged twice
+        # the same record again: found, and one registrar gathers the
+        # flag once; a fresh one, as the next run's, gathers it again
         registrar.register_derived_media(record, directory)
         assert len(registrar.flags) == 1
+        fresh = Registrar(wiki)
+        fresh.register_derived_media(record, directory)
+        assert fresh.flags == registrar.flags
 
     def test_a_mediums_title_alone(self, tmp_path):
         wiki = FakeWiki()
@@ -539,24 +868,42 @@ class TestDerivedMediaFlags:
         )
         assert list(derived) == [sha1(IMAGE)]
 
+    def test_the_module_wrapper_adds_the_flags_it_is_given(self, tmp_path):
+        wiki = FakeWiki()
+        old = unhashed(
+            wiki, "Deck A — image1.png", "File:Shop-retouched.png", OTHER_IMAGE
+        )
+        deck = deck_file(tmp_path, "a")
+        registrar_module.register_artifact(
+            wiki, deck, "presentation", "Deck A"
+        )
+        record, directory = recorded(
+            tmp_path, deck, "Deck A", [("image1.png", IMAGE, [1])]
+        )
+        flags: list[RegistrationFlag] = []
+        derived = registrar_module.register_derived_media(
+            wiki, record, directory, flags=flags
+        )
+        assert flag_tuples(flags) == [
+            (UNHASHED_TITLE, derived[sha1(IMAGE)], sha1(IMAGE), (old,))
+        ]
 
-# -- a scratch instance: registration alone, so no flag ----------------------
+
+# -- a scratch instance: registration and the GEDCOM import -----------------
 
 
-class TestNoFlagOnAScratchInstance:
+class TestScratchInstance:
     def test_registrations_alone_never_raise_a_flag(self, tmp_path):
         """Every item registration makes names its file and its hash
-        together, so on an instance only registration (and the writer, and
-        the GEDCOM import) has written to, nothing is unhashed and no flag
-        is raised, whatever is registered: homonyms of other bytes, the
-        same bytes under other names, a changed source, decks that share
-        an image, an image also ingested alone, and titles a GEDCOM media
-        object or a minted item already has."""
+        together, so on an instance only registration, the writer and the
+        GEDCOM import have written to, the only items with no hash are
+        the GEDCOM's media objects, and with no scan under exactly one's
+        title no flag is raised, whatever is registered, each twice:
+        homonyms of other bytes, the same bytes under other names, a
+        changed source, decks that share an image, an image also ingested
+        alone, and a title a minted item already has."""
         wiki = FakeWiki()
-        gedcom = wiki.item(GEDCOM_TITLE)
-        wiki.item(
-            TITLE, ("instance_of", ITEMS["artifact"], None), stated_in=gedcom
-        )
+        media_object = gedcom_media_object(wiki, MEDIA_OBJECT_TITLE)
         wiki.item(LETTER_TITLE)  # a label the writer gave an item it minted
         results = []
         registrars = []
@@ -603,11 +950,17 @@ class TestNoFlagOnAScratchInstance:
         registered(IMAGE, "image1", "image1.png")
         registered(IMAGE, "Deck — image1.png", "shop.png")
         registered(OTHER_IMAGE, "Deck — image1.png", "retouched.png")
+        # a write that runs again registers each again
+        for result in list(results):
+            if result.file_page is not None:
+                registered(
+                    wiki_bytes(wiki, result.file_page), "again", "again.png"
+                )
 
         assert all(result.flags == [] for result in results)
         assert all(registrar.flags == [] for registrar in registrars)
         instance = _Instance.read(wiki, *wiki.vocabulary())
-        assert instance.unhashed == set()
+        assert instance.unhashed == {media_object}
         # every file is named by the items of its bytes alone
         for qids in instance.files.values():
             assert (
@@ -615,6 +968,51 @@ class TestNoFlagOnAScratchInstance:
             )
         assert wiki.drift() == []
         assert_labels_unique(wiki)
+
+    def test_a_scan_under_a_media_objects_title_raises_that_alone(
+        self, tmp_path
+    ):
+        """A scan registered under exactly a GEDCOM media object's title is
+        the one flag a scratch instance can raise: unhashed-title, against
+        the media object's item. Shared-file is never raised there."""
+        wiki = FakeWiki()
+        media_object = gedcom_media_object(wiki, MEDIA_OBJECT_TITLE)
+        registrar = Registrar(wiki)
+        Registrar(wiki).register_artifact(
+            scan(tmp_path, RESCAN, folder="first"), "photograph", TITLE
+        )
+        result = registrar.register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", MEDIA_OBJECT_TITLE
+        )
+        again = Registrar(wiki).register_artifact(
+            scan(tmp_path, PORTRAIT, "copy.png", "copy"), "photograph", TITLE
+        )
+        expected = [
+            (UNHASHED_TITLE, result.artifact_qid, sha1(PORTRAIT),
+             (media_object,))
+        ]  # fmt: skip
+        assert flag_tuples(registrar.flags) == expected
+        # found under another title, its label still the media object's
+        assert flag_tuples(again.flags) == expected
+
+
+def wiki_bytes(wiki, page: str) -> bytes:
+    """The fictional bytes the in-memory wiki holds under `page`."""
+    current = wiki.files[page]
+    for data in (
+        PORTRAIT,
+        RESCAN,
+        LETTER,
+        LETTER_RESCAN,
+        CERTIFICATE,
+        MARRIAGE,
+        IMAGE,
+        OTHER_IMAGE,
+        *(f"PK synthetic deck {n}".encode() for n in "ab"),
+    ):
+        if sha1(data) == current:
+            return data
+    raise AssertionError(page)  # fmt: skip
 
 
 # -- the run's alerts ---------------------------------------------------------
@@ -660,8 +1058,7 @@ class TestFlagsReachTheRunsAlerts:
             UNHASHED_TITLE,
         ]
         assert any(
-            line.strip()
-            == f"flagged {SHARED_FILE}: new item {qid}, against {old}"
+            line.strip() == f"flagged {SHARED_FILE}: item {qid}, against {old}"
             for line in lines
         )
 
@@ -703,16 +1100,28 @@ class TestFlagsReachTheRunsAlerts:
             assert "sipkje" not in json.dumps(alert).lower()
         assert not any("sipkje" in line.lower() for line in lines)
 
-    def test_a_re_run_raises_no_alert_again(self, tmp_path):
+    def test_a_re_run_raises_the_alerts_again_until_cleared(self, tmp_path):
+        """Each write raises the flags while their conditions hold; once a
+        curator relabels and hashes the older item, the next raises none."""
         wiki = FakeWiki()
-        unhashed(wiki, "portrait-1890s", "File:Portrait-1890s.png", PORTRAIT)
+        old = unhashed(
+            wiki, "portrait-1890s", "File:Portrait-1890s.png", PORTRAIT
+        )
         orchestrator, _ = self.orchestrator(
             tmp_path, wiki, [("portrait-1890s.png", PORTRAIT)]
         )
         (doc,) = orchestrator.documents()
         qid = orchestrator._step_register(doc)
         assert orchestrator._step_register(doc) == qid
-        assert len(orchestrator.rundir.alerts()) == 2
+        alerts = orchestrator.rundir.alerts()
+        assert [(a["check"], a["artifact"], a["others"]) for a in alerts] == [
+            (SHARED_FILE, qid, [old]),
+            (UNHASHED_TITLE, qid, [old]),
+        ] * 2
+        wiki.entities[old]["labels"]["en"]["value"] = "the Löbig portrait"
+        del wiki.entities[old]["claims"][P["media_file"]]
+        assert orchestrator._step_register(doc) == qid
+        assert len(orchestrator.rundir.alerts()) == 4
 
     def test_registration_alone_raises_no_alert(self, tmp_path):
         wiki = FakeWiki()
@@ -730,8 +1139,8 @@ class TestFlagsReachTheRunsAlerts:
 
     def test_a_flag_of_a_registration_cut_short_is_raised(self, tmp_path):
         """A deck's registration fails at its media, after the deck's own
-        item was made and flagged: the flag is still raised, as a re-run
-        finds the item by its hash and flags nothing."""
+        item was made and flagged: the flag is still raised, as the next
+        write would raise it again."""
         wiki = FakeWiki()
         orchestrator, _ = self.orchestrator(tmp_path, wiki)
         old = unhashed(wiki, "Deck", "File:A.pptx", b"PK synthetic deck a")

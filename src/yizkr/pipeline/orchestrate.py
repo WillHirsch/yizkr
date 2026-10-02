@@ -1204,14 +1204,17 @@ class Orchestrator:
         derived medium of each PDF that places it, each PDF registered
         first. Returns the artifact's QID.
 
-        A new item the registrar flags as maybe an older artifact (one
-        whose file another item names, or whose title is the label of an
-        item with no hash; RegistrationFlag) is raised as an alert of the
-        write on the document, its check the flag's kind, for a person to
-        look at, the flags of a registration cut short included. The
-        alert holds ids and hashes alone: `artifact`, the new item;
-        `others`, the items it may be; `medium`, the first 12 hex digits
-        of the new item's media SHA-1 (docs/ANOMALIES.md)."""
+        An item the registrar flags as maybe an older artifact (another
+        item names a file that holds its bytes, or its title is the label
+        of an item with no hash; RegistrationFlag) is raised as an alert
+        of the write on the document, its check the flag's kind, for a
+        person to look at, the flags of a registration cut short by an
+        error or an interrupt included. An item is flagged on each write
+        while the condition holds, whether registration made it or found
+        it, so a flag a killed process never raised is raised by the next
+        write. The alert holds ids and hashes alone: `artifact`, the
+        item; `others`, the items it may be; `medium`, the first 12 hex
+        digits of the item's media SHA-1 (docs/ANOMALIES.md)."""
         from yizkr.pipeline.registrar import Registrar
 
         registrar = Registrar(self.client, exclusions=self.exclusions)
@@ -1231,7 +1234,7 @@ class Orchestrator:
                     medium=flag.sha1[:12],
                 )
                 self.log(
-                    f"  flagged {flag.kind}: new item {flag.artifact}, "
+                    f"  flagged {flag.kind}: item {flag.artifact}, "
                     f"against {', '.join(flag.others)}"
                 )
 
