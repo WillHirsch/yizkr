@@ -2607,23 +2607,45 @@ class ClaudeCodeClient:
 
     @staticmethod
     def _assemble_stream(stdout: str) -> str:
-        """Concatenate assistant text from a stream-json event stream.
+        """The answer a stream-json event stream gives: the assistant text
+        after the call's last tool result.
 
-        A long answer can span several assistant turns; every turn's text
-        is part of the response, so all of them are joined in order. Falls
-        back to the terminal result event (or raw stdout) if no assistant
-        events are present.
+        What the model writes before a tool call ("Let me read the
+        image.") is narration of its work, not its answer, so the stream's
+        structure decides where the answer starts: after the last user
+        event that carries a tool_result block. A long answer can span
+        several assistant turns with no tool call between them; each
+        turn's text is part of it, so they are joined in order. A model
+        that wrote text only before its last tool result gave no answer.
+        Falls back to the terminal result event (or raw stdout) if no
+        assistant event holds any text.
         """
         pieces: list[str] = []
+        spoke = False
         result_text: str | None = None
         for event in _stream_events(stdout):
+            message = event.get("message")
+            content = (
+                message.get("content") if isinstance(message, dict) else None
+            )
+            blocks = content if isinstance(content, list) else []
             if event.get("type") == "assistant":
-                for block in event.get("message", {}).get("content", []):
-                    if block.get("type") == "text":
+                for block in blocks:
+                    if (
+                        isinstance(block, dict)
+                        and block.get("type") == "text"
+                        and isinstance(block.get("text"), str)
+                    ):
+                        spoke = True
                         pieces.append(block["text"])
+            elif event.get("type") == "user" and any(
+                isinstance(block, dict) and block.get("type") == "tool_result"
+                for block in blocks
+            ):
+                pieces = []
             elif event.get("type") == "result":
                 result_text = event.get("result")
-        if pieces:
+        if spoke:
             # Join with no separator: when a turn resumes exactly where
             # the previous one stopped (possibly mid-token), direct
             # concatenation reconstructs the original text; any inserted

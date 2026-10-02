@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import example_universe as u
+from tests.fixtures.records import record_answer
 from tests.unit.stage_counts import disagreement
 from tests.unit.test_no_wiki_before_write import (  # noqa: F401
     build_deck,
@@ -199,7 +200,7 @@ class Engine:
         if self.fakes.hook is not None:
             self.fakes.hook(what, name)
         if what == "vision":
-            return corpus.texts[name]
+            return record_answer(corpus.texts[name])
         if what == "critique":
             return '{"done": true, "findings_emitted": 0}'
         person = {"id": "e1", "label": "Eugen Löbig", "kind": "human"}

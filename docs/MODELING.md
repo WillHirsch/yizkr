@@ -15,21 +15,27 @@
   in aliases. English labels are the bootstrap's idempotency key:
   unique per entity kind, and renames must happen on the wiki and in
   the manifest together.
-- Wikibase keeps a label, a description or an alias trimmed: each run
-  of control characters in it (a line feed or a tab among them) made one
-  space, the separators at either end dropped (the line and paragraph
-  separators, U+2028 and U+2029, among them), in NFC, and at most 250
-  characters long. It refuses a term that still holds a line or
-  paragraph separator inside, and an item whose label and description
-  are the same. The writer sends each term it makes in that form, with a
-  line or paragraph separator inside made a space too, and finds an item
-  by its label in it, so a label given in another form finds its item
-  again. A term still over 250 characters is cut as a long locator is
-  (below), with the digest of the whole, so that two labels that agree
-  up to the cut stay two items' labels, and the run item's label, which
-  holds the model's identifier, keeps its batch's fingerprint in the
-  digest. An entity whose description would be its label gets none, with
-  a warning (#384).
+- Wikibase keeps a label, a description or an alias trimmed, then
+  cleaned up, then in NFC: each run of control characters in it (a line
+  feed or a tab among them) made one space, the separators at either end
+  dropped (the line and paragraph separators, U+2028 and U+2029, among
+  them), then the noncharacters U+FFFE and U+FFFF made U+FFFD, and at
+  most 250 characters long. It refuses a term that still holds a line or
+  paragraph separator inside, or begins or ends with a Mongolian vowel
+  separator (U+180E), and an item whose label and description are the
+  same. The writer sends each term it makes in that form, with a line or
+  paragraph separator inside made a space too (a run of them and of
+  control characters is one space) and a Mongolian vowel separator at
+  either end dropped, and finds an item by its label in it,
+  so a label given in another form finds its item again; the registrar
+  compares and sets an artifact's title by the same rule, which it takes
+  from the writer (#369, #403). A term still over 250 characters in that
+  form is cut as a long locator is (below), with the digest of the whole,
+  so whitespace around a term never counts towards the limit, two labels
+  that agree up to the cut stay two items' labels, and the run item's
+  label, which holds the model's identifier, keeps its batch's
+  fingerprint in the digest. An entity whose description would be its
+  label gets none, with a warning (#384).
 - Schema-level statements (e.g. the subclass hierarchy) carry
   references too (ADR-0003): a `stated in` reference to the *model
   manifest* item, which represents `model/manifest.yaml` — the document that
@@ -145,10 +151,13 @@ Every statement carries at least one reference with:
   canvas+xywh URI (W2)
 - optional short transcription excerpt supporting human verification,
   tagged with the language it is written in (BCP-47). `yizkr ingest run`
-  detects each document's language from its transcription by default
-  (`--language auto`, ADR-0015), so a mixed-language folder tags each
-  excerpt correctly; the extractor may still tag individual excerpts in
-  their own language (a quoted passage in another tongue)
+  takes each document's language from its transcription by default
+  (`--language auto`, ADR-0015): from the transcription record the vision
+  engine fills, which names the languages each page is written in
+  (ADR-0037), and otherwise by detection from the text outside its
+  editorial marks. So a mixed-language folder tags each excerpt
+  correctly; the extractor may still tag individual excerpts in their own
+  language (a quoted passage in another tongue)
 
 Machine-written statements add a second reference:
 - inferred from extraction run → extraction-run item
@@ -169,26 +178,35 @@ claims, from an entity manifest or a ref, follow ADR-0007 instead.
 Wikibase holds at most 400 characters in the text of a string,
 external-id or monolingual text value, a reference's page number and
 region among them, and no text value with a line break or a tab in it,
-or whitespace at either end (it changes a vertical tab or a form feed in
-a string value into U+FFFD, and refuses one in monolingual text); it
-refuses the whole edit that sends a text it does not hold. The writer
-checks each text in NFC, the form the instance keeps it in (#366, #384).
-A page number, region or excerpt goes on one line: whitespace at either
-end is dropped, a line break inside becomes " | " and a tab a space, and
-one of whitespace alone is left out. One still over the limit is cut at
+or whitespace at either end; it refuses the whole edit that sends a text
+it does not hold. It also cleans a text up, making each C0 control
+character but the tab, the line feed and the carriage return, and each
+of the noncharacters U+FFFE and U+FFFF, U+FFFD: in a string or
+external-id value before it checks and stores it (so it changes a
+vertical tab or a form feed there, and refuses one in monolingual text),
+and in every text its API gives back, monolingual text included. The
+writer checks each text in NFC, the form the instance keeps it in, and
+sends none that the instance would give back changed (#366, #384,
+#403). A page number, region or excerpt goes on one line: whitespace at
+either end is dropped, a line break inside becomes " | ", a tab a space
+and each other character the instance cleans up U+FFFD, as the instance
+gives it back, so a re-run finds its reference block; one of whitespace
+alone is left out. One still over the limit is cut at
 a break between words and ends with " … sha1 " and the first 12 hex
 digits of the SHA-1 of the whole text: a locator only places the claim
 in its source, as an excerpt only helps a reader check it there, and the
 digest keeps two places whose locators or excerpts agree up to the cut
 two references. A claim whose own text, its value or a qualifier's, is
 over the limit, or holds a line break or a tab, or has whitespace at
-either end, is refused, never cut or changed, since that would alter
-what the source says: nothing of it is written, and the write's result
+either end, or holds a character the instance cleans up, is refused,
+never cut, trimmed or cleaned up, since that would alter what the source
+says: nothing of it is written, and the write's result
 names it by its claim id (its review-sheet id, unless the review
 corrected it), with a warning that says why (the writer's module
 docstring). Every other claim of the batch is written. An entity's type
 hint is free text, compared ignoring its spacing, so it goes with each
-run of whitespace in it as one space.
+run of whitespace in it as one space, and each character the instance
+cleans up as U+FFFD, and a re-run finds the statement written for it.
 
 Curator-attributed statements (a value correction from the review CSV)
 carry the `stated in → artifact` reference only:
@@ -282,10 +300,11 @@ artifact a new QID, changes neither.
 - Labels stay unique per kind: when a title is already another item's
   label, the new artifact's label is disambiguated with a short content
   tag (`"<title> [<sha1[:8]>]"`) rather than colliding. Titles are
-  compared in the form Wikibase stores labels in (separators and control
-  characters trimmed at either end, each run of control characters
-  inside made one space, then NFC), and one longer than the 250
-  characters Wikibase takes, as it is or once tagged, is refused. The tag
+  compared and set in the form Wikibase stores labels in, by the rule the
+  writer keeps labels by (above: trimmed, then U+FFFE and U+FFFF made
+  U+FFFD, then NFC; #369, #403), an artifact's description goes in that
+  form too, and a title longer than the 250 characters Wikibase takes,
+  as it is or once tagged, is refused. The tag
   is a stopgap until labels need not be unique for artifacts (#94), and
   which homonym bears it depends on registration order: nothing may key
   on an artifact's label, only on its `media SHA-1`.
@@ -499,7 +518,11 @@ and reference the artifact itself or the producing run.
   image's item, after the PDF, before any claim that cites it (ADR-0008
   as amended by #397). The same image in several PDFs is one item and
   one excerpt; an image whose bytes a document of the corpus has is that
-  document. An image placed within a page read by vision is read with
+  document. An image whose reading's record calls every page blank or
+  not a document page (a photograph with no writing, a colour chart) is
+  registered but is no excerpt; an illegible one is an excerpt, so that
+  a reader sees it was there. An excerpt's language and class are its
+  reading's record's (ADR-0037). An image placed within a page read by vision is read with
   that page, as the compilation's.
 - A claim cites the witness that asserts it. A claim read from the
   compilation's own text cites the compilation, with its page as the

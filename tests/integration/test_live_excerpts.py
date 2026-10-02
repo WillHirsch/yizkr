@@ -23,12 +23,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 
 import pytest
 
 from tests.fixtures import example_universe as u
 from tests.fixtures import pdfs
+from tests.fixtures.records import record_answer
 from tests.integration.test_live_write_time_registration import (
     cited,
     entities,
@@ -46,15 +48,21 @@ from yizkr.pipeline.transcribe import TRANSCRIPTION_PROMPT
 pytestmark = pytest.mark.live
 
 SOURCES = {source.key: source for source in u.SOURCES}
-LETTER = SOURCES["letter-excerpt-1939"].text
+LETTER_SOURCE = SOURCES["letter-excerpt-1939"]
+LETTER = LETTER_SOURCE.text
 TRANSLATION = (
     "Translation: Flörburg, Brunnenring 35, 28 July 1939. Dear Pünktchen! "
     "Rahel now lives at Angerring 71."
 )
 WIDTH, HEIGHT = 300, 120
-# the letter's image: grey pixels of this fixture's own, from its marker
+# the letter's image: grey pixels of this test session's own. A live
+# mutant run writes what the mutant wrote onto the items of the bytes it
+# read, and statements are never removed, so each session reads new bytes;
+# the test's second ingest is the re-run that must change nothing
 PIXELS = (
-    hashlib.sha256(b"yizkr live test #397: the letter's top").digest()
+    hashlib.sha256(
+        b"yizkr live test #397: the letter's top " + os.urandom(16)
+    ).digest()
     * (WIDTH * HEIGHT // 32 + 1)
 )[: WIDTH * HEIGHT]
 IMAGE = pdfs.Image(
@@ -72,7 +80,7 @@ LETTER_PERSON = f"Integration Test Rahel Sänger {MARK}"
 
 def booklet() -> bytes:
     """The booklet: a title page, and page 6 with the letter's image above
-    its translation. The same bytes on every run."""
+    its translation. The same bytes for the whole test session."""
     six = pdfs.Page().image(IMAGE, 72, 520, 300, 200)
     six.text(pdfs.lines(TRANSLATION), y=500)
     pages = [pdfs.Page().text(pdfs.lines(f"Our Family from Germany {MARK}"))]
@@ -88,7 +96,12 @@ class Engine:
 
     def complete(self, prompt: str, image_paths=()) -> str:
         if prompt.startswith(TRANSCRIPTION_PROMPT):
-            return LETTER
+            # a transcription is a record of the image's one page
+            return record_answer(
+                LETTER,
+                document_class=LETTER_SOURCE.artifact_class,
+                languages=(LETTER_SOURCE.lang,),
+            )
         person, year = (
             (LETTER_PERSON, 1871)
             if "Angerring 11" in prompt
@@ -184,8 +197,8 @@ def test_a_pdf_and_its_excerpt_are_written_as_two_witnesses(
     assert parts["other"] == {"6": [image]}
     claims = entities(client, image)[image]["claims"]
     # the image's one statement that it is part of the booklet, on page 6:
-    # an earlier run's items are this run's too, so each write must leave
-    # exactly that statement, never another beside it
+    # the first ingest's items are the second's too, so each write must
+    # leave exactly that statement, never another beside it
     on_the_booklet = [
         claim
         for claim in claims[properties["part_of"]]
