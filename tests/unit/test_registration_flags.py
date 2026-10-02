@@ -145,6 +145,13 @@ class TestTheInstanceAsRead:
         )
         assert _file_key("File:") == ""
 
+    def test_letters_after_the_first_keep_their_case(self):
+        """MediaWiki titles differ by case after the first letter, so two
+        files whose names differ only there are two files."""
+        assert _file_key("File:Brief an Sipkje.png") != _file_key(
+            "File:Brief an SIPKJE.png"
+        )
+
 
 # -- register_artifact --------------------------------------------------------
 

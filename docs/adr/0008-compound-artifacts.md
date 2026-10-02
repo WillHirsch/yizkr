@@ -450,8 +450,8 @@ time"):
   already has takes a content-tagged label. A new image is flagged, never
   adopted, as ADR-0010 flags a new artifact (amended by #371,
   2026-10-02): when its upload is a file another item names, or its
-  label before the tag is the label of an item with no hash. Its bytes are uploaded from
-  the file the record keeps, under the name `"<deck title> <name in the
+  label before the tag is the label of an item with no hash. Its bytes
+  are uploaded from the file the record keeps, under the name `"<deck title> <name in the
   archive>"` (in the form MediaWiki takes, as amended by #373). Bytes the
   archive holds under several names are one medium: the first name
   labels it (`"<deck title> — <name>"`), and the
