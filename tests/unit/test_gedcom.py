@@ -6618,3 +6618,10 @@ class TestRound6:
         assert eugen.label == "Eugen"
         assert "Peppi Peppi 'Peppi' Peppi" in eugen.aliases
         assert outcomes["NAME parts not restated"] == 1
+
+    def test_a_quoted_placeholder_glued_after_the_surname_leaves_no_mark(self):
+        eugen, outcomes = record_of(
+            person("I1", "Eugen /Löbig/'? Muckel'"), "i1"
+        )
+        assert eugen.label == "Eugen Löbig 'Muckel'"
+        assert outcomes["NAME part without a word"] == 1
