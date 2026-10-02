@@ -3452,7 +3452,9 @@ class TestNoFalseMerge:
         manifests puts its town in Kreis Peiltal, stay apart: a shared
         container is no shared place. So do two 'zum Blauen Hut' shops at
         Flörburg and at Peiltal. A bare Fläckfeld and one in Kreis
-        Mockburg nest, and registries at each merge."""
+        Mockburg nest, and registries at each merge; one at Kreis
+        Mockburg itself, which only the other's record puts Fläckfeld in,
+        stays apart."""
 
         def at(key: str, org: dict, town: str, district=None) -> Doc:
             return register(
@@ -3519,6 +3521,24 @@ class TestNoFalseMerge:
         ]
         identity = identity_of(*docs)
         assert {"registry"} in merged(docs, identity)
+        # containment that only a record's `within` states does not count
+        # for places location claims name: a registry at 'Fläckfeld, Kreis
+        # Mockburg' and one at Kreis Mockburg stay apart
+        docs = [
+            at("in Kreis Mockburg", registry(), "Fläckfeld", "Kreis Mockburg"),
+            register(
+                "at Kreis Mockburg",
+                [registry(), place("p0", "Kreis Mockburg")],
+                [("e1", "location", item("p0"))],
+                {"e1": "another registry", "p0": "Kreis Mockburg"},
+            ),
+        ]
+        identity = identity_of(*docs)
+        both = frozenset(doc.fingerprint("e1", identity) for doc in docs)
+        assert links_of(identity)[both] == (
+            AMBIGUOUS,
+            "none/unknown/differ",
+        )
 
     def test_a_shop_at_a_recordless_place_is_placed_by_its_name(self):
         """Two registers each name 'Hutmacherei zum Blauen Hut', one at
