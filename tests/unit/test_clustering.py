@@ -1260,6 +1260,26 @@ class TestKeys:
 
         docs = [widow("nina", "Nina Löbig"), widow("other", "Xxx Yyy")]
         assert blocked_pairs([doc.manifest for doc in docs]) == set()
+        # nor without records, where a mention keys on its exact names
+        recordless = [
+            register(
+                key,
+                [entity("e1", name)],
+                [
+                    (
+                        "e1",
+                        "referred_to_as",
+                        {
+                            "type": "monolingual",
+                            "value": {"text": "Рудольфиха", "language": "ru"},
+                        },
+                    )
+                ],
+                {"e1": key},
+            )
+            for key, name in (("nina bare", "Nina Löbig"), ("xxx", "Xxx Yyy"))
+        ]
+        assert blocked_pairs([doc.manifest for doc in recordless]) == set()
 
     def test_a_given_name_keys_as_written_too(self):
         """Two registers write 'Gustl Löbig', son of Sebastian Löbig; one
