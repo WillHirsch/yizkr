@@ -794,6 +794,28 @@ class TestDerivedMediaFlags:
         ]
         assert old not in derived.values()
 
+    def test_a_found_medium_is_flagged_under_its_own_label(self, tmp_path):
+        """Deck A's image took a tagged label, its title an unhashed item's;
+        found through deck B, under another first label, it is flagged
+        again under its own label before the tag."""
+        wiki = FakeWiki()
+        old = unhashed(
+            wiki, "Deck A — image1.png", "File:Shop-retouched.png", OTHER_IMAGE
+        )
+        _, derived = register_deck(
+            wiki, tmp_path, "a", "Deck A", [("image1.png", IMAGE, [1])]
+        )
+        registrar = Registrar(wiki)
+        deck = deck_file(tmp_path, "b")
+        registrar.register_artifact(deck, "presentation", "Deck B")
+        record, directory = recorded(
+            tmp_path, deck, "Deck B", [("image1.png", IMAGE, [2])]
+        )
+        assert registrar.register_derived_media(record, directory) == derived
+        assert flag_tuples(registrar.flags) == [
+            (UNHASHED_TITLE, derived[sha1(IMAGE)], sha1(IMAGE), (old,))
+        ]
+
     def test_a_medium_is_flagged_under_its_first_name_alone(self, tmp_path):
         """A medium of two names is labelled by its first: an unhashed
         item labelled with the deck's title and its second name is not its
@@ -1174,6 +1196,50 @@ class SimpleDoc:
         self.source = path
         self.kind = kind
         self.sha1 = sha1(path.read_bytes())
+
+
+class PagedListing:
+    """A wiki client whose file listing comes a page at a time."""
+
+    def __init__(self, pages):
+        self.pages = pages
+        self.asked: list[dict] = []
+
+    def api_get(self, params):
+        self.asked.append(dict(params))
+        return self.pages[len(self.asked) - 1]
+
+
+def test_every_page_of_the_file_listing_is_read():
+    client = PagedListing(
+        [
+            {
+                "continue": {
+                    "aicontinue": "Portrait-b.png",
+                    "continue": "-||",
+                },
+                "query": {"allimages": [{"title": "File:Portrait-a.png"}]},
+            },
+            {"query": {"allimages": [{"title": "File:Portrait-b.png"}]}},
+        ]
+    )
+    assert registrar_module._files_with_bytes(client, sha1(PORTRAIT)) == [
+        "File:Portrait-a.png",
+        "File:Portrait-b.png",
+    ]
+    assert client.asked[0] == {
+        "action": "query",
+        "list": "allimages",
+        "aisha1": sha1(PORTRAIT),
+        "ailimit": "max",
+    }
+    assert client.asked[1]["aicontinue"] == "Portrait-b.png"
+
+
+def test_a_listing_without_files_is_none():
+    assert (
+        registrar_module._files_with_bytes(PagedListing([{}]), "0" * 40) == []
+    )
 
 
 def test_a_flag_is_frozen():
