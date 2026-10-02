@@ -2143,8 +2143,10 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         `_MARNM`s (their display forms, the names their parts give where
         a value does not restate them, their bracketed parts and NICKs),
         hygiened by its record as the LLM path's are (ADR-0035 §8), which
-        keeps a form that adds a name part to the label, or that alone
-        holds a title or suffix of the record; and its mention record
+        keeps a form that adds a name part to the label or spells one
+        otherwise (a spelling variant is never derivable: "Gustav Lobig"
+        beside "Gustav Löbig"), or that alone holds a title or suffix of
+        the record; and its mention record
         (ADR-0035 §6), whose counts join the outcomes. A part that holds
         no letter or digit ('?' in 'Eugen /?/') names nothing, so it is
         dropped and counted; a record left with no given name, surname,

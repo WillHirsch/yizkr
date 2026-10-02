@@ -1,6 +1,8 @@
 """Offline tests for alias hygiene from mention records (ADR-0035 §8,
 ADR-0022 §4 as amended; #409)."""
 
+import pytest
+
 from yizkr.claims import (
     FamilyStructure,
     OrganizationStructure,
@@ -69,6 +71,94 @@ class TestPeople:
         ]
         cleaned = normalize_aliases("Ida Löbig", aliases, IDA)
         assert normalize_aliases("Ida Löbig", cleaned, IDA) == cleaned
+
+    @pytest.mark.parametrize(
+        ("label", "variant", "given", "surnames"),
+        [
+            ("Gustav Löbig", "Gustav Lobig", ["Gustav"], ["Löbig", "Lobig"]),
+            (
+                "Cäcilie Tarle",
+                "Cacilie Tarle",
+                ["Cäcilie", "Cacilie"],
+                ["Tarle"],
+            ),
+            (
+                "Eugen Fläckfeld",
+                "Eugen Flackfeld",
+                ["Eugen"],
+                ["Fläckfeld", "Flackfeld"],
+            ),
+            ("Ida Sörne", "Ida Sorne", ["Ida"], ["Sörne", "Sorne"]),
+            (
+                "Hans-Xxx Löbig",
+                "Hans Xxx Löbig",
+                ["Hans-Xxx", "Hans", "Xxx"],
+                ["Löbig"],
+            ),
+        ],
+    )
+    def test_a_spelling_variant_is_never_derivable(
+        self, label, variant, given, surnames
+    ):
+        """An alias that spells a part otherwise than the label does (an
+        umlaut written plain, a hyphen as a space) keeps that spelling;
+        a reorder and a case-only variant of the label still go."""
+        record = person(
+            given=[{"written": name} for name in given],
+            surnames=[{"written": name} for name in surnames],
+        )
+        reordered = ", ".join(reversed(label.split(" ", 1)))
+        aliases = [variant, reordered, label.upper()]
+        assert normalize_aliases(label, aliases, record) == [variant]
+
+    def test_the_rescue_prefers_a_holder_that_gives_a_name(self):
+        """Of the forms holding her title, the one that also gives a name
+        part stays ('Frau Löbig'), before a role phrase or a bare title;
+        with none such, the first holder stays."""
+        titled = IDA.model_copy(update={"suffixes": []})
+        for aliases in (["Frau Mutter", "Frau Löbig"], ["Frau", "Frau Löbig"]):
+            assert normalize_aliases("Ida Löbig", aliases, titled) == [
+                "Frau Löbig"
+            ]
+        assert normalize_aliases("Ida Löbig", ["Frau Mutter"], titled) == [
+            "Frau Mutter"
+        ]
+
+    def test_the_rescue_holds_a_title_as_whole_words(self):
+        """'Drxxx Löbig' only begins with the title 'Dr.', and holds it
+        not: 'Dr. Löbig' stays."""
+        doctor = IDA.model_copy(update={"titles": ["Dr."], "suffixes": []})
+        assert normalize_aliases(
+            "Ida Löbig", ["Drxxx Löbig", "Dr. Löbig"], doctor
+        ) == ["Dr. Löbig"]
+
+    def test_the_rescue_keeps_one_holder_per_title(self):
+        """A form holding both her titles keeps neither another holder;
+        a kept alias that holds a title already keeps no other; and the
+        titles and suffixes are taken in the order a form first holds
+        them, so 'Gustav Löbig jun.' stays beside 'Dr. Gustav Löbig
+        jun.'."""
+        two = IDA.model_copy(
+            update={"titles": ["Frau", "Dr."], "suffixes": []}
+        )
+        assert normalize_aliases(
+            "Ida Löbig", ["Frau Dr. Löbig", "Dr. Löbig", "Frau Löbig"], two
+        ) == ["Frau Dr. Löbig"]
+        titled = IDA.model_copy(update={"suffixes": []})
+        assert normalize_aliases(
+            "Ida Löbig", ["Frau Ida Sörne", "Frau Löbig"], titled
+        ) == ["Frau Ida Sörne"]
+        gustav = person(
+            given=[{"written": "Gustav"}],
+            surnames=[{"written": "Löbig"}],
+            titles=["Dr."],
+            suffixes=["jun."],
+        )
+        assert normalize_aliases(
+            "Gustav Löbig",
+            ["Gustav Löbig jun.", "Dr. Gustav Löbig jun."],
+            gustav,
+        ) == ["Gustav Löbig jun.", "Dr. Gustav Löbig jun."]
 
     def test_an_alias_that_gives_no_part_is_dropped(self):
         """A kinship term or a role that slipped into the aliases names no

@@ -5091,6 +5091,24 @@ class TestAliasHygiene:
         ursula, _ = record_of(text, "i16")
         assert ursula.aliases == []
 
+    @pytest.mark.parametrize(
+        ("first", "second", "alias"),
+        [
+            ("Gustav /Löbig/", "Gustav /Lobig/", "Gustav Lobig"),
+            ("Cäcilie /Tarle/", "Cacilie /Tarle/", "Cacilie Tarle"),
+            ("Eugen /Fläckfeld/", "Eugen /Flackfeld/", "Eugen Flackfeld"),
+            ("Ida /Sörne/", "Ida /Sorne/", "Ida Sorne"),
+            ("Hans-Xxx /Löbig/", "Hans Xxx /Löbig/", "Hans Xxx Löbig"),
+        ],
+    )
+    def test_an_untyped_spelling_variant_stays(self, first, second, alias):
+        """A second, untyped NAME that spells the label's parts otherwise
+        (an umlaut written plain, a hyphen as a space) gives no claim, so
+        the alias is the one place its spelling lands: a spelling variant
+        is never derivable (ADR-0035 §8)."""
+        found, _ = record_of(person("I8", first, f"1 NAME {second}"), "i8")
+        assert found.aliases == [alias]
+
     def test_the_cleanup_reads_the_record(self):
         """The adapter cleans a person's aliases by its record (ADR-0035
         §8): Gustav's second NAME 'Gustav /Löbig/' is derivable and goes,

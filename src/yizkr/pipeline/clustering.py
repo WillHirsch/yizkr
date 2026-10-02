@@ -1073,10 +1073,12 @@ def _derive_person(
             for word in _distinct_words(form)
         ]
     )
+    # the given names a nickname is weighed against: the given names and
+    # the words of the unsplit forms
     node.given_names = _all(
         part.keys
-        for part in node.given_parts[: len(record.given)]
-        if part.keys
+        for part in node.given_parts
+        if part.keys and not part.nickname
     )
     node.givens = _all(givens + alone)
     node.lone = frozenset() if node.keys else node.givens

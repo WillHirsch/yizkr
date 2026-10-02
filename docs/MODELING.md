@@ -665,8 +665,9 @@ shared safety net over both the LLM and GEDCOM paths: it reads an alias
 through the entity's mention record, never its token shapes (ADR-0035
 §8). A person's alias that gives no name part is dropped, as is one whose
 parts the label already gives ("Löbig, Ida" beside "Ida Löbig"); one that
-adds a part is kept ("Wastl"), and so is the first that alone holds a
-title or suffix the record gives ("Frau Löbig" beside "Ida Löbig", her
+adds a part is kept ("Wastl"), as is one that spells a part otherwise
+than the label ("Gustav Lobig" beside "Gustav Löbig"), and so is the
+first that alone holds a title or suffix the record gives ("Frau Löbig" beside "Ida Löbig", her
 record titling her Frau). The GEDCOM adapter cleans by the record it
 fills, as extraction does. A place's or an organisation's alias that
 gives no part (a deictic or generic reference) is dropped, and a short form
@@ -984,8 +985,9 @@ not a signal to grow the schema on.
   without a record (none given, or one extraction set aside under
   ADR-0035 §5, before the alias cleanup) meets only its exact name, and
   never merges; so a document's mention whose record was set aside never
-  meets the GEDCOM export, whose people and places all have records; the kinds that take no record (occupations, vessels and
-  the like) still merge on an exact name. A union is keyed by its couple,
+  meets the GEDCOM export, whose people and places all have records; the
+  kinds that take no record (occupations, vessels and the like) still
+  merge on an exact name. A union is keyed by its couple,
   and its weddings and ends by union, kind and date (ADR-0036 §3). A
   birth's or a death's date belongs to its principal alone, and one with
   no principal, several, or one whose own date of that kind conflicts

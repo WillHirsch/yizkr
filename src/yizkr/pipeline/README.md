@@ -556,8 +556,8 @@ refuses). The module docstring is the full account; in short:
   for people a shared key, counting only through given parts (given
   names, and the words of an `unsplit` form, which state no standard
   form) that may be one name: never two standard forms that share no
-  key, nor one nickname of two people who both give given names sharing
-  none, nor a given part whose standard form shares no key with the
+  key, nor one nickname of two people who both give given names or
+  unsplit words sharing none, nor a given part whose standard form shares no key with the
   given names of the other's nickname holder (a holder with no given
   names bars nothing); a key that does not count is `weak`. It links
   with kin that agree (kin that share a key, never a
@@ -575,7 +575,8 @@ refuses). The module docstring is the full account; in short:
   manifests' containment; a recordless one is compared by its exact
   names, and never agrees; places a record names agree only when one
   list lies among the other, as a place nests, and a part with a record
-  is shared); for families
+  is shared, are `unknown` when only a part without a record is, and
+  differ otherwise); for families
   never, since a surname
   names many; for unions a couple of two whose members merged, and
   weddings whose dates do not conflict (ADR-0036 §3); for a union's

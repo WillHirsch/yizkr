@@ -233,9 +233,13 @@ with it, is nobody's own and meets nothing through its other
 participants (§3.2; rule 9). The alias cleanup (§8) leaves an entity
 without a standing record its aliases, blanks and duplicates aside, and
 keeps a person's first alias that alone holds a title or suffix the
-record gives, so that the record names no part its forms do not hold
-("Frau Löbig" beside "Ida Löbig" stays where her record titles her
-Frau); the GEDCOM adapter cleans by the record it fills, as extraction
+record gives, preferring one that also gives a name part, so that the
+record names no part its forms do not hold ("Frau Löbig" beside "Ida
+Löbig" stays where her record titles her Frau, decision 11 below). A
+spelling variant is never derivable: an alias that spells a part
+otherwise than the label does stays ("Gustav Lobig" beside "Gustav
+Löbig", "Hans Xxx Löbig" beside "Hans-Xxx Löbig"), while a reorder or a
+case-only variant goes. The GEDCOM adapter cleans by the record it fills, as extraction
 does, so an alias that restates its bracketed label ("Peppi" beside
 "(Peppi)") is derivable and goes. A mention without a record meets only
 mentions without one, so a document's mention whose record was set aside
@@ -286,9 +290,10 @@ override; conservative as above):
   - Two given parts whose records give standard forms that share no
     key: a "Gustl" read as Gustav and a "Gustl" read as another name
     meet, and stay ambiguous.
-  - Two nicknames, where both records give given names that share no
-    key: two brothers with two given names and one family nickname
-    never merge.
+  - Two nicknames, where both records give given names or unsplit
+    words that share no key: two brothers with two given names and one
+    family nickname never merge, nor do they where one brother's name is
+    an unsplit form ("Xxx Löbig", or an export's NAME without slashes).
   - A given part against a nickname, only where the given part states a
     standard form that shares no key with the nickname holder's given
     names. So "Gustav 'Gustl' Löbig" against a "Gustl Löbig" whose
@@ -302,7 +307,10 @@ override; conservative as above):
     surname; it meets only as a lone name, rule 1.)
 
   A "Gustl" read as Gustav and a "Gustl" with no standard form still
-  meet, and merge only on corroboration.
+  meet, and merge only on corroboration. An export's given name is its
+  own standard form (§6), so an export's "Gustl /Löbig/" never merges
+  confidently with a document's "Gustl" read as Gustav: the safe
+  direction.
 - Rule 6, places a record names: they agree with the other's only as
   rule 5 would let them. Each side is one list of parts: a record's
   places, or the places the other's location claims reach and every
@@ -330,6 +338,16 @@ override; conservative as above):
   ambiguous, the safe direction. A place whose record and claims give
   contradictory containers (Kreis Peiltal and Kreis Mockburg) nests in
   both namesakes; its component stays ambiguous, which is safe.
+
+Amended by #409 (2026-10-02), decided by the orchestrator (the owner may
+override): **decision 11, §8's "Frau Löbig" example narrowed.** §8 drops
+"Frau Löbig" beside "Ida Löbig" as derivable. Where her record titles her
+Frau and no other form holds the title, it now stays, so that the record
+names no part its forms do not hold; where the record gives no title, or
+the label or another kept alias holds it, it still goes. Of several
+holders, one that also gives a name part is kept before a role phrase
+("Frau Mutter") or a bare title. This is an in-place narrowing of §8's
+example, for the owner to confirm at merge, as decision 9 is.
 
 **Decided by the owner (2026-09-29):**
 

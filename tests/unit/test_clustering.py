@@ -705,6 +705,11 @@ def pair(first: Doc, first_id: str, second: Doc, second_id: str):
     return frozenset({(first.sha1, first_id), (second.sha1, second_id)})
 
 
+def sha1_text(name: str) -> str:
+    """The SHA-1 a placeholder register of this name is cited by."""
+    return hashlib.sha1(name.encode()).hexdigest()
+
+
 def register(name: str, entities, claims, truth) -> Doc:
     """A placeholder document, cited by the SHA-1 of its name, for a
     pattern the universe's sources do not show."""
@@ -1150,6 +1155,10 @@ class TestKeys:
                 AMBIGUOUS,
                 "key/unknown/unknown",
             )
+        # whichever of the two is weighed first
+        judge, node = judge_of(wastl, nickname_holder)
+        a, b = node(wastl, "e1"), node(nickname_holder, "e1")
+        assert judge.name_level(a, b) == judge.name_level(b, a) == "key"
         # a word of a document's unsplit form is a given part with no
         # standard form: against "Sebastian 'Wastl' Löbig" the key counts
         unsplit = register(
@@ -1180,6 +1189,26 @@ class TestKeys:
                 AMBIGUOUS,
                 "key/unknown/unknown",
             )
+        # the words of an unsplit form are given names the nickname is
+        # weighed against: a brother written unsplit "Xxx Löbig", also
+        # called Gustl, never merges with "Gustav 'Gustl'", whichever
+        # document sorts first
+        unsplit_brother = human(
+            "e1",
+            "Xxx Löbig",
+            aliases=["Gustl"],
+            unsplit=["Xxx Löbig"],
+            nicknames=["Gustl"],
+        )
+        for keys in (("called", "unsplit"), ("unsplit", "called")):
+            docs = [
+                son(f"{keys[0]} brother", called, sebastian),
+                son(f"{keys[1]} brother", unsplit_brother, sebastian),
+            ]
+            identity = identity_of(*docs)
+            both = frozenset(doc.fingerprint("e1", identity) for doc in docs)
+            assert links_of(identity)[both][0] == AMBIGUOUS, keys
+            assert_no_false_merge(docs, identity)
         # a nickname alone, against "Gustav 'Gustl'", merges on the father
         nickname_only = human(
             "e1", "Gustl Löbig", surnames=["Löbig"], nicknames=["Gustl"]
@@ -1191,6 +1220,82 @@ class TestKeys:
         identity = identity_of(*docs)
         sons = frozenset(doc.fingerprint("e1", identity) for doc in docs)
         assert {identity["mentions"][m]["method"] for m in sons} == {CONFIDENT}
+
+    def test_the_exports_nickname_holders_are_weighed_by_given_names(self):
+        """An export's 'Ida /Löbig/', called Peppi and born 1911, and a
+        register's Klara Löbig, called Peppi and born 1911: the two give
+        given names that share no key, so the shared nickname never makes
+        the link confident, whichever sorts first. Nor does an export's
+        slashless 'Xxx Löbig', called Gustl, son of Sebastian Löbig, link
+        confidently with the register's 'Gustav 'Gustl' Löbig', his son
+        too: the words of a NAME without slashes are its given names."""
+        ged = export(
+            "0 @I7@ INDI\n1 NAME Ida /Löbig/\n2 NICK Peppi\n"
+            "1 BIRT\n2 DATE 1911\n",
+            {"i7": "ida-loebig"},
+        )
+        brothers = export(
+            "0 @I3@ INDI\n1 NAME Sebastian /Löbig/\n1 FAMS @F1@\n"
+            "0 @I8@ INDI\n1 NAME Xxx Löbig\n2 NICK Gustl\n1 FAMC @F1@\n"
+            "0 @F1@ FAM\n1 HUSB @I3@\n1 CHIL @I8@\n",
+            {"i3": "sebastian-loebig", "i8": "xxx-loebig"},
+            key="brothers",
+        )
+
+        def klara(key: str) -> Doc:
+            return register(
+                key,
+                [
+                    human(
+                        "e1",
+                        "Klara Löbig",
+                        aliases=["Peppi"],
+                        givens=["Klara"],
+                        surnames=["Löbig"],
+                        nicknames=["Peppi"],
+                    )
+                ],
+                [("e1", "date_of_birth", day(1911))],
+                {"e1": "klara-loebig"},
+            )
+
+        def gustav(key: str) -> Doc:
+            return register(
+                key,
+                [
+                    human(
+                        "e1",
+                        "Gustav Löbig",
+                        aliases=["Gustl"],
+                        givens=["Gustav"],
+                        surnames=["Löbig"],
+                        nicknames=["Gustl"],
+                    ),
+                    human("e2", "Sebastian Löbig"),
+                ],
+                [("e1", "father", item("e2"))],
+                {"e1": "gustav-loebig", "e2": "sebastian-loebig"},
+            )
+
+        for ged_doc, make, ged_id, want in (
+            (ged, klara, "i7", "weak/agree/unknown"),
+            (brothers, gustav, "i8", "weak/unknown/agree"),
+        ):
+            # a register whose SHA-1 sorts before the export's, and one after
+            keys = [f"{make.__name__} {n}" for n in range(500)]
+            before = next(k for k in keys if sha1_text(k) < ged_doc.sha1)
+            after = next(k for k in keys if sha1_text(k) > ged_doc.sha1)
+            for key in (before, after):
+                docs = [ged_doc, make(key)]
+                identity = identity_of(*docs)
+                both = frozenset(
+                    (
+                        ged_doc.fingerprint(ged_id, identity),
+                        docs[1].fingerprint("e1", identity),
+                    )
+                )
+                assert links_of(identity)[both] == (AMBIGUOUS, want), key
+                assert_no_false_merge(docs, identity)
 
     def test_given_names_match_by_standard_form_never_by_prefix(self):
         """Hilde never meets Hildegard by its first letters, nor Gustl

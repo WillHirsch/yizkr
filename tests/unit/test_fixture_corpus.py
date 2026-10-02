@@ -1148,10 +1148,11 @@ class TestTheTrapsInTheIdentityMap:
     def test_mirrored_kinship_is_read_as_one_relation(self, identity, batches):
         """The talk gives Klara no date and no parent: it says only that
         Sebastian and Hildegard have her as a child. The export gives her
-        a father and a mother, and no date. Clustering lifts kin from
-        both ends, so the two agree and the pair is a confident link on
-        kinship alone (the evidence reads name/dates/kin), as is the
-        family history's. The postcard states it from Klara's end too
+        a father and a mother, and her birth year, 1917. Clustering lifts
+        kin from both ends, so the two agree and the pair is a confident
+        link on kinship alone (the evidence reads name/dates/kin); the
+        family history's link to the export is corroborated by both her
+        dates and her kin. The postcard states it from Klara's end too
         (her father, its writer), but names its writer only by its own
         words for him, "Dein Vater", which is his label, with the status
         kinship (ADR-0035 §2.1): no name, so his mention keys on nothing,

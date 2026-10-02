@@ -253,6 +253,11 @@ rechecks.
   pairs, the adjudication estimate, and the hub keys not blocked on and
   the mentions holding them; `not run` when the run has no clustering
   stage, and the map's state when it is missing or of another format.
+  The map's summary also holds `confident_links_only`, what merging over
+  the confident links alone would give; the report leaves it out, since
+  a component of it may hold an ambiguous pair (two brothers who share a
+  nickname, and a plain "Gustl" linked to one of them), so it overstates
+  what merges.
 
 **Calls and the cache.** The calls that reached the engine and those the
 cache answered, in all and per role; hits and misses by reason; resumes,

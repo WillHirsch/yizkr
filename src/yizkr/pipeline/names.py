@@ -15,11 +15,15 @@ add something, in their order and verbatim spelling:
   - a person: an alias that gives no part names no one (a kinship term or
     a role that slipped through) and is dropped; one whose parts the
     label already gives is derivable and dropped ("Löbig, Ida" beside
-    "Ida Löbig"); one that adds a part is kept ("Wastl"). Titles and
+    "Ida Löbig"), unless it spells a part otherwise than the label does
+    ("Gustav Lobig" beside "Gustav Löbig", "Hans Xxx Löbig" beside
+    "Hans-Xxx Löbig"), since a spelling variant is never derivable; one
+    that adds a part is kept ("Wastl"). Titles and
     suffixes are no name parts, but an alias that is the only form
     holding a title or suffix the record gives is kept ("Frau Löbig"
-    beside "Ida Löbig", the record titling her Frau), so that the
-    record names no part its forms do not hold;
+    beside "Ida Löbig", the record titling her Frau), one that also
+    gives a name part before one that gives none ("Frau Mutter"), so
+    that the record names no part its forms do not hold;
   - a place, an organisation or a family: an alias that gives no part (a
     deictic or generic reference) is dropped, and any other kept, a short
     form included, since a place is looked up by its toponym;
@@ -37,6 +41,7 @@ surname stays whole. Idempotent: cleaning a cleaned bag changes nothing.
 
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Iterable
 
 from pydantic import ValidationError
@@ -51,6 +56,9 @@ from yizkr.claims import (
     _words,
     structure_problems,
 )
+
+# the punctuation a spelled word is taken without, at its edges
+_EDGES = ".,;:()\"'[]"
 
 
 def _parts(record) -> list[tuple[str, bool]]:
@@ -88,6 +96,30 @@ def _parts(record) -> list[tuple[str, bool]]:
     return []
 
 
+def _spelled(text: str) -> list[str]:
+    """A form's words as spelled: case folded after NFC, accents kept,
+    each whitespace-separated word without its edge punctuation, so a
+    hyphenated name stays one word."""
+    folded = unicodedata.normalize("NFC", text).casefold()
+    return [word for raw in folded.split() if (word := raw.strip(_EDGES))]
+
+
+def _spelled_in(part: str, form: list[str]) -> bool:
+    """Whether a part occurs in a form's spelled words, as whole words."""
+    words = _spelled(part)
+    size = len(words)
+    return bool(words) and any(
+        form[start : start + size] == words
+        for start in range(len(form) - size + 1)
+    )
+
+
+def _spelled_given(form: str, parts: list[tuple[str, bool]]) -> frozenset[str]:
+    """The parts that occur in a form as it spells them."""
+    words = _spelled(form)
+    return frozenset(part for part, _open in parts if _spelled_in(part, words))
+
+
 def _given(form: str, parts: list[tuple[str, bool]]) -> frozenset[str]:
     """The parts that occur in a form."""
     words = [_words(form)]
@@ -105,6 +137,7 @@ def normalize_aliases(
     by its record, or by none for an entity without one."""
     parts = _parts(record)
     in_label = _given(label, parts)
+    spelled_in_label = _spelled_given(label, parts)
     label_key = label.strip().lower()
     seen: set[str] = set()
     # each distinct alias, and whether the rules keep it
@@ -120,22 +153,52 @@ def normalize_aliases(
         keep = True
         if record is not None:
             given = _given(alias, parts)
+            # derivable: every part it gives the label gives too, and as
+            # the label spells it; a spelling variant is never derivable
             keep = bool(given) and not (
-                isinstance(record, PersonStructure) and given <= in_label
+                isinstance(record, PersonStructure)
+                and given <= in_label
+                and _spelled_given(alias, parts) <= spelled_in_label
             )
         found.append((alias, keep))
     if isinstance(record, PersonStructure):
-        # a title or suffix no kept form holds keeps the first alias
-        # holding it
-        for part in (*record.titles, *record.suffixes):
-            holders = [label, *(alias for alias, keep in found if keep)]
-            if _given_in(part, holders):
-                continue
-            for position, (alias, keep) in enumerate(found):
-                if not keep and _given_in(part, [alias]):
-                    found[position] = (alias, True)
-                    break
+        _rescue(label, found, (*record.titles, *record.suffixes), parts)
     return [alias for alias, keep in found if keep]
+
+
+def _rescue(
+    label: str,
+    found: list[tuple[str, bool]],
+    titles: Iterable[str],
+    parts: list[tuple[str, bool]],
+) -> None:
+    """Keep, for each title or suffix of the record that neither the label
+    nor a kept alias holds, one dropped alias holding it: the first that
+    also gives a name part, else the first at all. The titles and
+    suffixes are taken in the order an alias first holds them."""
+
+    def first_holder(part: str) -> int:
+        return next(
+            (
+                n
+                for n, (alias, _keep) in enumerate(found)
+                if _given_in(part, [alias])
+            ),
+            len(found),
+        )
+
+    for part in sorted(titles, key=first_holder):
+        holders = [label, *(alias for alias, keep in found if keep)]
+        if _given_in(part, holders):
+            continue
+        dropped = [
+            position
+            for position, (alias, keep) in enumerate(found)
+            if not keep and _given_in(part, [alias])
+        ]
+        named = [p for p in dropped if _given(found[p][0], parts)]
+        for position in (named or dropped)[:1]:
+            found[position] = (found[position][0], True)
 
 
 def _given_in(part: str, forms: list[str]) -> bool:
