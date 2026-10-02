@@ -33,10 +33,11 @@ import pytest
 import yaml
 
 from tests.fixtures import example_universe as u
+from tests.fixtures.records import record_answer
 from tests.unit.conftest import RecordedTimer
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.core.corpus import ExclusionList
-from yizkr.pipeline import anomalies, rundir
+from yizkr.pipeline import anomalies, rundir, transcription_check
 from yizkr.pipeline.anomalies import (
     AnomalyChecks,
     AnomalyConfigError,
@@ -58,8 +59,10 @@ from yizkr.pipeline.rundir import RunDir, fold_control
 from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.transcription_check import (
     TranscriptionCheckFailed,
+    check_answer,
     check_transcription,
 )
+from yizkr.pipeline.transcription_record import UNCLASSIFIED, parse_record
 
 SOURCES = u.by_key()
 # German, 302 letters and digits, detected as `de` with full confidence
@@ -460,7 +463,7 @@ class TestTranscription:
     def test_a_transcription_the_check_fails_is_a_new_alert(self, tmp_path):
         run, checks = make_checks(tmp_path)
         doc = a_doc(tmp_path, "letter.png", kind="media")
-        reason = verdict_reason("I'm unable to assist with this request.")
+        reason = verdict_reason("Traceback (most recent call last):")
         attempt(run, doc, "transcription", calls=["ok"], failed=reason)
         checks.failed(doc, "transcription")
         alert = only(run, "transcription-check")
@@ -468,10 +471,51 @@ class TestTranscription:
         assert alert["subject"] == doc.sha1[: anomalies.SUBJECT_PREFIX]
         assert (alert["value"], alert["status"]) == (True, "new")
         assert (alert["failure"], alert["signature"]) == (
-            "refusal",
-            "refusal-request",
+            "tool-failure",
+            "traceback",
         )
         assert alert["kind"] == "media"
+
+    def test_an_answer_that_is_not_the_record_is_a_verdict(self, tmp_path):
+        """A refusal in any language comes as an answer that is not the
+        record, and fails as that, naming no signature."""
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "letter.png", kind="media")
+        check, record = check_answer(
+            "Es tut mir leid, ich kann dieses Dokument nicht abschreiben."
+        )
+        assert record is None
+        reason = f"TranscriptionCheckFailed: {TranscriptionCheckFailed(check)}"
+        attempt(run, doc, "transcription", calls=["ok"], failed=reason)
+        checks.failed(doc, "transcription")
+        alert = only(run, "transcription-check")
+        assert alert["failure"] == "not-a-record"
+        assert "signature" not in alert
+
+    def test_a_flagged_transcription_is_an_alert_and_goes_on(self, tmp_path):
+        """The check's flag, as the stage output carries it, is an alert
+        of its own; the transcription is no failure."""
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "letter.png", kind="media", text=MARRIAGE)
+        flagged = vision(MARRIAGE)
+        flagged.flag = "refusal-request"
+        checks.stored(doc, "transcription", flagged)
+        alert = only(run, "transcription-flag")
+        assert (alert["value"], alert["signature"]) == (
+            True,
+            "refusal-request",
+        )
+        assert "transcription-check" not in checks_raised(run)
+
+    def test_the_flags_can_be_switched_off(self, tmp_path):
+        run, checks = make_checks(
+            tmp_path, {"checks": {"transcription-flag": {"enabled": False}}}
+        )
+        doc = a_doc(tmp_path, "letter.png", kind="media", text=MARRIAGE)
+        flagged = vision(MARRIAGE)
+        flagged.flag = "refusal-request"
+        checks.stored(doc, "transcription", flagged)
+        assert "transcription-flag" not in checks_raised(run)
 
     def test_a_reused_transcription_set_aside_is_a_carried_alert(
         self, tmp_path
@@ -498,7 +542,7 @@ class TestTranscription:
     @pytest.mark.parametrize(
         "text, pages, failure",
         [
-            ("I'm unable to assist with this request.", 1, "refusal"),
+            ("Let me take a look at the image.", 1, "tool-failure"),
             ("pdftoppm: command not found", 1, "tool-failure"),
             (" \n ", 1, "empty"),
             ("E L", 3, "too-short"),
@@ -536,7 +580,7 @@ class TestTranscription:
             tmp_path, {"checks": {"transcription-check": {"enabled": False}}}
         )
         doc = a_doc(tmp_path, "letter.png", kind="media")
-        reason = verdict_reason("I'm unable to assist with this request.")
+        reason = verdict_reason("Traceback (most recent call last):")
         attempt(run, doc, "transcription", calls=["ok"], failed=reason)
         checks.failed(doc, "transcription")
         assert run.alerts() == []
@@ -611,6 +655,23 @@ class TestLanguage:
             doc.detail["language"] = resolution
         checks.stored(doc, "transcription", vision(MARRIAGE))
         assert "language-unexpected" not in checks_raised(run)
+
+    def test_a_language_the_record_gives_can_be_unexpected(self, tmp_path):
+        """The record's language is the engine's reading, not a choice
+        the run made, so it is compared with the expected ones."""
+        run, checks = make_checks(
+            tmp_path,
+            {"checks": {"language-unexpected": {"expected": ["en"]}}},
+        )
+        doc = a_doc(
+            tmp_path,
+            "letter.png",
+            kind="media",
+            language={"code": "ru", "source": "record", "confidence": None},
+        )
+        checks.stored(doc, "transcription", vision(MARRIAGE, "ru"))
+        alert = only(run, "language-unexpected")
+        assert (alert["value"], alert["limit"]) == ("ru", ["en"])
 
     def test_a_language_detected_with_low_confidence(self, tmp_path):
         run, checks = make_checks(tmp_path)
@@ -996,6 +1057,93 @@ class TestDistributions:
         }
     }
 
+    @staticmethod
+    def a_classed_document(
+        tmp_path, checks, name, claims, document_class, kind="media"
+    ):
+        """A one-page scan whose transcription record gives its class,
+        stored with `claims` claims."""
+        doc = a_doc(tmp_path, name, kind=kind, text=NATURALISATION)
+        transcription = vision(NATURALISATION, "en")
+        transcription.document_class = document_class
+        checks.stored(doc, "transcription", transcription)
+        checks.stored(doc, "extraction", a_batch(*["en"] * claims))
+        return doc
+
+    def test_yields_are_compared_within_a_document_class(self, tmp_path):
+        """Captions and certificates yield very differently (#389): a
+        certificate is measured against the certificates alone, never
+        against the photographs beside it in the run."""
+        run, checks = make_checks(tmp_path, self.SMALL)
+        for n in range(3):
+            self.a_classed_document(
+                tmp_path, checks, f"photo{n}.png", 1, "photograph"
+            )
+        for n in range(3):
+            self.a_classed_document(
+                tmp_path, checks, f"cert{n}.png", 30, "certificate"
+            )
+        assert "claim-yield" not in checks_raised(run)
+        self.a_classed_document(
+            tmp_path, checks, "cert3.png", 1, "certificate"
+        )
+        alert = only(run, "claim-yield")
+        assert alert["subject"] == sha1_of("cert3.png")[:12]
+        assert (alert["document_class"], alert["class_source"]) == (
+            "certificate",
+            "record",
+        )
+
+    def test_a_class_is_one_sample_whatever_the_kind(self, tmp_path):
+        """A certificate an excerpt shows is measured against the scanned
+        certificates: the class decides, not the kind."""
+        run, checks = make_checks(tmp_path, self.SMALL)
+        for n in range(3):
+            self.a_classed_document(
+                tmp_path, checks, f"cert{n}.png", 30, "certificate"
+            )
+        self.a_classed_document(
+            tmp_path, checks, "excerpt.png", 1, "certificate", "excerpt"
+        )
+        alert = only(run, "claim-yield")
+        assert alert["subject"] == sha1_of("excerpt.png")[:12]
+        assert (alert["document_class"], alert["samples"]) == (
+            "certificate",
+            3,
+        )
+
+    def test_the_unclassified_of_a_kind_are_one_sample(self, tmp_path):
+        """A scan its record calls unclassified and one read with no
+        record are measured together, within their kind."""
+        run, checks = make_checks(tmp_path, self.SMALL)
+        for n in range(3):
+            self.a_classed_document(
+                tmp_path, checks, f"scan{n}.png", 30, UNCLASSIFIED
+            )
+        doc = a_doc(tmp_path, "pages.pdf", kind="media", text=NATURALISATION)
+        checks.stored(doc, "transcription", vision(NATURALISATION, "en"))
+        checks.stored(doc, "extraction", a_batch("en"))
+        alert = only(run, "claim-yield")
+        assert alert["subject"] == sha1_of("pages.pdf")[:12]
+        assert (alert["document_class"], alert["class_source"]) == (
+            UNCLASSIFIED,
+            "none",
+        )
+        assert alert["samples"] == 3
+
+    def test_a_document_without_a_record_is_unclassified_and_says_so(
+        self, tmp_path
+    ):
+        run, checks = make_checks(tmp_path, self.SMALL)
+        for n in range(3):
+            a_text_document(tmp_path, checks, f"tree{n}.txt", 40)
+        a_text_document(tmp_path, checks, "card.txt", 1)
+        alert = only(run, "claim-yield")
+        assert (alert["document_class"], alert["class_source"]) == (
+            UNCLASSIFIED,
+            "none",
+        )
+
     def test_a_claim_yield_far_above_the_run_s(self, tmp_path):
         run, checks = make_checks(tmp_path, self.SMALL)
         for n in range(3):
@@ -1032,7 +1180,9 @@ class TestDistributions:
             a_text_document(tmp_path, checks, f"card{n}.txt", 5)
         a_text_document(tmp_path, checks, "blank.txt", 0)
         assert "claim-yield" not in checks_raised(run)
-        assert checks._samples[("claim-yield", "text")] == [5.0] * 3
+        assert (
+            checks._samples[("claim-yield", UNCLASSIFIED, "text")] == [5.0] * 3
+        )
 
     def test_no_document_is_judged_before_enough_samples(self, tmp_path):
         run, checks = make_checks(tmp_path)  # ten samples by default
@@ -2515,9 +2665,19 @@ def snapshot(directory: Path) -> dict:
     }
 
 
-def a_recorded_document(state_dir, name, *, text, engine, claims=0):
+def a_recorded_document(
+    state_dir,
+    name,
+    *,
+    text,
+    engine,
+    claims=0,
+    record=True,
+    document_class="letter",
+):
     """A document directory as a run leaves it: its state, and its
-    transcription and batch views."""
+    transcription and batch views. A vision transcription is made from
+    the record of one page holding `text`, unless `record` is False."""
     directory = state_dir / name.split(".")[0]
     directory.mkdir(parents=True)
     resolution = resolve_language(text, "auto")
@@ -2539,13 +2699,22 @@ def a_recorded_document(state_dir, name, *, text, engine, claims=0):
             }
         )
     )
-    (directory / "transcription.json").write_text(
-        Transcription(
+    if record and engine.startswith("llm-vision:"):
+        transcription = Transcription.from_record(
+            parse_record(record_answer(text, document_class=document_class)),
+            artifact=ArtifactRef(sha1=sha1_of(name)),
+            language=resolution.code,
+            engine=engine,
+        )
+    else:
+        transcription = Transcription(
             artifact=ArtifactRef(sha1=sha1_of(name)),
             text=text,
             language=resolution.code,
             engine=engine,
-        ).model_dump_json()
+        )
+    (directory / "transcription.json").write_text(
+        transcription.model_dump_json()
     )
     (directory / "batch.json").write_text(
         a_batch(*["en"] * claims).model_dump_json()
@@ -2592,25 +2761,48 @@ class TestRecheck:
         self, tmp_path
     ):
         state = tmp_path / "state"
+        # a text file's tool failure fails
         a_recorded_document(
             state,
             "page.png",
-            text="I'm unable to assist with this request.",
+            text="pdftoppm: command not found",
+            engine="text-file:x",
+        )
+        # a record's text holding the same words only flags it (ADR-0037)
+        a_recorded_document(
+            state,
+            "caption.png",
+            text="pdftoppm: command not found",
             engine="llm-vision:fake-model",
+        )
+        # a vision transcription with no record fails
+        a_recorded_document(
+            state,
+            "scan.png",
+            text=MARRIAGE,
+            engine="llm-vision:fake-model",
+            record=False,
+        )
+        # a text file's, which has none, does not
+        a_recorded_document(
+            state, "brief.txt", text=MARRIAGE, engine="text-file:x"
         )
         # a curator's correction is never judged
         a_recorded_document(
             state,
             "note.png",
-            text="I'm unable to assist with this request.",
+            text="pdftoppm: command not found",
             engine="correction",
         )
         alerts = recheck(state, load_config())
         checks = [a for a in alerts if a["check"] == "transcription-check"]
-        assert [(a["subject"], a["failure"]) for a in checks] == [
-            (sha1_of("page.png")[:12], "refusal")
-        ]
-        assert checks[0]["status"] == "carried"
+        assert sorted((a["subject"], a["failure"]) for a in checks) == sorted(
+            [
+                (sha1_of("page.png")[:12], "tool-failure"),
+                (sha1_of("scan.png")[:12], "not-a-record"),
+            ]
+        )
+        assert {a["status"] for a in checks} == {"carried"}
 
     def test_every_document_is_judged_against_the_whole_run(self, tmp_path):
         state = tmp_path / "state"
@@ -2636,6 +2828,91 @@ class TestRecheck:
         assert alert["status"] == "carried"
         assert (alert["median"], alert["samples"]) == (5.0, 3)
 
+    def test_a_recheck_compares_within_a_document_class(self, tmp_path):
+        """Three photographs and a letter, all scans: the letter is alone
+        in its class, and is measured against no photograph."""
+        state = tmp_path / "state"
+        for name, claims, document_class in [("a.png", 60, "letter")] + [
+            (f"photo{n}.png", 5, "photograph") for n in range(3)
+        ]:
+            a_recorded_document(
+                state,
+                name,
+                text=NATURALISATION,
+                engine="llm-vision:fake-model",
+                claims=claims,
+                document_class=document_class,
+            )
+        alerts = recheck(
+            state,
+            load_config(
+                overrides={"checks": {"claim-yield": {"min-samples": 3}}}
+            ),
+        )
+        assert [a for a in alerts if a["check"] == "claim-yield"] == []
+
+    def test_a_recheck_carries_the_flag_the_check_raises_now(
+        self, tmp_path, monkeypatch
+    ):
+        """A recheck reads a stored transcription's flag as a run's reuse
+        of it would: a flag the check raises now is raised, though the
+        view was made without it, and one it no longer raises is not,
+        though the view stores it (ADR-0037 §2)."""
+        state = tmp_path / "state"
+        a_recorded_document(
+            state, "gained.png", text=MARRIAGE, engine="llm-vision:fake-model"
+        )
+        dropped = a_recorded_document(
+            state,
+            "dropped.png",
+            text=NATURALISATION,
+            engine="llm-vision:fake-model",
+        )
+        view = json.loads((dropped / "transcription.json").read_text())
+        (dropped / "transcription.json").write_text(
+            json.dumps({**view, "flag": "media-missing"})
+        )
+        flagging = transcription_check._signature(
+            "flagged-now",
+            transcription_check.TOOL_FAILURE,
+            r"Standesamt Flörburg",
+        )
+        monkeypatch.setattr(
+            transcription_check,
+            "SIGNATURES",
+            (*transcription_check.SIGNATURES, flagging),
+        )
+        alerts = recheck(state, load_config())
+        assert [
+            (alert["subject"], alert["signature"])
+            for alert in alerts
+            if alert["check"] == "transcription-flag"
+        ] == [(sha1_of("gained.png")[:12], "flagged-now")]
+
+    def test_a_whole_pdf_s_record_gives_exactly_its_pages(self, tmp_path):
+        """A record of two pages is too many for a PDF of one, read whole,
+        and not for an image, which may show an open book."""
+        state = tmp_path / "state"
+        for name in ("extract.pdf", "book.png"):
+            directory = a_recorded_document(
+                state, name, text=MARRIAGE, engine="llm-vision:fake-model"
+            )
+            two = Transcription.from_record(
+                parse_record(record_answer(MARRIAGE, MARRIAGE)),
+                artifact=ArtifactRef(sha1=sha1_of(name)),
+                language="de",
+                engine="llm-vision:fake-model",
+            )
+            (directory / "transcription.json").write_text(
+                two.model_dump_json()
+            )
+        alerts = recheck(state, load_config(), page_count=lambda path: 1)
+        assert [
+            (alert["subject"], alert["failure"])
+            for alert in alerts
+            if alert["check"] == "transcription-check"
+        ] == [(sha1_of("extract.pdf")[:12], "pages-extra")]
+
     def test_a_document_the_checks_cannot_read_stops_no_other(self, tmp_path):
         state = tmp_path / "state"
         broken = a_recorded_document(
@@ -2645,8 +2922,8 @@ class TestRecheck:
         a_recorded_document(
             state,
             "b.png",
-            text="I'm unable to assist with this request.",
-            engine="llm-vision:fake-model",
+            text="pdftoppm: command not found",
+            engine="text-file:x",
         )
         alerts = recheck(state, load_config())
         assert [

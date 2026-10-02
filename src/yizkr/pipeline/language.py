@@ -8,14 +8,22 @@ tag is real graph data: it is the BCP-47 language of the
 ``transcription_excerpt`` monolingual values written as references
 (ADR-0003).
 
-So ``--language`` defaults to ``auto``: each document's language is
-detected from its *full* transcription text — offline and
-deterministically, with a statistical identifier (py3langid: pure
-Python, self-hosted model, no network, honouring rule 7). An explicit
-``--language de`` forces that code and skips detection. Documents too
-short or ambiguous to identify with confidence fall back to
-``--fallback-language`` rather than guessing — unknown is never narrowed
-(rule 5), only defaulted to a code the curator chose.
+So ``--language`` defaults to ``auto``. A vision transcription's
+language comes from its transcription record (ADR-0037): the engine
+names the languages each page is written in, and the document's language
+is the one that holds most of its text (`record_language`). A text that
+has no record (a text file, a curator's correction, a deck's slide text,
+a PDF read page by page from its text layer) is detected from its *full*
+text outside its editorial marks (``[illegible]``, ``[?]``,
+``[redacted]``, page markers) — offline and deterministically, with a
+statistical identifier (py3langid: pure Python, self-hosted model, no
+network, honouring rule 7). The marks are the transcription's, not the
+document's words, and a line thick with them would otherwise read as
+another language. An explicit ``--language de`` forces that code and
+skips both. Documents too short or ambiguous to identify with confidence,
+and records that name no language, fall back to ``--fallback-language``
+rather than guessing — unknown is never narrowed (rule 5), only
+defaulted to a code the curator chose.
 
 The extraction model still tags each *excerpt* in its own language (a
 German phrase quoted in an English interview keeps its ``de`` tag); this
@@ -26,7 +34,14 @@ ceiling.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
+
+from yizkr.pipeline.transcription_record import (
+    RecordPage,
+    main_language,
+    outside_editorial_marks,
+)
 
 AUTO = "auto"
 
@@ -67,12 +82,13 @@ def _get_identifier():
 
 
 def detect_language(text: str) -> tuple[str | None, float]:
-    """Best-guess ISO-639 code and a ``[0, 1]`` confidence for ``text``.
+    """Best-guess ISO-639 code and a ``[0, 1]`` confidence for ``text``,
+    read outside its editorial marks.
 
     Returns ``(None, 0.0)`` when the detector is unavailable or the text
     is too short to judge, so the caller falls back instead of guessing.
     """
-    stripped = (text or "").strip()
+    stripped = outside_editorial_marks(text or "").strip()
     if len(stripped) < MIN_CHARS:
         return None, 0.0
     identifier = _get_identifier()
@@ -90,15 +106,17 @@ class LanguageResolution:
     """The chosen language code and why it was chosen (for logs/audit)."""
 
     code: str
-    source: str  # "override" | "detected" | "fallback"
+    source: str  # "override" | "record" | "detected" | "fallback"
     confidence: float | None = None
 
     def describe(self) -> str:
+        if self.source == "record":
+            return f"{self.code} (from the transcription record)"
         if self.source == "detected":
             return f"{self.code} (detected, {self.confidence:.0%} confidence)"
         if self.source == "fallback":
             if self.confidence is None:
-                return f"{self.code} (fallback: too short to detect)"
+                return f"{self.code} (fallback: no language to go by)"
             return (
                 f"{self.code} (fallback: best guess only "
                 f"{self.confidence:.0%})"
@@ -126,3 +144,22 @@ def resolve_language(
     return LanguageResolution(
         fallback, "fallback", confidence if code else None
     )
+
+
+def record_language(
+    pages: Iterable[RecordPage],
+    requested: str,
+    *,
+    fallback: str = "en",
+) -> LanguageResolution:
+    """Decide a document's language tag from the request and its
+    transcription record: an explicit code is forced; ``auto`` takes the
+    language that holds most of the record's text
+    (transcription_record.main_language), and the fallback code when the
+    record names none."""
+    if requested and requested != AUTO:
+        return LanguageResolution(requested, "override")
+    code = main_language(pages)
+    if code is not None:
+        return LanguageResolution(code, "record")
+    return LanguageResolution(fallback, "fallback")

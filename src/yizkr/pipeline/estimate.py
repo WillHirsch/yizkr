@@ -70,6 +70,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import json
 import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -128,9 +129,20 @@ FIRST_TURNS = 4
 EMPTY_CHUNK = '{"done": true, "claims_emitted": 0, "gaps_emitted": 0}'
 # the reading the estimate gives a page or an image of a PDF read page by
 # page that the cache cannot answer: one the transcription check passes (a
-# single editorial mark), so that the calls after it are keyed and counted
-# too
-STAND_IN_READING = "[a reading the engine is to give]"
+# transcription record of one illegible page, whose text is a single
+# editorial mark), so that the calls after it are keyed and counted too
+STAND_IN_READING = json.dumps(
+    {
+        "document_class": "unclassified",
+        "pages": [
+            {
+                "page": 1,
+                "status": "illegible",
+                "text": "[a reading the engine is to give]",
+            }
+        ],
+    }
+)
 # the files of such a page or image (yizkr.pipeline.textlayer), as against
 # a PDF read whole
 _READ_FILES = (".jpg", ".png")

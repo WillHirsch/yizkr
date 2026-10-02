@@ -4,6 +4,14 @@ Status: accepted — implemented. `--language` defaults to `auto`;
 each document's language is detected from its full transcription with an
 offline statistical identifier, with a confidence floor and a
 `--fallback-language` for documents too short to judge.
+Amended by #389 (2026-09-29): a vision transcription's language comes
+from its transcription record (ADR-0037), whose pages name the languages
+they are written in: the document's is the one that holds most of its
+text (resolution `record`), and a record that names none falls back.
+Detection runs only on a text that has no record (a text file, a
+correction, slide text, a PDF read page by page), and reads it outside
+its editorial marks (`[illegible]`, `[?]`, `[redacted]`, page markers),
+which a short text would otherwise be read by.
 
 ## Context
 
