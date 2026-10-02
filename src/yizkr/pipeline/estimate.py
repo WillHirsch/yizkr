@@ -124,9 +124,10 @@ CRITIQUE = "critique"
 # the extraction's first turns: two attempts at the entity manifest, then,
 # when both are refused, two at the segmentation (ChunkedClaimExtractor)
 FIRST_TURNS = 4
-# the answer the estimate gives a chunk the cache cannot answer: whole,
-# and empty, so that the chunks after it are keyed and counted too
-EMPTY_CHUNK = '{"done": true, "claims_emitted": 0, "gaps_emitted": 0}'
+# the answer the estimate gives a chunk the cache cannot answer: the
+# terminal sentinel the chunk prompt asks for, alone, so whole and empty,
+# and the chunks after it are keyed and counted too
+EMPTY_CHUNK = '{"done": true}'
 # the reading the estimate gives a page or an image of a PDF read page by
 # page that the cache cannot answer: one the transcription check passes (a
 # transcription record of one illegible page, whose text is a single

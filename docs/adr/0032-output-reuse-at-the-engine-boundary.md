@@ -62,13 +62,52 @@ terminal sentinel is; the stop reason is judged when the engine gives
 the answer, an entry does not keep it, and a hit is judged by its text
 alone; a call the claude CLI gave up on at that limit stores nothing,
 and its callers take it as a cut-off answer, so a fallback it led to
-repeats only if the engine gives up again (§3, §4, §5).
+repeats only if the engine gives up again (§3, §4, §5). Amended in turn
+by #390 below.
 
 Amended by #395 (2026-09-29): a keep publishes a session by moving the
 folder it finds at the answer's path aside and renaming its own in, so
 that path holds no folder between the two renames. Both readers, the
 run's and the lock-free one, read the folder moved aside while it does,
 instead of waiting for the path to hold one again (§3).
+
+Amended by #390 (2026-10-02): an entry keeps the stop reason and any API
+error's class in its provenance, never in its key, and a hit whose entry
+records a `max_tokens` stop is cut off, and rejected as a fresh one is,
+wherever a caller judges its answers by it (a chunk's, a transcription's
+and a critique's among them): a cut-off answer is never a valid answer
+anywhere. An entry kept without a stop reason is
+judged by its text, as before. An attempt (`llm.for_attempt`) the claude
+CLI gave up on at the output limit is kept under the attempt's key as a
+give-up entry, as a refused answer is kept, so a later run gives up on
+it again from the cache and takes the same fallback; only the exact key
+replays it (another model, effort, configuration, epoch or attempt asks
+the engine), attempt 0 shares the key of a plain call with the same
+components, and `--refresh` asks it again. An entry whose `gave_up` is
+no boolean is damaged. A give-up of a call that is not an attempt (a
+chunk, a critique, a transcription) still stores nothing. The run report
+counts the calls stopped at the output limit per stage, from the call
+events, and says `not recorded` for a run whose call events carry no
+stop reason (a run from before the engine recorded one, a run on the
+Anthropic API engine, or a run that made no call); a give-up replayed from the cache makes no call, and its
+`cache-hit` says `gave_up: true`, so the report counts those hits per
+stage in its cache section, apart from the stops (§3, §4, §5, §8).
+Amended in turn by #441 below.
+
+Amended by #441 (2026-10-02): a call event on the Anthropic API engine
+carries the model the API's response says answered and the stop reason
+it gave, verbatim, of an answered call (none of a call that gave no
+answer, and nothing else of the engine's report), as the claude-code
+engine's events carry its stream's, so the run report counts that
+engine's calls by model and its answers cut off at the output limit,
+which its callers already rejected. Only `max_tokens` counts as a cut-
+off; any other stop reason (`end_turn`, `refusal`, `pause_turn`,
+`stop_sequence`) only makes the run's stops recorded. The report says
+`not recorded` only for a run from before the engine recorded a stop,
+one that made no call, or one whose every call gave no stop reason (on
+that engine, every call failed or its response gave none as a plain
+token); the model and the stop reason stay in an entry's provenance,
+never in its key (§8).
 
 ## Context
 
@@ -226,15 +265,18 @@ an artifact a new QID changes no key.
 - Only a response the engine returned with some text in it is stored. An
   error, a timeout, a pause (`PassPaused`) or an empty answer stores
   nothing, so the next run asks again. The API engine's client refuses an
-  answer without text, as the claude CLI's does.
+  answer without text, as the claude CLI's does. The one exception is an
+  attempt the claude CLI gave up on at the output limit, kept as a
+  give-up entry (§5, #390).
 - Each entry records its key, the key's components, and its provenance:
   the role, the engine, the model the engine reported, the CLI version,
   the client's config hash, the time, and its origin (the engine, or an
   adoption's reason). A claude-code answer's provenance adds what its
   call's stream reported of it: the session, the tokens it used, its
-  turns and how it ended, none of which is keyed (#98), but not why its
-  model stopped, which its caller judges when the engine gives the
-  answer (§4). An entry is served only under the key it records.
+  turns, how it ended, why its model stopped and any API error's class,
+  none of which is keyed (#98, #390); an answer served from the entry
+  carries the stop reason, which its caller judges (§4). An entry is
+  served only under the key it records.
 - The cache deletes nothing and overwrites nothing. An entry a caller
   rejects is moved aside with the reason; one a newer entry displaces (a
   refresh's, a racing call's, one displacing a damaged entry) is moved
@@ -307,14 +349,17 @@ extractor use the new answer. The rejectors are:
   extraction, and for one cut off at the output limit or without its
   terminal sentinel, whose claims are kept.
 
-The stop reason is judged when the engine gives the answer. An entry
-keeps none, so an answer the cache gives from an entry is judged by its
-text alone. The pinned claude CLI, run at a limit of 40 tokens, gave up
-on an answer its model stopped at the output limit rather than hand it
-back, and such a call raises `OutputLimitReached` (ADR-0006 §3). Like
-any error, it stores nothing, so there is nothing to reject, and the
-next call asks the engine again; the callers take it as a cut-off
-answer.
+The stop reason is judged when the engine gives the answer, and an entry
+keeps it (#390): an answer the cache gives from an entry whose stop
+reason is `max_tokens` is cut off, and rejected and asked once more as a
+fresh one is, without spending a retry. An entry kept without a stop
+reason (one stored before entries kept it) is judged by its text alone.
+The pinned claude CLI, run at a limit of 40 tokens, gave up on an answer
+its model stopped at the output limit rather than hand it back, and such
+a call raises `OutputLimitReached` (ADR-0006 §3). There is no answer to
+reject; the callers take it as a cut-off answer. A call that is not an
+attempt (§5) stores nothing of it, so the next call asks the engine
+again.
 
 The price: a parser fix recovers every response the old parser accepted,
 without a call, but not one it rejected, which is asked again. ADR-0006 §5
@@ -329,10 +374,14 @@ entity manifest and for the segmentation behind it: two attempts each,
 then the next tier (ADR-0006 §2, ADR-0007). A refused answer is kept, so a
 later run is answered attempt by attempt from the cache, takes the same
 fallback and gives the same batch, whatever the engine would answer now.
-An attempt the claude CLI gave up on at the output limit is the
-exception: it stores nothing, so a later run asks it again, and its
-fallback repeats only if the engine gives up again (#390 is to have it
-replay).
+An attempt the claude CLI gave up on at the output limit is kept alike
+(#390): its key holds a give-up entry (`gave_up`, an empty response, and
+the stream's report of the call, its stop reason and API error among
+them), and a call served it raises `OutputLimitReached` again without
+asking the engine, so a later run takes the same fallback. Only attempts
+keep their give-ups: a chunk's, a critique's or a transcription's
+retries share one key, and a give-up kept there would fail every retry
+from the cache.
 A refused manifest falls back rather than failing the document, so the
 reason not to key chunk retries this way (a chunk that failed every
 attempt would fail again from the cache in every run) does not apply to
@@ -451,8 +500,12 @@ counts per role, as totals over every invocation of the run directory.
 Every call that reaches the engine is a `call` event too, with or
 without the cache (#101): a wrapper beneath the cache reports it, so a
 hit is none, and a miss or a replay is one. It carries what the call's
-stream reported of it but the session, and a replay's says it is one
-(#98).
+stream reported of it but the session, or, on the Anthropic API engine,
+the model and the stop reason its response gave of an answered call
+(#441), and a replay's says it is one (#98). The run report counts, per
+stage, the call events stopped at the output limit: answers whose stop reason is `max_tokens`, and calls that
+raised `OutputLimitReached` (#390). A give-up served from the cache is a
+hit, and no call.
 
 ### 9. Seeding: visible equivalences
 

@@ -1202,10 +1202,46 @@ class Orchestrator:
         embedded image the list names is left out
         (yizkr.pipeline.registrar). An excerpt is registered as the
         derived medium of each PDF that places it, each PDF registered
-        first. Returns the artifact's QID."""
-        from yizkr.pipeline.registrar import ExcludedMedia, Registrar
+        first. Returns the artifact's QID.
+
+        An item the registrar flags as maybe an older artifact (another
+        item names a file that holds its bytes, or its title is the label
+        of an item with no hash; RegistrationFlag) is raised as an alert
+        of the write on the document, its check the flag's kind, for a
+        person to look at, the flags of a registration cut short by an
+        error or an interrupt included. An item is flagged on each write
+        while the condition holds, whether registration made it or found
+        it, so a flag a killed process never raised is raised by the next
+        write. The alert holds ids and hashes alone: `artifact`, the
+        item; `others`, the items it may be; `medium`, the first 12 hex
+        digits of the item's media SHA-1 (docs/ANOMALIES.md)."""
+        from yizkr.pipeline.registrar import Registrar
 
         registrar = Registrar(self.client, exclusions=self.exclusions)
+        try:
+            return self._register_document(registrar, doc)
+        finally:
+            for flag in registrar.flags:
+                self.rundir.alert(
+                    stage="write",
+                    check=flag.kind,
+                    subject=doc.sha1[:12],
+                    value=True,
+                    carried=False,
+                    kind=doc.kind,
+                    artifact=flag.artifact,
+                    others=list(flag.others),
+                    medium=flag.sha1[:12],
+                )
+                self.log(
+                    f"  flagged {flag.kind}: item {flag.artifact}, "
+                    f"against {', '.join(flag.others)}"
+                )
+
+    def _register_document(self, registrar: Any, doc: DocumentRun) -> str:
+        """The document's QID, as `_step_register` registers it."""
+        from yizkr.pipeline.registrar import ExcludedMedia
+
         if not isinstance(doc, ExcerptRun):
             return self._register(registrar, doc)[0]
         found = None

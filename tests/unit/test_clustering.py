@@ -645,8 +645,8 @@ def gedcom() -> Doc:
         for person in u.PEOPLE
         if person.gedcom_xref
     }
-    # a union and its events are the export's own, as the universe holds
-    # no marriage entity yet (ADR-0036)
+    # a union and its events are as this file's documents name them
+    # (GEDCOM_UNIONS), or else the export's own (ADR-0036)
     truth = {
         record.id: people.get(record.id)
         or (

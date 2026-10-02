@@ -2,7 +2,8 @@
 (#98, ADR-0032): the model it ran on, the CLI version, the session, the
 tokens it used, its turns, how it ended and why its model stopped (#7),
 parsed from the stream's init and result events; kept beside the answer
-in the call's LLM cache entry, but for the stop reason, never in its key;
+in the call's LLM cache entry, the stop reason included (#390), never in
+its key;
 carried, but for the session, by the call's event; and totalled per stage
 and role from the run's events for the run report. An answer whose model
 stopped at the output limit (max_tokens) is cut off, whatever it holds: a
@@ -30,6 +31,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures.fake_anthropic import api_engine
 from tests.unit.test_chunking import (
     DOC_REF,
     claim,
@@ -66,6 +68,7 @@ from yizkr.pipeline.llm import (
     UsageLimitReached,
     at_output_limit,
     cached_client,
+    for_attempt,
     observed_client,
     open_cache,
     stream_report,
@@ -696,13 +699,13 @@ class TestTheCache:
         response = caching(engine, cache).complete("Read the letter.")
         entry = entry_of(tmp_path / "cache", response.key)
         provenance = entry["provenance"]
-        # all of the report but the stop reason, which its caller judges
-        # when the engine gives the answer (at_output_limit)
-        kept = {name: REPORT[name] for name in REPORT if name != "stop_reason"}
-        assert {name: provenance[name] for name in kept} == {
-            **kept,
+        # all of the report, the stop reason included, which at_output_limit
+        # judges an answer served from the entry by (#390)
+        assert {name: provenance[name] for name in REPORT} == {
+            **REPORT,
             "session_id": provenance["session_id"],
         }
+        assert provenance["stop_reason"] == "end_turn"
         assert uuid.UUID(provenance["session_id"])
         # none of it is keyed: the key names the model configured, never
         # the one the stream reports
@@ -1070,19 +1073,47 @@ class TestAtOutputLimit:
         assert not answer.hit
         assert at_output_limit(cached, answer)
 
-    def test_an_answer_the_cache_kept_is_judged_by_its_text(
+    def test_an_answer_the_cache_kept_is_judged_by_its_stop_reason(
         self, cli, tmp_path
     ):
-        """A hit was made by no call now, and its entry keeps no stop
-        reason: the engine's report of its last call, whatever it says,
-        says nothing of the hit."""
+        """A hit was made by no call now: it is judged by the stop reason
+        its entry keeps, never by the engine's report of its last call
+        (#390)."""
         engine = ClaudeCodeClient(model=MODEL)
         cli.result["stop_reason"] = "max_tokens"
         client = caching(engine, open_cache(tmp_path / "cache"))
         client.complete("Extract chunk 1.")
         again = client.complete("Extract chunk 1.")
-        assert again.hit
-        assert engine.last_report()["stop_reason"] == "max_tokens"
+        assert again.hit and again.stop_reason == "max_tokens"
+        assert at_output_limit(client, again)
+        # an entry whose model ended its turn, whatever the last call says
+        cli.result["stop_reason"] = "end_turn"
+        client.complete("Extract chunk 2.")
+        cli.result["stop_reason"] = "max_tokens"
+        client.complete("Extract chunk 3.")
+        whole = client.complete("Extract chunk 2.")
+        assert whole.hit and engine.last_report()["stop_reason"] == (
+            "max_tokens"
+        )
+        assert not at_output_limit(client, whole)
+
+    def test_an_entry_kept_without_a_stop_reason_is_judged_by_its_text(
+        self, cli, tmp_path
+    ):
+        """An entry stored before entries kept the stop reason is served,
+        and judged by its text alone, as before (#390)."""
+        engine = ClaudeCodeClient(model=MODEL)
+        cli.result["stop_reason"] = "max_tokens"
+        cache_root = tmp_path / "cache"
+        client = caching(engine, open_cache(cache_root))
+        first = client.complete("Extract chunk 1.")
+        path = cache_root / first.key[:2] / f"{first.key}.json"
+        entry = json.loads(path.read_text())
+        del entry["provenance"]["stop_reason"]
+        path.write_text(json.dumps(entry))
+        again = client.complete("Extract chunk 1.")
+        assert again.hit and again == first
+        assert again.stop_reason is None
         assert not at_output_limit(client, again)
 
     def test_the_api_clients_answer(self, monkeypatch):
@@ -1187,6 +1218,459 @@ class TestCutOffChunks:
             e["reason"] for e in run.events() if e["event"] == "cache-reject"
         ]
         assert rejected == ["chunk: cut off at max_tokens"] * 2
+
+    def test_a_kept_answer_cut_off_is_rejected_and_asked_once_more(
+        self, cli, tmp_path, monkeypatch
+    ):
+        """A chunk answer the cache kept whose entry records a max_tokens
+        stop is cut off when served again, as a fresh one is: it is
+        rejected and asked once more, without spending a retry (#390)."""
+        from yizkr.pipeline import chunking
+
+        # a first run that took the answer the model cut off as whole
+        with monkeypatch.context() as patched:
+            patched.setattr(chunking, "at_output_limit", lambda *_: False)
+            _, extractor = self.extractor(
+                cli, tmp_path, (WHOLE_CHUNK, "max_tokens")
+            )
+            extractor.extract(transcription(), DOC_REF)
+        cli.edit = answering((WHOLE_CHUNK, "end_turn"))
+        run = RunDir(tmp_path / "again")
+        client = caching(
+            ClaudeCodeClient(model=MODEL), open_cache(tmp_path / "cache"), run
+        )
+        extractor = ChunkedClaimExtractor(client, budget=10_000, retries=0)
+        batch = extractor.extract(transcription(), DOC_REF)
+        assert len(batch.claims) == 2 and extractor.failed_chunks == []
+        (rejected,) = [e for e in run.events() if e["event"] == "cache-reject"]
+        assert rejected["reason"] == "chunk: cut off at max_tokens"
+        forks = [
+            e
+            for e in run.events()
+            if e["event"] == ENGINE_CALL and e["call"] == "fork"
+        ]
+        assert [e["stop_reason"] for e in forks] == ["end_turn"]
+
+
+# -- the Anthropic API engine -------------------------------------------------
+
+
+# the bound on a wait that a synchronisation ends, never a time waited out
+HANG_GUARD = 30
+
+
+class TestApiCallEvents:
+    """A call event on the Anthropic API engine carries the model that
+    answered and why it stopped, as its response said (#441): the stop
+    reason verbatim, max_tokens for an answer cut off at the output limit,
+    which the run report counts and the LLM cache's callers reject, as on
+    the claude-code engine."""
+
+    def test_an_answered_call_carries_its_stop_reason(self, monkeypatch):
+        seen, emit = recorder()
+        engine = api_engine(
+            monkeypatch,
+            ("Sebastian Löbig, Hutmacher", "max_tokens"),
+            ("Sebastian Löbig, Hutmacher, Flörburg", "end_turn"),
+        )
+        client = observed_client(engine, role="extract", events=emit)
+        assert client.complete("Extract the claims.") == (
+            "Sebastian Löbig, Hutmacher"
+        )
+        client.complete("Extract the claims.")
+        assert [(e["outcome"], e["stop_reason"]) for e in seen] == [
+            ("ok", "max_tokens"),
+            ("ok", "end_turn"),
+        ]
+
+    def test_it_carries_the_model_and_nothing_else(self, monkeypatch):
+        """The event takes the model the API says answered (a dated one,
+        not the name asked for) and the stop reason, and nothing else of
+        the engine's report, which is no stream's."""
+        seen, emit = recorder()
+        engine = api_engine(monkeypatch, ("an answer", "end_turn"))
+        engine.complete = functools.partial(self._reported, engine)
+        observed_client(engine, role="critique", events=emit).complete(
+            "Critique the batch."
+        )
+        (event,) = seen
+        assert set(llm.CALL_STREAM_FIELDS) & event.keys() == {
+            "model",
+            "stop_reason",
+        }
+        assert (event["model"], event["stop_reason"]) == (RESOLVED, "end_turn")
+
+    @staticmethod
+    def _reported(engine, prompt, image_paths=()):
+        """The engine's answer, its report widened by a field that is no
+        API response's, as a stream's report would have it."""
+        answer = llm.AnthropicClient.complete(engine, prompt, image_paths)
+        engine._reports.value = {
+            **engine._reports.value,
+            "cli_version": "2.1.237",
+            "num_turns": 1,
+        }
+        return answer
+
+    def test_the_model_calls_are_counted_by(self, monkeypatch):
+        """The model the API says answered is the one the event names, so
+        the run report counts the call under it."""
+        seen, emit = recorder()
+        engine = api_engine(monkeypatch, ("an answer", "end_turn"))
+        observed_client(engine, role="extract", events=emit).complete(
+            "Extract the claims."
+        )
+        assert engine.last_report() == {
+            "model": RESOLVED,
+            "stop_reason": "end_turn",
+        }
+        assert seen[0]["model"] == RESOLVED != MODEL
+
+    @pytest.mark.parametrize(
+        "resolved", ["claude sonnet five", "", None, 5], ids=repr
+    )
+    def test_a_model_in_no_plain_form_is_left_out(self, monkeypatch, resolved):
+        seen, emit = recorder()
+        engine = api_engine(
+            monkeypatch, ("an answer", "end_turn"), resolved=resolved
+        )
+        observed_client(engine, role="extract", events=emit).complete(
+            "Extract the claims."
+        )
+        assert engine.last_report() == {"stop_reason": "end_turn"}
+        assert "model" not in seen[0]
+        assert seen[0]["stop_reason"] == "end_turn"
+
+    @pytest.mark.parametrize(
+        "stop_reason",
+        ["end_turn", "max_tokens", "refusal", "pause_turn", "stop_sequence"],
+    )
+    def test_every_stop_reason_is_carried_verbatim(
+        self, monkeypatch, stop_reason
+    ):
+        seen, emit = recorder()
+        engine = api_engine(monkeypatch, ("an answer", stop_reason))
+        observed_client(engine, role="extract", events=emit).complete(
+            "Extract the claims."
+        )
+        assert seen[0]["stop_reason"] == stop_reason
+
+    @pytest.mark.parametrize("stop_reason", ["Max Tokens", None])
+    def test_a_stop_reason_in_no_plain_form_is_left_out(
+        self, monkeypatch, stop_reason
+    ):
+        seen, emit = recorder()
+        engine = api_engine(monkeypatch, ("an answer", stop_reason))
+        observed_client(engine, role="extract", events=emit).complete(
+            "Extract the claims."
+        )
+        (event,) = seen
+        assert event["outcome"] == "ok" and "stop_reason" not in event
+
+    @pytest.mark.parametrize(
+        "failure",
+        [ConnectionError("the network is down"), ("  ", "max_tokens")],
+        ids=["raised", "no-text"],
+    )
+    def test_a_failed_call_carries_no_earlier_calls_stop_reason(
+        self, monkeypatch, failure
+    ):
+        """A request that gave no answer, after one cut off at the output
+        limit: its event says nothing of why a model stopped, and the
+        engine's report of it is empty."""
+        seen, emit = recorder()
+        engine = api_engine(monkeypatch, ("an answer", "max_tokens"), failure)
+        client = observed_client(engine, role="extract", events=emit)
+        client.complete("Extract chunk 1.")
+        with pytest.raises((ConnectionError, RuntimeError)):
+            client.complete("Extract chunk 2.")
+        assert engine.last_report() == {}
+        assert seen[0]["stop_reason"] == "max_tokens"
+        assert seen[1]["outcome"] == "error"
+        assert "stop_reason" not in seen[1]
+
+    def test_a_failed_fork_carries_no_earlier_calls_stop_reason(
+        self, monkeypatch
+    ):
+        """A fork that gave no answer, after one cut off at the output
+        limit in the same conversation: its event says nothing of why a
+        model stopped, and the engine's report of it is empty."""
+        seen, emit = recorder()
+        engine = api_engine(
+            monkeypatch,
+            ("the document", "end_turn"),
+            ("chunk 1", "max_tokens"),
+            ConnectionError("the network is down"),
+        )
+        client = observed_client(engine, role="extract", events=emit)
+        _, handle = client.open_conversation("Read the document.")
+        client.fork(handle, "Extract chunk 1.")
+        with pytest.raises(ConnectionError):
+            client.fork(handle, "Extract chunk 2.")
+        assert engine.last_report() == {}
+        assert [(e["call"], e.get("stop_reason")) for e in seen] == [
+            ("open", "end_turn"),
+            ("fork", "max_tokens"),
+            ("fork", None),
+        ]
+
+    def test_a_call_that_fails_before_its_request_leaves_no_report(
+        self, monkeypatch, tmp_path
+    ):
+        """A call whose image cannot be read sends no request, and the
+        engine's report keeps nothing of the call before it."""
+        engine = api_engine(monkeypatch, ("an answer", "max_tokens"))
+        engine.complete("Transcribe the page.")
+        with pytest.raises(FileNotFoundError):
+            engine.complete("Transcribe the page.", [tmp_path / "gone.png"])
+        assert engine.last_report() == {}
+
+    def test_threads_sharing_the_engine_each_get_their_own_report(
+        self, monkeypatch
+    ):
+        """Two threads ask one engine at once, and both have their answers
+        before either's event is made: each event carries its own call's
+        stop reason, and only the cut-off answer is judged cut off."""
+        seen, emit = recorder()
+        engine = api_engine(
+            monkeypatch,
+            by_prompt={
+                "Extract chunk 1.": ("chunk 1", "max_tokens"),
+                "Extract chunk 2.": ("chunk 2", "end_turn"),
+            },
+        )
+        both_answered = threading.Barrier(2)
+
+        def last_pacing():
+            both_answered.wait(timeout=HANG_GUARD)
+            return {}
+
+        engine.last_pacing = last_pacing
+        client = observed_client(engine, role="extract", events=emit)
+        judged = {}
+
+        def ask(prompt):
+            answer = client.complete(prompt)
+            judged[answer] = at_output_limit(client, answer)
+
+        threads = [
+            threading.Thread(target=ask, args=(f"Extract chunk {n}.",))
+            for n in (1, 2)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=HANG_GUARD)
+        assert sorted(e["stop_reason"] for e in seen) == [
+            "end_turn",
+            "max_tokens",
+        ]
+        assert judged == {"chunk 1": True, "chunk 2": False}
+
+    def test_a_report_in_no_plain_form_gives_nothing(self):
+        """An engine with no streams whose report gives a model or a stop
+        reason in no plain form: the event takes neither, and so is still
+        one the event log can hold."""
+
+        class Untidy:
+            model_identifier = "fake-model"
+
+            def complete(self, prompt, image_paths=()):
+                return "answer"
+
+            def last_report(self):
+                return {"model": object(), "stop_reason": "Max Tokens"}
+
+        seen, emit = recorder()
+        observed_client(Untidy(), role="extract", events=emit).complete(
+            "Extract."
+        )
+        assert seen[0]["outcome"] == "ok"
+        assert not set(llm.CALL_STREAM_FIELDS) & seen[0].keys()
+
+    def test_a_streams_empty_report_is_never_filled_from_the_engines(self):
+        """An engine with streams whose streams reported nothing of an
+        answered call: its event carries nothing, whatever the engine's
+        report of its last answered call says."""
+
+        class Streamed:
+            model_identifier = "fake-model"
+
+            def complete(self, prompt, image_paths=()):
+                return "answer"
+
+            def last_stream(self):
+                return {}
+
+            def last_report(self):
+                return {"model": RESOLVED, "stop_reason": "max_tokens"}
+
+        seen, emit = recorder()
+        observed_client(Streamed(), role="extract", events=emit).complete(
+            "Extract."
+        )
+        assert seen[0]["outcome"] == "ok"
+        assert not set(llm.CALL_STREAM_FIELDS) & seen[0].keys()
+
+    def test_a_failed_call_of_a_client_whose_report_lags_carries_none(self):
+        """A client that reports only its answered calls and keeps the
+        last one's report when a call fails: the failed call's event takes
+        nothing from it."""
+
+        class Lagging:
+            model_identifier = "fake-model"
+
+            def __init__(self):
+                self.report = {}
+
+            def complete(self, prompt, image_paths=()):
+                if prompt == "fail":
+                    raise RuntimeError("no answer")
+                self.report = {"stop_reason": "max_tokens"}
+                return "answer"
+
+            def last_report(self):
+                return dict(self.report)
+
+        seen, emit = recorder()
+        client = observed_client(Lagging(), role="extract", events=emit)
+        client.complete("Extract.")
+        with pytest.raises(RuntimeError):
+            client.complete("fail")
+        assert seen[0]["stop_reason"] == "max_tokens"
+        assert "stop_reason" not in seen[1]
+
+    @pytest.mark.parametrize("raised", [UsageLimitReached, KeyboardInterrupt])
+    def test_a_paused_or_interrupted_call_carries_none(self, raised):
+        """A call that paused its pass or was interrupted answered nothing:
+        its event takes nothing of a lagging report either."""
+
+        class Lagging:
+            model_identifier = "fake-model"
+
+            def __init__(self):
+                self.report = {}
+
+            def complete(self, prompt, image_paths=()):
+                if prompt == "stop":
+                    raise raised()
+                self.report = {"stop_reason": "max_tokens"}
+                return "answer"
+
+            def last_report(self):
+                return dict(self.report)
+
+        seen, emit = recorder()
+        client = observed_client(Lagging(), role="extract", events=emit)
+        client.complete("Extract.")
+        with pytest.raises(raised):
+            client.complete("stop")
+        assert seen[0]["stop_reason"] == "max_tokens"
+        assert "stop_reason" not in seen[1]
+
+    def test_a_report_that_is_no_mapping_gives_nothing(self):
+        """An engine whose report is no mapping adds nothing to the event,
+        and the call still answers."""
+
+        class Odd:
+            model_identifier = "fake-model"
+
+            def complete(self, prompt, image_paths=()):
+                return "answer"
+
+            def last_report(self):
+                return ["max_tokens"]
+
+        seen, emit = recorder()
+        client = observed_client(Odd(), role="extract", events=emit)
+        assert client.complete("Extract.") == "answer"
+        assert seen[0]["outcome"] == "ok"
+        assert "stop_reason" not in seen[0]
+
+    def test_a_streams_report_comes_before_the_engines(self, cli):
+        """From an engine with streams, the event is what they reported,
+        never its report of its last answered call: a call that failed with
+        its streams' report carries that, and one that never ran carries
+        nothing, though the engine's report keeps an earlier call's."""
+        seen, emit = recorder()
+        engine = ClaudeCodeClient(model=MODEL)
+        client = observed_client(engine, role="extract", events=emit)
+        cli.result["stop_reason"] = "max_tokens"
+        client.complete("Extract chunk 1.")
+        cli.result = json.loads(MAX_TURNS)
+        with pytest.raises(RuntimeError):
+            client.complete("Extract chunk 2.")
+        with pytest.raises(TypeError):
+            client.complete("Extract chunk 3.", [object()])
+        assert engine.last_report()["stop_reason"] == "max_tokens"
+        assert seen[0]["stop_reason"] == "max_tokens"
+        assert (seen[1]["subtype"], seen[1]["stop_reason"]) == (
+            "error_max_turns",
+            "tool_use",
+        )
+        assert not set(llm.CALL_STREAM_FIELDS) & seen[2].keys()
+
+    def test_a_cut_off_answer_is_judged_so_through_the_wrappers(
+        self, monkeypatch, tmp_path
+    ):
+        engine = api_engine(
+            monkeypatch,
+            ("an answer", "max_tokens"),
+            ("an answer", "max_tokens"),
+            ("an answer", "end_turn"),
+        )
+        observed = observed_client(
+            engine, role="extract", events=recorder()[1]
+        )
+        assert at_output_limit(observed, observed.complete("Extract."))
+        cached = caching(engine, open_cache(tmp_path / "cache"))
+        answer = cached.complete("Extract chunk 2.")
+        assert not answer.hit and at_output_limit(cached, answer)
+        answer = cached.complete("Extract chunk 3.")
+        assert not at_output_limit(cached, answer)
+
+    def test_a_cut_off_chunk_is_rejected_kept_and_counted(
+        self, monkeypatch, tmp_path
+    ):
+        """A chunk answer the API cut off at the output limit is rejected
+        in the cache, its entry keeping the stop reason beside the answer,
+        never in its key: the chunk asked again is keyed as it was. Its
+        call event says max_tokens, as the run report counts it."""
+        run = RunDir(tmp_path / "run")
+        cache_root = tmp_path / "cache"
+        engine = api_engine(
+            monkeypatch,
+            (entity_manifest_json(), "end_turn"),
+            (WHOLE_CHUNK, "max_tokens"),
+            (WHOLE_CHUNK, "end_turn"),
+        )
+        client = caching(engine, open_cache(cache_root), run)
+        extractor = ChunkedClaimExtractor(client, budget=10_000, retries=1)
+        batch = extractor.extract(transcription(), DOC_REF)
+        assert len(batch.claims) == 2 and extractor.failed_chunks == []
+        events = run.events()
+        (rejected,) = [e for e in events if e["event"] == "cache-reject"]
+        assert rejected["reason"] == "chunk: cut off at max_tokens"
+        calls = [e for e in events if e["event"] == ENGINE_CALL]
+        assert [(e["call"], e["stop_reason"]) for e in calls] == [
+            ("open", "end_turn"),
+            ("fork", "max_tokens"),
+            ("fork", "end_turn"),
+        ]
+        misses = [
+            e["key"]
+            for e in events
+            if e["event"] == "cache-miss" and e["call"] == "fork"
+        ]
+        assert misses == [rejected["key"]] * 2
+        key = rejected["key"]
+        (aside,) = open_cache(cache_root).rejected(key)
+        assert json.loads(aside.read_text())["provenance"]["stop_reason"] == (
+            "max_tokens"
+        )
+        assert entry_of(cache_root, key)["provenance"]["stop_reason"] == (
+            "end_turn"
+        )
 
 
 # -- answers the CLI gives up on at the output limit --------------------------
@@ -1393,8 +1877,11 @@ class TestTheCliGivingUp:
             "stop_reason": "stop_sequence",
         }
 
-    def test_the_cache_keeps_nothing(self, cli, tmp_path):
-        """Like any error, it stores nothing: the next call asks again."""
+    def test_the_cache_keeps_nothing_of_a_call_not_attempted(
+        self, cli, tmp_path
+    ):
+        """A call not asked as an attempt (a chunk's, whose retries share
+        one key) stores nothing: the next call asks again (#390)."""
         run = RunDir(tmp_path / "run")
         client = caching(
             ClaudeCodeClient(model=MODEL), open_cache(tmp_path / "cache"), run
@@ -1409,6 +1896,56 @@ class TestTheCliGivingUp:
             for event in run.events()
             if event["event"] != ENGINE_CALL
         ] == [("cache-miss", "absent")] * 2
+
+    def test_an_attempt_keeps_its_give_up(self, cli, tmp_path):
+        """An attempt (llm.for_attempt) the CLI gave up on is kept under
+        its key, with what its stream reported, the stop reason and the API
+        error among them; the next run raises it again from the cache
+        without running the CLI, and a refresh runs it again (#390)."""
+        run = RunDir(tmp_path / "run")
+        client = for_attempt(
+            caching(
+                ClaudeCodeClient(model=MODEL),
+                open_cache(tmp_path / "cache"),
+                run,
+            ),
+            1,
+        )
+        cli.edit = gave_up
+        with pytest.raises(OutputLimitReached):
+            client.complete("Extract the claims.")
+        (path,) = (tmp_path / "cache").glob("*/*.json")
+        entry = json.loads(path.read_text())
+        assert entry["gave_up"] is True and entry["response"] == ""
+        assert entry["components"]["attempt"] == 1
+        assert call_key(entry["components"]) == path.stem
+        provenance = entry["provenance"]
+        assert (
+            provenance["stop_reason"],
+            provenance["api_error"],
+            provenance["subtype"],
+        ) == ("stop_sequence", "max_output_tokens", "success")
+        cli.calls.clear()
+        with pytest.raises(OutputLimitReached, match="cut off at max_tokens"):
+            client.complete("Extract the claims.")
+        assert cli.calls == []
+        assert [
+            (event["event"], event.get("reason"))
+            for event in run.events()
+            if event["event"] != ENGINE_CALL
+        ] == [("cache-miss", "absent"), ("cache-hit", "key match")]
+        refreshing = for_attempt(
+            caching(
+                ClaudeCodeClient(model=MODEL),
+                open_cache(tmp_path / "cache", refresh=["extract"]),
+            ),
+            1,
+        )
+        cli.edit = None
+        assert refreshing.complete("Extract the claims.") == "answer"
+        assert len(cli.calls) == 1
+        (aside,) = (tmp_path / "cache").glob("*/*.replaced-*.json")
+        assert json.loads(aside.read_text())["gave_up"] is True
 
     def test_a_report_three_wrappers_down(self, cli, tmp_path):
         """at_output_limit reads the engine's report through wrappers that

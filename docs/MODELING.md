@@ -294,6 +294,25 @@ artifact a new QID, changes neither.
   media. Nothing before the write has an artifact item, and a write that
   runs again (a changed review, say) registers again, finding by SHA-1
   what the earlier write registered.
+- **An item that may be an older artifact is flagged, never adopted**
+  (ADR-0010 as amended by #371). An item with no hash has no `media
+  SHA-1` and names a `media file`, as an artifact registered before
+  content hashing does, or is an `instance of` an artifact kind, as a
+  GEDCOM media object's item is (a label, no file). Each time
+  registration makes or finds an artifact or derived medium while
+  another item names a wiki file holding its bytes (`shared-file`), or
+  while its title, or its own label before its content tag, is an
+  unhashed item's label (`unhashed-title`), `ingest run` raises the
+  flag as an alert of the write naming the items by QID, for a person
+  to look at; it repeats on every write until a curator acts on the
+  older item. A new item is made as any other, and neither item is
+  changed. Registration writes `media file` and `media SHA-1` together,
+  so a reset instance never raises `shared-file`; it raises
+  `unhashed-title` only for an artifact or derived medium registered
+  under exactly a GEDCOM media object's label, and only when the
+  GEDCOM's write made that media object's item first (a GEDCOM written
+  after the artifact joins its media object to it by the label, #109,
+  and makes no item to flag).
 - **A page fragment is keyed by its artifact.** The fragment for page
   *n* is the item that is an `instance of artifact fragment` and `part
   of` the artifact with `page number` *n*, whatever its label. A new one
@@ -330,7 +349,7 @@ artifact a new QID, changes neither.
   writer keeps labels by (above: trimmed, then U+FFFE and U+FFFF made
   U+FFFD, then NFC; #369, #403), an artifact's description goes in that
   form too, and a title longer than the 250 characters Wikibase takes,
-  as it is or once tagged, is refused. The tag
+  as it is or once tagged, is cut to fit, ending in "…" (#371). The tag
   is a stopgap until labels need not be unique for artifacts (#94), and
   which homonym bears it depends on registration order: nothing may key
   on an artifact's label, only on its `media SHA-1`.
@@ -638,8 +657,8 @@ Names are modelled in **two layers**:
   name that held one anywhere but in a NICK, a stray bracket included,
   gives no typed claim; a single dash or "&" between two words of one
   field is a connector, kept, and one against a slash, a bracket or a
-  quote, a "+" or a run ("--") is a placeholder. As many SPFX pieces as
-  SURN pieces pair in order. German low quotes and guillemets mark a
+  quote, a "+" or a run ("--") is a placeholder. As many SPFX slots as
+  SURN slots pair by position, empty slots included. German low quotes and guillemets mark a
   nickname as other quotes do. Where no NAME gives a
   name, the label falls back, marks and all, to brackets that hold a word
   ("(Peppi)"), then a GIVN's quotes or brackets, then a NICK, then a
@@ -1122,7 +1141,20 @@ not a signal to grow the schema on.
   `DEFAULT_CUTOFF_YEARS` in `yizkr.core.privacy`). **Unknown means
   excluded.** Exclusion removes every mention (other people's claims
   about them, orphaned provenance nodes), and a transcription excerpt —
-  a raw source quotation — leaves only with a statement it attests.
+  a raw source quotation — leaves only with a statement it attests. A
+  statement whose value, or any qualifier's value, is an item left out
+  goes whole, on a kept item too, with its rank, qualifiers and
+  references (ADR-0020, as amended by #364): an appellation of a
+  released person whose `perspective` is a possibly living relative
+  goes, its text included, and a statement naming a possibly living
+  partner takes its start time and its excerpt with it. Its truthy
+  triple goes too, unless a kept statement of the same item and
+  property, at normal or preferred rank, gives the same value; a
+  statement of unknown value that goes takes every truthy triple of
+  unknown value of its item and property, as the export does not read
+  which one it gave (it does not reproduce Wikibase's blank-node
+  labels). A reference or value node that a kept statement uses too
+  stays, its excerpt included.
 - **Who is a person fails closed too** (ADR-0020, as amended by #344).
   An item is a person when it has any person evidence, read at every
   rank, deprecated included: a `human` type; a statement of a property
@@ -1170,12 +1202,58 @@ not a signal to grow the schema on.
   #363). An event's date and place are its participants' too, and its
   label is written after them, so the export leaves out every event,
   whatever its kind, that has a `participant` statement at any rank
-  whose value it leaves out, a redirect to one included. An event so
-  left out may itself be a participant, and the rule applies again. An
-  event of a person kind that names no participant (none, or only one of
-  unknown value) is left out too: whom it happened to is unknown. And
-  the events that start and end a union it leaves out go with the union
-  (`started_by`, `ended_by`; ADR-0036 §6), a partner's own death aside.
+  whose value it leaves out, a redirect to one included, or one with a
+  qualifier that names such an item, whatever the statement's value, an
+  unknown one or none included (#364). An event goes, too, with any item
+  that one of its statements names, as its value or a qualifier's,
+  whatever the property: a divorce `carried out by` an organization left
+  out for its person evidence goes with it (the orchestrator,
+  2026-10-02). The rule follows only items left out to protect people:
+  an untyped place, or a family (or any item named a `member of`) with
+  recorded members all released, names no
+  one, so a released person's birth at an untyped place stays, without
+  the statement naming it; a family with a member who may be living, or
+  that names no member, takes the event with it, and so does an untyped
+  item that may be a person (through redirects), that the participant
+  or unattended rule leaves out too, or that names an item left out to
+  protect people. Such a group whose members are all released takes
+  part in an event harmlessly, as a released person does, except in a
+  person kind of event, which is its members' own, however the event
+  names it (as a participant or, say, `carried out by`). Members are
+  read through the groups among them, through redirects, ending on
+  cycles: a member group with a member not released, that names no
+  one, or that has person evidence and was not released by the check
+  makes the outer group take events with it, and so does a
+  `participant` of unknown value. A person named a `member of` (a
+  household recorded under its head) is a member whose standing
+  counts, and whose own members are read too; a person is never a
+  released group. An event that names the released head of a
+  household stays, whoever is recorded under that head: a released
+  person is judged on their own standing alone, and only a group by its
+  members. An untyped item with members is judged as a group, on its
+  members. A class the dump makes a subclass of a person kind of
+  event is a person kind too, everywhere in the export's reading of the
+  dump; the check's own selection of people does not follow such
+  classes, so a participant of one that the dump alone makes a person is
+  left out as not assessed, failing closed. An
+  event is an item typed `event`, a subclass of it or a person kind of
+  event, or an item with a `participant` statement, but never a union (a
+  partnership or a marriage, or a subclass of one), whose events go with
+  it and not it with them, nor an item typed human at normal or
+  preferred rank, unless typed a family too (for the participant rule
+  too). An
+  event so left out may itself be a participant, or named by another
+  event, and the rule applies again. An event of a person kind that
+  names no participant (none, or only one of unknown value, however
+  qualified: what a qualifier names, a role included, is no person
+  evidence and attends no event on that alone) is left out too: whom it
+  happened to is unknown; and so is an event of any kind that has
+  participant statements, every one of an unknown value or none (the
+  orchestrator, 2026-10-02, failing closed as ADR-0036 §6 does for
+  unions), while one of no person kind with no participant statement at
+  all names no one and stays. And the events that start and end a union
+  it leaves out go with the union (`started_by`, `ended_by`;
+  ADR-0036 §6), a partner's own death aside.
 - **Everything about a released person stays, text included** (ADR-0020,
   as amended by #363). The owner decided (2026-09-29): "I don't intend
   to make a completely public copy, so any non-privileged view can

@@ -527,10 +527,11 @@ _CLOSING = "’'\"”“‘«»"
 _QUOTES = "".join(dict.fromkeys(_OPENING + _CLOSING))
 # a quote whose only content is a bracket ("'(Peppi)'"), opening and
 # closing a word as a quoted part does (_QUOTED_NAME), or beside a slash
-# ("Ida '(Peppi)'/Sörne/"): the bracket is read, and the quote marks
-# around it are no placeholder
+# or a GIVN's comma ("Ida '(Peppi)'/Sörne/", "Ida '(Peppi)', Agnes"): the
+# bracket is read, and the quote marks around it are no placeholder
 _QUOTED_BRACKET = re.compile(
-    rf"(?:(?<=[\s/])|^)[{_OPENING}]\s*(\([^()]*\))\s*[{_CLOSING}](?=[\s/]|$)"
+    rf"(?:(?<=[\s/,])|^)[{_OPENING}]\s*(\([^()]*\))\s*[{_CLOSING}]"
+    r"(?=[\s/,]|$)"
 )
 # a single dash or '&' that joins the words beside it within one part
 # ('Löbig - Sörne', 'Eugen & Ida'), kept as written where it stands
@@ -600,14 +601,24 @@ def _kept_count(text: str) -> tuple[list[str], int]:
 
 
 def _nested_unnamed(text: str) -> int:
-    """How many brackets nested in another ('(Peppi ())', '(Peppi (?))')
-    hold no word: each is a placeholder, which _brackets leaves out."""
+    """How many brackets nested in another hold nothing but brackets
+    ('(Peppi ())', '(Peppi (()))'), counted once each at their outermost:
+    _brackets leaves each out whole, so it is a placeholder no other
+    count sees. One that holds a placeholder ('(Peppi (?))') is counted
+    where _brackets leaves its words ('Peppi ?')."""
     outermost = set(_bracket_spans(text))
-    return sum(
-        1
+    empty = [
+        (start, end)
         for start, end in _bracket_pairs(text)
         if (start, end) not in outermost
-        and not _has_word(text[start + 1 : end - 1])
+        and not re.sub(r"[()\s]", "", text[start + 1 : end - 1])
+    ]
+    return sum(
+        1
+        for start, end in empty
+        if not any(
+            outer < start and end < outer_end for outer, outer_end in empty
+        )
     )
 
 
@@ -661,6 +672,9 @@ def _name_pieces(name: Record) -> tuple[dict[str, list[str]], int]:
     dropped = 0
     for tag in _NAME_PARTS:
         found[tag] = []
+        # each comma-separated slot as written, '' where it holds no word,
+        # so that SPFX and SURN pair by position (_with_particle)
+        found[f"{tag} slots"] = []
         for part in name.all(tag):
             value = _unquote_brackets(part.value)
             if tag == "GIVN":
@@ -671,6 +685,7 @@ def _name_pieces(name: Record) -> tuple[dict[str, list[str]], int]:
             for piece in value.split(","):
                 text, count = _worded_count(piece)
                 dropped += count
+                found[f"{tag} slots"].append(text)
                 if text:
                     found[tag].append(text)
     return found, dropped
@@ -723,22 +738,37 @@ def _parts_text(pieces: dict[str, list[str]]) -> str:
     )
 
 
+def _paired_slots(pieces: dict[str, list[str]]) -> bool:
+    """Whether a NAME's SPFX and SURN pair slot by slot: they have as many
+    comma-separated slots each, empty ones included."""
+    return len(pieces["SPFX slots"]) == len(pieces["SURN slots"])
+
+
 def _with_particle(pieces: dict[str, list[str]]) -> list[str]:
     """Each SURN piece whole with its SPFX particle before it, unless it
-    holds it already. As many SPFX pieces as SURN pieces pair in order
-    ('von, de' + 'Löbig, Sörne' -> 'von Löbig', 'de Sörne'); otherwise
-    the SPFX pieces together are the particle of each ('von' + 'Löbig,
-    Sörne' -> 'von Löbig', 'von Sörne'), which read_name counts."""
-    surnames = pieces["SURN"]
-    if len(pieces["SPFX"]) == len(surnames):
-        particles = pieces["SPFX"]
+    holds it already. SPFX and SURN slots pair by position where their
+    counts match (_paired_slots: 'von, de' + 'Löbig, Sörne' -> 'von
+    Löbig', 'de Sörne'; 'von,' + 'Löbig, Sörne' -> 'von Löbig', 'Sörne'),
+    an empty slot or one that held only a placeholder giving no particle
+    and no surname; otherwise the SPFX pieces together are the particle
+    of each ('von' + 'Löbig, Sörne' -> 'von Löbig', 'von Sörne'), which
+    read_name counts."""
+    if _paired_slots(pieces):
+        pairs = [
+            (particle, surname)
+            for particle, surname in zip(
+                pieces["SPFX slots"], pieces["SURN slots"], strict=True
+            )
+            if surname
+        ]
     else:
-        particles = [" ".join(pieces["SPFX"])] * len(surnames)
+        particle = " ".join(pieces["SPFX"])
+        pairs = [(particle, surname) for surname in pieces["SURN"]]
     return [
         surname
         if not particle or _restated(particle, surname)
         else f"{particle} {surname}"
-        for particle, surname in zip(particles, surnames, strict=True)
+        for particle, surname in pairs
     ]
 
 
@@ -747,10 +777,11 @@ def _with_particle(pieces: dict[str, list[str]]) -> list[str]:
 # value marks a nickname ("Cäcilie 'Cilli' Tarle"), and a bracketed part
 # may hold a nickname, a maiden or a later name, or a note ("Ida (Peppi)
 # Sörne", "(geb. Laudler)"), so it is kept as an alias and an unsplit
-# form, typed as nothing. A quote opens a word and closes one, so an
-# apostrophe inside a name ("O'Neil") is no quote.
+# form, typed as nothing. A quote opens a word and closes one, or stands
+# against a slash ("Eugen 'Muckel'/Löbig/"), so an apostrophe inside a
+# name ("O'Neil") is no quote.
 _QUOTED_NAME = re.compile(
-    rf"(?:(?<=\s)|^)[{_OPENING}]([^{_QUOTES}]+)[{_CLOSING}](?=\s|$)"
+    rf"(?:(?<=[\s/])|^)[{_OPENING}]([^{_QUOTES}]+)[{_CLOSING}](?=[\s/]|$)"
 )
 # a NAME value's given part, its surname between slashes, and what follows
 _SLASHED_NAME = re.compile(r"^([^/]*)/([^/]*)/([^/]*)$")
@@ -890,8 +921,9 @@ def read_name(name: Record) -> NameReading:
       source is unsure of the name it types, and the name left would read
       as the whole of it. A NICK is no part of that name, so its
       placeholders block nothing.
-    * As many SPFX pieces as SURN pieces pair in order; other counts are
-      read as one particle before each surname, counted.
+    * As many SPFX slots as SURN slots, empty ones included, pair by
+      position; other counts are read as one particle before each
+      surname, counted.
     """
     reading = NameReading()
     value, strays = _stray_brackets(_unquote_brackets(name.value))
@@ -1002,10 +1034,7 @@ def read_name(name: Record) -> NameReading:
         pieces["SURN"] or (surname and _restated(particle, surname))
     ):
         reading.counts.append("SPFX without a surname")
-    elif pieces["SURN"] and len(pieces["SPFX"]) not in (
-        0,
-        len(pieces["SURN"]),
-    ):
+    elif pieces["SURN"] and pieces["SPFX"] and not _paired_slots(pieces):
         reading.counts.append("SPFX particles not matching SURN pieces")
     parts_text = _parts_text(pieces)
     # each part as its field holds it, a surname with its particle
@@ -1036,9 +1065,20 @@ def read_name(name: Record) -> NameReading:
         # field whether the value restates it or not; the name an
         # unrestated one completes is a name form of the person's,
         # counted, less the words of the name that the prefixes already
-        # write. A particle is counted as one with no surname.
-        prefixes = [p for p in pieces["NPFX"] if not _restated(p, named)]
-        suffixes = [p for p in pieces["NSFX"] if not _restated(p, named)]
+        # write. A particle is counted as one with no surname. A part is
+        # restated only where one name form holds it whole: the display,
+        # or else one bracket, as each bracket is a form of its own.
+        written = [display] if display else brackets
+        prefixes = [
+            p
+            for p in pieces["NPFX"]
+            if not any(_restated(p, form) for form in written)
+        ]
+        suffixes = [
+            p
+            for p in pieces["NSFX"]
+            if not any(_restated(p, form) for form in written)
+        ]
         reading.titles += pieces["NPFX"]
         reading.suffixes += pieces["NSFX"]
         if prefixes or suffixes:
@@ -1081,27 +1121,15 @@ def read_name(name: Record) -> NameReading:
     return reading
 
 
-# the quotes that may enclose a NICK's value, opening -> closing
-_QUOTE_PAIRS = {
-    "'": "'",
-    '"': '"',
-    "‘": "’",
-    "“": "”",
-    "„": "“",
-    "‚": "‘",
-    "»": "«",
-    "«": "»",
-}
-
-
 def _nick_count(value: str) -> tuple[str, int]:
     """A NICK's nickname: its value, whitespace collapsed, less one pair
-    of matching quotes that encloses it ("'Cilli'" -> 'Cilli'), as a
-    quoted part of a NAME value gives it, and less its placeholders
+    of quotes that encloses it ("'Cilli'", '„Cilli”' -> 'Cilli'), as a
+    quoted part of a NAME value gives it, its opening and closing marks
+    those of any quote (_OPENING, _CLOSING), and less its placeholders
     (_worded_count), which are counted; empty when none of it is a word
     ("''", '?'), as such a NICK names nothing."""
     text = " ".join(value.split())
-    if len(text) > 2 and _QUOTE_PAIRS.get(text[0]) == text[-1]:
+    if len(text) > 2 and text[0] in _OPENING and text[-1] in _CLOSING:
         text = text[1:-1]
     if not text.strip():
         # a NICK of nothing but quote marks (' ') names nothing
