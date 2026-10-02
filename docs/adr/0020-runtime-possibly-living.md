@@ -107,8 +107,8 @@ through redirects, ending on cycles: a group whose members, so read,
 include at least one person, every one released, counts as released;
 a member group with a member not released, or of unknown value, makes
 the outer group take events with it (V) (§4).
-Amended by #364, orchestrator decisions AA, AB and AC (2026-10-02,
-privacy first, on the fifth and sixth re-reviews' owner questions): J
+Amended by #364, orchestrator decisions AA to AE (2026-10-02, privacy
+first, on the fifth to seventh re-reviews' owner questions): J
 holds at every level of the walk, so a member group that names no one,
 has a participant of unknown value, or has person evidence and was not
 released by the check keeps the outer group unreleased; and a `member
@@ -117,7 +117,10 @@ then a member whose standing counts, and whose own members are read too,
 so Florence recorded under Gustav keeps the Lobigs unreleased; a person
 is never a released group (AA). A class the dump makes a subclass of a
 person kind of event, at any rank and through redirects, is a person
-kind everywhere in the export (AB). A group named by any statement of a
+kind everywhere in the export's reading of the dump (the check's own
+selection of people does not follow such classes, so a participant of
+one that the dump alone makes a person is left out as not assessed,
+failing closed) (AB). A group named by any statement of a
 person kind of event takes it, released or not, as a group taking part
 does (R): "Emigration of the Lobigs" carried out by the Lobigs goes,
 whether or not their members are all released. This narrows decision
@@ -127,7 +130,11 @@ still stays, without the statement naming it (AC, confirmed on the
 sixth re-review). An untyped item with members is judged as a group by
 J, on its members: its own lack of a type makes it no possible person
 whose standing counts, though it is left out as untyped all the same
-(§4).
+(AD). A released person is judged on their own standing alone: an event
+attributed to a released household head, Gustav, stays, even with
+Florence, who may be living, recorded under Gustav, as the export keeps
+everything on released people; only a group (a family, or an item
+someone names a `member of`) is judged by its members (AE) (§4).
 
 ## Context
 

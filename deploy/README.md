@@ -236,26 +236,25 @@ directory under `var/backups/` containing:
   nodes — and a statement whose value or a qualifier's value is an item
   left out goes whole, with its dates, qualifiers and references, even
   on an item kept (a reference a kept statement cites too stays with
-  it, its excerpt included). Who counts as a person fails closed as well: every
-  item with person evidence in the dump, at any rank (a `human` type, a
-  birth, kinship, a part in a death...), is dropped unless the check
-  released it, and so is every item that states no type, no
-  `instance of` at normal or preferred rank that names an item (the
-  vocabulary and the classes items are typed with aside), every family,
-  whose people may include a living person, every event that any of
-  these took part in (named as a participant, or in a participant
+  it, its excerpt included). Who counts as a person fails closed as
+  well: every item with person evidence in the dump, at any rank (a
+  `human` type, a birth, kinship, a part in a death...), is dropped
+  unless the check released it, and so is every item that states no
+  type, no `instance of` at normal or preferred rank that names an item
+  (the vocabulary and the classes items are typed with aside), every
+  family, whose people may include a living person, every event that any
+  of these took part in (named as a participant, or in a participant
   statement's qualifier) or that any statement of it names (unless that
-  item is left out only as untyped, or, in an event of no person kind
-  (a subclass a curator makes of one counts as one), as a family or other
+  item is left out only as untyped, or, in an event of no person kind (a
+  subclass a curator makes of one counts as one), as a family or other
   group with recorded members all released, read through its member
-  groups (and through the people named a `member of`, whose own
-  standing counts too), each of which names a member and, if it has
-  person evidence, was released; one that names no member, or a
-  participant of unknown value, takes it too; a union, or an item typed human and not a family, is
-  no event for this), every
-  person event that names no participant, every event that has
-  participant statements, all of an unknown value or none, and the
-  events that start and
+  groups (and through the people named a `member of`, whose own standing
+  counts too), each of which names a member and, if it has person
+  evidence, was released; one that names no member, or a participant of
+  unknown value, takes it too; a union, or an item typed human and not a
+  family, is no event for this), every person event that names no
+  participant, every event that has participant statements, all of an
+  unknown value or none, and the events that start and
   end a union it leaves out. Everything
   else leaves as it is, text included: whatever is recorded about a
   released person (their labels, descriptions, names, and the source

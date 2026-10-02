@@ -1117,8 +1117,11 @@ not a signal to grow the schema on.
   `participant` of unknown value. A person named a `member of` (a
   household recorded under its head) is a member whose standing
   counts, and whose own members are read too; a person is never a
-  released group. An untyped item with members is judged as a group,
-  on its members. A class the dump makes a subclass of a person kind of
+  released group. An event that names the released head of a
+  household stays, whoever is recorded under that head: a released
+  person is judged on their own standing alone, and only a group by its
+  members. An untyped item with members is judged as a group, on its
+  members. A class the dump makes a subclass of a person kind of
   event is a person kind too, everywhere in the export's reading of the
   dump; the check's own selection of people does not follow such
   classes, so a participant of one that the dump alone makes a person is
