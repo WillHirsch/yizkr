@@ -2843,6 +2843,31 @@ class TestExportPublic:
             backup.LINKED_LEFT_OUT.format("Q498")
         )
 
+    def test_a_family_typed_human_and_a_death_naming_no_one_is_unattended(
+        self, tmp_path, vocabulary
+    ):
+        # the Lobig household (Q498), typed family, human and death, with
+        # Gustav (Q401) its one member and no participant statement, both
+        # released by the check: a family is no person, so as a death that
+        # names no participant it is unattended, protects people, and
+        # "Departure of the Lobigs" goes with it, though its members are
+        # all released
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.entity("Q498", "the Lobig household", revision=498)
+        dump.says("Q498", "instance_of", entity(items["family"]))
+        dump.says("Q498", "instance_of", entity(items["human"]))
+        dump.says("Q498", "instance_of", entity(items["death"]))
+        dump.says("Q401", "member_of", entity("Q498"))
+        dump.entity("Q497", "Departure of the Lobigs", revision=497)
+        dump.says("Q497", "instance_of", entity(items["event"]))
+        dump.says("Q497", "point_in_time", dated(1975))
+        dump.says("Q497", "carried_out_by", entity("Q498"))
+        self.export_of(tmp_path, dump, vocabulary, released=("Q401", "Q498"))
+        text, mentioned = self.public(tmp_path)
+        assert "Q497" not in mentioned
+        assert dated(1975) not in text
+
     @pytest.mark.parametrize(
         ("group", "member", "shields"),
         [
