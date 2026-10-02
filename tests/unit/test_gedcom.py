@@ -6403,3 +6403,52 @@ class TestRound5:
         text = person("I1", "Eugen /Löbig/", "2 NICK Muckel '(Peppi)'")
         eugen, _ = record_of(text, "i1")
         assert parts(eugen.structure)["nicknames"] == ["Muckel (Peppi)"]
+
+    def test_a_quoted_bracket_glued_after_the_surname_is_read(self):
+        text = person("I7", "Ida /Sörne/'(Peppi)'", "2 TYPE birth")
+        ida, outcomes = record_of(text, "i7")
+        assert stated(text, "i7", "birth_name") == [("Ida Sörne", [])]
+        assert ida.aliases == ["Peppi"]
+        assert "NAME part without a word" not in outcomes
+
+    def test_a_connector_beside_an_emptied_bracket_is_a_placeholder(self):
+        eugen, outcomes = record_of(
+            person("I1", "Eugen - (?) Ida /Löbig/"), "i1"
+        )
+        assert eugen.label == "Eugen Ida Löbig"
+        assert outcomes["NAME part without a word"] == 2
+
+    def test_a_nested_empty_bracket_in_a_part_blocks(self):
+        text = person(
+            "I1", "Eugen /Löbig/ Jr.", "2 TYPE birth", "2 NSFX Jr. (Sr. ())"
+        )
+        _, outcomes = record_of(text, "i1")
+        assert stated(text, "i1", "birth_name") == []
+        assert outcomes["typed NAME with a placeholder"] == 1
+
+    def test_a_nested_bracket_with_a_word_is_no_placeholder(self):
+        text = person("I1", "Eugen (Pep(pi)) /Löbig/", "2 TYPE birth")
+        eugen, outcomes = record_of(text, "i1")
+        assert stated(text, "i1", "birth_name") == [("Eugen Löbig", [])]
+        assert eugen.aliases == ["Peppi"]
+        assert "NAME part without a word" not in outcomes
+
+    def test_a_married_surname_leaves_its_bracket_marks(self):
+        text = person("I1", "Agnes /Löbig/", "1 _MARNM Agnes /Löbig (Peppi)/")
+        agnes, _ = record_of(text, "i1")
+        assert ("Löbig Peppi", "married") in parts(agnes.structure)["surnames"]
+
+    def test_a_givn_connector_beside_its_bracket_is_a_placeholder(self):
+        text = person(
+            "I1", "Eugen /Löbig/", "2 TYPE birth", "2 GIVN Eugen - (Peppi)"
+        )
+        _, outcomes = record_of(text, "i1")
+        assert stated(text, "i1", "birth_name") == []
+        assert outcomes["NAME part without a word"] == 1
+
+    def test_a_slashless_connector_beside_a_quote_is_a_placeholder(self):
+        eugen, outcomes = record_of(
+            person("I1", "Eugen - 'Muckel' Löbig"), "i1"
+        )
+        assert parts(eugen.structure)["unsplit"] == ["Eugen Löbig"]
+        assert outcomes["NAME part without a word"] == 1

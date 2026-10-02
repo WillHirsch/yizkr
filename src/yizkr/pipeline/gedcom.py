@@ -536,9 +536,10 @@ _QUOTED_BRACKET = re.compile(
 # between two; '+', which a tree may write for a death, and a run ('--')
 # join nothing
 _CONNECTOR = re.compile(r"[-‐‑‒–—&]")
-# the mark _worded_count sets between a NAME's fields, at a slash and at
-# each edge of a bracket or a quote: never kept and never counted
-_EDGE = "/"
+# the mark set between a NAME's fields, at a slash and where a bracket or
+# a quote stood or was left out: never kept and never counted, and no
+# slash, so that a NAME's slashes still split it
+_EDGE = "\x01"
 
 
 def _unquote_brackets(text: str) -> str:
@@ -663,7 +664,8 @@ def _name_pieces(name: Record) -> tuple[dict[str, list[str]], int]:
             value = _unquote_brackets(part.value)
             if tag == "GIVN":
                 value = _QUOTED_NAME.sub(
-                    " ", _sub_brackets(value, lambda held: " ")
+                    f" {_EDGE} ",
+                    _sub_brackets(value, lambda held: f" {_EDGE} "),
                 )
             for piece in value.split(","):
                 text, count = _worded_count(piece)
@@ -757,7 +759,9 @@ def _name_display(value: str) -> str:
     """A NAME value's display form: cleaned, without its bracketed parts
     and its placeholders ('Ida (Peppi) /Sörne/' -> 'Ida Sörne', 'Eugen
     /?/' -> 'Eugen')."""
-    return _worded(_sub_brackets(_unquote_brackets(value), lambda held: " "))
+    return _worded(
+        _sub_brackets(_unquote_brackets(value), lambda held: f" {_EDGE} ")
+    )
 
 
 def _name_text(name: Record) -> str:
@@ -928,7 +932,7 @@ def read_name(name: Record) -> NameReading:
     reading.forms += givn_quoted + givn_bracketed
     reading.unsplit += givn_bracketed
     reading.counts += ["NAME bracketed part"] * len(givn_bracketed)
-    bare = _sub_brackets(value, lambda held: " ")
+    bare = _sub_brackets(value, lambda held: f" {_EDGE} ")
     display, count = _worded_count(bare)
     placeholders += count
     given: list[str] = []
@@ -964,7 +968,7 @@ def read_name(name: Record) -> NameReading:
             reading.suffixes += afters
     else:
         quoted += _QUOTED_NAME.findall(bare)
-        unsplit = _worded(_QUOTED_NAME.sub(" ", bare))
+        unsplit = _worded(_QUOTED_NAME.sub(f" {_EDGE} ", bare))
         # where a GIVN and a SURN give the parts, they say which is which;
         # where only one of them does, the value stays an unsplit form
         # beside it, so that no word the part does not place is lost
