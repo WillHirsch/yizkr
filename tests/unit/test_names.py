@@ -108,7 +108,7 @@ class TestPeople:
             surnames=[{"written": name} for name in surnames],
         )
         reordered = ", ".join(reversed(label.split(" ", 1)))
-        aliases = [variant, reordered, label.upper()]
+        aliases = [variant, reordered, reordered.upper(), label.upper()]
         assert normalize_aliases(label, aliases, record) == [variant]
 
     def test_the_rescue_prefers_a_holder_that_gives_a_name(self):
