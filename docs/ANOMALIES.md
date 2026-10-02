@@ -361,9 +361,11 @@ object's label joins the media object to that artifact by the label
 no flag is raised. With no such homonym a scratch run raises no
 registration flag. The monitor shows them by name; the run report's
 aggregates count them by check (`shared-file`, `unhashed-title`) and
-under the stage `write`, as counts only, and each counts flagged writes,
-not distinct items: an image two decks embed, flagged in each deck's
-write, counts twice (within one write, once). A document's own alerts in
+under the stage `write`, as counts only. The findings count flagged
+writes, not distinct items: a document's write and a check, once each,
+so an image two decks embed, flagged in each deck's write, counts twice.
+The alert count beside them counts each flag raised, so one write that
+flags two items under a check counts two. A document's own alerts in
 report.json and report.html name them with their items by QID.
 
 ## Thresholds

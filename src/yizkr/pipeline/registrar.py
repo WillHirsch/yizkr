@@ -895,7 +895,7 @@ class Registrar:
         "…", when longer than the TERM_LIMIT characters Wikibase takes
         (_free_label), and its description is cut so too (_new_artifact).
         The result's `flags` are what the item, made or found, is flagged
-        for (_Instance.flags), as `self.flags` gathers them.
+        for (Registrar._flags), as `self.flags` gathers them.
         """
         if media_path is None:
             raise ValueError(
