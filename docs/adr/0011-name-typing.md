@@ -57,6 +57,9 @@ alias bag — additive, not a replacement.
 - **birth name** (P1477) — name/maiden name given at birth
 - **married name** (P2562) — family name taken on marriage
 - **nickname** (P1449) — informal/pet name or "aka"
+  (amended by #434 (2026-10-02): a name the source gives as what the
+  person is called, by anyone; a relational appellation is ADR-0018's
+  `referred_to_as`)
 - **official name** (P1448) — a formally adopted or legally changed name
 
 Monolingual text keeps the source's exact wording; the language tag is a

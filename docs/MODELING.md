@@ -610,7 +610,10 @@ Names are modelled in **two layers**:
   event):
   - `birth name` (P1477) — name/maiden name given at birth;
   - `married name` (P2562) — family name taken on marriage;
-  - `nickname` (P1449) — informal/pet name or "aka";
+  - `nickname` (P1449) — a name the source gives as what the person is
+    called, by anyone ("Peppi", "Gustl"), or an "aka"; what one person
+    calls another, or a name that names the person through a relation
+    but is no literal kinship term, is `referred_to_as` instead (below);
   - `official name` (P1448) — a formally adopted or legally changed name.
 - An *ordinary* untyped name is NOT restated as a claim — it lives in
   the label/aliases only. Typing adds structure where a source marks it;
@@ -651,7 +654,9 @@ language:
   initial; surnames typed `birth`, `married` or `other`, with their
   particles; patronymics, a name part of their own (the 1941
   certificate's *Лёбиг Рудольф Феликсович* gives the given name Рудольф,
-  the surname Лёбиг and the patronymic Феликсович); nicknames; titles and
+  the surname Лёбиг and the patronymic Феликсович); nicknames, the names
+  the person is called by anyone, each also an alias (never a
+  `referred_to_as` appellation, ADR-0018); titles and
   suffixes, which never key; and `unsplit` forms whose given name and
   surname the source does not tell apart;
 - **a place:** a status (`toponym`, `deictic` or `generic`); its names,
@@ -694,7 +699,11 @@ the notes by category.
 "our great grandmother", "meine Oma", "Nana Maisie", "my husband" describe
 a relationship or viewpoint, so they never enter the alias bag. A literal
 kinship term is a `relative` + `kinship_type` claim with the ego as
-object (§Kinship); a courtesy title or family/pet name is a
+object (§Kinship); a spousal term ("my husband") gives a marriage
+(ADR-0036); any other relational appellation (a name the
+source gives as what one person calls another, with or without a stated
+perspective, or that names the person through a relation: a courtesy
+title, "Bubele", "Рудольфиха") is a
 `referred_to_as` (P1810) statement on the referent — verbatim, source-
 referenced — qualified by `perspective` (the person/family ego) when the
 ego is a modelled entity, and unqualified otherwise. Both are
