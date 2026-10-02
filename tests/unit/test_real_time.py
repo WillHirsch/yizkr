@@ -32,6 +32,7 @@ def uses(source: str, **options) -> list[str]:
         "import threading\nthreading.Event().wait(timeout=5)\n",
         "def f(thread):\n    thread.join(5)\n",
         "def f(thread):\n    thread.join(timeout=1.5)\n",
+        "def f(event, seconds):\n    event.wait(timeout=seconds)\n",
         "START_TIMER(0.05, print)\n",
         "START_TIMER(seconds, print)\n",
         "START_TIMER(False, print)\n",
