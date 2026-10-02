@@ -1039,14 +1039,17 @@ not a signal to grow the schema on.
   whatever the property: a divorce `carried out by` an organization left
   out for its person evidence goes with it (the orchestrator,
   2026-10-02). An event is an item typed `event`, a subclass of it or a
-  person kind of event, or an item with a `participant` statement. An
+  person kind of event, or an item with a `participant` statement, but
+  never a union (a partnership or a marriage), whose events go with it
+  and not it with them. An
   event so left out may itself be a participant, or named by another
   event, and the rule applies again. An event of a person kind that
   names no participant (none, or only one of unknown value, however
   qualified: what a qualifier names, a role included, is no person
   evidence and attends no event on that alone) is left out too: whom it
   happened to is unknown; and so is an event of any kind whose
-  participants are all of unknown value (the orchestrator, 2026-10-02,
+  participant statements all hold an unknown value or none (the
+  orchestrator, 2026-10-02,
   failing closed as ADR-0036 §6 does for unions). And the events that
   start and end a
   union it leaves out go with the union (`started_by`, `ended_by`;

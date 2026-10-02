@@ -768,7 +768,7 @@ def test_a_statement_naming_one_left_out_goes_whole(
         assert not [line for line in lines if line.startswith(truthy)]
         # its references (ADR-0003): the source's, with the excerpt, which
         # it alone cites, goes; the run's, which the released person's
-        # death cites too when one write made both, stays with the death
+        # death cites too, as one write made both, stays with the death
         assert [r for r in statement.references if r.snaks.get(excerpt)]
         assert {r.hash for r in statement.references} & death_cites
         for reference in statement.references:

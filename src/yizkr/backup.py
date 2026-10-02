@@ -338,12 +338,18 @@ UNION_BOUNDS = ("started_by", "ended_by")
 EVENT_CLASS = "event"
 
 
-def event_kinds() -> set[str]:
-    """The keys of the model manifest's event classes: `event`
-    (``EVENT_CLASS``) and every item the manifest makes a subclass of it,
-    directly or through another."""
+# The class of every union, a partnership or a marriage (ADR-0036): an
+# entity, not an event. Its `started_by` and `ended_by` statements point to
+# its events, which go with it (``BOUND_LEFT_OUT``), never the other way.
+UNION_CLASS = "partnership"
+
+
+def event_kinds(root: str = EVENT_CLASS) -> set[str]:
+    """The keys of the model manifest's classes under `root`: `root` itself
+    and every item the manifest makes a subclass of it, directly or
+    through another; by default the event classes (``EVENT_CLASS``)."""
     manifest = load_manifest()
-    kinds = {EVENT_CLASS}
+    kinds = {root}
     while wider := {
         key
         for key, spec in manifest.items.items()
@@ -444,7 +450,9 @@ def read_dump(
     or a class the manifest makes a subclass of it (``event_kinds``), a
     person kind of event, or a class the dump makes a subclass of one, at
     any rank and through redirects; or an item with a `participant`
-    statement.
+    statement; but never a union, an item typed, at normal or preferred
+    rank, as a partnership or a marriage (``UNION_CLASS``), whose events
+    go with it and not it with them.
     Each is linked to every item that any of its statements names, as its
     value or a qualifier's, at every rank (``links``).
 
@@ -635,7 +643,13 @@ def read_dump(
         event_classes |= wider
     # an event is linked to every item that a statement of it names, as its
     # value or a qualifier's, at any rank, whatever the property
-    linked = typed_as(event_classes) | set(events.values())
+    # a union is no event, whatever its kind: a marriage is a person kind
+    # for the unattended rule, and its partners are its participants
+    unions_typed = typed_as(
+        {items[key] for key in event_kinds(UNION_CLASS) if key in items},
+        ranked=True,
+    )
+    linked = (typed_as(event_classes) | set(events.values())) - unions_typed
     for statement, event in owners.items():
         if event in linked and statement in named:
             reading.links.setdefault(event, set()).update(named[statement])

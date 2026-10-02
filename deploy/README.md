@@ -246,7 +246,8 @@ directory under `var/backups/` containing:
   these took part in (named as a participant, or in a participant
   statement's qualifier) or that any statement of it names, every
   person event that names no participant, every event whose
-  participants are all of unknown value, and the events that start and
+  participant statements all hold an unknown value or none, and the
+  events that start and
   end a union it leaves out. Everything
   else leaves as it is, text included: whatever is recorded about a
   released person (their labels, descriptions, names, and the source

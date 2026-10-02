@@ -2447,6 +2447,34 @@ class TestExportPublic:
         )
         assert "Q472" not in exclusions["excluded"]
 
+    @pytest.mark.parametrize("kind", ["marriage", "partnership"])
+    def test_a_union_is_no_event_its_wedding_takes(
+        self, tmp_path, vocabulary, kind
+    ):
+        # Gustav's (Q401, released) union, started by a wedding Florence
+        # (Q405, left out) took part in and ended by a divorce of his: the
+        # wedding goes, and the union's statement naming it goes whole,
+        # but the union is no event and stays, and so does its divorce
+        properties, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.entity("Q480", "a union", revision=480)
+        dump.says("Q480", "instance_of", entity(items[kind]))
+        dump.says("Q480", "participant", entity("Q401"))
+        dump.says("Q480", "started_by", entity("Q481"))
+        dump.says("Q480", "ended_by", entity("Q482"))
+        dump.entity("Q481", "a wedding", revision=481)
+        dump.says("Q481", "instance_of", entity(items["wedding"]))
+        dump.says("Q481", "participant", entity("Q405"))
+        dump.entity("Q482", "a divorce", revision=482)
+        dump.says("Q482", "instance_of", entity(items["divorce"]))
+        dump.says("Q482", "participant", entity("Q401"))
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert "Q481" not in mentioned
+        assert {"Q480", "Q482"} <= mentioned
+        started = f"<{CONCEPT}/prop/{properties['started_by']}>"
+        assert f"{entity('Q480')} {started} " not in text
+
     def test_the_judgement_notes_never_leave(self, tmp_path, vocabulary):
         # the extractor's remark on its own reading, in a run's reference
         # (ADR-0035), goes; the reference keeps what it cites (#363)
