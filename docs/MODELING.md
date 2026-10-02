@@ -572,15 +572,19 @@ Names are modelled in **two layers**:
   ("Cäcilie 'Cilli' Tarle"). A bracketed part ("Ida (Peppi) Sörne") may
   hold a nickname, a maiden name or a note, so it is an alias and an
   unsplit form of the mention record, typed as nothing and counted, and
-  the label leaves it out, save where the value is brackets alone
-  ("(Peppi)"), whose person keeps the brackets as its label; a NAME
+  the label leaves it out, save where the value gives a name only in
+  brackets that hold a word ("(Peppi)") and no other NAME of the person
+  gives one, when the person keeps the brackets as its label; a NAME
   without slashes, whose parts no GIVN or SURN gives, is an unsplit form
   too, and its TYPE gives no claim, and one with only a GIVN or only a
   SURN keeps its whole value as an unsplit form beside that part. A
   `_MARNM` gives a married-name claim only where its slashes hold a
-  surname; otherwise it is an unsplit form too (ADR-0035 §6). The adapter's texts are in the export's language
-  (HEAD.LANG, mapped to BCP 47), or undetermined (`und`) where it states
-  none. Typed names also feed reconciliation: a married
+  surname; otherwise it is an unsplit form too (ADR-0035 §6). A name or
+  part that holds no letter or digit ("?", "()") names nothing: it is
+  counted, not placed, so "Eugen /?/" is labelled "Eugen", and a person
+  whose NAMEs give no word is skipped, as one with an empty NAME is. The
+  adapter's texts are in the export's language (HEAD.LANG, mapped to BCP
+  47), or undetermined (`und`) where it states none. Typed names also feed reconciliation: a married
   name matching another's birth name (a marriage name change) is strong
   identity evidence.
 
@@ -766,16 +770,19 @@ part in the marriage (or partnership) with the role `spouse` (or
 divorce, an annulment, a partner's death, or an event of unstated kind
 where the source does not say how it ended, and each of those events
 carries its own date and place. Until the rest of the pipeline moves to
-marriages, the readers of spouse statements (the disagreement report,
-the timeline, the kinship query) still read them; extraction refuses and
-counts any spouse claim.
+marriages, the readers of spouse statements (among them the disagreement
+report, the timeline, the kinship query, reconciliation, clustering and
+the static site) still read them; extraction refuses and counts any
+spouse claim.
 
 **The GEDCOM adapter makes unions (ADR-0036 §5).** A family with two
 partners (its `HUSB` and `WIFE`, or, with no `WIFE` or no `HUSB`, two
-`HUSB`s or two `WIFE`s, counted) is a `marriage` when a `MARR` of it
-states a wedding, otherwise a `partnership` (the export gives Felix and
-Ida no `MARR`, so theirs is a partnership); its couple are its
-participants with the role `spouse` or `partner`. A `MARR` states its
+`HUSB`s or two `WIFE`s, counted, the second a partner only and never
+the children's parent) is a `marriage` when a `MARR` of it states a
+wedding, or when a `DIV` or `ANUL` states its end with no such `MARR`
+(a marriage with no wedding, counted), otherwise a `partnership` (the
+export gives Felix and Ida no `MARR`, so theirs is a partnership); its
+couple are its participants with the role `spouse` or `partner`. A `MARR` states its
 wedding as a `DIV` its divorce, by a `Y` or a `DATE` or `PLAC` with a
 value: a `MARR N`, or one that states nothing, makes no wedding and is
 counted. The family's `MARR`s of one kind are one wedding, which the
@@ -816,11 +823,12 @@ dating below is the convention its readers still interpret:
 - **`point_in_time` on a spouse or residence statement dates an
   observation**: a date at which the source presents the marriage or the
   residence as holding (a directory's listing, a census) without dating
-  its start or end. It never carries a wedding date. A source that merely
-  names a spouse, without dating the marriage, gives an undated spouse
-  statement: the document's own date is not an observation of the
-  marriage (Ida's registration card of 1945 names Felix, dead since 1931,
-  as her husband).
+  its start or end. It never carried a wedding date. A source that merely
+  named a spouse, without dating the marriage, gave an undated spouse
+  statement: the document's own date was no observation of the marriage
+  (Ida's registration card of 1945 names Felix, dead since 1931, as her
+  husband). Now such a source gives a union with no date, and the
+  document's date is still no observation of it.
 - **Each end has a range of its own.** A statement has one start and
   one end, and a source may bound either, so each end takes its own pair
   of qualifiers, as on Wikidata since `latest start date` (P8555) and

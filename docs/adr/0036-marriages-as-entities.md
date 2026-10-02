@@ -37,7 +37,19 @@ override):
 - **Two partners under one tag.** A family with two HUSBs and no WIFE,
   or two WIFEs and no HUSB, naming two people, has those two as its
   couple: a partnership, or a marriage where a MARR states a wedding,
-  counted as `FAM two HUSB/WIFE`.
+  counted as `FAM two HUSB/WIFE`. The second stays a partner only, never
+  a parent: the family's children take the first HUSB as father and the
+  first WIFE as mother, as ADR-0021's #322 amendment has it, since a
+  second father or mother "would give each child a second parent, which
+  the record cannot mean". (Amended 2026-10-02.)
+
+Amended by #408 (2026-10-02; decided by the orchestrator, the owner may
+override): **a divorce or an annulment ends a marriage.** A family whose
+DIV or ANUL states its event, with no MARR that states a wedding, is a
+`marriage` with no wedding, its couple `spouse`s, counted as `union:
+marriage without a wedding`; the source asserts the end of a marriage,
+not of a partnership. A family whose HUSB and WIFE name one person has
+no couple, as two HUSBs naming one person have none.
 
 ## Context
 

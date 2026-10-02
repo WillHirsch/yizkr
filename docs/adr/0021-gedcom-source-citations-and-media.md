@@ -32,7 +32,9 @@ Amendments.
 Amended by #408 (2026-09-29): a family's MARR, DIV and ANUL are events of
 its union (ADR-0036 §5), whose citations fold into those events' claims;
 a divorce's PLAC and a MARR's TYPE naming a ceremony are read, and an
-ANUL is read; the HEAD's LANG gives the texts' language: see Amendments.
+ANUL is read; a couple of two HUSBs or two WIFEs is a union's couple,
+but the second is never a parent; the HEAD's LANG gives the texts'
+language: see Amendments.
 
 ## Context
 
@@ -491,7 +493,10 @@ what #308, #323 and #324 say of the spouse claims is superseded:
   that states none (`MARR N`, a bare DIV) is counted as MARR, DIV or
   ANUL;
 - a family with no WIFE and two HUSBs, or no HUSB and two WIFEs, has
-  those two as its couple, so its second HUSB or WIFE is read; a further
+  those two as its couple, so its second HUSB or WIFE is read as a
+  partner; it is never the children's parent, which the first HUSB and
+  first WIFE alone are, since mapping a second "would give each child a
+  second parent, which the record cannot mean" (#322 above); a further
   one is still counted;
 - the HEAD's LANG gives the language of every excerpt and name the
   adapter writes (ADR-0035 §6), `und` where the export states none the

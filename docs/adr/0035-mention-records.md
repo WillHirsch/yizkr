@@ -30,9 +30,10 @@ claim whose note fails is a counted reject.
 
 Amended by #408 (2026-09-29): the GEDCOM adapter fills §6 as follows.
 The label of a NAME leaves out its bracketed parts, each of which is an
-alias and an `unsplit` form; a NAME whose value is brackets alone, with
-no part that gives a name, is labelled by the brackets as written
-("(Peppi)"), so that its person keeps an entity and its claims. A NAME
+alias and an `unsplit` form; a NAME whose value gives a name only in
+brackets that hold a word, with no part that gives a name, is labelled
+by the brackets as written ("(Peppi)"), so that its person keeps an
+entity and its claims. A NAME
 without slashes, whose parts no GIVN or SURN gives, gives no typed-name
 claim, whatever its TYPE; one with more than one pair of slashes is
 read so too, counted apart (`NAME slashes not one pair`). Given names
@@ -48,9 +49,13 @@ without a name`). A particle that the value's surname holds is no
 particle without a surname. A `_MARNM` gives a `married` surname and a
 `married_name` claim only where its slashes hold a surname; otherwise it
 is `unsplit`, counted, with no typed-name claim, as a NAME without
-slashes gives none. HEAD.LANG maps GEDCOM 5.5.1's language names to BCP
-47 where the instance is known to take the code, and takes one of those
-codes as it is ("de"); an absent or unmapped one gives `und`. The live
+slashes gives none. A name or a name part that holds no letter or digit
+("?", "-", "()") names nothing, so it is counted (`NAME part without a
+word`), not placed: "Eugen /?/" is labelled "Eugen" with no surname, and
+a record left with no given name, surname, nickname or unsplit form is
+none. HEAD.LANG maps GEDCOM 5.5.1's language names to BCP 47 where the
+instance is known to take the code; an absent or unmapped one gives
+`und`. The live
 GEDCOM tests check that the instance takes `und` and every mapped code
 for a monolingual text. What §6 counts is counted in the adapter's
 outcomes, beside its census of unmapped tags, and reaches the run's
@@ -61,7 +66,32 @@ override): a NAME without slashes that has only a GIVN or only a SURN
 keeps its whole value as an `unsplit` form beside that part, counted
 (`NAME without slashes, one part given`), so that no word the part does
 not place is dropped silently. The table's `unsplit` row is the NAME
-with neither.
+with neither. A HEAD.LANG that is already one of the map's codes ("de"),
+or `und`, is taken as it is. The export's `NICK Gustl` is a nickname and
+an alias in Gustav's record, which clustering (#409) meets the postcard's
+"Gustl" on.
+
+Amended by #408 (2026-10-02; decided by the orchestrator, the owner may
+override):
+
+- A NAME made only of a placeholder with no letters ("?", "-", "…"), or
+  of brackets that hold no word ("()", "(?)"), names no one: a person with
+  no other NAME that gives a word is skipped with the adapter's warning,
+  as one whose NAME is empty is, since the writer finds an item by its
+  label and would make every person labelled "?" one item.
+- Brackets give a person's label only when none of the person's NAMEs
+  gives a name otherwise: `1 NAME (Peppi)` then `1 NAME Ida /Sörne/` is
+  labelled "Ida Sörne", with "Peppi" an alias.
+- A quoted word after the surname ("Eugen /Löbig/ 'Muckel'") is a
+  nickname, not a suffix. A `_MARNM`'s unsplit form leaves its brackets
+  out ("(Peppi)" gives "Peppi"). A GIVN's quoted or bracketed part ("Ida
+  (Peppi)") is a nickname beside the given name. A bracket name keeps an
+  NPFX or NSFX beside it as a title or suffix, its full form an alias
+  ("Frau Peppi"). An NPFX that is the whole given part ("Eugen /Löbig/" +
+  NPFX Eugen) stays a given name, and is counted (`NPFX that is the given
+  name`). An NPFX the value states in part ("Dr. Eugen" + NPFX "Dr.
+  med.") gives the form "Dr. med. Eugen Löbig", and a prefix is matched
+  by its words folded ("Dr med" is "Dr. med.").
 
 **Decided by the owner (2026-09-29):**
 
@@ -175,7 +205,8 @@ same kind of reading well beyond the lists:
   form that adds a letter to it, while "Gustl" never meets "Gustav"
   (658-680, 1213-1227);
 - the GEDCOM adapter types any short bracketed part of a name as a
-  nickname, "(geb. Laudler)" included (`pipeline/gedcom.py:646-665`);
+  nickname, "(geb. Laudler)" included (`pipeline/gedcom.py` before
+  #408);
 - place structure read from commas and token length, so a toponym of
   three letters or fewer never keys (`pipeline/clustering.py:1002-1022`,
   `pipeline/clustering.yaml:21`);

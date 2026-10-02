@@ -1115,10 +1115,12 @@ class TestUnions:
         # event (ADR-0020 §2)
         result = adapt_gedcom(family("1 DIV Y"), artifact=EXPORT)
         assert result.unsupported_tags == {}
+        # a divorce ends a marriage, whose wedding the export does not state
         assert unions(result.batch) == {
-            "f5": "partnership",
+            "f5": "marriage",
             "f5-divorce": "divorce",
         }
+        assert result.outcomes["union: marriage without a wedding"] == 1
         assert on(result.batch, "f5", "ended_by") == [
             ("ended_by", "f5-divorce", [])
         ]
@@ -1147,7 +1149,7 @@ class TestUnions:
             family("1 DIV", "2 DATE 2 JAN 1957", "1 DIV", "2 DATE 1957"),
             artifact=EXPORT,
         ).batch
-        assert unions(batch) == {"f5": "partnership", "f5-divorce": "divorce"}
+        assert unions(batch) == {"f5": "marriage", "f5-divorce": "divorce"}
         assert dates(
             family("1 DIV", "2 DATE 2 JAN 1957", "1 DIV", "2 DATE 1957"),
             "f5-divorce",
@@ -5007,7 +5009,9 @@ class TestQuotesAndSlashes:
         assert "nicknames" not in parts(entity.structure)
         assert parts(entity.structure)["given"] == ["S.", "van", "'t"]
 
-    @pytest.mark.parametrize("nick", ["'Cilli'", '"Cilli"', "“Cilli”"])
+    @pytest.mark.parametrize(
+        "nick", ["'Cilli'", '"Cilli"', "“Cilli”", "‘Cilli’", "' Cilli '"]
+    )
     def test_a_quoted_nick_loses_its_quotes(self, nick):
         text = person("I2", "Cäcilie 'Cilli' /Tarle/", f"2 NICK {nick}")
         caecilie, _ = record_of(text, "i2")
@@ -5302,3 +5306,305 @@ class TestTwoOfOneTag:
         ) == ["i11", "i17"]
         assert result.unsupported_tags == {"FAM.HUSB": 1}
         assert "FAM two HUSB/WIFE" not in result.outcomes
+
+
+def leopold_and(name: str, *lines: str) -> str:
+    """Leopold's family with Agnes, Agnes named (here) `name`."""
+    return family("1 MARR", "2 DATE 8 FEB 1947").replace(
+        "1 NAME Agnes /Löbig/", "\n".join([f"1 NAME {name}", *lines])
+    )
+
+
+SKIPPED = "@I17@: no NAME gives a name; skipped entirely, with the family "
+
+
+class TestNamesWithoutWords:
+    """A name or a name part that holds no letter or digit ('?', '()')
+    names nothing: it is counted, never placed, and a person whose NAMEs
+    give no word is skipped, as one with an empty NAME is (ADR-0035 §6)."""
+
+    @pytest.mark.parametrize(
+        ("name", "lines"),
+        [
+            ("()", []),
+            ("( )", []),
+            ("(?)", []),
+            ("(,)", []),
+            ("/()/", []),
+            ("() //", []),
+            ("()", ["2 NPFX Frau"]),
+            ("?", []),
+            ("-", []),
+            ("…", []),
+            ("", ["2 GIVN ?"]),
+        ],
+    )
+    def test_a_name_without_a_word_skips_its_person(self, name, lines):
+        result = adapt_gedcom(leopold_and(name, *lines), artifact=EXPORT)
+        assert [e.id for e in result.batch.entities if e.kind == "human"] == [
+            "i11"
+        ]
+        assert [w for w in result.warnings if w.startswith(SKIPPED)]
+        # the rest of the export adapts: Leopold keeps his entity
+        assert unions(result.batch) == {}
+
+    def test_brackets_without_a_word_beside_a_word(self):
+        entity, outcomes = record_of(person("I7", "(Peppi) (?)"), "i7")
+        assert (entity.label, entity.aliases) == ("(Peppi)", ["Peppi"])
+        assert outcomes["NAME part without a word"] == 1
+        entity, outcomes = record_of(person("I1", "Eugen (?) /Löbig/"), "i1")
+        assert entity.label == "Eugen Löbig"
+        assert outcomes["NAME part without a word"] == 1
+
+    @pytest.mark.parametrize("bracket", ["()", "(Peppi)"])
+    def test_brackets_give_the_label_only_where_nothing_else_does(
+        self, bracket
+    ):
+        # an empty bracket, or a bracket that holds a name, listed first,
+        # never takes the label from a NAME that gives one
+        text = person("I7", bracket, "1 NAME Ida /Sörne/")
+        ida, _ = record_of(text, "i7")
+        assert ida.label == "Ida Sörne"
+        assert ida.aliases == (["Peppi"] if bracket == "(Peppi)" else [])
+
+    def test_two_people_named_by_empty_brackets_are_two(self):
+        # neither is labelled '()', which the writer would make one item
+        text = "\n".join(
+            ["0 @I7@ INDI", "1 NAME ()", "1 NAME Ida /Sörne/",
+             "0 @I17@ INDI", "1 NAME ()", "1 NAME Agnes /Löbig/",
+             "0 TRLR", ""]
+        )  # fmt: skip
+        labels = {k: v[0] for k, v in names_of_batch(text).items()}
+        assert labels == {"i7": "Ida Sörne", "i17": "Agnes Löbig"}
+
+    @pytest.mark.parametrize("piece", ["?", ".", "†"])
+    @pytest.mark.parametrize("tag", ["NPFX", "NSFX"])
+    def test_a_prefix_or_suffix_without_a_word_is_counted(self, tag, piece):
+        text = person("I1", "Eugen /Löbig/", f"2 {tag} {piece}")
+        eugen_entity, outcomes = record_of(text, "i1")
+        assert (eugen_entity.label, eugen_entity.aliases) == (
+            "Eugen Löbig",
+            [],
+        )
+        assert parts(eugen_entity.structure) == {
+            "given": ["Eugen"],
+            "surnames": [("Löbig", "other")],
+        }
+        assert outcomes["NAME part without a word"] == 1
+        assert "NAME parts not restated" not in outcomes
+
+    def test_a_placeholder_value_beside_a_given_name_part(self):
+        eugen_entity, outcomes = record_of(
+            person("I1", "?", "2 GIVN Eugen"), "i1"
+        )
+        assert (eugen_entity.label, eugen_entity.aliases) == ("Eugen", [])
+        assert parts(eugen_entity.structure) == {"given": ["Eugen"]}
+        assert outcomes["NAME part without a word"] == 1
+
+    def test_a_placeholder_surname_is_counted_not_placed(self):
+        eugen_entity, outcomes = record_of(person("I1", "Eugen /?/"), "i1")
+        assert eugen_entity.label == "Eugen"
+        assert parts(eugen_entity.structure) == {"given": ["Eugen"]}
+        assert outcomes["NAME part without a word"] == 1
+
+    @pytest.mark.parametrize("nick", ["''", "?", '""'])
+    def test_a_nick_without_a_word_is_counted(self, nick):
+        text = person("I1", "Eugen /Löbig/", f"2 NICK {nick}")
+        eugen_entity, outcomes = record_of(text, "i1")
+        assert eugen_entity.aliases == []
+        assert "nicknames" not in parts(eugen_entity.structure)
+        assert outcomes["NAME part without a word"] == 1
+        assert stated(text, "i1", "nickname") == []
+
+    def test_a_quoted_part_without_a_word_is_counted(self):
+        text = person("I1", "Eugen '?' /Löbig/")
+        eugen_entity, outcomes = record_of(text, "i1")
+        assert eugen_entity.label == "Eugen Löbig"
+        assert outcomes["NAME part without a word"] == 1
+        assert stated(text, "i1", "nickname") == []
+
+    @pytest.mark.parametrize("tag", ["GIVN", "SURN"])
+    def test_a_part_without_a_word_beside_the_value(self, tag):
+        text = person("I1", "Eugen /Löbig/", f"2 {tag} ?")
+        eugen_entity, outcomes = record_of(text, "i1")
+        assert parts(eugen_entity.structure) == {
+            "given": ["Eugen"],
+            "surnames": [("Löbig", "other")],
+        }
+        assert outcomes["NAME part without a word"] == 1
+
+    @pytest.mark.parametrize(("marnm", "count"), [("/?/", 1), ("?", 1)])
+    def test_a_married_name_without_a_word_is_counted(self, marnm, count):
+        text = person("I17", "Agnes /Löbig/", f"1 _MARNM {marnm}")
+        agnes, outcomes = record_of(text, "i17")
+        assert agnes.aliases == []
+        assert outcomes["NAME part without a word"] == count
+        assert stated(text, "i17", "married_name") == []
+
+    def test_a_name_whose_only_word_is_a_suffix_gives_no_record(self):
+        # 'Jr.' alone names no one by a given name or a surname: the
+        # entity stands, with no record, rather than one that fails
+        entity, _ = record_of(person("I1", "// Jr."), "i1")
+        assert entity.label == "Jr."
+        assert entity.structure is None
+
+
+class TestRound2Readings:
+    """The small reading rules the orchestrator decided (decision 5)."""
+
+    def test_a_quoted_word_after_the_surname_is_a_nickname(self):
+        text = person("I1", "Eugen /Löbig/ 'Muckel'")
+        eugen_entity, _ = record_of(text, "i1")
+        assert parts(eugen_entity.structure) == {
+            "given": ["Eugen"],
+            "surnames": [("Löbig", "other")],
+            "nicknames": ["Muckel"],
+        }
+        assert stated(text, "i1", "nickname") == [("Muckel", [])]
+
+    def test_a_married_names_brackets_are_left_out(self):
+        text = person("I7", "Ida /Sörne/", "1 _MARNM (Peppi)")
+        ida, _ = record_of(text, "i7")
+        assert parts(ida.structure)["unsplit"] == ["Peppi"]
+        assert ida.aliases == ["Peppi"]
+
+    def test_a_given_name_parts_bracket_is_a_nickname(self):
+        text = person("I7", "Ida /Sörne/", "2 GIVN Ida (Peppi)")
+        ida, _ = record_of(text, "i7")
+        assert parts(ida.structure) == {
+            "given": ["Ida"],
+            "surnames": [("Sörne", "other")],
+            "nicknames": ["Peppi"],
+        }
+        assert ida.aliases == ["Peppi"]
+        assert structure_problems(ida) == []
+
+    def test_a_given_name_parts_quote_is_a_nickname(self):
+        text = person("I2", "Cäcilie /Tarle/", "2 GIVN Cäcilie 'Cilli'")
+        caecilie, _ = record_of(text, "i2")
+        assert parts(caecilie.structure)["given"] == ["Cäcilie"]
+        assert parts(caecilie.structure)["nicknames"] == ["Cilli"]
+
+    def test_undetermined_is_taken_as_it_is(self):
+        result = adapt_gedcom(
+            "0 HEAD\n1 LANG und\n" + eugen("1 BIRT", "2 DATE 1836"),
+            artifact=EXPORT,
+        )
+        assert {
+            c.source.transcription_excerpt.language
+            for c in result.batch.claims
+        } == {"und"}
+        assert not [k for k in result.outcomes if k.startswith("HEAD.LANG")]
+
+    def test_a_bracket_name_keeps_its_prefix(self):
+        ida, outcomes = record_of(person("I7", "(Peppi)", "2 NPFX Frau"), "i7")
+        assert parts(ida.structure) == {
+            "titles": ["Frau"],
+            "unsplit": ["Peppi"],
+        }
+        assert ida.aliases == ["Peppi", "Frau Peppi"]
+        assert outcomes["NAME parts not restated"] == 1
+        assert "NAME part without a name" not in outcomes
+        assert structure_problems(ida) == []
+
+    def test_a_prefix_that_is_the_given_name_stays_a_given_name(self):
+        eugen_entity, outcomes = record_of(
+            person("I1", "Eugen /Löbig/", "2 NPFX Eugen"), "i1"
+        )
+        assert parts(eugen_entity.structure) == {
+            "given": ["Eugen"],
+            "surnames": [("Löbig", "other")],
+        }
+        assert outcomes["NPFX that is the given name"] == 1
+
+    def test_a_prefix_stated_in_part_is_not_written_twice(self):
+        text = person("I1", "Dr. Eugen /Löbig/", "2 NPFX Dr. med.")
+        eugen_entity, _ = record_of(text, "i1")
+        assert eugen_entity.aliases == ["Dr. med. Eugen Löbig"]
+        assert parts(eugen_entity.structure)["titles"] == ["Dr. med."]
+
+    def test_a_prefix_matches_its_words_folded(self):
+        text = person("I1", "Dr med Eugen /Löbig/", "2 NPFX Dr. med.")
+        eugen_entity, outcomes = record_of(text, "i1")
+        assert parts(eugen_entity.structure)["given"] == ["Eugen"]
+        assert parts(eugen_entity.structure)["titles"] == ["Dr. med."]
+        assert "NAME parts not restated" not in outcomes
+
+    def test_a_restated_suffix_beside_the_value_gives_no_form(self):
+        text = person("I1", "Eugen /Löbig/ Jr.", "2 NSFX Jr.")
+        eugen_entity, outcomes = record_of(text, "i1")
+        assert parts(eugen_entity.structure)["suffixes"] == ["Jr."]
+        assert eugen_entity.aliases == []
+        assert "NAME parts not restated" not in outcomes
+
+    def test_a_married_name_with_a_blank_surname_is_unsplit(self):
+        text = person("I17", "Agnes /Löbig/", "1 _MARNM Agnes / /")
+        agnes, outcomes = record_of(text, "i17")
+        assert parts(agnes.structure)["unsplit"] == ["Agnes"]
+        assert outcomes["_MARNM without a surname"] == 1
+        assert stated(text, "i17", "married_name") == []
+
+    def test_a_slashless_name_with_one_part_keeps_its_typed_claim(self):
+        text = person("I12", "Rudolf Löbig", "2 SURN Löbig", "2 TYPE birth")
+        assert stated(text, "i12", "birth_name") == [("Rudolf Löbig", [])]
+
+    def test_a_nick_of_two_quotes_names_nothing(self):
+        text = person("I2", "Cäcilie /Tarle/", "2 NICK ''")
+        caecilie, outcomes = record_of(text, "i2")
+        assert "nicknames" not in parts(caecilie.structure)
+        assert outcomes["NAME part without a word"] == 1
+
+
+class TestRound2Unions:
+    def test_a_dated_end_stays_dated_beside_an_unparsed_date(self):
+        result = adapt_gedcom(
+            family("1 MARR Y", "1 DIV", "2 DATE 1957", "2 DATE sometime"),
+            artifact=EXPORT,
+        )
+        assert "union: undated divorce" not in result.outcomes
+
+    def test_one_person_as_husband_and_wife_is_no_couple(self):
+        text = family("1 MARR Y").replace("1 WIFE @I17@", "1 WIFE @I11@")
+        result = adapt_gedcom(text, artifact=EXPORT)
+        assert unions(result.batch) == {}
+
+    def test_the_second_of_one_tag_is_no_parent(self):
+        # decision 1: a couple under one tag are partners, and only the
+        # first is the child's parent, as the record cannot mean two
+        # fathers
+        text = same_tag_family(
+            "1 HUSB @I11@", "1 HUSB @I12@", "1 CHIL @I13@"
+        ).replace(
+            "0 @F9@ FAM", "0 @I13@ INDI\n1 NAME Gustav /Löbig/\n0 @F9@ FAM"
+        )
+        batch = adapt_gedcom(text, artifact=EXPORT).batch
+        assert [v for _, v, _ in on(batch, "i13", "father")] == ["i11"]
+        assert on(batch, "i13", "mother") == []
+        assert unions(batch) == {"f9": "partnership"}
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ["1 DIV Y"],
+            ["1 ANUL Y"],
+            ["1 MARR N", "1 DIV", "2 DATE 2 JAN 1957"],
+        ],
+    )
+    def test_an_end_with_no_wedding_is_of_a_marriage(self, lines):
+        # decision 4: a divorce or an annulment ends a marriage, whose
+        # wedding the export does not state
+        result = adapt_gedcom(family(*lines), artifact=EXPORT)
+        assert unions(result.batch)["f5"] == "marriage"
+        assert not [k for k in unions(result.batch) if "wedding" in k]
+        assert on(result.batch, "f5", "started_by") == []
+        assert result.outcomes["union: marriage without a wedding"] == 1
+        assert {
+            role
+            for _, _, quals in on(result.batch, "f5", "participant")
+            for _, role in quals
+        } == {"spouse"}
+
+    def test_an_end_that_states_nothing_leaves_a_partnership(self):
+        result = adapt_gedcom(family("1 DIV N"), artifact=EXPORT)
+        assert unions(result.batch) == {"f5": "partnership"}
+        assert "union: marriage without a wedding" not in result.outcomes
