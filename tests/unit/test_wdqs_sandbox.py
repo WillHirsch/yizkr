@@ -478,7 +478,7 @@ class Cues:
         finally:
             os.close(exited)
         if self.listener not in ready:
-            if process.poll() is None:
+            if exited not in ready:
                 pytest.fail(
                     f"no fake call reached {name} within {HANG_GUARD} s"
                 )
