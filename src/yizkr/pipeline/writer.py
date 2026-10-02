@@ -142,7 +142,7 @@ string value before it checks and stores it, and in every text its API
 gives back, monolingual text included. So it changes a vertical tab or a
 form feed in a string value into U+FFFD rather than refusing it. It
 trims a label, a description or an alias, cleans it up and keeps it in a
-form of its own (`_stored_term`), in at most TERM_LIMIT (250)
+form of its own (`stored_term`), in at most TERM_LIMIT (250)
 characters, and refuses an item whose label and description are the
 same. It refuses the whole edit that sends a text it does not hold. The
 writer checks each text in the form the instance keeps it in, and sends
@@ -185,7 +185,7 @@ before it are written:
   numbers, regions or excerpts that agree up to the cut apart, so the
   two places a source asserts a value in stay two reference blocks;
 * a label, a description or an alias the writer makes goes in the form
-  the instance keeps a term in (`_stored_term`: trimmed, cleaned up and
+  the instance keeps a term in (`stored_term`: trimmed, cleaned up and
   in NFC, in that order, as Wikibase's trimToNFC does it), and one still
   over TERM_LIMIT once in that form is cut in the same way, with its
   digest (`_term_text`), so whitespace around a term never counts
@@ -246,7 +246,7 @@ from yizkr.pipeline.review import (
 TEXT_LIMIT = 400
 # the most characters Wikibase holds in a term, a label, a description or
 # an alias (its `multilang` string limit), counted once it has trimmed the
-# term (_stored_term)
+# term (stored_term)
 TERM_LIMIT = 250
 # what a text cut to its limit ends with, before the digest of the whole
 # text (_cut)
@@ -575,7 +575,7 @@ def _cleaned_up(text: str) -> str:
     return text.translate(_CLEAN_UP)
 
 
-def _stored_term(text: str) -> str:
+def stored_term(text: str) -> str:
     """`text` in the form the instance keeps a label, a description or an
     alias in, reached as Wikibase's trimToNFC reaches it: first trimmed,
     each run of control characters and line or paragraph separators in it
@@ -592,11 +592,11 @@ def _stored_term(text: str) -> str:
 def _term_text(text: str) -> str:
     """A label, description or alias as the writer sends it, and as it
     looks for a label: in the form the instance keeps a term in
-    (_stored_term) and, when that is longer than TERM_LIMIT, cut to it
+    (stored_term) and, when that is longer than TERM_LIMIT, cut to it
     (_cut). So the term it sends is the term the instance keeps, and a
     label given in another form, or at any length, finds the item written
     for it."""
-    return _cut(_stored_term(text), TERM_LIMIT)
+    return _cut(stored_term(text), TERM_LIMIT)
 
 
 def _terms(texts: list[str]) -> list[str]:

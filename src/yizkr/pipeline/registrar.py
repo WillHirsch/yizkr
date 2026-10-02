@@ -73,7 +73,8 @@ from yizkr.pipeline.presentation import IMAGE_SUFFIXES, DerivedMediaRecord
 # rule (_stored_term), and TERM_LIMIT is the most characters it takes in
 # one: in any other form, a label another item holds would look free, and
 # an alias the item has would look missing
-from yizkr.pipeline.writer import TERM_LIMIT, _stored_term
+from yizkr.pipeline.writer import TERM_LIMIT
+from yizkr.pipeline.writer import stored_term as _stored_term
 
 
 def _fitted(

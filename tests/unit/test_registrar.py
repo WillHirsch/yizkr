@@ -1037,7 +1037,7 @@ class TestTermsInTheStoredForm:
 
     def test_titles_and_labels_share_the_writers_rule(self):
         # one rule for the terms both write, and one limit (#369)
-        assert registrar._stored_term is writer._stored_term
+        assert registrar._stored_term is writer.stored_term
         assert registrar.TERM_LIMIT == writer.TERM_LIMIT
 
     @pytest.mark.parametrize(

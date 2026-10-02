@@ -1,5 +1,5 @@
 """Live validation of the form the writer sends terms and text in (#369,
-#403; the writer's `_stored_term`, `_cleaned_up` and CLEANED_UP).
+#403; the writer's `stored_term`, `_cleaned_up` and CLEANED_UP).
 
 Wikibase keeps a label, a description or an alias as its trimToNFC gives
 it: trimmed, then cleaned up (UtfNormal's cleanUp makes each C0 control

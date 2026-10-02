@@ -25,7 +25,11 @@ Amended by #369 (2026-09-29): titles are compared and set by the one rule
 the writer keeps labels by, which the registrar imports from it, and an
 artifact's description is sent in that form too (§1).
 Amended by #403 (2026-09-29): that rule cleans a term up as Wikibase
-does after trimming it, U+FFFE and U+FFFF made U+FFFD (§1).
+does after trimming it, U+FFFE and U+FFFF made U+FFFD (§1). It follows
+UtfNormal 4.0.0, which MediaWiki pins: a Wikibase Suite upgrade that
+brings a newer UtfNormal must check the rule again, as UtfNormal's later
+code also puts U+25CC before a combining mark with no base character
+before it (prependIsolatedCombining).
 
 ## Context
 
@@ -102,7 +106,7 @@ never by name (amended by #103, 2026-09-29):
   the order they are registered in, so nothing may key on an artifact's
   label: its key is its `media SHA-1`. Titles and labels are compared
   and set in the form Wikibase stores terms in, by the rule the writer
-  keeps labels by (its `_stored_term`): each run of control characters
+  keeps labels by (its `stored_term`): each run of control characters
   and line or paragraph separators made one space, the separators and
   the Mongolian vowel separator trimmed at either end, then U+FFFE and
   U+FFFF made U+FFFD, then NFC. So a title in another form never passes

@@ -1,5 +1,5 @@
 """Offline tests of the one rule by which the writer and the registrar keep
-a term, and of the text Wikibase cleans up (#369, #403; `_stored_term`,
+a term, and of the text Wikibase cleans up (#369, #403; `stored_term`,
 `_cleaned_up` and CLEANED_UP in yizkr.pipeline.writer).
 
 Wikibase keeps a label, a description or an alias as its trimToNFC gives
@@ -41,6 +41,7 @@ from tests.unit.test_pipeline import (
     MEDIA_SHA1,
     TEXT_CLAIMS,
     TEXT_OF,
+    TREE_SHA1,
     FakeWiki,
     _batch_of,
     _by_value,
@@ -51,6 +52,7 @@ from tests.unit.test_pipeline import (
     _places,
     _sources,
     _statements,
+    _tree_batch,
     _values,
 )
 from tests.unit.test_writer_limits import (
@@ -67,7 +69,11 @@ from tests.unit.test_writer_limits import (
     _to_the_last_space,
     _with_properties,
 )
-from tests.unit.test_writer_text_shapes import TERM_ROOM, _term_cut
+from tests.unit.test_writer_text_shapes import (
+    TERM_ROOM,
+    _term_cut,
+    _with_aliases,
+)
 from yizkr.claims import ClaimBatch, RegionPercent
 from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import TERM_LIMIT, TEXT_LIMIT, BatchWriter
@@ -101,7 +107,7 @@ def _written_again(wiki: FakeWiki, batch: ClaimBatch):
 
 class TestTermsAsTheInstanceKeepsThem:
     """A label is sent and looked for, and a description sent, in the form
-    Wikibase keeps a term in (_stored_term): whitespace around it trimmed,
+    Wikibase keeps a term in (stored_term): whitespace around it trimmed,
     U+FFFE and U+FFFF made U+FFFD, and cut once in that form."""
 
     @pytest.mark.parametrize(
@@ -133,6 +139,23 @@ class TestTermsAsTheInstanceKeepsThem:
         assert again.created_items["e07"] == eugen
         assert unchanged
         assert _labelled(wiki, kept) == [eugen]
+
+    def test_an_alias_given_twice_is_sent_once(self):
+        # (here) the tree gives Sebastian's pet name twice, once with a
+        # space before it: one alias to the instance, so the writer sends
+        # it once, as an edit that repeats an alias is not the item's form
+        wiki = FakeWiki({MEDIA_SHA1: "Q23", TREE_SHA1: "Q29"}, detached=True)
+
+        written = BatchWriter(wiki).write_batch(
+            _with_aliases(_tree_batch(), ["Wastl", " Wastl"])
+        )
+
+        sebastian = written.created_items["e03"]
+        minted = next(
+            item for item in wiki.wbi.item.sent if item.get("id") == sebastian
+        )
+        sent = [alias["value"] for alias in minted["aliases"]["en"]]
+        assert sent == ["Wastl"]
 
     def test_a_description_is_cut_once_trimmed(self):
         # (here) Sebastian's summary, said over to one character past the

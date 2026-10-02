@@ -269,6 +269,18 @@ class TestTheFakeRefusesWhatWikibaseRefuses:
             "Muckel\ufffd"
         ]
 
+    def test_a_c1_control_in_a_term_is_kept_as_a_space(self):
+        # the next line (U+0085) is a control character (Cc), which
+        # trimWhitespace makes a space as it does a line feed
+        wiki = FakeWiki(detached=True)
+        item = wiki.wbi.item.new()
+        item.labels.set("en", "Eugen\x85Löbig")
+
+        item.write()
+
+        (kept,) = wiki.wbi.item.store.values()
+        assert str(kept.labels.get("en")) == "Eugen Löbig"
+
     def test_the_fake_cleans_up_what_utfnormal_cleans_up(self):
         # (#403) UtfNormal 4.0.0's replaceForNativeNormalize, written out
         # here apart from WIKIBASE_CLEANED: /[\x00-\x08\x0b\x0c\x0e-\x1f]/,
