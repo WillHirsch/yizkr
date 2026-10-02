@@ -2045,35 +2045,73 @@ class TestFailFastPauses:
         assert run.control().stopped(kind="media") == "kind:media paused"
         assert timers.waiting() == [first]
 
-    def test_the_timer_runs_on_a_thread_of_its_own(self, tmp_path):
-        """With the real timer and clock: an abort that no later check
-        makes. The pause stands when the check that asked for it ends, and
-        the timer's thread, of a daemon, aborts it in its own time; the
-        slice stays watched, by the next timer."""
+    # the fake clock's offset from the real one: none, stepped back an
+    # hour or a year, and far ahead
+    @pytest.mark.parametrize(
+        "offset", [0, -3600, -365 * 86400, 10 * 365 * 86400]
+    )
+    def test_the_timer_runs_on_a_thread_of_its_own(
+        self, tmp_path, clock, offset
+    ):
+        """With the real timer, started with no wait, and the checks' fake
+        clock, which never moves: an abort that no later check makes. The
+        pause stands when the check that asked for it ends, and the
+        timer's thread, of a daemon, aborts it in its own time, having run
+        its full wait; the slice stays watched, by the next timer. The
+        test waits on the thread (join), never on a time, and reads no
+        real clock, so the wall clock frozen, stepped back or far ahead
+        changes nothing."""
+        clock.advance(offset)
+        asked: list[float] = []
         started: list[threading.Timer] = []
+        seen = threading.Event()
 
         def start(seconds, callback):
-            started.append(START_TIMER(seconds, callback))
+            # the first timer runs at once, once the test has seen the
+            # pause; the next ones are only started
+            asked.append(seconds)
+            if started:
+                started.append(START_TIMER(seconds, callback))
+            else:
+
+                def released():
+                    # a hang guard only: the test sets it
+                    assert seen.wait(timeout=60)
+                    callback()
+
+                started.append(START_TIMER(0, released))
             return started[-1]
 
         run = RunDir(tmp_path / "run")
         checks = AnomalyChecks(
-            run, load_config(overrides={"pause-timeout-s": 2}), timer=start
+            run,
+            load_config(overrides={"pause-timeout-s": 2}),
+            now=clock,
+            timer=start,
         )
         try:
             outcomes(run, "transcription", "media", "xxxxxx")
             checks.poll()
             assert run.control().stopped(kind="media") == "kind:media paused"
             first = started[0]
-            assert first.daemon
-            first.join(timeout=30)
+            # due a timeout and a second after the request's whole-second
+            # stamp, on the fake clock
+            assert 2 < asked[0] <= 3
+            seen.set()
+            # a hang guard only: the thread runs at once
+            first.join(timeout=60)
             assert not first.is_alive()
+            assert first.daemon
             assert run.control().stopped(kind="media") == "kind:media aborted"
             assert len(started) == 2 and started[1].daemon
+            # the next look a timeout and a second after the time the
+            # first timer was due, by the fake clock, which has not moved
+            assert asked[1] == pytest.approx(asked[0] + 3)
         finally:
+            seen.set()
             for timer in started:
                 timer.cancel()
-                timer.join(timeout=30)
+                timer.join(timeout=60)
 
     def test_a_timer_waits_at_most_the_longest_wait_a_thread_can(self):
         timer = START_TIMER(threading.TIMEOUT_MAX + 1, lambda: None)
@@ -3126,3 +3164,40 @@ class TestHelpers:
             {"action": "pause", "scope": "run"},
             {"action": "resume", "scope": "run"},
         ]
+
+
+# the fakes that may read the real clock: the fake clock starts from it
+_REAL_CLOCK_ALLOWED = {"Clock"}
+_REAL_TIME_CALLS = {
+    ("time", "sleep"),
+    ("time", "time"),
+    ("time", "monotonic"),
+    ("time", "perf_counter"),
+    ("datetime", "now"),
+    ("datetime", "utcnow"),
+    ("threading", "Timer"),
+}
+
+
+def test_no_test_here_waits_on_or_reads_the_real_clock():
+    """No test in this file sleeps, reads the real clock or starts a
+    threading.Timer of its own: the checks' clock is the fake Clock, their
+    timers the fake Timers or the real _start_timer given no wait (#432).
+    Only the fakes in _REAL_CLOCK_ALLOWED may read the real clock."""
+    import ast
+
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    allowed: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name in _REAL_CLOCK_ALLOWED:
+            allowed.update(id(inner) for inner in ast.walk(node))
+    found = [
+        f"line {node.lineno}: {node.func.value.id}.{node.func.attr}("
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and (node.func.value.id, node.func.attr) in _REAL_TIME_CALLS
+        and id(node) not in allowed
+    ]
+    assert found == []
