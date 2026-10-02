@@ -45,6 +45,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.fixtures.exits import pid_exit_fd
 from tests.integration import live_lock
 from tests.integration.live_lock import LOCK_ENV, SHARED_ENV, TIMEOUT_ENV
 
@@ -505,13 +506,9 @@ def running(pid):
 
 def pidfd(pid):
     """A pidfd of `pid`, which turns readable once the process ends, as a
-    zombie awaiting reaping or reaped; None when it has ended already."""
-    if not hasattr(os, "pidfd_open"):
-        pytest.skip("no pidfd_open() here")
-    try:
-        return os.pidfd_open(pid)
-    except ProcessLookupError:
-        return None
+    zombie awaiting reaping or reaped; None when it has ended already
+    (tests/fixtures/exits.py, with or without os.pidfd_open)."""
+    return pid_exit_fd(pid)
 
 
 def until_ended(pids):

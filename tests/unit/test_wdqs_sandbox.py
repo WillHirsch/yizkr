@@ -41,6 +41,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures.exits import child_exit_fd
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "wdqs_sandbox.py"
 
@@ -468,7 +470,7 @@ class Cues:
     def wait_for(self, name: str, process: subprocess.Popen) -> socket.socket:
         """Wait until a fake call says it reached `name`, while `process`
         runs; returns the call's connection, which holds it there."""
-        exited = os.pidfd_open(process.pid)
+        exited = child_exit_fd(process.pid)
         try:
             ready, _, _ = select.select(
                 [self.listener, exited], [], [], HANG_GUARD
@@ -822,6 +824,21 @@ class TestInterruptedWorkStops:
         assert not world["wedged"]
         assert world["killed"] == world["pidfiles"][:1]
         assert not [path for path in world["files"] if path.endswith(".rq")]
+
+    def test_a_query_is_interrupted_where_python_has_no_pidfd_open(
+        self, fake, monkeypatch
+    ):
+        """A Python build may lack os.pidfd_open: the wait for the fake
+        call's cue still ends on the command's exit or on the cue, never
+        on a time (tests/fixtures/exits.py, #437)."""
+        monkeypatch.delattr(os, "pidfd_open", raising=False)
+        fake.set_world([SANDBOX], hang="query")
+        fake.record(SANDBOX["name"], loaded=[])
+        code, _, err, _ = fake.interrupt("query", "--raw", str(fake.query))
+        assert code == 128 + signal.SIGINT
+        assert "interrupted; cancelled the query in the engine (1 task)" in (
+            one_line_error(err)
+        )
 
     def test_load_replace(self, fake):
         """An interrupted load --replace records the emptied store before
