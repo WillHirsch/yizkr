@@ -33,6 +33,8 @@ def uses(source: str, **options) -> list[str]:
         "def f(thread):\n    thread.join(5)\n",
         "def f(thread):\n    thread.join(timeout=1.5)\n",
         "def f(event, seconds):\n    event.wait(timeout=seconds)\n",
+        "def f(event):\n    event.wait(False)\n",
+        "def f(thread):\n    thread.join(timeout=0.001)\n",
         "START_TIMER(0.05, print)\n",
         "START_TIMER(seconds, print)\n",
         "START_TIMER(False, print)\n",
@@ -65,6 +67,8 @@ def test_what_a_test_may_do_is_not_found():
         threading.Thread(target=print).join(HANG_GUARD)
         START_TIMER(0, print)
         START_TIMER(0.0, print)
+        threading.Event().wait(0)
+        threading.Thread(target=print).join(timeout=0.0)
     """
     assert (
         uses(source, hang_guards={"HANG_GUARD"}, real_timers={"START_TIMER"})

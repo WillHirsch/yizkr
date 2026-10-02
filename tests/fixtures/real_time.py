@@ -55,6 +55,15 @@ def _number(node: ast.expr) -> bool:
     )
 
 
+def _zero(node: ast.expr | None) -> bool:
+    """Whether `node` is a literal 0 (or 0.0), and not False."""
+    return (
+        isinstance(node, ast.Constant)
+        and not isinstance(node.value, bool)
+        and node.value == 0
+    )
+
+
 def _timeout(call: ast.Call) -> ast.expr | None:
     """The timeout a `.wait(...)` or `.join(...)` call passes: its
     `timeout` keyword, or a lone positional number (a str.join's iterable
@@ -77,9 +86,9 @@ def real_time_uses(
     """Each use of the real clock in `source`, as 'line N: what', outside
     the classes and functions named in `exempt`. A `.wait` or `.join`
     may take, as its timeout, only a name in `hang_guards`, a bound on a
-    wait that a synchronisation ends, never a time the test waits out. A
-    call of a
-    name in `real_timers` (a real timer's starter, called with its wait
+    wait that a synchronisation ends, never a time the test waits out,
+    or a literal 0, a poll that waits no time. A call of a name in
+    `real_timers` (a real timer's starter, called with its wait
     and its callback) must ask for a wait of 0."""
     tree = ast.parse(source)
     names, hang_guards = set(exempt), set(hang_guards)
@@ -103,16 +112,11 @@ def real_time_uses(
             found.append(f"line {node.lineno}: {name}(")
         elif name in WAITS:
             timeout = _timeout(node)
-            if timeout is not None and not (
-                isinstance(timeout, ast.Name) and timeout.id in hang_guards
-            ):
+            named = isinstance(timeout, ast.Name) and timeout.id
+            if not (timeout is None or _zero(timeout) or named in hang_guards):
                 found.append(f"line {node.lineno}: {name}( with a timeout")
-        elif name in real_timers:
-            wait = node.args[0] if node.args else None
-            if not (
-                isinstance(wait, ast.Constant)
-                and wait.value == 0
-                and not isinstance(wait.value, bool)
-            ):
-                found.append(f"line {node.lineno}: {name}( with a wait")
+        elif name in real_timers and not _zero(
+            node.args[0] if node.args else None
+        ):
+            found.append(f"line {node.lineno}: {name}( with a wait")
     return sorted(found, key=lambda use: int(use.split()[1].rstrip(":")))

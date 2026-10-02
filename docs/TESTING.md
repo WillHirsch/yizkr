@@ -66,6 +66,28 @@ itself in its own `--help`.
     that calls `monkeypatch.undo()` loses them for the rest of its run. A
     test that needs a patch for part of its run scopes it with
     `with monkeypatch.context() as patch:` instead.
+- **No unit test depends on real elapsed time or the real wall clock**
+  (#437). Code that reads a clock or sleeps takes a seam (`clock=`,
+  `now=`, `sleep=`, `monotonic=`, `timer=`) defaulting to the real one,
+  and the test injects a fake it advances itself. A test of an OS
+  mechanism (a lock across processes, a signal, a child) synchronises
+  on an event: a pipe, a line the child prints, a joined thread, an
+  Event set just before a call blocks. A bounded wait stays only as a
+  hang guard, with a module-level `HANG_GUARD` as its timeout, and is
+  followed by an assertion that the event happened, so a hang fails. A
+  timeout of a literal 0 is a poll and waits no time.
+  `tests/unit/test_no_real_time.py` enforces this: it reads every module
+  in `tests/unit`, conftest.py and new modules included, with the finder
+  in `tests/fixtures/real_time.py` (pinned by
+  `tests/unit/test_real_time.py`), and fails, naming the file and line,
+  on any use its allow-list `ALLOWED` does not name. Each entry names the
+  module, the use as the finder words it (or `*` for a whole module held
+  until another pull request merges), optionally the test it is limited
+  to, and its reason. An entry that no longer matches a use, or names a
+  module that does not exist, fails too, so the list only shrinks. The
+  finder reads only the module's own code: a child's script held in a
+  string, a timeout given to `subprocess.run` or `communicate`, and a
+  real clock reached through a default in `src/` are left to review.
 - **The offline end-to-end scratch run**
   (`tests/unit/test_fixture_corpus.py`, a unit test like the rest) takes
   the fixture corpus (`tests/fixtures/corpus/`, docs/EXAMPLES.md) through
