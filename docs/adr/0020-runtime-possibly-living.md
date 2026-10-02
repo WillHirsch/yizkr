@@ -31,6 +31,110 @@ participant, and the events that start and end a union it leaves out.
 It drops the extractor's judgement notes and any line it cannot read,
 and refuses a dump that holds a sitelink or a property of a type the
 model does not use (§4, Ruling 6).
+Amended by #364 (2026-09-29): a statement whose value, or any
+qualifier's value, is an item the export leaves out is left out whole:
+its node, rank, qualifiers (a wedding's date among them) and references
+(one a kept statement cites too stays with that one), and the truthy
+triple it gave (for a statement of unknown value, every truthy triple of
+unknown value of its item and property), even on an item the export
+keeps.
+An item named in a qualifier of an event's `participant` statement,
+whatever the statement's value, an unknown one or none included, takes
+part in that event for the event rule, without being person evidence or
+attending a person event on that alone (§4, Ruling 6).
+Amended by #364, orchestrator decisions (2026-10-02, privacy first, on
+the questions the review of #364 raised): an event whose participants
+are all of unknown value is left out, failing closed, as ADR-0036 §6
+does for unions; "the events involving them" covers any link, so an
+event that names an item the export leaves out as the value, or a
+qualifier's value, of any of its statements is left out whole, through
+the same fixpoint; a union (ADR-0036) is never an event for this rule:
+its events go with it, not it with them; and the private site keeps its
+badge on the person named, without marking the statements the export
+drops whole, which the site paragraphs below list (§4, Ruling 6).
+Amended by #364, orchestrator decisions on the re-review (2026-10-02):
+"participants all of unknown value" means at least one `participant`
+statement, every one of unknown value (or none); an event of no person
+kind with no `participant` statement at all names no one and stays,
+unless the link rule takes it, so impersonal events (a fire, a hearing
+that names only places or organizations) stay. The link rule follows
+only items left out to protect people: a possibly-living person, and an
+item left out as one that may be a person (an organization with person
+evidence, say). An item left out only as untyped, or as a family, takes
+no event with it; the statement naming it still goes whole, so a
+released person's birth at an untyped place, or a released person's
+migration that a family carried out, stays without that statement. An
+untyped item or a family that the participant or unattended rule would
+also leave out, that may be a person (read through redirects), or a
+statement of which names an item left out to protect people, is not
+left out only as untyped or as a family. And an item typed human, at
+normal or preferred rank, is never an event for the participant, link or
+unattended rule (§4).
+Amended by #364, orchestrator decision J (2026-10-02, privacy first;
+corrected the same day, unknown means excluded): a family protects
+people, and so takes with it an event that names it, unless it names at
+least one member and every member it names is released. Its members are
+read from the dump: the values of the family's own `participant`
+statements (never what their qualifiers name, a role or a place), and
+the items its `member of` statements name it, through redirects, at any
+rank. So "Departure of the Lobigs, 1975", carried out by a family with a
+possibly-living member, or with no recorded member, whose members cannot
+be confirmed released, goes whole; a family that names members, all of
+them released, is left out only as a family and takes no event with it,
+as decision I says. A family stays a family, a `human` type beside its
+`family` type notwithstanding (§4).
+Amended by #364, orchestrator decisions Q and R (2026-10-02): an item
+that anyone names with `member of` is a group for decision J, whatever
+its type or whether it is typed at all, so stating less type information
+never protects less; an untyped organization with a possibly-living
+member takes events with it, an over-drop accepted, failing closed (Q).
+And J applies to the participant rule too: a group that names at least
+one member, all of them released, is a harmless participant, like a
+released person, so "Emigration of the Lobigs" with Gustav and such a
+family as participants stays; a group with a member not released, or
+with no recorded member, still takes the event (`PARTICIPANT_LEFT_OUT`),
+and a person kind of event (a migration, a death, any person kind) is
+its members' own, so a group taking part takes it with it even when the
+check released every member, the group itself included (R, corrected
+the same day: such a group is not a person the check never assessed,
+as first written, as the check can release it) (§4).
+Amended by #364, orchestrator decisions U and V (2026-10-02, privacy
+first): a group with a `participant` statement of unknown value counts
+as not confirmed released, so it takes events with it and is never a
+harmless participant: Gustav and an unknown participant shield (U). And
+a group's members are read through the groups among them, transitively,
+through redirects, ending on cycles: a group whose members, so read,
+include at least one person, every one released, counts as released;
+a member group with a member not released, or of unknown value, makes
+the outer group take events with it (V) (§4).
+Amended by #364, orchestrator decisions AA to AE (2026-10-02, privacy
+first, on the fifth to seventh re-reviews' owner questions): J
+holds at every level of the walk, so a member group that names no one,
+has a participant of unknown value, or has person evidence and was not
+released by the check keeps the outer group unreleased; and a `member
+of` may name a person (a household recorded under its head), who is
+then a member whose standing counts, and whose own members are read too,
+so Florence recorded under Gustav keeps the Lobigs unreleased; a person
+is never a released group (AA). A class the dump makes a subclass of a
+person kind of event, at any rank and through redirects, is a person
+kind everywhere in the export's reading of the dump (the check's own
+selection of people does not follow such classes, so a participant of
+one that the dump alone makes a person is left out as not assessed,
+failing closed) (AB). A group named by any statement of a
+person kind of event takes it, released or not, as a group taking part
+does (R): "Emigration of the Lobigs" carried out by the Lobigs goes,
+whether or not their members are all released. This narrows decision
+I's example: a released person's migration that a family carried out
+now goes; an event of no person kind that a released group carried out
+still stays, without the statement naming it (AC, confirmed on the
+sixth re-review). An untyped item with members is judged as a group by
+J, on its members: its own lack of a type makes it no possible person
+whose standing counts, though it is left out as untyped all the same
+(AD). A released person is judged on their own standing alone: an event
+attributed to a released household head, Gustav, stays, even with
+Florence, who may be living, recorded under Gustav, as the export keeps
+everything on released people; only a group (a family, or an item
+someone names a `member of`) is judged by its members (AE) (§4).
 
 ## Context
 
@@ -147,11 +251,14 @@ is renamed **`critique_notes`** to reflect its now-single role (ADR-0013).
   signals above, reads births with the shared module's query, and calls
   the shared predicate; every triple mentioning an excluded person is
   still dropped. (Amended by #363: the export is a non-privileged view,
-  and an excerpt leaves with the statement it attests; see below.)
+  and an excerpt leaves with the statement it attests; see below.
+  Amended by #364: a statement naming an item left out, as its value or
+  a qualifier's, goes whole, and so does an event that any of its
+  statements links to an item left out.)
 - **Private static site** (`yizkr publish-site`): includes everyone but
   badges each subject the export would drop ("possibly living — never in
   public exports"), computed at render time with the same births query
-  and predicate — the private site therefore shows exactly what the
+  and predicate — the private site therefore shows exactly whom the
   public export would remove, derived, never stored. (Amended by #344:
   except a person with no type, whom the export leaves out even when
   released; the site shows no badge. A family is always badged. See
@@ -283,9 +390,13 @@ from the database while the check reads the query service. Now:
   the export's own rule, and a badge for it would need a wording of its
   own. The export also drops what the site lists as no person: an item
   that states no type and has no person evidence, a family with no person
-  evidence, a redirect, an event that an item it drops took part in, a
-  person event that names no participant, and an event that starts or
-  ends a union it drops.
+  evidence, a redirect, an event that an item it drops took part in or
+  that any of its statements links to such an item, a person event that
+  names no participant, an event whose participants are all of unknown
+  value, an event that starts or ends a union it drops, and a statement
+  of an item it keeps that names one it drops, as its value or a
+  qualifier's (amended by #364; the orchestrator, 2026-10-02: the site
+  badges the person named, not the statement).
 
 The rulings dated 2026-09-29 are the owner's, on the questions this
 amendment raised.
@@ -312,6 +423,30 @@ keeps of the items it keeps follows:
   person, or a document's title, can name a possibly living relative,
   and it is visible in the non-privileged view. A public copy would need
   rules of its own (#163).
+- **A statement that names an item left out goes whole** (#364). A
+  statement whose value, or any qualifier's value, is an item the export
+  leaves out (a redirect to one included), at any rank, is left out with
+  its node, its rank, its qualifiers and its references, on an item the
+  export keeps too: a released person's spouse statement naming a
+  possibly living partner takes its start time, the wedding's date, and
+  its excerpt with it, and an appellation whose `perspective` is a
+  person left out goes, its text included. A statement's node carries
+  its subject's QID, not its value's, so these are read apart
+  (`backup.statements_left_out`), a property's statements as an item's.
+  A reference or value node that a kept statement uses too stays with
+  that statement. A truthy triple goes with the statement that gave it,
+  unless a kept statement of the same item and property, at normal or
+  preferred rank, holds the same value ("no value" counts as one). An
+  unknown value is a blank node (or a skolem IRI) of its own
+  statement's, and the truthy triple's is another, so which truthy
+  triple of unknown value a statement gave is not read from the dump
+  (the export does not reproduce Wikibase's blank-node labels): when a
+  statement of unknown value goes, every truthy triple of unknown value
+  of that item and property goes with it, a kept statement's included,
+  whose node stays. A deprecated statement gives no truthy triple, so
+  one that goes takes none. An item named only in a reference's snak
+  of a kept statement loses that snak alone, and
+  `public-exclusions.json` lists items only.
 - **An event goes with its participants** (#363). An event stands for
   those who took part in it, as a family stands for its people: its
   date and place are theirs, and its label is written after them ("Death
@@ -320,20 +455,68 @@ keeps of the items it keeps follows:
   item it leaves out, a redirect to one included, whatever the event's
   kind (`public-exclusions.json`: "a participant the export leaves out
   (the QIDs): what this event records is theirs too";
-  `PARTICIPANT_LEFT_OUT`). An event so left out may itself be a
-  participant, so the rule applies again until no more go, and a
-  redirect to such an event goes with it. An event whose participants
-  are all kept stays.
+  `PARTICIPANT_LEFT_OUT`). An item that a qualifier of a `participant`
+  statement names takes part as much, whatever the statement's value,
+  an unknown one or none included (#364). A released group (a family,
+  or any item named a `member of`, that names at least one member, read
+  through the groups among its members, every one released, and no
+  participant of unknown value; decisions J, Q, U and V) takes part
+  harmlessly, as a released person does, except in a person kind of
+  event, which is its members' own (decision R, as corrected). Each
+  group so read must name a member, have no participant of unknown
+  value, and, if it has person evidence, have been released; a person
+  named a `member of` is a member whose standing counts, and whose own
+  members are read too, and never a released group (decision AA). A
+  person kind is one of `PERSON_EVENTS` or a class the dump makes a
+  subclass of one (decision AB). And an event goes with
+  every item any of its statements names, as its value or a qualifier's,
+  whatever the property, at any rank: a divorce carried out by an
+  organization the export leaves out for its person evidence goes with
+  it (`public-exclusions.json`: "a statement of it names an item the
+  export leaves out (the QIDs): what this event records is theirs too";
+  `LINKED_LEFT_OUT`; the orchestrator, 2026-10-02). It follows only
+  items left out to protect people, a possibly-living person or an item
+  that may be one: an item left out only as untyped, or as a released
+  group (decision J, as corrected), takes no event with it, though the
+  statement naming it goes whole; but a released group takes a person
+  kind of event that names it (decision AC). An untyped item or a family
+  that may be a person (read through redirects), that the participant
+  or unattended rule leaves out too, or a statement of which names an
+  item left out to protect people, is not left out only so; nor is an
+  item named a `member of` that is not a released group (decision Q).
+  An event is an item typed `event`, a subclass of it (the manifest's, or
+  the dump's at any rank), or a person kind of event, at any rank, or an
+  item with a `participant` statement; but never a union (a partnership
+  or a marriage, or a class the dump makes a subclass of one at any
+  rank, ADR-0036),
+  an entity whose events go with it and not it with them: a released
+  couple's marriage whose wedding goes stays, without the statement
+  naming the wedding. Nor is an item typed human, at normal or preferred
+  rank, unless typed a family too, an event for the participant, link or
+  unattended rule. An event so left out
+  may itself be a participant, or an item an event names, so the rule
+  applies again until no more go, and a redirect to such an event goes
+  with it. An event all of whose participants, and all the items its
+  statements name, are kept stays.
 - **A person event that names no participant goes** (#363; unknown means
   excluded, Ruling 2). An event of a person kind (`PERSON_EVENTS`) with
   no `participant` statement, or only one of unknown value, as a claim
   refused, left unconfirmed or cut short after the type leaves it,
   records a birth, a death or a marriage of someone unknown, who may be
-  living (`public-exclusions.json`: "an event of a person kind that
-  names no participant: unknown means excluded"; `UNATTENDED`). Once
-  #385's participant roles land, the stronger form is that a person
-  event whose principal the export does not keep goes; that belongs to
-  #410.
+  living. So does an event of any kind that has `participant`
+  statements, every one of an unknown value (or none): whom it involved
+  is unknown, so
+  it fails closed, as ADR-0036 §6 does for unions (the orchestrator,
+  2026-10-02; `public-exclusions.json`: "an event that names no
+  participant (of a person kind), or whose participants are all of
+  unknown value: unknown means excluded"; `UNATTENDED`). An event of no
+  person kind with no `participant` statement at all names no one and
+  stays, unless a link takes it. What a
+  qualifier of such a statement names, the role it gives (`principal`)
+  or an item it says took part, is no person evidence and attends no
+  event on that alone (#364). Once #385's participant roles land, the
+  stronger form is that a person event whose principal the export does
+  not keep goes; that belongs to #410.
 - **A union's bounds go with it** (#363; ADR-0036 §6). An event that a
   union the export leaves out points to by `started_by` or `ended_by`,
   read through redirects and at any rank, goes too: its wedding, divorce
@@ -400,7 +583,11 @@ is strictly safer, since the determination is now absence-of-death only.
    it drops took part in, every person event that names no participant,
    the events that start and end a union it drops, and the judgement
    notes; and it refuses a dump that holds a sitelink or a property of
-   another type than the model's (amended by #363).
+   another type than the model's (amended by #363). A statement whose
+   value or a qualifier's value is an item it drops goes whole; an item a
+   participant statement's qualifier names takes part in the event; an
+   event goes with every item its statements name; and an event whose
+   participants are all of unknown value goes (amended by #364).
 
 ## Consequences
 
@@ -429,14 +616,36 @@ is strictly safer, since the determination is now absence-of-death only.
   #363; the owner, 2026-09-29): every text recorded about a released
   person or another item it keeps leaves with it, a source's excerpt
   included, so a text can name a possibly living relative. A person
-  event that names no participant is left out, whatever else it records. An event with
-  a participant left out goes whole: a marriage of a released person and
-  a possibly living one, and, while every family is left out, every
-  event a family took part in. An item that is no event but carries a
-  `participant` statement goes by the same rule. A dump that holds a
+  event that names no participant is left out, whatever else it
+  records. An event with a participant left out goes whole: a marriage
+  of a released person and a possibly living one, and, while every
+  family is left out, every event a family took part in. An item that
+  is no event but carries a `participant` statement goes by the same
+  rule. A dump that holds a
   sitelink or a property of another type than the model's makes the
   export refuse until it is removed: the backup keeps its other dumps and
   records the refusal.
+- A released person's statement that names an item left out goes whole
+  (amended by #364): their spouse statement naming a possibly living
+  partner leaves out its dates, qualifiers and references too, so the
+  statement no longer shows the partner or the wedding's date, though an
+  excerpt that a kept statement also cites, or a description, can still
+  name them (#363). A kept item may so lose a statement whose own value
+  is kept: an appellation whose perspective is a possibly living person,
+  or a type whose qualifier names an untyped item, and with it the
+  truthy triple, unless another kept statement of the same item and
+  property, at normal or preferred rank, gives the same value.
+  While every family is left out, a released person's `member of`
+  statement naming a family goes whole too, with its dates and
+  references, and so does an appellation from a family's perspective. A
+  statement of unknown value that goes takes every truthy triple of
+  unknown value of its item and property, a kept statement's included,
+  whose node stays. An event goes when a participant it leaves out is
+  named only in a qualifier of a `participant` statement, as an identity
+  judgement on a participant of unknown value names one; when another
+  statement of it names an item left out (a divorce carried out by an
+  organization left out); and when its participants are all of unknown
+  value, whatever its kind.
 - Docs move with the code: MODELING.md "Living persons and privacy",
   `deploy/README.md`, and `pipeline/README.md` are updated in the same
   change; ADR-0018's exclusion note now points here.

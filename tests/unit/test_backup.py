@@ -7,13 +7,17 @@ item with any that the check did not release, and every item that states
 no type; and it refuses to run while the query service, where the check
 runs, lags the dump. It drops every event that an item it drops took
 part in, and the judgement notes, and keeps every text about what it
-keeps: it is a non-privileged view (#363; the owner, 2026-09-29)."""
+keeps: it is a non-privileged view (#363; the owner, 2026-09-29). A
+statement that names an item it drops, as its value or a qualifier's,
+goes whole, and an item a participant statement's qualifier names takes
+part in the event (#364)."""
 
 import datetime
 import gzip
 import hashlib
 import json
 import re
+import threading
 from pathlib import Path
 
 import pytest
@@ -56,6 +60,9 @@ from yizkr.core.config import Config
 from yizkr.core.privacy import BIRTHS_QUERY, people_selection
 from yizkr.model.schema import load_manifest, read_manifest_data
 from yizkr.queries.publish import prefix_block
+
+# how long a run that should end at once may take before it counts as hung
+HANG_GUARD = 30
 
 
 @pytest.fixture(scope="module")
@@ -170,6 +177,8 @@ REF_TEXT = "e" * 40  # a reference with a page number and an excerpt
 REF_RUN = "1" * 40  # a run's reference, with a judgement note
 TIME = "^^<http://www.w3.org/2001/XMLSchema#dateTime>"
 W = "http://w.lan"
+RDF_TYPE = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"
+ONTOLOGY = "http://wikiba.se/ontology#"
 RDFS_LABEL = "<http://www.w3.org/2000/01/rdf-schema#label>"
 PREF_LABEL = "<http://www.w3.org/2004/02/skos/core#prefLabel>"
 ALT_LABEL = "<http://www.w3.org/2004/02/skos/core#altLabel>"
@@ -308,6 +317,564 @@ class TestPublicFilter:
         assert (kept, dropped) == (len(self.LINES), 0)
 
 
+# an unknown value, which `statement` writes as dumpRdf.php does
+UNKNOWN = "somevalue"
+
+
+def statement(
+    subject: str,
+    node: str,
+    pid: str,
+    value: str | None,
+    rank: str = "Normal",
+    qualifiers=(),
+    reference: str | None = None,
+    normalized: str | None = None,
+    truthy: str | None = None,
+) -> list[str]:
+    """A statement as dumpRdf.php writes one, under `W`: its link, types
+    and rank, its value (and normalized value), its qualifiers as
+    (property, predicate form, value) triples, its reference, and the
+    truthy triples a best-ranked one gives its subject. A value of None
+    is no value, which types the node, and so its subject, with the
+    property's "no value" class, a qualifier's the node alone. A value of
+    `UNKNOWN` is a blank node of the statement's own, and the truthy
+    triple's is another, as dumpRdf.php labels each apart. `truthy` is
+    the value of the truthy triple when it is another than `value`."""
+    if value == UNKNOWN:
+        value = f"_:{subject}{node}value"
+        truthy = truthy or f"_:{subject}{node}direct"
+    item = f"<{W}/entity/{subject}>"
+    node = f"<{W}/entity/statement/{subject}-{node}>"
+    best = rank != "Deprecated"
+
+    def holds(term: str, key: str, form: str, held: str | None) -> str:
+        if held is None:
+            return f"{term} {RDF_TYPE} <{W}/prop/novalue/{key}> ."
+        return f"{term} <{W}/prop/{form}{key}> {held} ."
+
+    lines = [
+        f"{item} <{W}/prop/{pid}> {node} .",
+        f"{node} {RDF_TYPE} <{ONTOLOGY}Statement> .",
+        *([f"{node} {RDF_TYPE} <{ONTOLOGY}BestRank> ."] if best else []),
+        f"{node} <{ONTOLOGY}rank> <{ONTOLOGY}{rank}Rank> .",
+        holds(node, pid, "statement/", value),
+        *(
+            [holds(node, pid, "statement/value-normalized/", normalized)]
+            if normalized
+            else []
+        ),
+        *(
+            holds(node, qualifier, f"qualifier/{form}", qualified)
+            for qualifier, form, qualified in qualifiers
+        ),
+        *(
+            [f"{node} {DERIVED_FROM} <{W}/reference/{reference}> ."]
+            if reference
+            else []
+        ),
+    ]
+    if best:
+        lines.append(holds(item, pid, "direct/", truthy or value))
+        if normalized:
+            lines.append(holds(item, pid, "direct-normalized/", normalized))
+    return lines
+
+
+REF_WEDDING = "2" * 40  # the wedding's reference, which no kept one uses
+VALUE_LETTER = "3" * 40  # a value node only that reference names
+VALUE_1938 = "4" * 40  # the wedding's date, a value node only it holds
+VALUE_1941 = "5" * 40  # Rudolf's death, a value node a kept one holds too
+REF_INTERVIEW = "6" * 40  # a reference a kept statement shares
+REF_CERTIFICATE = "7" * 40  # the reference of Rudolf's death
+REF_DEPRECATED = "8" * 40  # the reference of a deprecated statement alone
+
+
+class TestAStatementGoesWhole:
+    """A statement whose value, or a qualifier's value, is an item left out
+    goes whole: its node, rank, qualifiers and references, and the truthy
+    triples only it gave (#364). Its node carries its subject's QID, not
+    its value's, so the token filter alone would keep all but its value.
+
+    Rudolf Löbig (Q501, 1916-1941) married Nina Sartina (Q502, of no
+    known dates, so left out) in 1938, as her letter of 1958 says, and
+    his death ended the marriage; a curator deprecated a reading of that
+    letter that took her brother Pavel Sartin (Q503, left out) for his;
+    Q504 is a duplicate of Nina's item, merged into hers. Gustav Löbig
+    (Q506, 1919-1996) was "Dad" to Nicholas Lobig (Q507, born 1950, left
+    out) and "Gus" to everyone, as the interview Nicholas gave says.
+    Leopold Löbig (Q505) is kept, and so is his arrest (Q508), in which
+    he took part in the role of its principal (Q509).
+
+    The properties: P26 spouse, its start and end times P580 and P582,
+    P570 a date of death, P1810 an appellation, P1811 its perspective,
+    P1449 a nickname, P3373 a sibling, P40 a child, P460 said to be the
+    same as, P70 an identifier, P50 an author, P710 a participant, P3831
+    its role, and P1855 an example of a property's use; in a reference, P8
+    its excerpt, P577 its source's date and P50 its author."""
+
+    TIME_1938 = f'"1938-01-01T00:00:00Z"{TIME}'
+    TIME_1941 = f'"1941-03-06T00:00:00Z"{TIME}'
+    MARRIED = nt("В 1938 году мы поженились.")
+    WEDDING = [
+        *statement(
+            "Q501",
+            "aaaa",
+            "P26",
+            f"<{W}/entity/Q502>",
+            qualifiers=[
+                ("P580", "", TIME_1938),
+                ("P580", "value/", f"<{W}/value/{VALUE_1938}>"),
+                ("P582", "", TIME_1941),
+                ("P582", "value/", f"<{W}/value/{VALUE_1941}>"),
+            ],
+            reference=REF_WEDDING,
+        ),
+        f'<{W}/reference/{REF_WEDDING}> <{W}/prop/reference/P8> "{MARRIED}"@ru .',  # noqa: E501
+        f"<{W}/reference/{REF_WEDDING}> <{W}/prop/reference/value/P577> <{W}/value/{VALUE_LETTER}> .",  # noqa: E501
+        f'<{W}/value/{VALUE_LETTER}> <{ONTOLOGY}timeValue> "1958-12-25T00:00:00Z"{TIME} .',  # noqa: E501
+        f"<{W}/value/{VALUE_1938}> <{ONTOLOGY}timeValue> {TIME_1938} .",
+    ]
+    # kept values under a qualifier naming Nicholas: "Dad", as he called
+    # Gustav, and an identifier, with its normalized form
+    QUALIFIED = [
+        *statement(
+            "Q506",
+            "aaaa",
+            "P1810",
+            '"Dad"@en',
+            qualifiers=[("P1811", "", f"<{W}/entity/Q507>")],
+            reference=REF_INTERVIEW,
+        ),
+        *statement(
+            "Q506",
+            "bbbb",
+            "P70",
+            '"id-1"',
+            qualifiers=[("P50", "", f"<{W}/entity/Q507>")],
+            normalized="<http://id.example/id-1>",
+        ),
+    ]
+    # the deprecated reading, and Nina named through Q504
+    OTHERS_LEFT_OUT = [
+        *statement(
+            "Q501",
+            "bbbb",
+            "P3373",
+            f"<{W}/entity/Q503>",
+            rank="Deprecated",
+            reference=REF_DEPRECATED,
+        ),
+        f'<{W}/reference/{REF_DEPRECATED}> <{W}/prop/reference/P8> "{nt("Мой брат Павел Сартин кланяется Вам.")}"@ru .',  # noqa: E501
+        *statement("Q501", "cccc", "P26", f"<{W}/entity/Q504>"),
+    ]
+    # the excerpt of the interview, which Gustav's appellation and
+    # nickname both cite, and its author, Nicholas, whom that reference
+    # alone names
+    INTERVIEW = (
+        f"<{W}/reference/{REF_INTERVIEW}> <{W}/prop/reference/P8> "
+        f'"{nt("Dad — Gus, everyone called him")}"@en .'
+    )
+    AUTHOR = (
+        f"<{W}/reference/{REF_INTERVIEW}> <{W}/prop/reference/P50> "
+        f"<{W}/entity/Q507> ."
+    )
+    # Gustav's nickname, under the reference his appellation uses
+    NICKNAME = statement(
+        "Q506", "cccc", "P1449", '"Gus"@en', reference=REF_INTERVIEW
+    )
+    # Leopold's part in his arrest, in the role of its principal: a
+    # qualifier that names an item kept
+    ARREST = statement(
+        "Q508",
+        "aaaa",
+        "P710",
+        f"<{W}/entity/Q505>",
+        qualifiers=[("P3831", "", f"<{W}/entity/Q509>")],
+    )
+    KEPT = [
+        f'<{W}/entity/Q501> {RDFS_LABEL} "{nt("Rudolf Löbig")}"@de .',
+        # his death, the value node of which the marriage's end shares
+        *statement(
+            "Q501", "dddd", "P570", TIME_1941, reference=REF_CERTIFICATE
+        ),
+        f"<{W}/entity/statement/Q501-dddd> <{W}/prop/statement/value/P570> <{W}/value/{VALUE_1941}> .",  # noqa: E501
+        f"<{W}/value/{VALUE_1941}> <{ONTOLOGY}timeValue> {TIME_1941} .",
+        f'<{W}/reference/{REF_CERTIFICATE}> <{W}/prop/reference/P8> "{nt("умер 6 марта 1941 г.")}"@ru .',  # noqa: E501
+        *NICKNAME,
+        INTERVIEW,
+        # the same identifier, unqualified, on another item
+        *statement(
+            "Q505",
+            "aaaa",
+            "P70",
+            '"id-1"',
+            normalized="<http://id.example/id-1>",
+        ),
+        *ARREST,
+    ]
+    EXCLUDED = {"Q502", "Q503", "Q504", "Q507"}
+
+    def lines(self, *more: list[str]) -> list[str]:
+        return [
+            *self.WEDDING,
+            *self.QUALIFIED,
+            *self.OTHERS_LEFT_OUT,
+            *self.KEPT,
+            self.AUTHOR,
+            *(line for lines in more for line in lines),
+        ]
+
+    @staticmethod
+    def filter(tmp_path: Path, lines, excluded) -> tuple[int, int, list[str]]:
+        full = tmp_path / "full.nt.gz"
+        public = tmp_path / "public.nt.gz"
+        with gzip.open(full, "wt") as handle:
+            handle.write("\n".join(lines) + "\n")
+        kept, dropped = filter_public_export(full, public, excluded)
+        with gzip.open(public, "rt") as handle:
+            return kept, dropped, handle.read().splitlines()
+
+    def test_a_statement_whose_value_is_left_out_goes_whole(self, tmp_path):
+        # its link, types and rank, its dates (the start time's value node,
+        # which only it holds, included), and its reference, with the
+        # excerpt and the value node only that names
+        _, _, public = self.filter(tmp_path, self.lines(), self.EXCLUDED)
+        text = "\n".join(public)
+        assert "Q501-aaaa" not in text
+        assert self.TIME_1938 not in text
+        assert self.MARRIED not in text
+        assert "1958-12-25" not in text
+        for node in (REF_WEDDING, VALUE_LETTER, VALUE_1938):
+            assert node not in text
+
+    def test_a_qualifier_naming_one_left_out_takes_the_statement(
+        self, tmp_path
+    ):
+        # its kept value goes, and the truthy triples it gave, the
+        # normalized one included; another item's same value stays
+        _, _, public = self.filter(tmp_path, self.lines(), self.EXCLUDED)
+        text = "\n".join(public)
+        assert "Q506-aaaa" not in text and "Q506-bbbb" not in text
+        assert '"Dad"@en' not in text
+        for qid, kept in (("Q506", False), ("Q505", True)):
+            for truthy in (
+                f'<{W}/entity/{qid}> <{W}/prop/direct/P70> "id-1" .',
+                f"<{W}/entity/{qid}> <{W}/prop/direct-normalized/P70> "
+                "<http://id.example/id-1> .",
+            ):
+                assert (truthy in public) is kept
+
+    def test_a_deprecated_statement_or_one_naming_a_redirect_goes(
+        self, tmp_path
+    ):
+        _, _, public = self.filter(tmp_path, self.lines(), self.EXCLUDED)
+        text = "\n".join(public)
+        assert "Q501-bbbb" not in text and "Q501-cccc" not in text
+        assert REF_DEPRECATED not in text
+        assert nt("Павел Сартин") not in text
+
+    def test_a_node_a_kept_statement_uses_too_stays(self, tmp_path):
+        # the reference Gustav's appellation and nickname share, and the
+        # value node of Rudolf's death, which the marriage's end time
+        # names too: each stays, linked from the statement kept alone
+        _, _, public = self.filter(tmp_path, self.lines(), self.EXCLUDED)
+        derived = f"{DERIVED_FROM} <{W}/reference/{REF_INTERVIEW}> ."
+        assert f"<{W}/entity/statement/Q506-aaaa> {derived}" not in public
+        assert f"<{W}/entity/statement/Q506-cccc> {derived}" in public
+        assert self.INTERVIEW in public
+        died = f"<{W}/value/{VALUE_1941}>"
+        assert f"{died} <{ONTOLOGY}timeValue> {self.TIME_1941} ." in public
+        assert [line for line in public if line.endswith(f" {died} .")] == [
+            f"<{W}/entity/statement/Q501-dddd> "
+            f"<{W}/prop/statement/value/P570> {died} ."
+        ]
+
+    def test_what_a_kept_statement_uses_stays(self, tmp_path):
+        # and every kept line leaves as it is
+        _, _, public = self.filter(tmp_path, self.lines(), self.EXCLUDED)
+        assert set(public) == set(self.KEPT)
+
+    def test_a_qualifier_naming_an_item_kept_takes_nothing(self, tmp_path):
+        # Leopold's part in his arrest stays whole, the truthy triple it
+        # gave included: a qualifier that names a role, or any other item
+        # kept, leaves its statement as it is
+        _, _, public = self.filter(tmp_path, self.lines(), self.EXCLUDED)
+        assert set(self.ARREST) <= set(public)
+
+    def test_an_item_named_in_a_reference_takes_that_snak_alone(
+        self, tmp_path
+    ):
+        # Nicholas, as the interview's author: the reference loses that
+        # snak, and keeps its excerpt and the nickname that cites it
+        _, _, public = self.filter(tmp_path, self.lines(), self.EXCLUDED)
+        assert self.AUTHOR not in public
+        assert self.INTERVIEW in public
+        assert set(self.NICKNAME) <= set(public)
+
+    def test_the_lines_may_come_in_any_order(self, tmp_path):
+        # a statement's value, qualifiers, rank and truthy triple before
+        # the link to its subject
+        forward = self.filter(tmp_path, self.lines(), self.EXCLUDED)
+        backward = self.filter(tmp_path, self.lines()[::-1], self.EXCLUDED)
+        assert set(backward[2]) == set(forward[2]) == set(self.KEPT)
+        assert backward[:2] == forward[:2]
+
+    def test_a_line_it_cannot_read_ends_no_reading(self, tmp_path):
+        # lines that are no triple as dumpRdf.php writes one, before every
+        # statement: each goes, and the statements after them are read
+        lines = [*TestWhatTheFilterReads.UNREADABLE, *self.lines()]
+        _, _, public = self.filter(tmp_path, lines, self.EXCLUDED)
+        assert set(public) == set(self.KEPT)
+
+    @pytest.mark.parametrize("order", [1, -1], ids=["in-order", "reversed"])
+    @pytest.mark.parametrize(
+        ("twin", "stays"),
+        [
+            ("Normal", True),
+            ("Preferred", True),
+            ("Deprecated", False),
+            ("another value", False),
+            ("in a qualifier", False),
+            ("another property", False),
+        ],
+        ids=[
+            "normal",
+            "preferred",
+            "deprecated",
+            "another-value",
+            "in-a-qualifier",
+            "another-property",
+        ],
+    )
+    @pytest.mark.parametrize(
+        ("pid", "value", "normalized", "another", "other_pid"),
+        [
+            # the other property: a nickname
+            ("P1810", '"Dad"@en', None, ('"Gus"@en', None), "P1449"),
+            # the other property: another identifier
+            (
+                "P70",
+                '"id-1"',
+                "<http://id.example/id-1>",
+                ('"id-2"', "<http://id.example/id-2>"),
+                "P71",
+            ),
+        ],
+        ids=["appellation", "identifier"],
+    )
+    def test_a_truthy_triple_a_kept_statement_gives_stays(
+        self,
+        tmp_path,
+        pid,
+        value,
+        normalized,
+        another,
+        other_pid,
+        twin,
+        stays,
+        order,
+    ):
+        # a kept statement of the same item and property with the same
+        # value gives it too, at normal or preferred rank, the normalized
+        # one included; a deprecated one gives none, nor does one of
+        # another value, though it holds this one in a qualifier of that
+        # very property, nor one of another property with this very value
+        given = statement("Q506", "9999", pid, value, normalized=normalized)
+        truthy = [line for line in given if "/prop/direct" in line]
+        if twin == "another property":
+            kept = statement(
+                "Q506", "9999", other_pid, value, normalized=normalized
+            )
+        elif twin in ("Normal", "Preferred", "Deprecated"):
+            kept = [
+                line
+                for line in statement(
+                    "Q506", "9999", pid, value, twin, normalized=normalized
+                )
+                if line not in truthy
+            ]
+        else:
+            other, other_normalized = another
+            holding = [(pid, "", value)] if twin == "in a qualifier" else []
+            kept = statement(
+                "Q506",
+                "9999",
+                pid,
+                other,
+                qualifiers=holding,
+                normalized=other_normalized,
+            )
+        _, _, public = self.filter(
+            tmp_path, self.lines(kept)[::order], self.EXCLUDED
+        )
+        assert truthy
+        for line in truthy:
+            assert (line in public) is stays
+        assert set(kept) <= set(public)
+
+    @pytest.mark.parametrize("order", [1, -1], ids=["in-order", "reversed"])
+    @pytest.mark.parametrize(
+        "twin",
+        [None, "Normal", "Preferred", "Deprecated"],
+        ids=["alone", "kept-twin", "preferred-twin", "deprecated-twin"],
+    )
+    def test_a_truthy_triple_of_unknown_value_goes_with_every_one(
+        self, tmp_path, twin, order
+    ):
+        # a child of Gustav's of unknown value, said to be Nicholas: the
+        # statement goes, and so does the truthy triple it gave. Each
+        # unknown value is a blank node of its own, and the export does not
+        # read which truthy one a statement gave, so a kept child of
+        # unknown value loses its truthy triple too, while its statement
+        # stays; a sibling of unknown value, of another property, keeps its
+        said = statement(
+            "Q506",
+            "dddd",
+            "P40",
+            UNKNOWN,
+            qualifiers=[("P460", "", f"<{W}/entity/Q507>")],
+        )
+        other = (
+            statement("Q506", "eeee", "P40", UNKNOWN, rank=twin)
+            if twin
+            else []
+        )
+        sibling = statement("Q506", "ffff", "P3373", UNKNOWN)
+        _, _, public = self.filter(
+            tmp_path, self.lines(said, other, sibling)[::order], self.EXCLUDED
+        )
+        children = f"<{W}/entity/Q506> <{W}/prop/direct/P40> _:"
+        assert said[-1].startswith(children)
+        assert not set(said) & set(public)
+        assert not [line for line in public if line.startswith(children)]
+        kept = [line for line in other if not line.startswith(children)]
+        assert set(public) == set(self.KEPT) | set(kept) | set(sibling)
+
+    @pytest.mark.parametrize("order", [1, -1], ids=["in-order", "reversed"])
+    def test_a_deprecated_statement_takes_no_truthy_triple(
+        self, tmp_path, order
+    ):
+        # a deprecated reading of a child of Gustav's of unknown value,
+        # said to be Nicholas: it goes, but gave no truthy triple, so the
+        # kept child of unknown value keeps its own
+        said = statement(
+            "Q506",
+            "dddd",
+            "P40",
+            UNKNOWN,
+            rank="Deprecated",
+            qualifiers=[("P460", "", f"<{W}/entity/Q507>")],
+        )
+        other = statement("Q506", "eeee", "P40", UNKNOWN)
+        _, _, public = self.filter(
+            tmp_path, self.lines(said, other)[::order], self.EXCLUDED
+        )
+        assert not set(said) & set(public)
+        assert set(public) == set(self.KEPT) | set(other)
+
+    @pytest.mark.parametrize("order", [1, -1], ids=["in-order", "reversed"])
+    def test_a_skolem_iri_is_an_unknown_value(self, tmp_path, order):
+        # unknown values written as skolem IRIs, as the query service
+        # writes them: they are read as blank nodes are
+        genid = "<http://www.wikidata.org/.well-known/genid/"
+        said = statement(
+            "Q506",
+            "dddd",
+            "P40",
+            f"{genid}aaaa>",
+            qualifiers=[("P460", "", f"<{W}/entity/Q507>")],
+            truthy=f"{genid}bbbb>",
+        )
+        other = statement(
+            "Q506", "eeee", "P40", f"{genid}cccc>", truthy=f"{genid}dddd>"
+        )
+        _, _, public = self.filter(
+            tmp_path, self.lines(said, other)[::order], self.EXCLUDED
+        )
+        assert not set(said) & set(public)
+        assert set(public) == set(self.KEPT) | set(other[:-1])
+
+    @pytest.mark.parametrize("order", [1, -1], ids=["in-order", "reversed"])
+    @pytest.mark.parametrize(
+        ("other", "stays"),
+        [
+            (None, False),
+            # a kept statement of no value of the same property
+            (statement("Q501", "ffff", "P40", None), True),
+            # a kept statement's qualifier of no value, of that property:
+            # a qualifier gives its statement's subject no truthy triple
+            (
+                statement(
+                    "Q501",
+                    "ffff",
+                    "P1449",
+                    '"Rudi"@de',
+                    qualifiers=[("P40", "", None)],
+                ),
+                False,
+            ),
+            # a kept child, Leopold, under a qualifier of no value of the
+            # same property: that is no statement of no value
+            (
+                statement(
+                    "Q501",
+                    "ffff",
+                    "P40",
+                    f"<{W}/entity/Q505>",
+                    qualifiers=[("P40", "", None)],
+                ),
+                False,
+            ),
+        ],
+        ids=["alone", "kept-twin", "kept-qualifier", "kept-own-qualifier"],
+    )
+    def test_a_statement_of_no_value_takes_its_truthy_type(
+        self, tmp_path, other, stays, order
+    ):
+        # Rudolf had no child, under a qualifier naming Nina: the
+        # statement goes, and with it the truthy type its "no value" gives
+        # him, unless a kept statement of no value of P40 gives it too
+        none = statement(
+            "Q501",
+            "eeee",
+            "P40",
+            None,
+            qualifiers=[("P50", "", f"<{W}/entity/Q502>")],
+        )
+        _, _, public = self.filter(
+            tmp_path, self.lines(none, other or [])[::order], self.EXCLUDED
+        )
+        typed = f"<{W}/entity/Q501> {RDF_TYPE} <{W}/prop/novalue/P40> ."
+        assert none[-1] == typed
+        assert not set(none[:-1]) & set(public)
+        assert (typed in public) is stays
+
+    @pytest.mark.parametrize(
+        "value", [f"<{W}/entity/Q501>", None], ids=["a-value", "no-value"]
+    )
+    def test_a_propertys_statement_goes_whole_too(self, tmp_path, value):
+        # an example of the spouse property's use, Rudolf, under a
+        # qualifier naming Nina: every line of it goes, the truthy triple
+        # it gave the property included, as an item's statement would
+        example = statement(
+            "P26",
+            "aaaa",
+            "P1855",
+            value,
+            qualifiers=[("P26", "", f"<{W}/entity/Q502>")],
+        )
+        _, _, public = self.filter(
+            tmp_path, self.lines(example), self.EXCLUDED
+        )
+        assert not set(example) & set(public)
+        assert set(public) == set(self.KEPT)
+
+    def test_nothing_goes_without_exclusions(self, tmp_path):
+        kept, dropped, public = self.filter(tmp_path, self.lines(), set())
+        assert (kept, dropped) == (len(self.lines()), 0)
+
+
 class TestWhatTheFilterReads:
     """The filter reads each line as a triple dumpRdf.php writes, and drops
     a line it cannot read (#363). Text leaves as it is: whatever is
@@ -429,8 +996,6 @@ class TestPruning:
 
 # -- the public export keeps only released people (#344) --------------------
 
-RDF_TYPE = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"
-ONTOLOGY = "http://wikiba.se/ontology#"
 DATA = f"{CONCEPT}/wiki/Special:EntityData/"
 
 
@@ -842,9 +1407,10 @@ class TestReadDump:
         )
 
     @staticmethod
-    def one(tmp_path, vocabulary, build) -> DumpReading:
+    def one(tmp_path, vocabulary, build, reverse=False) -> DumpReading:
         """What the dump `build` writes into gives, beside an item Q450
-        typed as a place (so that it states a type) and the vocabulary."""
+        typed as a place (so that it states a type) and the vocabulary;
+        with its lines in reverse order when `reverse`."""
         properties, items = vocabulary
         dump = Dump(vocabulary)
         for key, qid in items.items():
@@ -853,7 +1419,10 @@ class TestReadDump:
             dump.entity(qid, qid)
         dump.says("Q450", "instance_of", entity(items["place"]))
         build(dump)
-        return read_dump(dump.write(tmp_path / "one.nt.gz"), properties, items)
+        lines = dump.lines[::-1] if reverse else None
+        return read_dump(
+            dump.write(tmp_path / "one.nt.gz", lines), properties, items
+        )
 
     @pytest.mark.parametrize("key", DOCUMENTED_SUBJECT_EVIDENCE)
     def test_each_person_only_property_marks_its_subject(
@@ -966,6 +1535,223 @@ class TestReadDump:
         assert found.unattended == {"Q452", "Q453"}
         # every person event of the fixture names someone
         assert self.reading(tmp_path, vocabulary).unattended == set()
+
+    @pytest.mark.parametrize(
+        "reverse", [False, True], ids=["in-order", "reversed"]
+    )
+    def test_an_item_a_participant_qualifier_names_takes_part(
+        self, tmp_path, vocabulary, reverse
+    ):
+        # whatever the participant statement's value, an unknown one or
+        # none included, and at any rank, in lines of any order; each item
+        # its qualifiers name, a role beside another; an item named so is
+        # no person on that alone, and one a qualifier of another
+        # statement of the event names takes no part (#364)
+        _, items = vocabulary
+        principal = items["principal"]
+
+        def build(dump):
+            for qid in ("Q452", "Q453", "Q454", "Q455", "Q456", "Q457"):
+                dump.entity(qid, qid)
+            dump.says("Q452", "instance_of", entity(items["event"]))
+            dump.says(
+                "Q452",
+                "participant",
+                "_:genid9",
+                qualifiers=[
+                    ("perspective", entity("Q453")),
+                    ("object_has_role", entity(principal)),
+                ],
+            )
+            dump.says(
+                "Q452",
+                "location",
+                entity("Q499"),
+                qualifiers=[("perspective", entity("Q451"))],
+            )
+            dump.says("Q454", "instance_of", entity(items["birth"]))
+            dump.says(
+                "Q454",
+                "participant",
+                entity("Q450"),
+                rank="Deprecated",
+                qualifiers=[("perspective", entity("Q455"))],
+            )
+            dump.says("Q456", "instance_of", entity(items["event"]))
+            dump.says(
+                "Q456",
+                "participant",
+                None,
+                qualifiers=[("perspective", entity("Q457"))],
+            )
+
+        found = self.one(tmp_path, vocabulary, build, reverse)
+        assert found.participants == {
+            "Q452": {"Q453", principal},
+            "Q454": {"Q450", "Q455"},
+            "Q456": {"Q457"},
+        }
+        assert "Q450" in found.people
+        assert not {"Q451", "Q453", "Q455", "Q457", principal} & found.people
+
+    @pytest.mark.parametrize(
+        "reverse", [False, True], ids=["in-order", "reversed"]
+    )
+    def test_a_role_names_no_one_who_was_there(
+        self, tmp_path, vocabulary, reverse
+    ):
+        # a person event whose one participant is of unknown value, with
+        # the role it had, is still unattended, and the role no person
+        # (#364)
+        _, items = vocabulary
+        principal = items["principal"]
+
+        def build(dump):
+            dump.entity("Q452", "Q452")
+            dump.says("Q452", "instance_of", entity(items["death"]))
+            dump.says(
+                "Q452",
+                "participant",
+                "_:genid9",
+                qualifiers=[("object_has_role", entity(principal))],
+            )
+
+        found = self.one(tmp_path, vocabulary, build, reverse)
+        assert found.unattended == {"Q452"}
+        assert found.participants == {"Q452": {principal}}
+        assert principal not in found.people
+
+    @pytest.mark.parametrize(
+        "reverse", [False, True], ids=["in-order", "reversed"]
+    )
+    def test_an_event_whose_participants_are_all_unknown(
+        self, tmp_path, vocabulary, reverse
+    ):
+        # an event of no person kind whose one participant is of unknown
+        # value is unattended, whatever qualifies it; one that also names
+        # Gustav (Q401) as a participant is not
+        _, items = vocabulary
+
+        def build(dump):
+            for qid in ("Q401", "Q452", "Q453"):
+                dump.entity(qid, qid)
+            for event in ("Q452", "Q453"):
+                dump.says(event, "instance_of", entity(items["event"]))
+                dump.says(
+                    event,
+                    "participant",
+                    "_:genid9",
+                    qualifiers=[
+                        ("object_has_role", entity(items["principal"]))
+                    ],
+                )
+            dump.says("Q453", "participant", entity("Q401"))
+
+        found = self.one(tmp_path, vocabulary, build, reverse)
+        assert found.unattended == {"Q452"}
+
+    @pytest.mark.parametrize(
+        "reverse", [False, True], ids=["in-order", "reversed"]
+    )
+    def test_an_event_is_linked_to_what_its_statements_name(
+        self, tmp_path, vocabulary, reverse
+    ):
+        # a talk carried out by a society (Q454), as a statement's value; a
+        # wedding, a subclass of event in the manifest, at a place a
+        # qualifier names (Q455); an item of a class the dump alone makes
+        # a subclass of event, stated, at deprecated rank, in a book
+        # (Q456); and a place, no event, part of Q455: only events are
+        # linked
+        properties, items = vocabulary
+
+        def build(dump):
+            for qid in ("Q401", "Q452", "Q453", "Q454", "Q455", "Q456"):
+                dump.entity(qid, qid)
+            dump.entity("Q457", "Q457")
+            dump.says("Q457", "subclass_of", entity(items["event"]))
+            dump.says("Q452", "instance_of", entity(items["event"]))
+            dump.says("Q452", "carried_out_by", entity("Q454"))
+            dump.says("Q453", "instance_of", entity(items["wedding"]))
+            dump.says(
+                "Q453",
+                "point_in_time",
+                dated(1938),
+                qualifiers=[("location", entity("Q455"))],
+            )
+            dump.says("Q458", "instance_of", entity("Q457"))
+            dump.says(
+                "Q458",
+                "stated_in",
+                entity("Q456"),
+                rank="Deprecated",
+            )
+            dump.says("Q450", "part_of", entity("Q455"))
+            # a civil wedding, two subclasses down in the manifest
+            dump.says("Q460", "instance_of", entity(items["civil_wedding"]))
+            dump.says("Q460", "carried_out_by", entity("Q454"))
+            # a class two subclasses down in the dump alone
+            dump.says("Q459", "subclass_of", entity("Q457"))
+            dump.says("Q461", "instance_of", entity("Q459"))
+            dump.says("Q461", "carried_out_by", entity("Q454"))
+            # a subclass of a redirect to `event`
+            dump.redirect("Q462", items["event"])
+            dump.says("Q463", "subclass_of", entity("Q462"))
+            dump.says("Q464", "instance_of", entity("Q463"))
+            dump.says("Q464", "carried_out_by", entity("Q454"))
+            # an event typed so at deprecated rank alone
+            dump.says(
+                "Q465",
+                "instance_of",
+                entity(items["event"]),
+                rank="Deprecated",
+            )
+            dump.says("Q465", "carried_out_by", entity("Q454"))
+            # a subclass of event at deprecated rank alone
+            dump.says(
+                "Q466",
+                "subclass_of",
+                entity(items["event"]),
+                rank="Deprecated",
+            )
+            dump.says("Q467", "instance_of", entity("Q466"))
+            dump.says("Q467", "carried_out_by", entity("Q454"))
+            # an event typed a marriage at deprecated rank alone is no union
+            dump.says("Q468", "instance_of", entity(items["event"]))
+            dump.says(
+                "Q468",
+                "instance_of",
+                entity(items["marriage"]),
+                rank="Deprecated",
+            )
+            dump.says("Q468", "carried_out_by", entity("Q454"))
+            # a union of a class the dump alone makes a subclass of
+            # partnership, and a property that is a subclass of nothing read
+            dump.says("Q469", "subclass_of", entity(items["partnership"]))
+            dump.says("Q470", "instance_of", entity("Q469"))
+            dump.says("Q470", "participant", entity("Q401"))
+            dump.says("Q470", "started_by", entity("Q453"))
+            dump.says("P26", "subclass_of", entity(items["event"]))
+            # a union of a class made a subclass of partnership at
+            # deprecated rank alone: union classes are read at any rank
+            dump.says(
+                "Q471",
+                "subclass_of",
+                entity(items["partnership"]),
+                rank="Deprecated",
+            )
+            dump.says("Q472", "instance_of", entity("Q471"))
+            dump.says("Q472", "participant", entity("Q401"))
+            dump.says("Q472", "carried_out_by", entity("Q454"))
+
+        found = self.one(tmp_path, vocabulary, build, reverse)
+        assert "Q454" in found.links["Q452"]
+        assert "Q455" in found.links["Q453"]
+        assert "Q456" in found.links["Q458"]
+        assert "Q450" not in found.links
+        for event in ("Q460", "Q461", "Q464", "Q465", "Q467", "Q468"):
+            assert "Q454" in found.links[event], event
+        assert "Q470" not in found.links
+        assert "Q472" not in found.links
 
     def test_the_events_that_start_and_end_a_union(self, tmp_path, vocabulary):
         # by started_by and ended_by (ADR-0036), at every rank, once the
@@ -1418,10 +2204,12 @@ def facts_row(qid: str, died: bool = False) -> dict:
 class ExportRun:
     """The query service for export_public: the check's facts and births,
     and each answer to REVISIONS_QUERY in turn (the last one again once
-    they run out). `selected` are the people the facts query selects."""
+    they run out). `selected` are the people the facts query selects, and
+    `released` those of them it gives a death."""
 
-    def __init__(self, dumped, selected, revisions=None):
+    def __init__(self, dumped, selected, revisions=None, released=("Q401",)):
         self.selected = selected
+        self.released = set(released)
         self.revisions = list(revisions or [dumped])
         self.queries: list[str] = []
 
@@ -1433,7 +2221,9 @@ class ExportRun:
                 self.revisions.pop(0)
             return revision_rows(answer)
         if "SAMPLE(?deathDate)" in query:
-            return [facts_row(qid, qid == "Q401") for qid in self.selected]
+            return [
+                facts_row(qid, qid in self.released) for qid in self.selected
+            ]
         if 'BIND("value" AS ?bound)' in query:
             return birth_rows("Q404", [(("1990-01-01T00:00:00Z", 9), [], [])])
         raise AssertionError(f"unexpected query: {query}")
@@ -1519,15 +2309,20 @@ class TestExportPublic:
             assert f"{entity(qid)} {RDFS_LABEL} " not in text
 
     @staticmethod
-    def export_of(tmp_path, dump, vocabulary) -> None:
+    def export_of(tmp_path, dump, vocabulary, released=()) -> None:
         """export_public over `dump`, with the check selecting the
-        fixture's people, on a clock that only its naps move on."""
+        fixture's people and releasing Q401, and selecting and releasing
+        `released` too, on a clock that only its naps move on."""
         dump.write(tmp_path / "full.nt.gz")
         clock = Clock()
         export_public(
             config(),
             tmp_path,
-            run=ExportRun(dump.revisions, tuple(PEOPLE)),
+            run=ExportRun(
+                dump.revisions,
+                (*PEOPLE, *released),
+                released=("Q401", *released),
+            ),
             vocabulary=vocabulary,
             lag_timeout=60,
             sleep=clock.sleep,
@@ -1552,6 +2347,1137 @@ class TestExportPublic:
             (tmp_path / "public-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q470"] == backup.UNATTENDED
+
+    def test_a_statement_naming_one_left_out_goes_whole(
+        self, tmp_path, vocabulary
+    ):
+        # Gustav (Q401, released) married Florence (Q405, who states no
+        # type, so the export leaves her out) in 1942, as Nicholas's family
+        # history (Q466) says: the statement goes with its date and its
+        # reference, though its node carries Gustav's QID; so does the
+        # occupation type of Q413, whose qualifier names Q462, left out,
+        # and the truthy type it gave (#364)
+        properties, _ = vocabulary
+        dump = export_dump(vocabulary)
+        reference = [
+            ("stated_in", entity("Q466")),
+            (
+                "transcription_excerpt",
+                '"Dad married Florence Faxridge in 1942"@en',
+            ),
+        ]
+        dump.says(
+            "Q401",
+            "spouse",
+            entity("Q405"),
+            qualifiers=[("start_time", dated(1942))],
+            reference=reference,
+        )
+        self.export_of(tmp_path, dump, vocabulary)
+        text, _ = self.public(tmp_path)
+        (wedding,) = {
+            line.split(" ")[0]
+            for line in dump.lines
+            if line.endswith(f" {dated(1942)} .")
+        }
+        assert wedding.startswith(f"<{CONCEPT}/entity/statement/Q401-")
+        assert wedding not in text
+        assert dated(1942) not in text
+        assert "Dad married Florence Faxridge" not in text
+        digest = hashlib.sha1(repr(reference).encode()).hexdigest()
+        assert f"<{CONCEPT}/reference/{digest}>" not in text
+        # none of Gustav's spouse statements names one the export keeps
+        spouse = f"{entity('Q401')} <{CONCEPT}/prop/{properties['spouse']}> "
+        assert spouse not in text
+        typing = (
+            f"{entity('Q413')} <{CONCEPT}/prop/direct/"
+            f"{properties['instance_of']}> "
+        )
+        assert typing not in text
+        assert f"{entity('Q413')} {RDFS_LABEL} " in text
+
+    @pytest.mark.parametrize("order", [1, -1], ids=["role-first", "role-last"])
+    def test_an_event_whose_participant_is_named_in_a_qualifier_goes(
+        self, tmp_path, vocabulary, order
+    ):
+        # an event of no person kind that Gustav (Q401, released) took
+        # part in, and another participant of unknown value, in the role of
+        # its principal, said by a qualifier to be Florence (Q405, left
+        # out): it goes with its label and its date, as it would were she
+        # its participant's value, whichever qualifier comes first; the
+        # role, vocabulary, stays (#364)
+        _, items = vocabulary
+        principal = items["principal"]
+        dump = export_dump(vocabulary)
+        label = "an event, its participant of unknown value"
+        dump.entity("Q470", label, revision=470)
+        dump.says("Q470", "instance_of", entity(items["event"]))
+        dump.says("Q470", "point_in_time", dated(1938))
+        dump.says("Q470", "participant", entity("Q401"))
+        dump.says(
+            "Q470",
+            "participant",
+            "_:genid7",
+            qualifiers=[
+                ("object_has_role", entity(principal)),
+                ("said_to_be_the_same_as", entity("Q405")),
+            ][::order],
+        )
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert "Q470" not in mentioned
+        assert label not in text
+        assert dated(1938) not in text
+        assert principal in mentioned
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )
+        assert exclusions["excluded"]["Q470"] == (
+            backup.PARTICIPANT_LEFT_OUT.format("Q405")
+        )
+
+    def test_a_role_attends_no_person_event(self, tmp_path, vocabulary):
+        # a death whose one participant is of unknown value, in the role
+        # of its principal: whom it happened to is unknown, so it goes,
+        # and the role, which is vocabulary, stays (#364)
+        _, items = vocabulary
+        principal = items["principal"]
+        dump = export_dump(vocabulary)
+        label = "a death, its participant of unknown value"
+        dump.entity("Q470", label, revision=470)
+        dump.says("Q470", "instance_of", entity(items["death"]))
+        dump.says(
+            "Q470",
+            "participant",
+            "_:genid7",
+            qualifiers=[("object_has_role", entity(principal))],
+        )
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert "Q470" not in mentioned
+        assert label not in text
+        assert principal in mentioned
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )
+        assert exclusions["excluded"]["Q470"] == backup.UNATTENDED
+        assert principal not in exclusions["excluded"]
+
+    def test_an_event_whose_participants_are_all_unknown_goes(
+        self, tmp_path, vocabulary
+    ):
+        # an event of no person kind whose one participant is of unknown
+        # value: whom it involved is unknown, so it goes with its date
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        label = "an event, its one participant of unknown value"
+        dump.entity("Q470", label, revision=470)
+        dump.says("Q470", "instance_of", entity(items["event"]))
+        dump.says("Q470", "point_in_time", dated(1938))
+        dump.says("Q470", "participant", "_:genid7")
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert "Q470" not in mentioned
+        assert dated(1938) not in text
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )
+        assert exclusions["excluded"]["Q470"] == backup.UNATTENDED
+
+    def test_an_event_goes_with_an_item_any_statement_names(
+        self, tmp_path, vocabulary
+    ):
+        # a divorce that Gustav (Q401, released) took part in, carried out
+        # by an organization with a birth (Q426, left out): it goes with
+        # its date, and so does an event part of the divorce; an event
+        # carried out by a kept organization (Q411) stays
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.entity("Q470", "a divorce", revision=470)
+        dump.says("Q470", "instance_of", entity(items["divorce"]))
+        dump.says("Q470", "point_in_time", dated(1957))
+        dump.says("Q470", "participant", entity("Q401"))
+        dump.says("Q470", "carried_out_by", entity("Q426"))
+        dump.entity("Q471", "a notice of the divorce", revision=471)
+        dump.says("Q471", "instance_of", entity(items["event"]))
+        dump.says("Q471", "part_of", entity("Q470"))
+        dump.entity("Q472", "a hearing", revision=472)
+        dump.says("Q472", "instance_of", entity(items["event"]))
+        dump.says("Q472", "carried_out_by", entity("Q411"))
+        # a hearing carried out by Florence (Q405), who states no type but
+        # has person evidence: left out as one who may be a person, she
+        # takes it with her
+        dump.entity("Q473", "another hearing", revision=473)
+        dump.says("Q473", "instance_of", entity(items["event"]))
+        dump.says("Q473", "carried_out_by", entity("Q405"))
+        dump.says("Q473", "location", entity("Q429"))
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert not {"Q470", "Q471", "Q473"} & mentioned
+        assert dated(1957) not in text
+        assert "Q472" in mentioned
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )
+        assert exclusions["excluded"]["Q470"] == (
+            backup.LINKED_LEFT_OUT.format("Q426")
+        )
+        assert exclusions["excluded"]["Q471"] == (
+            backup.LINKED_LEFT_OUT.format("Q470")
+        )
+        # only Florence shields the hearing: the untyped place does not
+        assert exclusions["excluded"]["Q473"] == (
+            backup.LINKED_LEFT_OUT.format("Q405")
+        )
+        assert "Q472" not in exclusions["excluded"]
+
+    @pytest.mark.parametrize(
+        "case",
+        [
+            "unknown-participant",
+            "stray-participant",
+            "deprecated-event-type",
+            "participant-names-left-out",
+            "participant-names-untyped",
+            "participant-qualifier-names-left-out",
+            "participant-names-family",
+        ],
+    )
+    def test_a_person_is_never_an_event(self, tmp_path, vocabulary, case):
+        # Gustav (Q401, typed human, released) with a participant statement
+        # of unknown value, a stray participant statement and a sibling
+        # Florence (Q405, left out), or a type `event` a curator deprecated
+        # and that sibling: he is no event, so he stays, and only the
+        # statement naming Florence goes whole
+        properties, items = vocabulary
+        dump = export_dump(vocabulary)
+        if case == "unknown-participant":
+            dump.says("Q401", "participant", "_:genid8")
+        elif case == "participant-names-left-out":
+            dump.says("Q401", "participant", entity("Q405"))
+        elif case == "participant-names-untyped":
+            dump.says("Q401", "participant", entity("Q429"))
+        elif case == "participant-names-family":
+            dump.says("Q401", "participant", entity("Q446"))
+        elif case == "participant-qualifier-names-left-out":
+            dump.says(
+                "Q401",
+                "participant",
+                "_:genid8",
+                qualifiers=[("said_to_be_the_same_as", entity("Q405"))],
+            )
+        else:
+            dump.says("Q401", "sibling", entity("Q405"))
+        if case == "stray-participant":
+            dump.says("Q401", "participant", entity("Q412"))
+        if case == "deprecated-event-type":
+            dump.says(
+                "Q401",
+                "instance_of",
+                entity(items["event"]),
+                rank="Deprecated",
+            )
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert "Q401" in mentioned
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )
+        assert "Q401" not in exclusions["excluded"]
+        sibling = f"<{CONCEPT}/prop/{properties['sibling']}>"
+        assert f"{entity('Q401')} {sibling} " not in text
+        if case.startswith("participant-"):
+            part = f"<{CONCEPT}/prop/{properties['participant']}>"
+            assert f"{entity('Q401')} {part} " not in text
+
+    def test_an_item_left_out_as_untyped_or_a_family_takes_no_event(
+        self, tmp_path, vocabulary
+    ):
+        # Gustav's birth (Q401, released) at a place with no type (Q429),
+        # and a reunion of his carried out by a family (Q446) whose one
+        # member is Gustav: untyped items and families of released members
+        # are left out, but protect no one, so the events stay; the
+        # statements naming them go whole. A migration the family carried
+        # out is its members' own, and goes (decision AC)
+        properties, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.entity("Q480", "a birth", revision=480)
+        dump.says("Q480", "instance_of", entity(items["birth"]))
+        dump.says("Q480", "participant", entity("Q401"))
+        dump.says("Q480", "location", entity("Q429"))
+        dump.entity("Q481", "a reunion", revision=481)
+        dump.says("Q481", "instance_of", entity(items["event"]))
+        dump.says("Q481", "participant", entity("Q401"))
+        dump.says("Q481", "carried_out_by", entity("Q446"))
+        dump.says("Q401", "member_of", entity("Q446"))
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert {"Q480", "Q481"} <= mentioned
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )
+        assert not {"Q480", "Q481"} & set(exclusions["excluded"])
+        location = f"<{CONCEPT}/prop/{properties['location']}>"
+        carried = f"<{CONCEPT}/prop/{properties['carried_out_by']}>"
+        assert f"{entity('Q480')} {location} " not in text
+        assert f"{entity('Q481')} {carried} " not in text
+
+    @pytest.mark.parametrize(
+        "case",
+        [
+            "deportation",
+            "unattended",
+            "family-with-a-participant",
+            "deprecated-type-carried-out",
+            "untyped-carried-out",
+            "untyped-location",
+            "untyped-with-a-released-participant",
+            "released-family-carried-out",
+            "redirect-to-the-deportation",
+            "untyped-with-an-untyped-participant",
+            "redirect-to-an-untyped-with-an-untyped-participant",
+            "two-untyped-hops",
+            "redirect-to-an-untyped-carried-out",
+        ],
+    )
+    def test_an_untyped_or_family_event_of_someone_left_out_shields(
+        self, tmp_path, vocabulary, case
+    ):
+        # an item left out as untyped or as a family that is itself an event
+        # the participant or unattended rule leaves out: the deportation
+        # typed so at deprecated rank only (Q416), whose participant is left
+        # out; an untyped item whose one participant is of unknown value;
+        # or a family Florence (Q405, left out) took part in. So does one
+        # that names Florence by any other statement: carried out by her,
+        # typed an event at deprecated rank only or not at all, or at her
+        # as a location, beside a released participant, or a family whose
+        # one member is released. Or a redirect to the deportation (Q498),
+        # or an untyped item an untyped place (Q429) takes part in. An
+        # event part of it goes with it, its date with it
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        part = "Q416"
+        if case == "redirect-to-the-deportation":
+            part = "Q498"
+            dump.redirect("Q498", "Q416", revision=498)
+        if case == "two-untyped-hops":
+            part = "Q491"
+            dump.entity("Q492", "Florence's hearing", revision=492)
+            dump.says("Q492", "carried_out_by", entity("Q405"))
+            dump.entity("Q491", "a session of it", revision=491)
+            dump.says("Q491", "part_of", entity("Q492"))
+        if case == "redirect-to-an-untyped-carried-out":
+            part = "Q498"
+            dump.entity("Q491", "Florence's hearing", revision=491)
+            dump.says("Q491", "carried_out_by", entity("Q405"))
+            dump.redirect("Q498", "Q491", revision=498)
+        if case == "redirect-to-an-untyped-with-an-untyped-participant":
+            part = "Q498"
+            dump.entity("Q491", "an untyped item", revision=491)
+            dump.says("Q491", "participant", entity("Q429"))
+            dump.redirect("Q498", "Q491", revision=498)
+        if case in (
+            "deprecated-type-carried-out",
+            "untyped-carried-out",
+            "untyped-location",
+            "untyped-with-a-released-participant",
+            "released-family-carried-out",
+            "untyped-with-an-untyped-participant",
+        ):
+            part = "Q491"
+            dump.entity("Q491", "Florence's hearing", revision=491)
+        if case == "deprecated-type-carried-out":
+            dump.says(
+                "Q491",
+                "instance_of",
+                entity(items["event"]),
+                rank="Deprecated",
+            )
+        if case in (
+            "deprecated-type-carried-out",
+            "untyped-carried-out",
+            "untyped-with-a-released-participant",
+            "released-family-carried-out",
+        ):
+            dump.says("Q491", "carried_out_by", entity("Q405"))
+        if case == "untyped-location":
+            dump.says("Q491", "location", entity("Q405"))
+        if case == "untyped-with-a-released-participant":
+            dump.says("Q491", "participant", entity("Q401"))
+        if case == "released-family-carried-out":
+            dump.says("Q491", "instance_of", entity(items["family"]))
+            dump.says("Q401", "member_of", entity("Q491"))
+        if case == "untyped-with-an-untyped-participant":
+            dump.says("Q491", "participant", entity("Q429"))
+        if case == "unattended":
+            part = "Q491"
+            dump.entity("Q491", "an untyped item", revision=491)
+            dump.says("Q491", "participant", "_:genid9")
+        if case == "family-with-a-participant":
+            part = "Q491"
+            dump.entity("Q491", "a family", revision=491)
+            dump.says("Q491", "instance_of", entity(items["family"]))
+            dump.says("Q491", "participant", entity("Q405"))
+        dump.entity("Q490", "a gathering", revision=490)
+        dump.says("Q490", "instance_of", entity(items["event"]))
+        dump.says("Q490", "part_of", entity(part))
+        dump.says("Q490", "point_in_time", dated(1961))
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert "Q490" not in mentioned
+        assert dated(1961) not in text
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )
+        assert exclusions["excluded"]["Q490"] == (
+            backup.LINKED_LEFT_OUT.format(part)
+        )
+
+    @pytest.mark.parametrize(
+        ("case", "shields"),
+        [
+            ("member-through-a-redirect", False),
+            ("one-released-one-unassessed", True),
+            ("one-released-one-possibly-living", True),
+            ("released-and-deprecated-possibly-living", True),
+            ("own-participant-released", False),
+            ("own-participant-with-a-role", False),
+            ("own-participant-at-a-place", False),
+            ("released-member-but-a-person", True),
+            ("a-property-a-member", True),
+        ],
+    )
+    def test_a_familys_members_are_read_from_its_statements(
+        self, tmp_path, vocabulary, case, shields
+    ):
+        # "Departure of the Lobigs", carried out by the family Q446: its
+        # members are the items named a member of it, at any rank, through
+        # redirects (Q418 is a redirect to Gustav, Q401), and the values of
+        # its own participant statements, never a role or a place its
+        # qualifiers name. Released, all of them, the event stays; one
+        # unassessed (Q429) or possibly living (Florence, Q405), even at
+        # deprecated rank, and it goes. A family that is itself named a
+        # sibling of Gustav's has person evidence, and goes as a person;
+        # a property's member_of statement names no member
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        family = entity("Q446")
+        if case == "member-through-a-redirect":
+            dump.says("Q418", "member_of", family)
+        if (
+            case.startswith("one-released")
+            or case == "released-member-but-a-person"
+        ):
+            dump.says("Q401", "member_of", family)
+        if case == "one-released-one-unassessed":
+            dump.says("Q429", "member_of", family)
+        if case == "one-released-one-possibly-living":
+            dump.says("Q405", "member_of", family)
+        if case == "released-and-deprecated-possibly-living":
+            dump.says("Q401", "member_of", family)
+            dump.says("Q405", "member_of", family, rank="Deprecated")
+        if case == "own-participant-released":
+            dump.says("Q446", "participant", entity("Q401"))
+        if case == "own-participant-with-a-role":
+            dump.says(
+                "Q446",
+                "participant",
+                entity("Q401"),
+                qualifiers=[("object_has_role", entity(items["principal"]))],
+            )
+        if case == "own-participant-at-a-place":
+            dump.says(
+                "Q446",
+                "participant",
+                entity("Q401"),
+                qualifiers=[("location", entity("Q408"))],
+            )
+        if case == "released-member-but-a-person":
+            dump.says("Q401", "sibling", family)
+        if case == "a-property-a-member":
+            dump.says("P26", "member_of", family)
+        dump.entity("Q497", "Departure of the Lobigs", revision=497)
+        dump.says("Q497", "instance_of", entity(items["event"]))
+        dump.says("Q497", "point_in_time", dated(1975))
+        dump.says("Q497", "carried_out_by", family)
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert ("Q497" in mentioned) is not shields
+        assert (dated(1975) in text) is not shields
+
+    @pytest.mark.parametrize(
+        "participant",
+        ["Q405", "Q429", "_:genid9"],
+        ids=["left-out", "untyped", "unknown"],
+    )
+    def test_a_family_typed_human_keeps_its_participants(
+        self, tmp_path, vocabulary, participant
+    ):
+        # the Lobig household (Q498), typed family and human, released by
+        # the check, whose member is Gustav (Q401), that Florence (Q405,
+        # left out), an untyped item (Q429) or someone unknown took part
+        # in: a family stays a family, for the participant and unattended
+        # rules too, so that participant is among its members, and
+        # "Departure of the Lobigs" goes with it
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.entity("Q498", "the Lobig household", revision=498)
+        dump.says("Q498", "instance_of", entity(items["family"]))
+        dump.says("Q498", "instance_of", entity(items["human"]))
+        dump.says("Q498", "date_of_death", dated(1980))
+        dump.says(
+            "Q498",
+            "participant",
+            participant
+            if participant.startswith("_:")
+            else entity(participant),
+        )
+        dump.says("Q401", "member_of", entity("Q498"))
+        dump.entity("Q497", "Departure of the Lobigs", revision=497)
+        dump.says("Q497", "instance_of", entity(items["event"]))
+        dump.says("Q497", "point_in_time", dated(1975))
+        dump.says("Q497", "carried_out_by", entity("Q498"))
+        self.export_of(tmp_path, dump, vocabulary, released=("Q498",))
+        text, mentioned = self.public(tmp_path)
+        assert "Q497" not in mentioned
+        assert dated(1975) not in text
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )
+        assert exclusions["excluded"]["Q497"] == (
+            backup.LINKED_LEFT_OUT.format("Q498")
+        )
+
+    def test_a_family_typed_human_and_a_death_naming_no_one_is_unattended(
+        self, tmp_path, vocabulary
+    ):
+        # the Lobig household (Q498), typed family, human and death, with
+        # Gustav (Q401) its one member and no participant statement, both
+        # released by the check: a family is no person, so as a death that
+        # names no participant it is unattended, protects people, and
+        # "Departure of the Lobigs" goes with it, though its members are
+        # all released
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.entity("Q498", "the Lobig household", revision=498)
+        dump.says("Q498", "instance_of", entity(items["family"]))
+        dump.says("Q498", "instance_of", entity(items["human"]))
+        dump.says("Q498", "instance_of", entity(items["death"]))
+        dump.says("Q401", "member_of", entity("Q498"))
+        dump.entity("Q497", "Departure of the Lobigs", revision=497)
+        dump.says("Q497", "instance_of", entity(items["event"]))
+        dump.says("Q497", "point_in_time", dated(1975))
+        dump.says("Q497", "carried_out_by", entity("Q498"))
+        self.export_of(tmp_path, dump, vocabulary, released=("Q401", "Q498"))
+        text, mentioned = self.public(tmp_path)
+        assert "Q497" not in mentioned
+        assert dated(1975) not in text
+
+    @pytest.mark.parametrize(
+        ("group", "member", "shields"),
+        [
+            ("Q429", "Q405", True),
+            ("Q463", "Q405", True),
+            ("Q429", "Q401", False),
+        ],
+        ids=[
+            "untyped-possibly-living",
+            "deprecated-family",
+            "untyped-released",
+        ],
+    )
+    def test_whatever_is_named_a_member_of_is_a_group(
+        self, tmp_path, vocabulary, group, member, shields
+    ):
+        # an item named a member of is a group, whatever its type: the
+        # label-only Q429, or Q463, typed a family at deprecated rank only.
+        # With Florence (Q405, possibly living) a member, an event it
+        # carried out goes; with Gustav (Q401, released) alone, it stays
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.says(member, "member_of", entity(group))
+        dump.entity("Q497", "Departure of the Lobigs", revision=497)
+        dump.says("Q497", "instance_of", entity(items["event"]))
+        dump.says("Q497", "point_in_time", dated(1975))
+        dump.says("Q497", "carried_out_by", entity(group))
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert ("Q497" in mentioned) is not shields
+        assert (dated(1975) in text) is not shields
+
+    @pytest.mark.parametrize(
+        ("case", "goes"),
+        [
+            ("released", False),
+            ("possibly-living", True),
+            ("no-member", True),
+            ("through-a-redirect", False),
+            ("an-untyped-group", False),
+            ("person-kind", True),
+            ("death-the-check-released", True),
+            ("migration-the-check-released", True),
+            ("migration-of-a-family-organization", True),
+            ("migration-named-in-a-qualifier", True),
+        ],
+    )
+    def test_a_released_group_takes_part_harmlessly(
+        self, tmp_path, vocabulary, case, goes
+    ):
+        # "Emigration of the Lobigs", that Gustav (Q401, released) and the
+        # family Q446 took part in: a family whose members are all released
+        # takes part as harmlessly as a released person, named through its
+        # redirect (Q464) too, and so does an untyped group (Q429) of his;
+        # the event stays. One with a member who may be living, or that
+        # names none, takes it with it. In a person kind of event (a
+        # migration, a death) a group takes part as its members do, and the
+        # event goes: unassessed, released by the check itself on a death,
+        # set aside as an organization too, or named only in a qualifier
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        kind = "event"
+        group = "Q446"
+        released = ()
+        if case not in ("possibly-living", "no-member"):
+            dump.says("Q401", "member_of", entity("Q446"))
+        if case == "possibly-living":
+            dump.says("Q405", "member_of", entity("Q446"))
+        if case == "through-a-redirect":
+            group = "Q464"
+        if case == "an-untyped-group":
+            group = "Q429"
+            dump.says("Q401", "member_of", entity("Q429"))
+        if case in (
+            "person-kind",
+            "migration-the-check-released",
+            "migration-of-a-family-organization",
+            "migration-named-in-a-qualifier",
+        ):
+            kind = "migration"
+        if case == "death-the-check-released":
+            kind = "death"
+        if case in (
+            "death-the-check-released",
+            "migration-the-check-released",
+        ):
+            released = ("Q446",)
+            dump.entity("Q496", "a death", revision=496)
+            dump.says("Q496", "instance_of", entity(items["death"]))
+            dump.says("Q496", "participant", entity("Q446"))
+        if case == "migration-of-a-family-organization":
+            dump.says("Q446", "instance_of", entity(items["organization"]))
+        dump.entity("Q497", "Emigration of the Lobigs", revision=497)
+        dump.says("Q497", "instance_of", entity(items[kind]))
+        dump.says("Q497", "point_in_time", dated(1975))
+        if case == "migration-named-in-a-qualifier":
+            dump.says(
+                "Q497",
+                "participant",
+                entity("Q401"),
+                qualifiers=[("said_to_be_the_same_as", entity(group))],
+            )
+        else:
+            dump.says("Q497", "participant", entity("Q401"))
+            dump.says("Q497", "participant", entity(group))
+        self.export_of(tmp_path, dump, vocabulary, released=released)
+        text, mentioned = self.public(tmp_path)
+        assert ("Q497" in mentioned) is not goes
+        assert (dated(1975) in text) is not goes
+        if goes:
+            exclusions = json.loads(
+                (tmp_path / "public-exclusions.json").read_text()
+            )
+            assert exclusions["excluded"]["Q497"] == (
+                backup.PARTICIPANT_LEFT_OUT.format(group)
+            )
+
+    def test_a_harmless_group_is_not_named_among_those_who_take_an_event(
+        self, tmp_path, vocabulary
+    ):
+        # an event Florence (Q405, left out) and the Lobigs (Q446, whose
+        # one member, Gustav, is released) took part in goes for her alone
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.says("Q401", "member_of", entity("Q446"))
+        dump.entity("Q497", "a gathering", revision=497)
+        dump.says("Q497", "instance_of", entity(items["event"]))
+        dump.says("Q497", "participant", entity("Q405"))
+        dump.says("Q497", "participant", entity("Q446"))
+        self.export_of(tmp_path, dump, vocabulary)
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )
+        assert exclusions["excluded"]["Q497"] == (
+            backup.PARTICIPANT_LEFT_OUT.format("Q405")
+        )
+
+    @pytest.mark.parametrize("via", ["carried_out_by", "participant"])
+    @pytest.mark.parametrize(
+        ("case", "shields"),
+        [
+            ("an-unknown-participant", True),
+            ("nested-released", False),
+            ("nested-possibly-living", True),
+            ("a-cycle-of-no-one", True),
+            ("a-cycle-with-a-released-member", False),
+            ("nested-family-not-released", True),
+            ("nested-family-of-no-one", True),
+            ("a-person-named-a-group", True),
+            ("nested-family-unknown-participant", True),
+            ("nested-only-an-unknown-participant", True),
+            ("nested-family-participant-possibly-living", True),
+            ("nested-family-of-its-participant", False),
+            ("a-released-person-named-a-group", True),
+            ("a-released-person-named-a-group-nested", True),
+            ("a-released-person-named-a-group-through-a-redirect", True),
+            ("a-released-person-named-a-group-deprecated", True),
+            ("a-released-person-named-a-group-all-released", False),
+            ("a-released-person-named-back", False),
+        ],
+    )
+    def test_a_groups_members_are_read_through_its_groups(
+        self, tmp_path, vocabulary, case, shields, via
+    ):
+        # "Departure of the Lobigs", that the family Q446 carried out or
+        # took part in: one whose own participants are Gustav (Q401) and
+        # someone unknown is not confirmed released, and takes the event
+        # with it. Its members are read through the groups among them
+        # (Q491, a member of Q446), however deep, and a cycle of groups
+        # ends: released through them, the event stays; with Florence
+        # (Q405) a member of Q491, or no one at all, it goes. Each group so
+        # read must be released too: Q491 a family the check never
+        # assessed (it took part in a migration), one that names no one,
+        # or one with a participant of unknown value, takes the event with
+        # it. Florence named a group (Gustav a member of her) is a member
+        # all the same, whose standing counts; and Gustav, released, named a
+        # group (Florence a member of him, a household under its head, in
+        # Q446 or in Q491 within it, through his redirect Q418, or at
+        # deprecated rank), has his own members read too, so Florence keeps
+        # the family unreleased; with Florence released too, or with the
+        # Lobigs named a member of Gustav in turn, he counts as the released
+        # member he is, and the event stays. A family known by its type and
+        # its participant alone, Gustav, is released
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        family = entity("Q446")
+        if case == "an-unknown-participant":
+            dump.says("Q446", "participant", entity("Q401"))
+            dump.says("Q446", "participant", "_:genid9")
+        elif case == "a-person-named-a-group":
+            dump.says("Q405", "member_of", family)
+            dump.says("Q401", "member_of", entity("Q405"))
+        elif case == "a-released-person-named-back":
+            dump.says("Q401", "member_of", family)
+            dump.says("Q446", "member_of", entity("Q401"))
+        elif case.startswith("a-released-person-named-a-group"):
+            if case.endswith("-nested"):
+                dump.entity("Q491", "the Lobig cousins", revision=491)
+                dump.says("Q491", "instance_of", entity(items["family"]))
+                dump.says("Q491", "member_of", family)
+                dump.says("Q401", "member_of", entity("Q491"))
+            else:
+                dump.says("Q401", "member_of", family)
+            head = "Q418" if case.endswith("-redirect") else "Q401"
+            rank = "Deprecated" if case.endswith("-deprecated") else "Normal"
+            dump.says("Q405", "member_of", entity(head), rank=rank)
+        else:
+            dump.entity("Q491", "the Lobig cousins", revision=491)
+            dump.says("Q491", "member_of", family)
+        if case.startswith("nested-family") or case.startswith("nested-only"):
+            dump.says("Q491", "instance_of", entity(items["family"]))
+        if case in (
+            "nested-released",
+            "a-cycle-with-a-released-member",
+            "nested-family-not-released",
+        ):
+            dump.says("Q401", "member_of", entity("Q491"))
+        if case == "nested-possibly-living":
+            dump.says("Q401", "member_of", entity("Q491"))
+            dump.says("Q405", "member_of", entity("Q491"))
+        if case.startswith("a-cycle"):
+            dump.says("Q446", "member_of", entity("Q491"))
+        if case == "nested-family-not-released":
+            dump.entity("Q492", "a migration", revision=492)
+            dump.says("Q492", "instance_of", entity(items["migration"]))
+            dump.says("Q492", "participant", entity("Q491"))
+        if case in (
+            "nested-family-of-no-one",
+            "nested-only-an-unknown-participant",
+            "nested-family-participant-possibly-living",
+        ):
+            dump.says("Q401", "member_of", family)
+        if case == "nested-family-unknown-participant":
+            dump.says("Q491", "participant", entity("Q401"))
+            dump.says("Q491", "participant", "_:genid9")
+        if case == "nested-only-an-unknown-participant":
+            dump.says("Q491", "participant", "_:genid9")
+        if case == "nested-family-participant-possibly-living":
+            dump.says("Q491", "participant", entity("Q405"))
+        if case == "nested-family-of-its-participant":
+            dump.says("Q491", "participant", entity("Q401"))
+        dump.entity("Q497", "Departure of the Lobigs", revision=497)
+        dump.says("Q497", "instance_of", entity(items["event"]))
+        dump.says("Q497", "point_in_time", dated(1975))
+        dump.says("Q497", via, family)
+        released = ("Q405",) if case.endswith("-all-released") else ()
+        # a cycle of groups must end: a hang fails, rather than stalls
+        failures = []
+
+        def export():
+            try:
+                self.export_of(tmp_path, dump, vocabulary, released=released)
+            except BaseException as error:  # noqa: BLE001 - re-raised below
+                failures.append(error)
+
+        worker = threading.Thread(target=export, daemon=True)
+        worker.start()
+        worker.join(HANG_GUARD)
+        assert not worker.is_alive(), "the members walk did not end"
+        if failures:
+            raise failures[0]
+        text, mentioned = self.public(tmp_path)
+        assert ("Q497" in mentioned) is not shields
+        assert (dated(1975) in text) is not shields
+
+    @pytest.mark.parametrize("via", ["participant", "carried_out_by"])
+    def test_a_released_head_is_judged_on_their_own_standing(
+        self, tmp_path, vocabulary, via
+    ):
+        # "Departure of Gustav" (Q497), attributed to Gustav (Q401,
+        # released) himself, with Florence (Q405, who may be living)
+        # recorded under him: a released person is judged on their own
+        # standing alone, so the event stays (decision AE)
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.says("Q405", "member_of", entity("Q401"))
+        dump.entity("Q497", "Departure of Gustav", revision=497)
+        dump.says("Q497", "instance_of", entity(items["event"]))
+        dump.says("Q497", "point_in_time", dated(1975))
+        dump.says("Q497", via, entity("Q401"))
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert "Q497" in mentioned
+        assert dated(1975) in text
+
+    @pytest.mark.parametrize("via", ["participant", "carried_out_by"])
+    def test_a_person_named_a_group_is_never_a_released_group(
+        self, tmp_path, vocabulary, via
+    ):
+        # Q495, who states no type, released by the check (a death of
+        # theirs, Q496), with Gustav (Q401) a member of them: a person is
+        # never a released group, so "Departure of the Lobigs", that names
+        # them as a participant or as who carried it out, goes
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.entity("Q495", "Q495", revision=495)
+        dump.entity("Q496", "a death", revision=496)
+        dump.says("Q496", "instance_of", entity(items["death"]))
+        dump.says("Q496", "participant", entity("Q495"))
+        dump.says("Q401", "member_of", entity("Q495"))
+        dump.entity("Q497", "Departure of the Lobigs", revision=497)
+        dump.says("Q497", "instance_of", entity(items["event"]))
+        dump.says("Q497", "point_in_time", dated(1975))
+        dump.says("Q497", via, entity("Q495"))
+        self.export_of(tmp_path, dump, vocabulary, released=("Q495",))
+        text, mentioned = self.public(tmp_path)
+        assert "Q497" not in mentioned
+        assert dated(1975) not in text
+
+    @pytest.mark.parametrize(
+        "case", ["naming-no-one", "a-participant", "carried-out-by-a-group"]
+    )
+    def test_a_curator_subclass_of_a_person_kind_is_one_everywhere(
+        self, tmp_path, vocabulary, case
+    ):
+        # "Passage of Nina Lobig" (Q494), typed Q495, a class a curator made
+        # a subclass of Q492, a redirect to Q493, a subclass of migration:
+        # a person kind, two hops and a redirect down. Naming no
+        # participant, it is unattended; its participant Q498, typed only
+        # with a curator's class (Q499), has person evidence the check never
+        # assessed, and is left out with it. Carried out by the Lobigs
+        # (Q446), Gustav their one member, it is theirs, and goes too
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.entity("Q493", "a passage", revision=493)
+        dump.says("Q493", "subclass_of", entity(items["migration"]))
+        dump.redirect("Q492", "Q493")
+        dump.entity("Q495", "a sea passage", revision=495)
+        dump.says("Q495", "subclass_of", entity("Q492"))
+        dump.entity("Q494", "Passage of Nina Lobig", revision=494)
+        dump.says("Q494", "instance_of", entity("Q495"))
+        dump.says("Q494", "point_in_time", dated(1975))
+        if case == "a-participant":
+            dump.entity("Q499", "a traveller", revision=499)
+            dump.entity("Q498", "Q498", revision=498)
+            dump.says("Q498", "instance_of", entity("Q499"))
+            dump.says("Q494", "participant", entity("Q498"))
+        if case == "carried-out-by-a-group":
+            dump.says("Q401", "member_of", entity("Q446"))
+            dump.says("Q494", "participant", entity("Q401"))
+            dump.says("Q494", "carried_out_by", entity("Q446"))
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert "Q494" not in mentioned
+        assert dated(1975) not in text
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )["excluded"]
+        if case == "naming-no-one":
+            assert exclusions["Q494"] == backup.UNATTENDED
+        elif case == "carried-out-by-a-group":
+            assert exclusions["Q494"] == (
+                backup.LINKED_LEFT_OUT.format("Q446")
+            )
+        else:
+            assert "Q498" not in mentioned
+            assert exclusions["Q498"] == NOT_ASSESSED
+
+    @pytest.mark.parametrize(
+        ("case", "goes"),
+        [
+            ("carried-out-by-a-released-family", True),
+            ("carried-out-by-a-family-with-a-member-left-out", True),
+            ("a-curator-subclass-of-migration", True),
+            ("carried-out-by-a-released-family-not-a-person-kind", False),
+        ],
+    )
+    def test_a_person_kind_of_event_goes_with_any_group_it_names(
+        self, tmp_path, vocabulary, case, goes
+    ):
+        # "Emigration of the Lobigs", a migration of Gustav's (Q401)
+        # carried out by the family Q446: the event is its members' own,
+        # so it goes, the family's members all released (Gustav) or not
+        # (Florence, Q405, too). So does one typed with a class a curator
+        # made a subclass of migration (Q493), that the family took part
+        # in. An event of no person kind it carried out stays
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.says("Q401", "member_of", entity("Q446"))
+        if case == "carried-out-by-a-family-with-a-member-left-out":
+            dump.says("Q405", "member_of", entity("Q446"))
+        kind = entity(items["migration"])
+        if case == "a-curator-subclass-of-migration":
+            dump.entity("Q493", "a passage", revision=493)
+            dump.says("Q493", "subclass_of", kind)
+            kind = entity("Q493")
+        if case.endswith("not-a-person-kind"):
+            kind = entity(items["event"])
+        dump.entity("Q497", "Emigration of the Lobigs", revision=497)
+        dump.says("Q497", "instance_of", kind)
+        dump.says("Q497", "point_in_time", dated(1975))
+        dump.says("Q497", "participant", entity("Q401"))
+        if case == "a-curator-subclass-of-migration":
+            dump.says("Q497", "participant", entity("Q446"))
+        else:
+            dump.says("Q497", "carried_out_by", entity("Q446"))
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert ("Q497" in mentioned) is not goes
+        assert (dated(1975) in text) is not goes
+        if goes:
+            exclusions = json.loads(
+                (tmp_path / "public-exclusions.json").read_text()
+            )
+            reason = (
+                backup.PARTICIPANT_LEFT_OUT
+                if case == "a-curator-subclass-of-migration"
+                else backup.LINKED_LEFT_OUT
+            )
+            assert exclusions["excluded"]["Q497"] == reason.format("Q446")
+
+    @pytest.mark.parametrize("participant", ["Q446", "Q401", "Q464"])
+    def test_an_untyped_event_of_a_released_group_shields_nothing(
+        self, tmp_path, vocabulary, participant
+    ):
+        # an untyped gathering (Q491) that the Lobigs (Q446, Gustav their
+        # one member, or Q464, a redirect to them) or Gustav himself took
+        # part in: neither protects anyone, so an event part of it stays,
+        # without its statement
+        properties, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.says("Q401", "member_of", entity("Q446"))
+        dump.entity("Q491", "a gathering", revision=491)
+        dump.says("Q491", "participant", entity(participant))
+        dump.entity("Q490", "a dance", revision=490)
+        dump.says("Q490", "instance_of", entity(items["event"]))
+        dump.says("Q490", "part_of", entity("Q491"))
+        self.export_of(tmp_path, dump, vocabulary)
+        _, mentioned = self.public(tmp_path)
+        assert "Q490" in mentioned
+
+    def test_an_untyped_place_naming_another_shields_nothing(
+        self, tmp_path, vocabulary
+    ):
+        # Gustav's birth (Q401, released) at an untyped place (Q429) that
+        # is part of another untyped place (Q434): neither protects anyone,
+        # so the birth stays
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.says("Q429", "part_of", entity("Q434"))
+        dump.entity("Q480", "a birth", revision=480)
+        dump.says("Q480", "instance_of", entity(items["birth"]))
+        dump.says("Q480", "participant", entity("Q401"))
+        dump.says("Q480", "location", entity("Q429"))
+        self.export_of(tmp_path, dump, vocabulary)
+        _, mentioned = self.public(tmp_path)
+        assert "Q480" in mentioned
+
+    @pytest.mark.parametrize("named", ["redirect", "target"])
+    @pytest.mark.parametrize("kind", ["untyped", "family"])
+    def test_a_redirect_that_may_be_a_person_shields_its_target(
+        self, tmp_path, vocabulary, kind, named
+    ):
+        # Gustav (Q401) is married to Q495, a redirect to an untyped item
+        # (Q429) or a family (Q446): Q495 may be a person, so the item it
+        # stands for is not left out only as untyped or as a family, and an
+        # event that names either goes
+        _, items = vocabulary
+        target = {"untyped": "Q429", "family": "Q446"}[kind]
+        dump = export_dump(vocabulary)
+        dump.redirect("Q495", target, revision=495)
+        dump.says("Q401", "spouse", entity("Q495"))
+        dump.entity("Q496", "an emigration", revision=496)
+        dump.says("Q496", "instance_of", entity(items["event"]))
+        dump.says("Q496", "point_in_time", dated(1957))
+        dump.says(
+            "Q496",
+            "carried_out_by",
+            entity("Q495" if named == "redirect" else target),
+        )
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert "Q496" not in mentioned
+        assert dated(1957) not in text
+
+    def test_a_redirect_with_no_person_evidence_shields_nothing(
+        self, tmp_path, vocabulary
+    ):
+        # an event carried out by Q435, a redirect to the untyped Q429, with
+        # no person evidence of its own: it protects no one, so the event
+        # stays, without the statement naming it
+        properties, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.entity("Q496", "a fire", revision=496)
+        dump.says("Q496", "instance_of", entity(items["event"]))
+        dump.says("Q496", "carried_out_by", entity("Q435"))
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert "Q496" in mentioned
+        carried = f"<{CONCEPT}/prop/{properties['carried_out_by']}>"
+        assert f"{entity('Q496')} {carried} " not in text
+
+    @pytest.mark.parametrize(
+        "released", [False, True], ids=["unassessed", "released"]
+    )
+    def test_an_untyped_person_shields_unless_released(
+        self, tmp_path, vocabulary, released
+    ):
+        # an event carried out by Q492, untyped, with a birth in the dump:
+        # one the check never assessed may be a person, and takes the event
+        # with it; one it released is left out only as untyped, and does not
+        dump_items = vocabulary[1]
+        dump = export_dump(vocabulary)
+        dump.entity("Q492", "Q492", revision=492)
+        dump.says("Q492", "date_of_birth", dated(1890))
+        dump.entity("Q493", "a hearing", revision=493)
+        dump.says("Q493", "instance_of", entity(dump_items["event"]))
+        dump.says("Q493", "carried_out_by", entity("Q492"))
+        self.export_of(
+            tmp_path, dump, vocabulary, released=("Q492",) if released else ()
+        )
+        _, mentioned = self.public(tmp_path)
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )
+        assert "Q492" in exclusions["excluded"]
+        assert ("Q493" in mentioned) is released
+
+    def test_a_deprecated_human_type_makes_no_person_of_an_event(
+        self, tmp_path, vocabulary
+    ):
+        # Q494, typed event and, at deprecated rank, human, released by the
+        # check, whose one participant is of unknown value: it is no person
+        # at normal or preferred rank, so it is unattended and goes
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.entity("Q494", "a gathering", revision=494)
+        dump.says("Q494", "instance_of", entity(items["event"]))
+        dump.says(
+            "Q494", "instance_of", entity(items["human"]), rank="Deprecated"
+        )
+        dump.says("Q494", "participant", "_:genid9")
+        self.export_of(tmp_path, dump, vocabulary, released=("Q494",))
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )
+        assert exclusions["excluded"]["Q494"] == backup.UNATTENDED
+
+    @pytest.mark.parametrize("named", ["family", "redirect"])
+    @pytest.mark.parametrize(
+        ("member", "shields"),
+        [("Q405", True), ("Q401", False), (None, True)],
+        ids=["possibly-living", "released", "none"],
+    )
+    def test_a_family_shields_unless_its_members_are_released(
+        self, tmp_path, vocabulary, member, shields, named
+    ):
+        # "Departure of the Lobigs", carried out by the family Q446, named
+        # so or through its redirect Q464: a member who may be living
+        # (Florence, Q405, a member of it) takes the event with the family,
+        # and so does a family that names no member, whose members cannot
+        # be known released; one whose members are all released (Gustav,
+        # Q401) is left out only as a family, and the event stays
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        if member:
+            dump.says(member, "member_of", entity("Q464"))
+        dump.entity("Q497", "Departure of the Lobigs", revision=497)
+        dump.says("Q497", "instance_of", entity(items["event"]))
+        dump.says("Q497", "point_in_time", dated(1975))
+        dump.says(
+            "Q497",
+            "carried_out_by",
+            entity("Q446" if named == "family" else "Q464"),
+        )
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert ("Q497" in mentioned) is not shields
+        assert (dated(1975) in text) is not shields
+        if shields:
+            exclusions = json.loads(
+                (tmp_path / "public-exclusions.json").read_text()
+            )
+            family = "Q446" if named == "family" else "Q464"
+            assert exclusions["excluded"]["Q497"] == (
+                backup.LINKED_LEFT_OUT.format(family)
+            )
+
+    @pytest.mark.parametrize("kind", ["marriage", "partnership"])
+    def test_a_union_is_no_event_its_wedding_takes(
+        self, tmp_path, vocabulary, kind
+    ):
+        # Gustav's (Q401, released) union, started by a wedding Florence
+        # (Q405, left out) took part in and ended by a divorce of his: the
+        # wedding goes, and the union's statement naming it goes whole,
+        # but the union is no event and stays, and so does its divorce
+        properties, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.entity("Q480", "a union", revision=480)
+        dump.says("Q480", "instance_of", entity(items[kind]))
+        dump.says("Q480", "participant", entity("Q401"))
+        dump.says("Q480", "started_by", entity("Q481"))
+        dump.says("Q480", "ended_by", entity("Q482"))
+        dump.entity("Q481", "a wedding", revision=481)
+        dump.says("Q481", "instance_of", entity(items["wedding"]))
+        dump.says("Q481", "participant", entity("Q405"))
+        dump.entity("Q482", "a divorce", revision=482)
+        dump.says("Q482", "instance_of", entity(items["divorce"]))
+        dump.says("Q482", "participant", entity("Q401"))
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert "Q481" not in mentioned
+        assert {"Q480", "Q482"} <= mentioned
+        started = f"<{CONCEPT}/prop/{properties['started_by']}>"
+        assert f"{entity('Q480')} {started} " not in text
 
     def test_the_judgement_notes_never_leave(self, tmp_path, vocabulary):
         # the extractor's remark on its own reading, in a run's reference
