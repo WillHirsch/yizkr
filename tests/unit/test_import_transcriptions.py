@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures import records
+from tests.fixtures.records import page_text, record_answer
 from tests.unit.test_scratch import (  # noqa: F401
     CLI,
     MODEL,
@@ -72,19 +74,41 @@ from yizkr.pipeline.transcribe import TRANSCRIPTION_PROMPT
 # the client an older run transcribed with, as its transcriptions name it
 ARCHIVED = "llm-vision:claude-code/1.0.44:claude-sonnet-4-20250514"
 # a reading of the studio portrait's reverse, as the archive holds it:
-# not the words the fake engine reads now
-PORTRAIT = (
+# not the words the fake engine reads now; each archived reading is the
+# transcription record the engine answered (ADR-0037)
+PORTRAIT_TEXT = (
     "[mount] Photograph Brüsrich, Peiltal\n"
     "[reverse] Muckel / Cilli / Wastl / Rahel / Felix"
 )
-GRAVESTONE = "EUGEN LÖBIG\n1836 - 1909\nCÄCILIE LÖBIG\nGEB. TARLE\n1833 - 1902"
+PORTRAIT = record_answer(
+    PORTRAIT_TEXT, document_class="photograph", languages=["de"]
+)
+GRAVESTONE_TEXT = (
+    "EUGEN LÖBIG\n1836 - 1909\nCÄCILIE LÖBIG\nGEB. TARLE\n1833 - 1902"
+)
+GRAVESTONE = record_answer(
+    GRAVESTONE_TEXT, document_class="unclassified", languages=["de"]
+)
 # what a vision engine answered when its PDF renderer was missing, in the
-# engine's own voice: a tool failure, never a transcription
+# engine's own voice and in place of the record: a tool failure, never a
+# transcription
 TOOL_FAILURE = (
     "I'll read the image file.\n"
     "The image could not be rendered: pdftoppm: command not found. "
     "Install poppler-utils and try again."
 )
+
+
+@pytest.fixture(autouse=True)
+def made_with_the_prompt_the_run_sends(monkeypatch):
+    """The archives here were made with the prompt the run sends, so that
+    the adoption is exercised. The QID-format archives a run left were
+    made with an earlier prompt than the one that asks for the
+    transcription record (ADR-0037): a run adopts none of them
+    (TestTheRecordPrompt)."""
+    monkeypatch.setattr(
+        imports, "QID_FORMAT_PROMPT", sha256(TRANSCRIPTION_PROMPT)
+    )
 
 
 @pytest.fixture
@@ -278,14 +302,14 @@ class TestAdoption:
         # the views hold the archive's readings, name the artifact by its
         # SHA-1 and no QID, and name the client the archive names
         photo = view(run, corpus, PHOTO)
-        assert photo["text"] == PORTRAIT
+        assert photo["text"] == page_text(PORTRAIT_TEXT)
         assert photo["artifact"] == {
             "kind": "artifact",
             "sha1": corpus.sha1(PHOTO),
         }
         assert photo["engine"] == ARCHIVED
         assert "Q23" not in json.dumps(photo)
-        assert view(run, corpus, STONE)["text"] == GRAVESTONE
+        assert view(run, corpus, STONE)["text"] == page_text(GRAVESTONE_TEXT)
 
     def test_the_adoption_keeps_its_provenance_and_no_qid(
         self, tmp_path, engine
@@ -497,7 +521,9 @@ class TestAdoption:
             entry.pop("origin")
             path.write_text(json.dumps(entry))
         before = cache_files(tmp_path)
-        archive = an_archive(tmp_path, corpus, **{PHOTO: corpus.texts[PHOTO]})
+        archive = an_archive(
+            tmp_path, corpus, **{PHOTO: record_answer(corpus.texts[PHOTO])}
+        )
         (found,) = import_(tmp_path, archive, corpus).outcomes
         assert (found.outcome, found.skipped) == (SKIPPED, ANSWERED)
         assert found.detail == "the cache holds the engine's answer"
@@ -524,8 +550,7 @@ class TestTheCheck:
         assert report.counts() == {IMPORTED: 1, REJECTED: 1}
         stone = outcome_of(report, corpus.sha1(STONE))
         assert stone.outcome == REJECTED
-        assert "tool-failure" in stone.detail
-        assert "pdf-renderer" in stone.detail
+        assert "(not-a-record)" in stone.detail
         # recorded as a rejected answer under the call's key, never live
         (entry,) = rejected(tmp_path)
         assert entry["response"] == TOOL_FAILURE
@@ -542,16 +567,20 @@ class TestTheCheck:
         assert read_by_the_engine(engine) == {STONE}
         assert misses(run, "rejected") == {corpus.sha1(STONE)}
         assert hits(run, "adopted") == {corpus.sha1(PHOTO)}
-        assert view(run, corpus, STONE)["text"] == corpus.texts[STONE]
+        assert view(run, corpus, STONE)["text"] == page_text(
+            corpus.texts[STONE]
+        )
 
     def test_a_refusal_is_rejected(self, tmp_path, engine):
+        """A refusal, in the engine's words instead of the record, is not
+        the record, and fails as that."""
         corpus = small(tmp_path)
         refusal = "I'm sorry, but I can't transcribe this document."
         archive = an_archive(tmp_path, corpus, **{PHOTO: refusal})
         report = import_(tmp_path, archive, corpus)
         (found,) = report.outcomes
         assert found.outcome == REJECTED
-        assert "(refusal)" in found.detail
+        assert "(not-a-record)" in found.detail
         assert live(tmp_path) == []
 
     def test_a_reading_too_short_for_its_pages_is_rejected(
@@ -562,7 +591,13 @@ class TestTheCheck:
         length floor."""
         corpus = small(tmp_path)
         archive = an_archive(
-            tmp_path, corpus, **{PHOTO: "[illegible]\n[illegible]"}
+            tmp_path,
+            corpus,
+            **{
+                PHOTO: record_answer(
+                    "[illegible]", "[illegible]", "[illegible]"
+                )
+            },
         )
         monkeypatch.setattr(
             transcription_check, "media_page_count", lambda path: 3
@@ -572,6 +607,30 @@ class TestTheCheck:
         assert found.outcome == REJECTED
         assert "(too-short)" in found.detail
         assert live(tmp_path) == []
+
+    def test_a_scan_pdf_s_reading_gives_exactly_its_pages(
+        self, tmp_path, engine, monkeypatch
+    ):
+        """An archived reading of a PDF read whole that gives more pages
+        than the PDF has is rejected, as the run would reject it."""
+        corpus = small(tmp_path)
+        archive = an_archive(
+            tmp_path,
+            corpus,
+            **{PHOTO: record_answer(corpus.texts[PHOTO], "Rückseite")},
+        )
+        monkeypatch.setattr(
+            transcription_check, "media_page_count", lambda path: 1
+        )
+        monkeypatch.setattr(
+            transcription_check,
+            "is_pdf",
+            lambda path: path.name == PHOTO,
+        )
+        report = import_(tmp_path, archive, corpus)
+        (found,) = report.outcomes
+        assert found.outcome == REJECTED
+        assert "(pages-extra)" in found.detail
 
     def test_a_stricter_check_reaches_an_adoption_in_the_run(
         self, tmp_path, engine, monkeypatch
@@ -583,21 +642,16 @@ class TestTheCheck:
         archive = an_archive(tmp_path, corpus, **{PHOTO: PORTRAIT})
         import_(tmp_path, archive, corpus)
         # a signature the archive's reading has, and the engine's has not
-        signature = transcription_check._signature(
-            "slashed-names", transcription_check.TOOL_FAILURE, r"Muckel /"
-        )
-        monkeypatch.setattr(
-            transcription_check,
-            "SIGNATURES",
-            (*transcription_check.SIGNATURES, signature),
-        )
+        records.stricter_check(monkeypatch, r"Muckel /", "slashed-names")
         run = transcribe_only(tmp_path, corpus, engine)
         (reject,) = events(run, "cache-reject")
         assert reject["subject"] == corpus.sha1(PHOTO)
         assert "slashed-names" in reject["reason"]
         assert misses(run, "rejected") == {corpus.sha1(PHOTO)}
         assert read_by_the_engine(engine) == {PHOTO, STONE}
-        assert view(run, corpus, PHOTO)["text"] == corpus.texts[PHOTO]
+        assert view(run, corpus, PHOTO)["text"] == page_text(
+            corpus.texts[PHOTO]
+        )
         again = import_(tmp_path, archive, corpus)
         assert [o.outcome for o in again.outcomes] == [REJECTED]
 
@@ -610,14 +664,7 @@ class TestTheCheck:
         corpus = small(tmp_path)
         archive = an_archive(tmp_path, corpus, **{PHOTO: PORTRAIT})
         import_(tmp_path, archive, corpus)
-        signature = transcription_check._signature(
-            "slashed-names", transcription_check.TOOL_FAILURE, r"Muckel /"
-        )
-        monkeypatch.setattr(
-            transcription_check,
-            "SIGNATURES",
-            (*transcription_check.SIGNATURES, signature),
-        )
+        records.stricter_check(monkeypatch, r"Muckel /", "slashed-names")
         report = import_(tmp_path, archive, corpus)
         assert [o.outcome for o in report.outcomes] == [REJECTED]
         assert live(tmp_path) == []
@@ -666,7 +713,9 @@ class TestLeavingOut:
         corpus = small(tmp_path)
         transcribe_only(tmp_path, corpus, engine)
         before = cache_files(tmp_path)
-        archive = an_archive(tmp_path, corpus, **{PHOTO: corpus.texts[PHOTO]})
+        archive = an_archive(
+            tmp_path, corpus, **{PHOTO: record_answer(corpus.texts[PHOTO])}
+        )
         prefix = corpus.sha1(PHOTO)[:7]
         report = import_(tmp_path, archive, corpus, leave_out=[prefix])
         assert report.outcomes[0].detail == f"--leave-out {prefix}"
@@ -1095,6 +1144,24 @@ class TestSkipped:
             "TRANSCRIPTION_PROMPT",
             TRANSCRIPTION_PROMPT + "Mark each page's start.\n",
         )
+        report = import_(tmp_path, archive, corpus)
+        found = outcome_of(report, corpus.sha1(PHOTO))
+        assert (found.outcome, found.skipped) == (SKIPPED, OTHER_PROMPT)
+        assert live(tmp_path) == []
+
+    def test_an_archive_made_before_the_record_is_not_adopted(
+        self, tmp_path, engine, monkeypatch
+    ):
+        """The QID-format transcriptions were made with the prompt before
+        the one asking for the record: none is adopted, and the run
+        transcribes afresh."""
+        monkeypatch.setattr(
+            imports,
+            "QID_FORMAT_PROMPT",
+            "e9b42f6645e49dc3840b8ed973cad18eeeae43c446ab805725094b2320793b54",
+        )
+        corpus = small(tmp_path)
+        archive = an_archive(tmp_path, corpus, **{PHOTO: PORTRAIT})
         report = import_(tmp_path, archive, corpus)
         found = outcome_of(report, corpus.sha1(PHOTO))
         assert (found.outcome, found.skipped) == (SKIPPED, OTHER_PROMPT)

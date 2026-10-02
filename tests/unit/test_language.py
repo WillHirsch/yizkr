@@ -69,7 +69,7 @@ class TestDescribe:
             "fallback" in LanguageResolution("en", "fallback", 0.3).describe()
         )
         assert (
-            "too short"
+            "no language to go by"
             in LanguageResolution("en", "fallback", None).describe()
         )
 
