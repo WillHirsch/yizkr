@@ -1363,6 +1363,7 @@ class Orchestrator:
         if (
             detail.get("gedcom_warnings") != result.warnings
             or detail.get("gedcom_unsupported") != result.unsupported_tags
+            or detail.get("gedcom_outcomes") != result.outcomes
         ):
             for warning in result.warnings:
                 self.log(f"  {doc.source.name}: {warning}", file=sys.stderr)
@@ -1372,9 +1373,16 @@ class Orchestrator:
                     + format_unsupported_tags(result.unsupported_tags),
                     file=sys.stderr,
                 )
+            if result.outcomes:
+                self.log(
+                    f"  {doc.source.name}: GEDCOM outcomes: "
+                    + format_unsupported_tags(result.outcomes),
+                    file=sys.stderr,
+                )
         doc.state.detail = detail | {
             "gedcom_warnings": result.warnings,
             "gedcom_unsupported": result.unsupported_tags,
+            "gedcom_outcomes": result.outcomes,
         }
         return result.batch
 

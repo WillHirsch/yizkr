@@ -6,6 +6,59 @@ the owner's merge of the PR that adds it is its acceptance. It settles
 `spouse` edge, §6's deferred divorce event). #394 implements it with
 #385's extraction revision (ADR-0035, accepted), before scratch run 1.
 
+Amended by #408 (2026-09-29): the GEDCOM adapter makes unions as §5
+says. A MARR TYPE names a civil ceremony by `civil`, `civil ceremony`,
+`civil marriage`, `Standesamt` or `standesamtlich`, and a religious one
+by `religious`, `religious ceremony`, `religious marriage`, `church`,
+`church wedding` or `kirchlich`, in any case; a further TYPE of another
+kind is counted, as any other TYPE is. A DIV or an ANUL states its event
+as GEDCOM 5.5.1 has one asserted, by a DATE or a PLAC with a value or a
+Y, and one that states none is counted. An end of unstated kind is
+labelled as the end of its union. Two unions of one couple, or their
+events, get labels of their own, told apart by a number, since the
+writer finds an item by its label, and an entity whose id another
+entity holds (a family whose xref is another union's event's, or a
+person's) takes a numbered one. Each union and each event is counted
+by kind in the adapter's outcomes, and so is an undated divorce or
+annulment, one whose DATEs give no date among them.
+
+Amended by #408 (2026-09-29; decided by the orchestrator, the owner may
+override):
+
+- **A MARR states its wedding as a DIV states its divorce.** `MARR N`,
+  and a MARR that states nothing (no Y, and no DATE or PLAC with a
+  value), makes no wedding and is counted as `MARR`, and a family with
+  no MARR that states one is a partnership, unless a DIV or ANUL of it
+  states its event (below, 2026-10-02).
+- **Weddings are grouped by kind, not by TYPE.** The table's "MARRs of
+  one TYPE" reads "of one kind": MARRs whose TYPEs name one kind of
+  ceremony (`civil` and `Standesamt` alike) are one wedding, and a MARR
+  whose TYPE names no known kind ("Elopement") joins the wedding of
+  unstated kind, its TYPE counted as `MARR.TYPE`.
+- **Two partners under one tag.** A family with two HUSBs and no WIFE,
+  or two WIFEs and no HUSB, naming two people, has those two as its
+  couple: a partnership, or a marriage where a MARR states a wedding,
+  counted as `FAM two HUSB/WIFE`. The second stays a partner only, never
+  a parent: the family's children take the first HUSB as father and the
+  first WIFE as mother, as ADR-0021's #322 amendment has it, since a
+  second father or mother "would give each child a second parent, which
+  the record cannot mean". (Amended 2026-10-02.)
+
+Amended by #408 (2026-10-02; decided by the orchestrator, the owner may
+override): **a divorce or an annulment ends a marriage.** A family whose
+DIV or ANUL states its event, with no MARR that states a wedding, is a
+`marriage` with no wedding, its couple `spouse`s, counted as `union:
+marriage without a wedding`; the source asserts the end of a marriage,
+not of a partnership. A family whose HUSB and WIFE name one person has
+no couple, as two HUSBs naming one person have none.
+
+Amended by #408 (2026-10-02; decided by the orchestrator, the owner may
+override): **one person as HUSB and WIFE.** A family whose first HUSB and
+first WIFE name the same person gives no union and no parent claim for its
+children, counted as `FAM one person as HUSB and WIFE`: one person as
+both father and mother is a reading the record cannot mean, so it is not
+guessed.
+
 Amended by #409 (2026-09-29): §3's union that names only one of its
 couple is ambiguous with every other union of that person, whether or
 not a second union of theirs is known, since clustering cannot count a
@@ -117,7 +170,7 @@ can still generate P26 so qualified. #394 adds the new classes' ids.
 
 | The export gives | The adapter makes |
 |---|---|
-| a family with two partners | a union: a `marriage` when the family has a MARR, otherwise a `partnership`, which may be a marriage the export does not identify |
+| a family with two partners | a union: a `marriage` when the family has a MARR (or, amended by #408, a DIV or ANUL that states its event: a marriage with no wedding, counted), otherwise a `partnership`, which may be a marriage the export does not identify |
 | each MARR | a wedding. A TYPE that names a civil or a religious ceremony gives that kind; any other TYPE stays in the excerpt and is counted. A family's MARRs of one TYPE, or of none, are one wedding, each alternative date or place a statement of its own (ADR-0021) |
 | each DIV, each ANUL | a divorce, an annulment (a family's DIVs are one divorce), with its PLAC as the event's `location` |
 | a DATE's range or circa | the range or circa of that event's own date |

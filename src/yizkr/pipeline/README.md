@@ -152,7 +152,13 @@ its control file; their thresholds are in `anomalies.yaml` here, and
 `$YIZKR_ANOMALIES` names a file of an operator's own over them
 ([docs/ANOMALIES.md](../../../docs/ANOMALIES.md)).
 GEDCOM (`.ged`) files take a deterministic adapter in place of
-transcribe/extract; the gates, resolve, and write are identical.
+transcribe/extract; the gates, resolve, and write are identical. The
+adapter fills each person's and place's mention record from the export's
+tags (ADR-0035 §6) and makes each family with two partners a marriage or
+a partnership bounded by its weddings, divorce and annulment (ADR-0036
+§5); it reports the tags it does not map, and counts the outcomes worth
+reporting (unions and events by kind, name parts kept unsplit or
+counted, an undetermined language) in the document's state and log.
 
 ```sh
 uv sync --dev            # from the repo root

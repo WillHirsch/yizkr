@@ -740,6 +740,11 @@ class TestTheTraps:
         }
         # the adapter counts the DEAT it did not map
         assert export.state.detail["gedcom_unsupported"].get("DEAT", 0) >= 1
+        # and what it did map worth reporting: the export's two marriages,
+        # and the language it does not state (ADR-0035 §6, ADR-0036 §5)
+        outcomes = export.state.detail["gedcom_outcomes"]
+        assert outcomes["union: marriage"] == 2
+        assert outcomes["HEAD.LANG absent: und"] == 1
 
     def test_an_early_birth_and_the_later_ones_stand_side_by_side(self, runs):
         run = runs.run("first")
@@ -1197,12 +1202,14 @@ class TestTheTrapsInTheIdentityMap:
     def test_the_death_carrying_merge_is_one_nothing_makes(
         self, identity, batches
     ):
-        """The certificate's Gustave Lobig meets the export's Gustav
-        Löbig, which carries his death, by the name the export gives him
-        as an alias, and so do the family history's and the talk's
-        mentions of him. Recordless, none of those links is confident
-        (#409), so no merge carries his death to the certificate. The
-        postcard's lone 'Gustl' meets nothing."""
+        """The certificate's Gustave Lobig links confidently to the
+        export's Gustav Löbig, which carries his death, and so do the
+        family history's and the talk's mentions of him. The postcard's
+        'Gustl' links to the same anchor on its name alone: one token,
+        which meets the export's NICK and nothing else, with no date and
+        no kin. The merge rule takes the candidate
+        cluster whole, so that one ambiguous link leaves every mention of
+        him apart, and no merge carries his death to the certificate."""
         gustav = identity.of("gustav-loebig")
         assert set(gustav) == set(fc.DOCUMENTS)
         entry = identity.candidate(gustav[fc.EXPORT])
@@ -1215,9 +1222,10 @@ class TestTheTrapsInTheIdentityMap:
             for document, fingerprint in gustav.items()
             if document not in (fc.EXPORT, fc.LETTER)
         } == {
-            fc.CERTIFICATE: (clustering.AMBIGUOUS, "exact/agree/unknown"),
-            fc.NARRATIVE: (clustering.AMBIGUOUS, "exact/agree/unknown"),
-            fc.DECK: (clustering.AMBIGUOUS, "exact/unknown/unknown"),
+            fc.CERTIFICATE: (clustering.CONFIDENT, "exact/agree/unknown"),
+            fc.NARRATIVE: (clustering.CONFIDENT, "exact/agree/agree"),
+            fc.DECK: (clustering.CONFIDENT, "exact/unknown/agree"),
+            fc.LETTER: (clustering.AMBIGUOUS, "exact/unknown/unknown"),
         }
         assert gustav[fc.LETTER] not in entry["members"]
         assert identity.method(gustav[fc.LETTER]) == clustering.SINGLETON
@@ -1620,11 +1628,11 @@ class TestTheRunReport:
         assert set(clusters["by_kind"]) == {
             "human",
             "place",
+            "marriage",
+            "wedding",
             "migration",
             "occupation_class",
             "vessel",
-            "marriage",
-            "wedding",
         }
         # the counts report.md shows are those, rendered
         for label, count in counts.items():

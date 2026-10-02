@@ -5,9 +5,9 @@ it.
 Every document is one of the fictional universe's sources, cited by the
 SHA-1 of its text, with a manifest an extractor could make of it and the
 mention records (ADR-0035 §2) its entities carry; the GEDCOM export is
-the fixture, adapted by the pipeline's own adapter, with the records the
-adapter fills from its tags (ADR-0035 §6, `export_records`) until the
-adapter makes them itself (docs/EXAMPLES.md). The universe has no parent
+the fixture, adapted by the pipeline's own adapter, which fills its
+records from the export's tags (ADR-0035 §6; docs/EXAMPLES.md). The
+universe has no parent
 and child of one name, so that case uses placeholder names. No wiki, no
 model.
 """
@@ -20,7 +20,6 @@ import itertools
 import json
 import os
 import random
-import re
 import shutil
 import subprocess
 import sys
@@ -622,99 +621,39 @@ GEDCOM_TRUTH = {
     "Studio portrait of the Löbig family": "studio-photo-1890s",
 }
 
-_NAME = re.compile(r"^1 (NAME|_MARNM) (.*)$")
-_TYPES = {"birth": "birth", "maiden": "birth", "married": "married"}
-
-
-def _gedcom_name(value: str, record: dict, kind: str) -> None:
-    """One NAME value's parts, into a person's record, as ADR-0035 §6's
-    table reads it: the part before the slashes the given names (a
-    bracketed part an unsplit form), the part between them a surname of
-    the NAME's type; a value without slashes unsplit."""
-    if "/" not in value:
-        record["unsplit"].append(value.strip())
-        return
-    before, surname, _after = value.split("/")
-    for bracketed in re.findall(r"\(([^)]*)\)", before):
-        record["unsplit"].append(bracketed)
-    for name in re.sub(r"\([^)]*\)", " ", before).split():
-        if name not in [g["written"] for g in record["given"]]:
-            record["given"].append(given(name))
-    if surname.strip():
-        record["surnames"].append({"written": surname.strip(), "type": kind})
-
-
-def export_records(text: str) -> dict[str, dict]:
-    """The record of each person of an export, by the adapter's id, as
-    the adapter fills them from the export's tags (ADR-0035 §6)."""
-    records: dict[str, dict] = {}
-    record: dict | None = None
-    # a NAME whose TYPE may follow it
-    pending: str | None = None
-
-    def settle(kind: str = "other") -> None:
-        nonlocal pending
-        if pending is not None and record is not None:
-            _gedcom_name(pending, record, kind)
-        pending = None
-
-    for line in text.splitlines():
-        if line.startswith("0 "):
-            settle()
-            found = re.match(r"^0 @(\w+)@ INDI", line)
-            record = person_record() if found else None
-            if found:
-                records[found.group(1).lower()] = record
-        elif record is None:
-            continue
-        elif named := _NAME.match(line):
-            settle()
-            if named.group(1) == "_MARNM":
-                _gedcom_name(named.group(2), record, "married")
-            else:
-                pending = named.group(2)
-        elif line.startswith("2 TYPE "):
-            settle(_TYPES.get(line[7:].strip().lower(), "other"))
-        elif line.startswith("2 NICK "):
-            record["nicknames"].append(line[7:].strip())
-        elif line.startswith("1 "):
-            settle()
-    settle()
-    return records
-
-
-def _with_records(text: str, batch: ClaimBatch) -> ClaimBatch:
-    """An adapted batch with the records its adapter fills: its people
-    from their NAME tags, its places from PLAC (the first part the name,
-    the rest its containers, each as written)."""
-    people = export_records(text)
-    entities = []
-    for record in batch.entities:
-        data = record.model_dump()
-        if record.kind == "human":
-            data["structure"] = people[record.id]
-        elif record.kind == "place":
-            first, *rest = [part.strip() for part in record.label.split(",")]
-            data["structure"] = place_record(first, within=rest)
-        entities.append(data)
-    return ClaimBatch.model_validate(
-        {**batch.model_dump(mode="json"), "entities": entities}
-    )
+GEDCOM_UNION_KINDS = {
+    "partnership", "marriage", "wedding", "civil_wedding",
+    "religious_wedding", "divorce", "annulment", "event",
+}  # fmt: skip
+# the export's unions and their events, by the adapter's id, as this
+# file's documents name them; any other is the export's own
+GEDCOM_UNIONS = {
+    "f1": "eugen-and-caecilie",
+    "f2": "sebastian-and-hildegard",
+    "f5": "leopold-and-agnes",
+    "f5-civil-wedding": "leopold-and-agnes-wedding",
+    "f5-divorce": "leopold-and-agnes-divorce",
+}
 
 
 def gedcom() -> Doc:
     raw = u.GEDCOM_FIXTURE.read_bytes()
     artifact = ArtifactRef.from_bytes(raw)
-    batch = _with_records(
-        raw.decode(), adapt_gedcom(raw.decode(), artifact).batch
-    )
+    batch = adapt_gedcom(raw.decode(), artifact).batch
     people = {
         person.gedcom_xref.strip("@").lower(): person.key
         for person in u.PEOPLE
         if person.gedcom_xref
     }
+    # a union and its events are the export's own, as the universe holds
+    # no marriage entity yet (ADR-0036)
     truth = {
-        record.id: people.get(record.id) or GEDCOM_TRUTH[record.label]
+        record.id: people.get(record.id)
+        or (
+            GEDCOM_UNIONS.get(record.id, f"gedcom-{record.id}")
+            if record.kind in GEDCOM_UNION_KINDS
+            else GEDCOM_TRUTH[record.label]
+        )
         for record in batch.entities
     }
     return Doc("gedcom", Manifest(artifact.sha1, batch, GEDCOM), truth)
@@ -775,16 +714,23 @@ def register(name: str, entities, claims, truth) -> Doc:
 
 def export(records: str, truth: dict[str, str], key: str = "gedcom") -> Doc:
     """A GEDCOM export of `records`, adapted by the pipeline's adapter,
-    with its records; `truth` names who each person (by id) or place (by
-    string) is."""
+    which fills its records; `truth` names who each person (by id) or
+    place (by string) is, and any union or event of the export is its
+    own."""
     text = "0 HEAD\n1 CHAR UTF-8\n" + records + "0 TRLR\n"
     artifact = ArtifactRef.from_bytes(text.encode())
-    batch = _with_records(text, adapt_gedcom(text, artifact).batch)
+    batch = adapt_gedcom(text, artifact).batch
     return Doc(
         key,
         Manifest(artifact.sha1, batch, GEDCOM),
         {
-            record.id: truth.get(record.id) or truth[record.label]
+            record.id: truth.get(record.id)
+            or (
+                f"gedcom-{record.id}"
+                if record.kind in GEDCOM_UNION_KINDS
+                and record.label not in truth
+                else truth[record.label]
+            )
             for record in batch.entities
         },
     )
@@ -816,32 +762,6 @@ def judge_of(*docs):
     judge = clustering._Judge(corpus.index, {}, config)
     nodes = {(node.sha1, node.mention.local_id): node for node in corpus.nodes}
     return judge, lambda doc, local_id: nodes[(doc.sha1, local_id)]
-
-
-class TestExportRecords:
-    def test_the_export_reads_as_the_adapter_fills_it(self):
-        """The test's stand-in for the adapter's records follows ADR-0035
-        §6: given names before the slashes, a surname between them typed
-        by TYPE, a quoted or NICK nickname, a bracketed part unsplit."""
-        records = export_records(u.GEDCOM_FIXTURE.read_text())
-        assert records["i8"]["given"] == [
-            {"written": "Gustav"},
-            {"written": "Gustave"},
-        ]
-        assert records["i8"]["surnames"] == [
-            {"written": "Löbig", "type": "birth"},
-            {"written": "Lobig", "type": "other"},
-        ]
-        assert records["i8"]["nicknames"] == ["Gustl"]
-        assert records["i7"]["unsplit"] == ["Peppi"]
-        assert records["i7"]["surnames"] == [
-            {"written": "Sörne", "type": "other"},
-            {"written": "Löbig", "type": "married"},
-        ]
-        assert records["i4"]["surnames"] == [
-            {"written": "Laudler", "type": "birth"},
-            {"written": "Löbig", "type": "married"},
-        ]
 
 
 # -- keys ---------------------------------------------------------------------
@@ -1984,7 +1904,7 @@ class TestBlocking:
             "0 @I6@ INDI\n1 NAME Felix /Löbig/\n1 DEAT Y\n0 TRLR\n"
         )
         artifact = ArtifactRef.from_bytes(text.encode())
-        adapted = _with_records(text, adapt_gedcom(text, artifact).batch)
+        adapted = adapt_gedcom(text, artifact).batch
         (event,) = [e for e in adapted.entities if e.kind == "death"]
         ged = Doc(
             "gedcom",

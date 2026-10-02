@@ -748,7 +748,6 @@ def validate_against_manifest(
     manifest_path=DEFAULT_MANIFEST,
     vocabulary: tuple[dict[str, str], set[str]] | None = None,
     acceptance: Acceptance | None = None,
-    allow_retired: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Check every key, datatype and value kind in the batch against the
     manifest.
@@ -762,8 +761,7 @@ def validate_against_manifest(
       batch's entity manifest or else its own `instance_of`; a
       vocabulary ref's is its key. An existing item named by its QID has
       no kind here, so it is not checked;
-    * a claim of a retired property is refused (ADR-0036), save one in
-      `allow_retired`;
+    * a claim of a retired property is refused (ADR-0036);
     * a reference property (`stated_in`, the judgement note's) is refused
       as a claim's or a qualifier's property;
     * a vocabulary ref to an entity kind (`human`, `place`) is a class,
@@ -833,7 +831,7 @@ def validate_against_manifest(
         if datatype is None:
             errors.append(f"{where}: unknown property key {prop!r}")
             return
-        if prop in acceptance.retired and prop not in allow_retired:
+        if prop in acceptance.retired:
             errors.append(f"{where}: {acceptance.refusal(prop, None)}")
             return
         if prop in acceptance.references:
@@ -856,15 +854,14 @@ def validate_against_manifest(
             )
         if isinstance(value, ItemValue):
             check_ref(value.value, f"{where}.value")
-            if prop not in acceptance.retired:
-                refusal = acceptance.refusal(
-                    prop,
-                    kind_of(value.value),
-                    subject_kind,
-                    vocabulary=isinstance(value.value, VocabRef),
-                )
-                if refusal is not None:
-                    errors.append(f"{where}.value: {refusal}")
+            refusal = acceptance.refusal(
+                prop,
+                kind_of(value.value),
+                subject_kind,
+                vocabulary=isinstance(value.value, VocabRef),
+            )
+            if refusal is not None:
+                errors.append(f"{where}.value: {refusal}")
 
     def ref_key(ref) -> str:
         if isinstance(ref, LocalRef):
