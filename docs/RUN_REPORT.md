@@ -163,7 +163,12 @@ state and attention labels, or `not run`; a run with none says so.
 document or the run, a stage and a check) counted once: new when any of
 its alerts was new (on an output the engine answered in the run), carried
 otherwise (docs/ANOMALIES.md). Also the checks that failed and the
-rechecks.
+rechecks. Registration's flags count here under their checks,
+`shared-file` and `unhashed-title`, and the stage `write`, as counts
+alone, of flagged writes; the QIDs of the items flagged and of those
+they are flagged against appear only in a document's own alert rows in
+report.json and report.html, which are local-only (docs/ANOMALIES.md,
+"Registration").
 
 **Content**, from the views of the stages that completed:
 

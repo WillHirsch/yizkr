@@ -13,6 +13,8 @@ from __future__ import annotations
 import hashlib
 import json
 
+import pytest
+
 from yizkr.pipeline import report
 from yizkr.pipeline.registrar import REGISTRATION_CHECKS
 from yizkr.pipeline.rundir import RunDir
@@ -106,8 +108,12 @@ def test_a_documents_rows_carry_the_items_by_qid(tmp_path):
     assert "Q101 against Q9, Q100" in page
 
 
-def test_a_row_keeps_qids_alone(tmp_path):
-    """An `artifact` or `others` that is not an item's QID is left out."""
+@pytest.mark.parametrize(
+    "artifact", ["Studio portrait of the Löbig family", "Q12 portrait", "Q12x"]
+)
+def test_a_row_keeps_qids_alone(tmp_path, artifact):
+    """An `artifact` or `others` that is not an item's QID is left out,
+    one that only starts with a QID included."""
     rundir = RunDir(tmp_path / "run")
     rundir.start(
         documents=[{"sha1": PORTRAIT_SHA1, "file": PORTRAIT_FILE}],
@@ -118,8 +124,15 @@ def test_a_row_keeps_qids_alone(tmp_path):
         subject=PORTRAIT_SHA1[:12],
         value=True,
         carried=False,
-        artifact="Studio portrait of the Löbig family",
-        others=["Q7", "File:Portrait-1890s.png", 7, "Q07"],
+        artifact=artifact,
+        others=[
+            "Q7",
+            "File:Portrait-1890s.png",
+            7,
+            "Q07",
+            "Q12 portrait",
+            "Q12x",
+        ],
     )
     rundir.end("finished")
     (document,) = report.build(rundir.path)["documents"]

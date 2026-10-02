@@ -39,16 +39,21 @@ Amended by #371 (2026-10-02): an item whose bytes a file another item
 names holds, or whose title is the label of an item with no hash, is
 flagged for review as an alert of the write, and still never adopted
 (§1, "Registration at write time", and "Media files"). The owner's
-decisions: a flag is raised on every registration, of an item made or
-found, while its condition holds, until a curator acts (Z1); the run
-report's aggregates count the flags by check and under the stage
-`write` (Z2); shared-file names every item whose `media file` holds the
-bytes, by MediaWiki's list of the files of its SHA-1 (Z3); and a
-GEDCOM media object's item, an artifact kind with no file and no hash,
-is an item with no hash, so a scratch run raises unhashed-title for an
-artifact or derived medium registered under exactly its label (Z4). An
-artifact's label longer than Wikibase takes is cut to fit, as a derived
-medium's is.
+decisions: a flag is raised on every write that registers the item,
+made or found, while its condition holds, until a curator acts (Z1); an
+`ingest run` that finds a document's write current skips it, so
+registers nothing and raises nothing then (a scratch run's state is
+fresh, so it always writes); the run report's aggregates count the
+flags by check and under the stage `write` (Z2); shared-file names
+every item whose `media file` holds the bytes, by MediaWiki's list of
+the files of its SHA-1 (Z3); and a GEDCOM media object's item, an
+artifact kind with no file and no hash, is an item with no hash, so a
+scratch run raises unhashed-title for an artifact or derived medium
+registered under exactly its label, when the GEDCOM's write made that
+item first: a GEDCOM written after such an artifact joins the media
+object to it by resolve's label matching (#109), makes no item for it
+and raises no flag (Z4). An artifact's label longer than Wikibase takes
+is cut to fit, as a derived medium's is.
 
 ## Context
 
@@ -139,7 +144,9 @@ never by name (amended by #103, 2026-09-29):
   for an artifact or derived medium whose title (a derived medium's
   first label), or own label before its content tag, is exactly a media
   object's label: its title, or without one a fallback such as its
-  file's name (ADR-0021).
+  file's name (ADR-0021), when the GEDCOM's write made the media
+  object's item first (written after, the GEDCOM joins the media object
+  to that artifact by its label, #109, and no flag is raised).
   When the title is already another item's label, the new item's label
   takes a short content tag (`"<title> [<sha1[:8]>]"`), so labels stay
   unique (the wiki client's label index; #94 would scope that rule away
@@ -497,8 +504,8 @@ the hash key above is built to carry them. Tracked in #162.
   file. In the development stage every instance is reset (ADR-0025), so
   no such item exists there. On a kept instance such a registration is
   flagged, as is an item under the older item's title (amended by #371,
-  2026-10-02): each run's alerts list both items for a person to look
-  at, and the graph holds both until a curator links or ranks them.
+  2026-10-02): each write that registers the item raises alerts that
+  list both items for a person to look at, and the graph holds both until a curator links or ranks them.
 - **Not solved yet:** re-encodes, re-scans, crops/uncrops, and the
   corroboration-inflation they cause remain until parts 2 & 3 land. The
   inconsistency report and galleries treat them as distinct artifacts

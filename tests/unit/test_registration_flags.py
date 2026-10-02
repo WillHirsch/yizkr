@@ -275,8 +275,8 @@ class TestArtifactFlags:
         assert result.created and new != old
         assert result.file_page == "File:Portrait-1890s.png"
         assert flag_tuples(result.flags) == [
-            (SHARED_FILE, new, sha1(PORTRAIT), (old,)),
             (UNHASHED_TITLE, new, sha1(PORTRAIT), (old,)),
+            (SHARED_FILE, new, sha1(PORTRAIT), (old,)),
         ]
         assert registrar.flags == result.flags
         assert wiki.entities[old] == before
@@ -466,8 +466,8 @@ class TestArtifactFlags:
         first = registrar.register_artifact(path, "photograph", TITLE)
         new = first.artifact_qid
         expected = [
-            (SHARED_FILE, new, sha1(PORTRAIT), (old,)),
             (UNHASHED_TITLE, new, sha1(PORTRAIT), (old,)),
+            (SHARED_FILE, new, sha1(PORTRAIT), (old,)),
         ]
         assert flag_tuples(first.flags) == expected
         entities = copy.deepcopy(wiki.entities)
@@ -575,8 +575,8 @@ class TestArtifactFlags:
 
         new = first.artifact_qid
         expected = [
-            (SHARED_FILE, new, sha1(PORTRAIT), (old,)),
             (UNHASHED_TITLE, new, sha1(PORTRAIT), (old,)),
+            (SHARED_FILE, new, sha1(PORTRAIT), (old,)),
         ]
         for result in (again, anew):
             assert result.artifact_qid == new and not result.created
@@ -766,7 +766,7 @@ class TestArtifactFlags:
                 "sha1": sha1(PORTRAIT),
                 "others": [old],
             }
-            for kind in (SHARED_FILE, UNHASHED_TITLE)
+            for kind in (UNHASHED_TITLE, SHARED_FILE)
         ]
 
 
@@ -796,8 +796,8 @@ class TestDerivedMediaFlags:
         assert medium != old
         assert container.flags == []
         assert flag_tuples(registrar.flags) == [
-            (SHARED_FILE, medium, sha1(IMAGE), (old,)),
             (UNHASHED_TITLE, medium, sha1(IMAGE), (old,)),
+            (SHARED_FILE, medium, sha1(IMAGE), (old,)),
         ]
         assert wiki.entities[old] == before
         assert strings(wiki, medium, "media_sha1") == [sha1(IMAGE)]
@@ -1118,8 +1118,8 @@ class TestFlagsReachTheRunsAlerts:
 
         alerts = orchestrator.rundir.alerts()
         assert [alert["check"] for alert in alerts] == [
-            SHARED_FILE,
             UNHASHED_TITLE,
+            SHARED_FILE,
         ]
         for alert in alerts:
             assert alert["check"] in REGISTRATION_CHECKS
@@ -1135,8 +1135,8 @@ class TestFlagsReachTheRunsAlerts:
             e for e in orchestrator.rundir.events() if e["event"] == "alert"
         ]
         assert [event["check"] for event in events] == [
-            SHARED_FILE,
             UNHASHED_TITLE,
+            SHARED_FILE,
         ]
         assert any(
             line.strip() == f"flagged {SHARED_FILE}: item {qid}, against {old}"
@@ -1196,8 +1196,8 @@ class TestFlagsReachTheRunsAlerts:
         assert orchestrator._step_register(doc) == qid
         alerts = orchestrator.rundir.alerts()
         assert [(a["check"], a["artifact"], a["others"]) for a in alerts] == [
-            (SHARED_FILE, qid, [old]),
             (UNHASHED_TITLE, qid, [old]),
+            (SHARED_FILE, qid, [old]),
         ] * 2
         wiki.entities[old]["labels"]["en"]["value"] = "the Löbig portrait"
         del wiki.entities[old]["claims"][P["media_file"]]
@@ -1241,10 +1241,92 @@ class TestFlagsReachTheRunsAlerts:
             orchestrator._step_register(doc)
         alerts = orchestrator.rundir.alerts()
         assert [alert["check"] for alert in alerts] == [
-            SHARED_FILE,
             UNHASHED_TITLE,
+            SHARED_FILE,
         ]
         assert all(alert["others"] == [old] for alert in alerts)
+
+
+# -- a file listing that fails ------------------------------------------------
+
+
+class ListingFails(FakeWiki):
+    """The in-memory wiki, its file listing (list=allimages) failing, as a
+    5xx or an API error does through `WikiClient.api_get`, while `fails`."""
+
+    fails = True
+
+    def api_get(self, params):
+        if self.fails and params.get("list") == "allimages":
+            raise RuntimeError("list=allimages: 503 Service Unavailable")
+        return super().api_get(params)
+
+
+class TestAFailedListing:
+    """A file listing that fails fails the document's registration for the
+    run, as any other wiki call does, and the next write raises the flag
+    (docs/ANOMALIES.md). The flags by its names, which need no listing,
+    are gathered before it is asked, and the item and its fragments are
+    complete before it is."""
+
+    def test_the_registration_fails_and_the_next_one_flags(self, tmp_path):
+        wiki = ListingFails()
+        old = unhashed(wiki, TITLE, "File:Portrait-1890s.png", PORTRAIT)
+        registrar = Registrar(wiki)
+        path = scan(tmp_path, PORTRAIT)
+
+        with pytest.raises(RuntimeError, match="allimages"):
+            registrar.register_artifact(path, "photograph", TITLE, pages=2)
+
+        (new,) = (
+            qid
+            for qid in wiki.entities
+            if strings(wiki, qid, "media_sha1") == [sha1(PORTRAIT)]
+        )
+        # the title flag needs no listing: it is gathered before it
+        assert flag_tuples(registrar.flags) == [
+            (UNHASHED_TITLE, new, sha1(PORTRAIT), (old,))
+        ]
+        entities = copy.deepcopy(wiki.entities)
+
+        wiki.fails = False
+        again = Registrar(wiki).register_artifact(
+            path, "photograph", TITLE, pages=2
+        )
+
+        assert again.artifact_qid == new and not again.created
+        assert flag_tuples(again.flags) == [
+            (UNHASHED_TITLE, new, sha1(PORTRAIT), (old,)),
+            (SHARED_FILE, new, sha1(PORTRAIT), (old,)),
+        ]
+        # nothing was left half-registered: the item and both fragments
+        # were made before the listing failed, and are found now
+        assert set(again.fragment_qids.values()) <= set(entities)
+        assert wiki.entities == entities
+
+    def test_a_failed_listing_still_raises_the_title_alert(self, tmp_path):
+        wiki = ListingFails()
+        old = unhashed(
+            wiki, "portrait-1890s", "File:Portrait-1890s.png", PORTRAIT
+        )
+        orchestrator, _ = TestStepRegister.orchestrator(
+            tmp_path, wiki, [("portrait-1890s.png", PORTRAIT)]
+        )
+        (doc,) = orchestrator.documents()
+
+        with pytest.raises(RuntimeError, match="allimages"):
+            orchestrator._step_register(doc)
+
+        alerts = orchestrator.rundir.alerts()
+        assert [(a["check"], a["others"]) for a in alerts] == [
+            (UNHASHED_TITLE, [old])
+        ]
+        wiki.fails = False
+        qid = orchestrator._step_register(doc)
+        assert [
+            (a["check"], a["artifact"])
+            for a in orchestrator.rundir.alerts()[1:]
+        ] == [(UNHASHED_TITLE, qid), (SHARED_FILE, qid)]
 
 
 class SimpleDoc:
@@ -1303,6 +1385,19 @@ def test_a_listing_without_files_is_none():
     assert (
         registrar_module._files_with_bytes(PagedListing([{}]), "0" * 40) == []
     )
+
+
+def test_a_continuation_given_twice_fails_the_listing():
+    """A listing that would ask the same page again and again fails, as a
+    wiki call that fails does, rather than loop."""
+    page = {
+        "continue": {"aicontinue": "Portrait-b.png", "continue": "-||"},
+        "query": {"allimages": [{"title": "File:Portrait-a.png"}]},
+    }
+    client = PagedListing([page, page, {}])
+    with pytest.raises(RuntimeError, match="continuation twice"):
+        registrar_module._files_with_bytes(client, sha1(PORTRAIT))
+    assert len(client.asked) == 2
 
 
 def test_a_flag_is_frozen():
@@ -1395,7 +1490,7 @@ def test_an_excerpts_write_raises_its_pdfs_flags_on_the_excerpt(tmp_path):
             (alert["check"], alert["others"])
         )
     assert by_medium == {
-        pdf.sha1[:12]: [(SHARED_FILE, [old_pdf]), (UNHASHED_TITLE, [old_pdf])],
+        pdf.sha1[:12]: [(UNHASHED_TITLE, [old_pdf]), (SHARED_FILE, [old_pdf])],
         excerpt.sha1[:12]: [(UNHASHED_TITLE, [old_image])],
     }
     assert pdf.sha1 != excerpt.sha1

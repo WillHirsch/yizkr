@@ -328,8 +328,14 @@ raise one for itself and one for each image.
 
 **`shared-file`**: `others` name as their `media file` a wiki file that
 holds the item's bytes: the file its upload answered with, or any other
-MediaWiki lists for its SHA-1 (`list=allimages`, one query per item
-registered), whatever hash the others carry.
+MediaWiki lists for its SHA-1 (`list=allimages`, one listing, every
+page of it, per item registered), whatever hash the others carry. A
+listing that fails (an HTTP or API error, or a continuation it gave
+before) fails the document's registration for that run, as any other
+wiki call that fails does: the item, and an artifact's page fragments,
+are complete by then, its `unhashed-title` flag, which needs no listing,
+is raised all the same, and the next write that registers it raises
+`shared-file`.
 
 **`unhashed-title`**: the item's title (for a derived medium, its first
 label before any content tag), or its own label before its content tag,
@@ -347,11 +353,18 @@ though (ADR-0025 §1), so `unhashed-title` is raised there when an
 artifact or derived medium is registered under exactly the label of a
 media object's item (its title, or without one its file's name or a
 fallback), against that item, and on every write that registers it while
-the two share it; with no such homonym a scratch run raises no
-registration flag. The monitor shows them by name; the run report's aggregates count them by
-check (`shared-file`, `unhashed-title`) and under the stage `write`, as
-counts only, and a document's own alerts in report.json and report.html
-name them with their items by QID.
+the two share it. That depends on the order of the writes: the media
+object's item is there only when the GEDCOM's write made it first. A
+GEDCOM written after an artifact registered under exactly a media
+object's label joins the media object to that artifact by the label
+(resolve's label matching, #109), so no media object's item is made and
+no flag is raised. With no such homonym a scratch run raises no
+registration flag. The monitor shows them by name; the run report's
+aggregates count them by check (`shared-file`, `unhashed-title`) and
+under the stage `write`, as counts only, and each counts flagged writes,
+not distinct items: an image two decks embed, flagged in each deck's
+write, counts twice (within one write, once). A document's own alerts in
+report.json and report.html name them with their items by QID.
 
 ## Thresholds
 

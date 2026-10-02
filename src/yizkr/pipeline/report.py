@@ -302,7 +302,8 @@ FAILURE_LABELS = frozenset(
 CHECKS = frozenset(name.replace("_", "-") for name in Checks.model_fields)
 CHECKS = CHECKS | {"anomaly-config"}
 # the checks registration raises as alerts of the write, and the stage they
-# name (yizkr.pipeline.registrar.REGISTRATION_CHECKS)
+# name: a copy of yizkr.pipeline.registrar.REGISTRATION_CHECKS, which a unit
+# test keeps equal to it
 REGISTRATION_CHECKS = frozenset({"shared-file", "unhashed-title"})
 CHECKS = CHECKS | REGISTRATION_CHECKS
 WRITE = "write"
