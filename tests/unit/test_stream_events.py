@@ -1289,12 +1289,12 @@ class TestApiCallEvents:
         seen, emit = recorder()
         engine = api_engine(
             monkeypatch,
-            ("Pauline Brenner, Hutmacherin", "max_tokens"),
-            ("Pauline Brenner, Hutmacherin, Flörburg", "end_turn"),
+            ("Sebastian Löbig, Hutmacher", "max_tokens"),
+            ("Sebastian Löbig, Hutmacher, Flörburg", "end_turn"),
         )
         client = observed_client(engine, role="extract", events=emit)
         assert client.complete("Extract the claims.") == (
-            "Pauline Brenner, Hutmacherin"
+            "Sebastian Löbig, Hutmacher"
         )
         client.complete("Extract the claims.")
         assert [(e["outcome"], e["stop_reason"]) for e in seen] == [
@@ -1375,6 +1375,53 @@ class TestApiCallEvents:
             client.complete("fail")
         assert seen[0]["stop_reason"] == "max_tokens"
         assert "stop_reason" not in seen[1]
+
+    @pytest.mark.parametrize("raised", [UsageLimitReached, KeyboardInterrupt])
+    def test_a_paused_or_interrupted_call_carries_none(self, raised):
+        """A call that paused its pass or was interrupted answered nothing:
+        its event takes nothing of a lagging report either."""
+
+        class Lagging:
+            model_identifier = "fake-model"
+
+            def __init__(self):
+                self.report = {}
+
+            def complete(self, prompt, image_paths=()):
+                if prompt == "stop":
+                    raise raised()
+                self.report = {"stop_reason": "max_tokens"}
+                return "answer"
+
+            def last_report(self):
+                return dict(self.report)
+
+        seen, emit = recorder()
+        client = observed_client(Lagging(), role="extract", events=emit)
+        client.complete("Extract.")
+        with pytest.raises(raised):
+            client.complete("stop")
+        assert seen[0]["stop_reason"] == "max_tokens"
+        assert "stop_reason" not in seen[1]
+
+    def test_a_report_that_is_no_mapping_gives_nothing(self):
+        """An engine whose report is no mapping adds nothing to the event,
+        and the call still answers."""
+
+        class Odd:
+            model_identifier = "fake-model"
+
+            def complete(self, prompt, image_paths=()):
+                return "answer"
+
+            def last_report(self):
+                return ["max_tokens"]
+
+        seen, emit = recorder()
+        client = observed_client(Odd(), role="extract", events=emit)
+        assert client.complete("Extract.") == "answer"
+        assert seen[0]["outcome"] == "ok"
+        assert "stop_reason" not in seen[0]
 
     def test_a_streams_report_comes_before_the_engines(self, cli):
         """From an engine with streams, the event is what they reported,

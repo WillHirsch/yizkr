@@ -98,9 +98,10 @@ carries the stop reason the API's response gave of an answered call
 (none of a call that failed, and nothing else of the engine's report),
 so the run report counts that engine's answers cut off at the output
 limit, which its callers already rejected, and says `not recorded` only
-for a run from before the engine recorded a stop or one that made no
-call; the stop reason stays in an entry's provenance, never in its key
-(§8).
+for a run from before the engine recorded a stop, one that made no call,
+or one whose every call gave no stop reason (on that engine, every call
+failed); the stop reason stays in an entry's provenance, never in its
+key (§8).
 
 ## Context
 

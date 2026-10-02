@@ -2650,8 +2650,8 @@ class TestCallsAndTime:
 
         engine = api_engine(
             monkeypatch,
-            ("Pauline Brenner, Hutmacherin", "max_tokens"),
-            ("Pauline Brenner, Hutmacherin, Flörburg", "end_turn"),
+            ("Sebastian Löbig, Hutmacher", "max_tokens"),
+            ("Sebastian Löbig, Hutmacher, Flörburg", "end_turn"),
             ConnectionError("the network is down"),
         )
         client = llm.observed_client(engine, role="extract", events=emit)
