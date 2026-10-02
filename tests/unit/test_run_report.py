@@ -1106,7 +1106,8 @@ def hostile_stream() -> list:
         # an engine call: its role, stage, outcome, hold and error
         event(7300, "call", THIRD, subject=CERT, kind="media", role=HOSTILE,
               stage=HOSTILE, outcome=HOSTILE, held=HOSTILE, error=LOWER,
-              duration_s=1.0, usage={"input_tokens": 1}),
+              duration_s=1.0, usage={"input_tokens": 1},
+              stop_reason="max_tokens"),
         # the cache's answers: a hit's reason, as a stage's reuse reason
         # too, and a miss's
         event(7301, "started", THIRD, subject=CARD, kind="text",
@@ -1380,6 +1381,10 @@ class TestAggregateOnly:
         (corpus,) = [s for s in aggregate["corpus_stages"] if s["failure"]]
         assert (corpus["name"], corpus["failure"]) == (OTHER, OTHER)
         assert aggregate["documents"]["failed_by_label"][OTHER] == 1
+        assert aggregate["calls"]["output_limit_stops"][OTHER] == {
+            "cut_off": 1,
+            "gave_up": 0,
+        }
         content = aggregate["content"]
         assert content["fallbacks"][OTHER] == 1
         assert content["records"]["set_aside_by_reason"][OTHER] == 1
@@ -2592,6 +2597,42 @@ class TestCallsAndTime:
         assert models == {SONNET: 3, OPUS: 2, OTHER: 1}
         text = render_markdown(made["aggregate"])
         assert "| all |  | 16 | 5 | 3,400 | 650 | 90 | 800 |" in text
+
+    def test_stops_at_the_output_limit_by_stage(self, made, tmp_path):
+        """The calls stopped at the output limit, per stage, from the call
+        events (#390): an answer whose stop reason is max_tokens is cut
+        off; a call that raised OutputLimitReached was given up on, told by
+        its error alone, never by its API error's class."""
+        assert made["aggregate"]["calls"]["output_limit_stops"] == {}
+        assert "Stops at the output limit by stage: none" in (
+            render_markdown(made["aggregate"])
+        )
+        stops = [
+            call(7400, DIRECTORY, "extract", THIRD, 1.0,
+                 stop_reason="max_tokens"),
+            call(7401, DIRECTORY, "extract", THIRD, 1.0, outcome="error",
+                 error="OutputLimitReached", api_error="max_output_tokens",
+                 stop_reason="stop_sequence"),
+            call(7402, DIRECTORY, "extract", THIRD, 1.0, outcome="error",
+                 error="OutputLimitReached"),
+            call(7403, CERT, "critique", THIRD, 1.0,
+                 stop_reason="max_tokens"),
+            # a crash after the notice: an error of another class
+            call(7404, CERT, "critique", THIRD, 1.0, outcome="error",
+                 error="RuntimeError", api_error="max_output_tokens"),
+            call(7405, CERT, "transcribe", THIRD, 1.0,
+                 stop_reason="end_turn"),
+        ]  # fmt: skip
+        built = build(record(tmp_path / "run", [*STREAM, *stops]), now=NOW)
+        aggregate = built["aggregate"]
+        assert aggregate["calls"]["output_limit_stops"] == {
+            "critique": {"cut_off": 1, "gave_up": 0},
+            "extraction": {"cut_off": 1, "gave_up": 2},
+        }
+        assert (
+            "Stops at the output limit by stage: critique: 1 cut off, 0 "
+            "given up; extraction: 1 cut off, 2 given up"
+        ) in render_markdown(aggregate)
 
     def test_a_run_without_the_cache_counts_its_call_events(self, tmp_path):
         """A run made without the LLM cache (`ingest run --no-cache`) has

@@ -108,10 +108,16 @@ from yizkr.claims import (
     PlaceStructure,
     load_vocabulary,
 )
-from yizkr.pipeline.anomalies import ERROR_EVENT, RECHECK_EVENT, Checks, route
+from yizkr.pipeline.anomalies import (
+    ERROR_EVENT,
+    OUTPUT_LIMIT_REACHED,
+    RECHECK_EVENT,
+    Checks,
+    route,
+)
 from yizkr.pipeline.critique import AXES, CATEGORIES, Finding
 from yizkr.pipeline.critique import entry as critique_entry
-from yizkr.pipeline.llm import USAGE_TOKENS
+from yizkr.pipeline.llm import OUTPUT_LIMIT, USAGE_TOKENS
 from yizkr.pipeline.monitor import (
     _CLASS_NAME,
     _duration,
@@ -508,6 +514,9 @@ class _Calls:
     # what they used, and the tokens they reported
     models: Counter = field(default_factory=Counter)
     usage: dict[tuple[str, str], Counter] = field(default_factory=dict)
+    # per stage, as the call event names it, the calls stopped at the
+    # output limit: answers cut off there, and calls the engine gave up on
+    limit_stops: dict[str, Counter] = field(default_factory=dict)
 
     def role(self, name: str) -> Counter:
         counts = self.roles.get(name)
@@ -715,6 +724,22 @@ class _Fold:
             calls.adopts += 1
             role["adopted"] += 1
 
+    def _limit_stop(self, stage: str, event: dict) -> None:
+        """Count a call stopped at the output limit, by its stage: a call
+        that raised OutputLimitReached (gave up), told by its error alone
+        as the anomaly checks tell it, or an answer whose stop reason is
+        max_tokens (cut off)."""
+        if (
+            event.get("outcome") == "error"
+            and event.get("error") == OUTPUT_LIMIT_REACHED
+        ):
+            stop = "gave_up"
+        elif event.get("stop_reason") == OUTPUT_LIMIT:
+            stop = "cut_off"
+        else:
+            return
+        self.calls.limit_stops.setdefault(stage, Counter())[stop] += 1
+
     def _call(self, event: dict) -> None:
         calls = self.calls
         calls.events += 1
@@ -746,6 +771,7 @@ class _Fold:
         )
         used = calls.usage.setdefault(where, Counter())
         used["calls"] += 1
+        self._limit_stop(where[0], event)
         usage = event.get("usage")
         tokens = {
             name: usage[name]
@@ -2324,6 +2350,21 @@ def _aggregate_calls(fold: _Fold, vocabulary: _Vocabulary) -> dict[str, Any]:
             ),
         },
         "usage": _aggregate_usage(calls, vocabulary),
+        "output_limit_stops": _aggregate_limit_stops(calls, vocabulary),
+    }
+
+
+def _aggregate_limit_stops(
+    calls: _Calls, vocabulary: _Vocabulary
+) -> dict[str, dict[str, int]]:
+    """Per stage the call events name, the calls stopped at the output
+    limit: cut off there, and given up on. Counts only."""
+    rows: dict[str, Counter] = {}
+    for stage, stops in calls.limit_stops.items():
+        rows.setdefault(vocabulary.stage(stage), Counter()).update(stops)
+    return {
+        stage: {stop: rows[stage][stop] for stop in ("cut_off", "gave_up")}
+        for stage in sorted(rows)
     }
 
 
@@ -3047,6 +3088,17 @@ def _calls_sections(calls: Mapping[str, Any]) -> list[_Section]:
             f"{_listed(events['errors'])}",
             "Calls by the model the engine reported: "
             + _listed(events["models"], "not recorded"),
+            "Stops at the output limit by stage: "
+            + (
+                "; ".join(
+                    f"{stage}: {_n(stops['cut_off'])} cut off, "
+                    f"{_n(stops['gave_up'])} given up"
+                    for stage, stops in calls.get(
+                        "output_limit_stops", {}
+                    ).items()
+                )
+                or "none"
+            ),
         ]
     )
     return [

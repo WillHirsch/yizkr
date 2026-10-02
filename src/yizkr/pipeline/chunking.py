@@ -942,9 +942,9 @@ class ChunkedClaimExtractor:
     The entity manifest and the segmentation are asked in two attempts
     each, keyed apart behind the cache (llm.for_attempt): a refused
     answer is kept, so a later run replays the same attempts and takes the
-    same fallback. An attempt the engine gave up on at its output limit
-    stores nothing, so a later run asks it again, and takes that fallback
-    again only if the engine gives up again. When a conversation behind
+    same fallback. An attempt the engine gave up on at its output limit is
+    kept alike, as a give-up, so a later run gives up on it again without
+    asking the engine, and takes the same fallback. When a conversation behind
     the cache has to be opened again and answers differently
     (llm.ConversationChanged), the extraction starts over from the new
     answer.
@@ -1048,8 +1048,9 @@ class ChunkedClaimExtractor:
         attempt fails when the engine raises or its answer is refused, and
         each gives its own reason. An answer the engine gave up on at its
         output limit (OutputLimitReached) is an answer refused, not a call
-        unanswered: the engine answered, past its limit. Being an error, it
-        is kept nowhere, so a later run asks that attempt again. No handle
+        unanswered: the engine answered, past its limit. Behind the cache
+        it is kept under its attempt, as a refused answer is, so a later
+        run raises it again without asking the engine. No handle
         survives a refused answer: forking would plant known-bad output in
         every chunk's context."""
         handle = None

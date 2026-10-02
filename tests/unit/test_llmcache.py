@@ -46,6 +46,7 @@ from yizkr.pipeline.extract import LlmClaimExtractor
 from yizkr.pipeline.llm import (
     ConversationalLlmClient,
     ConversationChanged,
+    OutputLimitReached,
     PassPaused,
     RejectingLlmClient,
     cached_client,
@@ -361,8 +362,13 @@ class TestKeys:
         falls back, asks each attempt through llm.for_attempt: the cache
         keys, and keeps, each attempt apart (#225)."""
         caching = client(tmp_path, Engine())
-        second = for_attempt(caching, 1)
-        assert for_attempt(caching, 0) is caching
+        first, second = for_attempt(caching, 0), for_attempt(caching, 1)
+        # attempt 0 is keyed as the client's own calls are, and asked as an
+        # attempt, whose give-up is kept (#390)
+        assert first.complete_key("Read it.") == caching.complete_key(
+            "Read it."
+        )
+        assert first._attempted and not caching._attempted
         assert second is not caching and second.cache is caching.cache
         assert second.complete_key("Read it.") != (
             caching.complete_key("Read it.")
@@ -3158,6 +3164,82 @@ class TestTheExtractor:
             assert again.used_fallback_manifest
             assert engine.calls == []
             assert replayed.claims == batch.claims
+
+    def test_a_give_up_replays_as_it_went(self, tmp_path):
+        """The engine gives up on the manifest at its output limit in both
+        attempts, and the extraction falls back to segmentation. Each
+        give-up is kept under its attempt's key, as a refused answer is: a
+        later run gives up again from the cache, without asking the
+        engine, and takes the same fallback to the same batch (#390)."""
+
+        def answer(kind, prompt, opening):
+            if "manifest of EVERY distinct entity" in prompt:
+                raise OutputLimitReached()
+            return segmenting(True)(kind, prompt, opening)
+
+        engine = Engine(answer)
+        first, batch = extract(tmp_path, engine)
+        assert first.used_fallback_manifest
+        assert len(batch.claims) == 2
+        gave_up = [e for e in live_entries(tmp_path) if e.get("gave_up")]
+        assert sorted(e["components"]["attempt"] for e in gave_up) == [0, 1]
+        assert {e["response"] for e in gave_up} == {""}
+        assert {e["components"]["call"] for e in gave_up} == {OPEN}
+        run = RunDir(tmp_path / "run")
+        again, replayed = extract(
+            tmp_path, Refusing(segmenting(True)), run=run
+        )
+        assert again.used_fallback_manifest
+        assert replayed.claims == batch.claims
+        assert events(run, "cache-miss") == []
+        assert {e["reason"] for e in events(run, "cache-hit")} == {"key match"}
+
+    def test_a_refresh_asks_a_give_up_again(self, tmp_path):
+        """A refreshed role asks the attempts the engine gave up on again;
+        their give-ups are kept aside, replaced (#390)."""
+
+        def answer(kind, prompt, opening):
+            if "manifest of EVERY distinct entity" in prompt:
+                raise OutputLimitReached()
+            return segmenting(True)(kind, prompt, opening)
+
+        first, _ = extract(tmp_path, Engine(answer))
+        assert first.used_fallback_manifest
+        engine = Engine(extractor_answers())
+        again, batch = extract(tmp_path, engine, refresh={"extract"})
+        assert not again.used_fallback_manifest
+        assert len(batch.claims) == 2
+        assert kinds(engine)[0] == OPEN
+        # the first attempt answered; the second, never asked, keeps its own
+        assert [
+            e["components"]["attempt"]
+            for e in live_entries(tmp_path)
+            if e.get("gave_up")
+        ] == [1]
+        replaced = [
+            json.loads(path.read_text())
+            for path in (tmp_path / "cache").glob("*/*.replaced-*.json")
+        ]
+        assert [e["components"]["attempt"] for e in replaced] == [0]
+        assert replaced[0]["gave_up"] is True
+
+    def test_a_chunk_give_up_is_kept_nowhere(self, tmp_path):
+        """A chunk's retries share one key, so a give-up on a chunk is
+        kept nowhere: the next run asks the chunk again (#390)."""
+
+        def answer(kind, prompt, opening):
+            if kind == FORK and "- e1:" in prompt:
+                raise OutputLimitReached()
+            return extractor_answers()(kind, prompt, opening)
+
+        extractor, _ = extract(tmp_path, Engine(answer))
+        assert extractor.failed_chunks == ["c001"]
+        assert not [e for e in live_entries(tmp_path) if e.get("gave_up")]
+        engine = Engine(extractor_answers())
+        extractor, batch = extract(tmp_path, engine)
+        assert extractor.failed_chunks == []
+        assert len(batch.claims) == 2
+        assert kinds(engine) == [OPEN, FORK]
 
     def test_a_replay_with_other_ids_does_not_mix_them(self, tmp_path):
         """A fork misses behind a cached manifest (here a chunk cut off in

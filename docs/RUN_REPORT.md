@@ -256,8 +256,11 @@ cache answered, in all and per role; hits and misses by reason; resumes,
 replays (and those that answered otherwise), rejections and adoptions;
 and what the engine's call events say: outcomes, errors by exception
 class, engine time, waits for the subscription, attempts a limit
-refused, why calls were held, and the model the engine reported for each
-call. The calls that reached the engine are the cache's misses and
+refused, why calls were held, the model the engine reported for each
+call, and per stage the calls stopped at the output limit: answers cut
+off there (stop reason `max_tokens`) and calls the engine gave up on
+(error `OutputLimitReached`, told by the error alone as the truncations
+check tells it), as counts only (#390). The calls that reached the engine are the cache's misses and
 replays; a run made without the cache (`ingest run --no-cache`) has no
 cache events, so its engine calls are its call events, as the monitor
 counts them.
