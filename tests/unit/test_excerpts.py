@@ -511,6 +511,11 @@ class TestAScratchRun:
             "excerpts": 1,
         }
         assert documents["views_not_read"] == 0
+        # the excerpt's extraction counts its mention records and notes as
+        # the PDF's does (#420)
+        records = report["aggregate"]["content"]["records"]
+        assert records["extractions"] == 2
+        assert records["absent"] == {"predating": 0, "line_range": 0}
         text = render_markdown(report["aggregate"])
         assert (
             "Images placed within PDFs read page by page and read on their "
