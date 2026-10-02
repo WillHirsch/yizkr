@@ -113,12 +113,20 @@ def hang(stubborn=False):
         text=True,
         check=True,
     )
+    if not stubborn:
+        # A SIGINT from here on stays pending until sigwait takes it. One
+        # that came between a pause()'s check for signals and its start
+        # would be lost, and pytest would hang (#437).
+        signal.pthread_sigmask(signal.SIG_BLOCK, {{signal.SIGINT}})
     cue = os.environ.get("CALC_CUE")
     if cue:
         with socket.socket(socket.AF_UNIX) as sent:
             sent.connect(cue)
             pids = f"{{os.getpid()}} {{child.pid}} {{job.stdout.strip()}}\\n"
             sent.sendall(pids.encode())
+    if not stubborn:
+        signal.sigwait({{signal.SIGINT}})
+        raise KeyboardInterrupt
     while True:
         signal.pause()
 '''
