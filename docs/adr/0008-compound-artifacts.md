@@ -27,6 +27,10 @@ once it has trimmed a label, as Wikibase does: see Amendments (#103's).
 Amended by #373 (2026-10-02): a derived medium's file name keeps its
 container's title, in the form MediaWiki takes and cut to fit its limit:
 see Amendments.
+Amended by #371 (2026-10-02): a derived medium is flagged as an
+artifact is, on each registration, made or found, while a file another
+item names holds its bytes or its label, before any content tag, is the
+label of an item with no hash: see Amendments (#103's).
 
 ## Context
 
@@ -443,9 +447,14 @@ time"):
   and ADR-0010's "Media files", except one: the #50 amendment's adoption
   of an item without a hash by its label no longer applies. An image is
   found by its SHA-1 alone, and a new image whose label another item
-  already has takes a content-tagged label. Its bytes are uploaded from
-  the file the record keeps, under the name `"<deck title> <name in the
-  archive>"` (in the form MediaWiki takes, as amended by #373). Bytes the
+  already has takes a content-tagged label. An image is flagged, never
+  adopted, as ADR-0010 flags an artifact (amended by #371, 2026-10-02):
+  on each registration, made or found, while a file another item names
+  holds its bytes, or its first label before the tag, or its own label
+  before its tag, is the label of an item with no hash. Its bytes are
+  uploaded from the file the record keeps, under the name `"<deck
+  title> <name in the archive>"` (in the form MediaWiki takes, as
+  amended by #373). Bytes the
   archive holds under several names are one medium: the first name
   labels it (`"<deck title> — <name>"`), and the
   others are its aliases. Labels are compared and set in the form

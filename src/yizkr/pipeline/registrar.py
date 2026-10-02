@@ -40,6 +40,38 @@ taken for a page's fragment. A file on the never-ingest list
 it before it asks anything of the wiki, and leaves out an embedded medium
 the list names.
 
+**An item that may be an older artifact is flagged, never adopted.**
+Each registration of an artifact or a derived medium, of an item made or
+found, reports it for a person to look at (RegistrationFlag), raised by
+`ingest run` as an alert of the write (docs/ANOMALIES.md), while either
+condition holds: another item names as its `media file` a wiki file that
+holds its bytes (``shared-file``; every such file, as MediaWiki lists
+them by their SHA-1), or its title, or its own label before its content
+tag, is the label of an item with no hash (``unhashed-title``). An item
+with no hash has no `media SHA-1` and either names a `media file`, as an
+artifact registered before content hashing does, or is an `instance of`
+an artifact kind, as the item the GEDCOM import makes for a media object
+is (a label, no file); an artifact fragment, a run item or a person
+naming no file is never one. So a flag is raised again on every write
+that registers the item until a curator acts, by hashing, merging or
+relabelling the older item, and a run cut short before it raised one
+raises it on the next. A flag changes nothing registration finds or
+writes: the item is made, and labelled, as any other, and the older item
+is left as it is. The flags are sought once the item, and an artifact's
+page fragments, are complete, unhashed-title first, as it needs nothing
+of the wiki; a file listing that fails then fails the document's
+registration for that run, as any other wiki call that fails does, with
+unhashed-title gathered already, and the next write raises shared-file.
+
+On a reset instance, where only registration writes `media file`, always
+with `media SHA-1`, shared-file is never raised: an item naming a file
+that holds these bytes carries this SHA-1, as an upload never overwrites
+a file, and is this item. Unhashed-title is raised there only for an
+artifact or derived medium registered under exactly the label of a media
+object's item that the GEDCOM import made, and so only when the GEDCOM's
+write made that item first: the GEDCOM's write joins a media object to
+an artifact registered before it under its label, and makes it no item.
+
 Provenance: an artifact asserts its own kind and its own composition by
 existing, so its `instance of`, `media file` and `media SHA-1`, and its
 fragments' `instance of` and `part of`, are referenced ``stated in -> the
@@ -67,6 +99,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
@@ -278,6 +311,31 @@ class ExcludedMedia(RuntimeError):
     reads the wiki, writes to it or uploads anything."""
 
 
+# the kinds of RegistrationFlag, each the name of the alert it is raised as
+SHARED_FILE = "shared-file"
+UNHASHED_TITLE = "unhashed-title"
+REGISTRATION_CHECKS = frozenset({SHARED_FILE, UNHASHED_TITLE})
+
+
+@dataclass(frozen=True)
+class RegistrationFlag:
+    """An item registration made or found that may be an older artifact,
+    for a person to look at; the flag changes nothing registration writes.
+
+    `kind` is SHARED_FILE when the `others` name as their `media file` a
+    wiki file that holds the item's bytes, and UNHASHED_TITLE when its
+    title, or its own label before its content tag, is the label of the
+    `others`, items with no hash (`_Instance.unhashed`). `artifact` is
+    the item, and `sha1` the SHA-1 of its media. Every field is an id or
+    a hash, none a title or a file name, so a flag can be raised as an
+    alert as it is."""
+
+    kind: str
+    artifact: str
+    sha1: str
+    others: tuple[str, ...]
+
+
 @dataclass
 class RegistrationResult:
     artifact_qid: str
@@ -286,6 +344,9 @@ class RegistrationResult:
     created: bool = True
     # the SHA-1 of the media's bytes: the artifact's identity (ADR-0010)
     content_sha1: str | None = None
+    # what the artifact item was flagged for by this registration, made or
+    # found: empty when neither condition holds
+    flags: list[RegistrationFlag] = field(default_factory=list)
 
 
 def _append(entity, claim) -> None:
@@ -479,6 +540,37 @@ def _files_holding(
     )
 
 
+def _files_with_bytes(client: WikiClient, content_sha1: str) -> list[str]:
+    """Every wiki file whose current bytes have this SHA-1, by MediaWiki's
+    own hash of each file (list=allimages), each as its page title."""
+    params = {
+        "action": "query",
+        "list": "allimages",
+        "aisha1": content_sha1,
+        "ailimit": "max",
+    }
+    pages: list[str] = []
+    seen: set[str] = set()
+    while True:
+        data = client.api_get(params)
+        pages += [
+            image["title"]
+            for image in (data.get("query") or {}).get("allimages") or []
+        ]
+        more = (data.get("continue") or {}).get("aicontinue")
+        if not more:
+            return pages
+        # a cursor the listing gave before would ask the same page again,
+        # and again: the listing fails, as a wiki call that fails does
+        if more in seen:
+            raise RuntimeError(
+                f"the file listing for SHA-1 {content_sha1[:12]} gave one "
+                f"continuation twice: its files could not be read"
+            )
+        seen.add(more)
+        params = {**params, "aicontinue": more}
+
+
 # -- the instance, as registration finds items in it --------------------------
 
 
@@ -489,7 +581,24 @@ def _value(snak):
 
 
 def _earliest(qids: list[str]) -> str:
-    return min(qids, key=lambda qid: int(qid[1:]))
+    return min(qids, key=_order)
+
+
+def _order(qid: str) -> int:
+    return int(qid[1:])
+
+
+def _file_key(page: str) -> str:
+    """A `media file` value in one form for every way of writing the one
+    wiki file, as MediaWiki takes a page title: in NFC, the bidirectional
+    marks its title parser strips left out (_FILE_NAME_BIDI), without its
+    ``File:`` prefix, underscores and runs of spaces made one space, and
+    its first letter upper-cased."""
+    name = unicodedata.normalize("NFC", _FILE_NAME_BIDI.sub("", page)).strip()
+    if name[:5].lower() == "file:":
+        name = name[5:]
+    name = " ".join(name.replace("_", " ").split())
+    return name[:1].upper() + name[1:]
 
 
 @dataclass
@@ -505,6 +614,12 @@ class _Instance:
     by_sha1: dict[str, str] = field(default_factory=dict)
     # (artifact, page number) -> the artifact's fragment for that page
     fragments: dict[tuple[str, str], str] = field(default_factory=dict)
+    # a wiki file (_file_key) -> the items whose `media file` names it
+    files: dict[str, set[str]] = field(default_factory=dict)
+    # the items with no hash: each has no `media SHA-1` and names a `media
+    # file`, as an artifact registered before content hashing does, or is
+    # an `instance of` an artifact kind, as a GEDCOM media object's item is
+    unhashed: set[str] = field(default_factory=set)
 
     @classmethod
     def read(
@@ -513,16 +628,28 @@ class _Instance:
         properties: dict[str, str],
         items: dict[str, str],
     ) -> _Instance:
-        """Every item's English label, `media SHA-1` values and, for an
+        """Every item's English label, `media file` and `media SHA-1`
+        values, whether it is an `instance of` an artifact kind (artifact,
+        or a class the manifest makes a `subclass_of` it) and, for an
         `instance of artifact fragment`, each `part of` target with each
         `page number` of that statement."""
+        from yizkr.pipeline.transcription_record import artifact_classes
+
         instance_of, part_of = properties["instance_of"], properties["part_of"]
         page_number = properties["page_number"]
+        media_file = properties["media_file"]
         media_sha1 = properties["media_sha1"]
         fragment_class = items["artifact_fragment"]
+        artifact_kinds = {
+            items[key]
+            for key in ("artifact", *artifact_classes())
+            if key in items
+        }
         labels: dict[str, set[str]] = {}
         hashes: dict[str, list[str]] = {}
         fragments: dict[tuple[str, str], list[str]] = {}
+        files: dict[str, set[str]] = {}
+        unhashed: set[str] = set()
         for qid, entity in client.iter_entities("labels|claims"):
             if not qid.startswith("Q"):
                 continue  # a property's label is of another kind
@@ -530,15 +657,24 @@ class _Instance:
             if isinstance(label, str) and label:
                 labels.setdefault(label, set()).add(qid)
             claims = entity.get("claims") or {}
+            hashed = named = False
             for claim in claims.get(media_sha1) or []:
                 value = _value(claim.get("mainsnak"))
                 if isinstance(value, str):
                     hashes.setdefault(value, []).append(qid)
+                    hashed = True
+            for claim in claims.get(media_file) or []:
+                value = _value(claim.get("mainsnak"))
+                if isinstance(value, str) and _file_key(value):
+                    files.setdefault(_file_key(value), set()).add(qid)
+                    named = True
             kinds = {
                 value.get("id")
                 for claim in claims.get(instance_of) or []
                 if isinstance(value := _value(claim.get("mainsnak")), dict)
             }
+            if not hashed and (named or kinds & artifact_kinds):
+                unhashed.add(qid)
             if fragment_class not in kinds:
                 continue
             for claim in claims.get(part_of) or []:
@@ -558,10 +694,57 @@ class _Instance:
             fragments={
                 key: _earliest(qids) for key, qids in fragments.items()
             },
+            files=files,
+            unhashed=unhashed,
         )
 
     def label(self, qid: str, label: str) -> None:
         self.labels.setdefault(label, set()).add(qid)
+
+    def file(self, qid: str, page: str) -> None:
+        self.files.setdefault(_file_key(page), set()).add(qid)
+
+    def file_flags(
+        self, qid: str, sha1: str, pages: Iterable[str]
+    ) -> list[RegistrationFlag]:
+        """What the item `qid`, of the media with SHA-1 `sha1`, is flagged
+        for by its files: the other items that name any of `pages`, the
+        wiki files that hold its bytes (shared-file). It changes
+        nothing."""
+        flags = []
+        sharing = set().union(
+            *(self.files.get(_file_key(page), set()) for page in pages)
+        ) - {qid}
+        if sharing:
+            flags.append(
+                RegistrationFlag(
+                    SHARED_FILE, qid, sha1, tuple(sorted(sharing, key=_order))
+                )
+            )
+        return flags
+
+    def title_flags(
+        self, qid: str, sha1: str, titles: Iterable[str]
+    ) -> list[RegistrationFlag]:
+        """What the item `qid`, of the media with SHA-1 `sha1`, is flagged
+        for by its names: the items with no hash labelled any of `titles`,
+        its title and its label before any content tag (unhashed-title).
+        It changes nothing."""
+        flags = []
+        homonyms = set().union(
+            *(self.labels.get(title, set()) for title in titles)
+        )
+        homonyms = (homonyms & self.unhashed) - {qid}
+        if homonyms:
+            flags.append(
+                RegistrationFlag(
+                    UNHASHED_TITLE,
+                    qid,
+                    sha1,
+                    tuple(sorted(homonyms, key=_order)),
+                )
+            )
+        return flags
 
 
 # -- registration -------------------------------------------------------------
@@ -575,7 +758,10 @@ class Registrar:
     the single-file steps run when none is configured. The instance is
     read on first need, once, and what was read is kept current with what
     this registrar writes: one registrar serves any number of artifacts,
-    while nothing else writes to the instance."""
+    while nothing else writes to the instance. `flags` gathers what each
+    item it registered, made or found, a derived medium included, was
+    flagged for, in the order the items were registered: each kind of flag
+    on an item once, however often the item is registered."""
 
     def __init__(
         self, client: WikiClient, *, exclusions: ExclusionList | None = None
@@ -583,6 +769,35 @@ class Registrar:
         self.client = client
         self.exclusions = exclusions
         self._instance: _Instance | None = None
+        self.flags: list[RegistrationFlag] = []
+
+    def _flag(self, flags: list[RegistrationFlag]) -> None:
+        """Gather `flags`, but a kind of flag already gathered on its item."""
+        raised = {(flag.kind, flag.artifact) for flag in self.flags}
+        self.flags.extend(
+            flag for flag in flags if (flag.kind, flag.artifact) not in raised
+        )
+
+    def _flags(
+        self, qid: str, sha1: str, held: Iterable[str], titles: Iterable[str]
+    ) -> list[RegistrationFlag]:
+        """What the item `qid` is flagged for, each flag gathered (_flag)
+        as it is found. First by its names (_Instance.title_flags), each
+        title compared with and without its content tag, which needs
+        nothing of the wiki; then by its files (_Instance.file_flags), its
+        bytes, of SHA-1 `sha1`, held by the files `held` and by every file
+        MediaWiki lists for that SHA-1 (_files_with_bytes). A listing that
+        fails fails the registration, as any other wiki call does, with
+        the flags by its names gathered already."""
+        instance = self._read()
+        tag = f" [{sha1[:8]}]"
+        names = {title.removesuffix(tag) for title in titles if title}
+        titled = instance.title_flags(qid, sha1, names)
+        self._flag(titled)
+        pages = {*held, *_files_with_bytes(self.client, sha1)}
+        shared = instance.file_flags(qid, sha1, pages)
+        self._flag(shared)
+        return [*titled, *shared]
 
     def _read(self) -> _Instance:
         if self._instance is None:
@@ -602,31 +817,21 @@ class Registrar:
         )
 
     def _free_label(
-        self,
-        title: str,
-        content_sha1: str,
-        suffix: str = "",
-        *,
-        fit: bool = False,
+        self, title: str, content_sha1: str, suffix: str = ""
     ) -> str:
         """The label `title + suffix`, or, when another item has that as
         its label, with the media's content tag at its end: labels stay
         unique per kind. `title` and `suffix` are in the form Wikibase
-        stores terms in (_stored_term). With `fit`, the title is cut,
-        ending in "…", so that the label fits the TERM_LIMIT characters
-        Wikibase takes, tagged or not (_fitted). Without it, a label that
-        long is refused here, before anything is written, so that a write
-        Wikibase would refuse leaves no half-made item behind."""
-
-        def label_for(tag: str) -> str:
-            if fit:
-                return _fitted(title, suffix + tag)
-            return title + suffix + tag
-
+        stores terms in (_stored_term). The title is cut, ending in "…",
+        so that the label fits the TERM_LIMIT characters Wikibase takes,
+        tagged or not (_fitted). A label that still does not fit, its
+        suffix taking all the room, is refused here, before anything is
+        written, so that a write Wikibase would refuse leaves no
+        half-made item behind."""
         labels = self._read().labels
-        label = label_for("")
+        label = _fitted(title, suffix)
         if label in labels:
-            tagged = label_for(f" [{content_sha1[:8]}]")
+            tagged = _fitted(title, f"{suffix} [{content_sha1[:8]}]")
             if tagged in labels:
                 raise RuntimeError(
                     f"the labels {label!r} and {tagged!r} both name other "
@@ -685,8 +890,12 @@ class Registrar:
         required. The title is taken in the form Wikibase stores a label
         in (_stored_term), and one blank in that form is refused. The
         bytes are uploaded under the file's name in the form MediaWiki
-        takes as it is (_upload_name), and the description is cut to the
-        TERM_LIMIT characters Wikibase takes (_new_artifact).
+        takes as it is (_upload_name). A new item's label is the title,
+        content-tagged when another item has it, and cut to fit, ending in
+        "…", when longer than the TERM_LIMIT characters Wikibase takes
+        (_free_label), and its description is cut so too (_new_artifact).
+        The result's `flags` are what the item, made or found, is flagged
+        for (Registrar._flags), as `self.flags` gathers them.
         """
         if media_path is None:
             raise ValueError(
@@ -775,17 +984,26 @@ class Registrar:
         label = str(artifact.labels.get("en") or title)
         instance.label(artifact_qid, label)
         instance.by_sha1.setdefault(content_sha1, artifact_qid)
+        instance.file(artifact_qid, file_page)
 
         fragment_qids = {
             page: self._fragment(artifact_qid, label, content_sha1, page)
             for page in range(1, pages + 1)
         }
+        # flagged on every registration while a condition holds, under its
+        # title and its label before its content tag, once the item and
+        # its fragments are complete: a file listing that fails leaves
+        # nothing half-registered
+        flags = self._flags(
+            artifact_qid, content_sha1, [file_page, *held], [title, label]
+        )
         return RegistrationResult(
             artifact_qid=artifact_qid,
             file_page=file_page,
             fragment_qids=fragment_qids,
             created=created,
             content_sha1=content_sha1,
+            flags=flags,
         )
 
     def _new_artifact(self, description: str | None):
@@ -823,7 +1041,7 @@ class Registrar:
         # the artifact's label is cut to fit, if need be: the fragment's
         # label and description only display it
         label = self._free_label(
-            artifact_label, content_sha1, f", page {page}", fit=True
+            artifact_label, content_sha1, f", page {page}"
         )
         fragment = self.client.wbi.item.new()
         fragment.labels.set("en", label)
@@ -936,7 +1154,7 @@ class Registrar:
             changed = item is None
             # a new item's label is settled before anything is uploaded
             new_label = (
-                self._free_label(title, key, f" — {names[0]}", fit=True)
+                self._free_label(title, key, f" — {names[0]}")
                 if changed
                 else None
             )
@@ -1007,6 +1225,17 @@ class Registrar:
             if item.labels.get("en"):
                 instance.label(item.id, str(item.labels.get("en")))
             instance.by_sha1.setdefault(key, item.id)
+            for page in held:
+                instance.file(item.id, page)
+            # flagged on every registration while a condition holds, under
+            # its first label and its own label before its content tag,
+            # once the item is complete
+            self._flags(
+                item.id,
+                key,
+                held,
+                [labels[0], str(item.labels.get("en") or "")],
+            )
             derived[key] = item.id
         return derived
 
@@ -1034,9 +1263,13 @@ def register_derived_media(
     directory: Path,
     *,
     exclusions: ExclusionList | None = None,
+    flags: list[RegistrationFlag] | None = None,
 ) -> dict[str, str]:
     """Register the media a registered container embeds, from their
-    record, reading the instance afresh (Registrar.register_derived_media)."""
-    return Registrar(client, exclusions=exclusions).register_derived_media(
-        record, directory
-    )
+    record, reading the instance afresh (Registrar.register_derived_media).
+    What the media were flagged for is added to `flags`, when given."""
+    registrar = Registrar(client, exclusions=exclusions)
+    derived = registrar.register_derived_media(record, directory)
+    if flags is not None:
+        flags.extend(registrar.flags)
+    return derived

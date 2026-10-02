@@ -294,6 +294,25 @@ artifact a new QID, changes neither.
   media. Nothing before the write has an artifact item, and a write that
   runs again (a changed review, say) registers again, finding by SHA-1
   what the earlier write registered.
+- **An item that may be an older artifact is flagged, never adopted**
+  (ADR-0010 as amended by #371). An item with no hash has no `media
+  SHA-1` and names a `media file`, as an artifact registered before
+  content hashing does, or is an `instance of` an artifact kind, as a
+  GEDCOM media object's item is (a label, no file). Each time
+  registration makes or finds an artifact or derived medium while
+  another item names a wiki file holding its bytes (`shared-file`), or
+  while its title, or its own label before its content tag, is an
+  unhashed item's label (`unhashed-title`), `ingest run` raises the
+  flag as an alert of the write naming the items by QID, for a person
+  to look at; it repeats on every write until a curator acts on the
+  older item. A new item is made as any other, and neither item is
+  changed. Registration writes `media file` and `media SHA-1` together,
+  so a reset instance never raises `shared-file`; it raises
+  `unhashed-title` only for an artifact or derived medium registered
+  under exactly a GEDCOM media object's label, and only when the
+  GEDCOM's write made that media object's item first (a GEDCOM written
+  after the artifact joins its media object to it by the label, #109,
+  and makes no item to flag).
 - **A page fragment is keyed by its artifact.** The fragment for page
   *n* is the item that is an `instance of artifact fragment` and `part
   of` the artifact with `page number` *n*, whatever its label. A new one
@@ -330,7 +349,7 @@ artifact a new QID, changes neither.
   writer keeps labels by (above: trimmed, then U+FFFE and U+FFFF made
   U+FFFD, then NFC; #369, #403), an artifact's description goes in that
   form too, and a title longer than the 250 characters Wikibase takes,
-  as it is or once tagged, is refused. The tag
+  as it is or once tagged, is cut to fit, ending in "…" (#371). The tag
   is a stopgap until labels need not be unique for artifacts (#94), and
   which homonym bears it depends on registration order: nothing may key
   on an artifact's label, only on its `media SHA-1`.

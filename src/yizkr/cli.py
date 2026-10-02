@@ -26,6 +26,7 @@ Connection settings come from deploy/.env (or $YIZKR_ENV_FILE /
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import math
 import sys
@@ -289,7 +290,7 @@ def cmd_register(args) -> int:
         description=args.description,
         pages=args.pages,
     )
-    print(json.dumps(result.__dict__, indent=2))
+    print(json.dumps(dataclasses.asdict(result), indent=2))
     return 0
 
 

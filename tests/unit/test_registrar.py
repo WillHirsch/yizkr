@@ -367,8 +367,22 @@ class FakeWiki:
         return page
 
     def api_get(self, params):
-        assert params["prop"] == "imageinfo"
         current = self.media.current()
+        if params.get("list") == "allimages":
+            # every file whose current bytes have the SHA-1 asked for
+            return {
+                "query": {
+                    "allimages": [
+                        {
+                            "name": name,
+                            "title": f"File:{name.replace('_', ' ')}",
+                        }
+                        for name, sha1 in sorted(current.items())
+                        if sha1 == params["aisha1"]
+                    ]
+                }
+            }
+        assert params["prop"] == "imageinfo"
         pages = {}
         for n, title in enumerate(params["titles"].split("|")):
             name = FakeMediaWiki.normalise(title.removeprefix("File:"))
@@ -800,43 +814,48 @@ class TestRegisterArtifact:
         assert len(wiki.entities) == 2
 
     @pytest.mark.parametrize("length", [250, 251])
-    def test_a_label_of_250_characters_is_taken_and_251_refused(
+    def test_a_label_of_250_characters_is_taken_and_251_cut(
         self, tmp_path, length
     ):
         """Wikibase takes a label of 250 characters and refuses one of
-        251: so does registration, which refuses it before anything is
-        uploaded or written."""
+        251: registration takes a title of 250 as it is, and cuts a longer
+        one to fit, ending in "…", as it cuts a derived medium's label
+        (_fitted). A re-run finds the item by its SHA-1."""
         wiki = StoringWiki()
         title = LONG[:length]
-        if length == 250:
-            result = register(wiki, scan(tmp_path, PORTRAIT), title)
-            assert label_of(wiki, result.artifact_qid) == title
-            return
-        with pytest.raises(ValueError, match="250 characters"):
-            register(wiki, scan(tmp_path, PORTRAIT), title)
-        assert (wiki.writes, wiki.media.requests) == (0, [])
+        result = register(wiki, scan(tmp_path, PORTRAIT), title)
+        expected = title if length == 250 else title[:249] + "…"
+        assert label_of(wiki, result.artifact_qid) == expected
+        assert len(expected) == 250
+        again = register(wiki, scan(tmp_path, PORTRAIT), title)
+        assert again.artifact_qid == result.artifact_qid
+        assert not again.created
 
     @pytest.mark.parametrize("length", [239, 240])
-    def test_a_tagged_label_of_250_characters_is_taken_and_251_refused(
-        self, tmp_path, length
-    ):
+    def test_a_tagged_label_is_cut_to_250_characters(self, tmp_path, length):
         """A title another item holds is tagged, 11 characters more: 250
-        in all is taken, and 251 refused before anything is uploaded or
-        written, retry after retry, so that no half-made item is left."""
+        in all is taken as it is, and a longer title is cut, ending in
+        "…", before its tag, so the tagged label fits."""
         wiki = StoringWiki()
         title = LONG[:length]
         wiki.item(title)
-        writes = wiki.writes
-        tagged = f"{title} [{sha1(PORTRAIT)[:8]}]"
-        if length == 239:
-            result = register(wiki, scan(tmp_path, PORTRAIT), title)
-            assert label_of(wiki, result.artifact_qid) == tagged
-            assert len(tagged) == 250
-            return
-        for _ in range(2):
-            with pytest.raises(ValueError, match="250 characters"):
-                register(wiki, scan(tmp_path, PORTRAIT), title)
-        assert (wiki.writes, wiki.media.requests) == (writes, [])
+        tag = f" [{sha1(PORTRAIT)[:8]}]"
+        result = register(wiki, scan(tmp_path, PORTRAIT), title)
+        cut = title if length == 239 else title[:238] + "…"
+        assert label_of(wiki, result.artifact_qid) == cut + tag
+        assert len(cut + tag) == 250
+        assert_labels_unique(wiki)
+
+    def test_labels_of_normal_length_are_not_cut(self, tmp_path):
+        """Cutting to fit changes no label that fits: a title, and a title
+        another item holds, tagged."""
+        wiki = FakeWiki()
+        first = register(wiki, scan(tmp_path, PORTRAIT))
+        second = register(wiki, scan(tmp_path, RESCAN, folder="rescan"))
+        assert label_of(wiki, first.artifact_qid) == TITLE
+        assert label_of(wiki, second.artifact_qid) == (
+            f"{TITLE} [{sha1(RESCAN)[:8]}]"
+        )
 
     @pytest.mark.parametrize("length", [250, 251])
     def test_a_name_of_250_characters_is_an_alias_and_251_not_one(

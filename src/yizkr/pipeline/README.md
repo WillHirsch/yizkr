@@ -246,7 +246,10 @@ re-running one step in isolation — but for a normal ingest you only ever run
   registered. Registration and resolve (below) are the steps before the
   write that use the wiki: registration until write-time registration
   (#103) takes its place, and resolve's label match until the
-  identity-map writer (#109).
+  identity-map writer (#109). An item whose bytes a file another item
+  names holds, or whose title is the label of an item with no hash, is
+  flagged, never adopted: each write raises it as a `shared-file` or
+  `unhashed-title` alert while that holds (#371; docs/ANOMALIES.md).
 - **derived media** (decks) — records the images a deck embeds in the
   deck's state directory, not on the wiki: `derived-media.json` keys each
   distinct image by the SHA-1 of its bytes (ADR-0010), with its names in
