@@ -42,9 +42,21 @@ changing what they check:
   test that clears or records the instance-contents key
   (yizkr.core.instance), or a child process it starts, never touches the
   developer's record of the one instance, which scratch runs read.
+- **No settings from the host.** No unit test reads the host's
+  deploy/.env (or ./.env), nor a `YIZKR_*` variable or a connection
+  setting (yizkr.core.config) exported in the host's environment (the
+  package-scoped `_no_host_settings` fixture). The environment loses
+  them, and `resolve_env_file` finds no default env file, as on CI,
+  which has none: `env_setting`, `Config.load`, `corpus_dir` and
+  `load_exclusions` read only what a test gives them. A test that needs
+  a setting gives it explicitly: in the environment, or in an env file
+  it names with `$YIZKR_ENV_FILE` or `env_file`. `yizkr backup` reads
+  `<deploy-dir>/.env` directly, not through `resolve_env_file`, so the
+  unit tests always give it a temporary deploy dir. The live tests
+  under tests/integration read the real env file.
 
-test_conftest.py tests the first two and the last, and test_anomalies.py
-the third.
+test_conftest.py tests the first two and the last two, and
+test_anomalies.py the third.
 """
 
 from __future__ import annotations
@@ -53,7 +65,7 @@ import hashlib
 import os
 import sys
 import warnings
-from collections.abc import Container, MutableMapping
+from collections.abc import Container, Iterable, MutableMapping
 
 import pytest
 
@@ -138,6 +150,50 @@ def _no_claude_config(monkeypatch, tmp_path_factory):
     and before every call). Tests that need one set their own."""
     missing = tmp_path_factory.getbasetemp() / "no-claude-config"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(missing))
+
+
+# The stack's connection settings, which Config.load reads from the
+# environment before the env file.
+CONNECTION_VARIABLES = (
+    "WIKIBASE_PUBLIC_HOST",
+    "WDQS_PUBLIC_HOST",
+    "PUBLIC_SCHEME",
+    "HTTP_PORT",
+    "MW_ADMIN_NAME",
+    "MW_ADMIN_PASS",
+    "WIKIBASE_URL",
+    "WDQS_SPARQL_URL",
+)
+# Set by the fixtures here to places of the tests' own, never the host's.
+OWN_VARIABLES = frozenset({"YIZKR_INSTANCE_STATE"})
+
+
+def host_settings(environ: Iterable[str]) -> list[str]:
+    """The names in `environ` that no unit test reads from the host: every
+    `YIZKR_*` variable but OWN_VARIABLES, and CONNECTION_VARIABLES."""
+    return sorted(
+        name
+        for name in environ
+        if (name.startswith("YIZKR_") and name not in OWN_VARIABLES)
+        or name in CONNECTION_VARIABLES
+    )
+
+
+@pytest.fixture(scope="package", autouse=True)
+def _no_host_settings():
+    """Clear the host's settings from the environment, and leave
+    resolve_env_file no default env file to find, for every unit test
+    and every fixture of theirs. Package scope makes it set up before any
+    fixture of a module, which then sets what it needs on top, and undo
+    after the last unit test, so the live tests in the same session read
+    the real env file."""
+    from yizkr.core import config
+
+    with pytest.MonkeyPatch.context() as patch:
+        for name in host_settings(os.environ):
+            patch.delenv(name)
+        patch.setattr(config, "ENV_FILE_CANDIDATES", ())
+        yield
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -17,6 +17,8 @@ the wiki, the engine, the LLM cache or the corpus:
     <document>/      a document's state.json and its views:
                      transcription.json, batch.json, critique.json and
                      the extraction's extraction/coverage.json
+    excerpts/<sha1>/ the same, for an image a PDF places within a page
+                     read as a document of its own (ADR-0008)
     corpus/<stage>/  a corpus stage's outputs: the clustering stage's
                      identity-map.json
 
@@ -98,9 +100,14 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
-from yizkr.claims import load_vocabulary
+from yizkr.claims import (
+    JudgementNote,
+    PersonStructure,
+    PlaceStructure,
+    load_vocabulary,
+)
 from yizkr.pipeline.anomalies import ERROR_EVENT, RECHECK_EVENT, Checks, route
 from yizkr.pipeline.critique import AXES, CATEGORIES, Finding
 from yizkr.pipeline.critique import entry as critique_entry
@@ -115,7 +122,12 @@ from yizkr.pipeline.monitor import (
     failure_label,
     reason_label,
 )
-from yizkr.pipeline.orchestrate import DOCUMENT_STAGES, MODEL_ROLES
+from yizkr.pipeline.orchestrate import (
+    DOCUMENT_STAGES,
+    EXCERPT,
+    EXCERPTS_DIR,
+    MODEL_ROLES,
+)
 from yizkr.pipeline.rundir import (
     ALERTS,
     CACHE_EVENTS,
@@ -218,7 +230,7 @@ ROUTES = frozenset(
 )
 # how a page of a PDF read page by page is read (yizkr.pipeline.textlayer)
 PAGE_METHODS = frozenset({"text-layer", "vision", "none"})
-RESOLUTIONS = frozenset({"detected", "fallback", "override"})
+RESOLUTIONS = frozenset({"record", "detected", "fallback", "override"})
 HIT_REASONS = frozenset({KEY_MATCH, "adopted"})
 MISS_REASONS = frozenset({"absent", "rejected", "refresh"})
 FORCED = MISS_REASONS | {NO_CALL, NO_CACHE, REPLAY, REPLAY_CHANGED}
@@ -238,6 +250,25 @@ HOLDS = frozenset(
 REQUESTERS = frozenset({"operator", "monitor", "anomaly"})
 ACTIONS = frozenset({"pause", "resume", "abort"})
 FALLBACK_TIERS = frozenset({"manifest", "segmentation"})
+# the leading labels of the reasons an extraction sets a mention record
+# aside by (ADR-0035 §5): claims.set_aside_structure's `schema` and
+# claims.structure_problems' own
+SET_ASIDE_REASONS = frozenset(
+    {"schema", "kind", "addition", "initial", "no name part", "no toponym"}
+)
+# the reason an entity's judgement note is set aside by (ADR-0035 §5),
+# which coverage.json counts among the records' reasons, once a note
+NOTE_SET_ASIDE = "note"
+# a judgement note's categories (ADR-0035 §4)
+NOTE_CATEGORIES = frozenset(
+    get_args(JudgementNote.model_fields["category"].annotation)
+)
+# a mention record's label statuses (ADR-0035 §2.1, §2.2)
+RECORD_STATUSES = frozenset(
+    status
+    for model in (PersonStructure, PlaceStructure)
+    for status in get_args(model.model_fields["status"].annotation)
+)
 MAP_STATES = frozenset({"read", "missing", "unreadable"})
 # the leading labels of the reasons stages give an output that needs
 # attention: the extraction's fallback tiers and empty batches, and the
@@ -323,6 +354,25 @@ def _count(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         return 0
     return max(0, value)
+
+
+def _counted(value: Any) -> int | None:
+    """A count an output gives: a whole number, at least 0; else None."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _tally(value: Any) -> dict[str, int] | None:
+    """A {name: count} an output gives, less each entry whose count is no
+    count (`_counted`); None when it gives none."""
+    if not isinstance(value, dict):
+        return None
+    return {
+        name: count
+        for name, count in value.items()
+        if isinstance(name, str) and _counted(count) is not None
+    }
 
 
 def _list(value: Any) -> list:
@@ -848,8 +898,14 @@ def _directories(path: Path) -> dict[str, tuple[Path, dict]]:
         entries = sorted(path.iterdir())
     except OSError:
         return found
+    # an excerpt's directory is in EXCERPTS_DIR, named for its image
+    with contextlib.suppress(OSError):
+        entries += sorted((path / EXCERPTS_DIR).iterdir())
     for entry in entries:
-        if entry.name.startswith(".") or entry.name == CORPUS_DIR:
+        if entry.name.startswith(".") or entry.name in (
+            CORPUS_DIR,
+            EXCERPTS_DIR,
+        ):
             continue
         state = _json(entry / "state.json")
         if not isinstance(state, dict):
@@ -880,12 +936,22 @@ def _view(document: Document, stage: str, path: Path, kind: type) -> Any:
 
 def _pages(pages: Any) -> dict[str, Any]:
     """A PDF read page by page, as its transcription's `pages` give it:
-    its pages by the method that read them, and how many of its
-    text-layer pages show annotations the text layer leaves unread. Pages
-    whose provenance cannot be read are not counted."""
+    its pages by the method that read them, how many of its text-layer
+    pages show annotations the text layer leaves unread, and the images
+    placed within its pages that were read on their own, by their SHA-1s,
+    each once: its derived images (ADR-0008). Pages whose provenance
+    cannot be read are not counted, and neither is a name of an image that
+    is no SHA-1."""
     methods: Counter = Counter()
     annotated = 0
+    images: set[str] = set()
     for page in _list(pages):
+        if isinstance(page, dict):
+            images.update(
+                sha1
+                for sha1 in _list(page.get("images"))
+                if isinstance(sha1, str) and re.fullmatch("[0-9a-f]{40}", sha1)
+            )
         provenance = page.get("provenance") if isinstance(page, dict) else None
         if not isinstance(provenance, dict):
             continue
@@ -899,16 +965,21 @@ def _pages(pages: Any) -> dict[str, Any]:
             and unread > 0
         ):
             annotated += 1
-    return {"page_methods": dict(methods), "annotated_pages": annotated}
+    return {
+        "page_methods": dict(methods),
+        "annotated_pages": annotated,
+        "images": sorted(images),
+    }
 
 
 def _read_views(document: Document, directory: Path, state: dict) -> None:
     """What the document's views hold, for each stage that completed: the
     transcription's language, route and how its language was resolved;
     the batch's entities by kind and claims by property; the extraction's
-    coverage (chunks, rejects, fallback tiers); and the critique's
-    findings by class. A view that is missing or cannot be read counts
-    nothing, and is noted."""
+    coverage (chunks, rejects, fallback tiers, and the mention records
+    and judgement notes it counts: None for both unless it counts both);
+    and the critique's findings by class. A view that is missing or
+    cannot be read counts nothing, and is noted."""
     document.directory = directory.name
     views = document.views
     detail = state.get("detail")
@@ -958,6 +1029,7 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
                 )
                 if isinstance(fallback, dict)
                 else [],
+                **_records(coverage),
             }
     if document.completed("critique"):
         findings = _view(
@@ -965,6 +1037,61 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
         )
         if findings is not None:
             views["critique"] = _critique(findings)
+
+
+def _records(coverage: dict) -> dict[str, Any]:
+    """The mention records and judgement notes an extraction's coverage
+    counts (ADR-0035 §4, §5): the records given, by status, and the
+    unsplit name forms they hold, the mentions recordless, the records set
+    aside and the reasons they were set aside by, by category; and the
+    notes by category, and the notes set aside. Each name is folded into
+    the report's fixed vocabulary, OTHER for one it does not know.
+
+    The coverage's `set_aside` counts reasons, not records: a record that
+    does not parse counts once, as `schema`, one of the wrong kind once,
+    as `kind`, and any other once for each problem found in it; an
+    entity's note set aside counts once, as `note`, which is told apart
+    here as a note set aside.
+    The extraction writes its records and its notes together, so both
+    are None unless the coverage holds both, as the line-range tier's and
+    one written before these counts do not: absent, never zero. The
+    records set aside and the unsplit forms are each None when the
+    coverage, though it holds both, gives no count of them."""
+    records, notes = coverage.get("records"), _tally(coverage.get("notes"))
+    if not isinstance(records, dict) or notes is None:
+        return {"records": None, "notes": None}
+    reasons = _tally(records.get("set_aside")) or {}
+    noted = reasons.pop(NOTE_SET_ASIDE, 0)
+    return {
+        "records": {
+            "given": _count(records.get("given")),
+            "recordless": _count(records.get("recordless")),
+            "by_status": _folded(
+                _tally(records.get("by_status")) or {},
+                lambda value: _known(value, RECORD_STATUSES),
+            ),
+            "unsplit_forms": _counted(records.get("unsplit_forms")),
+            "set_aside_records": _counted(records.get("set_aside_records")),
+            "set_aside_by_reason": _folded(
+                reasons, lambda value: _known(value, SET_ASIDE_REASONS)
+            ),
+        },
+        "notes": {
+            "by_category": _folded(
+                notes, lambda value: _known(value, NOTE_CATEGORIES)
+            ),
+            "set_aside": noted,
+        },
+    }
+
+
+def _uncounted(coverage: Mapping[str, Any]) -> str:
+    """Why an extraction's coverage counts no mention records or notes:
+    `line_range` when its entity manifest fell back to line ranges, a tier
+    that counts none and leaves every mention recordless; else
+    `predating`, a coverage written before these counts (or holding only
+    one half of them, which the extraction never writes)."""
+    return "line_range" if "manifest" in coverage["fallback"] else "predating"
 
 
 def _critique(findings: list) -> dict[str, Any]:
@@ -1709,6 +1836,10 @@ def _aggregate_documents(
     resolved: Counter = Counter()
     page_methods: Counter = Counter()
     annotated_pages = 0
+    # each PDF's derived images: how many PDFs place how many images, and
+    # the images themselves, each once however many PDFs place it
+    images_per_pdf: Counter = Counter()
+    images: set[str] = set()
     untranscribed = 0
     for document in planned:
         if "transcription" not in document.stages:
@@ -1727,6 +1858,10 @@ def _aggregate_documents(
             resolved[_known(transcription["resolved"], RESOLUTIONS)] += 1
         page_methods.update(transcription.get("page_methods") or {})
         annotated_pages += transcription.get("annotated_pages") or 0
+        placed = transcription.get("images") or []
+        if placed:
+            images_per_pdf[str(len(placed))] += 1
+            images.update(placed)
     return {
         "planned": len(planned),
         "files": entries,
@@ -1749,6 +1884,20 @@ def _aggregate_documents(
         # the text layer leaves unread
         "pdf_pages": _by_count(page_methods),
         "pdf_pages_annotated": annotated_pages,
+        # the images placed within the pages of the PDFs read page by page
+        # and read on their own, per PDF (ADR-0008): the PDFs that place
+        # any, the images they place (an image counted once per PDF, and
+        # once however many PDFs place it), how many PDFs place how many,
+        # and how many of the images are documents of their own, excerpts
+        "pdf_images": {
+            "pdfs": sum(images_per_pdf.values()),
+            "placed": sum(int(n) * c for n, c in images_per_pdf.items()),
+            "distinct": len(images),
+            "per_pdf": dict(
+                sorted(images_per_pdf.items(), key=lambda item: int(item[0]))
+            ),
+            "excerpts": sum(d.kind == EXCERPT for d in planned),
+        },
         "failed": len(failed),
         # the planned documents that failed, by the kind the plan gives
         # each; the others (a source that could not be read has no SHA-1
@@ -1952,6 +2101,12 @@ def _aggregate_content(
     fallbacks: Counter = Counter()
     by_axis: Counter = Counter()
     by_category: Counter = Counter()
+    set_aside: Counter = Counter()
+    statuses: Counter = Counter()
+    notes: Counter = Counter()
+    absent: Counter = Counter()
+    record_extractions = records_given = recordless = notes_set_aside = 0
+    records_set_aside = unsplit_forms = 0
     batches = not_extracted = zero_entities = 0
     extractions = chunks = rejected = unread = with_rejects = given = 0
     failed_rejecting = critiques = with_findings = findings = invalid = 0
@@ -1980,6 +2135,25 @@ def _aggregate_content(
             fallbacks.update(
                 _known(tier, FALLBACK_TIERS) for tier in coverage["fallback"]
             )
+            records, noted = coverage["records"], coverage["notes"]
+            if records is None:
+                absent[_uncounted(coverage)] += 1
+            else:
+                record_extractions += 1
+                records_given += records["given"]
+                recordless += records["recordless"]
+                statuses.update(records["by_status"])
+                if records["set_aside_records"] is None:
+                    absent["set_aside_records"] += 1
+                else:
+                    records_set_aside += records["set_aside_records"]
+                if records["unsplit_forms"] is None:
+                    absent["unsplit_forms"] += 1
+                else:
+                    unsplit_forms += records["unsplit_forms"]
+                set_aside.update(records["set_aside_by_reason"])
+                notes.update(noted["by_category"])
+                notes_set_aside += noted["set_aside"]
         failed_rejecting += document.unusable is not None
         if "critique" in document.views:
             critique = document.views["critique"]
@@ -2022,6 +2196,28 @@ def _aggregate_content(
         "zero_entities": zero_entities,
         "chunks": chunks,
         "fallbacks": _by_count(fallbacks),
+        "records": {
+            "extractions": record_extractions,
+            "given": records_given,
+            "recordless": recordless,
+            # each document's names are folded already (`_records`)
+            "by_status": _by_count(statuses),
+            "unsplit_forms": unsplit_forms,
+            "set_aside_records": records_set_aside,
+            "set_aside_reasons": set_aside.total(),
+            "set_aside_by_reason": _by_count(set_aside),
+            "absent": {
+                "predating": absent["predating"],
+                "line_range": absent["line_range"],
+                "set_aside_records": absent["set_aside_records"],
+                "unsplit_forms": absent["unsplit_forms"],
+            },
+        },
+        "notes": {
+            "total": notes.total(),
+            "by_category": _by_count(notes),
+            "set_aside": notes_set_aside,
+        },
         "critic": {
             "critiques": critiques,
             "findings": findings,
@@ -2235,6 +2431,14 @@ def _time_of(seconds: float | None) -> str:
     return "-" if seconds is None else _duration(seconds)
 
 
+def _absent(count: int | None) -> str:
+    """A document's count, or why it has none: its coverage gives none
+    (it predates the count, or what it gives is no count)."""
+    if count is None:
+        return "not counted (its coverage gives no count of it)"
+    return _n(count)
+
+
 def _listed(counts: Mapping[str, int], none: str = "none") -> str:
     return (
         ", ".join(f"{name} {_n(count)}" for name, count in counts.items())
@@ -2414,10 +2618,25 @@ def _documents_section(documents: Mapping[str, Any]) -> _Section:
             "Pages of PDFs read page by page, by method: "
             f"{_listed(documents['pdf_pages'])}; with annotations the text "
             f"layer leaves unread: {_n(documents['pdf_pages_annotated'])}",
+            _images_line(documents["pdf_images"]),
             f"Language resolved: {_listed(documents['language_resolved'])}",
         ]
     )
     return _Section("Documents", blocks)
+
+
+def _images_line(images: Mapping[str, Any]) -> str:
+    """The derived images of the PDFs read page by page, as one line."""
+    per_pdf = ", ".join(
+        f"{count} in {_n(pdfs)}" for count, pdfs in images["per_pdf"].items()
+    )
+    return (
+        "Images placed within PDFs read page by page and read on their own: "
+        f"{_n(images['placed'])} in {_n(images['pdfs'])} PDFs "
+        f"({_n(images['distinct'])} distinct; images per PDF: "
+        f"{per_pdf or 'none'}); documents of their own (excerpts): "
+        f"{_n(images['excerpts'])}"
+    )
 
 
 def _stage_sections(
@@ -2634,6 +2853,11 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
             3,
         ),
         _Section(
+            "Mention records and judgement notes",
+            _records_blocks(content["records"], content["notes"]),
+            3,
+        ),
+        _Section(
             "Zero-claim documents",
             [
                 f"{_n(zero['documents'])} of {_n(content['batches'])} batches "
@@ -2686,6 +2910,61 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
         ),
     ]
     return sections
+
+
+def _records_blocks(
+    records: Mapping[str, Any], notes: Mapping[str, Any]
+) -> list[Any]:
+    absent = records["absent"]
+    blocks: list[Any] = [
+        [
+            f"Extractions counted: {_n(records['extractions'])}; mention "
+            f"records given: {_n(records['given'])}; recordless mentions "
+            "(no record given, or it was set aside): "
+            f"{_n(records['recordless'])}",
+            "Unsplit name forms in the records given: "
+            f"{_n(records['unsplit_forms'])}",
+            f"Records set aside: {_n(records['set_aside_records'])}; "
+            "reasons records were set aside: "
+            f"{_n(records['set_aside_reasons'])} (a record can give "
+            "several)",
+            f"Judgement notes: {_n(notes['total'])}; notes set aside: "
+            f"{_n(notes['set_aside'])}",
+            "Extractions not counted: "
+            f"{_n(absent['predating'])} whose coverage predates these "
+            f"counts; {_n(absent['line_range'])} that fell back to line "
+            "ranges (all their mentions recordless)",
+            "Extractions counted whose coverage gives no count of it, so "
+            "left out of that count: records set aside "
+            f"{_n(absent['set_aside_records'])}; unsplit name forms "
+            f"{_n(absent['unsplit_forms'])}",
+        ]
+    ]
+    if records["by_status"]:
+        blocks.append(
+            _table(
+                ("Record status", "Records"),
+                records["by_status"].items(),
+                numbers=(1,),
+            )
+        )
+    if records["set_aside_by_reason"]:
+        blocks.append(
+            _table(
+                ("Set-aside reason", "Reasons"),
+                records["set_aside_by_reason"].items(),
+                numbers=(1,),
+            )
+        )
+    if notes["by_category"]:
+        blocks.append(
+            _table(
+                ("Note category", "Notes"),
+                notes["by_category"].items(),
+                numbers=(1,),
+            )
+        )
+    return blocks
 
 
 def _cluster_blocks(clusters: Mapping[str, Any]) -> list[Any]:
@@ -3187,6 +3466,29 @@ def _html_document(document: Mapping[str, Any]) -> str:
             f"{coverage['unread_objects']}; fallback tiers: "
             f"{', '.join(coverage['fallback']) or 'none'}"
         )
+        records, notes = coverage.get("records"), coverage.get("notes")
+        if records is None or notes is None:
+            why = (
+                "it fell back to line ranges (all its mentions recordless)"
+                if _uncounted(coverage) == "line_range"
+                else "its coverage predates these counts"
+            )
+            items.append(
+                f"Mention records and judgement notes: not counted, as {why}"
+            )
+        else:
+            items.append(
+                f"Mention records given: {records['given']}, by status: "
+                f"{_listed(_by_count(records['by_status']))}; unsplit name "
+                f"forms: {_absent(records['unsplit_forms'])}; recordless: "
+                f"{records['recordless']}; records set aside: "
+                f"{_absent(records['set_aside_records'])}; reasons set "
+                "aside: "
+                f"{_listed(_by_count(records['set_aside_by_reason']))}; "
+                "judgement notes: "
+                f"{_listed(_by_count(notes['by_category']))}; notes set "
+                f"aside: {notes['set_aside']}"
+            )
     if document["critique"] is not None:
         critique = document["critique"]
         items.append(

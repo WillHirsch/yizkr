@@ -23,6 +23,12 @@ Amended by [ADR-0035](0035-mention-records.md) (owner decision
 family gains a `structure`, what its names are made of, which is input to
 identity and never written, and any record may carry a judgement note
 (ADR-0035 §2, §4).
+Amended by #407 (2026-09-29): the entity-manifest prompt asks for each
+record and note; one that fails validation is set aside, never repaired,
+and never refuses the manifest, and `coverage.json` counts the records
+given, recordless and set aside (by reason) and the notes (by category).
+The capitalised-token coverage check is gone, since capitals are no sign
+of a name in every language.
 
 Amends ADR-0006. The transport machinery specified there — forked
 conversations, NDJSON emission with sentinel, per-chunk state with
@@ -206,9 +212,10 @@ and local refs.
   the type statements written and referenced.
 
 Coverage report: in place of ADR-0006's line audit, `coverage.json`
-flags transcription lines that mention no manifest entity (heuristic:
-capitalized-token match against labels/aliases) plus manifest entities
-that yielded zero claims. Advisory, as before.
+flags manifest entities that yielded zero claims, and counts the mention
+records and judgement notes (ADR-0035 §5; amended by #407, which removed
+the capitalised-token check of lines that mention no manifest entity).
+Advisory, as before.
 
 ### Phase 3 — reconciliation (proposals, never assertions)
 

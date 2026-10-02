@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures import records
+from tests.fixtures.records import page_text, record_answer
 from tests.unit.test_orchestrate import (
     ScriptedOrchestrator,
     approve_all_claims,
@@ -38,7 +40,7 @@ from tests.unit.test_orchestrate import (
     this_run,
 )
 from yizkr.claims import ArtifactRef, ClaimBatch
-from yizkr.pipeline import llm, llmcache, transcription_check
+from yizkr.pipeline import llm, llmcache
 from yizkr.pipeline.chunking import ChunkedClaimExtractor
 from yizkr.pipeline.extract import LlmClaimExtractor
 from yizkr.pipeline.llm import (
@@ -2158,8 +2160,9 @@ LETTER_REF = ArtifactRef.from_bytes(b"fictional scan: a Loebig letter")
 
 
 def person(prompt: str) -> tuple[str, int]:
-    """The first word and year of a prompt's first numbered line."""
-    match = re.search(r"^1: (.*)$", prompt, re.M)
+    """The first word and year of a prompt's first numbered line, past
+    a page marker."""
+    match = re.search(r"^\d+: (?!\[Page \d+\]$)(.*)$", prompt, re.M)
     line = match.group(1) if match else ""
     words = re.findall(r"[A-Za-z]+", line)
     year = re.search(r"\b(1[5-9]\d\d)\b", line)
@@ -2173,7 +2176,7 @@ def pipeline_answers(kind, prompt, opening):
     letter, answers the entity manifest and the chunks from the document
     it is shown, and the critic with no findings."""
     if prompt.startswith(TRANSCRIPTION_PROMPT):
-        return LETTER
+        return record_answer(LETTER)
     if "manifest of EVERY distinct entity" in prompt:
         name, _ = person(prompt)
         entity = {"id": "e1", "label": name, "kind": "human"}
@@ -2205,7 +2208,7 @@ def reading(text: str):
 
     def answer(kind, prompt, opening):
         if prompt.startswith(TRANSCRIPTION_PROMPT):
-            return text
+            return record_answer(text)
         return pipeline_answers(kind, prompt, opening)
 
     return answer
@@ -2213,16 +2216,11 @@ def reading(text: str):
 
 def stricter_check(monkeypatch) -> None:
     """Make the transcription check stricter, as a change to it would: a
-    signature for the service notice."""
-    signature = transcription_check._signature(
-        "reading-service-notice",
-        transcription_check.TOOL_FAILURE,
+    signature for the service notice (records.stricter_check)."""
+    records.stricter_check(
+        monkeypatch,
         r"reading service will be offline",
-    )
-    monkeypatch.setattr(
-        transcription_check,
-        "SIGNATURES",
-        (*transcription_check.SIGNATURES, signature),
+        "reading-service-notice",
     )
 
 
@@ -2363,7 +2361,7 @@ class TestThePipeline:
                 )
         assert len(found["engine"]) == 3
         assert found["replay"] == found["engine"] == found["no-cache"]
-        assert found["engine"]["a-scan"]["transcription"] == LETTER
+        assert found["engine"]["a-scan"]["transcription"] == page_text(LETTER)
         # the engine took part in both live runs, the same calls each time
         engine, uncached = runs["engine"][0], runs["no-cache"][0]
         assert sorted(engine.calls) == sorted(uncached.calls)
@@ -2557,13 +2555,15 @@ class TestThePipeline:
         assert "reading-service-notice" in aside["reason"]
         assert aside["kept"] == "transcription.superseded-1.json"
         kept = json.loads((doc.dir / aside["kept"]).read_text())
-        assert kept["text"] == NOTICE
+        assert kept["text"] == page_text(NOTICE)
         assert "transcription" not in {
             event["stage"] for event in this_run(again, "reused")
         }
         # the engine was asked once for the scan, and its answer is the view
         assert transcriptions(engine) == 1
-        assert json.loads(doc.transcription.read_text())["text"] == READ_AGAIN
+        assert json.loads(doc.transcription.read_text())["text"] == page_text(
+            READ_AGAIN
+        )
         if cached:
             (reject,) = this_run(again, "cache-reject")
             assert reject["role"] == "transcribe"
@@ -2654,10 +2654,48 @@ class TestThePipeline:
             == (
                 2,
                 AWAITING_EQUIVALENCES,
-                READ_AGAIN,
+                page_text(READ_AGAIN),
                 1,
             )
         )
+
+    def test_a_vision_view_made_before_the_record_is_made_again(
+        self, tmp_path
+    ):
+        """A stored vision transcription that holds no record (one made
+        before it, #389) fails the check when it is reused: it is moved
+        aside and made again, with its record."""
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "scan.png").write_bytes(b"not really a png")
+
+        def run():
+            orchestrator = CachedRun(
+                folder,
+                tmp_path / "state",
+                engine=Engine(pipeline_answers),
+                cache_dir=tmp_path / "cache",
+                log=quiet,
+            )
+            orchestrator.run()
+            (doc,) = orchestrator.documents()
+            return orchestrator, doc
+
+        _, doc = run()
+        view = json.loads(doc.transcription.read_text())
+        assert view["document_class"] == "letter"
+        # the view as a transcription made before the record left it
+        for name in ("pages", "document_class"):
+            view.pop(name)
+        view["text"] = LETTER
+        doc.transcription.write_text(json.dumps(view))
+        again, doc = run()
+        (aside,) = this_run(again, "set-aside")
+        assert aside["stage"] == "transcription"
+        assert "(not-a-record)" in aside["reason"]
+        made = json.loads(doc.transcription.read_text())
+        assert made["document_class"] == "letter"
+        assert made["text"] == page_text(LETTER)
 
     def test_a_text_file_that_now_fails_the_check_fails_its_document(
         self, tmp_path, monkeypatch
@@ -3200,7 +3238,7 @@ class TestTheExtractor:
                 return json.dumps(manifest)
 
             def missing(parsed):
-                return [e.id for e in parsed if not e.summary]
+                return [e.id for e in parsed.entities if not e.summary]
 
         else:
             answers = functools.partial(segmenting, False)

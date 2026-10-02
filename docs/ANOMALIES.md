@@ -99,10 +99,23 @@ again). It fires on a transcription the check failed in the run, read
 from its stage's `failed` event, and on a reused transcription view the
 check fails again and the orchestrator sets aside, read from its
 `set-aside` event (carried). Value `true`; `failure` is the kind of
-failure (`tool-error`, `tool-failure`, `refusal`, `empty`, `too-short`),
-and `signature` the name of the signature that matched, when one did.
-Only the kind and the name are read from the reason; the rest of it can
-quote the output.
+failure (`tool-error`, `cut-off`, `not-a-record`, `pages-missing`,
+`pages-extra`, `tool-failure`, `empty`, `too-short`), and `signature`
+the name of the signature that matched, when one did. Only the kind and the name are read
+from the reason; the rest of it can quote the output. A recheck judges a
+stored vision transcription with its transcription record, and fails one
+without (ADR-0037).
+
+**`transcription-flag`**: a transcription the check passed with a flag:
+its wording matched a signature of the flag tier, a phrase in the
+engine's voice that a letter may also write (a refusal, a note that the
+media could not be read); for a transcription with a record, any
+signature, in a page's text or in its notes (ADR-0037 §3). The
+transcription goes on downstream; its stage output carries the flag
+(`flag`), which this check reads, for review. A stored transcription
+carries the flag of the check made now wherever it is read: a run's
+reuse of it, an excerpt made from a kept image reading, and a recheck
+(ADR-0037 §2). Value `true`; `signature` is the signature's name.
 
 **`transcription-sparse`**: a vision transcription with fewer letters and
 digits per page than `min-chars-per-page`, for a document of at least
@@ -196,23 +209,32 @@ share of one. Value: the share; `count`, `of`.
 ### Distributions
 
 A document's measure is compared with the median of the same measure over
-the documents of its kind: an outlier is more than `factor` times the
+the documents of its class: an outlier is more than `factor` times the
 median, or less than the median divided by it, with `smoothing` added to
 both, so that a median near zero does not make every value an outlier. A
-kind is judged once `min-samples` of its documents have the measure.
+class is judged once `min-samples` of its documents have the measure.
 While the run unfolds a document is compared with those before it; a
 recheck compares each with every other.
+
+A document's class is the one its transcription record gives
+(`document_class`, one of the manifest's artifact classes or
+`unclassified`; ADR-0037), so captions, certificates and registers are
+never measured against one another. A document without a record (a text
+file, a curator's correction, a deck, a GEDCOM export, a PDF read page by
+page) has no class yet: it is `unclassified`, and is compared within its
+kind among the unclassified documents. Each distribution alert says so:
+`document_class`, and `class_source`, `record` or `none`.
 
 **`entity-yield`**, **`claim-yield`**: entities, or claims, per page of a
 batch that has some (none at all is the zero checks' finding). A page is
 the medium's own (a PDF's pages, an image's one), a deck's slide, or, for
 a text file, `chars-per-page` characters of its transcription. A GEDCOM
 file's batch has no pages and is not measured. Value: the yield;
-`median`, `samples`.
+`median`, `samples`, `document_class`, `class_source`.
 
 **`critic-rate`** (on the critique): the critic's findings per item it
 reviewed (the batch's entities and claims). Value: the rate; `median`,
-`samples`.
+`samples`, `document_class`, `class_source`.
 
 ### Rates
 
@@ -349,18 +371,32 @@ asked for it, appends the abort. When such a pause stands short of the
 timeout, the next look comes when it is due; otherwise the next look
 comes when the checks' request would reach the timeout, or, that past, a
 timeout later. A slice has one pending timer at a time, cancelled when a
-look needs a sooner one. The look holds the lock the control file's
-appenders take (rundir's `_append_line`) from its read to its abort, so
-no other process appends a request in between: an operator's resume
-lands before the look, and is seen, or after the abort. The lock is
-POSIX's, so it does not hold against this process's own threads, nor
-after any descriptor on the file in this process is closed. A look that
-fails (the control file cannot be opened, read or appended to, on a full
-disk say, or a timer cannot start) is an `anomaly-error` event: under
-the watch's own invocation, `watch-<hex>`, when a timer made it, and
-under the check's otherwise. Either way it stops the look at no other
-slice, and leaves the slice a timer a timeout later when none is
-pending: a slice never goes unwatched.
+look needs a sooner one (after a look that failed). Every look, a
+timer's or a check's, judges the time on one clock, the process's
+monotonic clock, which the timers wait on too: the timeout counts from
+when the checks asked for the pause, read on that clock as they ask. The
+wall clock only stamps the control file's requests. So a wall clock that
+steps back or falls behind (a virtual machine's clock resynchronised
+under load, say) never delays an abort, one that reads ahead and is then
+corrected back never brings one forward, and neither moves a timer. A
+timer whose look came early would find the pause short of its timeout
+and look again when it is due. After an abort, the next look comes when
+the checks' request would have reached the timeout, or, that past, a
+timeout and a second later, on the same clock. The monotonic clock
+counts the time the host is awake: time it spends suspended (a laptop's
+lid closed, say) does not count towards a timeout, as the run does no
+work then. The look holds the lock the control file's appenders take
+(rundir's `_append_line`) from its read to its abort, so no other
+process appends a request in between: an operator's resume lands before
+the look, and is seen, or after the abort. The lock is POSIX's, so it
+does not hold against this process's own threads, nor after any
+descriptor on the file in this process is closed. A look that fails (the
+control file cannot be opened, read or appended to, on a full disk say,
+or a timer cannot start) is an `anomaly-error` event: under the watch's
+own invocation, `watch-<hex>`, when a timer made it, and under the
+check's otherwise. Either way it stops the look at no other slice, and
+leaves the slice a timer a timeout later when none is pending: a slice
+never goes unwatched.
 
 The slice stays watched after its pause is aborted, resumed or cleared,
 because a driver that invokes the run again in the same process, as the
@@ -372,15 +408,19 @@ times it from the checks' own request, which the watch keeps, never from
 the carry's new time. So a pause carried through one re-invocation after
 another is still aborted once the timeout has passed since the checks
 asked for it, whether or not any check runs in the new invocation, and
-even when the timer looks between the start marker and the carry. A
-pause whose timeout passes during the wait is aborted there, and the
-driver carries the abort instead; a pause carried from a reading of the
-file older than the checks' abort is aborted again at the next look. The
-watch lives in the process whose checks asked for the pause: a pause
-carried into another process is not watched there, and holds until
-someone resumes or aborts it. A driver that carries pauses from one
-invocation to the next within its process, as the scratch driver does,
-needs nothing more.
+even when a look comes between the start marker and the carry. A pause
+whose timeout passes during the wait is aborted there, and the driver
+carries the abort instead; a pause carried from a reading of the file
+older than the checks' abort is aborted again at the next look. The
+watch lives in the process whose checks asked for the pause, and no
+pause outlives it unwatched: the scratch driver carries requests only
+into its own next invocation, in the same process, and a new process's
+first invocation carries none, its start marker voiding every request
+before it. So a run invoked again in a new process (after a crash, say)
+never waits on a pause no timer watches: the slice is dispatched again,
+and its checks pause it afresh, with a watch of their own, if it fails
+again. A driver that carried pauses into a new process would have to
+watch them itself, or report them and end the run rather than wait.
 
 **How a driver sees it.** A driver folds `control.jsonl` with
 `rundir.fold_control`, as it folds every request, the monitor's
@@ -415,7 +455,9 @@ again, under the thresholds as they are now (`--config` names a file of
 thresholds in place of the one `$YIZKR_ANOMALIES` names), without
 dispatching anything or recomputing any stage (`anomalies.recheck`).
 Each stored vision or text-file transcription meets the transcription
-check as it is now, as a run's reuse of it would, and every output meets
+check as it is now, as a run's reuse of it would, and each stored
+transcription, a PDF read page by page's included, carries the flag the
+check raises now, not the one stored with it; and every output meets
 the per-output checks and the distributions over the whole run. The rate
 checks, which read a run's dispatches and calls rather than its outputs,
 are not checked again. Its alerts, all carried, are appended to the

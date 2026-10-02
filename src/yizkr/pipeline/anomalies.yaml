@@ -32,9 +32,16 @@ chars-per-page: 2000
 
 checks:
   # The transcription check's verdict: a transcription it fails in the run
-  # (a tool error, tool-failure or refusal text, a blank or implausibly
-  # short one), or a stored one it fails when the run reuses it.
+  # (a tool error, an answer cut off or not the transcription record, pages
+  # missing, a failing signature, a blank or implausibly short one), or a
+  # stored one it fails when the run reuses it.
   transcription-check:
+    enabled: true
+
+  # The transcription check's flag: a transcription it passed whose
+  # wording reads like an engine's note or refusal (a signature of the
+  # flag tier), as the stage output carries it, for review.
+  transcription-flag:
     enabled: true
 
   # A vision transcription with fewer letters and digits per page than

@@ -1,5 +1,6 @@
 """Offline tests for pipeline steps (pytest; no instance, no LLM)."""
 
+import copy
 import csv
 import errno
 import hashlib
@@ -14,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from tests.fixtures.records import record_answer
 from yizkr.claims import (
     ArtifactRef,
     ClaimBatch,
@@ -156,11 +158,12 @@ class TestTranscribe:
         assert result.engine.startswith("text-file:")
 
     def test_llm_vision_engine_passes_image(self, tmp_path):
-        llm = FakeLlm("The transcribed text")
+        llm = FakeLlm(record_answer("The transcribed text"))
         image = tmp_path / "scan.png"
         image.write_bytes(MEDIA)
         result = LlmVisionTranscriber(llm).transcribe(image)
-        assert result.text == "The transcribed text"
+        assert result.text == "[Page 1]\nThe transcribed text"
+        assert result.document_class == "letter"
         assert result.engine == "llm-vision:fake-model"
         assert result.artifact == MEDIA_REF
         assert "exactly as written" in llm.prompts[0]
@@ -1393,21 +1396,25 @@ def _illegal(text: str) -> bool:
     )
 
 
-# the characters Wikibase makes U+FFFD in a string value before it checks
-# it (StringNormalizer::cleanupToNFC, through UtfNormal's cleanUp): every
-# control character but the tab, the line feed and the carriage return,
-# and the noncharacters U+FFFE and U+FFFF
+# the characters Wikibase makes U+FFFD, one for one, wherever it cleans a
+# text up (UtfNormal's Validator::cleanUp, 4.0.0): every C0 control
+# character but the tab, the line feed and the carriage return, and the
+# noncharacters U+FFFE and U+FFFF. It cleans up a string value before it
+# checks and stores it (StringNormalizer::cleanupToNFC), a term once it
+# has trimmed it (trimToNFC), and every text its API gives back, a
+# monolingual text among them (ApiResult, through Language::normalize;
+# #403)
 WIKIBASE_CLEANED = "".join(
     map(chr, (*range(0x09), 0x0B, 0x0C, *range(0x0E, 0x20), 0xFFFE, 0xFFFF))
 )
 
 
 def _cleaned_up(text: str) -> str:
-    """A string value as Wikibase cleans it up before it checks it
-    (cleanupToNFC): each character of WIKIBASE_CLEANED made U+FFFD, and
-    the whole in NFC. So Wikibase changes a vertical tab or a form feed in
-    a string value, where it refuses one in a monolingual text (#401's
-    review)."""
+    """A text as Wikibase cleans it up (cleanupToNFC): each character of
+    WIKIBASE_CLEANED made U+FFFD, and the whole in NFC. It does so to a
+    string value before it checks it, so it changes a vertical tab or a
+    form feed in a string value, where it refuses one in a monolingual text
+    (#401's review)."""
     return unicodedata.normalize(
         "NFC",
         "".join(
@@ -1419,10 +1426,12 @@ def _cleaned_up(text: str) -> str:
 
 def _kept_term(term: str) -> str:
     """A label, description or alias as Wikibase keeps it
-    (StringNormalizer::trimToNFC): each run of control characters made one
-    space, the separators at either end trimmed, and the whole in NFC."""
+    (StringNormalizer::trimToNFC): first trimmed (trimWhitespace), each
+    run of control characters made one space and the separators at either
+    end dropped, then cleaned up (_cleaned_up), which makes U+FFFE and
+    U+FFFF U+FFFD, and in NFC (#403)."""
     term = re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", term)
-    return unicodedata.normalize("NFC", term.strip(WIKIBASE_SEPARATORS))
+    return _cleaned_up(term.strip(WIKIBASE_SEPARATORS))
 
 
 def _refusal(name: str, info: str, text: str):
@@ -1521,7 +1530,9 @@ class FakeItems:
     any copy is seen through every other (compare DetachedItems). As an
     instance does, write() refuses an edit that sends a text Wikibase does
     not hold, over its limits or with a line break, a tab or whitespace at
-    either end (_refuse_as_the_instance)."""
+    either end (_refuse_as_the_instance). Unlike an instance, it holds each
+    text as it was sent: DetachedItems keeps and serves text as an
+    instance does, cleaned up, trimmed and in NFC."""
 
     def __init__(self) -> None:
         self.store: dict[str, object] = {}
@@ -1568,15 +1579,17 @@ class DetachedItems(FakeItems):
     an edit sent from a stale read does on an instance: an edit sends the
     item's aliases whole, and its statements as that copy holds them.
 
-    As an instance serves it, every text in a copy is in Unicode NFC:
-    Wikibase saves string and external-id values, labels, descriptions
-    and aliases in NFC, and its API gives every text back in NFC,
-    monolingual text included (#335, #349), and it keeps a label, a
-    description or an alias trimmed (_kept_term, #384): an empty one is
-    gone, and so is a repeated alias. `sent` keeps each write's item as
-    the writer sent it. As an instance does, a write that sends a text
-    Wikibase does not hold is refused whole, and changes nothing
-    (_refuse_as_the_instance, #366, #384).
+    As an instance stores an edit, a write keeps a string or external-id
+    value, in a statement, a qualifier or a reference, cleaned up
+    (_cleaned_up, in NFC), a monolingual text as it was sent, and a label,
+    a description or an alias trimmed and cleaned up (_kept_term, #384,
+    #403): an empty one is gone, and so is a repeated alias (_as_stored).
+    As an instance's API serves an item, every text in a copy is cleaned
+    up, and so in NFC, monolingual text included (#335, #349, #403;
+    _as_served). `sent` keeps each write's item as the writer sent it. As
+    an instance does, a write that sends a text Wikibase does not hold is
+    refused whole, and changes nothing (_refuse_as_the_instance, #366,
+    #384).
 
     Unlike an instance, the store's round trip through `get_json` and
     `from_json` ignores WikibaseIntegrator's `remove` flags: a statement
@@ -1598,31 +1611,18 @@ class DetachedItems(FakeItems):
                 if statement.id is None:
                     statement.id = f"{item.id}${next(self._statement_ids)}"
             self.sent.append(item.get_json())
-            self.store[item.id] = self._copy(item)
+            self.store[item.id] = self._copy(item, _as_stored)
             return item
 
         item.write = write
         return item
 
-    def _copy(self, item):
+    def _copy(self, item, form):
+        """A copy of `item`, its JSON document in the form `form` gives it
+        (_as_stored, _as_served)."""
         from wikibaseintegrator import WikibaseIntegrator
 
-        # an instance gives every text back in NFC, and keeps a term
-        # trimmed
-        data = _in_form(item.get_json(), "NFC")
-        for kind in ("labels", "descriptions"):
-            terms = data.get(kind, {})
-            for language, term in list(terms.items()):
-                term["value"] = _kept_term(term["value"])
-                if not term["value"]:
-                    del terms[language]
-        for language, aliases in data.get("aliases", {}).items():
-            kept = {}
-            for alias in aliases:
-                value = _kept_term(alias["value"])
-                if value:
-                    kept.setdefault(value, dict(alias, value=value))
-            data["aliases"][language] = list(kept.values())
+        data = form(item.get_json())
         data["lastrevid"] = self.writes
         for statements in data.get("claims", {}).values():
             for statement in statements:
@@ -1642,7 +1642,48 @@ class DetachedItems(FakeItems):
         return self._bound(WikibaseIntegrator().item.new())
 
     def get(self, qid):
-        return self._copy(self.store[qid])
+        return self._copy(self.store[qid], _as_served)
+
+
+def _as_stored(data: dict) -> dict:
+    """An item's JSON document `data`, as a write sends it, as Wikibase
+    stores it: each string or external-id value, in a statement, a
+    qualifier or a reference, cleaned up (_cleaned_up), a monolingual text
+    as it is sent, and each label, description and alias as Wikibase keeps
+    it (_kept_term), an empty one dropped, and a repeated alias too."""
+    data = copy.deepcopy(data)
+    for kind in ("labels", "descriptions"):
+        terms = data.get(kind, {})
+        for language, term in list(terms.items()):
+            term["value"] = _kept_term(term["value"])
+            if not term["value"]:
+                del terms[language]
+    for language, aliases in data.get("aliases", {}).items():
+        kept = {}
+        for alias in aliases:
+            value = _kept_term(alias["value"])
+            if value:
+                kept.setdefault(value, dict(alias, value=value))
+        data["aliases"][language] = list(kept.values())
+    for statements in data.get("claims", {}).values():
+        for statement in statements:
+            for snak in _snaks(statement):
+                datavalue = snak.get("datavalue") or {}
+                if datavalue.get("type") == "string":
+                    datavalue["value"] = _cleaned_up(datavalue["value"])
+    return data
+
+
+def _as_served(value):
+    """`value`, a JSON document as Wikibase stores it, as its API gives it
+    back: every string in it cleaned up (_cleaned_up), and so in NFC."""
+    if isinstance(value, str):
+        return _cleaned_up(value)
+    if isinstance(value, dict):
+        return {key: _as_served(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_as_served(item) for item in value]
+    return value
 
 
 class FakeWiki:

@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import example_universe as u
+from tests.fixtures.records import record_answer
 from tests.unit.stage_counts import disagreement
 from tests.unit.test_no_wiki_before_write import (  # noqa: F401
     build_deck,
@@ -107,7 +108,12 @@ class Corpus:
         (self.folder / name).write_text(u.GEDCOM_FIXTURE.read_text() + note)
 
     def sha1(self, name: str) -> str:
-        return sha1((self.folder / name).read_bytes())
+        """The SHA-1 of a file of the folder, or of an image a PDF places,
+        which the engine is shown as the file named for its SHA-1."""
+        path, stem = self.folder / name, Path(name).stem
+        if not path.exists() and re.fullmatch(r"[0-9a-f]{40}", stem):
+            return stem
+        return sha1(path.read_bytes())
 
     def about(self, prompt: str) -> str | None:
         """The file whose transcription the prompt holds, told by the
@@ -194,7 +200,7 @@ class Engine:
         if self.fakes.hook is not None:
             self.fakes.hook(what, name)
         if what == "vision":
-            return corpus.texts[name]
+            return record_answer(corpus.texts[name])
         if what == "critique":
             return '{"done": true, "findings_emitted": 0}'
         person = {"id": "e1", "label": "Eugen Löbig", "kind": "human"}
@@ -972,6 +978,45 @@ class TestControl:
         assert (run / "run.json").read_bytes() == before
         assert command(tmp_path, corpus, fakes, resume=run.name) == EXIT_OK
         assert started(run, invocation=-1) == [(stone, "critique")]
+        assert statuses(run) == {DONE}
+
+    def test_a_new_process_waits_on_no_pause_of_an_earlier_one(
+        self, tmp_path, fakes
+    ):
+        """A pause the anomaly checks asked for in an earlier process, whose
+        timer ended with it, never holds a new process: the new process's
+        start marker voids every request before it, and only a driver's
+        own next invocation, in the same process, carries any. So no slice
+        waits on a pause that no timer watches (#432)."""
+        corpus = small(tmp_path)
+        with pytest.raises(KeyboardInterrupt):
+            command(tmp_path, corpus, fakes, driver=CutShort)
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        RunDir(run).request(
+            "pause",
+            stage="critique",
+            by="anomaly",
+            reason="call-failures: 3 of 5",
+            check="call-failures",
+        )
+        waits = Waits()
+        assert (
+            command(
+                tmp_path,
+                corpus,
+                fakes,
+                resume=run.name,
+                clock=waits.clock,
+                sleep=waits.sleep,
+            )
+            == EXIT_OK
+        )
+        assert waits.waited == []
+        assert RunDir(run).control().stopped(stage="critique") is None
+        assert not [r for r in read_jsonl(run / CONTROL) if r.get("carried")]
+        assert started(run, invocation=-1) == [
+            (corpus.sha1(STONE), "critique")
+        ]
         assert statuses(run) == {DONE}
 
     def test_the_stops_in_force_are_those_since_a_start(self, tmp_path):

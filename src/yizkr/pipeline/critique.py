@@ -30,6 +30,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from yizkr.claims import (
+    ArtifactRef,
     Claim,
     ClaimBatch,
     EntityRecord,
@@ -66,10 +67,12 @@ CATEGORIES: dict[str, str] = {
         "MOTHER, FATHER, CHILD, INFORMANT, BRIDE, GROOM, WITNESS"
     ),
     "kinship_term_alias": (
-        'a kinship term recorded as an alias ("my husband", "our great '
-        'grandmother", "Oma", "Nana Maisie"): it is not a name; suggest '
-        "`relative` + `kinship_type` (a literal kinship term) or "
-        "`referred_to_as` (a courtesy or pet name), NOT an alias (ADR-0018)"
+        "a kinship term or other relational appellation recorded as an "
+        'alias ("my husband", "our great grandmother", "Oma", "Nana '
+        'Maisie", "Bubele"): it is not a name; suggest `relative` + '
+        "`kinship_type` (a literal kinship term), a marriage (a spousal "
+        "term) or `referred_to_as` (any other relational appellation), NOT "
+        "an alias (ADR-0018)"
     ),
     "deictic_alias": (
         'a deictic or generic reference recorded as an alias ("the '
@@ -92,8 +95,8 @@ CATEGORIES: dict[str, str] = {
         "a claim whose relation takes a kind its value is not (ADR-0031: "
         "the relation decides the kind): a relation of place (place of "
         "birth, death or burial, residence, location) takes a place; a "
-        "relation of agency (employer, educated at, member of) takes an "
-        "organization"
+        "relation of agency (issued by, carried out by, employer, educated "
+        "at, member of) takes an organization"
     ),
     "implausible_value": (
         "a value the source is unlikely to say as read, such as a birth "
@@ -225,7 +228,9 @@ def _entities_block(batch: ClaimBatch) -> str:
 
 def _ref_id(ref: Any) -> str:
     """A reference as the prompt lists it: its local id, QID or
-    vocabulary key."""
+    vocabulary key, or a document subject by its content key."""
+    if isinstance(ref, ArtifactRef):
+        return str(ref)
     for name in ("local_id", "qid", "key"):
         value = getattr(ref, name, None)
         if value:

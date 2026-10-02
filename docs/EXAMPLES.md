@@ -157,6 +157,7 @@ comment above it.
 | Spouses and parents, 3+ generations | four generations, Eugen to Nicholas; marriages in 1859, 1905, 1938, 1942 and 1947, and two undated ones |
 | Divorce | Leopold and Agnes, married on 8 Feb 1947 and divorced on 2 Jan 1957 by the Landgericht Rekau (the judgment); the 1984 tree says *div. 1957*. The spouse statements carry it as `end_time`, the GEDCOM export as `DIV` |
 | Kinship terms and courtesy titles (ADR-0018) | literal: *Dein Vater* (the postcard, from Klara's view); *Dad*, *Aunt Pünktchen*, *Dad's cousin Leopold* (the interview, from Nicholas's view). Each is recorded as the kinship, never as `referred_to_as`: *Dein Vater* and *Dad* as `father`; the other two as `relative` + `kinship_type`, with the referent as subject and the ego as object: `Klara —relative→ Nicholas ; kinship_type = "aunt"` (and *Pünktchen* is her `nickname`) and `Leopold —relative→ Gustav ; kinship_type = "cousin"` (the ego is *Dad*). Courtesy: *Nana Maisie* (the interview), a neighbour who is no relation: `referred_to_as`, never `relative` |
+| Absolute and relational names (ADR-0018) | absolute, what the person is called by anyone: *Peppi*, *Gustl*, nicknames (an alias and a record nickname); relational, what one person calls another or a name through a relation: *Nana Maisie*, *Рудольфиха* (above), and *Bubele*, ADR-0018's pet name a grandmother gives a grandchild, which no source in the universe uses: `referred_to_as`, never an alias or a record nickname |
 | Family firm (ADR-0012) | Hutmacherei zum Blauen Hut, hat makers, founded 1863 (*gegr. 1863*), at Brunnenring 35, owned by Sebastian in 1912, after his father's death in 1909 (*Inh. Sebastian Löbig*), gone *before 1926* |
 | Other agents and kinds | Standesamt Flörburg, Städtische Realschule Flörburg, Wiedergutmachungsamt Peiltal, Landgericht Rekau, Photograph Brüsrich, the Kaldovsky district civil registry, the Snylsjum brickworks (organisations); RMS Flund (vessel); occupations *Hatter*, *Master hatter* and *Fitter* (*слесарь*) |
 | Street address and containment (ADR-0009) | Brunnenring 35 → Brunnenring → Flörburg → Kreis Peiltal → Hesse → Germany; 8 Hawthorn Road → Hawthorn Road → Stupfield → Victoria → Australia; Koshnovka → Kaldovsky District → Chadsk Oblast → Russia; Snylsjum → Drakeradiel → Friesland → Netherlands |
@@ -222,7 +223,14 @@ its own. `engine.RecordedEngine` answers every call the stages before
 write make of them, as a faithful model would, from the universe's own
 assertions for each source (`answers.py`), with one deliberate mistake: it
 reads the family history's *'50* as 1850, and reads it right once the
-chunk prompt carries a rule about two-digit years.
+chunk prompt carries a rule about two-digit years. Its answers take the
+form the extraction prompts ask for (ADR-0035, ADR-0036; #407): each
+person, place and organisation of a manifest has its mention record (the
+postcard's writer, whom it names only as *Dein Vater*, is labelled so,
+with the status `kinship`); each event's participant has a role; and each
+of the universe's spouse assertions is answered as a marriage whose
+couple take part in it as spouses, started by a wedding where the source
+dates the start.
 `tests/unit/test_fixture_corpus.py` takes the corpus through whole scratch
 runs under a refusing wiki, and asserts what must come of each stage and
 each trap, with no gold set. Past the driver it holds the run report

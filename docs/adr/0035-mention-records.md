@@ -11,6 +11,55 @@ grammar is resolved; and the review sheet's `critique_notes` puts each
 finding on exactly one row (its claim's, else the first row naming its
 entity), not on every row of its subject.
 
+Amended by #407 (2026-09-29): the extraction prompts ask for records,
+roles, kinship classes, markers as claims, civil status, unions and
+judgement notes (§5). A claim names its own document as subject by an
+`artifact` reference, the source's own content key; validation takes one
+only on a property the manifest marks `document_subject` (`issued_by`,
+§3.4), and only naming the claim's own source, and refuses a claim of
+such a property about anything else, as a counted reject. The writer
+checks the same rule itself, since `yizkr write` takes a batch without
+validating it, refusing and counting a claim that breaks it, and
+resolves a document subject to the artifact item as it resolves the
+source. A kinship term other than a cousin's with no "great-" has degree
+0 (§3.3). A note's categories are written `kind`, `relation`,
+`date_reading`, `identity` and `other`, each its manifest item's key
+less `judgement_`. An entity's record or note that fails validation is
+set aside and counted in `coverage.json` (`records`, `notes`), and a
+claim whose note fails is a counted reject.
+
+Amended by #420 (2026-09-29): the run report sums each extraction's
+`coverage.json` records (given, by status, the `unsplit` forms they
+hold, recordless, the records set aside, and the reasons records were
+set aside by, by category: a record that parses, of its entity's kind,
+gives one for each problem found in it, so these count reasons, not
+records) and notes (by category, and those set aside, each counted there
+as one `note` reason), and counts apart, never as zero, an extraction
+whose coverage holds none: one that fell back to line ranges, and one
+whose coverage predates these counts (or holds only one half of them).
+`coverage.json`'s `records` now also carries `set_aside_records`, the
+records set aside, once each, and `unsplit_forms`, the `unsplit` forms
+in the records given (§5); a coverage written before them still counts
+its other figures, and the report counts apart, never as zero, the
+extractions that lack each. The notes written are the writer's count,
+and wait for #410, which writes judgement notes to the wiki.
+
+Amended by #389 (2026-09-29): the transcription check, the stream
+assembly and language detection no longer read wording (§10): the check
+reads the transcription record (ADR-0037), and no wording fails a
+record, so its English signatures only flag one; the answer is the text
+after the last tool result; and detection reads a text outside its
+editorial marks.
+
+Amended by #434 (2026-10-02): a record nickname is a name the source
+gives as what the person is called, by anyone, and so also an alias; a
+name the source gives as what one person calls another, or that names
+the person through a relation but is no literal kinship term, is
+ADR-0018's `referred_to_as`, never an alias and never a record nickname
+(§2.1). A nickname that is a form of a given name is also that given
+name. The `courtesy` status is a courtesy title or other relational
+appellation that is no literal relation.
+
 Amended by #409 (2026-09-29): clustering keys on the records as §7 says,
 and settles what §7 leaves open. A person's kin agree only on a key a
 record gives (never on a recordless kin's name), and the couple of a
@@ -338,8 +387,14 @@ to `toponym`, and a surname's type to `other`.
   The postcard's lone "Gustl" never spells the full form, so it gets
   none, and its written form stands in. A full name is its own standard
   form. A standard form is never a translation, and an initial has none.
-  A pet name that stands for no given name ("Peppi", "Muckel") is a
-  nickname, with no standard form.
+  A name the source gives as what the person is called, by anyone, is a
+  nickname. One that is a form of a given name ("Gustl", "Gus") is also
+  that given name, with its standard form where the document supports
+  it; one that stands for no given name ("Peppi", "Muckel") has no
+  standard form. A name the source gives as what one person calls
+  another, or that names the person through a relation but is no
+  literal kinship term ("Bubele", "Nana Maisie", "Рудольфиха"), is no
+  nickname: it is `referred_to_as` (ADR-0018), never an alias.
 - **A patronymic** is a name part of its own, never a surname. The
   relation it states is a `father` claim where the source names the
   father (§3.1). (An example follows when #400 adds a patronymic to the
@@ -359,9 +414,9 @@ to `toponym`, and a surname's type to `other`.
   - `role`: a role or form-field label, such as INFORMANT or MOTHER
     (ADR-0013);
   - `kinship`: a literal kinship term (ADR-0018 (A));
-  - `courtesy`: a courtesy title or pet appellation that is no literal
-    relation, such as "Nana Maisie" where a document names her no other
-    way (ADR-0018 (B));
+  - `courtesy`: a courtesy title or other relational appellation that
+    is no literal relation, such as "Nana Maisie" where a document names
+    her no other way (ADR-0018 (B));
   - `placeholder`: the source's stand-in for a name it does not know,
     such as "N.N. Löbig";
   - `description`: a label the model composes for someone the document
@@ -716,7 +771,8 @@ run's note, or none. Earlier notes stay, never updated or removed.
   subject's rows, as `critique_notes` does. An edited note changes the
   row's `claim_id` (`pipeline/review.py:133-147`), so the sheet fails
   loudly.
-- The run report counts notes by category, and notes written, as
+- The run report counts notes by category, and notes written (the
+  writer's count, with #410, which writes the notes to the wiki), as
   aggregates (docs/RUN_REPORT.md).
 - The non-privileged export (`public.nt.gz`) drops both note snaks, in
   any form: `backup.DROPPED_PROPERTIES` names both properties (#363;
@@ -803,7 +859,12 @@ surname types, roles, classes and note categories. Beyond the schema:
 **Omissions and inconsistencies are flagged, never repaired by parsing.**
 An omitted optional field is empty. A structure that fails validation is
 set aside, never the whole manifest: the entity keeps its label, aliases
-and kind, and the reason is counted in the extraction's `coverage.json`.
+and kind, and the reason is counted in the extraction's `coverage.json`
+(`records.set_aside`, by category), as is the record
+(`records.set_aside_records`, once however many reasons it gives); the
+same `records` counts the records given, by status
+(`records.by_status`), the `unsplit` forms they hold
+(`records.unsplit_forms`) and the recordless mentions.
 Such a mention, like one of a batch without a manifest (the line-range
 fallback of ADR-0007), is *recordless* (§7, rule 1), and is counted in
 the identity map's summary and the run report. The capitalised-token
@@ -1053,14 +1114,14 @@ into "fix first, and measure in run 1": under the pre-baseline exception
   any other language gives no claim and a warning, as now.
 - #361's date thresholds (`circa-years`, `max-corroborating-years`):
   numbers, not wording.
-- The transcription check knows failure text by English phrases
-  (`pipeline/transcription_check.py:172-528`), so a refusal worded
-  otherwise passes, and the stream assembly keeps an engine's narration
-  ahead of its answer (`pipeline/llm.py:2475-2500`).
-- Language detection reads a transcription with its editorial marks
-  (`pipeline/transcribe.py:212-214`, `pipeline/language.py:109-128`),
-  which can mislead it on a short text, and the language anomaly checks
-  read its result (`pipeline/anomalies.py:424-489`, 649-666).
+- The transcription check's English phrases only flag a transcription
+  (ADR-0037, #389): it fails on the record's structure, so a refusal in
+  any language, which is not the record, fails. The stream assembly takes
+  the answer after the last tool result.
+- Language detection reads a text that has no transcription record
+  outside its editorial marks, and a vision transcription's language
+  comes from its record (ADR-0037, #389); the language anomaly checks
+  read the result.
 - The critic's axis is read from its target's grammar
   (`pipeline/critique.py:26-41`, `pipeline/orchestrate.py:1555-1579`,
   `pipeline/report.py:942-950`): a grammar the prompt sets, not a

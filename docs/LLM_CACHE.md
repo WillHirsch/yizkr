@@ -47,7 +47,7 @@ up to date once per run, each after the view it is made from:
 | View | Made by (stage, role) | Made from |
 |---|---|---|
 | `transcription.json` | `transcription`, `transcribe` | the correction `transcription.corrected.txt`, when there is one; otherwise the source, routed (vision, text file, slide text), a PDF with a text layer page by page (below) |
-| `batch.json` | `extraction`, `extract` (a GEDCOM file: `gedcom`) | `transcription.json`, by its canonical content (text, language, and the artifact's key, the SHA-1 of its media); a GEDCOM file: the source alone |
+| `batch.json` | `extraction`, `extract` (a GEDCOM file: `gedcom`) | `transcription.json`, by its canonical content (text, language, the artifact's key, the SHA-1 of its media, and the transcription record's fields, ADR-0037: the document's class, and each page's place in the text, printed page number, status, languages and notes); what stays out is its provenance (the engine, each page's method and engine) and the check's flag; a GEDCOM file: the source alone |
 | `critique.json` | `critique`, `critique` | `batch.json`, by its canonical content (without its run stamps) |
 
 The source is not recorded: the directory is kept for one source's bytes,
@@ -65,9 +65,15 @@ rejected and the engine is asked (Rejection, below). When the batch made
 from the new transcription differs, the reviews of the old one are moved
 aside, as below. A curator's correction and slide text are never checked.
 A PDF read page by page (below) is checked again where the vision engine
-read it: each page the engine read, and the transcription of each image
-the document's directory keeps. Text read from a text layer is the
-document's own, read without an engine, and is never checked. An image's
+read it: each page the engine read, with the one-page record its stored
+fields make, as its reading was checked when it was made (a page called
+blank needs no text), and the transcription of each image the
+document's directory keeps. Text read from a text layer is the
+document's own, read without an engine, and is never checked. A reused
+transcription that passes carries the flag of the check made now, as
+does an excerpt made from a kept image reading: the flag is no part of
+its content, so a change to the flag tier reaches every stored
+transcription without making one again. An image's
 transcription that the check now fails is moved aside as
 `<sha1>.transcription.superseded-<n>.json` when the transcription is made
 again. `--refresh ROLE` makes the role's views again, in place, current or not
@@ -132,8 +138,14 @@ image 1" for its places, with the pages it is on), and each image's own
 transcription, `derived-media/<sha1>.transcription.json`, which names the
 image by its SHA-1. An image whose reading fails the transcription check
 has none, and the transcription stage's attention says so; the PDF's own
-text goes on to its batch. Nothing extracts the images' transcriptions
-yet, so no claim cites an image, and the write registers none (ADR-0008).
+text goes on to its batch. Each image's transcription is then taken as a
+document of its own, an excerpt, without a call: its extraction and
+critique make the calls any document's do, and cite the image; the write
+registers the images (ADR-0008, as amended by #397). A reused
+transcription is made again when an image it marks has no reading of its
+own, when the record of its images or their bytes are not kept whole, or
+when the never-ingest list names an image it marks: the cache answers
+what it answered before, and the image with no reading is asked again.
 The readings are made in a scratch folder of their own, and nothing is
 written to the document's directory until the stage keeps them. The call
 estimate takes the stage through the same code: it counts a call for each
@@ -287,7 +299,9 @@ A key is the SHA-256 of the canonical JSON of its components:
 | `epoch` | The role's epoch: 0 unless `--epoch ROLE=N` says otherwise |
 
 The role itself is not a component: two roles making the same call share
-its entry. A claude CLI update changes `config`, and so every key.
+its entry. A claude CLI update changes `config`, and so every key. The
+transcription prompt names the manifest's artifact classes (ADR-0037), so
+a change to them changes the prompt, and so every transcription key.
 
 **What a key does not see.** Anything added on the engine's side of the
 call. The claude CLI fetches account data from the server at every start,

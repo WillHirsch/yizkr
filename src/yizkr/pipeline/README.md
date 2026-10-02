@@ -77,7 +77,8 @@ depends on it (make-style, by content hash; modification times are never
 read).
 
 A transcription that fails the transcription check (below), such as a
-tool-failure message or a refusal instead of the page's text, fails its
+tool-failure message, or an answer that is not the transcription record
+(a refusal in place of the page's text, say), fails its
 document the same way: the reason is recorded as the `error` in the
 document's `state.json` and in the run's events, and no transcription is
 kept. The check runs on every vision and text-file transcription a run
@@ -224,9 +225,13 @@ re-running one step in isolation — but for a normal ingest you only ever run
 `ingest run` and fill the two gates above.
 
 - **register** — uploads media (idempotent by content; a wiki file is
-  never overwritten or stored twice, ADR-0010), ensures the
-  artifact item (`instance of`, `media file`, `media SHA-1`) and optional
-  page fragments (`part of` + page qualifier). Statement provenance:
+  never overwritten or stored twice, ADR-0010) under a name in the form
+  MediaWiki takes as it is (every letter kept, `-` for each character it
+  refuses, cut to fit its 240-byte limit with room for a content tag;
+  ADR-0010 as amended by #373), ensures the artifact item
+  (`instance of`, `media file`, `media SHA-1`; its description cut to
+  the 250 characters Wikibase takes) and optional page fragments
+  (`part of` + page qualifier). Statement provenance:
   `stated in → the artifact itself` (see docs/MODELING.md, "Artifacts
   and registration"). Claims cite an artifact by the SHA-1 of its media,
   never by QID, and the write resolves that key through the `media
@@ -250,8 +255,18 @@ re-running one step in isolation — but for a normal ingest you only ever run
   and reported, not recorded. A PDF read page by page (below) records
   the images placed within its pages in the same record, by its
   transcription stage, each named for its places ("page 6, image 1")
-  with the pages it is on; they are not registered, since no claim cites
-  them yet.
+  with the pages it is on; the write registers them after the PDF, each
+  `part of` it once per page (ADR-0008).
+- **excerpts** — each image a PDF places within a text-layer page, with
+  a reading of its own that passes the check, is a document of its own
+  (kind `excerpt`, `ExcerptRun`), in `excerpts/<sha1>/` of the state
+  directory: its transcription is that reading, taken without a call,
+  and its extraction and critique cite the image. The same image in
+  several PDFs is one excerpt; one whose bytes a document of the corpus
+  has, or that the never-ingest list names, is none. `ingest run` takes
+  excerpts after the folder's documents; the scratch driver as their
+  PDF's transcription ends, the first as the excerpts' canary. An
+  excerpt's write registers each PDF that places it, with its images.
 - **transcribe** — engines: `llm` (LLM-vision, ADR-0004), `textfile`
   (wrap an existing/manual transcription; keeps the pipeline fully
   local), `htr` (a Transkribus-style platform adapter, dropped as LLM
@@ -280,6 +295,23 @@ re-running one step in isolation — but for a normal ingest you only ever run
   embed with its own, never the host's, so a page reads and renders alike
   on every host and in every run. The standalone `ingest transcribe
   --engine llm` reads a PDF whole.
+- **transcription record** — the vision engine answers the transcription
+  prompt with a record (ADR-0037,
+  `yizkr.pipeline.transcription_record`): the document's class, from the
+  manifest's artifact classes or `unclassified`, and per page the page
+  number printed on it, a status (`transcribed`, `blank`, `illegible`,
+  `not-a-document-page`), its text with the editorial marks
+  (`[illegible]`, `[?]`, `[redacted]` where text is blacked out or
+  covered), the languages it is written in, and notes. The transcription
+  view keeps the record's fields on its `pages` (the page's physical
+  index stays `page`, and the printed number is `printed_page`) and the
+  class as `document_class`; its text opens each page with a `[Page N]`
+  marker. The document's language hint is the language that holds most
+  of the record's text. `Transcription.printed_pages()` gives the printed
+  page numbers by physical index. A PDF read page by page fills the same
+  fields for each page: a vision page from its reading's record, a
+  text-layer page as transcribed, and a page with nothing to read as
+  blank.
 - **transcription check** — runs on the output of the `llm` and
   `textfile` engines (in `ingest run`, the vision and text-file methods)
   before anything uses it, in `ingest run` and `ingest transcribe`
@@ -291,28 +323,36 @@ re-running one step in isolation — but for a normal ingest you only ever run
   without asking the engine again for one it passes. A stored view it
   now fails is moved aside and made again, and a cached answer it fails
   is rejected in the cache and asked for once more (docs/LLM_CACHE.md).
-  It fails the document when the output
-  matches a tool-failure or refusal signature (the PDF renderer missing,
-  a CLI or API error, "I can't transcribe this document"), or when a
-  document of two or more pages yields fewer than 3 letters or digits per
-  page. Editorial marks such as `[illegible]` don't count, and a single
-  image has no floor, since a photograph may carry no text at all. A
-  note that a printed email or letter could also hold ("I couldn't open
-  the PDF", "I can't transcribe this", "unable to comply with your
-  request") counts only in the engine's own voice: opening the output, a
-  page section (after a "Page 2" or "[Page 2]" heading) or a line
-  labelled "Note:", "NB:", "Error:" or "Warning:", or naming the page it
-  skipped, and not about the correspondents' own attachment, writing or
-  request ("the attachment you sent", "the old handwriting on the back of
-  the photograph", "your request for copies of the register"). A page
-  named by number or place as the subject or object of a failed read
-  ("Page 2 could not be read", "I couldn't read the remaining pages")
-  fails wherever it stands; other wordings count only where a note
-  opens. The reason is recorded and the failed output is never passed
-  on. A PDF read page by page is checked where the vision engine read
-  it, each page and each image apart, as a single image: a page that
-  fails fails the document, while an image that fails is left without
-  a transcription of its own, which the stage's attention reports. Text
+  It reads the record, not the wording, and fails the document only on an
+  unambiguous signal: a tool error the engine's stream reports, an
+  answer the engine stopped at its output limit, an answer that is not
+  the record (a page without a status among the ways; a refusal in any
+  language), a record with fewer pages than the media (or, for a PDF
+  read whole, more), a blank output, fewer than 3 letters or digits per
+  page the record calls transcribed in a document of two or more pages,
+  and, in a text with no record only, a tool token no source writes (the
+  PDF renderer missing, a traceback, an API error) or an output that is
+  wholly the engine's announcement ("Let me read the image."). Inside a
+  record every signature only flags, and the flag tier reads each page's
+  notes too (ADR-0037 §3). A record's near-miss shapes (a printed page
+  number given as a number, null text, a code in capitals) are
+  normalised, not refused. Editorial marks don't count, and a single
+  image has no floor, since a photograph may carry no text at all. The engine's phrases in English ("I couldn't
+  open the PDF", "I can't transcribe this", "unable to comply with your
+  request") only flag the output, since a printed email or letter could
+  hold them too: the transcription goes on, carries the flag (`flag`) and
+  raises a `transcription-flag` alert (docs/ANOMALIES.md). Such a phrase
+  counts only in the engine's own voice: opening the output, a page
+  section (after a "Page 2" or "[Page 2]" heading) or a line labelled
+  "Note:", "NB:", "Error:" or "Warning:", or naming the page it skipped,
+  and not about the correspondents' own attachment, writing or request
+  ("the attachment you sent", "the old handwriting on the back of the
+  photograph", "your request for copies of the register"). The reason of
+  a failure is recorded and the failed output is never passed on. A PDF
+  read page by page is checked where the vision engine read it, each
+  page and each image apart, as a single image: a page that fails fails
+  the document, while an image that fails is left without a
+  transcription of its own, which the stage's attention reports. Text
   read from a text layer is the document's own and is never checked.
 - **extract** — engines: `llm` (prompts with the claim JSON Schema and
   the uncertainty rules; output is schema- and manifest-validated

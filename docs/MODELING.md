@@ -15,21 +15,27 @@
   in aliases. English labels are the bootstrap's idempotency key:
   unique per entity kind, and renames must happen on the wiki and in
   the manifest together.
-- Wikibase keeps a label, a description or an alias trimmed: each run
-  of control characters in it (a line feed or a tab among them) made one
-  space, the separators at either end dropped (the line and paragraph
-  separators, U+2028 and U+2029, among them), in NFC, and at most 250
-  characters long. It refuses a term that still holds a line or
-  paragraph separator inside, and an item whose label and description
-  are the same. The writer sends each term it makes in that form, with a
-  line or paragraph separator inside made a space too, and finds an item
-  by its label in it, so a label given in another form finds its item
-  again. A term still over 250 characters is cut as a long locator is
-  (below), with the digest of the whole, so that two labels that agree
-  up to the cut stay two items' labels, and the run item's label, which
-  holds the model's identifier, keeps its batch's fingerprint in the
-  digest. An entity whose description would be its label gets none, with
-  a warning (#384).
+- Wikibase keeps a label, a description or an alias trimmed, then
+  cleaned up, then in NFC: each run of control characters in it (a line
+  feed or a tab among them) made one space, the separators at either end
+  dropped (the line and paragraph separators, U+2028 and U+2029, among
+  them), then the noncharacters U+FFFE and U+FFFF made U+FFFD, and at
+  most 250 characters long. It refuses a term that still holds a line or
+  paragraph separator inside, or begins or ends with a Mongolian vowel
+  separator (U+180E), and an item whose label and description are the
+  same. The writer sends each term it makes in that form, with a line or
+  paragraph separator inside made a space too (a run of them and of
+  control characters is one space) and a Mongolian vowel separator at
+  either end dropped, and finds an item by its label in it,
+  so a label given in another form finds its item again; the registrar
+  compares and sets an artifact's title by the same rule, which it takes
+  from the writer (#369, #403). A term still over 250 characters in that
+  form is cut as a long locator is (below), with the digest of the whole,
+  so whitespace around a term never counts towards the limit, two labels
+  that agree up to the cut stay two items' labels, and the run item's
+  label, which holds the model's identifier, keeps its batch's
+  fingerprint in the digest. An entity whose description would be its
+  label gets none, with a warning (#384).
 - Schema-level statements (e.g. the subclass hierarchy) carry
   references too (ADR-0003): a `stated in` reference to the *model
   manifest* item, which represents `model/manifest.yaml` — the document that
@@ -117,9 +123,17 @@ and the judgement note's `judgement` and `judgement_note`) are marked
 `reference: true`: they are written only in a statement's references, so
 validation refuses one as a claim's or a qualifier's property, and no
 prompt offers it. A property may also be held back from the prompts with
-`offered: false` while it stays in the manifest and the bootstrap:
-`issued_by` is, since a claim has no way to name the document it comes
-from as its subject (ADR-0035 §3.4).
+`offered: false` while it stays in the manifest and the bootstrap. A
+property marked `document_subject: true` (`issued_by`) takes the
+claim's own source document as its subject, named by an `artifact`
+reference to the source's media, and no other subject; validation
+refuses such a subject on any other property, or naming another
+document, and a claim of such a property with any other subject
+(ADR-0035 §3.4). The writer checks the same rule itself, since `yizkr
+write` takes a batch without validating it against the manifest: it
+refuses such a claim before the first write, names it in its `refused`
+list and warns why, as it refuses a claim whose text the instance cannot
+hold.
 
 **A retired property** stays in the instance and takes no new claim: it
 accepts nothing, validation refuses every claim of it, and no prompt that
@@ -137,10 +151,13 @@ Every statement carries at least one reference with:
   canvas+xywh URI (W2)
 - optional short transcription excerpt supporting human verification,
   tagged with the language it is written in (BCP-47). `yizkr ingest run`
-  detects each document's language from its transcription by default
-  (`--language auto`, ADR-0015), so a mixed-language folder tags each
-  excerpt correctly; the extractor may still tag individual excerpts in
-  their own language (a quoted passage in another tongue)
+  takes each document's language from its transcription by default
+  (`--language auto`, ADR-0015): from the transcription record the vision
+  engine fills, which names the languages each page is written in
+  (ADR-0037), and otherwise by detection from the text outside its
+  editorial marks. So a mixed-language folder tags each excerpt
+  correctly; the extractor may still tag individual excerpts in their own
+  language (a quoted passage in another tongue)
 
 Machine-written statements add a second reference:
 - inferred from extraction run → extraction-run item
@@ -161,26 +178,35 @@ claims, from an entity manifest or a ref, follow ADR-0007 instead.
 Wikibase holds at most 400 characters in the text of a string,
 external-id or monolingual text value, a reference's page number and
 region among them, and no text value with a line break or a tab in it,
-or whitespace at either end (it changes a vertical tab or a form feed in
-a string value into U+FFFD, and refuses one in monolingual text); it
-refuses the whole edit that sends a text it does not hold. The writer
-checks each text in NFC, the form the instance keeps it in (#366, #384).
-A page number, region or excerpt goes on one line: whitespace at either
-end is dropped, a line break inside becomes " | " and a tab a space, and
-one of whitespace alone is left out. One still over the limit is cut at
+or whitespace at either end; it refuses the whole edit that sends a text
+it does not hold. It also cleans a text up, making each C0 control
+character but the tab, the line feed and the carriage return, and each
+of the noncharacters U+FFFE and U+FFFF, U+FFFD: in a string or
+external-id value before it checks and stores it (so it changes a
+vertical tab or a form feed there, and refuses one in monolingual text),
+and in every text its API gives back, monolingual text included. The
+writer checks each text in NFC, the form the instance keeps it in, and
+sends none that the instance would give back changed (#366, #384,
+#403). A page number, region or excerpt goes on one line: whitespace at
+either end is dropped, a line break inside becomes " | ", a tab a space
+and each other character the instance cleans up U+FFFD, as the instance
+gives it back, so a re-run finds its reference block; one of whitespace
+alone is left out. One still over the limit is cut at
 a break between words and ends with " … sha1 " and the first 12 hex
 digits of the SHA-1 of the whole text: a locator only places the claim
 in its source, as an excerpt only helps a reader check it there, and the
 digest keeps two places whose locators or excerpts agree up to the cut
 two references. A claim whose own text, its value or a qualifier's, is
 over the limit, or holds a line break or a tab, or has whitespace at
-either end, is refused, never cut or changed, since that would alter
-what the source says: nothing of it is written, and the write's result
+either end, or holds a character the instance cleans up, is refused,
+never cut, trimmed or cleaned up, since that would alter what the source
+says: nothing of it is written, and the write's result
 names it by its claim id (its review-sheet id, unless the review
 corrected it), with a warning that says why (the writer's module
 docstring). Every other claim of the batch is written. An entity's type
 hint is free text, compared ignoring its spacing, so it goes with each
-run of whitespace in it as one space.
+run of whitespace in it as one space, and each character the instance
+cleans up as U+FFFD, and a re-run finds the statement written for it.
 
 Curator-attributed statements (a value correction from the review CSV)
 carry the `stated in → artifact` reference only:
@@ -216,6 +242,32 @@ artifact a new QID, changes neither.
 
 - W1: media are wiki files on the instance; the artifact item points at
   its file page via the `media file` (string) property (ADR-0004).
+- **A file's name is in the form MediaWiki takes as it is** (ADR-0010 as
+  amended by #373, after MediaWiki 1.45.4's source). A file is uploaded
+  under its own name, and a medium a container embeds under
+  `"<container title> <its name>"`: every letter kept, each character
+  MediaWiki refuses in a file name made `-` (`# < > [ ] { } |`, `: / \`
+  and the controls other than whitespace), as is the start of each
+  sequence it refuses (`%` and two hex digits, a character reference
+  such as `&amp;` or `&Сартина;`, `~~~`), each run of whitespace and
+  underscores one space, a `-` before a dot that would start a part
+  (`.jpg` is `-.jpg`), and the dot before each part but the last that
+  MediaWiki refuses as an extension made `-` (`Hutmacherei.com.pdf` is
+  `Hutmacherei-com.pdf`; a refused last part, the file's type, is left,
+  and MediaWiki refuses the upload). A name these rules leave nothing of
+  leaves the title as the name, or, with none, is `-`: never empty. At
+  most 231 bytes in UTF-8: MediaWiki's 240, less the 9 a content-tagged
+  name adds. A longer name is cut, never between a letter and its
+  combining marks, with "…" where the cut is: the title
+  first, so the medium's own name stays whole; then the title left out,
+  so a name that fits on its own is never cut; and then the name before
+  its extension. A `media file` names the file as MediaWiki stores it,
+  its first letter a capital.
+- An artifact's description is put in the stored form, then cut,
+  ending in "…" and never between a letter and its combining marks, to
+  the 250 characters Wikibase takes: the one registration writes, ``"ingested
+  by `yizkr ingest run` from <file name>"``, passes that for a long file
+  name (ADR-0010 as amended by #373).
 - Registrar statements (`instance of`, `media file`, a fragment's
   `part of` + page qualifier) are referenced `stated in -> the artifact
   item itself`: an artifact asserts its own kind and composition by
@@ -274,10 +326,11 @@ artifact a new QID, changes neither.
 - Labels stay unique per kind: when a title is already another item's
   label, the new artifact's label is disambiguated with a short content
   tag (`"<title> [<sha1[:8]>]"`) rather than colliding. Titles are
-  compared in the form Wikibase stores labels in (separators and control
-  characters trimmed at either end, each run of control characters
-  inside made one space, then NFC), and one longer than the 250
-  characters Wikibase takes, as it is or once tagged, is refused. The tag
+  compared and set in the form Wikibase stores labels in, by the rule the
+  writer keeps labels by (above: trimmed, then U+FFFE and U+FFFF made
+  U+FFFD, then NFC; #369, #403), an artifact's description goes in that
+  form too, and a title longer than the 250 characters Wikibase takes,
+  as it is or once tagged, is refused. The tag
   is a stopgap until labels need not be unique for artifacts (#94), and
   which homonym bears it depends on registration order: nothing may key
   on an artifact's label, only on its `media SHA-1`.
@@ -300,12 +353,25 @@ artifact a new QID, changes neither.
 
 - An `organization` is an agent — a company, bank, committee, government
   body, school, or congregation. It is **distinct from `place`**: an
-  organization has a `location`, it is not one. Typed by primary role —
-  a source that treats an entity as an agent (employs, is deregistered,
-  helps, hires) makes it an organization; one that treats it as a
-  location (born at, died at, lives in) makes it a place. Dual-nature
-  entities (a hospital that is also a birthplace) pick their dominant
-  use in the document; genuine dual `instance of` is deferred.
+  organization has a `location`, it is not one. **The relation decides
+  the kind** (ADR-0031): a relation of place (born, died or buried at,
+  lives at, located at, deported to, held at) takes a place, and a
+  relation of agency (`issued_by`, `carried_out_by`, `employer`,
+  `educated_at`, `member_of`) an organization. So a camp, a prison, a
+  hospital or a school named only as where something happened is a
+  place, and one the source shows acting is an organization: the
+  registration card's Peiltal court prison, where Leopold was held, is a
+  place; the Landgericht Rekau, which divorces Leopold and Agnes, is an
+  organization. Where one source uses one institution both ways, it
+  gives two entities, a site and a body, linked by the organization's
+  `location`. The extraction prompts carry the rule, and validation
+  refuses a relation whose value is of a kind it does not accept.
+- `issued_by` (P2378) links a document to the organization that issued
+  it, such as the register office of a certificate. Its subject is the
+  document itself: a claim names it by the SHA-1 of its media, as its
+  source is named, and the writer writes the statement on the artifact
+  item (ADR-0035 §3.4). `carried_out_by` links an event to the
+  organization that carried it out, such as the court of a divorce.
 - `employer` (P108) links a person to an organization, orthogonal to
   `occupation`: what someone does (occupation, an occupation item) and
   whom they work for (employer, an organization item) are independent,
@@ -463,19 +529,27 @@ and reference the artifact itself or the producing run.
 - Unpacking is deterministic (documented ZIP+XML), never generative;
   only claim extraction from the slide text uses an LLM.
 - **A compilation's original excerpts are artifacts of their own**
-  (planned: ADR-0008 as amended by #289 lists what is still to do,
-  starting with #176). A compilation sets text of its own (a typed
-  translation, commentary) beside images of excerpts from the originals
-  it draws on: two witnesses of one text, which may disagree. An image
-  that a PDF places within one of its pages is a derived item like a
-  deck's: keyed by its SHA-1, `part_of` the PDF once per page it is on
-  (page-number qualified), and labelled "<title> — page <n>, image <k>".
-  An image that is a whole page, as a scanned page is, is that page.
-  A PDF with a text layer is read page by page, and each image placed
+  (ADR-0008 as amended by #289, #176 and #397). A compilation sets text
+  of its own (a typed translation, commentary) beside images of excerpts
+  from the originals it draws on: two witnesses of one text, which may
+  disagree. An image that a PDF places within one of its pages is a
+  derived item like a deck's: keyed by its SHA-1, `part_of` the PDF once
+  per page it is on (page-number qualified), labelled "<title> — page
+  <n>, image <k>" for its first place, and an `instance of` photograph.
+  An image that is a whole page, as a scanned page is, is that page. A
+  PDF with a text layer is read page by page, and each image placed
   within one of its text-layer pages has a transcription of its own
-  (ADR-0008 as amended by #176); until those transcriptions are
-  extracted, every claim read from a PDF cites the PDF, and is read from
-  its own text.
+  (ADR-0008 as amended by #176), which is extracted as a document of its
+  own, an excerpt, whose claims cite the image; the write registers the
+  image's item, after the PDF, before any claim that cites it (ADR-0008
+  as amended by #397). The same image in several PDFs is one item and
+  one excerpt; an image whose bytes a document of the corpus has is that
+  document. An image whose reading's record calls every page blank or
+  not a document page (a photograph with no writing, a colour chart) is
+  registered but is no excerpt; an illegible one is an excerpt, so that
+  a reader sees it was there. An excerpt's language and class are its
+  reading's record's (ADR-0037). An image placed within a page read by vision is read with
+  that page, as the compilation's.
 - A claim cites the witness that asserts it. A claim read from the
   compilation's own text cites the compilation, with its page as the
   locator; a claim read from an excerpt cites the excerpt, with no page
@@ -536,7 +610,10 @@ Names are modelled in **two layers**:
   event):
   - `birth name` (P1477) — name/maiden name given at birth;
   - `married name` (P2562) — family name taken on marriage;
-  - `nickname` (P1449) — informal/pet name or "aka";
+  - `nickname` (P1449) — a name the source gives as what the person is
+    called, by anyone ("Peppi", "Gustl"), or an "aka"; what one person
+    calls another, or a name that names the person through a relation
+    but is no literal kinship term, is `referred_to_as` instead (below);
   - `official name` (P1448) — a formally adopted or legally changed name.
 - An *ordinary* untyped name is NOT restated as a claim — it lives in
   the label/aliases only. Typing adds structure where a source marks it;
@@ -582,7 +659,9 @@ language:
   initial; surnames typed `birth`, `married` or `other`, with their
   particles; patronymics, a name part of their own (the 1941
   certificate's *Лёбиг Рудольф Феликсович* gives the given name Рудольф,
-  the surname Лёбиг and the patronymic Феликсович); nicknames; titles and
+  the surname Лёбиг and the patronymic Феликсович); nicknames, the names
+  the person is called by anyone, each also an alias (never a
+  `referred_to_as` appellation, ADR-0018); titles and
   suffixes, which never key; and `unsplit` forms whose given name and
   surname the source does not tell apart;
 - **a place:** a status (`toponym`, `deictic` or `generic`); its names,
@@ -606,11 +685,30 @@ label, aliases and kind. What a marker in a name asserts (a widow's
 marker, "the late", a patronymic's father, a married-name marker) is a
 claim: a `civil_status`, a death, a `father`, a `married_name`.
 
+The entity-manifest prompt asks for each record, and for each label's
+status, by the structure of what it reads (a surname-first register,
+capitals, a maiden-name or married-name marker, a courtesy title, a
+place's generic head, an institution's kind), with examples from the
+universe's sources in German, English, Russian and Frisian, and lists no
+marker words. A person the document does not name is labelled with the
+document's own words for them (the postcard's *Dein Vater*, status
+`kinship`). Any manifest entity or claim may carry a **judgement note**
+(ADR-0035 §4): a category (`kind`, `relation`, `date_reading`, `identity`
+or `other`) and one sentence in English, only where the extractor made a
+call a careful reader could make differently. `coverage.json` counts the
+records given (and by status, and the `unsplit` forms they hold),
+recordless and set aside (the records, and the reasons by category), and
+the notes by category.
+
 **Relational and perspectival appellations are NOT names** (ADR-0018).
 "our great grandmother", "meine Oma", "Nana Maisie", "my husband" describe
 a relationship or viewpoint, so they never enter the alias bag. A literal
 kinship term is a `relative` + `kinship_type` claim with the ego as
-object (§Kinship); a courtesy title or family/pet name is a
+object (§Kinship); a spousal term ("my husband") gives a marriage
+(ADR-0036); any other relational appellation (a name the
+source gives as what one person calls another, with or without a stated
+perspective, or that names the person through a relation: a courtesy
+title, "Bubele", "Рудольфиха") is a
 `referred_to_as` (P1810) statement on the referent — verbatim, source-
 referenced — qualified by `perspective` (the person/family ego) when the
 ego is a modelled entity, and unqualified otherwise. Both are
@@ -663,7 +761,9 @@ primitive network and the *same* term set describes any pair:
   states, never a guess: `side` (`paternal` or `maternal`), `degree` (how
   many "great-"s, or a cousin's number) and `removes` (a cousin's
   removes). The 1958 letter's *дядя по отцу*, "uncle on the father's
-  side", is `kin_aunt_or_uncle` on the `paternal` side; its *двоюродная
+  side", is `kin_aunt_or_uncle` of degree 0 (a term other than a
+  cousin's with no "great-" has degree 0) on the `paternal` side; its
+  *двоюродная
   сестра*, "first cousin", is `kin_cousin` of degree 1; the 1952 letter's
   *oerbeppe*, "great-grandmother", is `kin_grandparent` of degree 1. A
   literal term that reduces to a primitive stays one: *Dein Vater* is
@@ -703,11 +803,16 @@ subject; there is no household statement enumerating occupants.
 
 ADR-0036 makes a marriage an entity bounded by events, and retires the
 `spouse` statement below; its vocabulary is in the manifest ("Core
-classes"). Until the rest of the pipeline moves to marriages, the GEDCOM
-adapter still writes the spouse statements described here, the readers
-of spouse statements (the disagreement report, the timeline, the kinship
-query) still read them, and the chunk prompt's own text still names
-`spouse`, whose claims extraction now refuses and counts.
+classes"). The extraction prompts ask for marriages so: the couple take
+part in the marriage (or partnership) with the role `spouse` (or
+`partner`), the union is `started_by` its wedding and `ended_by` a
+divorce, an annulment, a partner's death, or an event of unstated kind
+where the source does not say how it ended, and each of those events
+carries its own date and place. Until the rest of the pipeline moves to
+marriages, the GEDCOM adapter still writes the spouse statements
+described here, and the readers of spouse statements (the disagreement
+report, the timeline, the kinship query) still read them; extraction
+refuses and counts any spouse claim.
 
 A statement that holds for a period, such as a marriage (`spouse`), a
 residence, an occupation or a membership, is dated as Wikidata dates
@@ -777,7 +882,9 @@ person timeline (`queries/person-timeline.rq`) lists each start, end and
 point in time with the range stated for it, which the static site's
 timeline page and feed show beside the date, each bound under its
 qualifier's label ("1946 (earliest date: 1946; latest start date:
-1947)"); and the extraction prompt gives the extractor this convention.
+1947)"); and the extraction prompts give the extractor this convention
+for residences and other periods, and date a marriage by its wedding and
+end events instead.
 
 ## Persecution and displacement as events (see ADR-0014)
 

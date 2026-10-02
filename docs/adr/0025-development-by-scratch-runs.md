@@ -328,7 +328,16 @@ futile, and explain itself afterwards.
   check marked fail-fast pauses only its slice, through the run's control
   file, and other slices keep running. If the operator does not resume
   it within a configurable timeout, the paused slice is aborted, so an
-  overnight run never stalls indefinitely.
+  overnight run never stalls indefinitely. Amended by #432 (2026-10-02):
+  the timeout is measured on the process's monotonic clock, which the
+  timer that looks at the pause waits on too, from the checks' request
+  for the pause; the wall clock only stamps the control file, so a wall
+  clock that steps or is corrected either way neither delays nor brings
+  forward an abort. The timeout counts the time the host is awake, since
+  the run does no work while it is suspended. A pause never outlives the
+  process that watches it: a new process's start marker voids it, and
+  only the driver's next invocation in the same process carries it
+  (docs/ANOMALIES.md).
 - **Abort and resume.** Ctrl-C, `yizkr scratch abort`, or a request in
   the control file from the monitor or an anomaly check stops dispatch
   for the whole run or for one slice. In-flight calls finish or are

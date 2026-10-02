@@ -288,8 +288,8 @@ class TestVocabulary:
         properties, items = vocabulary_prompt_lines()
         keys = {line.split(":")[0].strip() for line in properties.splitlines()}
         assert "spouse" not in keys
-        # held back until a claim can name its own document as subject
-        assert "issued_by" not in keys
+        # offered now that a claim can name its own document as subject
+        assert "issued_by" in keys
         assert {"object_has_role", "civil_status", "started_by"} <= keys
         kinds = entity_kind_prompt_lines()[0].split(", ")
         assert {"partnership", "wedding", "divorce"} <= set(kinds)
@@ -374,11 +374,10 @@ class TestTheRelationDecidesTheKind:
             claim("divorce", "carried_out_by", item("court")),
             # the court prison is where Leopold was held: a place
             claim("imprisonment", "location", item("prison")),
-            # the register office issued the birth register extract. Only
-            # the value's kind is checked here: the subject stands in for
-            # the document, which ADR-0035 §3.4 makes the subject and a
-            # claim has no way to name yet
-            claim("birth", "issued_by", item("standesamt")),
+            # the register office issued the birth register extract, the
+            # claim's own source document and so its subject
+            claim("birth", "issued_by", item("standesamt"))
+            | {"subject": {"kind": "artifact", "sha1": SHA1}},
             # the escape hatch goes wherever a real kind does
             claim("leopold", "residence", item("hint")),
             claim("marriage", "started_by", item("wedding")),
@@ -1112,6 +1111,26 @@ class TestMoreParts:
             "Ida Sörne",
         )
         assert structure_problems(ida) == []
+
+    def test_a_nickname_outside_the_label_and_aliases_is_an_addition(self):
+        """A record nickname must stand in the label or an alias. What one
+        person calls another is `referred_to_as`, never an alias (ADR-0018,
+        #434), so beside a label that names the person it cannot be a
+        nickname: Nicholas's "Nana Maisie" is no name form of Maisie
+        Cutmore."""
+        maisie = record(
+            "Maisie Cutmore",
+            "human",
+            {
+                "kind": "human",
+                "given": [{"written": "Maisie"}],
+                "surnames": [{"written": "Cutmore", "type": "other"}],
+                "nicknames": ["Nana Maisie"],
+            },
+        )
+        assert structure_problems(maisie) == [
+            "addition: 'Nana Maisie' occurs in neither the label nor an alias"
+        ]
 
     def test_an_unsplit_form_is_a_name_part(self):
         # the 1912 directory's "Löbig Ursula" when its order is unsettled

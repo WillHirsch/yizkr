@@ -101,7 +101,7 @@ snapshot, and says so.
 **Documents.** The documents planned (a SHA-1 planned twice is one
 document) by kind; languages, by the transcriptions read, and by kind;
 the transcription routes (vision, text file, slide text, correction) and
-how each language was resolved (detected, fallback, override); the
+how each language was resolved (record, detected, fallback, override); the
 documents that failed, each once: those whose stage failed, as their
 latest events leave them, and those the latest invocation failed outside
 their stages, with the class of the exception or the label their failure
@@ -177,6 +177,69 @@ rechecks.
   stays with its document, in `report.html` and `report.json`;
 - zero-claim documents, by kind, and batches with no entity; the chunks
   and the fallback tiers taken;
+- mention records and judgement notes, summed from each extraction's
+  `coverage.json` (ADR-0035 §4, §5, #420): the mention records given,
+  and those by label status (`name`, `role`, `kinship`, `courtesy`,
+  `placeholder`, `description`, `toponym`, `deictic`, `generic`, the
+  statuses of `claims.PersonStructure` and `claims.PlaceStructure`;
+  `report.RECORD_STATUSES`); the unsplit name forms the records given
+  hold (a person's `unsplit`: forms whose given name and surname the
+  source does not tell apart, ADR-0035 §2.1); the recordless mentions;
+  the records set aside; the reasons records were set aside by, by
+  category (`schema`, `kind`, `addition`, `initial`, `no name part`,
+  `no toponym`; `report.SET_ASIDE_REASONS`); the notes by category
+  (`kind`, `relation`, `date_reading`, `identity`, `other`, the
+  categories of `claims.JudgementNote`); and the notes set aside. Counts
+  only, never a label, a reason's text or a note's text.
+  `coverage.json`'s `records.set_aside` counts reasons, not records: a
+  record that does not parse gives one `schema`, and one of the wrong
+  kind one `kind`, but any other record gives one for each problem found
+  in it (each part of a name that no form of the entity holds gives its
+  own `addition`, and a place's name is checked as written and again by
+  its toponym and its head), so the reasons can outnumber the records
+  set aside, which `records.set_aside_records` counts, once each. A
+  record set aside on a mention of a kind that takes one (a
+  person, place, organisation or family) leaves that mention recordless,
+  so the recordless mentions are those given no record and those whose
+  record was set aside. `coverage.json` counts an entity's note set aside
+  among the same reasons, once, as `note`; the report counts it as a note
+  set aside, never as a record's reason (a claim whose note fails is a
+  counted reject instead). A reason, status or category the report does
+  not know is counted as `other`, as everywhere in the aggregates; since
+  `other` is also a note category, the notes' `other` holds both. An
+  extraction whose coverage holds no such counts is counted apart,
+  never as zero,
+  and the report says how many there were of each: one whose entity
+  manifest fell back to line ranges (the line-range tier counts no
+  records, and all its mentions are recordless), and one whose coverage
+  predates these counts (or holds its records without its notes, or its
+  notes without its records, which the extraction never writes). So the
+  recordless mentions the clustering stage counts, once #409 adds that
+  figure, also include the line-range fallback's mentions, and that
+  figure need not equal the records' recordless count. An
+  extraction whose `coverage.json` is missing, cannot be read or holds no
+  object is in none of these figures, as in none of the rejects'. Nor
+  are the judgement notes counted that a line-range fallback's claims
+  carry: its coverage counts no notes. A coverage that holds its records
+  and notes but predates `records.set_aside_records` or
+  `records.unsplit_forms` (or gives one that is no count) still counts
+  its other figures, but is counted in none of the counts it lacks,
+  never as zero: the report says how many extractions it counted lack
+  each (`absent.set_aside_records`,
+  `absent.unsplit_forms`), and a document's own view gives the count as
+  null and its drill-down says it is not counted. A reason, status or
+  category whose count is no count (not a whole number of at least 0) is
+  dropped, never a 0 row; a genuine 0 stays.
+  Each document's own counts are in `report.json` and `report.html`, its
+  reasons, statuses and categories folded as the aggregates' are, and
+  `report.json`'s `aggregate.content.records` (`extractions`, `given`,
+  `recordless`, `by_status`, `unsplit_forms`, `set_aside_records`,
+  `set_aside_reasons`, `set_aside_by_reason`, `absent.predating`,
+  `absent.line_range`, `absent.set_aside_records`,
+  `absent.unsplit_forms`) and `aggregate.content.notes`
+  (`total`, `by_category`, `set_aside`) sit beside the rejects, chunks
+  and fallback tiers, where the run-to-run diff (#198) is to compare them
+  with the other extraction counts;
 - critic findings by axis and by category: the statement-part each
   doubts (subject, predicate, value or existence, ADR-0023) and its
   category from the critic's fixed list (`critique.CATEGORIES`), and the
@@ -238,7 +301,10 @@ a label, an excerpt, a quote, or a number a document gives
 
 - every name in them is checked against a fixed vocabulary (stages,
   kinds, roles, statuses, reasons, outcomes, holds, requesters, the
-  anomaly checks' names, the critic's axes and categories) or against the model
+  anomaly checks' names, the critic's axes and categories, the reasons a
+  mention record is set aside by, the mention records' statuses, the
+  judgement notes' categories) or
+  against the model
   manifest (claim properties and entity kinds), and one it does not know
   is counted as `other`;
 - a reason is shown by its leading label only, and only when the label is
@@ -261,7 +327,8 @@ fields and identity map carry names from the example universe
 appear in `report.md` or in any string of the aggregates. The same run
 carries a name in every field the aggregates name something by (a stage,
 a kind, a role, a reason, an outcome, a hold, an error, a requester, a
-route, a fallback tier, a critic's axis and category, the mode, the state, the engine,
+route, a fallback tier, a critic's axis and category, a set-aside reason,
+a record status, a note category, the mode, the state, the engine,
 a model, the code's version), and each must fold into `other`. And the
 run rewritten, with every document's name and SHA-1 replaced in every file
 of its directory, must give a `report.md` the same byte for byte. Still,

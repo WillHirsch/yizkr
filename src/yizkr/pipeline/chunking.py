@@ -27,7 +27,16 @@ from typing import Any, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from yizkr.claims import ArtifactRef, ClaimBatch, EntityRecord, load_vocabulary
+from yizkr.claims import (
+    STRUCTURED_KINDS,
+    ArtifactRef,
+    ClaimBatch,
+    EntityRecord,
+    JudgementNote,
+    PersonStructure,
+    load_vocabulary,
+    set_aside_structure,
+)
 from yizkr.pipeline.extract import (
     cite_artifact,
     claim_schema_prompt_text,
@@ -174,7 +183,7 @@ Transcription of artifact sha1:{artifact_sha1} (language: {language}):
 
 CHUNK_PROMPT = """\
 You extract source-attributed genealogical claims from transcriptions of
-historical documents.
+historical documents, in whatever language a document is written.
 
 Rules — these mirror the archive's non-negotiable conventions:
 - Record exactly what the source asserts. Never round dates, never guess,
@@ -194,38 +203,126 @@ Rules — these mirror the archive's non-negotiable conventions:
 {property_keys}
 - Vocabulary item keys available for "vocab" references:
 {item_keys}
+- The relation decides the kind (ADR-0031). A relation of place
+  (place_of_birth, place_of_death, burial_place, residence, location)
+  takes a place; a relation of agency (issued_by, carried_out_by,
+  employer, educated_at, member_of) takes an organization (member_of
+  also a family). Pick the relation the source best fits, and point it
+  at the manifest entity of that kind: a claim whose value is of a kind
+  its property does not accept is refused. Where the manifest holds a
+  site and an institution of one name, a relation of place takes the
+  site and a relation of agency the institution.
 - A person's ordinary name lives in their entity-manifest label and
-  aliases; do NOT restate it as a claim. Use the typed name properties
-  only when the source marks a name's TYPE: birth_name (a name/maiden
-  name given at birth), married_name (taken on marriage), nickname (an
-  informal/pet name or "aka"), official_name (a formal or legal change).
-  The marker may be CONTEXTUAL (a née/geb. maiden cue, a stated legal or
-  immigration change), not only an explicit tag. Never infer a name's kind
-  (given vs family) or type from word order or position — type only what a
-  source marks (ADR-0022).
-- Kinship: use ONLY the primitives father, mother, spouse, sibling,
-  child. Do NOT invent properties for compound relations (aunt, cousin,
-  grandmother, brother-in-law) — those are derived from the primitives.
-  If a source states a compound relation you cannot reduce to a
-  primitive (e.g. "maternal aunt" with the connecting parent unknown),
-  use `relative` with a `kinship_type` qualifier holding the source's
-  exact words. Record `sex_or_gender` (male/female vocab) when a source
-  gives it.
+  aliases, and which part of it is which lives in the manifest's record;
+  do NOT restate either as a claim. Use the typed name properties only
+  when the source marks a name's TYPE: birth_name (a name/maiden name
+  given at birth), married_name (taken on marriage), nickname (a name
+  marked as what the person is called, such as an "aka"), official_name
+  (a formal or legal change).
+  The marker may be CONTEXTUAL (a maiden-name cue such as "geb." or
+  "née", a married-name cue such as "по мужу", a stated legal or
+  immigration change), not only an explicit tag. Type only what a source
+  marks (ADR-0022).
+- A word that states a fact rather than naming someone is a claim, never
+  part of a name (ADR-0035 §3.1):
+  * a widow's or widower's marker ("Wwe.", "вдова", "widdo"): the
+    person's `civil_status` `widowed`; where it names the late spouse
+    ("Witwer der Cäcilie Löbig geb. Tarle"), also their marriage, ended
+    by that spouse's `death` event (below);
+  * "the late" ("verstorben", "покойный", "sillige"): that person's
+    `death` event, with them as its principal, dated only as the source
+    dates it;
+  * a patronymic ("Феликсович", "Васильевна"): `father`, where the
+    manifest holds the father it names;
+  * a married-name marker: `married_name`, and `birth_name` for the name
+    the marker sets apart as the person's own;
+  * an occupation beside a name ("Hutmachermeister"): `occupation`.
+  Where no listed property expresses what a marker asserts, write a gap
+  line (below), never a name part.
+- `civil_status` records a civil status the source states (unmarried,
+  meaning never married; married; widowed; divorced), with point_in_time
+  the date at which the source presents it as holding. It names no
+  partner and makes no marriage.
+- Record `sex_or_gender` (male/female vocab) only where the source states
+  it, in words or in its grammar ("den Schüler"), never from a given
+  name.
+- Kinship: use the primitives father, mother, sibling, child. Do NOT
+  invent properties for compound relations. A literal kinship term that
+  reduces to a primitive stays one: "Dein Vater" is `father`. A compound
+  term you cannot reduce ("Dad's cousin", "uncle on the father's side",
+  a great-grandmother) is `relative`, with the OTHER party (the "our" /
+  "my" / "his" ego) as the object, qualified by:
+  * `kinship_type`: the term exactly as the source words it;
+  * `kinship_class`: its class, one of the kin_ items, or kin_relative
+    where the class is unclear;
+  * `side` (paternal or maternal), `degree` (how many "great-"s, or a
+    cousin's number) and `removes` (a cousin's removes): ONLY where the
+    term itself states them, never guessed. Apart from a cousin, a
+    kinship term with no "great-" has degree 0.
+  "дядя по отцу" (uncle on the father's side) is kin_aunt_or_uncle of
+  degree 0 on the paternal side; "двоюродная сестра" (first cousin) is
+  kin_cousin of degree 1; "oerbeppe" (great-grandmother) is
+  kin_grandparent of degree 1; a bare "cousin" states no degree. A
+  spousal term ("my husband") gives a marriage (below), never a kinship
+  class.
+- Nicknames and relational appellations (ADR-0018). A name the source
+  gives as what the person is called, by anyone, is a nickname ("Peppi",
+  "Gustl"): an alias, a record nickname, and a `nickname` claim only where
+  the source marks the type. A name the source gives as what one person
+  calls another, with or without a stated perspective, or that names the
+  person through a relation but is no literal kinship term ("Bubele",
+  "Nana Maisie", "Рудольфиха"), is `referred_to_as`: never an alias and
+  never a record nickname. A name a writer simply uses for someone, in a
+  greeting ("Liebes Pünktchen!") or a mention, is their name.
 - Relational / perspectival appellations (ADR-0018): a reference like
-  "our great grandmother", "meine Oma", "Aunt Pünktchen", "my husband" is
-  NOT a name and never an alias. Two cases:
-  * If it is a LITERAL kinship term, record the kinship — `relative` +
-    `kinship_type` (the term verbatim) with the OTHER party (the "our" /
-    "my" ego) as the object, or a primitive when reducible.
-  * If it is a courtesy title or family/pet name that is NOT a literal
-    relation (a "Tante" who is no aunt, "Bubele"), record it as
-    `referred_to_as` (the term verbatim), and add a `perspective`
-    qualifier naming the ego (the person or family whose viewpoint it is)
-    ONLY when that ego is an entity you can point to. Omit `perspective`
-    when the ego is a bare "our"/"we" with no named person or family —
-    never invent an entity to fill it.
+  "our great grandmother", "meine Oma", "Aunt Pünktchen", "Mem" is NOT a
+  name and never an alias. Two cases:
+  * If it is a LITERAL kinship term, record the kinship, as above.
+  * If it is NOT a literal relation (a courtesy title such as a "Tante"
+    who is no aunt, "Nana Maisie", or a name one person calls another,
+    "Bubele"), record it as `referred_to_as` (the term verbatim), and
+    add a `perspective` qualifier naming the ego (the person or family
+    whose viewpoint it is) ONLY when that ego is an entity you can point
+    to. Omit `perspective` when the ego is a bare "our"/"we" with no
+    named person or family — never invent an entity to fill it.
   When unsure whether a term is literal kinship, prefer `referred_to_as`
   (it asserts only that the term was used, never a relation).
+- Events and their participants (ADR-0035 §3.2): a `participant` claim
+  has the EVENT as subject and the person as value, with an
+  `object_has_role` qualifier saying how they took part: `principal` (in
+  a birth or a death the one born or who died; in any other event the
+  person it happens to, such as the deportee, the prisoner or the
+  emigrant), `parent`, `informant` (who reported it), `witness` or
+  `officiant` (who performed it). One person may take part in several
+  roles, each a qualifier on one claim: a father who reports his son's
+  birth is `parent` and `informant`. A death's principal is never its
+  informant. An institution that carried out an event (a court, an
+  authority) is `carried_out_by` on the event, not a participant.
+- Marriages and partnerships are entities bounded by events (ADR-0036);
+  no property links two spouses directly:
+  * the couple take part in the `marriage` entity (a `partnership` where
+    the source presents a couple without saying they married): each is
+    a `participant` of it with the role `spouse` (`partner` in a
+    partnership);
+  * its wedding is an event of its own: the union is `started_by` it,
+    and the wedding carries its own `point_in_time`, `location`, and
+    any witness or officiant as a participant with that role. The couple
+    take part in the union, not in its wedding;
+  * its end is an event too: the union is `ended_by` a `divorce` or an
+    `annulment` (with its own date and place, and `carried_out_by` the
+    court or authority that pronounced it), or by a partner's own
+    `death` event, or by an `event` where the source does not say how
+    the union ended;
+  * a source that merely names a spouse dates nothing, and the
+    document's own date is no date of the marriage; a directory or a
+    census that lists a couple as married gives the union a
+    `point_in_time`, an observation, never a wedding date.
+- The document itself: `issued_by` names the organization that issued
+  THIS document, where the source shows it issuing (the register office
+  of a certificate, the court of a judgment). Its subject is the
+  document, given exactly as the source's artifact:
+  {{"kind": "artifact", "sha1": "{artifact_sha1}"}}, and never anything
+  else. No other property takes the document as its subject.
 - Residence: an address stated on a form is asserted for the person that
   field names (e.g. the informant/applicant on a certificate), NOT for
   everyone the document mentions. Do not copy one person's stated address
@@ -234,18 +331,16 @@ Rules — these mirror the archive's non-negotiable conventions:
   never asserted here. If you do record a dependent's residence from a
   relative's address (e.g. a newborn at the parents' address), lower its
   confidence to mark the inference.
-- Dating a marriage, a residence or any other period: a marriage's date
-  is `start_time` on the `spouse` claim, and the date the source gives
-  for its end (a divorce, an annulment, widowhood) is its `end_time`; a
-  move in and a move out date a `residence` the same way. `point_in_time`
-  on a spouse or residence claim only records a date at which the source
-  presents the marriage or the residence as holding (a census, a
-  directory entry), never a wedding date; a document that merely names a
-  spouse gives no such date. A range bounds one end: a start takes
-  `earliest_date` and `latest_start_date`, an end takes
-  `earliest_end_date` and `latest_date`. Married "between X and Y" is
-  start_time X with earliest_date X and latest_start_date Y; divorced
-  "before Z" is end_time Z with latest_date Z. These pairs bound
+- Dating a period: a residence, an occupation or a membership is dated
+  by its `start_time` and `end_time` qualifiers, a move in and a move out
+  as its start and end. `point_in_time` on such a claim only records a
+  date at which the source presents it as holding (a census, a
+  directory entry). A marriage has no dates of its own: its wedding and
+  its end are events, each with its own `point_in_time`. A range bounds
+  one end: a start takes `earliest_date` and `latest_start_date`, an end
+  takes `earliest_end_date` and `latest_date`. Moved in "between X and
+  Y" is start_time X with earliest_date X and latest_start_date Y; moved
+  out "before Z" is end_time Z with latest_date Z. These pairs bound
   `start_time` and `end_time` qualifiers; an entity's own `start_time` or
   `end_time` claim (a firm's founding, a detention's start) is a date
   value that `earliest_date` and `latest_date` bound.
@@ -253,13 +348,21 @@ Rules — these mirror the archive's non-negotiable conventions:
   locations on a person (ADR-0014). "Deported to Klurnau in 1942" is a
   `deportation`; "held at", "interned at", "taken to" an
   `imprisonment`; "released from", "freed from" a `release`. Put the
-  claims on the EVENT: `participant` (the person), `location` (the
-  camp, ghetto, or prison), `point_in_time` (the date) — or
-  `start_time`/`end_time` for a period of detention. Never record the
+  claims on the EVENT: `participant` (the person, role `principal`),
+  `location` (the camp, ghetto, or prison), `point_in_time` (the date) —
+  or `start_time`/`end_time` for a period of detention. Never record the
   camp or prison as the person's own `location` or `residence`, and
   never emit a gap line for a relation the event model already
   carries. If no such event is available to you, a gap line is the
   honest fallback — but check first: it should be rare.
+- A claim may carry a judgement note, "note": {{"category": "<kind,
+  relation, date_reading, identity or other>", "text": "<one sentence in
+  English>"}}, ONLY where you made a judgement call that a careful reader
+  could make differently: a date_reading note such as "the postmark
+  '19.8.38' read as 1938", a relation note such as "'Dein Vater' recorded
+  as Klara's father, not as a relative". Leave it out for a plain
+  reading. A note is your remark on your reading, never a measure of
+  certainty.
 - Set confidence (0-1) per claim: how certain you are the source asserts it.
 
 {assignment_block}
@@ -287,20 +390,23 @@ After the last line, end with exactly one final line:
 
 
 LINE_ASSIGNMENT_BLOCK = """\
-Refer to people, places, organizations, events, and occupations with
-"local" references (stable local_id per entity within this response,
-label as written — prefer the fullest name the document gives for a
-person anywhere, instance_of from: {kinds}).
-An organization (company, committee, agency) is an agent, never a place.
+Refer to people, places, organizations, events, unions and occupations
+with "local" references (stable local_id per entity within this
+response, label as written — prefer the fullest name the document gives
+for a person anywhere, instance_of from: {kinds}).
+The relation decides the kind: an institution named only as where
+something happened is a place; one the source shows acting (issuing,
+employing, educating, carrying out an event) is an organization.
 An occupation value keeps the source's exact wording as its label.
 
 Extract claims ONLY for the assigned units below — nothing from other
 parts of the document, even though you can see them. Use the rest of
 the document only as context (identity, relationships, spellings).
-Ownership rule: every claim whose SUBJECT is a person/place/event of an
-assigned unit belongs to you, including relations to entities outside
-the unit — a unit person's father/mother from the enclosing tree
-structure or the unit's context line, their spouse, their instance_of.
+Ownership rule: every claim whose SUBJECT is a person/place/event/union
+of an assigned unit belongs to you, including relations to entities
+outside the unit — a unit person's father/mother from the enclosing tree
+structure or the unit's context line, their unions, their instance_of,
+and the `issued_by` claim of an issuer the unit names.
 Do not skip a claim because its object or evidence lies partly outside
 your units.
 
@@ -317,10 +423,12 @@ The full manifest (id = canonical label):
 
 Emit every claim whose SUBJECT is one of your ASSIGNED entities below —
 and only those. Relations to entities outside your assignment (their
-parents, spouses, locations) still belong to you when your entity is
-the subject; refer to the other entity by its manifest id. Do not emit
-claims whose subject is not assigned to you, and do not emit
-instance_of claims (the manifest's kind already records it).
+parents, unions, locations) still belong to you when your entity is
+the subject; refer to the other entity by its manifest id. The
+`issued_by` claim, whose subject is the document itself, belongs to the
+chunk assigned the organization that issued it. Do not emit claims whose
+subject is not assigned to you, and do not emit instance_of claims (the
+manifest's kind already records it).
 
 Assigned entities:
 {entities_block}"""
@@ -329,34 +437,86 @@ Assigned entities:
 ENTITY_MANIFEST_PROMPT = """\
 You are preparing a genealogical claim extraction. First pass: read the
 whole transcription and produce a manifest of EVERY distinct entity it
-mentions — people, places, organizations (a company, bank, committee,
-government body, school, or congregation — anything the source treats as
-an AGENT that employs, helps, hires, or is registered/taxed; kind
-organization, NOT place — an organization has a location, it is not
-one), events (births, deaths, marriages, migrations, military service),
-and occupations or professions it names for people (kind
-occupation_class, label in the source's exact wording). A hospital,
-clinic, school, or congregation is an `organization` even when the
-source names it only as WHERE an event happened (a place of birth or
-death): an organization HAS a location, it is not one. Also: a named
-family or household ("the Löbigs") is a `family`; a ship is a `vessel`;
-a cited law, decree, gazette, or register is a `legal_instrument`; a
-regiment or brigade is a `military_unit`. A forced removal is a
-`deportation` event, a detention an `imprisonment` event, a freeing a
-`release` event (each an event with a person participant, a place, and
-a date) — not a place or a bare relation. Unify aliases: one entity that
-appears as "Cäcilie Löbig", "Cäcilie", and "C. Löbig" is ONE
-manifest entry whose label is the fullest form the document gives and
-whose aliases list every other NAME form, verbatim. Aliases are actual
-NAMES the document uses for the entity. They are NOT:
+mentions — people, places, organizations, families, events (births,
+deaths, weddings, divorces, migrations, military service), marriages and
+partnerships, and occupations or professions it names for people (kind
+occupation_class, label in the source's exact wording). The document may
+be in any language: read it by its own conventions, never by a rule
+about a language.
+
+The relation decides the kind (ADR-0031). An entity's kind is the one
+the relations this source states of it call for:
+- a relation of place (born, died or buried at, lived at, located at,
+  deported to, held at) takes a `place`. A camp, a prison, a hospital, a
+  school or a congregation named only as WHERE something happened is a
+  place: the registration card's "held in Peiltal court prison" names a
+  place;
+- a relation of agency (issued a document, carried out an event,
+  employed, educated, had as a member) takes an `organization`, an
+  institution the source shows ACTING: the Landgericht Rekau, which
+  divorces Leopold and Agnes; the Städtische Realschule zu Flörburg,
+  whose pupil Rudolf was; the Калдовское районное бюро ЗАГС, which issued
+  the 1941 death certificate;
+- where one source uses one institution both ways, give TWO entities, a
+  place for the site and an organization for the body, linked by the
+  organization's `location` (the site).
+Also:
+- a person who holds an office (a consul, a director, a rabbi, a mayor,
+  a registrar) is a `human`, never the organization or the office they
+  hold;
+- a religion, a denomination or an ethnicity is never an
+  `occupation_class`;
+- a named family or household ("the Löbigs") is a
+  `family`; a ship is a `vessel`; a cited law, decree, gazette, or
+  register is a `legal_instrument`; a regiment or brigade is a
+  `military_unit`;
+- a forced removal is a `deportation` event, a detention an
+  `imprisonment` event, a freeing a `release` event (each an event with a
+  person participant, a place, and a date) — not a place or a bare
+  relation;
+- a marriage is an entity, not an event (ADR-0036): a `marriage` for a
+  couple the source says married, a `partnership` for a couple it
+  presents as a couple without saying they married (two people named
+  only as a child's parents are not thereby a couple). Its wedding (a
+  `wedding`, or a `civil_wedding` or `religious_wedding` where the source
+  states the kind) and a `divorce` or `annulment` that ended it are
+  events of their own;
+- a marker of a death ("the late", "verstorben", "покойный", "sillige")
+  gives that person's `death` event; a widow's or widower's marker that
+  names the late spouse ("Witwer der Cäcilie Löbig") gives the marriage
+  and the spouse's `death` event, and one that names no spouse
+  ("Löbig, Ursula, Wwe.") gives neither.
+
+Unify aliases: one entity that appears as "Cäcilie Löbig", "Cäcilie", and
+"C. Löbig" is ONE manifest entry whose label is the fullest form the
+document gives and whose aliases list every other NAME form, verbatim.
+Aliases are actual NAMES the document uses for the entity. They are NOT:
 - role or form-field labels — MOTHER, FATHER, CHILD, INFORMANT, BRIDE,
   WITNESS name a ROLE, not the person;
 - relational or perspectival references — "our great grandmother", "my
-  husband", "Aunt Pünktchen", "Oma", "the deceased". These describe a
-  relationship or viewpoint, not a name; they are captured as claims at
-  extraction, not as aliases (a literal kinship term becomes `relative` +
-  `kinship_type`; a courtesy/pet name becomes `referred_to_as`). Never
-  record any of these as an alias (ADR-0018).
+  husband", "Aunt Pünktchen", "Oma", "Mem", "the deceased". These
+  describe a relationship or viewpoint, not a name; they are captured as
+  claims at extraction, not as aliases (a literal kinship term becomes
+  `relative` + `kinship_type`; a spousal term gives a marriage; any other
+  relational appellation becomes `referred_to_as`). Never record any of
+  these as an alias (ADR-0018);
+- for a place, a deictic or locative reference back to it ("dort",
+  "hier", "daselbst", "ebenda", "there") or a generic one ("the
+  village"): a place's alias is a toponym;
+- for an organization, a generic phrase that names no one ("die Firma",
+  "the company", "the bank"): an organization's alias is a name.
+A name the source gives as what the person is called, by anyone, is a
+nickname ("Peppi", "Gustl"): an alias, a record nickname, and a `nickname`
+claim only where the source marks the type. A name the source gives as what
+one person calls another, with or without a stated perspective, or that
+names the person through a relation but is no literal kinship term
+("Bubele", "Nana Maisie", "Рудольфиха"), is `referred_to_as`: never an
+alias and never a record nickname. A name a writer simply uses for someone,
+in a greeting ("Liebes Pünktchen!") or a mention, is their name.
+A person the document does not name is labelled with the document's own
+words for them: the postcard's writer signs "Dein Vater", so that is his
+label. Only where the document has no words for a person at all do you
+compose a label, such as "Klara's father".
 
 Name composition and the canonical label (ADR-0022):
 - Do NOT enumerate full-name PERMUTATIONS as aliases. A "/" between family
@@ -364,8 +524,7 @@ Name composition and the canonical label (ADR-0022):
   at different times: give the label ONE clean form (given + one surname),
   list the OTHER surname forms as aliases, and do NOT emit the composed
   cross-products ("Ida Löbig"). Never guess which surname is maiden vs
-  married — that is a name TYPE, recorded only when the source marks it, at
-  extraction.
+  married — that is a name TYPE, recorded only when the source marks it.
 - Do NOT list a bare given name ("Sebastian") or an initialism ("S. Löbig")
   as an alias — a reader derives those from a fuller form. A genuinely
   distinct informal form ("Wastl") IS an alias.
@@ -373,8 +532,94 @@ Name composition and the canonical label (ADR-0022):
   it. "Hildegard Löbig (b. Laudler)" has label "Hildegard Löbig"; "Gustav
   Löbig (later Gustave Lobig)" has label "Gustav Löbig" with "Gustave Lobig"
   as an alias. Keep hyphenated and space-separated compound/particle
-  surnames ("A-B", "de la Cruz", "van der Berg") WHOLE — never split them.
-  Never infer given vs family from word order.
+  surnames ("A-B", "de la Cruz", "van 't Nijks") WHOLE — never split them.
+
+The mention record (ADR-0035): give each `human`, `place`, `organization`
+and `family` entity a "structure", what its names are made of, read from
+its label and aliases as the document writes them. Divide and label the
+words; never add one that is in neither the label nor an alias (a given
+name's standard form aside), and leave out every field the document does
+not settle: each is optional.
+- A person: {{"kind": "human", "status": "<status>",
+  "given": [{{"written": "...", "standard": "...", "initial": false}}],
+  "surnames": [{{"written": "...", "type": "<birth, married or other>"}}],
+  "patronymics": [...], "nicknames": [...], "titles": [...],
+  "suffixes": [...], "unsplit": [...]}}.
+  * status says what the label is: `name` where it names the person;
+    `role`, a role or form-field label (INFORMANT) or an office the
+    source names alone ("the consul"); `kinship`, a literal kinship term
+    ("Dein Vater", "Mem"); `courtesy`, a courtesy title or other
+    relational appellation that is no literal relation ("Nana Maisie");
+    `placeholder`, the source's stand-in for a name it does not know
+    ("N.N. Löbig"); `description`, a label you composed.
+  * The document's conventions decide which part is which. A register,
+    card or form that writes the surname first, or in capitals, is read
+    so: the card's "LÖBIG, Ida, née SÖRNE" gives the given name Ida and
+    the surnames LÖBIG and SÖRNE; the Soviet certificate's "Лёбиг Рудольф
+    Феликсович" gives the surname Лёбиг, the given name Рудольф and the
+    patronymic Феликсович. Where the document does not settle which word
+    is the given name, put the form in `unsplit`.
+  * A surname is `birth` or `married` only where the source marks it
+    (the card's "née SÖRNE" is `birth`; "по мужу Лёбиг" is `married`),
+    else `other`. A title never types a surname. A particle stays in its
+    surname: "S. van 't Nijks" gives the initial S. and the surname
+    "van 't Nijks".
+  * A standard form is the full form of a given name in its usual
+    spelling that a diminutive or an abbreviation stands for, given only
+    where the document supports it: the 2008 family history's "became
+    Gustave Lobig here, Gus to everyone" makes its Gus Gustave. A full
+    name is its own standard form; a standard form is never a
+    translation; an initial has none.
+  * A name the source gives as what the person is called, by anyone, is a
+    nickname ("Peppi", "Gustl"): an alias, a record nickname, and a
+    `nickname` claim only where the source marks the type. A name the
+    source gives as what one person calls another, with or without a
+    stated perspective, or that names the person through a relation but
+    is no literal kinship term ("Bubele", "Nana Maisie", "Рудольфиха"),
+    is `referred_to_as`: never an alias and never a record nickname. A
+    name a writer simply uses for someone, in a greeting ("Liebes
+    Pünktchen!") or a mention, is their name. A nickname that is a form
+    of a given name ("Gustl", "Gus") is also that given name, with its
+    standard form where the document supports it; one that stands for no
+    given name ("Peppi") has no standard form.
+  * A patronymic, a name formed from the father's given name, is a part
+    of its own, never a surname. Titles (Mrs, Dr., Fräulein, Mefrou) and
+    suffixes (generational and status words, such as "Wwe.") never name
+    anyone. A word that states a fact (an occupation beside a name, a
+    widow's marker, "the late") is no name part: it becomes a claim at
+    extraction.
+- A place: {{"kind": "place", "status": "<toponym, deictic or generic>",
+  "names": [{{"written": "...", "toponym": "...", "head": "..."}}],
+  "address": {{"written": "...", "street": "...", "number": "..."}},
+  "within": [...]}}.
+  * status: `toponym` for a place's own name; `deictic` for a reference
+    back ("dort"); `generic` for a head with no toponym ("Lager").
+  * a name's toponym and generic head, where they can be told apart:
+    "Lager Klurnau" has the head Lager and the toponym Klurnau.
+  * the address, a street and a house number as written: "8 Hawthorn
+    Road, Stupfield, Victoria" has the address 8 Hawthorn Road (street
+    Hawthorn Road, number 8), within Stupfield and Victoria.
+  * within: the places the source puts it in, as written, in the
+    source's order: "Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân"
+    is Snylsjum within "gemeente Drakeradiel", "Fryslân" and "Nederlân".
+- An organization: {{"kind": "organization", "names": [...],
+  "kinds": [...], "places": [...]}}: its proper names, the words naming
+  its kind of institution, and the places its names carry. "Hutmacherei
+  zum Blauen Hut" has the name "zum Blauen Hut" and the kind Hutmacherei;
+  "It tichelwurk fan Snylsjum" has no proper name, the kind tichelwurk
+  and the place Snylsjum; "Standesamt Flörburg" has no proper name, the
+  kind Standesamt and the place Flörburg. A generic word any
+  organization carries (a word for a firm, a legal form) is neither a
+  name nor a kind.
+- A family: {{"kind": "family", "surnames": [...]}}: "the Löbigs" has the
+  surname Löbig.
+Other kinds take no structure.
+
+A judgement note: an entity may carry "note": {{"category": "<kind or
+identity>", "text": "<one sentence in English>"}}, ONLY where you made a
+kind or identity call that a careful reader could make differently, such
+as "the court prison typed a place: the card names it only as where
+Leopold was held". Leave it out for a plain reading.
 
 Output ONE JSON object, no prose, no code fences:
 {{"entities": [{{"id": "e01", "label": "<canonical, fullest form>",
@@ -382,19 +627,20 @@ Output ONE JSON object, no prose, no code fences:
 "summary": "<one line: who/what this is, with key dates/relations>",
 "mention_lines": [<line numbers where it is mentioned>],
 "type_hint": "<only when kind is unclassified_entity — see below>",
-"extract": <true, or false — see below>}}, ...]}}
+"extract": <true, or false — see below>,
+"structure": {{<the mention record, for the four kinds above>}},
+"note": {{<only for a judgement call>}}}}, ...]}}
 
 Rules:
 - One entry per real-world entity, however many aliases it has.
 - ids must be unique. Do NOT include a "qid" field.
-- NEVER force an entity into a wrong-but-adjacent kind. A company,
-  bank, committee, or agency is an `organization`, NOT a place and NOT a
-  person. If an entity clearly exists but NO listed kind fits it (a
-  ship, a regiment, a building that is not a settlement), use kind
-  `unclassified_entity` and set `type_hint` to what it actually is
-  ("ship", "military regiment"). This is a LAST resort — use a real
-  kind whenever one fits; `unclassified_entity` without a type_hint is
-  invalid.
+- NEVER force an entity into a wrong-but-adjacent kind. If an entity
+  clearly exists but NO listed kind fits it (a building that is not a
+  settlement, a brickworks the source names only as a building), use
+  kind `unclassified_entity` and set `type_hint` to what it actually is,
+  in English whatever the document's language ("military regiment",
+  "brickworks"). This is a LAST resort — use a real kind whenever one
+  fits; `unclassified_entity` without a type_hint is invalid.
 - Prefer completeness: an entity mentioned once still gets an entry.
 - extract=false for entities that appear ONLY in non-assertive context:
   travel or event logistics (schedules, bookings, contact lists), people
@@ -403,14 +649,17 @@ Rules:
   Entities the document asserts historical/genealogical facts about get
   extract=true.
 - On official certificates and registers the administrative apparatus is
-  boilerplate: the registrar, officiant, or witness who certifies the
-  record; the issuing authority (e.g. a civil registry office such as a
-  Standesamt); and the register or certificate the document cites as its
-  own source are all extract=false. They attest the record — they are not
-  its genealogical subject. (A witness or officiant who is ALSO a relative
-  of the subject is the exception: extract=true for the relationship.)
+  boilerplate: the registrar, officiant, or witness who only certifies
+  the record, and the register or certificate the document cites as its
+  own source, are extract=false. They attest the record — they are not
+  its genealogical subject. Whom the source shows acting is the
+  exception, extract=true: the officiant or a witness of the event the
+  document records (a wedding's registrar), the authority that issued
+  the document (a civil registry office such as a Standesamt), and a
+  witness or officiant who is ALSO a relative of the subject.
 - summary is evidence for later identity matching: pack it with the
-  document's key facts (born/died/married when-where, parents, spouse).
+  document's key facts (born/died/married when-where, parents, the
+  person married).
 
 Entity kinds — pick the one whose meaning actually fits, not the
 nearest-sounding one:
@@ -786,6 +1035,11 @@ class ChunkedClaimExtractor:
         # per chunk, the objects in its answer that held something the
         # parser could not read (parse_chunk_unread)
         self._unread: dict[str, list[dict]] = {}
+        # the entity manifest's mention records and judgement notes set
+        # aside, counted by the category of each reason, and the number of
+        # entities whose mention record was set aside
+        self._set_aside: dict[str, int] = {}
+        self._set_aside_records = 0
         # how chunk calls saw the document: fork, inline or compressed
         self.context_mode: str | None = None
         self.attention: list[str] = []
@@ -858,12 +1112,12 @@ class ChunkedClaimExtractor:
 
     def _entity_manifest(
         self, transcription: Transcription, artifact: ArtifactRef
-    ) -> tuple[list[EntityRecord] | None, Any, list[str], bool]:
-        """(entities, conversation handle, why each attempt failed, any
+    ) -> tuple[_Manifest | None, Any, list[str], bool]:
+        """(manifest, conversation handle, why each attempt failed, any
         call answered).
 
-        No entities means the manifest was unusable in both attempts; the
-        caller falls back to line-range segmentation."""
+        No manifest means it was unusable in both attempts; the caller
+        falls back to line-range segmentation."""
         line_count = len(transcription.text.splitlines())
         kinds, kind_descriptions = entity_kind_prompt_lines()
         prompt = ENTITY_MANIFEST_PROMPT.format(
@@ -881,12 +1135,18 @@ class ChunkedClaimExtractor:
     @staticmethod
     def _parse_entity_manifest(
         response: str, line_count: int
-    ) -> tuple[list[EntityRecord] | None, list[str]]:
-        """(entities, problems); entities is None when the answer holds no
-        entity list. Only a list, or null, is one, and any other value is
-        unusable. An empty one, the engine's word that the document names
-        nothing, comes with the problem "empty entity list", so that it is
-        refused and the line-range tier looks again."""
+    ) -> tuple[_Manifest | None, list[str]]:
+        """(manifest, problems); the manifest is None when the answer holds
+        no entity list. Only a list, or null, is one, and any other value
+        is unusable. An empty one, the engine's word that the document
+        names nothing, comes with the problem "empty entity list", so that
+        it is refused and the line-range tier looks again.
+
+        An entity's mention record or judgement note that fails validation
+        is set aside, never repaired and never the reason the manifest is
+        refused (ADR-0035 §5): the entity keeps its label, aliases and
+        kind, and the manifest counts each reason by its category, and the
+        records set aside (one record can give several reasons)."""
         _, item_keys = load_vocabulary()
         for obj in scan_json_objects(response):
             if "entities" not in obj:
@@ -896,11 +1156,19 @@ class ChunkedClaimExtractor:
                 return None, [
                     f"'entities' is not a list ({type(listed).__name__})"
                 ]
+            set_aside: dict[str, int] = {}
+            set_aside_records = 0
             try:
                 records = []
                 for raw in listed or []:
                     data = dict(raw)
                     data.pop("qid", None)  # resolution state, never model-set
+                    data, reasons = _set_aside_note(data)
+                    data, more = set_aside_structure(data)
+                    set_aside_records += bool(more)
+                    for reason in reasons + more:
+                        category = reason.split(":", 1)[0]
+                        set_aside[category] = set_aside.get(category, 0) + 1
                     records.append(EntityRecord.model_validate(data))
             except Exception as exc:
                 return None, [str(exc)[:300]]
@@ -922,7 +1190,7 @@ class ChunkedClaimExtractor:
                     for number in record.mention_lines
                     if 1 <= number <= line_count
                 ]
-            return records, problems
+            return _Manifest(records, set_aside, set_aside_records), problems
         return None, ["no JSON object with an 'entities' array"]
 
     # -- phase 1b: line-range segmentation (fallback tier) -----------------
@@ -1001,11 +1269,13 @@ class ChunkedClaimExtractor:
         extracted by a degraded path the engine never chose.
         """
         self._log("  scanning document for entities...")
-        entities, handle, reasons, answered = self._entity_manifest(
+        manifest, handle, reasons, answered = self._entity_manifest(
             transcription, artifact
         )
-        if entities is not None:
-            return entities, None, handle
+        if manifest is not None:
+            self._set_aside = manifest.set_aside
+            self._set_aside_records = manifest.set_aside_records
+            return manifest.entities, None, handle
         if not answered:
             raise RuntimeError(
                 f"entity manifest: no engine response ({reasons[-1]})"
@@ -1205,6 +1475,8 @@ class ChunkedClaimExtractor:
         self.used_fallback_segmentation = False
         self._refusals = {}
         self._unread = {}
+        self._set_aside = {}
+        self._set_aside_records = 0
 
         entities, segmentation, handle = self._phase_one(
             transcription, artifact
@@ -1504,7 +1776,7 @@ class ChunkedClaimExtractor:
         if gaps:
             extras["gaps.ndjson"] = "\n".join(map(json.dumps, gaps))
         if entities is not None:
-            coverage = self._entity_coverage(entities, batch, text_lines)
+            coverage = self._manifest_coverage(entities, batch)
         else:
             coverage = self._coverage(segmentation, batch, len(text_lines))
         # the extraction's health, on either tier, for the checks that read
@@ -1520,41 +1792,35 @@ class ChunkedClaimExtractor:
         extras["coverage.json"] = json.dumps(coverage, indent=2)
         return batch, extras
 
-    def _entity_coverage(
-        self,
-        entities: list[EntityRecord],
-        batch: ClaimBatch,
-        text_lines: list[str],
+    def _manifest_coverage(
+        self, entities: list[EntityRecord], batch: ClaimBatch
     ) -> dict:
-        """Advisory completeness report, entity flavour (ADR-0007).
-
-        Used in place of the line-range path's unit audit (`_coverage`):
-        flags manifest entities with zero claims, and lines that carry
-        name-shaped tokens matching no manifest label/alias (a
-        possibly-missed entity)."""
+        """Advisory completeness report, entity flavour (ADR-0007), in
+        place of the line-range path's unit audit (`_coverage`): the
+        manifest entities with zero claims, and counts of the mention
+        records and judgement notes the extraction gave (ADR-0035 §5):
+        the records given, by status, and the unsplit name forms they
+        hold; the mentions recordless; the records set aside, and the
+        reasons they and the notes were set aside by, by category; and
+        the notes by category. A mention of a kind that takes a record
+        but has none is recordless: its record was set aside, or never
+        given. Nothing in it quotes a label."""
         subject_ids = {
             claim.subject.local_id
             for claim in batch.claims
             if hasattr(claim.subject, "local_id")
         }
-        name_tokens = {
-            token.lower()
-            for entity in entities
-            for name in [entity.label, *entity.aliases]
-            for token in name.split()
-            if len(token) >= 3
-        }
-        unmatched_lines = []
-        for number, line in enumerate(text_lines, start=1):
-            capitalized = [
-                token.strip(".,;:()")
-                for token in line.split()
-                if token[:1].isupper() and len(token.strip(".,;:()")) >= 3
-            ]
-            if capitalized and not any(
-                token.lower() in name_tokens for token in capitalized
-            ):
-                unmatched_lines.append(number)
+        structured = [e for e in entities if e.kind in STRUCTURED_KINDS]
+        statuses: dict[str, int] = {}
+        for entity in structured:
+            status = getattr(entity.structure, "status", None)
+            if entity.structure is not None and status is not None:
+                statuses[status] = statuses.get(status, 0) + 1
+        notes: dict[str, int] = {}
+        noted = [*entities, *batch.claims]
+        for note in (fact.note for fact in noted):
+            if note is not None:
+                notes[note.category] = notes.get(note.category, 0) + 1
         return {
             "strategy": "entity",
             "entities_total": len(entities),
@@ -1566,9 +1832,21 @@ class ChunkedClaimExtractor:
                 for entity in entities
                 if entity.extract and entity.id not in subject_ids
             ],
-            "lines_matching_no_entity": unmatched_lines,
             "distinct_subject_ids": sorted(subject_ids),
             "failed_chunks": self.failed_chunks,
+            "records": {
+                "given": sum(e.structure is not None for e in structured),
+                "recordless": sum(e.structure is None for e in structured),
+                "by_status": dict(sorted(statuses.items())),
+                "unsplit_forms": sum(
+                    len(entity.structure.unsplit)
+                    for entity in structured
+                    if isinstance(entity.structure, PersonStructure)
+                ),
+                "set_aside_records": self._set_aside_records,
+                "set_aside": dict(sorted(self._set_aside.items())),
+            },
+            "notes": dict(sorted(notes.items())),
         }
 
     def _coverage(
@@ -1603,6 +1881,34 @@ class ChunkedClaimExtractor:
             "distinct_subject_labels": sorted(subject_labels),
             "failed_chunks": self.failed_chunks,
         }
+
+
+class _Manifest(NamedTuple):
+    """An entity manifest as parsed: its entities; the mention records
+    and judgement notes set aside, counted by the category of each
+    reason; and the number of entities whose mention record was set
+    aside."""
+
+    entities: list[EntityRecord]
+    set_aside: dict[str, int]
+    set_aside_records: int
+
+
+def _set_aside_note(entity: dict) -> tuple[dict, list[str]]:
+    """An entity of an entity manifest, as the model wrote it, with its
+    judgement note set aside when the note does not validate, and the
+    reason (ADR-0035 §5): `note` and the first error. The entity keeps
+    everything else."""
+    note = entity.get("note")
+    if note is None:
+        return entity, []
+    try:
+        JudgementNote.model_validate(note)
+    except Exception as exc:
+        rest = {key: value for key, value in entity.items() if key != "note"}
+        first = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+        return rest, [f"note: {first}"]
+    return entity, []
 
 
 class _Chunk(NamedTuple):

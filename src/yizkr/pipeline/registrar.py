@@ -9,16 +9,21 @@ the item whose `media SHA-1` statement registration writes. Per artifact,
 registration writes:
 
 * the media file, uploaded to the wiki (W1: artifacts as wiki media,
-  ADR-0004);
-* an artifact item: label, description, ``instance of -> <type>``,
+  ADR-0004) under its file name in the form MediaWiki takes as it is
+  (_upload_name): every letter kept, each character or sequence
+  MediaWiki refuses made "-", as is the dot before an extension it
+  refuses within the name, and, when too long, cut, ending in "…", to
+  fit MediaWiki's limit with room for a content tag, its extension kept;
+* an artifact item: label, description (cut to the 250 characters
+  Wikibase takes, ending in "…"), ``instance of -> <type>``,
   ``media file -> File:...`` and ``media SHA-1 -> <hex digest>``;
 * optional page-fragment items: ``instance of -> artifact fragment``,
   ``part of -> <artifact>`` with a ``page number`` qualifier;
 * for a compound artifact (ADR-0008), the media it embeds, from the
   record the stages before the write keep of them
   (yizkr.pipeline.presentation): each an artifact item of its own, with
-  its media file and SHA-1, ``part of`` the container once per slide it is
-  on.
+  its media file and SHA-1, ``part of`` the container once per slide of a
+  deck, or page of a PDF, it is on.
 
 **Identity is the SHA-1 alone.** An artifact is the item whose `media
 SHA-1` is the SHA-1 of its file's bytes, and with none a new item is made.
@@ -69,28 +74,43 @@ from yizkr.core.corpus import ExclusionList, file_sha1, is_excluded
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.presentation import IMAGE_SUFFIXES, DerivedMediaRecord
 
-# the most characters Wikibase takes in a label, a description or an alias
-# (its default limit on a term's length)
-TERM_LIMIT = 250
+# a title is compared with the instance's labels, and set, in the form
+# Wikibase stores a label, a description or an alias in, by the writer's
+# rule (_stored_term), and TERM_LIMIT is the most characters it takes in
+# one: in any other form, a label another item holds would look free, and
+# an alias the item has would look missing; a cut keeps whole letters by
+# the writer's rule too (extends, half_flag)
+from yizkr.pipeline.writer import TERM_LIMIT, extends, half_flag
+from yizkr.pipeline.writer import stored_term as _stored_term
 
-# how Wikibase trims a term before it stores it: the separators and control
-# characters at either end go, and each run of control characters inside
-# becomes one space. `\s` holds every separator and the controls that are
-# whitespace; the other controls are named.
-_TERM_EDGES = re.compile(r"^[\s\x00-\x1f\x7f-\x9f]+|[\s\x00-\x1f\x7f-\x9f]+$")
-_TERM_CONTROLS = re.compile(r"[\x00-\x1f\x7f-\x9f]+")
+# the categories of the characters that show nothing: format characters
+# (such as the zero-width space and the bidirectional marks), controls,
+# and separators
+_UNSEEN = ("Cf", "Cc", "Zs", "Zl", "Zp")
 
 
-def _stored_term(term: str) -> str:
-    """`term` in the form Wikibase stores a label, a description or an
-    alias in: the separators and control characters at either end
-    trimmed, each run of control characters inside made one space, and the
-    whole in Unicode NFC. The reading of the instance holds labels in that
-    form, so a title is compared with it, and set, in that form too: in any
-    other, a label another item holds would look free, and an alias the
-    item has would look missing."""
-    trimmed = _TERM_CONTROLS.sub(" ", _TERM_EDGES.sub("", term))
-    return unicodedata.normalize("NFC", trimmed)
+def _shows(name: str) -> bool:
+    """Whether `name`, in the form Wikibase stores a term in, holds a
+    character that shows: one a label can end in and a reader see."""
+    return any(
+        unicodedata.category(char) not in _UNSEEN
+        for char in _stored_term(name)
+    )
+
+
+def _whole_letters(text: str, cut: str) -> str:
+    """`cut`, a start of `text`, backed off until it ends after a whole
+    letter: never before a character that extends the letter it ends in
+    (writer.extends), which keeps a zero-width joiner with the letters either
+    side of it, and never halfway through a pair of regional indicators.
+    A cut that would keep a letter without its accents keeps neither,
+    and one that keeps no whole letter is empty."""
+    while cut and (
+        (len(cut) < len(text) and extends(text[len(cut)], cut[-1]))
+        or half_flag(cut)
+    ):
+        cut = cut[:-1]
+    return cut
 
 
 def _fitted(
@@ -99,7 +119,8 @@ def _fitted(
     """`prefix + text + suffix`, whose parts are in the stored form
     (_stored_term), within the TERM_LIMIT characters Wikibase takes: when
     the whole is longer, `text` is cut, at the last `at` within the room
-    when `at` is given, and ends in "…". The result is in the stored form
+    when `at` is given, never within a letter (_whole_letters), and ends
+    in "…". The result is in the stored form
     too, and the same parts always give the same result. For text that
     only displays, such as a deck's title in the labels of its slides and
     images: nothing finds an item by it."""
@@ -107,10 +128,149 @@ def _fitted(
     room = TERM_LIMIT - len(prefix) - len(suffix) - 1
     if len(whole) <= TERM_LIMIT or room < 1:
         return whole
-    cut = text[:room]
+    cut = _whole_letters(text, text[:room].rstrip())
     if at is not None and at in cut:
         cut = cut.rsplit(at, 1)[0]
     return prefix + cut.rstrip() + "…" + suffix
+
+
+# the most bytes MediaWiki takes in an uploaded file's name, counted in
+# UTF-8 on the name the upload asks for, once in NFC (UploadBase::getTitle:
+# an archived version's name adds a timestamp and "!" within 255 bytes)
+FILE_NAME_LIMIT = 240
+# the most bytes a name made for an upload takes: when that name holds
+# other bytes, WikiClient.upload_file uploads under it with a content tag,
+# " <sha1[:8]>", 9 bytes, before its extension, and that name fits too
+UPLOAD_NAME_BYTES = FILE_NAME_LIMIT - 9
+
+# the bidirectional marks MediaWiki strips from a title (TitleParser)
+_FILE_NAME_BIDI = re.compile(r"[\u200e\u200f\u202a-\u202e]")
+# the characters MediaWiki reads as a space in a title, "_" among them
+# (TitleParser), and the other whitespace
+_FILE_NAME_SPACES = re.compile(
+    r"[\s_\u00a0\u1680\u180e\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+"
+)
+# the characters a file name cannot hold as they are, each made "-":
+# * the ASCII outside MediaWiki's title characters, "#<>[]{}|" and the
+#   controls ($wgLegalTitleChars), and ":", "/" and "\"
+#   ($wgIllegalFileChars), which an upload replaces with "-" or, for most
+#   controls, refuses;
+# * the replacement character, and U+FFFE and U+FFFF, which the request's
+#   normalisation makes one (UtfNormal), and which a title refuses;
+# * the controls beyond ASCII, which show as nothing, and lone surrogates,
+#   which UTF-8 cannot encode
+_FILE_NAME_ILLEGAL = re.compile(
+    r"[#<>\[\]{}|:/\\\x00-\x1f\x7f-\x9f\ud800-\udfff\ufffd-\uffff]"
+)
+# the start of each sequence a title refuses (TitleParser): a "%" hex
+# escape, an HTML character reference and three tildes
+_FILE_NAME_SEQUENCES = re.compile(
+    r"%(?=[0-9A-Fa-f]{2})|&(?=[A-Za-z0-9\u0080-\U0010ffff]+;)|~(?=~~)"
+)
+# the extensions MediaWiki refuses after any dot of a file's name: the
+# default $wgProhibitedFileExtensions of MediaWiki 1.45.4
+# (includes/MainConfigSchema.php), which the deploy's settings leave as
+# it is
+_PROHIBITED_EXTENSIONS = frozenset(
+    {
+        "html", "htm", "js", "jsb", "mhtml", "mht", "xhtml", "xht",
+        "php", "phtml", "php3", "php4", "php5", "phps", "phar",
+        "shtml", "jhtml", "pl", "py", "cgi",
+        "exe", "scr", "dll", "msi", "vbs", "bat", "com", "pif", "cmd", "vxd",
+        "cpl",
+        "xml",
+    }
+)  # fmt: skip
+
+
+def _file_name_part(text: str) -> str:
+    """`text` as part of a file name MediaWiki takes as it is: the
+    bidirectional marks MediaWiki strips left out, then in NFC, every
+    letter kept (a title takes every character beyond ASCII), each run
+    of whitespace and underscores one space, each character or sequence
+    it refuses (_FILE_NAME_ILLEGAL, _FILE_NAME_SEQUENCES) made "-", and
+    no space at either end. A part that would start with a dot starts
+    with "-" before it, its dot kept: a file whose name starts with a dot
+    is a hidden one on the wiki's disk, MediaWiki refuses one with
+    nothing before its extension's dot (``filename-tooshort``), and the
+    dot may be the extension's."""
+    text = unicodedata.normalize("NFC", _FILE_NAME_BIDI.sub("", text))
+    text = _FILE_NAME_ILLEGAL.sub("-", _FILE_NAME_SPACES.sub(" ", text))
+    text = _FILE_NAME_SEQUENCES.sub("-", text).strip(" ")
+    return f"-{text}" if text.startswith(".") else text
+
+
+def _cut_to_fit(text: str, end: str) -> str:
+    """The longest start of `text`, in whole letters (_whole_letters),
+    that leaves room for `end` within UPLOAD_NAME_BYTES, none of it when
+    `end` takes all that room or more, its end space trimmed, then
+    `end`."""
+    room = max(0, UPLOAD_NAME_BYTES - len(end.encode()))
+    cut = text.encode()[:room].decode(errors="ignore").rstrip(" ")
+    return _whole_letters(text, cut).rstrip(" ") + end
+
+
+def _unprohibited(name: str) -> str:
+    """`name` with the dot before each part MediaWiki refuses, but its
+    last, made "-", which takes the dot's one byte. MediaWiki splits a
+    file's name at every dot and refuses the upload
+    (``filetype-banned``) when a part after the first, as the title
+    holds it (each space "_") and in ASCII lower case, is one of
+    _PROHIBITED_EXTENSIONS (UploadBase::getTitle, splitExtensions and
+    checkFileExtensionList). The last part is the file's extension, its
+    type: one MediaWiki refuses is left as it is, and the upload is
+    refused."""
+    first, *parts = name.split(".")
+    kept = first
+    for at, part in enumerate(parts, start=1):
+        # bytes.lower() changes the ASCII letters alone, as PHP's
+        # strtolower does
+        key = part.replace(" ", "_").encode().lower().decode()
+        refused = at < len(parts) and key in _PROHIBITED_EXTENSIONS
+        kept += ("-" if refused else ".") + part
+    return kept
+
+
+def _upload_name(name: str, title: str = "", fallback: str = "") -> str:
+    """The name the bytes of a medium called `name` (with its extension)
+    are uploaded under: ``"<title> <name>"``, or `name` alone with no
+    title, each part in the form MediaWiki takes as it is
+    (_file_name_part), and `fallback` for a title that form leaves
+    nothing of. A `name` that form leaves nothing of leaves the title to
+    stand as the name, and with no title either the name is "-", never
+    empty: WikiClient.upload_file takes the file's own name, as it is,
+    for an empty one. The dot before each part MediaWiki refuses as an
+    extension, but the last, is "-", the parts those of the whole name
+    as it is cut (_unprohibited).
+
+    It takes at most UPLOAD_NAME_BYTES, so its content-tagged form fits
+    MediaWiki's limit too (_within_limit). The same parts always give
+    the same name."""
+    name = _file_name_part(name)
+    title = _file_name_part(title) or _file_name_part(fallback)
+    if not name:
+        title, name = "", title
+    return _unprohibited(_within_limit(title, name)) or "-"
+
+
+def _within_limit(title: str, name: str) -> str:
+    """``"<title> <name>"``, or `name` alone with no title, within
+    UPLOAD_NAME_BYTES. A longer one is cut, with "…" where the cut is:
+    the title, as far as ``"… <name>"``, keeping `name` whole; past that,
+    `name` alone, the title left out, when it fits, so a name that fits
+    on its own is never cut; and a longer `name` before its extension
+    or, when its extension leaves no room, at its end."""
+    whole = " ".join(part for part in (title, name) if part)
+    if len(whole.encode()) <= UPLOAD_NAME_BYTES:
+        return whole
+    if title and len(f"… {name}".encode()) <= UPLOAD_NAME_BYTES:
+        return _cut_to_fit(title, f"… {name}")
+    if len(name.encode()) <= UPLOAD_NAME_BYTES:
+        return name
+    path = PurePosixPath(name)
+    if len(f"…{path.suffix}".encode()) <= UPLOAD_NAME_BYTES:
+        return _cut_to_fit(path.stem, f"…{path.suffix}")
+    return _cut_to_fit(name, "…")
 
 
 class ExcludedMedia(RuntimeError):
@@ -523,7 +683,10 @@ class Registrar:
         never-ingest list, before it asks anything of the wiki. Without
         media there is nothing to find an artifact by, so `media_path` is
         required. The title is taken in the form Wikibase stores a label
-        in (_stored_term), and one blank in that form is refused.
+        in (_stored_term), and one blank in that form is refused. The
+        bytes are uploaded under the file's name in the form MediaWiki
+        takes as it is (_upload_name), and the description is cut to the
+        TERM_LIMIT characters Wikibase takes (_new_artifact).
         """
         if media_path is None:
             raise ValueError(
@@ -577,7 +740,13 @@ class Registrar:
         )
         # upload before any item is made, and only when no file of the
         # item holds the bytes already
-        file_page = held[0] if held else self.client.upload_file(media_path)
+        file_page = (
+            held[0]
+            if held
+            else self.client.upload_file(
+                media_path, filename=_upload_name(media_path.name)
+            )
+        )
 
         if created:
             artifact = self._new_artifact(description)
@@ -620,12 +789,17 @@ class Registrar:
         )
 
     def _new_artifact(self, description: str | None):
-        """A new artifact item, with its description alone. Its statements
-        cite the item itself, so they are written once it has an id, with
-        its label: a registration cut short between the two writes leaves
-        an item with no label and no statement, which nothing finds and
-        which takes no label from the artifact registered after it."""
+        """A new artifact item, with its description alone, in the form
+        Wikibase stores it in and cut to the TERM_LIMIT characters it
+        takes, ending in "…" (_fitted): a longer one, such as one that
+        names a long file, would be refused, and no item made. Its
+        statements cite the item itself, so they are written once it has
+        an id, with its label: a registration cut short between the two
+        writes leaves an item with no label and no statement, which
+        nothing finds and which takes no label from the artifact
+        registered after it."""
         item = self.client.wbi.item.new()
+        description = _fitted(_stored_term(description or ""))
         if description:
             item.descriptions.set("en", description)
         return item.write(summary="ingest: register artifact")
@@ -685,26 +859,36 @@ class Registrar:
     ) -> dict[str, str]:
         """Ensure each medium a container embeds has its artifact item and
         its file on the wiki, from the record of them kept in `directory`
-        (presentation.record_derived_media); returns {media SHA-1 -> QID}.
+        (presentation.record_derived_media, or the record a PDF read page
+        by page keeps of the images placed within its pages); returns
+        {media SHA-1 -> QID}.
 
         The container is the item whose `media SHA-1` is the record's
         source SHA-1, registered before its media. Each medium is found by
-        its own SHA-1 (ADR-0010), so an image that several decks embed, or
-        that is also ingested on its own, is one item, `part of` each
-        container. It is labelled ``"<container title> — <name>"`` by its
-        first name in the archive (ADR-0008), and its other names become
-        aliases, unless another item has one as its label. Its bytes are
-        uploaded from the file the record keeps, under the name
-        ``"<title> <name>"``, only when no file of the item holds them.
+        its own SHA-1 (ADR-0010), so an image that several decks or PDFs
+        embed, or that is also ingested on its own, is one item, `part of`
+        each container. It is labelled ``"<container title> — <name>"`` by
+        its first name: in the deck's archive (``image1.png``), or its
+        first place in the PDF (``page 6, image 1``; ADR-0008), of the
+        names that show something once stored (_shows), or ``image N``
+        when none does, N its place among the record's media in
+        the order of their SHA-1s, excluded media counted; its other
+        names become aliases, unless another item has one as its label.
+        Its bytes are uploaded from the file the record keeps, under the
+        name ``"<title> <name>"``, with the file's suffix when the name has
+        none, in the form MediaWiki takes, its title cut or left out to
+        fit (_upload_name), only when no file of the item holds them.
+        It is a `photograph` when that file is an image's, and an
+        `artifact` otherwise.
 
         Each container asserts its media additively: one ``part of ->
-        container`` per slide the medium is on, slide-qualified, plus
-        `instance of`, `media file` and `media SHA-1`, each referenced
-        ``stated in -> the container``. A statement another container (or
-        the artifact itself) made already gains this container's reference
-        instead of a duplicate. A medium the never-ingest list names, by
-        a name or by its SHA-1, is left out: neither registered nor
-        uploaded.
+        container`` per slide or page the medium is on, qualified with its
+        number, plus `instance of`, `media file` and `media SHA-1`, each
+        referenced ``stated in -> the container``. A statement another
+        container (or the artifact itself) made already gains this
+        container's reference instead of a duplicate. A medium the
+        never-ingest list names, by a name or by its SHA-1, is left out:
+        neither registered nor uploaded.
         """
         if not record.media:
             return {}
@@ -720,25 +904,32 @@ class Registrar:
         stated_in = properties["stated_in"]
         media_file = properties["media_file"]
         media_sha1 = properties["media_sha1"]
-        # MediaWiki refuses some characters in a file name
-        prefix = (
-            re.sub(r"[^A-Za-z0-9 _.-]+", "", record.title).strip()
-            or "presentation"
-        )
         title = _stored_term(record.title)
         derived: dict[str, str] = {}
-        for key, medium in sorted(record.media.items()):
+        media = sorted(record.media.items())
+        for number, (key, medium) in enumerate(media, start=1):
             if self._excluded(medium.names, key):
                 continue
             path = directory / medium.file
+            # the record names the file for the medium's SHA-1 and the
+            # suffix of its first name
+            suffix = PurePosixPath(medium.file).suffix.lower()
             if path.is_symlink() or file_sha1(path) != key:
                 raise RuntimeError(
                     f"{medium.file} does not hold the bytes its record "
                     f"names; nothing of it was registered or uploaded"
                 )
+            # the names that show something once stored (_shows), in
+            # their order: a medium with none, its names control
+            # characters or a zero-width space alone, say, is "image N",
+            # N its place among the record's media in the order of their
+            # SHA-1s, excluded media counted; its label then ends in a
+            # name the instance keeps as sent, and a re-run finds it
+            kept = [name for name in medium.names if _shows(name)]
+            first = kept[0] if kept else f"image {number}"
+            names = list(dict.fromkeys(map(_stored_term, kept))) or [first]
             # the container's title is cut to fit, if need be: a medium's
             # labels and aliases only display it
-            names = [_stored_term(name) for name in medium.names]
             labels = [_fitted(title, f" — {name}") for name in names]
             found = instance.by_sha1.get(key)
             item = self.client.wbi.item.get(found) if found else None
@@ -759,11 +950,11 @@ class Registrar:
             # uploaded only when no file of the item holds the bytes, so a
             # medium another container embeds adds no second blob
             if not held:
-                held = [
-                    self.client.upload_file(
-                        path, filename=f"{prefix} {medium.names[0]}"
-                    )
-                ]
+                name = first
+                if not PurePosixPath(name).suffix:
+                    name += suffix
+                upload = _upload_name(name, record.title, record.container)
+                held = [self.client.upload_file(path, filename=upload)]
             if item is None:
                 item = self.client.wbi.item.new()
                 item.labels.set("en", new_label)
@@ -773,7 +964,11 @@ class Registrar:
                     _fitted(
                         slides,
                         ")",
-                        prefix="media embedded in the presentation (slide ",
+                        prefix=(
+                            "image placed within the PDF (page "
+                            if record.container == "pdf"
+                            else "media embedded in the presentation (slide "
+                        ),
                         at=", ",
                     ),
                 )
@@ -781,10 +976,11 @@ class Registrar:
                 if self._takes_alias(item, name, key):
                     item.aliases.set("en", name)
                     changed = True
-            image = (
-                PurePosixPath(medium.names[0]).suffix.lower() in IMAGE_SUFFIXES
+            kind = (
+                items["photograph"]
+                if suffix in IMAGE_SUFFIXES
+                else items["artifact"]
             )
-            kind = items["photograph"] if image else items["artifact"]
             statements = [
                 _item_claim(instance_of, kind, stated_in, container),
                 *(

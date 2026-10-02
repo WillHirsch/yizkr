@@ -17,7 +17,13 @@ Per batch, the writer:
    to the artifact item carrying that `media SHA-1` (ADR-0010). This
    happens before anything is written: a batch that cites media no item
    carries is refused whole, since its statements would have no source
-   to reference;
+   to reference. A claim whose subject is its own source document (an
+   `artifact` subject, such as an `issued_by` claim; ADR-0035 §3.4) is
+   written on that artifact item. A document subject that names any
+   other document, or sits on a property the manifest does not mark
+   `document_subject`, and a claim of such a property whose subject is
+   anything but its own source document, are refused before the first
+   write, as a claim whose text the instance cannot hold is (below);
 1. mints an extraction-run item from the batch metadata (idempotent:
    matched by a deterministic label containing the batch content hash),
    with its run details in the label/description — items describe
@@ -32,9 +38,9 @@ Per batch, the writer:
 2. creates items for unresolved `local` subjects/values (reusing an
    existing item on exact label match, so re-runs never duplicate
    people: the label is matched and written in the form the instance
-   keeps labels in, whatever form the batch gives it in: trimmed, in
-   Unicode NFC, and cut to the characters the instance holds in a
-   label, `_term_text`),
+   keeps labels in, whatever form the batch gives it in: trimmed,
+   cleaned up, in Unicode NFC, and cut to the characters the instance
+   holds in a label, `_term_text`),
    writing each minted item's `instance of`, and an
    unclassified entity's `type hint`, with two references: stated in ->
    the artifact that mentions the entity, and inferred from extraction
@@ -67,7 +73,9 @@ Per batch, the writer:
    writer sends it, with every text in it in Unicode NFC, the form the
    instance keeps text in and gives it back in (`_stored_string`): its
    string, external-id and monolingual text values and qualifiers, and
-   its source block's page number, region and excerpt. So a claim whose
+   its source block's page number, region and excerpt, which also go on
+   one line and cleaned up as the instance gives them back
+   (`_locator_text`). So a claim whose
    text the batch gives in another form, such as the decomposed form
    (NFD), finds the statement written for it. The claim's source block,
    `stated in` with its page number, region and excerpt, is compared
@@ -127,53 +135,67 @@ Wikibase holds at most TEXT_LIMIT (400) characters in the text of a
 string, external-id or monolingual text value, whether the value is a
 statement's, a qualifier's or a reference's, and no text value that
 holds a line break or a tab, or has whitespace at either end
-(LINE_BREAKS, WHITESPACE), save that it changes a vertical tab or a form
-feed in a string value into U+FFFD rather than refusing it. It trims a
-label, a description or an alias and keeps it in a form of its own
-(`_stored_term`), in at most TERM_LIMIT (250) characters, and refuses an
-item whose label and description are the same. It refuses the whole edit
-that sends a text it does not hold. The writer checks each text in the
-form the instance keeps it in, and sends none that the instance would
-refuse, so that no text's length or shape stops the batch, with one
-exception: a local ref whose label holds nothing the instance keeps
-raises ValueError when the writer comes to mint its item, as one with no
-label does (step 2), after the claims before it are written:
+(LINE_BREAKS, WHITESPACE). It cleans a text up (CLEANED_UP): each C0
+control character but the tab, the line feed and the carriage return,
+and each of the noncharacters U+FFFE and U+FFFF, becomes U+FFFD, in a
+string value before it checks and stores it, and in every text its API
+gives back, monolingual text included. So it changes a vertical tab or a
+form feed in a string value into U+FFFD rather than refusing it. It
+trims a label, a description or an alias, cleans it up and keeps it in a
+form of its own (`stored_term`), in at most TERM_LIMIT (250)
+characters, and refuses an item whose label and description are the
+same. It refuses the whole edit that sends a text it does not hold. The
+writer checks each text in the form the instance keeps it in, and sends
+none that the instance would refuse or give back changed, so that no
+text's length or shape stops the batch and a re-run finds what the
+first run wrote, with one exception: a local ref whose label holds
+nothing the instance keeps raises ValueError when the writer comes to
+mint its item, as one with no label does (step 2), after the claims
+before it are written:
 
 * a claim whose own text, its value or a qualifier's, is over the limit,
-  or holds a line break or a tab, or has whitespace at either end, is
-  refused before the first write, and nothing of it is written: no
-  statement, and no item that only it mentions. That holds for a
-  vertical tab or a form feed in a string value too, which the instance
-  would change. The result's `refused` names it by its claim id
-  (`claim_id` in yizkr.pipeline.review), its review-sheet id unless the
-  review corrected it, and a warning says what keeps each of its texts
-  out, quoting none of them. The text is never cut or changed, as that
-  would alter what the source says (CLAUDE.md rule 5). Every other claim
-  of the batch is written as the steps above say, with its references
+  or holds a line break or a tab, or has whitespace at either end, or
+  holds a character the instance cleans up, is refused before the first
+  write, and nothing of it is written: no statement, and no item that
+  only it mentions. That holds for a vertical tab or a form feed in a
+  string value too, which the instance would change. The result's
+  `refused` names it by its claim id (`claim_id` in
+  yizkr.pipeline.review), its review-sheet id unless the review
+  corrected it, and a warning says what keeps each of its texts out,
+  quoting none of them. The text is never cut or changed, as that would
+  alter what the source says (CLAUDE.md rule 5). Every other claim of
+  the batch is written as the steps above say, with its references
   (rules 1 and 2). An entity's type hint is free text that the writer
   compares ignoring its spacing (step 5), so it goes with each run of
-  whitespace in it made one space (`_hint_text`), and one still over the
-  limit is left out in the same way, with a warning, wherever the writer
-  would record it;
+  whitespace in it made one space, and each character the instance
+  cleans up made U+FFFD, as the instance would give it back
+  (`_hint_text`), and one still over the limit is left out in the same
+  way, with a warning, wherever the writer would record it;
 * a reference's page number and region only place the claim in its
   source, as its excerpt only helps a reader check it there, so each is
-  put on one line and cut to the limit rather than refused
+  put on one line, cleaned up and cut to the limit rather than refused
   (`_locator_text`): whitespace at either end goes, a line break inside
-  becomes " | ", visibly, and a tab a space. A text still over the limit
-  is cut at a break between words and ends with CUT_MARK (" …"), "sha1"
-  and the first 12 hex digits of the SHA-1 of the whole text (`_cut`). A
-  locator or excerpt with nothing left is left out. Each depends on the
-  text alone, so a re-run builds the block the instance keeps, and is
-  skipped (step 4). The digest keeps two page numbers, regions or
-  excerpts that agree up to the cut apart, so the two places a source
-  asserts a value in stay two reference blocks;
+  becomes " | ", visibly, a tab a space, and each other character the
+  instance cleans up U+FFFD, as the instance would give it back. A text
+  still over the limit is cut at a break between words and ends with
+  CUT_MARK (" …"), "sha1" and the first 12 hex digits of the SHA-1 of
+  the whole text (`_cut`). A locator or excerpt with nothing left is
+  left out. Each depends on the text alone, so a re-run builds the block
+  the instance keeps, and is skipped (step 4). The digest keeps two page
+  numbers, regions or excerpts that agree up to the cut apart, so the
+  two places a source asserts a value in stay two reference blocks;
 * a label, a description or an alias the writer makes goes in the form
-  the instance keeps a term in, and one still over TERM_LIMIT is cut in
-  the same way, with its digest (`_term_text`). A label is how the
-  writer finds an item again: a label given at length finds the item
-  written for it, and two labels that agree up to the cut still name two
-  items. The run item's label, which holds the model's identifier, is
-  made the same way.
+  the instance keeps a term in (`stored_term`: trimmed, cleaned up and
+  in NFC, in that order, as Wikibase's trimToNFC does it), and one still
+  over TERM_LIMIT once in that form is cut in the same way, with its
+  digest (`_term_text`), so whitespace around a term never counts
+  towards the limit. A label is how the writer finds an item again: a
+  label given in another form or at length finds the item written for
+  it, and two labels that agree up to the cut still name two items. The
+  run item's label, which holds the model's identifier, is made the same
+  way. The registrar compares and sets an artifact's title by the same
+  rule (yizkr.pipeline.registrar), so a title and a label that the
+  instance keeps alike are alike to both.
 
 Nothing here auto-approves: the writer expects the output of
 `apply_review` and trusts the human decisions that produced it, except
@@ -207,6 +229,7 @@ from yizkr.claims import (
     VocabRef,
 )
 from yizkr.core.wiki import WikiClient
+from yizkr.model.schema import load_acceptance
 from yizkr.pipeline.review import (
     claim_id,
     entity_records,
@@ -218,11 +241,12 @@ from yizkr.pipeline.review import (
 # the string and the monolingual text value types, an external id being a
 # string value. It checks every snak of a statement it is sent, the value,
 # each qualifier and each reference, after it has put a string value in
-# NFC, and refuses the whole edit when one is longer.
+# NFC and cleaned it up (CLEANED_UP), and refuses the whole edit when one
+# is longer.
 TEXT_LIMIT = 400
 # the most characters Wikibase holds in a term, a label, a description or
 # an alias (its `multilang` string limit), counted once it has trimmed the
-# term (_stored_term)
+# term (stored_term)
 TERM_LIMIT = 250
 # what a text cut to its limit ends with, before the digest of the whole
 # text (_cut)
@@ -235,10 +259,10 @@ CUT_MARK = " …"
 # breaks, the tab, the space separators, and U+180E, which `\h` holds
 # though Unicode has made it a format character (Cf). Python's
 # str.isspace() differs, counting U+001C to U+001F and not U+180E. Before
-# the check, Wikibase cleans a string value up (cleanupToNFC), making a
-# vertical tab or a form feed in it U+FFFD, so it refuses those two in
-# monolingual text alone; the writer counts them as line breaks in every
-# text value, as the instance either refuses or changes them.
+# the check, Wikibase cleans a string value up (cleanupToNFC, CLEANED_UP),
+# making a vertical tab or a form feed in it U+FFFD, so it refuses those
+# two in monolingual text alone; the writer counts them as line breaks in
+# every text value, as the instance either refuses or changes them.
 LINE_BREAKS = "".join(map(chr, (0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x2028, 0x2029)))
 WHITESPACE = LINE_BREAKS + "".join(
     map(
@@ -251,13 +275,14 @@ WHITESPACE = LINE_BREAKS + "".join(
 # run of whitespace (_hint_text)
 _LINE_BREAK = re.compile("\r\n|[" + LINE_BREAKS + "]")
 _WHITESPACE_RUN = re.compile("[" + WHITESPACE + "]+")
-# How Wikibase trims a term (StringNormalizer::trimToNFC): each run of
-# control characters (Unicode Cc, a line break or a tab among them) becomes
-# one space, and the separators (Unicode Z) at either end go. It refuses a
-# term that still holds a line or paragraph separator (U+2028, U+2029),
-# which are separators but no control characters, or that begins or ends
-# with a Mongolian vowel separator (U+180E): the writer makes each of the
-# two a space as well, and trims the third with the separators.
+# How Wikibase trims a term (StringNormalizer::trimToNFC, whose
+# trimWhitespace comes before its cleanupToNFC): each run of control
+# characters (Unicode Cc, a line break or a tab among them) becomes one
+# space, and the separators (Unicode Z) at either end go. It refuses a term
+# that still holds a line or paragraph separator (U+2028, U+2029), which
+# are separators but no control characters, or that begins or ends with a
+# Mongolian vowel separator (U+180E): the writer makes each of the two a
+# space as well, and trims the third with the separators.
 _TERM_CONTROLS = re.compile(
     r"[\x00-\x1f\x7f-\x9f\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}]+"
 )
@@ -267,6 +292,28 @@ _TERM_EDGES = "".join(
         (0x20, 0xA0, 0x1680, *range(0x2000, 0x200B), 0x2028, 0x2029)
         + (0x202F, 0x205F, 0x3000, 0x180E),
     )
+)
+# The characters Wikibase makes U+FFFD, one for one, wherever it cleans a
+# text up: UtfNormal's Validator::cleanUp (version 4.0.0, which MediaWiki
+# pins), whose replaceForNativeNormalize replaces them before it puts the
+# text in NFC. These are every C0 control character but the tab, the line
+# feed and the carriage return, and the noncharacters U+FFFE and U+FFFF;
+# DEL, the C1 control characters and the other noncharacters stay as they
+# are. Wikibase cleans up a string or external-id value before it checks
+# and stores it (StringNormalizer::cleanupToNFC), and a term once it has
+# trimmed it (trimToNFC, after its trimWhitespace has made every control
+# character a space, so only the two noncharacters are left to replace).
+# It stores a monolingual text as it is sent, but its API cleans up every
+# text it gives back (ApiResult, through Language::normalize), so that
+# too reads back cleaned up.
+CLEANED_UP = "".join(
+    map(
+        chr,
+        (*range(0x09), 0x0B, 0x0C, *range(0x0E, 0x20), 0xFFFE, 0xFFFF),
+    )
+)
+_CLEAN_UP = str.maketrans(
+    dict.fromkeys(CLEANED_UP, "\N{REPLACEMENT CHARACTER}")
 )
 # punctuation that joins the letters or digits on its two sides into one
 # word, which a cut keeps whole: a point or comma inside a number
@@ -332,9 +379,10 @@ class WriteResult:
     warnings: list[str] = field(default_factory=list)
     # the claim id (yizkr.pipeline.review.claim_id; its review-sheet id
     # unless the review corrected it) of each claim refused whole because
-    # the instance cannot hold its own text as it is (over TEXT_LIMIT, or
-    # with a line break, a tab or whitespace at either end), in batch
-    # order; a warning says why for each (the module docstring)
+    # the instance cannot hold its own text as it is (over TEXT_LIMIT,
+    # with a line break, a tab or whitespace at either end, or with a
+    # character it cleans up into U+FFFD), in batch order; a warning says
+    # why for each (the module docstring)
     refused: list[str] = field(default_factory=list)
 
 
@@ -406,8 +454,10 @@ def _faults(text: str) -> list[str]:
     form the writer sends it in (_stored_string), as it is: each fault a
     clause that reads after the words naming the text ("its value ...").
     None when the instance holds it: it has at most TEXT_LIMIT characters,
-    holds no line break (LINE_BREAKS) or tab, and has no whitespace
-    (WHITESPACE) at either end."""
+    holds no line break (LINE_BREAKS) or tab, has no whitespace
+    (WHITESPACE) at either end, and holds no other character the instance
+    cleans up into U+FFFD (CLEANED_UP; a vertical tab and a form feed are
+    line breaks here)."""
     faults = []
     if len(text) > TEXT_LIMIT:
         faults.append(
@@ -429,18 +479,28 @@ def _faults(text: str) -> list[str]:
             f"holds {_listed(shapes)}, which Wikibase refuses or changes in "
             f"a text value"
         )
+    if any(char in CLEANED_UP and char not in LINE_BREAKS for char in text):
+        faults.append(
+            "holds a control character or a noncharacter, which Wikibase "
+            "changes into U+FFFD"
+        )
     return faults
 
 
 def _hint_text(text: str) -> str:
     """An entity's type hint as the writer sends it: in the form the
     instance keeps text in (_stored_string), each run of whitespace in it
-    (WHITESPACE, a line break or a tab among them) made one space, and
-    none at either end. A type hint is free text, which the writer compares
-    ignoring its spacing (normalized_type_hint), so its spacing says
-    nothing the writer keeps, and its words go as they are. Empty when the
-    hint is whitespace alone."""
-    return _WHITESPACE_RUN.sub(" ", _stored_string(text)).strip(" ")
+    (WHITESPACE, a line break or a tab among them) made one space, none at
+    either end, and then cleaned up as the instance cleans up a string
+    value (_cleaned_up). A type hint is free text, which the writer
+    compares ignoring its spacing (normalized_type_hint), so its spacing
+    says nothing the writer keeps, and its words go as they are. The hint
+    the writer compares with an item's is the one it sends, so it is the
+    one the instance gives back, and a re-run finds the statement written
+    for it. Empty when the hint is whitespace alone."""
+    return _cleaned_up(
+        _WHITESPACE_RUN.sub(" ", _stored_string(text)).strip(" ")
+    )
 
 
 def _value_text(value) -> str | None:
@@ -457,6 +517,66 @@ def _is_mark(char: str) -> bool:
     """A combining mark (Unicode category M), which belongs to the
     character before it."""
     return unicodedata.category(char).startswith("M")
+
+
+# the zero-width joiner, which joins the characters either side of it
+# into one, and the regional indicators, two of which make one flag
+_JOINER = "\u200d"
+_REGIONAL_INDICATORS = range(0x1F1E6, 0x1F200)
+
+
+# the characters that extend the letter before them, besides combining
+# marks: the zero-width non-joiner and joiner, the emoji skin tones, the
+# tag characters that spell a subdivision's flag, the halfwidth kana's
+# sound marks, and the Hangul vowel and final jamo that NFC leaves apart
+_EXTENDERS = (
+    range(0x200C, 0x200E),
+    range(0x1F3FB, 0x1F400),
+    range(0xE0020, 0xE0080),
+    range(0xFF9E, 0xFFA0),
+    range(0x1160, 0x1200),
+    range(0xD7B0, 0xD800),
+)
+# the canonical combining class of a virama, which joins the letter after
+# it to the one before (an Indic conjunct)
+_VIRAMA = 9
+# an old Hangul syllable's leading jamo, which joins the leading jamo or
+# the precomposed syllable after it into one syllable
+_LEADING_JAMO = (range(0x1100, 0x1160), range(0xA960, 0xA980))
+_SYLLABLES = range(0xAC00, 0xD7A4)
+
+
+def extends(char: str, before: str) -> bool:
+    """Whether `char`, coming right after `before`, belongs to the same
+    letter, so that no cut falls between them: a combining mark
+    (_is_mark), a character of _EXTENDERS, any character after a
+    zero-width joiner, a letter after a virama, or a leading jamo or a
+    precomposed Hangul syllable after a leading jamo (_LEADING_JAMO,
+    _SYLLABLES). A narrower rule than
+    Unicode's grapheme clusters (Unicode Standard Annex 29), which it
+    follows for these sequences alone (ADR-0010). The writer's cuts and
+    the registrar's keep to it."""
+    code = ord(char)
+    return (
+        _is_mark(char)
+        or any(code in extenders for extenders in _EXTENDERS)
+        or before == _JOINER
+        or (char.isalpha() and unicodedata.combining(before) == _VIRAMA)
+        or (
+            any(ord(before) in leading for leading in _LEADING_JAMO)
+            and (
+                code in _SYLLABLES
+                or any(code in leading for leading in _LEADING_JAMO)
+            )
+        )
+    )
+
+
+def half_flag(text: str) -> bool:
+    """Whether `text` ends in an odd run of regional indicators: the
+    first half of a flag whose second half was cut off."""
+    run = len(text) - len(text.rstrip("".join(map(chr, _REGIONAL_INDICATORS))))
+    return run % 2 == 1
 
 
 def _in_word(text: str, index: int, inner: str = INNER_PUNCTUATION) -> bool:
@@ -476,11 +596,14 @@ def _in_word(text: str, index: int, inner: str = INNER_PUNCTUATION) -> bool:
 
 def _joined(text: str, end: int, inner: str = INNER_PUNCTUATION) -> bool:
     """Whether a cut of `text` before text[end] would split what reads as
-    one: a combining mark from the character before it, or a word, whose
-    parts `inner` punctuation joins. With no `inner` punctuation, a word
-    is a run of letters, digits and marks."""
-    return _is_mark(text[end]) or (
-        _in_word(text, end - 1, inner) and _in_word(text, end, inner)
+    one: a letter, from a character that extends it (extends) or half of
+    a flag (half_flag), or a word, whose parts `inner` punctuation joins.
+    With no `inner` punctuation, a word is a run of letters, digits and
+    marks."""
+    return (
+        extends(text[end], text[end - 1])
+        or half_flag(text[:end])
+        or (_in_word(text, end - 1, inner) and _in_word(text, end, inner))
     )
 
 
@@ -497,31 +620,46 @@ def _one_line(text: str) -> str:
 def _locator_text(text: str) -> str:
     """A reference's page number, region or excerpt as the writer sends
     it: in the form the instance keeps text in (_stored_string), on one
-    line (_one_line) and, when that is longer than TEXT_LIMIT, cut to it
-    (_cut). It depends on the text alone, so a claim written again sends
-    the text the instance keeps, and its reference block is found (step 4
-    of the module docstring). Empty when the text is whitespace alone."""
-    return _cut(_one_line(_stored_string(text)), TEXT_LIMIT)
+    line (_one_line), cleaned up as the instance gives it back
+    (_cleaned_up; a vertical tab or a form feed is a line break by then)
+    and, when that is longer than TEXT_LIMIT, cut to it (_cut), with the
+    digest of the text as the instance would keep it. It depends on the
+    text alone, so a claim written again sends the text the instance
+    keeps, and its reference block is found (step 4 of the module
+    docstring). Empty when the text is whitespace alone."""
+    return _cut(_cleaned_up(_one_line(_stored_string(text))), TEXT_LIMIT)
 
 
-def _stored_term(text: str) -> str:
+def _cleaned_up(text: str) -> str:
+    """`text` as Wikibase cleans a text up: each character of CLEANED_UP
+    made U+FFFD. It replaces one character by one, and a text in NFC
+    stays in NFC: neither U+FFFD nor any character it replaces combines
+    with a character beside it."""
+    return text.translate(_CLEAN_UP)
+
+
+def stored_term(text: str) -> str:
     """`text` in the form the instance keeps a label, a description or an
-    alias in: each run of control characters in it, and each line or
-    paragraph separator, made one space, the separators at either end
-    trimmed (_TERM_CONTROLS, _TERM_EDGES), and the whole in Unicode NFC.
-    Empty when the text holds nothing the instance keeps."""
+    alias in, reached as Wikibase's trimToNFC reaches it: first trimmed,
+    each run of control characters and line or paragraph separators in it
+    made one space, and the separators at either end dropped
+    (_TERM_CONTROLS, _TERM_EDGES); then cleaned up (_cleaned_up), which
+    leaves only U+FFFE and U+FFFF to make U+FFFD; and then in Unicode NFC.
+    The writer finds, compares and sends every term in this form, and the
+    registrar every title. Empty when the text holds nothing the instance
+    keeps."""
     text = _TERM_CONTROLS.sub(" ", text).strip(_TERM_EDGES)
-    return unicodedata.normalize("NFC", text)
+    return unicodedata.normalize("NFC", _cleaned_up(text))
 
 
 def _term_text(text: str) -> str:
     """A label, description or alias as the writer sends it, and as it
     looks for a label: in the form the instance keeps a term in
-    (_stored_term) and, when that is longer than TERM_LIMIT, cut to it
+    (stored_term) and, when that is longer than TERM_LIMIT, cut to it
     (_cut). So the term it sends is the term the instance keeps, and a
     label given in another form, or at any length, finds the item written
     for it."""
-    return _cut(_stored_term(text), TERM_LIMIT)
+    return _cut(stored_term(text), TERM_LIMIT)
 
 
 def _terms(texts: list[str]) -> list[str]:
@@ -539,13 +677,15 @@ def _cut(text: str, limit: int) -> str:
     between words and leaves room for the mark, and the mark follows it:
     CUT_MARK, then "sha1" and the first 12 hex digits of the SHA-1 of the
     whole text. So no word is kept in part: a page "112" is never kept as
-    "11", nor "1.234" as "1" (INNER_PUNCTUATION), and no letter loses a
-    combining mark. When one word fills the room, as a list of pages with
+    "11", nor "1.234" as "1" (INNER_PUNCTUATION), and no letter is kept
+    in part: none loses a combining mark or another character that
+    extends it, and no flag is halved (extends, half_flag). When one word
+    fills the room, as a list of pages with
     no spaces ("2,3,4") can, the cut falls at its last point, comma or
     apostrophe, so no number in it is kept in part either; and only when
     no such start holds anything but spaces, as when one run of letters
     and digits fills the room, is the text cut inside the run, each letter
-    kept with its marks. The digest keeps two texts that agree up to the
+    kept whole. The digest keeps two texts that agree up to the
     cut apart, and apart from a text that reads as the cut's start: the
     places a source asserts a value in stay a reference block each (step 4
     of the module docstring), and two labels that agree up to the cut name
@@ -571,7 +711,9 @@ def _cut(text: str, limit: int) -> str:
     if not kept:
         # one run of letters and digits fills the room
         end = room
-        while end and _is_mark(text[end]):
+        while end and (
+            extends(text[end], text[end - 1]) or half_flag(text[:end])
+        ):
             end -= 1
         kept = text[:end] or text[:room]
     return kept + mark
@@ -645,12 +787,15 @@ class BatchWriter:
 
     def _resolve_ref(
         self,
-        ref: EntityRef,
+        ref: EntityRef | ArtifactRef,
         result: WriteResult,
         source_artifact_qid: str | None,
     ) -> str:
         if isinstance(ref, VocabRef):
             return self.items[ref.key]
+        if isinstance(ref, ArtifactRef):
+            # a claim's own source document, resolved in step 0
+            return self._artifact_qids[ref.sha1]
         if isinstance(ref, QidRef):
             qid = ref.qid
         elif isinstance(ref, LocalRef):
@@ -749,9 +894,10 @@ class BatchWriter:
             item.write(summary="ingest: instance of")
         # open-schema escape hatch (ADR-0013): record what an unclassified
         # entity actually is, so the gap is queryable, not lost. It goes
-        # with its spacing made single spaces (_hint_text), and a hint the
-        # instance cannot hold is left out, with the warning write_batch
-        # gave before its first write
+        # with its spacing made single spaces and cleaned up as the
+        # instance gives it back (_hint_text), and a hint the instance
+        # cannot hold is left out, with the warning write_batch gave before
+        # its first write
         type_hint = _hint_text(record.type_hint or "") if record else ""
         if type_hint and len(type_hint) <= TEXT_LIMIT and source_artifact_qid:
             from wikibaseintegrator.datatypes import String
@@ -907,9 +1053,10 @@ class BatchWriter:
             Item(prop_nr=self.properties["stated_in"], value=artifact_qid)
         )
         # the locators and the excerpt only place the claim in its source
-        # and help a reader check it there: each goes in NFC, on one line
-        # and cut to what the instance holds, never failing the write, and
-        # one of whitespace alone is left out (_locator_text)
+        # and help a reader check it there: each goes in NFC, on one line,
+        # cleaned up as the instance gives it back and cut to what the
+        # instance holds, never failing the write, and one of whitespace
+        # alone is left out (_locator_text)
         source = claim.source if claim is not None else None
         page = _locator_text(source.page_number or "") if source else ""
         if page:
@@ -1274,7 +1421,8 @@ class BatchWriter:
                     result,
                 )
             # and so is a type hint the instance cannot hold; one it holds
-            # goes with its spacing made single spaces (_hint_text)
+            # goes with its spacing made single spaces and cleaned up as
+            # the instance gives it back (_hint_text)
             hint = _hint_text(found.type_hint or "")
             if hint and len(hint) <= TEXT_LIMIT:
                 self._record_type_statement(
@@ -1320,15 +1468,45 @@ class BatchWriter:
 
     @staticmethod
     def _refusals(batch: ClaimBatch) -> dict[int, str]:
-        """The claims of `batch` whose own text the instance cannot hold as
-        it is, by their place in the batch, each with the warning that
-        names it by its claim id and property and says, for each of its
-        texts, its value or a qualifier's, what keeps the instance from
-        holding it in the form the writer sends it in (_faults): its
-        length, a line break or a tab, whitespace at either end (the module
-        docstring). The warning quotes none of the texts."""
+        """The claims of `batch` the writer refuses, by their place in the
+        batch, each with the warning that names it by its claim id and
+        property and says why (the module docstring):
+
+        * a document subject that is not the claim's own source, or on a
+          property the manifest does not mark `document_subject`, and a
+          claim of such a property with any other subject (ADR-0035
+          §3.4): the statement would go on the wrong item;
+        * a claim whose own text the instance cannot hold as it is: for
+          each of its texts, its value or a qualifier's, what keeps the
+          instance from holding it in the form the writer sends it in
+          (_faults): its length, a line break or a tab, whitespace at
+          either end, a control character or a noncharacter the instance
+          changes into U+FFFD. The warning quotes none of the texts."""
+        document_subjects = load_acceptance().document_subjects
         refusals = {}
         for index, claim in enumerate(batch.claims):
+            if isinstance(claim.subject, ArtifactRef):
+                reasons = []
+                if claim.subject.sha1 != claim.source.artifact.sha1:
+                    reasons.append(
+                        "its subject is a document other than its own source"
+                    )
+                if claim.property not in document_subjects:
+                    reasons.append(
+                        "its property does not take the source document as "
+                        "its subject"
+                    )
+            elif claim.property in document_subjects:
+                reasons = ["its property takes only its source document"]
+            else:
+                reasons = []
+            if reasons:
+                refusals[index] = (
+                    f"claim {claim_id(claim)} ({claim.property}) is "
+                    f"refused, and nothing of it is written: "
+                    f"{'; '.join(reasons)} (ADR-0035 §3.4)"
+                )
+                continue
             texts = [("its value", claim.value)]
             texts.extend(
                 (f"its {qualifier.property} qualifier", qualifier.value)
