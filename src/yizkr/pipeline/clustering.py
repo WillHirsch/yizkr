@@ -116,12 +116,14 @@ by deterministic evidence alone:
 
 - a person pair is confident when they share a key (`key`), and kin that
   agree, or dates that agree, corroborate it. A shared key counts only
-  through given parts that may be one name: not two given names whose
-  records give standard forms that share no key; not two nicknames of
-  people whose records give given names that share no key; and not a
-  given name against a nickname where the given name states a standard
-  form that shares no key with the nickname holder's given names (a
-  shared key that does not count is `weak`). A key only a GEDCOM
+  through given parts that may be one name (a given part is a given name
+  or a word of an `unsplit` form, which states no standard form): not
+  two given parts whose records give standard forms that share no key;
+  not two nicknames whose holders' records both give given names,
+  sharing no key; and not a given part against a nickname where the
+  given part states a standard form that shares no key with the
+  nickname holder's given names, a holder with no given names barring
+  nothing. A shared key that does not count is `weak`. A key only a GEDCOM
   `unsplit` form gives (`weak`) and a lone given name (`given`) never
   make a link confident. Stated sexes that differ, or civil statuses
   that cannot both hold (`unmarried` at a date wholly after a `married`,
@@ -1437,11 +1439,13 @@ def _apart(first: _Node, second: _Node) -> bool:
 
 def _one_given(a: _Node, one: _Given, b: _Node, other: _Given) -> bool:
     """Whether two given parts that share a key may be one name
-    (ADR-0035 §7, rules 1 and 3): not two given names whose records give
-    standard forms that share no key; not two nicknames of people whose
-    records give given names that share no key; and not a given name
-    against a nickname where the given name states a standard form that
-    shares no key with the nickname holder's given names."""
+    (ADR-0035 §7, rules 1 and 3). A given part is a given name or a word
+    of an `unsplit` form, which states no standard form. Not two given
+    parts whose records give standard forms that share no key; not two
+    nicknames whose holders' records both give given names, sharing no
+    key; and not a given part against a nickname where the given part
+    states a standard form that shares no key with the nickname holder's
+    given names. A nickname holder with no given names bars nothing."""
     if one.nickname and other.nickname:
         return not (
             a.given_names
@@ -1516,8 +1520,10 @@ class _Judge:
     def name_level(self, a: _Node, b: _Node) -> str:
         """How two mentions' names match: for a recordless mention, or one
         of a kind without records, `exact` on a shared normalised name;
-        for people `key`, `weak` (a key only a GEDCOM unsplit form gives)
-        or `given` (a lone given name); for places `exact`, `nested` or
+        for people `key`, `weak` (a shared key that may not make a link
+        confident: one only a GEDCOM unsplit form gives, or one through
+        given parts that cannot be one name, _one_given) or `given` (a
+        lone given name); for places `exact`, `nested` or
         `key` (a shared name, containers that differ); for organisations
         `exact`, `key` or `kind` (_organizations); for families `key`;
         else `none`."""

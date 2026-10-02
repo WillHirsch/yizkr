@@ -505,11 +505,14 @@ refuses). The module docstring is the full account; in short:
   and `reconcile.impossible_pair` (ADR-0017) then rules out a pair one of
   them joins (hard). Dates never rule a pair out.
 - **Links.** A pair is a confident link only on corroborated evidence:
-  for people a shared key, counting only through given parts that may
-  be one name (never two standard forms that share no key, nor one
-  nickname of two people whose given names share none, nor a given name
-  whose standard form shares no key with the given names of the other's
-  nickname holder), with kin that agree (kin that share a key, never a
+  for people a shared key, counting only through given parts (given
+  names, and the words of an `unsplit` form, which state no standard
+  form) that may be one name: never two standard forms that share no
+  key, nor one nickname of two people who both give given names sharing
+  none, nor a given part whose standard form shares no key with the
+  given names of the other's nickname holder (a holder with no given
+  names bars nothing); a key that does not count is `weak`. It links
+  with kin that agree (kin that share a key, never a
   surname alone) or dates that agree (a century or an open "before"
   agrees with nothing), while stated sexes that differ, or a
   civil status `unmarried` stated after a marriage another source

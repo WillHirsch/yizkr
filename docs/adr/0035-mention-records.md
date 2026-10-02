@@ -80,19 +80,26 @@ Amended by #409 (2026-10-02), decided by the orchestrator (the owner may
 override; conservative as above):
 
 - Rules 3 and 8: a shared key neither makes a link confident nor makes
-  kin agree when it joins two given parts that cannot be one name:
-  - two given names whose records give standard forms that share no
+  kin agree (it is `weak`) when it joins two given parts that cannot be
+  one name. A given part is a given name or a word of a document's
+  `unsplit` form, which states no standard form.
+  - Two given parts whose records give standard forms that share no
     key: a "Gustl" read as Gustav and a "Gustl" read as another name
-    meet, and stay ambiguous;
-  - two nicknames, where both records give given names that share no
+    meet, and stay ambiguous.
+  - Two nicknames, where both records give given names that share no
     key: two brothers with two given names and one family nickname
-    never merge;
-  - a given name against a nickname, only where the given name states a
+    never merge.
+  - A given part against a nickname, only where the given part states a
     standard form that shares no key with the nickname holder's given
     names. So "Gustav 'Gustl' Löbig" against a "Gustl Löbig" whose
     record gives no standard form, or Gustav, merges on corroboration
     (a shared father), and against a "Gustl" read as Xxx stays
-    ambiguous.
+    ambiguous. A nickname holder with no given names bars nothing: a
+    "Wastl" read as Sebastian against a nickname-only "Wastl Löbig"
+    keeps the key. A word of an `unsplit` form states no standard form,
+    so "Wastl Löbig" written unsplit against "Sebastian 'Wastl' Löbig"
+    keeps it too. (A one-word `unsplit` form makes no key with a
+    surname; it meets only as a lone name, rule 1.)
 
   A "Gustl" read as Gustav and a "Gustl" with no standard form still
   meet, and merge only on corroboration.

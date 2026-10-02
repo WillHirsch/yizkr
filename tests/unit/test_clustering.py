@@ -1194,6 +1194,72 @@ class TestKeys:
             ]
             identity = identity_of(*docs)
             assert merged(docs, identity) == [], (first, second)
+        # a nickname holder with no given names imposes no bar: a "Wastl"
+        # read as Sebastian against a nickname-only "Wastl Löbig" keeps
+        # the key (decided 2026-10-02)
+        wastl = register(
+            "wastl read as Sebastian",
+            [
+                human(
+                    "e1",
+                    "Wastl Löbig",
+                    givens=[given("Wastl", "Sebastian")],
+                    surnames=["Löbig"],
+                )
+            ],
+            [],
+            {"e1": "sebastian-loebig"},
+        )
+        nickname_holder = register(
+            "wastl as a nickname",
+            [
+                human(
+                    "e1",
+                    "Wastl Löbig",
+                    surnames=["Löbig"],
+                    nicknames=["Wastl"],
+                )
+            ],
+            [],
+            {"e1": "sebastian-loebig"},
+        )
+        for docs in ([wastl, nickname_holder], [nickname_holder, wastl]):
+            identity = identity_of(*docs)
+            both = frozenset(doc.fingerprint("e1", identity) for doc in docs)
+            assert links_of(identity)[both] == (
+                AMBIGUOUS,
+                "key/unknown/unknown",
+            )
+        # a word of a document's unsplit form is a given part with no
+        # standard form: against "Sebastian 'Wastl' Löbig" the key counts
+        unsplit = register(
+            "wastl unsplit",
+            [human("e1", "Wastl Löbig", unsplit=["Wastl Löbig"])],
+            [],
+            {"e1": "sebastian-loebig"},
+        )
+        called_wastl = register(
+            "sebastian called wastl",
+            [
+                human(
+                    "e1",
+                    "Sebastian Löbig",
+                    aliases=["Wastl"],
+                    givens=["Sebastian"],
+                    surnames=["Löbig"],
+                    nicknames=["Wastl"],
+                )
+            ],
+            [],
+            {"e1": "sebastian-loebig"},
+        )
+        for docs in ([unsplit, called_wastl], [called_wastl, unsplit]):
+            identity = identity_of(*docs)
+            both = frozenset(doc.fingerprint("e1", identity) for doc in docs)
+            assert links_of(identity)[both] == (
+                AMBIGUOUS,
+                "key/unknown/unknown",
+            )
         # a nickname alone, against "Gustav 'Gustl'", merges on the father
         nickname_only = human(
             "e1", "Gustl Löbig", surnames=["Löbig"], nicknames=["Gustl"]
