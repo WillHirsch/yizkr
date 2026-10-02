@@ -13,7 +13,11 @@ them, and reads them back through the API:
 
 * Eugen's label is given with spaces before it and an ideographic space
   after it: the instance keeps it trimmed, and a second write finds his
-  item by it and mints no other;
+  item by it and mints no other. He has a description, as Hildegard has,
+  so a write that missed his item would be refused as a second item
+  with his label and description, and leave none behind: two items with
+  one label and no description would make every later label lookup on
+  the instance fail (WikiClient.label_index);
 * Hildegard's label ends in U+FFFF, which the instance keeps as U+FFFD,
   and a second write finds her item by it;
 * the first claim gives Eugen's date of death on a page with a backspace
@@ -64,10 +68,15 @@ PAGE = "Blatt\x0812, Flörburg"
 PAGE_KEPT = f"Blatt{REPLACEMENT}12, Flörburg"
 EXCERPT = "Gestorben:\x1f16. März 1909."
 EXCERPT_KEPT = f"Gestorben:{REPLACEMENT}16. März 1909."
-TYPE_HINT = "Hut\x01geschäft￾"
+TYPE_HINT = "Hut\x01geschäft\ufffe"
 TYPE_HINT_KEPT = f"Hut{REPLACEMENT}geschäft{REPLACEMENT}"
 ENTITIES = (
-    {"id": "eugen", "label": "Eugen Löbig", "kind": "human"},
+    {
+        "id": "eugen",
+        "label": "Eugen Löbig",
+        "kind": "human",
+        "summary": "fixture: Eugen Löbig, hatter, who founded the Blue Hat",
+    },
     {
         "id": "hildegard",
         "label": "Hildegard Löbig",
@@ -177,7 +186,7 @@ def labels_of(marker: str) -> dict[str, str]:
     ideographic space after it, Hildegard's ending in U+FFFF."""
     return {
         "eugen": f"  Stored Term Fixture ({marker}) Eugen Löbig　",
-        "hildegard": f"Stored Term Fixture ({marker}) Hildegard Löbig￿",
+        "hildegard": f"Stored Term Fixture ({marker}) Hildegard Löbig\uffff",
         "firm": f"Stored Term Fixture ({marker}) Hutmacherei zum Blauen Hut",
     }
 

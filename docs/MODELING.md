@@ -24,8 +24,9 @@
   paragraph separator inside, or begins or ends with a Mongolian vowel
   separator (U+180E), and an item whose label and description are the
   same. The writer sends each term it makes in that form, with a line or
-  paragraph separator inside made a space too and a Mongolian vowel
-  separator at either end dropped, and finds an item by its label in it,
+  paragraph separator inside made a space too (a run of them and of
+  control characters is one space) and a Mongolian vowel separator at
+  either end dropped, and finds an item by its label in it,
   so a label given in another form finds its item again; the registrar
   compares and sets an artifact's title by the same rule, which it takes
   from the writer (#369, #403). A term still over 250 characters in that

@@ -18,11 +18,14 @@ from the writer's. So:
   towards the limit;
 * a page number, region, excerpt or type hint with a character Wikibase
   cleans up is sent cleaned up, so a second write finds the reference
-  block or type statement written for it and sends no edit;
+  block or type statement written for it and sends no edit, and one cut
+  to the limit carries the digest of the text as the instance keeps it;
 * a claim whose own text, its value or a qualifier's, holds such a
   character is refused whole, never cleaned up (CLAUDE.md rule 5), as one
   with whitespace around it is, never trimmed: a warning names the fault,
-  quoting no text, and the batch's other claims are written.
+  quoting no text, and the batch's other claims are written. One holding
+  a character Wikibase neither refuses nor cleans up, such as DEL, U+FFFD
+  or another noncharacter, is written as it is.
 
 The registrar keeps a title by the same rule (test_registrar.py). Every
 text comes from the fictional universe (docs/EXAMPLES.md).
@@ -56,16 +59,18 @@ from tests.unit.test_writer_limits import (
     MENTIONS,
     WHERE,
     _cause,
+    _leaves,
     _quotes,
     _quoting,
     _said_over,
     _saying,
+    _to_the_last_space,
     _with_properties,
 )
 from tests.unit.test_writer_text_shapes import TERM_ROOM, _term_cut
 from yizkr.claims import ClaimBatch, RegionPercent
 from yizkr.pipeline.review import claim_id
-from yizkr.pipeline.writer import TERM_LIMIT, BatchWriter
+from yizkr.pipeline.writer import TERM_LIMIT, TEXT_LIMIT, BatchWriter
 
 REPLACEMENT = "\N{REPLACEMENT CHARACTER}"
 
@@ -104,8 +109,8 @@ class TestTermsAsTheInstanceKeepsThem:
         [
             ("  Eugen Löbig\N{IDEOGRAPHIC SPACE}", "Eugen Löbig"),
             ("\tEugen Löbig\n", "Eugen Löbig"),
-            ("Eugen Löbig￿", f"Eugen Löbig{REPLACEMENT}"),
-            (" ￾Eugen Löbig", f"{REPLACEMENT}Eugen Löbig"),
+            ("Eugen Löbig\uffff", f"Eugen Löbig{REPLACEMENT}"),
+            (" \ufffeEugen Löbig", f"{REPLACEMENT}Eugen Löbig"),
         ],
         ids=[
             "spaces before, an ideographic space after",
@@ -200,6 +205,40 @@ class TestLocatorsAndHintsCleanedUp:
         )
         assert len(_sources(died)) == 2
 
+    @pytest.mark.parametrize("where", ["page number", "excerpt"])
+    def test_a_long_locator_is_cut_with_the_digest_of_the_kept_text(
+        self, where
+    ):
+        # (here) the register gives Eugen's entry on a list of leaves over
+        # the limit, a scan's text layer leaving a backspace after the
+        # first leaf; a second claim gives the list as the instance keeps
+        # it, U+FFFD in its place. The two are one text to the instance,
+        # so one place: cut with the digest of the text as the instance
+        # keeps it, they are one reference block
+        leaves = _leaves(1, 60)
+        assert len(leaves) > TEXT_LIMIT
+        given = leaves.replace(" ; ", "\x08 ; ", 1)
+        kept = leaves.replace(" ; ", f"{REPLACEMENT} ; ", 1)
+        claim = _cause if where == "page number" else _quoting
+        wiki = FakeWiki(MEDIA, detached=True)
+
+        written = BatchWriter(wiki).write_batch(
+            _batch_of(claim(given), claim(kept))
+        )
+
+        (died,) = _statements(
+            wiki, written.created_items["e07"], "cause_of_death"
+        )
+        column = 1 if where == "page number" else 3
+        assert [place[column] for place in _places(died)] == [
+            _to_the_last_space(kept)
+        ]
+        assert (written.written, written.referenced, written.skipped) == (
+            1,
+            0,
+            1,
+        )
+
     def test_a_region_written_twice_is_one_block(self, monkeypatch):
         # a region's form, as a percentage box gives it, holds no control
         # character; the rule applies to whatever form the region takes
@@ -230,7 +269,9 @@ class TestLocatorsAndHintsCleanedUp:
         assert unchanged
 
     @pytest.mark.parametrize(
-        "char", ["\x01", "￾", "￿"], ids=["U+0001", "U+FFFE", "U+FFFF"]
+        "char",
+        ["\x01", "\ufffe", "\uffff"],
+        ids=["U+0001", "U+FFFE", "U+FFFF"],
     )
     @pytest.mark.parametrize("found", [False, True], ids=["minted", "found"])
     def test_a_type_hint_written_twice_is_one_statement(self, found, char):
@@ -286,7 +327,7 @@ class TestClaimsTheInstanceWouldChange:
         [
             ("external id", "\x1f"),
             ("monolingual value", "\x01"),
-            ("string qualifier", "￿"),
+            ("string qualifier", "\uffff"),
         ],
         ids=[
             "U+001F in a value",
@@ -322,10 +363,35 @@ class TestClaimsTheInstanceWouldChange:
         for local_id in MENTIONS[case]:
             assert local_id not in written.created_items
 
-    def test_a_character_the_instance_keeps_is_written(self):
-        # DEL and the C1 control characters Wikibase neither refuses nor
-        # cleans up in a value: the claim is written as it is
-        text = "Pünktchen\x7f\x9f"
+    @pytest.mark.parametrize(
+        "char",
+        [
+            "\x7f",
+            "\x80",
+            "\x9f",
+            REPLACEMENT,
+            "﷐",
+            "﷯",
+            "\U0001fffe",
+            "\U0010ffff",
+        ],
+        ids=[
+            "DEL",
+            "U+0080",
+            "U+009F",
+            "U+FFFD",
+            "U+FDD0",
+            "U+FDEF",
+            "U+1FFFE",
+            "U+10FFFF",
+        ],
+    )
+    def test_a_character_the_instance_keeps_is_written(self, char):
+        # what Wikibase neither refuses nor cleans up in a value: DEL, the
+        # C1 control characters but the next line (U+0085, a line break),
+        # U+FFFD itself and every noncharacter but U+FFFE and U+FFFF. The
+        # claim is written as it is
+        text = f"Pünktchen{char}"
         claim = _saying("monolingual value", text)
         wiki = FakeWiki(MEDIA, detached=True)
 

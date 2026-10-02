@@ -438,13 +438,13 @@ time"):
   medium: the first name labels it (`"<deck title> — <name>"`), and the
   others are its aliases. Labels are compared and set in the form
   Wikibase stores them in, by the rule the writer keeps labels by (each
-  run of control characters, and each line or paragraph separator, made
-  one space, the separators and the Mongolian vowel separator trimmed at
+  run of control characters and line or paragraph separators made one
+  space, the separators and the Mongolian vowel separator trimmed at
   either end, then U+FFFE and U+FFFF made U+FFFD, then NFC; ADR-0010,
-  #369, #403). A deck title that would push its images' or its slides' labels,
-  or its slides' descriptions, past the 250 characters Wikibase takes is
-  cut there, ending in "…", since those only display it; so is the list
-  of slides in an image's description;
+  #369, #403). A deck title that would push its images' or its slides'
+  labels, or its slides' descriptions, past the 250 characters Wikibase
+  takes is cut there, ending in "…", since those only display it; so is
+  the list of slides in an image's description;
 - an image the never-ingest list names, by any of its names or by its
   SHA-1, is left out: neither registered nor uploaded. The deck's own
   file is uploaded as it is, with whatever it embeds (the owner's

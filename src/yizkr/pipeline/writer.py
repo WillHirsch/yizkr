@@ -73,7 +73,9 @@ Per batch, the writer:
    writer sends it, with every text in it in Unicode NFC, the form the
    instance keeps text in and gives it back in (`_stored_string`): its
    string, external-id and monolingual text values and qualifiers, and
-   its source block's page number, region and excerpt. So a claim whose
+   its source block's page number, region and excerpt, which also go on
+   one line and cleaned up as the instance gives them back
+   (`_locator_text`). So a claim whose
    text the batch gives in another form, such as the decomposed form
    (NFD), finds the statement written for it. The claim's source block,
    `stated in` with its page number, region and excerpt, is compared
@@ -576,8 +578,8 @@ def _cleaned_up(text: str) -> str:
 def _stored_term(text: str) -> str:
     """`text` in the form the instance keeps a label, a description or an
     alias in, reached as Wikibase's trimToNFC reaches it: first trimmed,
-    each run of control characters in it, and each line or paragraph
-    separator, made one space, and the separators at either end dropped
+    each run of control characters and line or paragraph separators in it
+    made one space, and the separators at either end dropped
     (_TERM_CONTROLS, _TERM_EDGES); then cleaned up (_cleaned_up), which
     leaves only U+FFFE and U+FFFF to make U+FFFD; and then in Unicode NFC.
     The writer finds, compares and sends every term in this form, and the
@@ -825,9 +827,10 @@ class BatchWriter:
             item.write(summary="ingest: instance of")
         # open-schema escape hatch (ADR-0013): record what an unclassified
         # entity actually is, so the gap is queryable, not lost. It goes
-        # with its spacing made single spaces (_hint_text), and a hint the
-        # instance cannot hold is left out, with the warning write_batch
-        # gave before its first write
+        # with its spacing made single spaces and cleaned up as the
+        # instance gives it back (_hint_text), and a hint the instance
+        # cannot hold is left out, with the warning write_batch gave before
+        # its first write
         type_hint = _hint_text(record.type_hint or "") if record else ""
         if type_hint and len(type_hint) <= TEXT_LIMIT and source_artifact_qid:
             from wikibaseintegrator.datatypes import String
@@ -983,9 +986,10 @@ class BatchWriter:
             Item(prop_nr=self.properties["stated_in"], value=artifact_qid)
         )
         # the locators and the excerpt only place the claim in its source
-        # and help a reader check it there: each goes in NFC, on one line
-        # and cut to what the instance holds, never failing the write, and
-        # one of whitespace alone is left out (_locator_text)
+        # and help a reader check it there: each goes in NFC, on one line,
+        # cleaned up as the instance gives it back and cut to what the
+        # instance holds, never failing the write, and one of whitespace
+        # alone is left out (_locator_text)
         source = claim.source if claim is not None else None
         page = _locator_text(source.page_number or "") if source else ""
         if page:
@@ -1350,7 +1354,8 @@ class BatchWriter:
                     result,
                 )
             # and so is a type hint the instance cannot hold; one it holds
-            # goes with its spacing made single spaces (_hint_text)
+            # goes with its spacing made single spaces and cleaned up as
+            # the instance gives it back (_hint_text)
             hint = _hint_text(found.type_hint or "")
             if hint and len(hint) <= TEXT_LIMIT:
                 self._record_type_statement(

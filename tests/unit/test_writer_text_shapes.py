@@ -67,6 +67,7 @@ from tests.unit.test_pipeline import (
     _batch_of,
     _by_value,
     _certificate_batch,
+    _cleaned_up,
     _directory_batch,
     _firm_batch,
     _labelled,
@@ -252,8 +253,9 @@ class TestTheFakeRefusesWhatWikibaseRefuses:
         assert wiki.wbi.item.writes == 1
 
     def test_a_term_is_kept_trimmed_then_cleaned_up(self):
-        # trimmed first, so U+FFFE after a space at its start is not
-        # trimmed, and then made U+FFFD, as trimToNFC does (#403)
+        # trimmed first, so U+0001 inside is made a space rather than
+        # U+FFFD; then U+FFFE and U+FFFF are made U+FFFD, as trimToNFC
+        # does (#403)
         wiki = FakeWiki(detached=True)
         item = wiki.wbi.item.new()
         item.labels.set("en", " \ufffeEugen\x01Löbig\uffff")
@@ -267,17 +269,34 @@ class TestTheFakeRefusesWhatWikibaseRefuses:
             "Muckel\ufffd"
         ]
 
+    def test_the_fake_cleans_up_what_utfnormal_cleans_up(self):
+        # (#403) UtfNormal 4.0.0's replaceForNativeNormalize, written out
+        # here apart from WIKIBASE_CLEANED: /[\x00-\x08\x0b\x0c\x0e-\x1f]/,
+        # U+FFFE and U+FFFF become U+FFFD, one for one; the tab, the line
+        # feed, the carriage return, DEL, the C1 control characters, U+FFFD
+        # itself and the other noncharacters stay as they are
+        replaced = "".join(
+            map(chr, (*range(0x09), 0x0B, 0x0C, *range(0x0E, 0x20)))
+        )
+        replaced += "\ufffe\uffff"
+        kept = "\t\n\r\x7f\x80\x85\x9f\ufffd\ufdd0\ufdef\U0001fffe\U0010ffff"
+
+        assert _cleaned_up(f"Blatt{replaced}12{kept}") == (
+            f"Blatt{chr(0xFFFD) * len(replaced)}12{kept}"
+        )
+
     @pytest.mark.parametrize("where", ["value", "qualifier", "reference"])
     def test_a_string_value_is_stored_cleaned_up(self, where):
-        # (#403) each character of WIKIBASE_CLEANED made U+FFFD, and the
+        # (#403) the first and last of each run UtfNormal cleans up, the
+        # vertical tab and the form feed among them, made U+FFFD, and the
         # value held
-        text = f"Blatt{WIKIBASE_CLEANED.replace(chr(0x0B), '')}12"
+        text = "Blatt\x00\x08\x0b\x0c\x0e\x1f 12\ufffe\uffff"
         wiki, item = _item_holding(where, "string", text)
 
         item.write()
 
         (stored,) = wiki.wbi.item.store.values()
-        cleaned = "Blatt" + "\ufffd" * (len(WIKIBASE_CLEANED) - 1) + "12"
+        cleaned = "Blatt" + "\ufffd" * 6 + " 12" + "\ufffd" * 2
         assert cleaned in _held_texts(stored)
         assert cleaned in _held_texts(wiki.wbi.item.get(stored.id))
 
