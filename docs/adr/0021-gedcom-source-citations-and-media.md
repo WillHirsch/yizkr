@@ -106,7 +106,10 @@ Each `OBJE` becomes an entity of kind **`artifact`** (not `photograph`: we
 hold none of the bytes and cannot vouch it is a photo — many objects are
 document scans — and an un-held stub stays out of the gallery/faces flows,
 which key on held media). Its label is the object's `TITL` (else file
-name); it carries **no `media file` and no `media SHA-1`** — the absence
+name), with ` [media object]` at its end when an item registered with a
+hash, or a page fragment of one, holds that label, as it never joins
+one (ADR-0010 as amended by #444); it carries **no `media file` and no
+`media SHA-1`** — the absence
 of a content hash *is* the un-held marker. The person links to it with the
 new **`image`** property (P18 semantics: media of the subject),
 `point_in_time`-qualified when the object is dated. Objects are deduped by

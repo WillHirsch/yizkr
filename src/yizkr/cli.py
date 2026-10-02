@@ -628,7 +628,7 @@ def cmd_write(args) -> int:
     result = BatchWriter(_client(args), dry_run=args.dry_run).write_batch(
         batch
     )
-    print(json.dumps(result.__dict__, indent=2))
+    print(json.dumps(dataclasses.asdict(result), indent=2))
     if args.dry_run:
         print("(dry run: nothing written)")
     return 0

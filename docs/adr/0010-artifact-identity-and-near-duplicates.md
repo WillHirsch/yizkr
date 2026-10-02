@@ -49,11 +49,24 @@ every item whose `media file` holds the bytes, by MediaWiki's list of
 the files of its SHA-1 (Z3); and a GEDCOM media object's item, an
 artifact kind with no file and no hash, is an item with no hash, so a
 scratch run raises unhashed-title for an artifact or derived medium
-registered under exactly its label, when the GEDCOM's write made that
-item first: a GEDCOM written after such an artifact joins the media
-object to it by resolve's label matching (#109), makes no item for it
-and raises no flag (Z4). An artifact's label longer than Wikibase takes
+registered under exactly its label, in either order of the writes (Z4,
+as amended by #444). An artifact's label longer than Wikibase takes
 is cut to fit, as a derived medium's is.
+Amended by #444 (2026-10-02): a media object, or any entity of an
+artifact kind, is never joined by its label to an item registration
+made: an artifact, which carries a `media SHA-1`, or one of its page
+fragments. Written after the artifact, the GEDCOM makes the media
+object an item of its own under its label with the tag " [media
+object]", and the write raises unhashed-title on every artifact
+registered under that label, as it is or content-tagged (a scan and a
+re-scan under one title), or holding it as a fragment's label, as
+registration does when it comes second; registration compares a title,
+and each of its fragments' labels, with the plain and the tagged label,
+so the flag repeats on every later registration, and, the media
+object's item tagged, on every later write of the GEDCOM. Resolve's
+exact-label step never resolves an artifact-kind ref.
+The kinds still matched by label, and why, are listed in §1 ("What is
+still matched by label").
 
 ## Context
 
@@ -144,9 +157,18 @@ never by name (amended by #103, 2026-09-29):
   for an artifact or derived medium whose title (a derived medium's
   first label), or own label before its content tag, is exactly a media
   object's label: its title, or without one a fallback such as its
-  file's name (ADR-0021), when the GEDCOM's write made the media
-  object's item first (written after, the GEDCOM joins the media object
-  to that artifact by its label, #109, and no flag is raised).
+  file's name (ADR-0021), whichever of the two is written first
+  (amended by #444, 2026-10-02): written after the artifact, the
+  GEDCOM's write makes the media object an item of its own, labelled
+  `"<label> [media object]"` (the writer's `media_object_label`), never
+  the artifact, and raises the flag on the artifact against it, its
+  `medium` the artifact's SHA-1, as registration does; registration
+  compares a title with that tagged label too. The same holds for every
+  artifact registered under that label with a content tag (a re-scan
+  under the scan's title), and for an artifact one of whose page
+  fragments has the media object's label (`"<title>, page <n>"`): the
+  media object is never joined to the fragment, and the flag is on the
+  fragment's artifact.
   When the title is already another item's label, the new item's label
   takes a short content tag (`"<title> [<sha1[:8]>]"`), so labels stay
   unique (the wiki client's label index; #94 would scope that rule away
@@ -453,6 +475,38 @@ only `written` documents seed the map (docs/LLM_CACHE.md).
 Together these close the "two items, one blob" leak (correctness) and
 skip redundant LLM passes for renamed-identical files both within a
 batch and across runs (efficiency), which were the concrete costs.
+
+**What is still matched by label** (amended by #444, 2026-10-02). No
+artifact is matched or adopted by its title or label: registration finds
+one by its SHA-1 alone, resolve's exact-label step never resolves a ref
+of an artifact kind (artifact, or a class the manifest makes a
+`subclass_of` it), and the writer never joins such an entity to an item
+registration made, one that carries a `media SHA-1` or a page fragment
+`part of` one (above). A page fragment is found by its artifact and page
+number, never by its label. Labels still match, until the identity map
+(#109), for:
+
+* every other kind of entity, in resolve's exact-label step (the refs an
+  extraction labels) and in the writer, which finds an item by its label
+  before it makes one: people, places, organisations, families, vessels,
+  legal instruments, military units, occupation classes, events (births,
+  deaths, weddings, divorces and the rest), partnerships and marriages,
+  and unclassified entities. It is the interim identity of a named
+  entity, so a re-run never duplicates one and two documents naming it
+  alike meet on one item (ADR-0021 relies on it for the GEDCOM import);
+  a person or place whose name is a registered artifact's title is
+  matched to it as before, as no such entity is an artifact;
+* a media object, or another artifact-kind entity, and an item with no
+  hash that is no fragment: two exports' media objects under one title,
+  or a media object and an artifact registered before content hashing,
+  are one item, as neither carries a hash to tell them apart;
+  registration flags such an item when hashed bytes come under its
+  label;
+* the writer's own run items, the extraction run's and the place
+  hierarchy's, keyed by a deterministic label that holds a fingerprint
+  of their content, so the label is their key by construction;
+* the manifest's vocabulary, its properties and classes, which the wiki
+  client maps from their manifest labels.
 
 ### 2 & 3. Near-duplicates and versions (deferred, designed here)
 

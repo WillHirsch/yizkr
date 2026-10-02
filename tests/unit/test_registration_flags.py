@@ -1499,3 +1499,496 @@ def test_an_excerpts_write_raises_its_pdfs_flags_on_the_excerpt(tmp_path):
         for alert in alerts
         if alert["medium"] == excerpt.sha1[:12]
     } == {qid}
+
+
+# -- a GEDCOM's media object and a registered artifact, in either order -------
+
+# the family's GEDCOM export (tests/fixtures/example-family.ged): Sebastian
+# Löbig, whose media object is the studio portrait, under the title the
+# scan of that portrait is registered under
+FAMILY_GEDCOM = (
+    "0 HEAD\n1 CHAR UTF-8\n"
+    "0 @I1@ INDI\n1 NAME Sebastian /Löbig/\n1 OBJE @O1@\n"
+    "0 @O1@ OBJE\n1 FILE studio-portrait-1890s.jpg\n"
+    f"2 TITL {TITLE}\n"
+    "0 TRLR\n"
+)
+
+
+class WritingWiki(FakeWiki):
+    """The in-memory wiki with the surface the writer uses beside the
+    registrar's: its vocabulary, the label lookup and the label index,
+    which fail on a duplicate label as the wiki client's label index
+    does, and the media SHA-1 index."""
+
+    PROPERTIES = {
+        **FakeWiki.PROPERTIES,
+        "image": "P60",
+        "inferred_from_extraction_run": "P61",
+        "transcription_excerpt": "P62",
+        "type_hint": "P63",
+        "relative_position_within_image": "P64",
+    }
+    ITEMS = {**FakeWiki.ITEMS, "human": "Q9"}
+
+    def find_item_by_label(self, label: str) -> str | None:
+        assert_labels_unique(self)
+        for qid in self.entities:
+            if label_of(self, qid) == label:
+                return qid
+        return None
+
+    def label_index(self) -> tuple[dict[str, str], dict[str, str]]:
+        assert_labels_unique(self)
+        return {}, {label_of(self, qid): qid for qid in self.entities}
+
+    def string_statement_index(self, pid: str) -> dict[str, str]:
+        index: dict[str, str] = {}
+        for qid in sorted(self.entities, key=lambda q: int(q[1:])):
+            for statement in self.entities[qid]["claims"].get(pid, []):
+                index.setdefault(
+                    statement["mainsnak"]["datavalue"]["value"], qid
+                )
+        return index
+
+
+def family_gedcom(wiki, text: str = FAMILY_GEDCOM):
+    """The GEDCOM export's batch, its own item registered by its hash
+    under a file name of its own, beside the export gedcom_media_object
+    registers."""
+    from yizkr.claims import ArtifactRef
+    from yizkr.pipeline.gedcom import adapt_gedcom
+
+    exported = ArtifactRef.from_bytes(text.encode())
+    if not wiki.string_statement_index(P["media_sha1"]).get(exported.sha1):
+        wiki.item(
+            "family-tree-export.ged",
+            ("instance_of", ITEMS["genealogical_report"], None),
+            ("media_sha1", exported.sha1, None),
+        )
+    return adapt_gedcom(text, artifact=exported).batch
+
+
+def write_gedcom(wiki, text: str = FAMILY_GEDCOM):
+    from yizkr.pipeline.writer import BatchWriter
+
+    return BatchWriter(wiki).write_batch(family_gedcom(wiki, text))
+
+
+def images(wiki, qid: str) -> list[str]:
+    return [
+        statement["mainsnak"]["datavalue"]["value"]["id"]
+        for statement in wiki.entities[qid]["claims"].get(
+            WritingWiki.PROPERTIES["image"], []
+        )
+    ]
+
+
+class TestAGedcomsMediaObjectAndARegisteredArtifact:
+    """A GEDCOM media object (a label, no file, no hash) and an artifact
+    registered under its title are never one item, whichever is written
+    first: the pair is flagged unhashed-title, with the artifact as the
+    item flagged and the media object's item against it (ADR-0010)."""
+
+    def write(self, tmp_path, wiki, order: str):
+        """The scan registered and the GEDCOM written, in `order`: the
+        registration's flags, the write's result, and the scan's item."""
+        registrar = Registrar(wiki)
+        if order == "gedcom-first":
+            written = write_gedcom(wiki)
+        registered = registrar.register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", TITLE
+        )
+        if order == "artifact-first":
+            written = write_gedcom(wiki)
+        return registrar.flags, written, registered.artifact_qid
+
+    @pytest.mark.parametrize("order", ["artifact-first", "gedcom-first"])
+    def test_the_two_are_never_one_item(self, tmp_path, order):
+        wiki = WritingWiki()
+        _, written, artifact = self.write(tmp_path, wiki, order)
+
+        media_object = written.created_items["md1"]
+        assert media_object != artifact
+        assert strings(wiki, media_object, "media_sha1") == []
+        assert strings(wiki, artifact, "instance_of") == [ITEMS["photograph"]]
+        assert not wiki.entities[artifact].get("aliases")
+        assert images(wiki, written.created_items["i1"]) == [media_object]
+        assert_labels_unique(wiki)
+
+    @pytest.mark.parametrize("order", ["artifact-first", "gedcom-first"])
+    def test_the_pair_is_flagged_in_either_order(self, tmp_path, order):
+        wiki = WritingWiki()
+        registered, written, artifact = self.write(tmp_path, wiki, order)
+
+        media_object = written.created_items["md1"]
+        flag = (UNHASHED_TITLE, artifact, sha1(PORTRAIT), (media_object,))
+        assert flag_tuples([*registered, *written.flags]) == [flag]
+
+    def test_a_media_object_after_the_artifact_takes_a_tagged_label(
+        self, tmp_path
+    ):
+        """The artifact keeps the title; the media object's item takes it
+        with the writer's tag, so labels stay unique."""
+        wiki = WritingWiki()
+        _, written, artifact = self.write(tmp_path, wiki, "artifact-first")
+
+        assert label_of(wiki, artifact) == TITLE
+        assert (
+            label_of(wiki, written.created_items["md1"])
+            == f"{TITLE} [media object]"
+        )
+
+    def test_each_later_write_of_either_flags_the_pair_again(self, tmp_path):
+        wiki = WritingWiki()
+        _, first, artifact = self.write(tmp_path, wiki, "artifact-first")
+        media_object = first.created_items["md1"]
+        flag = (UNHASHED_TITLE, artifact, sha1(PORTRAIT), (media_object,))
+
+        again = write_gedcom(wiki)
+        assert again.created_items["md1"] == media_object
+        assert flag_tuples(again.flags) == [flag]
+
+        registrar = Registrar(wiki)
+        registrar.register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", TITLE
+        )
+        assert flag_tuples(registrar.flags) == [flag]
+        assert_labels_unique(wiki)
+
+    def test_a_derived_medium_under_the_title_is_never_joined(self, tmp_path):
+        """A derived medium carries a hash of its own: a media object
+        under its label is flagged against it as against an artifact."""
+        wiki = WritingWiki()
+        medium = wiki.item(
+            TITLE,
+            ("instance_of", ITEMS["photograph"], None),
+            ("media_sha1", sha1(IMAGE), None),
+        )
+        written = write_gedcom(wiki)
+
+        media_object = written.created_items["md1"]
+        assert media_object != medium
+        assert flag_tuples(written.flags) == [
+            (UNHASHED_TITLE, medium, sha1(IMAGE), (media_object,))
+        ]
+
+    def test_a_dry_run_makes_and_flags_nothing(self, tmp_path):
+        from yizkr.pipeline.writer import BatchWriter
+
+        wiki = WritingWiki()
+        Registrar(wiki).register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", TITLE
+        )
+        batch = family_gedcom(wiki)
+        before = copy.deepcopy(wiki.entities)
+
+        written = BatchWriter(wiki, dry_run=True).write_batch(batch)
+
+        assert written.created_items["md1"] == "(new:md1)"
+        assert written.flags == []
+        assert wiki.entities == before
+
+    def test_a_dry_run_after_a_write_flags_the_pair_it_finds(self, tmp_path):
+        """Once the media object's tagged item is there, a dry run finds it
+        and reports the flag a write raises, writing nothing."""
+        from yizkr.pipeline.writer import BatchWriter
+
+        wiki = WritingWiki()
+        _, first, artifact = self.write(tmp_path, wiki, "artifact-first")
+        media_object = first.created_items["md1"]
+        batch = family_gedcom(wiki)
+        before = copy.deepcopy(wiki.entities)
+
+        written = BatchWriter(wiki, dry_run=True).write_batch(batch)
+
+        assert written.created_items["md1"] == media_object
+        assert flag_tuples(written.flags) == [
+            (UNHASHED_TITLE, artifact, sha1(PORTRAIT), (media_object,))
+        ]
+        assert wiki.entities == before
+
+    def test_an_entity_of_an_artifact_class_is_never_joined(self, tmp_path):
+        """Any artifact kind, not only `artifact`: an entity of a class
+        the manifest makes a subclass of it, here a photograph, is kept
+        from a registered artifact under its label too."""
+        from yizkr.pipeline.writer import BatchWriter
+
+        wiki = WritingWiki()
+        artifact = (
+            Registrar(wiki)
+            .register_artifact(scan(tmp_path, PORTRAIT), "photograph", TITLE)
+            .artifact_qid
+        )
+        given = family_gedcom(wiki).model_dump(mode="json")
+        (record,) = [e for e in given["entities"] if e["id"] == "md1"]
+        record["kind"] = "photograph"
+        batch = type(family_gedcom(wiki)).model_validate(given)
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        media_object = written.created_items["md1"]
+        assert media_object != artifact
+        assert flag_tuples(written.flags) == [
+            (UNHASHED_TITLE, artifact, sha1(PORTRAIT), (media_object,))
+        ]
+
+    def test_a_title_at_the_term_limit_keeps_its_tag_within_it(self, tmp_path):
+        """A title as long as Wikibase takes a label: the tagged label is
+        cut to leave room for the tag, so it fits, and a later
+        registration still finds the pair under it."""
+        from yizkr.pipeline.writer import TERM_LIMIT, media_object_label
+
+        long_title = ("Studio portrait of the Löbig family, Hamburg " * 6)[
+            :TERM_LIMIT
+        ].strip()
+        assert len(long_title) > TERM_LIMIT - len(" [media object]")
+        tagged = media_object_label(long_title)
+        assert len(tagged) <= TERM_LIMIT
+        assert tagged.endswith(" [media object]")
+
+        wiki = WritingWiki()
+        artifact = (
+            Registrar(wiki)
+            .register_artifact(
+                scan(tmp_path, PORTRAIT), "photograph", long_title
+            )
+            .artifact_qid
+        )
+        written = write_gedcom(wiki, FAMILY_GEDCOM.replace(TITLE, long_title))
+        media_object = written.created_items["md1"]
+        assert label_of(wiki, media_object) == tagged
+        flag = (UNHASHED_TITLE, artifact, sha1(PORTRAIT), (media_object,))
+        assert flag_tuples(written.flags) == [flag]
+
+        again = Registrar(wiki)
+        again.register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", long_title
+        )
+        assert flag_tuples(again.flags) == [flag]
+
+    def test_two_registered_items_under_both_labels_are_refused(
+        self, tmp_path
+    ):
+        wiki = WritingWiki()
+        for label, data in (
+            (TITLE, PORTRAIT),
+            (f"{TITLE} [media object]", RESCAN),
+        ):
+            wiki.item(
+                label,
+                ("instance_of", ITEMS["photograph"], None),
+                ("media_sha1", sha1(data), None),
+            )
+        with pytest.raises(RuntimeError, match="ADR-0010"):
+            write_gedcom(wiki)
+
+    @pytest.mark.parametrize("order", ["artifact-first", "gedcom-first"])
+    def test_a_scan_and_a_rescan_under_the_title_are_both_flagged(
+        self, tmp_path, order
+    ):
+        """Two scans of other bytes registered under the media object's
+        title, one labelled with it and one with it content-tagged: each
+        is flagged against the media object's item, whichever is written
+        first."""
+        wiki = WritingWiki()
+        registrar = Registrar(wiki)
+        if order == "gedcom-first":
+            written = write_gedcom(wiki)
+        first = registrar.register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", TITLE
+        ).artifact_qid
+        second = registrar.register_artifact(
+            scan(tmp_path, RESCAN, name="portrait-rescan.png", folder="s2"),
+            "photograph",
+            TITLE,
+        ).artifact_qid
+        if order == "artifact-first":
+            written = write_gedcom(wiki)
+
+        media_object = written.created_items["md1"]
+        assert media_object not in {first, second}
+        assert sorted(flag_tuples([*registrar.flags, *written.flags])) == [
+            (UNHASHED_TITLE, first, sha1(PORTRAIT), (media_object,)),
+            (UNHASHED_TITLE, second, sha1(RESCAN), (media_object,)),
+        ]
+        assert_labels_unique(wiki)
+
+    @pytest.mark.parametrize("order", ["artifact-first", "gedcom-first"])
+    def test_a_media_object_under_a_fragments_label_is_never_joined(
+        self, tmp_path, order
+    ):
+        """A media object titled as a page fragment of a registered
+        artifact is never that fragment: the artifact is flagged against
+        the media object's item, whichever is written first."""
+        wiki = WritingWiki()
+        registrar = Registrar(wiki)
+        text = FAMILY_GEDCOM.replace(TITLE, f"{LETTER_TITLE}, page 1")
+        if order == "gedcom-first":
+            written = write_gedcom(wiki, text)
+        registered = registrar.register_artifact(
+            scan(tmp_path, LETTER, name="letter.png"),
+            "photograph",
+            LETTER_TITLE,
+            pages=2,
+        )
+        if order == "artifact-first":
+            written = write_gedcom(wiki, text)
+
+        media_object = written.created_items["md1"]
+        assert media_object != registered.artifact_qid
+        assert media_object not in registered.fragment_qids.values()
+        assert strings(wiki, media_object, "part_of") == []
+        assert images(wiki, written.created_items["i1"]) == [media_object]
+        flag = (
+            UNHASHED_TITLE,
+            registered.artifact_qid,
+            sha1(LETTER),
+            (media_object,),
+        )
+        assert flag_tuples([*registrar.flags, *written.flags]) == [flag]
+        assert_labels_unique(wiki)
+
+        # and on every later registration, and, the media object's item
+        # tagged, every later write of the GEDCOM
+        if order == "artifact-first":
+            assert flag_tuples(write_gedcom(wiki, text).flags) == [flag]
+        again = Registrar(wiki)
+        again.register_artifact(
+            scan(tmp_path, LETTER, name="letter.png"),
+            "photograph",
+            LETTER_TITLE,
+        )
+        assert flag_tuples(again.flags) == [flag]
+
+
+class TestOtherKindsStillMatchByLabel:
+    """Only an artifact kind is kept from a registered item's label: every
+    other kind is matched by its label as before, and a media object by
+    the label of an item with no hash, such as another export's media
+    object."""
+
+    def test_a_person_joins_the_item_under_its_label(self, tmp_path):
+        wiki = WritingWiki()
+        person = wiki.item(
+            "Sebastian Löbig",
+            ("instance_of", WritingWiki.ITEMS["human"], None),
+        )
+        written = write_gedcom(wiki)
+        assert written.created_items["i1"] == person
+        assert written.flags == []
+
+    def test_a_person_under_a_registered_artifacts_label_joins_it(
+        self, tmp_path
+    ):
+        """The writer keeps only an artifact kind from a registered item:
+        a person's label meeting one is matched as before."""
+        wiki = WritingWiki()
+        artifact = Registrar(wiki).register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", "Sebastian Löbig"
+        )
+        written = write_gedcom(wiki)
+        assert written.created_items["i1"] == artifact.artifact_qid
+        assert written.flags == []
+
+    def test_a_media_object_joins_an_unhashed_media_object(self, tmp_path):
+        wiki = WritingWiki()
+        older = gedcom_media_object(wiki, TITLE)
+        written = write_gedcom(wiki)
+        assert written.created_items["md1"] == older
+        assert written.flags == []
+
+    def test_resolve_never_resolves_an_artifact_kind_by_label(self):
+        from yizkr.claims import LocalRef, QidRef
+        from yizkr.pipeline.resolve import resolve_batch
+
+        wiki = WritingWiki()
+        batch = family_gedcom(wiki)
+        given = batch.model_dump(mode="json")
+        (claim,) = given["claims"]
+        claim["subject"].update(label="Sebastian Löbig")
+        claim["value"]["value"].update(label=TITLE)
+        # a ref of an artifact class with no record, by its own kind
+        photo = dict(
+            claim,
+            value={
+                "type": "item",
+                "value": {
+                    "kind": "local",
+                    "local_id": "ph1",
+                    "label": TITLE,
+                    "instance_of": "photograph",
+                },
+            },
+        )
+        given["claims"].append(photo)
+        # the media object as a claim's subject, and as an item-valued
+        # qualifier's value, by its record's kind
+        media_object = dict(claim["value"]["value"])
+        given["claims"].append(
+            dict(
+                claim,
+                subject=media_object,
+                value={"type": "item", "value": claim["subject"]},
+                qualifiers=[
+                    {
+                        "property": "image",
+                        "value": {"type": "item", "value": media_object},
+                    }
+                ],
+            )
+        )
+        labels = {"Sebastian Löbig": "Q500", TITLE: "Q501"}
+
+        resolved = resolve_batch(type(batch).model_validate(given), labels)
+
+        first, second, third = resolved.claims
+        assert first.subject == QidRef(qid="Q500")
+        assert isinstance(first.value.value, LocalRef)
+        assert isinstance(second.value.value, LocalRef)
+        assert isinstance(third.subject, LocalRef)
+        assert third.value.value == QidRef(qid="Q500")
+        (qualifier,) = third.qualifiers
+        assert isinstance(qualifier.value.value, LocalRef)
+
+
+class TestTheWriteStepRaisesTheFlag:
+    def test_the_flag_is_an_alert_of_the_gedcoms_write(
+        self, tmp_path, monkeypatch
+    ):
+        """Raised as registration raises it: on the GEDCOM's write, the
+        artifact as its item, the media object's item against it, and the
+        artifact's own SHA-1 as its medium (docs/ANOMALIES.md)."""
+        from tests.unit.test_write_step import WriteStep
+        from yizkr.pipeline import rundir
+
+        monkeypatch.setattr(
+            rundir, "_now", lambda: "2026-10-02T09:00:00+00:00"
+        )
+        wiki = WritingWiki()
+        artifact = Registrar(wiki).register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", TITLE
+        )
+        batch = family_gedcom(wiki)
+        step = WriteStep(tmp_path, wiki, "example-family.ged")
+        step.doc.source.parent.mkdir(parents=True, exist_ok=True)
+        step.doc.source.write_text(FAMILY_GEDCOM)
+        step.review(batch, decide=lambda row: "approve")
+
+        summary = step.write(batch)
+
+        media_object = summary["created_items"]["md1"]
+        (alert,) = step.orchestrator.rundir.alerts()
+        assert alert["check"] == UNHASHED_TITLE
+        assert alert["stage"] == "write"
+        assert alert["subject"] == step.doc.sha1[:12]
+        assert alert["kind"] == step.doc.kind
+        assert alert["artifact"] == artifact.artifact_qid
+        assert alert["others"] == [media_object]
+        assert alert["medium"] == sha1(PORTRAIT)[:12]
+        assert any(
+            line.strip()
+            == f"flagged {UNHASHED_TITLE}: item {artifact.artifact_qid}, "
+            f"against {media_object}"
+            for line in step.lines
+        )

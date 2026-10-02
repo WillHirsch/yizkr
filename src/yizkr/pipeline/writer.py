@@ -59,7 +59,19 @@ Per batch, the writer:
    those of an entity an approved equivalence names go on before any
    claim is written. A kind the vocabulary lacks is recorded for no
    item, minted or found: the result's `warnings` name each entity that
-   gives one, found before the first write;
+   gives one, found before the first write. An artifact-kind entity,
+   such as the GEDCOM import's media object, is never matched by its
+   label to an item registration made (ADR-0010): an artifact, which
+   carries a `media SHA-1`, or an artifact's page fragment, `part of`
+   one. Its item is found, or made, under its label with
+   MEDIA_OBJECT_TAG at its end (`media_object_label`), and the result's
+   `flags` name, against it, as unhashed-title, the artifact holding
+   its label (the fragment's whole, for a fragment) and every artifact
+   registered under its label with a content tag at its end, or whose
+   fragment is (_registered_under), as the registrar flags each when
+   the registration comes second (yizkr.pipeline.registrar), on every
+   write that finds them so. An item with no hash under its label is
+   matched as any other is;
 3. writes each claim as a statement at NORMAL rank (the contract has
    no rank field — ADR-0002) with TWO references (ADR-0003):
    * stated in -> artifact, with page number / region / excerpt
@@ -210,6 +222,7 @@ import re
 import unicodedata
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from yizkr.claims import (
     ArtifactRef,
@@ -236,6 +249,9 @@ from yizkr.pipeline.review import (
     unapproved_depicts,
 )
 
+if TYPE_CHECKING:
+    from yizkr.pipeline.registrar import RegistrationFlag
+
 # The most characters (Unicode code points) Wikibase holds in the text of a
 # string, external-id or monolingual text value: its `string-limits` for
 # the string and the monolingual text value types, an external id being a
@@ -251,6 +267,12 @@ TERM_LIMIT = 250
 # what a text cut to its limit ends with, before the digest of the whole
 # text (_cut)
 CUT_MARK = " …"
+# what the label of a media object's item ends with when a registered
+# artifact holds the media object's title (media_object_label)
+MEDIA_OBJECT_TAG = " [media object]"
+# the content tag registration gives a label another item holds: " [", the
+# first 8 hex digits of the media's SHA-1, "]" (yizkr.pipeline.registrar)
+_CONTENT_TAG = re.compile(r" \[[0-9a-f]{8}\]")
 # What else Wikibase refuses in a text value, and in a term once it has
 # trimmed it: its `illegal-string-chars` check, /^\s|[\v\t]|\s$/u, finds a
 # line break or a tab anywhere, or whitespace at either end. PHP matches
@@ -384,6 +406,13 @@ class WriteResult:
     # character it cleans up into U+FFFD), in batch order; a warning says
     # why for each (the module docstring)
     refused: list[str] = field(default_factory=list)
+    # each registered artifact under the label of an artifact-kind entity
+    # of the batch, such as a GEDCOM media object, as it is or content-
+    # tagged, its own or a fragment's: the entity's item is never that
+    # artifact or fragment, and the pair is flagged unhashed-title, as the
+    # registrar flags it, for a person to look at (step 2 of the module
+    # docstring; yizkr.pipeline.registrar.RegistrationFlag)
+    flags: list[RegistrationFlag] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -662,6 +691,24 @@ def _term_text(text: str) -> str:
     return _cut(stored_term(text), TERM_LIMIT)
 
 
+def media_object_label(label: str) -> str:
+    """The label of the item for an artifact-kind entity, such as a GEDCOM
+    media object, whose label `label` (as the writer sends a label,
+    _term_text) a registered artifact holds: `label`, cut to leave room
+    (_cut), then MEDIA_OBJECT_TAG. It depends on the label alone, so a
+    re-run finds the item again, and the registrar looks for it under an
+    artifact's title (ADR-0010)."""
+    return _cut(label, TERM_LIMIT - len(MEDIA_OBJECT_TAG)) + MEDIA_OBJECT_TAG
+
+
+def artifact_kinds() -> frozenset[str]:
+    """The manifest keys of the artifact kinds: artifact, and each class
+    the manifest makes a `subclass_of` it."""
+    from yizkr.pipeline.transcription_record import artifact_classes
+
+    return frozenset({"artifact", *artifact_classes()})
+
+
 def _terms(texts: list[str]) -> list[str]:
     """`texts`, a list of aliases, as the writer sends it: each alias as
     it sends a term (_term_text), in their order, leaving out a repeat and
@@ -840,7 +887,32 @@ class BatchWriter:
                 f"a QID or add a label)"
             )
         existing = self.client.find_item_by_label(label)
+        # an artifact-kind entity, such as a GEDCOM media object, is never
+        # joined by its label to an item registration made, an artifact or
+        # its fragment (ADR-0010): it takes an item of its own under its
+        # tagged label (media_object_label), found again by it, and each
+        # artifact registered under its label is flagged against it, on
+        # every write, for a person to look at
+        held: list[tuple[str, str]] = []
+        if (
+            existing
+            and instance_of in artifact_kinds()
+            and self._registered(existing)
+        ):
+            held = self._registered_under(label)
+        if held:
+            label = media_object_label(label)
+            existing = self.client.find_item_by_label(label)
+            if existing and self._registered(existing):
+                raise RuntimeError(
+                    f"entity {ref.local_id!r}: its label and its tagged "
+                    f"label both name items registered by the SHA-1 of "
+                    f"their media, and an artifact is never matched by its "
+                    f"label (ADR-0010): no item was made for it"
+                )
         if existing:
+            for registered in held:
+                self._flag_title(registered, existing, result)
             if aliases:
                 self._ensure_aliases(existing, aliases)
             if record is None and instance_of and source_artifact_qid:
@@ -910,8 +982,89 @@ class BatchWriter:
             )
             self._append(item, hint)
             item.write(summary="ingest: type hint (unclassified entity)")
+        for registered in held:
+            self._flag_title(registered, qid, result)
         result.created_items[ref.local_id] = qid
         return qid
+
+    def _hash_of(self, qid: str) -> str | None:
+        """The `media SHA-1` the item `qid` carries, or None."""
+        pid = self.properties.get("media_sha1")
+        if pid is None:
+            return None
+        for statement in self._entity(qid).claims.get(pid) or []:
+            value = (statement.mainsnak.datavalue or {}).get("value")
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    def _registered(self, qid: str) -> tuple[str, str] | None:
+        """(the artifact, the SHA-1 it carries) when the item `qid` is one
+        registration made: an artifact, which carries a `media SHA-1`, or
+        an `instance of artifact fragment` that is `part of` one, for
+        which the artifact is its whole. None otherwise."""
+        sha1 = self._hash_of(qid)
+        if sha1:
+            return qid, sha1
+        fragment = self.items.get("artifact_fragment")
+        part_of = self.properties.get("part_of")
+        if fragment is None or part_of is None:
+            return None
+        claims = self._entity(qid).claims
+
+        def targets(pid: str) -> list[str]:
+            values = (
+                (statement.mainsnak.datavalue or {}).get("value")
+                for statement in claims.get(pid) or []
+            )
+            return [
+                value["id"]
+                for value in values
+                if isinstance(value, dict) and "id" in value
+            ]
+
+        if fragment not in targets(self.properties["instance_of"]):
+            return None
+        for whole in targets(part_of):
+            sha1 = self._hash_of(whole)
+            if sha1:
+                return whole, sha1
+        return None
+
+    def _registered_under(self, label: str) -> list[tuple[str, str]]:
+        """Every artifact (_registered) whose item, or a fragment of which,
+        has the label `label` as it is or with a content tag at its end, "
+        [" and the first 8 hex digits of a SHA-1 and "]", as registration
+        tags a label another item holds (yizkr.pipeline.registrar): the
+        artifacts registered under that title, in the order of their
+        items, each once."""
+        _, item_labels = self.client.label_index()
+        found: list[tuple[str, str]] = []
+        for other, qid in sorted(
+            item_labels.items(), key=lambda pair: int(pair[1][1:])
+        ):
+            if other != label and not (
+                other.startswith(label)
+                and _CONTENT_TAG.fullmatch(other[len(label) :])
+            ):
+                continue
+            registered = self._registered(qid)
+            if registered and registered not in found:
+                found.append(registered)
+        return found
+
+    def _flag_title(
+        self, held: tuple[str, str], qid: str, result: WriteResult
+    ) -> None:
+        """Flag the registered artifact `held`, (item, SHA-1), registered
+        under the label of the batch's entity whose item, found or made, is
+        `qid`, as the registrar flags an artifact registered under the
+        label of an item with no hash: unhashed-title, once a write."""
+        from yizkr.pipeline.registrar import UNHASHED_TITLE, RegistrationFlag
+
+        flag = RegistrationFlag(UNHASHED_TITLE, held[0], held[1], (qid,))
+        if flag not in result.flags:
+            result.flags.append(flag)
 
     def _ensure_aliases(self, qid: str, aliases: list[str]) -> None:
         """Append this document's name variants to an existing item.

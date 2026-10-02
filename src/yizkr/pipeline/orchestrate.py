@@ -143,7 +143,7 @@ import re
 import sys
 import threading
 from collections import Counter
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -1221,22 +1221,27 @@ class Orchestrator:
         try:
             return self._register_document(registrar, doc)
         finally:
-            for flag in registrar.flags:
-                self.rundir.alert(
-                    stage="write",
-                    check=flag.kind,
-                    subject=doc.sha1[:12],
-                    value=True,
-                    carried=False,
-                    kind=doc.kind,
-                    artifact=flag.artifact,
-                    others=list(flag.others),
-                    medium=flag.sha1[:12],
-                )
-                self.log(
-                    f"  flagged {flag.kind}: item {flag.artifact}, "
-                    f"against {', '.join(flag.others)}"
-                )
+            self._raise_flags(doc, registrar.flags)
+
+    def _raise_flags(self, doc: DocumentRun, flags: Iterable[Any]) -> None:
+        """Raise each RegistrationFlag in `flags` as an alert of the write on
+        `doc`, its check the flag's kind, and log it (_step_register)."""
+        for flag in flags:
+            self.rundir.alert(
+                stage="write",
+                check=flag.kind,
+                subject=doc.sha1[:12],
+                value=True,
+                carried=False,
+                kind=doc.kind,
+                artifact=flag.artifact,
+                others=list(flag.others),
+                medium=flag.sha1[:12],
+            )
+            self.log(
+                f"  flagged {flag.kind}: item {flag.artifact}, "
+                f"against {', '.join(flag.others)}"
+            )
 
     def _register_document(self, registrar: Any, doc: DocumentRun) -> str:
         """The document's QID, as `_step_register` registers it."""
@@ -2044,6 +2049,10 @@ class Orchestrator:
         ).write_batch(
             approved, bulk_accepted=is_bulk_accepted(doc.review_reviewed)
         )
+        # a registered artifact under the label of an artifact-kind entity
+        # of the batch, such as a GEDCOM media object, flagged as
+        # registration flags the two (yizkr.pipeline.writer, step 2)
+        self._raise_flags(doc, result.flags)
         for warning in result.warnings:
             self.log(f"  {doc.source.name}: {warning}", file=sys.stderr)
         self.log(
