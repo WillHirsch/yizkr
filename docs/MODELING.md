@@ -691,7 +691,9 @@ document's own words for them (the postcard's *Dein Vater*, status
 (ADR-0035 §4): a category (`kind`, `relation`, `date_reading`, `identity`
 or `other`) and one sentence in English, only where the extractor made a
 call a careful reader could make differently. `coverage.json` counts the
-records given, recordless and set aside, and the notes by category.
+records given (and by status, and the `unsplit` forms they hold),
+recordless and set aside (the records, and the reasons by category), and
+the notes by category.
 
 **Relational and perspectival appellations are NOT names** (ADR-0018).
 "our great grandmother", "meine Oma", "Nana Maisie", "my husband" describe
