@@ -111,6 +111,15 @@ class TestPeople:
         aliases = [variant, reordered, reordered.upper(), label.upper()]
         assert normalize_aliases(label, aliases, record) == [variant]
 
+    def test_a_variant_in_case_alone_is_derivable(self):
+        """'XXX YYYSS' writes 'Xxx Yyyß' in capitals, where a capital ß is
+        written SS: it differs from the label in case alone, which the
+        spelling test folds, so it goes."""
+        record = person(
+            given=[{"written": "Xxx"}], surnames=[{"written": "Yyyß"}]
+        )
+        assert normalize_aliases("Xxx Yyyß", ["XXX YYYSS"], record) == []
+
     def test_the_rescue_prefers_a_holder_that_gives_a_name(self):
         """Of the forms holding her title, the one that also gives a name
         part stays ('Frau Löbig'), before a role phrase or a bare title;
