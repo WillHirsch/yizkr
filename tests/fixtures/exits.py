@@ -49,10 +49,10 @@ def _syscall_pidfd_open(pid: int) -> int:
     fd = libc.syscall(SYS_PIDFD_OPEN, pid, 0)
     if fd < 0:
         error = ctypes.get_errno()
-        if error == errno.ESRCH:
-            raise ProcessLookupError(error, os.strerror(error))
         if error in (errno.ENOSYS, errno.EPERM):
             pytest.skip("no pidfd_open(2) in this kernel")
+        # OSError picks its subclass by errno: ESRCH, a process that has
+        # ended and been reaped, is ProcessLookupError
         raise OSError(error, os.strerror(error))
     return fd
 

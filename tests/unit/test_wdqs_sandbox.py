@@ -798,6 +798,24 @@ class TestUpLeavesNoContainer:
         assert state["container"] == container["name"]
 
 
+def test_a_cue_wait_ends_when_the_command_ends_first(tmp_path):
+    """The wait for a fake call's cue ends on the command's end, when it
+    ends with no call reaching the point, and says so."""
+    cues = Cues(tmp_path / "cues")
+    process = subprocess.Popen(
+        [sys.executable, "-c", "pass"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        with pytest.raises(pytest.fail.Exception, match="ended before busy"):
+            cues.wait_for("busy", process)
+    finally:
+        cues.close()
+        process.wait()
+
+
 class TestInterruptedWorkStops:
     @pytest.mark.parametrize(
         "signum", [signal.SIGINT, signal.SIGTERM], ids=["INT", "TERM"]
