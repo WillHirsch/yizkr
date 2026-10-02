@@ -996,7 +996,9 @@ def test_a_timeout_is_an_error_that_stops_all_the_tests_started(
     in-process, on a fake clock that stands still until hang() has
     started its processes and sent the cue, and then moves on only as the
     harness sleeps: the run times out once hang() is in place, in no real
-    time (#437)."""
+    time (#437). The SIGINT returns only once pytest has exited, so the
+    harness always finds it gone within the grace, and stops waiting
+    there, however long pytest takes to exit."""
     calc = repo / "calc.py"
     before = snapshot(calc)
     spec = repo.parent / "spec.toml"
@@ -1007,6 +1009,14 @@ def test_a_timeout_is_an_error_that_stops_all_the_tests_started(
     cued_at = []
     runs = []
     waiting = mutate.Harness._wait
+    signalling = mutate.signal_group
+    interrupted = []
+
+    def signal_then_until_exited(child, signum):
+        signalling(child, signum)
+        if signum == signal.SIGINT:
+            interrupted.append(clock.now)
+            until_ended([child.pid])
 
     def noting_the_run(self, child, deadline):
         runs.append(child)
@@ -1025,6 +1035,7 @@ def test_a_timeout_is_an_error_that_stops_all_the_tests_started(
 
     clock = Clock(limit=TIMEOUT + mutate.DEFAULT_GRACE + 1, ready=cued)
     monkeypatch.setattr(mutate.Harness, "_wait", noting_the_run)
+    monkeypatch.setattr(mutate, "signal_group", signal_then_until_exited)
     for key, value in GIT_ENV.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("CALC_CUE", str(cue.path))
@@ -1038,11 +1049,14 @@ def test_a_timeout_is_an_error_that_stops_all_the_tests_started(
         )
         captured = capsys.readouterr()
         assert status == 2, captured.out + captured.err
-        # the clock stood still until the cue, and the harness waited out
-        # its timeout, then the grace, on it
+        # the clock stood still until the cue, the harness waited out its
+        # timeout on it, and it stopped waiting out the grace once pytest
+        # had exited on the SIGINT
         assert cued_at == [0]
         assert len(pids) == 3
-        assert clock.now >= TIMEOUT + mutate.DEFAULT_GRACE
+        [halted_at] = interrupted
+        assert halted_at >= TIMEOUT
+        assert clock.now < halted_at + mutate.DEFAULT_GRACE
         row = results(captured.out)["sum hangs"]
         assert (row["result"], row["detail"]) == (
             "error",
