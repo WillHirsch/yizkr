@@ -7,15 +7,17 @@ and the registrar itself over an in-memory wiki whose uploads run the
 real `WikiClient.upload_file` against a fake MediaWiki (#186): artifacts
 found or made by SHA-1 alone, never by title; page fragments keyed by
 their artifact (#187); a container's derived media registered from their
-record (#128); the never-ingest list (#29); and `ensure_self_typed`, which
+record (#128); upload names in the form MediaWiki takes, and
+descriptions, within MediaWiki's and Wikibase's limits (#373); the
+never-ingest list (#29); and `ensure_self_typed`, which
 gives an item found without its kind that kind, stated in the item itself
 (#368; its use for the place-hierarchy pass's run item is tested in
 tests/unit/test_places.py). The orchestrator's
 write-time registration of a document runs here too, through its real
 `_step_register`. The flow is also verified live
 (tests/integration/test_live_write_time_registration.py,
-test_live_registrar.py, test_live_pipeline.py and
-test_live_presentation.py).
+test_live_registrar.py, test_live_pipeline.py,
+test_live_presentation.py and test_live_upload_names.py).
 """
 
 from __future__ import annotations
@@ -50,9 +52,13 @@ from yizkr.pipeline.registrar import (
     ExcludedMedia,
     Registrar,
     _cites,
+    _cut_to_fit,
     _ensure_referenced,
+    _fitted,
     _item_claim,
     _string_claim,
+    _upload_name,
+    _whole_letters,
     ensure_self_typed,
     register_artifact,
     register_derived_media,
@@ -1035,6 +1041,116 @@ class TestTermsInTheStoredForm:
         register_deck(wiki, tmp_path, "a", decomposed, media)
         assert wiki.writes == writes
 
+    def test_a_name_that_leaves_nothing_once_stored_is_image_n(self, tmp_path):
+        """A medium named only by control characters keeps no name once
+        stored: it is "image N", N its place among the record's media, so
+        its label ends in a name the instance keeps as sent, and a second
+        write of the deck sends no edit."""
+        wiki = StoringWiki()
+        media = [("\x01\x02", IMAGE, [1])]
+        _, derived = register_deck(wiki, tmp_path, "a", SHOP, media)
+        assert label_of(wiki, derived[sha1(IMAGE)]) == f"{SHOP} — image 1"
+        writes = wiki.writes
+        register_deck(wiki, tmp_path, "a", SHOP, media)
+        assert wiki.writes == writes
+
+    def test_nameless_media_are_numbered_in_the_order_of_their_sha1s(
+        self, tmp_path
+    ):
+        """Two media with names of control characters alone, one of them
+        on the never-ingest list, and one whose second name is such a
+        name: each nameless one is "image N", N its place among the
+        record's media in the order of their SHA-1s, excluded media
+        counted; a name the stored form leaves nothing of is no alias;
+        and a second write of the deck sends no edit."""
+        wiki = StoringWiki()
+        nameless = (IMAGE, OTHER_IMAGE, RESCAN)
+        # the deck holds them in the reverse of their SHA-1s' order
+        media = [
+            (control, data, [slide])
+            for slide, (control, data) in enumerate(
+                zip(
+                    ("\x01\x02", "\x03", "\x04"),
+                    sorted(nameless, key=sha1, reverse=True),
+                    strict=True,
+                ),
+                start=1,
+            )
+        ] + [("image1.png", PORTRAIT, [4]), ("\x01", PORTRAIT, [4])]
+        excluded_one = sorted(nameless, key=sha1)[1]
+        excluded = ExclusionList(sha1s=frozenset({sha1(excluded_one)}))
+        _, derived = register_deck(
+            wiki, tmp_path, "a", SHOP, media, exclusions=excluded
+        )
+        order = sorted(map(sha1, (*nameless, PORTRAIT)))
+        assert sha1(excluded_one) not in derived
+        for data in nameless:
+            if data != excluded_one:
+                number = order.index(sha1(data)) + 1
+                assert label_of(wiki, derived[sha1(data)]) == (
+                    f"{SHOP} — image {number}"
+                )
+        portrait = wiki.entities[derived[sha1(PORTRAIT)]]
+        assert label_of(wiki, derived[sha1(PORTRAIT)]) == (
+            f"{SHOP} — image1.png"
+        )
+        assert not portrait.get("aliases")
+        writes = wiki.writes
+        register_deck(wiki, tmp_path, "a", SHOP, media, exclusions=excluded)
+        assert wiki.writes == writes
+
+    def test_nameless_media_are_numbered_whatever_the_records_order(
+        self, tmp_path
+    ):
+        """A record that holds its media out of their SHA-1s' order numbers
+        them in that order all the same."""
+        wiki = StoringWiki()
+        deck = deck_file(tmp_path, "a")
+        registrar = Registrar(wiki)
+        registrar.register_artifact(deck, "presentation", SHOP)
+        media = [("\x01", IMAGE, [1]), ("\x02", OTHER_IMAGE, [2])]
+        record, directory = recorded(tmp_path, deck, SHOP, media)
+        backwards = dict(reversed(list(record.media.items())))
+        record = record.model_copy(update={"media": backwards})
+        derived = registrar.register_derived_media(record, directory)
+        for number, key in enumerate(sorted(derived), start=1):
+            assert label_of(wiki, derived[key]) == f"{SHOP} — image {number}"
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "\N{ZERO WIDTH SPACE}",
+            "\N{LEFT-TO-RIGHT MARK}",
+            "\N{ZERO WIDTH SPACE}\N{RIGHT-TO-LEFT MARK}",
+        ],
+    )
+    def test_a_name_that_shows_nothing_is_image_n(self, tmp_path, name):
+        """A name of characters that show nothing is no name: its label
+        would end in an invisible character."""
+        wiki = StoringWiki()
+        media = [(name, IMAGE, [1])]
+        _, derived = register_deck(wiki, tmp_path, "a", SHOP, media)
+        assert label_of(wiki, derived[sha1(IMAGE)]) == f"{SHOP} — image 1"
+        writes = wiki.writes
+        register_deck(wiki, tmp_path, "a", SHOP, media)
+        assert wiki.writes == writes
+
+    def test_a_nameless_medium_is_uploaded_as_image_n(self, tmp_path):
+        """Its file takes the name its label ends in, with no extension,
+        as its record's file has none: MediaWiki adds its type's."""
+        wiki = FakeWiki()
+        media = [("\x01\x02", IMAGE, [1])]
+        register_deck(wiki, tmp_path, "a", SHOP, media)
+        assert uploaded(wiki, sha1(IMAGE)) == f"File:{SHOP} image 1"
+
+    def test_a_surviving_name_comes_before_an_emptied_one(self, tmp_path):
+        """A medium whose first name the stored form empties and whose
+        second survives is labelled by the second."""
+        wiki = StoringWiki()
+        media = [("\x01", IMAGE, [1]), ("image3.png", IMAGE, [1])]
+        _, derived = register_deck(wiki, tmp_path, "a", SHOP, media)
+        assert label_of(wiki, derived[sha1(IMAGE)]) == f"{SHOP} — image3.png"
+
     def test_titles_and_labels_share_the_writers_rule(self):
         # one rule for the terms both write, and one limit (#369)
         assert registrar._stored_term is writer.stored_term
@@ -1168,6 +1284,807 @@ class TestLongDeckTitles:
         listed = description[len(prefix) : -2].split(", ")
         assert listed == [str(n) for n in slides[: len(listed)]]
         assert len(listed) < len(slides)
+
+
+# -- upload names (#373) ------------------------------------------------------
+
+
+def uploaded(wiki, content_sha1: str) -> str:
+    """The page of the one file holding `content_sha1`'s bytes."""
+    (page,) = [p for p, held in wiki.files.items() if held == content_sha1]
+    return page
+
+
+def name_bytes(page: str) -> int:
+    """The bytes a file page's name takes, in UTF-8."""
+    return len(page.removeprefix("File:").encode())
+
+
+def overridden(wiki) -> bool:
+    """Did any upload override MediaWiki's warnings, about its name or
+    anything else?"""
+    return any("ignorewarnings" in request for request in wiki.media.requests)
+
+
+# the firm's address, in ASCII, to fill a name to a given number of bytes
+ADDRESS = "Hutmacherei zum Blauen Hut, Brunnenring 35, Floerburg; " * 6
+
+
+class TestUploadNames:
+    """A medium's bytes are uploaded under ``"<container title> <name>"``
+    and an artifact's under its own file name, each in the form MediaWiki
+    takes as it is: every letter kept, each character or sequence it
+    refuses made "-", as is the dot before a part it refuses as an
+    extension, no part starting with a dot, never empty, and within its
+    240 bytes with room for the content tag of `WikiClient.upload_file`'s
+    second attempt, 231 bytes. The fake MediaWiki refuses, changes and
+    warns about names as MediaWiki does, so a name it would refuse fails
+    here, and one it would change overrides a warning."""
+
+    # 244 characters, of 250 bytes
+    TITLE = TestLongDeckTitles.TITLE
+    # a deck title of Russian sources, two bytes a letter
+    CYRILLIC = ("Калдовское районное бюро ЗАГС, " * 8).strip(" ,")
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "Familie Löbig",
+            "Калдовское районное бюро ЗАГС",
+            "Sipkje van 't Nijks (it tichelwurk fan Snylsjum)",
+            # the 1912 directory's form, its dot at the end kept
+            "Löbig, Ursula, Wwe.",
+            # a compatibility character, which only NFKC would change
+            "Brunnenring 35½",
+        ],
+    )
+    @pytest.mark.parametrize("form", ["NFC", "NFD"])
+    def test_a_deck_title_keeps_its_letters(self, tmp_path, title, form):
+        wiki = FakeWiki()
+        given = unicodedata.normalize(form, title)
+        register_deck(wiki, tmp_path, "a", given, [("image1.png", IMAGE, [1])])
+        assert uploaded(wiki, sha1(IMAGE)) == f"File:{title} image1.png"
+        # MediaWiki takes the name as it is: no warning overridden
+        assert not overridden(wiki)
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            # the bidirectional isolates, which a title keeps
+            "Familie\N{LEFT-TO-RIGHT ISOLATE}Löbig\N{POP DIRECTIONAL ISOLATE}",
+            # "&;" names no character, so it is no reference
+            "Brief &; Markt",
+        ],
+    )
+    def test_a_title_mediawiki_takes_as_it_is_is_kept(self, tmp_path, title):
+        wiki = FakeWiki()
+        register_deck(wiki, tmp_path, "a", title, [("image1.png", IMAGE, [1])])
+        assert uploaded(wiki, sha1(IMAGE)) == f"File:{title} image1.png"
+        assert not overridden(wiki)
+
+    def test_two_titles_cut_to_one_name_are_told_apart_by_the_tag(
+        self, tmp_path
+    ):
+        """Two long titles that differ only past the cut ask for one name.
+        The first deck's image takes it; the second's bytes are other
+        bytes under that name, so they go under its content-tagged form.
+        Nothing is overwritten, and a re-run finds both by SHA-1."""
+        wiki = FakeWiki()
+        common = "Hutmacherei zum Blauen Hut, Brunnenring 35, Flörburg; " * 4
+        first, second = f"{common}Teil 1", f"{common}Teil 2"
+        register_deck(wiki, tmp_path, "a", first, [("image1.png", IMAGE, [1])])
+        register_deck(
+            wiki, tmp_path, "b", second, [("image1.png", OTHER_IMAGE, [1])]
+        )
+        taken = uploaded(wiki, sha1(IMAGE))
+        assert taken.endswith("… image1.png")
+        stem = taken.removesuffix(".png")
+        tagged = f"{stem} {sha1(OTHER_IMAGE)[:8]}.png"
+        assert uploaded(wiki, sha1(OTHER_IMAGE)) == tagged
+        assert name_bytes(tagged) <= 240
+        files, requests = dict(wiki.files), len(wiki.media.requests)
+        register_deck(wiki, tmp_path, "a", first, [("image1.png", IMAGE, [1])])
+        register_deck(
+            wiki, tmp_path, "b", second, [("image1.png", OTHER_IMAGE, [1])]
+        )
+        assert wiki.files == files
+        assert len(wiki.media.requests) == requests
+
+    def test_characters_mediawiki_refuses_become_dashes(self, tmp_path):
+        wiki = FakeWiki()
+        title = "Löbig: Briefe [1919] #2 {a|b} <c> d/e\\f\x07g"
+        register_deck(wiki, tmp_path, "a", title, [("image1.png", IMAGE, [1])])
+        assert uploaded(wiki, sha1(IMAGE)) == (
+            "File:Löbig- Briefe -1919- -2 -a-b- -c- d-e-f-g image1.png"
+        )
+        assert not overridden(wiki)
+
+    @pytest.mark.parametrize(
+        "char",
+        [
+            *"#<>[]{}|:/\\",
+            "\x00",
+            "\x1b",
+            "\x7f",
+            "\x80",  # the controls beyond ASCII, which show as nothing
+            "\x9f",
+            "\ufffd",
+            "\ufffe",
+            "\uffff",
+            "\udc80",  # a byte of a file name that is no UTF-8
+            "\ud83d",  # half a pair, as a JSON string may hold one
+        ],
+    )
+    def test_each_character_a_name_cannot_hold_becomes_a_dash(self, char):
+        assert _upload_name("image1.png", f"Löbig{char}Flörburg", "x") == (
+            "Löbig-Flörburg image1.png"
+        )
+
+    def test_sequences_mediawiki_refuses_are_broken(self, tmp_path):
+        wiki = FakeWiki()
+        title = "Hutmacherei 100%2F ~~~~ &amp; ~~ &x 50% 9%a"
+        register_deck(wiki, tmp_path, "a", title, [("image1.png", IMAGE, [1])])
+        assert uploaded(wiki, sha1(IMAGE)) == (
+            "File:Hutmacherei 100-2F --~~ -amp; ~~ &x 50% 9%a image1.png"
+        )
+        assert not overridden(wiki)
+
+    @pytest.mark.parametrize(
+        "title, upload",
+        [
+            # a lower-case escape, as a downloaded file's name holds one
+            ("L%c3%b6big", "L-c3-b6big"),
+            # a reference by number: digits alone
+            ("Brief &1919;", "Brief -1919;"),
+        ],
+    )
+    def test_lower_case_escapes_and_numbered_references_are_broken(
+        self, tmp_path, title, upload
+    ):
+        wiki = FakeWiki()
+        register_deck(wiki, tmp_path, "a", title, [("image1.png", IMAGE, [1])])
+        assert uploaded(wiki, sha1(IMAGE)) == f"File:{upload} image1.png"
+        assert not overridden(wiki)
+
+    def test_a_character_reference_of_any_letters_is_broken(self, tmp_path):
+        """A title refuses "&<letters>;" whatever its letters: MediaWiki's
+        pattern takes every byte beyond ASCII among them."""
+        wiki = FakeWiki()
+        title = "Nina &Сартина; aus &Flörburg;"
+        register_deck(wiki, tmp_path, "a", title, [("image1.png", IMAGE, [1])])
+        assert uploaded(wiki, sha1(IMAGE)) == (
+            "File:Nina -Сартина; aus -Flörburg; image1.png"
+        )
+        assert not overridden(wiki)
+
+    def test_a_character_reference_made_by_normalising_is_broken(self):
+        """U+037E, the Greek question mark, is ";" in NFC: the name is
+        made legal in the form MediaWiki reads it in."""
+        assert _upload_name("image1.png", "Löbig &amp\u037e", "x") == (
+            "Löbig -amp; image1.png"
+        )
+
+    def test_spaces_underscores_and_bidi_marks(self):
+        title = (
+            "\u200e Familie\t Löbig_ _Flörburg\n\x85\u3000\u180e1919 \u202e"
+        )
+        assert _upload_name("image 1.png", title, "presentation") == (
+            "Familie Löbig Flörburg 1919 image 1.png"
+        )
+
+    @pytest.mark.parametrize(
+        "mark", ["\u200e", "\u200f", "\u202a", "\u202b", "\u202c", "\u202d"]
+    )
+    def test_each_bidi_mark_mediawiki_strips_is_left_out(self, mark):
+        assert _upload_name("image1.png", f"Löbig{mark} Flörburg", "x") == (
+            "Löbig Flörburg image1.png"
+        )
+
+    def test_bidi_marks_go_before_the_name_is_composed(self):
+        """A mark between a letter and its combining diaeresis keeps them
+        apart until it goes: the name is composed (NFC) once it has."""
+        upload = _upload_name("image1.png", "Lo\u200e\u0308big", "x")
+        assert upload == "L\u00f6big image1.png"
+
+    @pytest.mark.parametrize("title", ["", " ", "\u200f_\u200e", "_"])
+    def test_a_title_that_leaves_nothing_names_the_container(self, title):
+        assert _upload_name("page 6, image 1.png", title, "pdf") == (
+            "pdf page 6, image 1.png"
+        )
+
+    def test_a_deck_title_that_leaves_nothing_names_the_container(
+        self, tmp_path
+    ):
+        wiki = FakeWiki()
+        register_deck(wiki, tmp_path, "a", "_", [("image1.png", IMAGE, [1])])
+        assert uploaded(wiki, sha1(IMAGE)) == "File:Presentation image1.png"
+        assert not overridden(wiki)
+
+    def test_a_pdf_title_that_leaves_nothing_names_the_pdf(self, tmp_path):
+        """The container's kind stands for the title: a PDF's images are
+        "pdf <name>"."""
+        wiki = FakeWiki()
+        deck = deck_file(tmp_path, "a")
+        registrar = Registrar(wiki)
+        registrar.register_artifact(deck, "presentation", "_")
+        record, directory = recorded(
+            tmp_path, deck, "_", [("page 6, image 1.png", IMAGE, [6])]
+        )
+        pdf = record.model_copy(update={"container": "pdf"})
+        registrar.register_derived_media(pdf, directory)
+        assert uploaded(wiki, sha1(IMAGE)) == "File:Pdf page 6, image 1.png"
+        assert not overridden(wiki)
+
+    def test_a_medium_name_is_made_legal_too(self):
+        assert _upload_name(".Flörburg [1].png", "Familie Löbig") == (
+            "Familie Löbig -.Flörburg -1-.png"
+        )
+
+    @pytest.mark.parametrize(
+        "name, title, upload",
+        [
+            ("..png", "Familie Löbig", "Familie Löbig -..png"),
+            (".jpg", "", "-.jpg"),
+            ("_.png", "", "-.png"),
+            ("\u200e .png", "", "-.png"),
+            ("page 6, image 1.png", " . ", "-. page 6, image 1.png"),
+        ],
+    )
+    def test_a_part_that_would_start_with_a_dot_starts_with_a_dash(
+        self, name, title, upload
+    ):
+        """The dot stays, a "-" before it: no part starts with a dot, which
+        would make the file a hidden one on the wiki's disk, and a name
+        keeps its extension."""
+        assert _upload_name(name, title) == upload
+
+    def test_a_corpus_file_name_with_nothing_before_its_extension(
+        self, tmp_path
+    ):
+        """A corpus file "_.png" is ".png" in a title's form, which
+        MediaWiki refuses (``filename-tooshort``): it is uploaded as
+        "-.png"."""
+        wiki = FakeWiki()
+        result = register(wiki, scan(tmp_path, PORTRAIT, "_.png"))
+        assert result.file_page == "File:-.png"
+        assert not overridden(wiki)
+
+    @pytest.mark.parametrize("name", ["", " ", "_", "\u200e_\u200f", "\t\n"])
+    def test_a_name_that_leaves_nothing_is_never_empty(self, name):
+        """The title stands as the name; with none, the name is "-": never
+        empty, for which `upload_file` would take the file's own name."""
+        assert _upload_name(name, "Familie Löbig") == "Familie Löbig"
+        assert _upload_name(name, "", "presentation") == "presentation"
+        assert _upload_name(name) == "-"
+
+    def test_a_corpus_file_name_that_leaves_nothing(self, tmp_path):
+        """A corpus file named "_" is uploaded as "-", not under its own
+        name, an empty title, which MediaWiki refuses."""
+        wiki = FakeWiki()
+        register(wiki, scan(tmp_path, PORTRAIT, "_"))
+        assert [r["filename"] for r in wiki.media.requests] == ["-"]
+
+    def test_a_title_standing_as_the_name_is_cut_at_its_end(self):
+        """With no name to keep whole, the title is cut as a name with no
+        extension is: at its end, with no space before the "…"."""
+        upload = _upload_name("_", self.TITLE, "presentation")
+        assert upload.endswith("…") and not upload.endswith(" …")
+        assert self.TITLE.startswith(upload.removesuffix("…"))
+        assert 228 <= len(upload.encode()) <= 231
+
+    def test_a_legal_short_name_is_unchanged(self):
+        for name in ("portrait-1890s.png", "page 6, image 1.png"):
+            assert _upload_name(name) == name
+        assert _upload_name("image1.png", "Deck A", "x") == "Deck A image1.png"
+
+    def test_a_name_of_231_bytes_is_whole_and_one_more_is_cut(self):
+        name = "Brunnenring 35.png"
+        title = ADDRESS[:212]
+        assert _upload_name(name, title) == f"{title} {name}"
+        assert len(f"{title} {name}".encode()) == 231
+        # one byte more: "… Brunnenring 35.png" leaves the title 209
+        # bytes, "...Brunnenring 35, ", and the space at their end goes
+        longer = ADDRESS[:213]
+        assert ADDRESS[:209].endswith("35, ")
+        assert _upload_name(name, longer) == f"{ADDRESS[:208]}… {name}"
+
+    @pytest.mark.parametrize("size", [228, 229, 230, 231])
+    def test_a_name_that_fits_alone_is_uploaded_alone_and_whole(
+        self, tmp_path, size
+    ):
+        """Under a title, a name of 228 to 231 bytes leaves no room for
+        "… <name>": it is uploaded alone, the title left out, with no
+        "…" and no byte of it lost."""
+        wiki = FakeWiki()
+        name = ADDRESS[: size - 4] + ".png"
+        assert len(name.encode()) == size
+        register_deck(wiki, tmp_path, "a", SHOP, [(name, IMAGE, [1])])
+        assert uploaded(wiki, sha1(IMAGE)) == f"File:{name}"
+        assert not overridden(wiki)
+
+    def test_a_name_of_many_bytes_is_measured_in_bytes(self, tmp_path):
+        """The name "Лёбиг" * 23 + ".png" takes 119 characters and 234
+        bytes: too long alone, and under a title, so it is cut before its
+        extension to 231 bytes."""
+        wiki = FakeWiki()
+        name = "Лёбиг" * 23 + ".png"
+        register_deck(
+            wiki, tmp_path, "a", "Familie Löbig", [(name, IMAGE, [1])]
+        )
+        page = uploaded(wiki, sha1(IMAGE))
+        # 224 bytes, 112 letters of two, then "….png"
+        assert page == f"File:{name[:112]}….png"
+        assert name_bytes(page) == 231
+
+    def test_an_extension_of_many_bytes_is_measured_in_bytes(self):
+        """What follows the last dot of a name with no extension, 117
+        characters of 232 bytes, leaves no room: the name is cut at its
+        end."""
+        name = "Brief v. " + "Лёбиг" * 23
+        # "Brief v. " and 109 letters of two, 227 bytes, then "…"
+        assert _upload_name(name) == f"{name[:118]}…"
+
+    @pytest.mark.parametrize("form", ["NFC", "NFD"])
+    def test_a_long_title_is_cut_keeping_the_name(self, tmp_path, form):
+        wiki = FakeWiki()
+        given = unicodedata.normalize(form, self.TITLE)
+        register_deck(
+            wiki, tmp_path, "a", given, [("Flörburg-shop.png", IMAGE, [1])]
+        )
+        page = uploaded(wiki, sha1(IMAGE))
+        # 231 bytes: " Flörburg-shop.png" takes 19 and "…" 3, so the title
+        # keeps its longest start of at most 209 bytes
+        kept = next(
+            self.TITLE[:n].rstrip()
+            for n in range(len(self.TITLE), 0, -1)
+            if len(self.TITLE[:n].encode()) <= 209
+        )
+        assert page == f"File:{kept}… Flörburg-shop.png"
+        assert name_bytes(page) <= 231
+        assert not overridden(wiki)
+
+    def test_a_cut_is_made_between_letters_of_many_bytes(self):
+        """The title's 216 bytes end within a letter of two: the cut is
+        made before it."""
+        name = _upload_name("image10.png", self.CYRILLIC, "presentation")
+        assert name.endswith("… image10.png")
+        kept = name.removesuffix("… image10.png")
+        assert self.CYRILLIC.startswith(kept)
+        # 231 bytes at most, and one more letter would not have fitted
+        assert len(name.encode()) == 230
+        longer = self.CYRILLIC[: len(kept) + 1]
+        assert len(f"{longer}… image10.png".encode()) > 231
+        assert name == unicodedata.normalize("NFC", name)
+
+    @pytest.mark.parametrize("size, kept", [(225, "Л"), (226, ""), (227, "")])
+    def test_the_title_is_cut_to_nothing_before_the_name(self, size, kept):
+        """A name of 227 bytes leaves room for "… " alone; of 226, for
+        one byte of a title whose first letter takes two."""
+        name = ADDRESS[: size - 4] + ".png"
+        assert _upload_name(name, "Лёбиг", "x") == f"{kept}… {name}"
+
+    @pytest.mark.parametrize(
+        "name, upload",
+        [
+            (
+                "Hutmacherei zum Blauen Hut.com.pdf",
+                "Hutmacherei zum Blauen Hut-com.pdf",
+            ),
+            # in any case, each such part
+            ("Brunnenring 35.Exe.JS.png", "Brunnenring 35-Exe-JS.png"),
+            # a whole part, never a part's start
+            ("Brief.combined.pdf", "Brief.combined.pdf"),
+            # "com " is "com_" as a title holds it, which MediaWiki takes
+            ("Hutmacherei.com .pdf", "Hutmacherei.com .pdf"),
+            # the last part is the file's type, left as it is
+            (
+                "Hutmacherei zum Blauen Hut.com",
+                "Hutmacherei zum Blauen Hut.com",
+            ),
+        ],
+    )
+    def test_the_dot_before_an_extension_mediawiki_refuses_is_a_dash(
+        self, name, upload
+    ):
+        assert _upload_name(name) == upload
+
+    # $wgProhibitedFileExtensions by default, as MediaWiki 1.45.4's
+    # includes/MainConfigSchema.php lists them
+    MEDIAWIKI_PROHIBITED = (
+        "html", "htm", "js", "jsb", "mhtml", "mht", "xhtml", "xht",
+        "php", "phtml", "php3", "php4", "php5", "phps", "phar",
+        "shtml", "jhtml", "pl", "py", "cgi",
+        "exe", "scr", "dll", "msi", "vbs", "bat", "com", "pif", "cmd", "vxd",
+        "cpl",
+        "xml",
+    )  # fmt: skip
+
+    @pytest.mark.parametrize("extension", MEDIAWIKI_PROHIBITED)
+    def test_each_extension_mediawiki_refuses_loses_its_dot(self, extension):
+        assert _upload_name(f"Brief.{extension}.pdf") == (
+            f"Brief-{extension}.pdf"
+        )
+
+    def test_the_fake_refuses_the_extensions_mediawiki_refuses(self):
+        assert set(self.MEDIAWIKI_PROHIBITED) == FakeMediaWiki.PROHIBITED
+
+    def test_a_title_holding_an_extension_mediawiki_refuses(self, tmp_path):
+        """MediaWiki refuses "Flörburg St.Pl.Dok image1.png"
+        (``filetype-banned``): its part "Pl" is the extension "pl"."""
+        wiki = FakeWiki()
+        title = "Flörburg St.Pl.Dok"
+        register_deck(wiki, tmp_path, "a", title, [("image1.png", IMAGE, [1])])
+        assert uploaded(wiki, sha1(IMAGE)) == (
+            "File:Flörburg St-Pl.Dok image1.png"
+        )
+        assert not overridden(wiki)
+
+    def test_parts_are_judged_in_the_name_as_cut(self, tmp_path):
+        """The parts are those of the name as it is uploaded, cut: each
+        "Pl" the cut keeps has a "-" before it, the last one too, before
+        "D…"."""
+        wiki = FakeWiki()
+        title = ("Flörburg St.Pl.Dok " * 12).strip()
+        register_deck(wiki, tmp_path, "a", title, [("image1.png", IMAGE, [1])])
+        page = uploaded(wiki, sha1(IMAGE))
+        assert page == (
+            "File:"
+            + "Flörburg St-Pl.Dok " * 10
+            + "Flörburg St-Pl.D… image1.png"
+        )
+        assert name_bytes(page) == 231
+        assert not overridden(wiki)
+
+    def test_a_part_the_cut_ends_with_is_no_extension(self, tmp_path):
+        """The title cut after "St.Pl" leaves "Pl… image1", which MediaWiki
+        takes: its dot stays."""
+        wiki = FakeWiki()
+        title = "Hutmacherei zum Blauen Hut, " * 7 + "Flörburg Markt St.Pl.Dok"
+        register_deck(wiki, tmp_path, "a", title, [("image1.png", IMAGE, [1])])
+        assert uploaded(wiki, sha1(IMAGE)) == (
+            "File:"
+            + "Hutmacherei zum Blauen Hut, " * 7
+            + "Flörburg Markt St.Pl… image1.png"
+        )
+        assert not overridden(wiki)
+
+    def test_a_cut_whose_end_takes_all_the_room_keeps_none_of_the_text(self):
+        # 238 bytes, more than the 231 a name takes
+        end = "… " + "Лёбиг" * 23 + ".png"
+        assert _cut_to_fit("Familie Löbig", end) == end
+
+    def test_the_content_tagged_name_fits_too(self, tmp_path):
+        """A cut name another file holds with other bytes is uploaded under
+        its tagged form, 9 bytes longer, within MediaWiki's 240."""
+        wiki = FakeWiki()
+        name = _upload_name("image1.png", self.TITLE, "presentation")
+        wiki.media.store(name, OTHER_IMAGE)
+        register_deck(
+            wiki, tmp_path, "a", self.TITLE, [("image1.png", IMAGE, [1])]
+        )
+        page = uploaded(wiki, sha1(IMAGE))
+        stem = name.removesuffix(".png")
+        assert page == f"File:{stem} {sha1(IMAGE)[:8]}.png"
+        assert name_bytes(page) <= 240
+        # a second write finds the file by its item: nothing is uploaded
+        requests = len(wiki.media.requests)
+        register_deck(
+            wiki, tmp_path, "a", self.TITLE, [("image1.png", IMAGE, [1])]
+        )
+        assert len(wiki.media.requests) == requests
+
+    def test_a_name_too_long_alone_keeps_its_extension(self, tmp_path):
+        """With no room even for "… <name>", the title is left out and the
+        medium's own name cut before its extension."""
+        wiki = FakeWiki()
+        long_name = "Flörburg" * 30 + ".png"
+        register_deck(wiki, tmp_path, "a", SHOP, [(long_name, IMAGE, [1])])
+        page = uploaded(wiki, sha1(IMAGE))
+        assert page.startswith("File:Flörburg")
+        assert page.endswith("….png")
+        assert name_bytes(page) <= 231
+        stem = page.removeprefix("File:").removesuffix("….png")
+        assert long_name.startswith(stem)
+        assert len(f"{long_name[: len(stem) + 1]}….png".encode()) > 231
+
+    def test_an_extension_too_long_to_keep_is_cut_with_the_name(self):
+        """A dot early in a name with no extension: what follows it is no
+        extension to keep, and the name is cut at its end."""
+        name = "Brief v. " + "Gustav Löbig an Nina, Flörburg; " * 9
+        cut = _upload_name(name)
+        assert cut.startswith("Brief v. Gustav Löbig an Nina")
+        assert cut.endswith("…") and name.startswith(cut.removesuffix("…"))
+        assert len(cut.encode()) <= 231
+        assert len(cut.encode()) >= 228
+
+    def test_a_long_corpus_file_name_is_cut_keeping_its_extension(
+        self, tmp_path
+    ):
+        wiki = FakeWiki()
+        long_name = ("Hutmacherei zum Blauen Hut, Flörburg, " * 7)[:240]
+        long_name = long_name.strip(" ,") + ".png"
+        assert len(long_name.encode()) > 240
+        result = register(wiki, scan(tmp_path, PORTRAIT, long_name))
+        assert result.file_page.startswith("File:Hutmacherei zum Blauen")
+        assert result.file_page.endswith("….png")
+        assert name_bytes(result.file_page) <= 231
+        assert wiki.files == {result.file_page: sha1(PORTRAIT)}
+        # a re-scan under the same name takes the tagged name, which fits
+        rescan = register(
+            wiki, scan(tmp_path, RESCAN, long_name, folder="rescans")
+        )
+        stem = result.file_page.removesuffix(".png")
+        assert rescan.file_page == f"{stem} {sha1(RESCAN)[:8]}.png"
+        assert name_bytes(rescan.file_page) <= 240
+
+    def test_a_corpus_file_name_mediawiki_refuses_is_made_legal(
+        self, tmp_path
+    ):
+        wiki = FakeWiki()
+        path = scan(tmp_path, PORTRAIT, "brief #2 [1919] ~~~ {Löbig}.png")
+        result = register(wiki, path)
+        assert result.file_page == "File:Brief -2 -1919- -~~ -Löbig-.png"
+        assert not overridden(wiki)
+
+
+# "Калдовское районное бюро ЗАГС" with its stress marks: each stressed
+# vowel is a letter and a combining acute accent, which NFC leaves apart
+STRESS = "\N{COMBINING ACUTE ACCENT}"
+STRESSED = f"Калдо{STRESS}вское ра{STRESS}йонное бю{STRESS}ро ЗАГС"
+
+
+class TestCutsKeepWholeLetters:
+    """A cut never falls between a letter and the combining marks after
+    it: the letter goes with them. Each text is padded so that a cut by
+    bytes or characters alone would keep the letter and drop its
+    accent."""
+
+    def test_a_title_cut_keeps_whole_letters(self, tmp_path):
+        title = "Hutmacherei" + "x" * 5 + " " + ", ".join([STRESSED] * 4)
+        wiki = FakeWiki()
+        register_deck(wiki, tmp_path, "a", title, [("image1.png", IMAGE, [1])])
+        page = uploaded(wiki, sha1(IMAGE))
+        kept = page.removeprefix("File:").removesuffix("… image1.png")
+        assert title.startswith(kept) and kept.endswith(", Калд")
+        # the whole "о" with its accent went, not the accent alone
+        assert title[len(kept) :].startswith(f"о{STRESS}")
+        assert not overridden(wiki)
+
+    def test_a_name_cut_before_its_extension_keeps_whole_letters(self):
+        stem = "Brief" + "x" * 1 + " " + ", ".join([STRESSED] * 8)
+        name = _upload_name(f"{stem}.png")
+        assert name.endswith("….png")
+        kept = name.removesuffix("….png")
+        assert stem.startswith(kept) and kept.endswith("кое р")
+        assert stem[len(kept) :].startswith(f"а{STRESS}")
+
+    def test_a_description_cut_keeps_whole_letters(self, tmp_path):
+        wiki = StoringWiki()
+        description = (
+            "ingested by `yizkr ingest run` from Brief"
+            + "x" * 13
+            + " "
+            + ", ".join([STRESSED] * 12)
+            + ".pdf"
+        )
+        result = register_artifact(
+            wiki,
+            media_path=scan(tmp_path, PORTRAIT),
+            artifact_type="photograph",
+            title=TITLE,
+            description=description,
+        )
+        stored = wiki.entities[result.artifact_qid]["descriptions"]["en"]
+        # 249 characters would end in "бю", the accent of its "ю" cut off
+        assert description[248:250] == f"ю{STRESS}"
+        assert stored["value"] == description[:248] + "…"
+
+    DE = (
+        "\N{REGIONAL INDICATOR SYMBOL LETTER D}"
+        "\N{REGIONAL INDICATOR SYMBOL LETTER E}"
+    )
+    ZW = (
+        "\N{REGIONAL INDICATOR SYMBOL LETTER Z}"
+        "\N{REGIONAL INDICATOR SYMBOL LETTER W}"
+    )
+    JOINER = "\N{ZERO WIDTH JOINER}"
+    FAMILY = f"\N{MAN}{JOINER}\N{WOMAN}{JOINER}\N{GIRL}"
+    THUMBS = "\N{THUMBS UP SIGN}\N{EMOJI MODIFIER FITZPATRICK TYPE-4}"
+    # a subdivision's flag: a black flag, the tags "gbeng", a cancel tag
+    ENGLAND = (
+        "\N{WAVING BLACK FLAG}"
+        + "".join(chr(0xE0000 + ord(letter)) for letter in "gbeng")
+        + "\N{CANCEL TAG}"
+    )
+    KANA = (
+        "\N{HALFWIDTH KATAKANA LETTER KA}"
+        "\N{HALFWIDTH KATAKANA VOICED SOUND MARK}"
+    )
+    # an old Hangul syllable, whose jamo NFC leaves apart
+    JAMO = (
+        "\N{HANGUL CHOSEONG KIYEOK}"
+        "\N{HANGUL JUNGSEONG ARAEA}"
+        "\N{HANGUL JONGSEONG KIYEOK}"
+    )
+    JAMO_EXTENDED = "\N{HANGUL CHOSEONG KIYEOK}\N{HANGUL JUNGSEONG O-YEO}"
+    # old syllables that open with two or three leading jamo: one before
+    # a precomposed syllable, three before a vowel, and one of Hangul
+    # Jamo Extended-A before a precomposed syllable
+    OLD_DOUBLE = "\N{HANGUL CHOSEONG SIOS}\N{HANGUL SYLLABLE GA}"
+    OLD_CLUSTER = (
+        "\N{HANGUL CHOSEONG PIEUP}"
+        "\N{HANGUL CHOSEONG SIOS}"
+        "\N{HANGUL CHOSEONG KIYEOK}"
+        "\N{HANGUL JUNGSEONG ARAEA}"
+    )
+    OLD_EXTENDED = "\N{HANGUL CHOSEONG TIKEUT-MIEUM}\N{HANGUL SYLLABLE GA}"
+    CONJUNCT = (
+        "\N{DEVANAGARI LETTER KA}"
+        "\N{DEVANAGARI SIGN VIRAMA}"
+        "\N{DEVANAGARI LETTER SSA}"
+    )
+
+    @pytest.mark.parametrize(
+        "text, cut, kept",
+        [
+            # a letter with two marks: all three go
+            (f"Ра{STRESS}{STRESS}йон", f"Ра{STRESS}", "Р"),
+            # a letter whose marks leave no room keeps nothing
+            (f"а{STRESS}{STRESS}б", "а", ""),
+            (STRESS * 5, STRESS * 3, ""),
+            # a zero-width joiner joins the letters either side: both go
+            (f"Löbig a{JOINER}b", f"Löbig a{JOINER}", "Löbig "),
+            (f"Flörburg {FAMILY}", f"Flörburg {FAMILY[:3]}", "Flörburg "),
+            (f"Flörburg {FAMILY}", "Flörburg \N{MAN}", "Flörburg "),
+            # a zero-width non-joiner belongs to the letter before it
+            (
+                "Löbig a\N{ZERO WIDTH NON-JOINER}b",
+                "Löbig a",
+                "Löbig ",
+            ),
+            # a skin tone belongs to its emoji
+            (f"Flörburg {THUMBS}", f"Flörburg {THUMBS[0]}", "Flörburg "),
+            # the tags belong to their flag
+            (f"Flörburg {ENGLAND}", f"Flörburg {ENGLAND[:3]}", "Flörburg "),
+            # a halfwidth sound mark belongs to its kana
+            (f"Flörburg {KANA}", f"Flörburg {KANA[0]}", "Flörburg "),
+            # a vowel or final jamo belongs to its syllable
+            (f"Flörburg {JAMO}", f"Flörburg {JAMO[:2]}", "Flörburg "),
+            (
+                f"Flörburg {JAMO_EXTENDED}",
+                f"Flörburg {JAMO_EXTENDED[0]}",
+                "Flörburg ",
+            ),
+            # a leading jamo joins the leading jamo or the syllable after
+            # it, the precomposed one NFC makes of a modern pair
+            (
+                f"Flörburg {OLD_DOUBLE}",
+                f"Flörburg {OLD_DOUBLE[0]}",
+                "Flörburg ",
+            ),
+            (
+                f"Flörburg {OLD_CLUSTER}",
+                f"Flörburg {OLD_CLUSTER[:2]}",
+                "Flörburg ",
+            ),
+            (
+                f"Flörburg {OLD_EXTENDED}",
+                f"Flörburg {OLD_EXTENDED[0]}",
+                "Flörburg ",
+            ),
+            # a letter after a virama belongs to the conjunct
+            (f"Flörburg {CONJUNCT}", f"Flörburg {CONJUNCT[:2]}", "Flörburg "),
+            # half a flag goes, a whole one stays
+            (f"Flörburg {DE}{DE}", f"Flörburg {DE}{DE[0]}", f"Flörburg {DE}"),
+            (f"Flörburg {DE}{DE}", f"Flörburg {DE}", f"Flörburg {DE}"),
+            (f"Flörburg {ZW}{ZW}", f"Flörburg {ZW}{ZW[0]}", f"Flörburg {ZW}"),
+            (f"Flörburg {ZW}", f"Flörburg {ZW}", f"Flörburg {ZW}"),
+            # a lone indicator, the first of their range, goes
+            (
+                "Flörburg \N{REGIONAL INDICATOR SYMBOL LETTER A}",
+                "Flörburg \N{REGIONAL INDICATOR SYMBOL LETTER A}",
+                "Flörburg ",
+            ),
+            # a cut that ends after a whole letter is kept as it is
+            (f"ра{STRESS}йон", f"ра{STRESS}", f"ра{STRESS}"),
+        ],
+    )
+    def test_a_cut_ends_after_a_whole_letter(self, text, cut, kept):
+        assert _whole_letters(text, cut) == kept
+
+    def test_a_cut_backed_off_to_a_space_ends_before_it(self):
+        """The cut's 228 bytes end in a flag's first tag character: the
+        flag goes, and so does the space before it."""
+        text = "x" * 222 + " " + self.ENGLAND
+        assert _cut_to_fit(text, "…") == "x" * 222 + "…"
+
+    def test_a_cut_ending_in_a_space_backs_off_from_before_it(self):
+        """The cut's 228 bytes end in the space after a joiner: the space
+        is trimmed first, so the joiner, and the letter it joins, go
+        too, and no joiner is left before the "…"."""
+        text = "x" * 223 + f"a{self.JOINER} " + "b" * 20
+        assert _cut_to_fit(text, "…") == "x" * 223 + "…"
+
+    def test_a_fitted_cut_backed_off_to_a_space_ends_before_it(self):
+        """The room's 249 characters end in a flag's first tag character:
+        the flag goes, and so does the space before it."""
+        text = "x" * 246 + " " + self.ENGLAND
+        assert _fitted(text) == "x" * 246 + "…"
+
+    def test_a_fitted_cut_ending_in_a_space_backs_off_from_before_it(self):
+        """The room's 249 characters end in the space after a joiner: the
+        space is trimmed first, so the joiner, and the letter it joins, go
+        too, and no joiner is left before the "…"."""
+        text = "x" * 246 + f"a{self.JOINER} " + "b" * 20
+        assert _fitted(text) == "x" * 246 + "…"
+
+    @pytest.mark.parametrize(
+        "unit",
+        [
+            f"а{STRESS}",
+            FAMILY,
+            THUMBS,
+            ENGLAND,
+            KANA,
+            JAMO,
+            CONJUNCT,
+            f"{DE}",
+        ],
+    )
+    @pytest.mark.parametrize("pad", range(8))
+    def test_an_upload_name_ends_after_a_whole_letter(self, unit, pad):
+        """However the bytes fall, the title is cut after a whole
+        letter: what it keeps of the repeated letter is whole letters."""
+        before = "Hutmacherei" + "Ф" * pad + " "
+        name = _upload_name("image1.png", before + unit * 80, "presentation")
+        kept = name.removesuffix("… image1.png")
+        assert name.endswith("… image1.png") and kept.startswith(
+            before.rstrip()
+        )
+        rest = kept[len(before) :]
+        assert rest == unit * (len(rest) // len(unit))
+
+
+class TestLongDescriptions:
+    """A description is cut to the 250 characters Wikibase takes, ending
+    in "…": a longer one would be refused before the artifact had an item
+    (StoringWiki refuses it, as the instance does)."""
+
+    def test_a_long_description_is_cut_with_a_mark(self, tmp_path):
+        wiki = StoringWiki()
+        description = "Brief von Gustav Löbig aus Flörburg, " * 10
+        result = register_artifact(
+            wiki,
+            media_path=scan(tmp_path, PORTRAIT),
+            artifact_type="photograph",
+            title=TITLE,
+            description=description,
+        )
+        stored_description = wiki.entities[result.artifact_qid][
+            "descriptions"
+        ]["en"]["value"]
+        assert len(stored_description) <= 250
+        assert stored_description == description[:249].rstrip() + "…"
+
+    @pytest.mark.parametrize("form", ["NFC", "NFD"])
+    @pytest.mark.parametrize("length", [249, 250])
+    def test_a_description_that_fits_is_unchanged(
+        self, tmp_path, length, form
+    ):
+        """Its length is counted in the form Wikibase stores it in: one
+        given decomposed (NFD) has more characters, and is not cut."""
+        wiki = StoringWiki()
+        description = ("Brief von Gustav Löbig aus Flörburg " * 10)[:length]
+        description = description[:-1] + "x"
+        result = register_artifact(
+            wiki,
+            media_path=scan(tmp_path, PORTRAIT),
+            artifact_type="photograph",
+            title=TITLE,
+            description=unicodedata.normalize(form, description),
+        )
+        entity = wiki.entities[result.artifact_qid]
+        assert entity["descriptions"]["en"]["value"] == description
 
 
 # -- the never-ingest list (#29) ----------------------------------------------
@@ -1944,6 +2861,32 @@ class TestStepRegister:
         )
         assert strings(wiki, qid, "media_sha1") == [doc.sha1]
         assert strings(wiki, qid, "instance_of") == [ITEMS["artifact"]]
+        # a second write finds it by its bytes, and writes nothing
+        writes = wiki.writes
+        assert orchestrator._step_register(doc) == qid
+        assert wiki.writes == writes
+
+    def test_a_long_file_name_is_described_within_the_limit(self, tmp_path):
+        """The description "ingested by `yizkr ingest run` from <file
+        name>" passes 250 characters for a name of more than 214: it is
+        cut, ending in "…", and the artifact is made (StoringWiki refuses
+        a longer term)."""
+        wiki = StoringWiki()
+        name = ("Hutmacherei zum Blauen Hut, Brunnenring 35, " * 6)[:230]
+        name = name.strip(" ,") + ".png"
+        orchestrator, _ = self.orchestrator(tmp_path, wiki, [(name, PORTRAIT)])
+        (doc,) = orchestrator.documents()
+        qid = orchestrator._step_register(doc)
+        entity = wiki.entities[qid]
+        whole = f"ingested by `yizkr ingest run` from {name}"
+        assert len(whole) > 250
+        assert entity["descriptions"]["en"]["value"] == (
+            whole[:249].rstrip() + "…"
+        )
+        assert label_of(wiki, qid) == name.removesuffix(".png")
+        # its file name, of 234 bytes, is cut to fit too
+        (page,) = strings(wiki, qid, "media_file")
+        assert page.endswith("….png") and name_bytes(page) <= 231
         # a second write finds it by its bytes, and writes nothing
         writes = wiki.writes
         assert orchestrator._step_register(doc) == qid

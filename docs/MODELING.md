@@ -242,6 +242,32 @@ artifact a new QID, changes neither.
 
 - W1: media are wiki files on the instance; the artifact item points at
   its file page via the `media file` (string) property (ADR-0004).
+- **A file's name is in the form MediaWiki takes as it is** (ADR-0010 as
+  amended by #373, after MediaWiki 1.45.4's source). A file is uploaded
+  under its own name, and a medium a container embeds under
+  `"<container title> <its name>"`: every letter kept, each character
+  MediaWiki refuses in a file name made `-` (`# < > [ ] { } |`, `: / \`
+  and the controls other than whitespace), as is the start of each
+  sequence it refuses (`%` and two hex digits, a character reference
+  such as `&amp;` or `&Сартина;`, `~~~`), each run of whitespace and
+  underscores one space, a `-` before a dot that would start a part
+  (`.jpg` is `-.jpg`), and the dot before each part but the last that
+  MediaWiki refuses as an extension made `-` (`Hutmacherei.com.pdf` is
+  `Hutmacherei-com.pdf`; a refused last part, the file's type, is left,
+  and MediaWiki refuses the upload). A name these rules leave nothing of
+  leaves the title as the name, or, with none, is `-`: never empty. At
+  most 231 bytes in UTF-8: MediaWiki's 240, less the 9 a content-tagged
+  name adds. A longer name is cut, never between a letter and its
+  combining marks, with "…" where the cut is: the title
+  first, so the medium's own name stays whole; then the title left out,
+  so a name that fits on its own is never cut; and then the name before
+  its extension. A `media file` names the file as MediaWiki stores it,
+  its first letter a capital.
+- An artifact's description is put in the stored form, then cut,
+  ending in "…" and never between a letter and its combining marks, to
+  the 250 characters Wikibase takes: the one registration writes, ``"ingested
+  by `yizkr ingest run` from <file name>"``, passes that for a long file
+  name (ADR-0010 as amended by #373).
 - Registrar statements (`instance of`, `media file`, a fragment's
   `part of` + page qualifier) are referenced `stated in -> the artifact
   item itself`: an artifact asserts its own kind and composition by
@@ -584,7 +610,10 @@ Names are modelled in **two layers**:
   event):
   - `birth name` (P1477) — name/maiden name given at birth;
   - `married name` (P2562) — family name taken on marriage;
-  - `nickname` (P1449) — informal/pet name or "aka";
+  - `nickname` (P1449) — a name the source gives as what the person is
+    called, by anyone ("Peppi", "Gustl"), or an "aka"; what one person
+    calls another, or a name that names the person through a relation
+    but is no literal kinship term, is `referred_to_as` instead (below);
   - `official name` (P1448) — a formally adopted or legally changed name.
 - An *ordinary* untyped name is NOT restated as a claim — it lives in
   the label/aliases only. Typing adds structure where a source marks it;
@@ -651,7 +680,9 @@ language:
   initial; surnames typed `birth`, `married` or `other`, with their
   particles; patronymics, a name part of their own (the 1941
   certificate's *Лёбиг Рудольф Феликсович* gives the given name Рудольф,
-  the surname Лёбиг and the patronymic Феликсович); nicknames; titles and
+  the surname Лёбиг and the patronymic Феликсович); nicknames, the names
+  the person is called by anyone, each also an alias (never a
+  `referred_to_as` appellation, ADR-0018); titles and
   suffixes, which never key; and `unsplit` forms whose given name and
   surname the source does not tell apart;
 - **a place:** a status (`toponym`, `deictic` or `generic`); its names,
@@ -703,7 +734,11 @@ the notes by category.
 "our great grandmother", "meine Oma", "Nana Maisie", "my husband" describe
 a relationship or viewpoint, so they never enter the alias bag. A literal
 kinship term is a `relative` + `kinship_type` claim with the ego as
-object (§Kinship); a courtesy title or family/pet name is a
+object (§Kinship); a spousal term ("my husband") gives a marriage
+(ADR-0036); any other relational appellation (a name the
+source gives as what one person calls another, with or without a stated
+perspective, or that names the person through a relation: a courtesy
+title, "Bubele", "Рудольфиха") is a
 `referred_to_as` (P1810) statement on the referent — verbatim, source-
 referenced — qualified by `perspective` (the person/family ego) when the
 ego is a modelled entity, and unqualified otherwise. Both are

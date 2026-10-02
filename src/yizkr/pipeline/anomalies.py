@@ -61,16 +61,17 @@ stored output without recomputing a stage.
 A rate check marked fail-fast asks for a pause of its slice when it
 fires: the stage, or the document kind (RunDir.request, with `by` BY),
 and the other slices go on. When a pause of the checks alone stands on
-the slice and the configured timeout has passed since they asked for
-it, the checks append an abort of it, so an unattended run never waits
-on it indefinitely. A slice they paused stays watched for the rest of the
+the slice and the configured timeout has passed since they asked for it,
+the checks append an abort of it, so an unattended run never waits on it
+indefinitely. A slice they paused stays watched for the rest of the
 process, by a timer that looks even while no stage runs and by every
 later check: a driver that invokes the run again may ask again for a
 pause of theirs as it stood, and the timeout of such a pause still runs
-from the checks' own request (_SliceWatch). A pause of the same slice
-that someone else asked for is theirs, and is never aborted here. An
-abort, like a pause, only stops dispatch: nothing is deleted, and every
-completed output stays.
+from the checks' own request, on the monotonic clock, whatever the wall
+clock does, counting only the time the host is awake (_SliceWatch). A
+pause of the same slice that someone else asked for is theirs, and is
+never aborted here. An abort, like a pause, only stops dispatch: nothing
+is deleted, and every completed output stays.
 
 Alerts are signals. The checks never change, move or drop an output or a
 claim (ADR-0002), and a check that fails is an `anomaly-error` event and
@@ -90,11 +91,11 @@ import re
 import statistics
 import sys
 import threading
+import time
 import uuid
 from collections import Counter, deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
 from importlib.resources import files
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -954,10 +955,6 @@ class _FirstOf:
         self.fired = False
 
 
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
-
-
 def _start_timer(seconds: float, callback: Callable[[], None]) -> Any:
     """A daemon timer, started, that calls `callback` after `seconds`, or
     after the longest wait a thread can make (threading.TIMEOUT_MAX); it
@@ -966,16 +963,6 @@ def _start_timer(seconds: float, callback: Callable[[], None]) -> Any:
     timer.daemon = True
     timer.start()
     return timer
-
-
-def _time(value: Any) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        moment = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
 def _foldable(request: dict) -> bool:
@@ -987,7 +974,7 @@ def _foldable(request: dict) -> bool:
 
 def _fold_scopes(
     requests: Sequence[dict],
-) -> tuple[dict[str, str], dict[str, tuple[datetime | None, bool]]]:
+) -> tuple[dict[str, str], dict[str, bool]]:
     """The control file as the driver folds it (rundir.fold_control):
     each stopped scope, paused or aborted, and each pause's stretch
     (_pause_stretches). A request the fold cannot take is left out, as
@@ -996,13 +983,12 @@ def _fold_scopes(
     return fold_control(foldable).scopes, _pause_stretches(foldable)
 
 
-def _pause_stretches(
-    requests: Sequence[dict],
-) -> dict[str, tuple[datetime | None, bool]]:
+def _pause_stretches(requests: Sequence[dict]) -> dict[str, bool]:
     """For each scope a pause holds, folded as rundir.fold_control folds
-    the control file: when the pause began, and whether the anomaly checks
-    asked for every pause of it since."""
-    stretches: dict[str, tuple[datetime | None, bool]] = {}
+    the control file: whether the anomaly checks asked for every pause of
+    it since the pause began. The requests' stamps play no part: the
+    timeout is measured on the monotonic clock (_SliceWatch)."""
+    stretches: dict[str, bool] = {}
     aborted: set[str] = set()
     for request in requests:
         action = request.get("action")
@@ -1015,11 +1001,7 @@ def _pause_stretches(
             continue
         if action == PAUSE:
             ours = request.get("by") == BY
-            if scope in stretches:
-                since, only_ours = stretches[scope]
-                stretches[scope] = (since, only_ours and ours)
-            else:
-                stretches[scope] = (_time(request.get("at")), ours)
+            stretches[scope] = stretches.get(scope, True) and ours
         elif action == RESUME:
             stretches.pop(scope, None)
         elif action == ABORT:
@@ -1080,19 +1062,19 @@ def _locked_control(path: Path) -> Iterator[list[dict]]:
 @dataclass
 class _Watched:
     """A slice the checks paused: the check that paused it last, and that
-    check's timeout, clock and timer; when the checks asked for the pause,
-    as the control file stamps the request (`origin`, once a look has read
-    it); and the pending timer that looks at the slice next, by the token
-    it calls back with, and when it is due on that clock."""
+    check's timeout, monotonic clock and timer; when the watch of the
+    pause began on that clock (`began`, as the checks asked for it); and
+    the pending timer that looks at the slice next, by the token it calls
+    back with, and when it is due on that clock."""
 
     check: str
     timeout: float
-    now: Callable[[], datetime]
+    clock: Callable[[], float]
     timer: Callable[[float, Callable[[], None]], Any]
-    origin: datetime | None = None
+    began: float
     pending: Any = None
     token: object | None = None
-    due: datetime | None = None
+    due: float | None = None
 
 
 def _cancel(handle: Any) -> None:
@@ -1112,15 +1094,27 @@ class _SliceWatch:
     and no invocation's checks asked for it. So each look reads the
     control file as the driver folds it, under the lock its appenders
     take, and aborts the slice when a pause of the checks alone stands on
-    it and the timeout has passed since the checks asked for the pause
-    (its origin, which a carry does not change). A look that finds such a
-    pause short of its timeout looks again when it is due; any other look,
-    the one that aborts included, looks again when the checks' request
-    would reach its timeout, or once that has passed, a timeout later, for
-    a carry still to come. One pending timer per slice makes the looks,
-    and so does every check the orchestrator calls. The watch belongs to
-    the process whose checks asked for the pause: a pause carried into
-    another process is not watched there."""
+    it and the timeout has passed since the checks asked for the pause,
+    which a carry does not change.
+
+    Every look judges the time passed on one clock, the monotonic one the
+    timers wait on, from when the watch began: the checks watch a slice as
+    soon as they have asked for its pause, in this process. The wall
+    clock only stamps the control file's requests, and can step or be
+    corrected either way without moving a pause's timeout. A look that
+    finds such a pause short of its timeout looks again when it is due;
+    any other look, the one that aborts included, looks again when the
+    checks' request would reach its timeout, or once that has passed, a
+    timeout later, for a carry still to come. One pending timer per slice
+    makes the looks, and so does every check the orchestrator calls.
+
+    The monotonic clock counts the time the host is awake: time it spends
+    suspended does not count towards a timeout, as the run does no work
+    then. The watch belongs to the process whose checks asked for the
+    pause, and no pause outlives it unwatched: a driver carries requests
+    only into its own next invocation, in the same process, and a new
+    process's start marker voids every request before it
+    (rundir.fold_control)."""
 
     def __init__(self, path: Path) -> None:
         # the watch's own events (a look that fails) carry an invocation of
@@ -1134,22 +1128,23 @@ class _SliceWatch:
         scope: str,
         check: str,
         timeout: float | None,
-        now: Callable[[], datetime],
+        clock: Callable[[], float],
         timer: Callable[[float, Callable[[], None]], Any],
     ) -> None:
         """Watch a slice the checks have just paused, with their timeout,
-        clock and timer, in place of any earlier watch of it. With no
-        timeout the slice is not watched: its pauses hold until someone
-        resumes it. The checks pause a slice as they read the run's
-        events, and the look at every watched slice that ends each read
-        (AnomalyChecks._poll) reads the pause's origin and starts its
-        timer."""
+        monotonic clock and timer, from now on that clock, in place of any
+        earlier watch of it. With no timeout the slice is not watched: its
+        pauses hold until someone resumes it. The checks pause a slice as
+        they read the run's events, and the look at every watched slice
+        that ends each read (AnomalyChecks._poll) starts its timer."""
         with self._lock:
             watched = self._slices.pop(scope, None)
             if watched is not None:
                 _cancel(watched.pending)
             if timeout is not None:
-                self._slices[scope] = _Watched(check, timeout, now, timer)
+                self._slices[scope] = _Watched(
+                    check, timeout, clock, timer, clock()
+                )
 
     def look(self) -> None:
         """Look at every watched slice now. A look that fails stops no
@@ -1184,12 +1179,12 @@ class _SliceWatch:
         a timer or a check makes the look and whether it succeeds or fails.
         A timer is started when none is, or when this look wants one
         sooner than the pending one is due, which is then cancelled. The
-        looks agree on when a pause is due, so a sooner one comes only when
-        the wall clock steps back; the pending timer is then never later
-        than the look the slice needs. A look that fails (the control file
-        cannot be opened, read or appended to, or a timer cannot start)
-        raises, and leaves a timer a timeout later when none is pending, so
-        that the slice never goes unwatched."""
+        looks agree on when a slice is due, on the one clock, so a sooner
+        one comes only after a look that failed, whose timer comes a
+        timeout from then. A look that fails (the control file cannot be
+        opened, read or appended to, or a timer cannot start) raises, and
+        leaves a timer a timeout later when none is pending, so that the
+        slice never goes unwatched."""
         try:
             due = self._judge(scope, watched)
             if watched.pending is not None and (
@@ -1199,37 +1194,34 @@ class _SliceWatch:
             self._arm(scope, watched, due)
         finally:
             if watched.pending is None:
-                margin = timedelta(seconds=watched.timeout + 1)
-                self._arm(scope, watched, watched.now() + margin)
+                margin = watched.timeout + 1
+                self._arm(scope, watched, watched.clock() + margin)
 
-    def _arm(self, scope: str, watched: _Watched, due: datetime) -> None:
+    def _arm(self, scope: str, watched: _Watched, due: float) -> None:
         """Start the timer that looks at the slice when `due` comes, and
         only then cancel the pending one it replaces: a timer that cannot
         start leaves the pending one as it was."""
         token = object()
-        wait = max(0.0, (due - watched.now()).total_seconds())
+        wait = max(0.0, due - watched.clock())
         pending = watched.timer(wait, lambda: self._fire(scope, token))
         _cancel(watched.pending)
         watched.pending, watched.token, watched.due = pending, token, due
 
-    def _judge(self, scope: str, watched: _Watched) -> datetime:
+    def _judge(self, scope: str, watched: _Watched) -> float:
         """Abort the slice when a pause of the checks alone stands on it
-        and the timeout has passed since its origin; when the slice is to
-        be looked at again: when a pause standing short of the timeout
-        reaches it, or else when the checks' request would reach it, or,
-        that past, a timeout from now; and a second more, since the
-        control file stamps its requests in whole seconds."""
-        margin = timedelta(seconds=watched.timeout + 1)
-        now = watched.now()
+        and the timeout has passed since the watch began; when the slice
+        is to be looked at again: when the checks' request reaches the
+        timeout, or, that past, a timeout from now; and a second more, so
+        that a timer's look comes past the timeout however its wait is
+        rounded."""
+        margin = watched.timeout + 1
+        now = watched.clock()
         with _locked_control(self.run.path / CONTROL) as requests:
             state, stretches = _fold_scopes(requests)
-            since, ours = stretches.get(scope, (None, False))
-            if state.get(scope) == "paused" and ours and since is not None:
-                if watched.origin is None:
-                    watched.origin = since
-                start = min(since, watched.origin)
-                if (now - start).total_seconds() < watched.timeout:
-                    return start + margin
+            ours = stretches.get(scope, False)
+            if state.get(scope) == "paused" and ours:
+                if now - watched.began < watched.timeout:
+                    return watched.began + margin
                 what, name = scope.split(":", 1)
                 self.run.request(
                     ABORT,
@@ -1239,9 +1231,8 @@ class _SliceWatch:
                     check=watched.check,
                     **{what: name},
                 )
-        origin = watched.origin
-        if origin is not None and origin + margin > now:
-            return origin + margin
+        if watched.began + margin > now:
+            return watched.began + margin
         return now + margin
 
 
@@ -1271,24 +1262,26 @@ class AnomalyChecks:
     `stored`, `reused` and `failed` are called as a stage output is
     stored, as a stored output is reused when its document is dispatched,
     and as a stage fails; each first reads the events the invocation has
-    appended since the last call. `now` gives the time (UTC), `timer`
-    (seconds, callback) starts the timer that aborts a fail-fast pause
-    nobody resumed, and `page_count` counts the pages of a document's
-    medium (transcription_check.media_page_count)."""
+    appended since the last call. `monotonic` gives the time, in seconds,
+    on the monotonic clock that times a fail-fast pause out
+    (time.monotonic by default), `timer` (seconds, callback) starts the
+    timer that aborts such a pause nobody resumed, and `page_count`
+    counts the pages of a document's medium
+    (transcription_check.media_page_count)."""
 
     def __init__(
         self,
         run: RunDir,
         config: AnomalyConfig | None = None,
         *,
-        now: Callable[[], datetime] | None = None,
+        monotonic: Callable[[], float] | None = None,
         timer: Callable[[float, Callable[[], None]], Any] | None = None,
         page_count: Callable[[Path], int | None] | None = None,
     ) -> None:
         self.run = run
         self.config = config if config is not None else load_config()
         self.digest = self.config.digest()
-        self._now = now or _utc_now
+        self._monotonic = monotonic or time.monotonic
         self._timer = timer or _start_timer
         self._page_count = page_count or media_page_count
         self._lock = threading.RLock()
@@ -1914,7 +1907,11 @@ class AnomalyChecks:
         self._paused[scope] = reset
         watch = _watch_of(self.run.path)
         watch.watch(
-            scope, check, self.config.pause_timeout_s, self._now, self._timer
+            scope,
+            check,
+            self.config.pause_timeout_s,
+            self._monotonic,
+            self._timer,
         )
         return scope
 
