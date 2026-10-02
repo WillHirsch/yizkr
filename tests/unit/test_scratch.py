@@ -980,6 +980,45 @@ class TestControl:
         assert started(run, invocation=-1) == [(stone, "critique")]
         assert statuses(run) == {DONE}
 
+    def test_a_new_process_waits_on_no_pause_of_an_earlier_one(
+        self, tmp_path, fakes
+    ):
+        """A pause the anomaly checks asked for in an earlier process, whose
+        timer ended with it, never holds a new process: the new process's
+        start marker voids every request before it, and only a driver's
+        own next invocation, in the same process, carries any. So no slice
+        waits on a pause that no timer watches (#432)."""
+        corpus = small(tmp_path)
+        with pytest.raises(KeyboardInterrupt):
+            command(tmp_path, corpus, fakes, driver=CutShort)
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        RunDir(run).request(
+            "pause",
+            stage="critique",
+            by="anomaly",
+            reason="call-failures: 3 of 5",
+            check="call-failures",
+        )
+        waits = Waits()
+        assert (
+            command(
+                tmp_path,
+                corpus,
+                fakes,
+                resume=run.name,
+                clock=waits.clock,
+                sleep=waits.sleep,
+            )
+            == EXIT_OK
+        )
+        assert waits.waited == []
+        assert RunDir(run).control().stopped(stage="critique") is None
+        assert not [r for r in read_jsonl(run / CONTROL) if r.get("carried")]
+        assert started(run, invocation=-1) == [
+            (corpus.sha1(STONE), "critique")
+        ]
+        assert statuses(run) == {DONE}
+
     def test_the_stops_in_force_are_those_since_a_start(self, tmp_path):
         run = RunDir(tmp_path / "run")
         run.request("abort", kind="gedcom")  # before the start: void

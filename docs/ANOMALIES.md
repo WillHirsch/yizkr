@@ -380,19 +380,23 @@ steps back or falls behind (a virtual machine's clock resynchronised
 under load, say) never delays an abort, one that reads ahead and is then
 corrected back never brings one forward, and neither moves a timer. A
 timer whose look came early would find the pause short of its timeout
-and look again when it is due. After an abort, the next look comes a
-full timeout and a second later on the same clock. The look holds the
-lock the control file's appenders take (rundir's `_append_line`) from
-its read to its abort, so no other process appends a request in between:
-an operator's resume lands before the look, and is seen, or after the
-abort. The lock is POSIX's, so it does not hold against this process's
-own threads, nor after any descriptor on the file in this process is
-closed. A look that fails (the control file cannot be opened, read or
-appended to, on a full disk say, or a timer cannot start) is an
-`anomaly-error` event: under the watch's own invocation, `watch-<hex>`,
-when a timer made it, and under the check's otherwise. Either way it
-stops the look at no other slice, and leaves the slice a timer a timeout
-later when none is pending: a slice never goes unwatched.
+and look again when it is due. After an abort, the next look comes when
+the checks' request would have reached the timeout, or, that past, a
+timeout and a second later, on the same clock. The monotonic clock
+counts the time the host is awake: time it spends suspended (a laptop's
+lid closed, say) does not count towards a timeout, as the run does no
+work then. The look holds the lock the control file's appenders take
+(rundir's `_append_line`) from its read to its abort, so no other
+process appends a request in between: an operator's resume lands before
+the look, and is seen, or after the abort. The lock is POSIX's, so it
+does not hold against this process's own threads, nor after any
+descriptor on the file in this process is closed. A look that fails (the
+control file cannot be opened, read or appended to, on a full disk say,
+or a timer cannot start) is an `anomaly-error` event: under the watch's
+own invocation, `watch-<hex>`, when a timer made it, and under the
+check's otherwise. Either way it stops the look at no other slice, and
+leaves the slice a timer a timeout later when none is pending: a slice
+never goes unwatched.
 
 The slice stays watched after its pause is aborted, resumed or cleared,
 because a driver that invokes the run again in the same process, as the
@@ -404,15 +408,19 @@ times it from the checks' own request, which the watch keeps, never from
 the carry's new time. So a pause carried through one re-invocation after
 another is still aborted once the timeout has passed since the checks
 asked for it, whether or not any check runs in the new invocation, and
-even when a look comes between the start marker and the carry. A
-pause whose timeout passes during the wait is aborted there, and the
-driver carries the abort instead; a pause carried from a reading of the
-file older than the checks' abort is aborted again at the next look. The
-watch lives in the process whose checks asked for the pause: a pause
-carried into another process is not watched there, and holds until
-someone resumes or aborts it. A driver that carries pauses from one
-invocation to the next within its process, as the scratch driver does,
-needs nothing more.
+even when a look comes between the start marker and the carry. A pause
+whose timeout passes during the wait is aborted there, and the driver
+carries the abort instead; a pause carried from a reading of the file
+older than the checks' abort is aborted again at the next look. The
+watch lives in the process whose checks asked for the pause, and no
+pause outlives it unwatched: the scratch driver carries requests only
+into its own next invocation, in the same process, and a new process's
+first invocation carries none, its start marker voiding every request
+before it. So a run invoked again in a new process (after a crash, say)
+never waits on a pause no timer watches: the slice is dispatched again,
+and its checks pause it afresh, with a watch of their own, if it fails
+again. A driver that carried pauses into a new process would have to
+watch them itself, or report them and end the run rather than wait.
 
 **How a driver sees it.** A driver folds `control.jsonl` with
 `rundir.fold_control`, as it folds every request, the monitor's

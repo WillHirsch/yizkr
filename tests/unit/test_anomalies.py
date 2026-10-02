@@ -33,6 +33,7 @@ import pytest
 import yaml
 
 from tests.fixtures import example_universe as u
+from tests.fixtures.real_time import real_time_uses
 from tests.fixtures.records import record_answer
 from tests.unit.conftest import RecordedTimer
 from yizkr.claims import ArtifactRef, ClaimBatch
@@ -92,6 +93,9 @@ REPO = Path(__file__).resolve().parents[2]
 # the checks' real pause timer, taken as the tests are collected: in every
 # test, tests/unit/conftest.py records the timers the checks start instead
 START_TIMER = anomalies._start_timer
+# the bound, in seconds, on a wait for a thread or an event that the test
+# itself ends: a guard against a hang, never a time the test waits out
+HANG_GUARD = 60
 
 
 def sha1_of(name: str) -> str:
@@ -156,19 +160,20 @@ def a_doc(tmp_path, name, kind="text", text=None, **detail) -> Doc:
 class Clock:
     """The checks' clocks, moved on by hand: the wall clock, which the
     `clock` fixture makes the run directory's too, to stamp the control
-    file's requests, and the monotonic clock (`monotonic`), which times
-    the pauses out and which the fake Timers wait on. `advance` moves both;
-    `step` moves the wall clock alone, as a wall clock that is set or
-    corrected moves while the monotonic clock goes on."""
+    file's requests, and the monotonic clock (`steady`), which times
+    the pauses out and which the fake Timers wait on. Both start at a
+    fixed instant, never the real clock's. `advance` moves both; `step`
+    moves the wall clock alone, as a wall clock that is set or corrected
+    moves while the monotonic clock goes on."""
 
     def __init__(self) -> None:
-        self.at = datetime.now(UTC)
+        self.at = datetime(2026, 1, 1, tzinfo=UTC)
         self.elapsed = 0.0
 
     def __call__(self) -> datetime:
         return self.at
 
-    def monotonic(self) -> float:
+    def steady(self) -> float:
         return self.elapsed
 
     def advance(self, seconds: float) -> None:
@@ -210,7 +215,7 @@ class Timers:
             raise RuntimeError("can't start new thread")
         self.started.append(RecordedTimer(seconds, callback))
         if self.clock is not None:
-            self._due[id(self.started[-1])] = self.clock.monotonic() + seconds
+            self._due[id(self.started[-1])] = self.clock.steady() + seconds
         return self.started[-1]
 
     def waiting(self) -> list[RecordedTimer]:
@@ -223,7 +228,7 @@ class Timers:
     def fire(self) -> None:
         for timer in self.waiting():
             due = self._due.get(id(timer))
-            if due is None or due <= self.clock.monotonic():
+            if due is None or due <= self.clock.steady():
                 self._run.add(id(timer))
                 timer.callback()
 
@@ -239,7 +244,7 @@ def make_checks(tmp_path, overrides=None, pages=None, clock=None, timers=None):
     checks = AnomalyChecks(
         run,
         load_config(overrides=overrides or {}),
-        monotonic=(clock := clock or Clock()).monotonic,
+        monotonic=(clock := clock or Clock()).steady,
         timer=(timers if timers is not None else Timers()).on(clock),
         page_count=pages or (lambda source: None),
     )
@@ -1746,7 +1751,7 @@ def checks_of(run: RunDir, clock, timers=None) -> AnomalyChecks:
     return AnomalyChecks(
         run,
         load_config(),
-        monotonic=clock.monotonic,
+        monotonic=clock.steady,
         timer=(timers if timers is not None else Timers()).on(clock),
         page_count=lambda source: None,
     )
@@ -2017,8 +2022,9 @@ class TestFailFastPauses:
         """The timer waits on the monotonic clock, and its look judges the
         pause's age on that clock too: once the timeout has passed on it,
         the slice is aborted even when the wall clock has fallen behind or
-        stepped back meanwhile (#432), and the next look comes a full
-        timeout and a second later on the same clock."""
+        stepped back meanwhile (#432). After a timer's abort, past the
+        time the checks' request reached the timeout, the next look comes
+        a timeout and a second later on the same clock."""
         timers = Timers()
         run, _checks = paused_media(tmp_path, clock=clock, timers=timers)
         (first,) = timers.waiting()
@@ -2084,6 +2090,19 @@ class TestFailFastPauses:
         checks_of(run, clock, timers).poll()
         assert run.control().stopped(kind="media") == "kind:media aborted"
 
+    def test_the_timeout_has_passed_at_its_last_instant(self, tmp_path, clock):
+        """A pause has stood its timeout once the monotonic clock reaches
+        the timeout since the checks asked for it: short of it the pause
+        stands, at it a check's look aborts it."""
+        timers = Timers()
+        run, checks = paused_media(tmp_path, clock=clock, timers=timers)
+        clock.advance(1799.5)
+        checks.poll()
+        assert run.control().stopped(kind="media") == "kind:media paused"
+        clock.advance(0.5)
+        checks.poll()
+        assert run.control().stopped(kind="media") == "kind:media aborted"
+
     def test_a_timer_that_runs_early_aborts_nothing(self, tmp_path, clock):
         """A timer whose look comes before its wait has run out on the
         monotonic clock, as a wait cut short would, is not trusted for the
@@ -2146,15 +2165,16 @@ class TestFailFastPauses:
 
         def start(seconds, callback):
             # the first timer runs at once, once the test has moved the
-            # monotonic clock to its due; the next ones are only started
+            # monotonic clock to its due; the next ones are started with
+            # nothing to do, their waits only recorded
             asked.append(seconds)
             if started:
-                started.append(START_TIMER(seconds, callback))
+                started.append(START_TIMER(0, lambda: None))
             else:
 
                 def released():
                     # a hang guard only: the test sets it
-                    assert seen.wait(timeout=60)
+                    assert seen.wait(timeout=HANG_GUARD)
                     callback()
 
                 started.append(START_TIMER(0, released))
@@ -2164,7 +2184,7 @@ class TestFailFastPauses:
         checks = AnomalyChecks(
             run,
             load_config(overrides={"pause-timeout-s": 2}),
-            monotonic=clock.monotonic,
+            monotonic=clock.steady,
             timer=start,
         )
         try:
@@ -2177,7 +2197,7 @@ class TestFailFastPauses:
             clock.advance(asked[0])
             seen.set()
             # a hang guard only: the thread runs at once
-            first.join(timeout=60)
+            first.join(timeout=HANG_GUARD)
             assert not first.is_alive()
             assert first.daemon
             assert run.control().stopped(kind="media") == "kind:media aborted"
@@ -2188,13 +2208,25 @@ class TestFailFastPauses:
             seen.set()
             for timer in started:
                 timer.cancel()
-                timer.join(timeout=60)
+                timer.join(timeout=HANG_GUARD)
 
-    def test_a_timer_waits_at_most_the_longest_wait_a_thread_can(self):
+    def test_a_timer_waits_at_most_the_longest_wait_a_thread_can(
+        self, monkeypatch
+    ):
+        """The real timer's starter clamps its wait to the longest a thread
+        can make, and starts a daemon timer; here the timer is made but its
+        thread never starts."""
+        made: list[threading.Timer] = []
+
+        class Unstarted(threading.Timer):
+            def start(self) -> None:
+                made.append(self)
+
+        monkeypatch.setattr(threading, "Timer", Unstarted)
         timer = START_TIMER(threading.TIMEOUT_MAX + 1, lambda: None)
-        timer.cancel()
-        timer.join(timeout=30)
+        assert made == [timer]
         assert timer.interval == threading.TIMEOUT_MAX
+        assert timer.daemon
 
     def test_a_carried_pause_times_out_from_the_checks_request(
         self, tmp_path, clock
@@ -2361,7 +2393,7 @@ class TestFailFastPauses:
         anomalies.attach(
             run,
             load_config(),
-            monotonic=clock.monotonic,
+            monotonic=clock.steady,
             timer=timers.on(clock),
             page_count=lambda source: None,
         )
@@ -2401,10 +2433,10 @@ class TestFailFastPauses:
         run.request("pause", stage="critique", by="anomaly", reason="calls")
         watch = anomalies._watch_of(run.path)
         watch.watch(
-            "kind:media", "kind-failures", 1800.0, clock.monotonic, timers
+            "kind:media", "kind-failures", 1800.0, clock.steady, timers
         )
         watch.watch(
-            "stage:critique", "call-failures", 1800.0, clock.monotonic, timers
+            "stage:critique", "call-failures", 1800.0, clock.steady, timers
         )
         monkeypatch.setattr(
             anomalies,
@@ -2444,7 +2476,7 @@ class TestFailFastPauses:
         run.request("pause", kind="media", by="anomaly", reason="kind")
         watch = anomalies._watch_of(run.path)
         watch.watch(
-            "kind:media", "kind-failures", 1800.0, clock.monotonic, timers
+            "kind:media", "kind-failures", 1800.0, clock.steady, timers
         )
         clock.advance(600)
         monkeypatch.setattr(
@@ -3281,38 +3313,18 @@ class TestHelpers:
         ]
 
 
-# the fakes that may read the real clock: the fake clock starts from it
-_REAL_CLOCK_ALLOWED = {"Clock"}
-_REAL_TIME_CALLS = {
-    ("time", "sleep"),
-    ("time", "time"),
-    ("time", "monotonic"),
-    ("time", "perf_counter"),
-    ("datetime", "now"),
-    ("datetime", "utcnow"),
-    ("threading", "Timer"),
-}
-
-
 def test_no_test_here_waits_on_or_reads_the_real_clock():
-    """No test in this file sleeps, reads the real clock or starts a
-    threading.Timer of its own: the checks' clock is the fake Clock, their
-    timers the fake Timers or the real _start_timer given no wait (#432).
-    Only the fakes in _REAL_CLOCK_ALLOWED may read the real clock."""
-    import ast
-
-    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
-    allowed: set[int] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and node.name in _REAL_CLOCK_ALLOWED:
-            allowed.update(id(inner) for inner in ast.walk(node))
-    found = [
-        f"line {node.lineno}: {node.func.value.id}.{node.func.attr}("
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Name)
-        and (node.func.value.id, node.func.attr) in _REAL_TIME_CALLS
-        and id(node) not in allowed
-    ]
-    assert found == []
+    """No test in this file sleeps, reads a real clock, waits a real time
+    or starts a real timer with a wait (#432): the checks' clocks are the
+    fake Clock, their timers the fake Timers or the real _start_timer
+    given no wait, and a wait for a thread or an event is bounded only by
+    HANG_GUARD."""
+    source = Path(__file__).read_text(encoding="utf-8")
+    uses = real_time_uses(
+        source,
+        # its timer is made, never started: threading.Timer is patched
+        exempt={"test_a_timer_waits_at_most_the_longest_wait_a_thread_can"},
+        hang_guards={"HANG_GUARD"},
+        real_timers={"START_TIMER", "_start_timer"},
+    )
+    assert uses == []

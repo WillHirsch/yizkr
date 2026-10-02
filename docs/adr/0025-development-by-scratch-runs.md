@@ -333,7 +333,11 @@ futile, and explain itself afterwards.
   timer that looks at the pause waits on too, from the checks' request
   for the pause; the wall clock only stamps the control file, so a wall
   clock that steps or is corrected either way neither delays nor brings
-  forward an abort (docs/ANOMALIES.md).
+  forward an abort. The timeout counts the time the host is awake, since
+  the run does no work while it is suspended. A pause never outlives the
+  process that watches it: a new process's start marker voids it, and
+  only the driver's next invocation in the same process carries it
+  (docs/ANOMALIES.md).
 - **Abort and resume.** Ctrl-C, `yizkr scratch abort`, or a request in
   the control file from the monitor or an anomaly check stops dispatch
   for the whole run or for one slice. In-flight calls finish or are
