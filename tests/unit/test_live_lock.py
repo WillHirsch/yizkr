@@ -23,12 +23,14 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import http.server
+import inspect
 import json
 import os
 import signal
 import subprocess
 import sys
 import threading
+import time
 import warnings
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -284,7 +286,15 @@ def until_empty(path: Path, what: str, child: Child) -> None:
 
 class FakeClock:
     """The clocks of a hold() in this process: `monotonic` reads the time
-    that only `sleep` moves on, and either is counted."""
+    that only `sleep` moves on, and either is counted.
+
+    It fails the test when it is read READS times while its time stands
+    still, or sleeps past LIMIT seconds: a hold() whose wait stopped
+    moving the clock on, or never reached its timeout, would otherwise
+    spin for ever rather than fail."""
+
+    READS = 50
+    LIMIT = 60.0
 
     def __init__(self) -> None:
         self.time = 0.0
@@ -292,14 +302,22 @@ class FakeClock:
         self.sleeps: list[float] = []
         # called after the nth sleep, keyed by n
         self.after_sleep: dict[int, Callable[[], None]] = {}
+        self._still = 0  # reads since the time last moved on
 
     def monotonic(self) -> float:
         self.reads += 1
+        self._still += 1
+        if self._still > self.READS:
+            pytest.fail("the clock was read over and over, standing still")
         return self.time
 
     def sleep(self, seconds: float) -> None:
         self.sleeps.append(seconds)
+        if seconds > 0:
+            self._still = 0
         self.time += seconds
+        if self.time > self.LIMIT:
+            pytest.fail(f"slept {self.time:g} s, past {self.LIMIT:g} s")
         self.after_sleep.get(len(self.sleeps), lambda: None)()
 
 
@@ -854,6 +872,18 @@ def test_a_record_of_an_ended_process_is_read_again_before_it_is_named(
     assert f"pid {ended} has ended" in message
 
 
+def test_a_hold_waits_on_the_real_clocks_by_default():
+    defaults = {
+        name: parameter.default
+        for name, parameter in inspect.signature(
+            hold.__wrapped__
+        ).parameters.items()
+    }
+    assert defaults["monotonic"] is time.monotonic
+    assert defaults["sleep"] is time.sleep
+    assert defaults["now"] == datetime.now
+
+
 def test_the_lock_path_and_timeout_come_from_the_environment(
     monkeypatch, tmp_path
 ):
@@ -895,4 +925,13 @@ def test_no_test_here_waits_on_or_reads_the_real_clock():
     print, a hold() here runs on FakeClock, and a wait for a process, a
     thread or a line is bounded only by HANG_GUARD."""
     source = Path(__file__).read_text(encoding="utf-8")
-    assert real_time_uses(source, hang_guards={"HANG_GUARD"}) == []
+    # the one exception names the real clocks, to check the defaults by
+    # identity, and calls none of them
+    pin = "test_a_hold_waits_on_the_real_clocks_by_default"
+    assert (
+        real_time_uses(source, exempt={pin}, hang_guards={"HANG_GUARD"}) == []
+    )
+    assert {
+        use.split(": ", 1)[1]
+        for use in real_time_uses(source, hang_guards={"HANG_GUARD"})
+    } == {"monotonic uncalled", "sleep uncalled", "now uncalled"}

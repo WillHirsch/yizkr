@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import hashlib
+import inspect
 import io
 import json
 import os
@@ -23,6 +24,7 @@ import random
 import re
 import shutil
 import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime, timedelta
@@ -3300,6 +3302,10 @@ class TestTerminalKeys:
         finally:
             os.close(reading)
         assert slept == [HANG_GUARD]
+
+    def test_the_interval_is_slept_on_the_real_clock_by_default(self):
+        sleep = inspect.signature(monitor.TerminalKeys).parameters["sleep"]
+        assert sleep.default is time.sleep
 
 
 def test_main_requests_and_watches_once(run, capsys):

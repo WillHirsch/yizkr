@@ -120,6 +120,43 @@ class TestNewRunIds:
             "20260928T090000Z-0000ac"
         )
 
+    def test_the_id_reads_the_real_utc_clock_by_default(
+        self, runs, monkeypatch
+    ):
+        """With no clock given, the id is the time the system's clock
+        reads in UTC: here a stand-in for datetime that reads a fixed
+        time, so the test reads no real clock."""
+        asked = []
+
+        class Fixed(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                asked.append(tz)
+                return cls(2026, 3, 14, 9, 26, 53, 589793, tzinfo=UTC)
+
+        monkeypatch.setattr(scratch, "datetime", Fixed)
+        assert scratch.new_run_id(runs) == "20260314T092653Z-08ffe1"
+        assert asked == [UTC]
+
+    @pytest.mark.parametrize(
+        "name", ["99991231T235959Z-0f423f", "99991231T235959Z-ffffff"]
+    )
+    def test_a_name_no_id_sorts_after_is_refused_by_name(self, runs, name):
+        """The last microsecond of 9999, or a name past it in that second,
+        has no run id after it: a new run is refused, naming the entry,
+        rather than given an id that sorts before it or is its own."""
+        (runs / name).mkdir()
+        with pytest.raises(scratch.ScratchRefused, match=name):
+            scratch.new_run_id(runs, clock=Clock())
+        with pytest.raises(scratch.ScratchRefused, match=name):
+            scratch.choose_run(runs, new=True, clock=Clock())
+
+    def test_an_earlier_microsecond_of_9999_still_has_one_after(self, runs):
+        (runs / "99991231T235959Z-0f423e").mkdir()
+        assert scratch.new_run_id(runs, clock=Clock()) == (
+            "99991231T235959Z-0f423f"
+        )
+
     def test_other_names_in_the_runs_directory_are_not_run_ids(self, runs):
         for name in (
             "notes",

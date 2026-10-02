@@ -927,10 +927,12 @@ version, which every key names.
 run directory. The scratch driver (`yizkr scratch run`,
 docs/runbooks/scratch-run.md) gives each run its own,
 `var/scratch/<run id>/`, which is also the run's state directory, fresh
-for each new run; a run's id starts with the UTC time it started, and
-always sorts after every run id already there, so the runs sort as they
-started even when the clock is set back. Every file but `run.json` is append-only JSON
-lines. Readers need no lock and skip a torn last line, so an interrupted
+for each new run. A run's id is the UTC time it started, to the second,
+then six hex digits that give the microsecond; when the clock reads at or
+before the latest run id already in the runs directory (a clock set
+back), the id is the first after that one instead, so that runs always
+sort as they were started (docs/RUN_MANIFEST.md, `run_id`). Every file
+but `run.json` is append-only JSON lines. Readers need no lock and skip a torn last line, so an interrupted
 writer never corrupts a log.
 
 | File | Written by | Read by |

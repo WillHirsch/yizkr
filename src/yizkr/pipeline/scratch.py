@@ -575,10 +575,12 @@ def _run_id(moment: datetime, step: int) -> str:
     return f"{moment:%Y%m%dT%H%M%SZ}-{step:06x}"
 
 
-def _run_id_after(name: str) -> str | None:
-    """The first run id that sorts after `name`, when `name` is a run id
-    (new_run_id): the next microsecond's, or the next second's first;
-    None for any other name."""
+def _run_id_after(name: str, runs: Path) -> str | None:
+    """The first run id that sorts after `name`, an entry in `runs`, when
+    `name` is a run id (new_run_id): the next microsecond's, or the next
+    second's first; None for any other name. ScratchRefused, naming the
+    entry, when no run id sorts after it: the last microsecond of the
+    year 9999, or a name past it in that second."""
     if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}", name):
         return None
     try:
@@ -588,7 +590,14 @@ def _run_id_after(name: str) -> str | None:
     step = int(name[17:], 16) + 1
     if step < 1_000_000:
         return _run_id(second, step)
-    return _run_id(second + timedelta(seconds=1), 0)
+    try:
+        return _run_id(second + timedelta(seconds=1), 0)
+    except OverflowError:
+        raise ScratchRefused(
+            f"{runs / name} is named like a run id that no other sorts "
+            "after, so no new run in that directory could sort after it: "
+            "move it out of the runs directory"
+        ) from None
 
 
 def new_run_id(
@@ -602,12 +611,14 @@ def new_run_id(
     set back), the id is the first after that latest, so that the runs in
     a runs directory sort as they were started, however the clock moves.
     One driver at a time takes a new run there (hold), so the id is not
-    taken by another before its directory is made."""
+    taken by another before its directory is made. ScratchRefused when
+    an entry's name is a run id that no run id sorts after
+    (_run_id_after)."""
     now = (clock or (lambda: datetime.now(UTC)))().astimezone(UTC)
     run_id = _run_id(now, now.microsecond)
     runs = Path(runs)
     if runs.is_dir():
-        after = (_run_id_after(path.name) for path in runs.iterdir())
+        after = (_run_id_after(path.name, runs) for path in runs.iterdir())
         first = max((name for name in after if name), default=None)
         if first is not None and first > run_id:
             run_id = first
