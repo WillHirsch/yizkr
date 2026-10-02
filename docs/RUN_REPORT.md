@@ -214,9 +214,10 @@ rechecks.
   records, and all its mentions are recordless), and one whose coverage
   predates these counts (or holds its records without its notes, or its
   notes without its records, which the extraction never writes). So the
-  recordless mentions the clustering stage counts, once #409 adds that
-  figure, also include the line-range fallback's mentions, and that
-  figure need not equal the records' recordless count. An
+  recordless mentions the clustering stage counts (the identity map's
+  `summary.recordless_mentions`, below) also include the line-range
+  fallback's mentions, and that figure need not equal the records'
+  recordless count. An
   extraction whose `coverage.json` is missing, cannot be read or holds no
   object is in none of these figures, as in none of the rejects'. Nor
   are the judgement notes counted that a line-range fallback's claims

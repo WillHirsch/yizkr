@@ -231,9 +231,17 @@ clustering reads any record of the entity's kind. A birth or death with
 no principal, or several, or one whose own date of that kind conflicts
 with it, is nobody's own and meets nothing through its other
 participants (§3.2; rule 9). The alias cleanup (§8) leaves an entity
-without a standing record its aliases, blanks and duplicates aside. The
-run report counts recordless mentions; #420 counts the records and the
-judgement notes of §4 in it.
+without a standing record its aliases, blanks and duplicates aside, and
+keeps a person's first alias that alone holds a title or suffix the
+record gives, so that the record names no part its forms do not hold
+("Frau Löbig" beside "Ida Löbig" stays where her record titles her
+Frau); the GEDCOM adapter cleans by the record it fills, as extraction
+does, so an alias that restates its bracketed label ("Peppi" beside
+"(Peppi)") is derivable and goes. A mention without a record meets only
+mentions without one, so a document's mention whose record was set aside
+never meets the export, whose people and places all have records. The
+run report counts recordless mentions (`summary.recordless_mentions`),
+and #420 counts the records and the judgement notes of §4 in it.
 
 Amended by #409 (2026-09-29), decided by the orchestrator (the owner may
 override; conservative, since a missed merge is safe and a false

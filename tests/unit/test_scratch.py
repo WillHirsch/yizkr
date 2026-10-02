@@ -203,7 +203,17 @@ class Engine:
             return record_answer(corpus.texts[name])
         if what == "critique":
             return '{"done": true, "findings_emitted": 0}'
-        person = {"id": "e1", "label": "Eugen Löbig", "kind": "human"}
+        person = {
+            "id": "e1",
+            "label": "Eugen Löbig",
+            "kind": "human",
+            # the mention record extraction hands over (ADR-0035 §2)
+            "structure": {
+                "kind": "human",
+                "given": [{"written": "Eugen"}],
+                "surnames": [{"written": "Löbig", "type": "other"}],
+            },
+        }
         if what == "manifest":
             return json.dumps({"entities": [person | {"mention_lines": [1]}]})
         claim = {
@@ -1655,18 +1665,20 @@ class TestCorpusStages:
         path = driver.state_dir / CORPUS_DIR / "clustering"
         identity = json.loads((path / "identity-map.json").read_text())
         # every document's one person, Eugen, born in 1836 as the export
-        # says: the scripted answers carry no mention records, so the five
-        # meet on the exact name and stay apart, an ambiguous candidate
-        # cluster (ADR-0035 §7, rule 1)
-        (candidate,) = [
-            entry
-            for entry in identity["review"]
-            if entry["status"] == clustering.AMBIGUOUS
-        ]
-        assert len(candidate["members"]) == 5
-        assert identity["summary"]["clusters"]["confident"] == 0
+        # says: each document's mention has a record (ADR-0035 §2) and
+        # meets the export's on (Eugen, Löbig), and the date corroborates
+        # it, so the five merge, one confident cluster, with nothing left
+        # for review
+        assert [
+            (entry["method"], len(entry["members"]))
+            for entry in identity["clusters"].values()
+            if len(entry["members"]) > 1
+        ] == [(clustering.CONFIDENT, 5)]
+        assert identity["review"] == []
+        assert identity["summary"]["clusters"]["confident"] == 1
+        assert identity["summary"]["recordless_mentions"] == 0
         assert identity["summary"]["gedcom_documents"] == 1
-        # the stage's reasons reach its `done` event
+        # the stage's reasons, none here, reach its `done` event
         (done,) = [
             e
             for e in events(driver.state_dir, "done")
@@ -1675,7 +1687,6 @@ class TestCorpusStages:
         assert done.get("attention") == (
             clustering.attention(identity["summary"]) or None
         )
-        assert done["attention"]
         before = (path / "identity-map.json").read_bytes()
         inode = (path / "identity-map.json").stat().st_ino
         again = Driver(corpus.folder, driver.state_dir)

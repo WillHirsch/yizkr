@@ -16,7 +16,10 @@ add something, in their order and verbatim spelling:
     a role that slipped through) and is dropped; one whose parts the
     label already gives is derivable and dropped ("Löbig, Ida" beside
     "Ida Löbig"); one that adds a part is kept ("Wastl"). Titles and
-    suffixes are no name parts;
+    suffixes are no name parts, but an alias that is the only form
+    holding a title or suffix the record gives is kept ("Frau Löbig"
+    beside "Ida Löbig", the record titling her Frau), so that the
+    record names no part its forms do not hold;
   - a place, an organisation or a family: an alias that gives no part (a
     deictic or generic reference) is dropped, and any other kept, a short
     form included, since a place is looked up by its toponym;
@@ -26,7 +29,7 @@ add something, in their order and verbatim spelling:
 Whether a record stands is judged on the alias bag as it comes, before
 this cleanup (ADR-0035 §5 before §8), and never again after it: a
 dropped alias may have been the only form holding a part the record
-gives, such as a suffix.
+gives that no rule above keeps, such as an organisation's kind.
 
 Nothing is composed and nothing is split, so a compound or a particle
 surname stays whole. Idempotent: cleaning a cleaned bag changes nothing.
@@ -104,7 +107,8 @@ def normalize_aliases(
     in_label = _given(label, parts)
     label_key = label.strip().lower()
     seen: set[str] = set()
-    kept: list[str] = []
+    # each distinct alias, and whether the rules keep it
+    found: list[tuple[str, bool]] = []
     for raw in aliases:
         alias = raw.strip()
         if not alias:
@@ -112,15 +116,31 @@ def normalize_aliases(
         key = alias.lower()
         if key == label_key or key in seen:
             continue
+        seen.add(key)
+        keep = True
         if record is not None:
             given = _given(alias, parts)
-            if not given:
+            keep = bool(given) and not (
+                isinstance(record, PersonStructure) and given <= in_label
+            )
+        found.append((alias, keep))
+    if isinstance(record, PersonStructure):
+        # a title or suffix no kept form holds keeps the first alias
+        # holding it
+        for part in (*record.titles, *record.suffixes):
+            holders = [label, *(alias for alias, keep in found if keep)]
+            if _given_in(part, holders):
                 continue
-            if isinstance(record, PersonStructure) and given <= in_label:
-                continue
-        seen.add(key)
-        kept.append(alias)
-    return kept
+            for position, (alias, keep) in enumerate(found):
+                if not keep and _given_in(part, [alias]):
+                    found[position] = (alias, True)
+                    break
+    return [alias for alias, keep in found if keep]
+
+
+def _given_in(part: str, forms: list[str]) -> bool:
+    """Whether a part occurs in any of the forms."""
+    return any(_occurs(part, [_words(form)]) for form in forms)
 
 
 def _standing(entity: dict):

@@ -1235,6 +1235,32 @@ class TestKeys:
         assert pair(both, "e1", docs["gustav"], "e1") in again
         assert pair(both, "e1", docs["gustave"], "e1") in again
 
+    def test_a_relational_appellation_never_keys(self):
+        """A name the source gives through a relation ('Рудольфиха',
+        Rudolf's wife) is a `referred_to_as` claim, never an alias or a
+        record nickname (ADR-0018): clustering keys on neither, so two
+        women the sources only call that never meet through it."""
+
+        def widow(key: str, name: str) -> Doc:
+            return register(
+                key,
+                [human("e1", name)],
+                [
+                    (
+                        "e1",
+                        "referred_to_as",
+                        {
+                            "type": "monolingual",
+                            "value": {"text": "Рудольфиха", "language": "ru"},
+                        },
+                    )
+                ],
+                {"e1": key},
+            )
+
+        docs = [widow("nina", "Nina Löbig"), widow("other", "Xxx Yyy")]
+        assert blocked_pairs([doc.manifest for doc in docs]) == set()
+
     def test_a_given_name_keys_as_written_too(self):
         """Two registers write 'Gustl Löbig', son of Sebastian Löbig; one
         record gives Gustl the standard form Gustav, the other none. A
@@ -1657,11 +1683,12 @@ class TestRecordless:
 
     def test_records_that_stand_before_the_cleanup_stay_records(self):
         """ADR-0035 §5's verdict is extraction's, taken on the alias bag
-        before the cleanup of §8. The cleanup drops 'Frau Löbig' beside
-        Ida Löbig, the widow's 'Löbig, Ursula, Wwe.', and 'die
-        Hutmacherei' beside 'zum Blauen Hut', and with them the only form
-        holding a title, a suffix or a kind: their records still stand in
-        clustering, which reads only their kind."""
+        before the cleanup of §8. The cleanup keeps 'Frau Löbig' beside
+        Ida Löbig and the widow's 'Löbig, Ursula, Wwe.', the only forms
+        holding her title and the widow's suffix, and drops 'die
+        Hutmacherei' beside 'zum Blauen Hut', the only form holding its
+        kind: every record still stands in clustering, which reads only
+        its kind."""
         ida = human(
             "e1",
             "Ida Löbig",
@@ -1686,7 +1713,11 @@ class TestRecordless:
             kinds=["Hutmacherei"],
         )
         cleaned = [normalize_entity_dict(e) for e in (ida, widow, shop)]
-        assert [e["aliases"] for e in cleaned] == [[], [], []]
+        assert [e["aliases"] for e in cleaned] == [
+            ["Frau Löbig"],
+            ["Löbig, Ursula, Wwe."],
+            [],
+        ]
         doc = register(
             "cleaned",
             cleaned,
@@ -4554,6 +4585,10 @@ class TestAcrossSources:
                 {"hawthorn-road-8"},
                 {"hildegard-loebig"},
                 {"sebastian-loebig"},
+                # the export's unions (ADR-0036 §5) meet the certificate's
+                # through their couples, once both spouses merged
+                {"eugen-and-caecilie"},
+                {"sebastian-and-hildegard"},
             ],
             key=sorted,
         )

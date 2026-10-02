@@ -522,7 +522,9 @@ refuses). The module docstring is the full account; in short:
   and a key only a GEDCOM `unsplit` form gives never makes a link
   confident. Parts fold case and accents, and an umlaut keys a second
   time written out (DIN 5007-2: "Floerburg" meets "Flörburg"). A mention
-  of those kinds without a record is *recordless*: it keys on its exact
+  of those kinds without a record is *recordless* (so a document's
+  mention whose record was set aside never meets the GEDCOM export, whose
+  people and places have records): it keys on its exact
   normalised name, meets only mentions without a record, never links
   confidently, and is counted. Whether a record stands (ADR-0035 §5) is
   extraction's verdict, taken before the alias cleanup; clustering reads

@@ -3156,12 +3156,12 @@ class TestAScratchRun:
         assert content["claims"]["by_property"] == {"date_of_birth": 4}
         # the counts of mention records and notes the extraction writes
         # (#420): read from each, none absent; the fake manifest gives
-        # its person no record and no note
+        # its person a record of status `name`, and no note
         assert content["records"] == {
             "extractions": 4,
-            "given": 0,
-            "recordless": 4,
-            "by_status": {},
+            "given": 4,
+            "recordless": 0,
+            "by_status": {"name": 4},
             "unsplit_forms": 0,
             "set_aside_records": 0,
             "set_aside_reasons": 0,

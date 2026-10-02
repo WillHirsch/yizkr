@@ -29,6 +29,7 @@ class TestPeople:
         """'Löbig, Ida' and 'Frau Löbig' give no part the label lacks,
         whatever their order or their title; 'Ida Sörne' and 'Peppi' add
         one."""
+        untitled = IDA.model_copy(update={"titles": [], "suffixes": []})
         assert normalize_aliases(
             "Ida Löbig",
             [
@@ -38,8 +39,36 @@ class TestPeople:
                 "Ida Sörne",
                 "Peppi",
             ],
-            IDA,
+            untitled,
         ) == ["Ida Sörne", "Peppi"]
+
+    def test_the_only_form_holding_a_title_or_suffix_stays(self):
+        """Her record titles her Frau and gives the suffix Wwe.: 'Frau
+        Löbig' is the first form holding the title and 'LÖBIG Ida Wwe.'
+        the only one holding the suffix, so both stay, and a second form
+        holding the title goes; a label holding the title keeps none for
+        it."""
+        aliases = [
+            "Löbig, Ida",
+            "Frau Löbig",
+            "Frau Ida Löbig",
+            "LÖBIG Ida Wwe.",
+            "Ida Sörne",
+            "Peppi",
+        ]
+        assert normalize_aliases("Ida Löbig", aliases, IDA) == [
+            "Frau Löbig",
+            "LÖBIG Ida Wwe.",
+            "Ida Sörne",
+            "Peppi",
+        ]
+        assert normalize_aliases("Frau Ida Löbig", aliases, IDA) == [
+            "LÖBIG Ida Wwe.",
+            "Ida Sörne",
+            "Peppi",
+        ]
+        cleaned = normalize_aliases("Ida Löbig", aliases, IDA)
+        assert normalize_aliases("Ida Löbig", cleaned, IDA) == cleaned
 
     def test_an_alias_that_gives_no_part_is_dropped(self):
         """A kinship term or a role that slipped into the aliases names no
@@ -175,22 +204,27 @@ class TestNormalizeEntityDict:
             )
 
     def test_standing_is_judged_once_before_the_cleanup(self):
-        """ADR-0035 §5 before §8: Ida's record, titled Frau, stands on
-        her alias bag as it comes. The cleanup drops 'Frau Löbig', the
-        only form holding the title, and the record is kept: standing is
-        never judged again on the cleaned bag, and a second cleaning
-        changes nothing."""
-        record = person(
-            given=[{"written": "Ida"}],
-            surnames=[{"written": "Löbig"}],
-            titles=["Frau"],
-            nicknames=["Peppi"],
-        ).model_dump()
-        entity = self.entity(structure=record)
-        entity["aliases"] = ["Frau Löbig", "Peppi"]
+        """ADR-0035 §5 before §8: the shop's record, of kind Hutmacherei,
+        stands on its alias bag as it comes. The cleanup drops 'die
+        Hutmacherei', which gives no name part and is the only form
+        holding the kind, and the record is kept: standing is never
+        judged again on the cleaned bag, and a second cleaning changes
+        nothing."""
+        record = {
+            "kind": "organization",
+            "names": ["zum Blauen Hut"],
+            "kinds": ["Hutmacherei"],
+        }
+        entity = {
+            "id": "e1",
+            "kind": "organization",
+            "label": "zum Blauen Hut",
+            "aliases": ["die Hutmacherei"],
+            "structure": record,
+        }
         assert set_aside_structure(entity) == (entity, [])
         cleaned = normalize_entity_dict(entity)
-        assert cleaned["aliases"] == ["Peppi"]
+        assert cleaned["aliases"] == []
         assert cleaned["structure"] == record
         assert normalize_entity_dict(cleaned) == cleaned
 
