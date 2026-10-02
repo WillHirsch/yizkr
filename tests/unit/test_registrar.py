@@ -1050,6 +1050,84 @@ class TestTermsInTheStoredForm:
         register_deck(wiki, tmp_path, "a", SHOP, media)
         assert wiki.writes == writes
 
+    def test_nameless_media_are_numbered_in_the_order_of_their_sha1s(
+        self, tmp_path
+    ):
+        """Two media with names of control characters alone, one of them
+        on the never-ingest list, and one whose second name is such a
+        name: each nameless one is "image N", N its place among the
+        record's media in the order of their SHA-1s, excluded media
+        counted; a name the stored form leaves nothing of is no alias;
+        and a second write of the deck sends no edit."""
+        wiki = StoringWiki()
+        nameless = (IMAGE, OTHER_IMAGE, RESCAN)
+        # the deck holds them in the reverse of their SHA-1s' order
+        media = [
+            (control, data, [slide])
+            for slide, (control, data) in enumerate(
+                zip(
+                    ("\x01\x02", "\x03", "\x04"),
+                    sorted(nameless, key=sha1, reverse=True),
+                    strict=True,
+                ),
+                start=1,
+            )
+        ] + [("image1.png", PORTRAIT, [4]), ("\x01", PORTRAIT, [4])]
+        excluded_one = sorted(nameless, key=sha1)[1]
+        excluded = ExclusionList(sha1s=frozenset({sha1(excluded_one)}))
+        _, derived = register_deck(
+            wiki, tmp_path, "a", SHOP, media, exclusions=excluded
+        )
+        order = sorted(map(sha1, (*nameless, PORTRAIT)))
+        assert sha1(excluded_one) not in derived
+        for data in nameless:
+            if data != excluded_one:
+                number = order.index(sha1(data)) + 1
+                assert label_of(wiki, derived[sha1(data)]) == (
+                    f"{SHOP} — image {number}"
+                )
+        portrait = wiki.entities[derived[sha1(PORTRAIT)]]
+        assert label_of(wiki, derived[sha1(PORTRAIT)]) == (
+            f"{SHOP} — image1.png"
+        )
+        assert not portrait.get("aliases")
+        writes = wiki.writes
+        register_deck(wiki, tmp_path, "a", SHOP, media, exclusions=excluded)
+        assert wiki.writes == writes
+
+    def test_nameless_media_are_numbered_whatever_the_records_order(
+        self, tmp_path
+    ):
+        """A record that holds its media out of their SHA-1s' order numbers
+        them in that order all the same."""
+        wiki = StoringWiki()
+        deck = deck_file(tmp_path, "a")
+        registrar = Registrar(wiki)
+        registrar.register_artifact(deck, "presentation", SHOP)
+        media = [("\x01", IMAGE, [1]), ("\x02", OTHER_IMAGE, [2])]
+        record, directory = recorded(tmp_path, deck, SHOP, media)
+        backwards = dict(reversed(list(record.media.items())))
+        record = record.model_copy(update={"media": backwards})
+        derived = registrar.register_derived_media(record, directory)
+        for number, key in enumerate(sorted(derived), start=1):
+            assert label_of(wiki, derived[key]) == f"{SHOP} — image {number}"
+
+    def test_a_nameless_medium_is_uploaded_as_image_n(self, tmp_path):
+        """Its file takes the name its label ends in, with no extension,
+        as its record's file has none: MediaWiki adds its type's."""
+        wiki = FakeWiki()
+        media = [("\x01\x02", IMAGE, [1])]
+        register_deck(wiki, tmp_path, "a", SHOP, media)
+        assert uploaded(wiki, sha1(IMAGE)) == f"File:{SHOP} image 1"
+
+    def test_a_surviving_name_comes_before_an_emptied_one(self, tmp_path):
+        """A medium whose first name the stored form empties and whose
+        second survives is labelled by the second."""
+        wiki = StoringWiki()
+        media = [("\x01", IMAGE, [1]), ("image3.png", IMAGE, [1])]
+        _, derived = register_deck(wiki, tmp_path, "a", SHOP, media)
+        assert label_of(wiki, derived[sha1(IMAGE)]) == f"{SHOP} — image3.png"
+
 
 class TestLongDeckTitles:
     """A deck's title is part of the labels of its slides and images, and
@@ -1736,27 +1814,125 @@ class TestCutsKeepWholeLetters:
         "\N{REGIONAL INDICATOR SYMBOL LETTER D}"
         "\N{REGIONAL INDICATOR SYMBOL LETTER E}"
     )
+    ZW = (
+        "\N{REGIONAL INDICATOR SYMBOL LETTER Z}"
+        "\N{REGIONAL INDICATOR SYMBOL LETTER W}"
+    )
+    JOINER = "\N{ZERO WIDTH JOINER}"
+    FAMILY = f"\N{MAN}{JOINER}\N{WOMAN}{JOINER}\N{GIRL}"
+    THUMBS = "\N{THUMBS UP SIGN}\N{EMOJI MODIFIER FITZPATRICK TYPE-4}"
+    # a subdivision's flag: a black flag, the tags "gbeng", a cancel tag
+    ENGLAND = (
+        "\N{WAVING BLACK FLAG}"
+        + "".join(chr(0xE0000 + ord(letter)) for letter in "gbeng")
+        + "\N{CANCEL TAG}"
+    )
+    KANA = (
+        "\N{HALFWIDTH KATAKANA LETTER KA}"
+        "\N{HALFWIDTH KATAKANA VOICED SOUND MARK}"
+    )
+    # an old Hangul syllable, whose jamo NFC leaves apart
+    JAMO = (
+        "\N{HANGUL CHOSEONG KIYEOK}"
+        "\N{HANGUL JUNGSEONG ARAEA}"
+        "\N{HANGUL JONGSEONG KIYEOK}"
+    )
+    JAMO_EXTENDED = "\N{HANGUL CHOSEONG KIYEOK}\N{HANGUL JUNGSEONG O-YEO}"
+    CONJUNCT = (
+        "\N{DEVANAGARI LETTER KA}"
+        "\N{DEVANAGARI SIGN VIRAMA}"
+        "\N{DEVANAGARI LETTER SSA}"
+    )
 
     @pytest.mark.parametrize(
         "text, cut, kept",
         [
             # a letter with two marks: all three go
             (f"Ра{STRESS}{STRESS}йон", f"Ра{STRESS}", "Р"),
-            # the joiner goes, the letter before it stays
+            # a letter whose marks leave no room keeps nothing
+            (f"а{STRESS}{STRESS}б", "а", ""),
+            (STRESS * 5, STRESS * 3, ""),
+            # a zero-width joiner joins the letters either side: both go
+            (f"Löbig a{JOINER}b", f"Löbig a{JOINER}", "Löbig "),
+            (f"Flörburg {FAMILY}", f"Flörburg {FAMILY[:3]}", "Flörburg "),
+            (f"Flörburg {FAMILY}", "Flörburg \N{MAN}", "Flörburg "),
+            # a zero-width non-joiner belongs to the letter before it
             (
-                "Löbig a\N{ZERO WIDTH JOINER}b",
-                "Löbig a\N{ZERO WIDTH JOINER}",
+                "Löbig a\N{ZERO WIDTH NON-JOINER}b",
                 "Löbig a",
+                "Löbig ",
             ),
+            # a skin tone belongs to its emoji
+            (f"Flörburg {THUMBS}", f"Flörburg {THUMBS[0]}", "Flörburg "),
+            # the tags belong to their flag
+            (f"Flörburg {ENGLAND}", f"Flörburg {ENGLAND[:3]}", "Flörburg "),
+            # a halfwidth sound mark belongs to its kana
+            (f"Flörburg {KANA}", f"Flörburg {KANA[0]}", "Flörburg "),
+            # a vowel or final jamo belongs to its syllable
+            (f"Flörburg {JAMO}", f"Flörburg {JAMO[:2]}", "Flörburg "),
+            (
+                f"Flörburg {JAMO_EXTENDED}",
+                f"Flörburg {JAMO_EXTENDED[0]}",
+                "Flörburg ",
+            ),
+            # a letter after a virama belongs to the conjunct
+            (f"Flörburg {CONJUNCT}", f"Flörburg {CONJUNCT[:2]}", "Flörburg "),
             # half a flag goes, a whole one stays
             (f"Flörburg {DE}{DE}", f"Flörburg {DE}{DE[0]}", f"Flörburg {DE}"),
             (f"Flörburg {DE}{DE}", f"Flörburg {DE}", f"Flörburg {DE}"),
+            (f"Flörburg {ZW}{ZW}", f"Flörburg {ZW}{ZW[0]}", f"Flörburg {ZW}"),
+            (f"Flörburg {ZW}", f"Flörburg {ZW}", f"Flörburg {ZW}"),
+            # a lone indicator, the first of their range, goes
+            (
+                "Flörburg \N{REGIONAL INDICATOR SYMBOL LETTER A}",
+                "Flörburg \N{REGIONAL INDICATOR SYMBOL LETTER A}",
+                "Flörburg ",
+            ),
             # a cut that ends after a whole letter is kept as it is
             (f"ра{STRESS}йон", f"ра{STRESS}", f"ра{STRESS}"),
         ],
     )
     def test_a_cut_ends_after_a_whole_letter(self, text, cut, kept):
         assert _whole_letters(text, cut) == kept
+
+    def test_a_cut_backed_off_to_a_space_ends_before_it(self):
+        """The cut's 228 bytes end in a flag's first tag character: the
+        flag goes, and so does the space before it."""
+        text = "x" * 222 + " " + self.ENGLAND
+        assert _cut_to_fit(text, "…") == "x" * 222 + "…"
+
+    def test_a_cut_ending_in_a_space_backs_off_from_before_it(self):
+        """The cut's 228 bytes end in the space after a joiner: the space
+        is trimmed first, so the joiner, and the letter it joins, go
+        too, and no joiner is left before the "…"."""
+        text = "x" * 223 + f"a{self.JOINER} " + "b" * 20
+        assert _cut_to_fit(text, "…") == "x" * 223 + "…"
+
+    @pytest.mark.parametrize(
+        "unit",
+        [
+            f"а{STRESS}",
+            FAMILY,
+            THUMBS,
+            ENGLAND,
+            KANA,
+            JAMO,
+            CONJUNCT,
+            f"{DE}",
+        ],
+    )
+    @pytest.mark.parametrize("pad", range(8))
+    def test_an_upload_name_ends_after_a_whole_letter(self, unit, pad):
+        """However the bytes fall, the title is cut after a whole
+        letter: what it keeps of the repeated letter is whole letters."""
+        before = "Hutmacherei" + "Ф" * pad + " "
+        name = _upload_name("image1.png", before + unit * 80, "presentation")
+        kept = name.removesuffix("… image1.png")
+        assert name.endswith("… image1.png") and kept.startswith(
+            before.rstrip()
+        )
+        rest = kept[len(before) :]
+        assert rest == unit * (len(rest) // len(unit))
 
 
 class TestLongDescriptions:

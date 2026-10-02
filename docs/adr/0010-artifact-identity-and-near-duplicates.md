@@ -304,8 +304,16 @@ deploy/config changes none (`$wgLegalTitleChars`, `$wgIllegalFileChars`,
   bytes is 9 bytes longer. A longer name is cut, counted in bytes,
   never between a letter and its combining marks (a stressed Cyrillic
   vowel is a letter and U+0301: the cut steps back, and the whole letter
-  goes), nor after a zero-width joiner or within a flag, with `…` where
-  the cut is: the title first, as far
+  goes), with `…` where the cut is. The same rule keeps these sequences
+  whole: a letter and a zero-width non-joiner or joiner after it, and
+  whatever a joiner joins (an emoji family); an emoji and its skin tone
+  (U+1F3FB to U+1F3FF); a flag's regional indicators, in pairs, and a
+  subdivision's flag and its tag characters (U+E0020 to U+E007F); a
+  halfwidth kana and its sound mark (U+FF9E, U+FF9F); an old Hangul
+  syllable's jamo, which NFC leaves apart (U+1160 to U+11FF, U+D7B0 to
+  U+D7FF); and an Indic conjunct, a letter after a virama. It is not
+  Unicode's full grapheme cluster rule (UAX #29), and keeps only these
+  sequences whole. The cut is made: the title first, as far
   as `"… <name>"`, so the medium's own name stays whole; past that, the
   name alone, the title left out, when it fits, so a name that fits on
   its own is never cut; a longer name before its extension; and, should
