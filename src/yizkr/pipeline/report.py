@@ -108,10 +108,16 @@ from yizkr.claims import (
     PlaceStructure,
     load_vocabulary,
 )
-from yizkr.pipeline.anomalies import ERROR_EVENT, RECHECK_EVENT, Checks, route
+from yizkr.pipeline.anomalies import (
+    ERROR_EVENT,
+    OUTPUT_LIMIT_REACHED,
+    RECHECK_EVENT,
+    Checks,
+    route,
+)
 from yizkr.pipeline.critique import AXES, CATEGORIES, Finding
 from yizkr.pipeline.critique import entry as critique_entry
-from yizkr.pipeline.llm import USAGE_TOKENS
+from yizkr.pipeline.llm import OUTPUT_LIMIT, ROLE_STAGES, USAGE_TOKENS
 from yizkr.pipeline.monitor import (
     _CLASS_NAME,
     _duration,
@@ -514,6 +520,14 @@ class _Calls:
     # what they used, and the tokens they reported
     models: Counter = field(default_factory=Counter)
     usage: dict[tuple[str, str], Counter] = field(default_factory=dict)
+    # per stage, as the call event names it, the calls stopped at the
+    # output limit: answers cut off there, and calls the engine gave up on;
+    # and the call events that record why a call stopped at all
+    limit_stops: dict[str, Counter] = field(default_factory=dict)
+    stops_recorded: int = 0
+    # per stage of the role a cache hit names, the hits that replayed a
+    # give-up at the output limit the cache kept: no call was made
+    gave_up_hits: Counter = field(default_factory=Counter)
 
     def role(self, name: str) -> Counter:
         counts = self.roles.get(name)
@@ -707,6 +721,10 @@ class _Fold:
             calls.cached += 1
             calls.hits[reason or KEY_MATCH] += 1
             role["cached"] += 1
+            if event.get("gave_up") is True:
+                calls.gave_up_hits[
+                    ROLE_STAGES.get(_text(event.get("role")) or "?", "?")
+                ] += 1
             if totals is not None:
                 totals.cached += 1
             if attempt is not None:
@@ -720,6 +738,27 @@ class _Fold:
         elif name == "cache-adopt":
             calls.adopts += 1
             role["adopted"] += 1
+
+    def _limit_stop(self, stage: str, event: dict) -> None:
+        """Count a call stopped at the output limit, by its stage: a call
+        that raised OutputLimitReached (gave up), told by its error alone
+        as the anomaly checks tell it, or an answer whose stop reason is
+        max_tokens (cut off). A call event records why its call stopped
+        when it carries a stop reason or an API error, or is a give-up:
+        the run's events record stops at all only when one of them does."""
+        gave_up = (
+            event.get("outcome") == "error"
+            and event.get("error") == OUTPUT_LIMIT_REACHED
+        )
+        if gave_up or "stop_reason" in event or "api_error" in event:
+            self.calls.stops_recorded += 1
+        if gave_up:
+            stop = "gave_up"
+        elif event.get("stop_reason") == OUTPUT_LIMIT:
+            stop = "cut_off"
+        else:
+            return
+        self.calls.limit_stops.setdefault(stage, Counter())[stop] += 1
 
     def _call(self, event: dict) -> None:
         calls = self.calls
@@ -752,6 +791,7 @@ class _Fold:
         )
         used = calls.usage.setdefault(where, Counter())
         used["calls"] += 1
+        self._limit_stop(where[0], event)
         usage = event.get("usage")
         tokens = {
             name: usage[name]
@@ -2345,6 +2385,25 @@ def _aggregate_calls(fold: _Fold, vocabulary: _Vocabulary) -> dict[str, Any]:
             ),
         },
         "usage": _aggregate_usage(calls, vocabulary),
+        "output_limit_stops": _aggregate_limit_stops(calls, vocabulary),
+        "give_ups_replayed": _folded(calls.gave_up_hits, vocabulary.stage),
+    }
+
+
+def _aggregate_limit_stops(
+    calls: _Calls, vocabulary: _Vocabulary
+) -> dict[str, Any]:
+    """Per stage the call events name, the calls stopped at the output
+    limit: cut off there, and given up on. Counts only. RECORDED false
+    when no call event of the run records why its call stopped."""
+    if not calls.stops_recorded:
+        return {RECORDED: False}
+    rows: dict[str, Counter] = {}
+    for stage, stops in calls.limit_stops.items():
+        rows.setdefault(vocabulary.stage(stage), Counter()).update(stops)
+    return {
+        stage: {stop: rows[stage][stop] for stop in ("cut_off", "gave_up")}
+        for stage in sorted(rows)
     }
 
 
@@ -3050,6 +3109,8 @@ def _calls_sections(calls: Mapping[str, Any]) -> list[_Section]:
     blocks.append(
         [
             f"Hits by reason: {_listed(calls['hits_by_reason'])}",
+            "Give-ups replayed from the cache by stage (no call made): "
+            + _listed(calls["give_ups_replayed"]),
             f"Misses by reason: {_listed(calls['misses_by_reason'])}",
             f"Resumed: {_n(calls['resumes'])}; replayed: "
             f"{_n(calls['replays'])}, {_n(calls['replays_changed'])} of them "
@@ -3068,12 +3129,28 @@ def _calls_sections(calls: Mapping[str, Any]) -> list[_Section]:
             f"{_listed(events['errors'])}",
             "Calls by the model the engine reported: "
             + _listed(events["models"], "not recorded"),
+            "Stops at the output limit by stage: "
+            + _limit_stops(calls["output_limit_stops"]),
         ]
     )
     return [
         _Section("Calls and the cache", blocks),
         _Section("Usage", _usage_blocks(calls["usage"]), 3),
     ]
+
+
+def _limit_stops(stops: Mapping[str, Any]) -> str:
+    """The output-limit stops, by stage, as the Calls section gives them."""
+    if stops.get(RECORDED) is False:
+        return "not recorded: the run's call events carry no stop reason"
+    return (
+        "; ".join(
+            f"{stage}: {_n(counts['cut_off'])} cut off, "
+            f"{_n(counts['gave_up'])} given up"
+            for stage, counts in stops.items()
+        )
+        or "none"
+    )
 
 
 def _usage_blocks(usage: Mapping[str, Any]) -> list[Any]:
