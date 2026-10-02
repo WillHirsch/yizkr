@@ -1,6 +1,8 @@
 """Live write path for the GEDCOM adapter's SOUR/OBJE handling (ADR-0021),
 a residence's date period (#308), a repeated event's alternatives (#322),
-an undated death (#323) and a marriage's citation (#324).
+an undated death (#323), a marriage's citation (#324), and a family's
+union with its events, the death's principal and the undetermined
+language of an export that states none (#408).
 
 A source citation (SOUR) must fold into the birth statement's reference
 as a page-number locator, and a multimedia object (OBJE) must become an
@@ -10,14 +12,21 @@ date period (FROM x TO y) must become the residence statement's start and
 end time, each with the range its own phrase states (docs/MODELING.md,
 "Marriages, residences and other periods"). A repeated BIRT or MARR, as
 GEDCOM states an alternative, must become statements of its own, each
-with its own date, circa and citation, beside the first, and a citation
-beneath a MARR must reach the reference of the spouse statements it
-dates. A DEAT that gives
+with its own date, circa and citation, beside the first. A family with a
+MARR must become a marriage item whose couple are its participants with
+the role spouse, started by a wedding item that holds each MARR's date
+as a statement of its own, the citation beneath a MARR in its reference,
+and ended by a divorce item that holds the DIV's date and place
+(ADR-0036 §5); a family whose only event is a DIV must become a marriage
+item with no wedding. A DEAT that gives
 no date, place or cause must become a death event: an item that is an
-instance of `death`, with the person as its participant, which is what
-the possibly-living check reads as death evidence (ADR-0020 §2). All flow
-through the generic writer unchanged; this proves they land in the graph.
-Every claim cites the export by the SHA-1 of its bytes (#102)."""
+instance of `death`, with the person as its principal participant, which
+is what the possibly-living check reads as death evidence (ADR-0020 §2).
+The export states no language, so its excerpts are undetermined (`und`),
+which the instance must take (ADR-0035 §6), as it must every code the
+adapter maps a GEDCOM language name to. All flow through the generic
+writer unchanged; this proves they land in the graph. Every claim cites
+the export by the SHA-1 of its bytes (#102)."""
 
 from __future__ import annotations
 
@@ -27,7 +36,11 @@ import json
 import pytest
 
 from yizkr.claims import ArtifactRef
-from yizkr.pipeline.gedcom import adapt_gedcom
+from yizkr.pipeline.gedcom import (
+    GEDCOM_LANGUAGES,
+    UNDETERMINED,
+    adapt_gedcom,
+)
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.writer import BatchWriter
 
@@ -65,6 +78,7 @@ TEMPLATE = """\
 2 DATE FROM BET 1956 AND 1957 TO BET 1974 AND 1984
 2 PLAC Integration Town {marker}
 1 FAMS @F1@
+1 FAMS @F2@
 0 @I2@ INDI
 1 NAME Gedcom Spouse /Tester {marker}/
 1 DEAT Y
@@ -82,6 +96,15 @@ TEMPLATE = """\
 2 DATE ABT 1974
 1 DIV
 2 DATE 1980
+2 PLAC Integration Court Town {marker}
+0 @I3@ INDI
+1 NAME Gedcom Former /Tester {marker}/
+1 FAMS @F2@
+0 @F2@ FAM
+1 HUSB @I1@
+1 WIFE @I3@
+1 DIV
+2 DATE 1970
 0 TRLR
 """
 
@@ -248,17 +271,16 @@ def test_gedcom_residence_period_is_a_start_and_an_end(
 def test_gedcom_alternatives_are_statements_of_their_own(
     client, gedcom_artifact
 ):
-    """A repeated BIRT and a repeated MARR land as statements of their own,
-    each with its own date, circa and citation: a birth in 1950 per page 1
-    and one about 1951 per page 7; a marriage from 1975 until the divorce
-    of 1980, per the marriage register at its page, and one from about
-    1974 (#322, #324)."""
+    """A repeated BIRT lands as statements of their own, each with its own
+    date, circa and citation: a birth in 1950 per page 1 and one about
+    1951 per page 7 (#322). The repeated MARR dates the couple's wedding
+    (test_gedcom_family_is_a_marriage_bounded_by_its_events), and no
+    spouse statement is written (#408)."""
     _, export = gedcom_artifact
     write = BatchWriter(client).write_batch(
         adapt_gedcom(GEDCOM, artifact=export).batch
     )
     person_qid = write.created_items["i1"]
-    spouse_qid = write.created_items["i2"]
     properties, items = client.vocabulary()
     key_of = {pid: key for key, pid in properties.items()}
 
@@ -308,28 +330,193 @@ def test_gedcom_alternatives_are_statements_of_their_own(
         ("+1950-00-00T00:00:00Z", [], ["Volume 1, Page 1"]),
         ("+1951-00-00T00:00:00Z", [circa], ["Volume 2, Page 7"]),
     ]
-    spouses = sorted(
-        (qualifiers(statement), pages(statement))
-        for statement in statements("spouse")
-        if statement["mainsnak"]["datavalue"]["value"]["id"] == spouse_qid
+    # the couple's marriage: no spouse statement, but a union each of
+    # them takes part in as a spouse
+    assert statements("spouse") == []
+
+
+def _statements(client, entity_qid, prop_key):
+    properties, _ = client.vocabulary()
+    found = client.api_get(
+        {
+            "action": "wbgetclaims",
+            "entity": entity_qid,
+            "property": properties[prop_key],
+        }
     )
-    assert spouses == [
-        (
-            [
-                ("end_time", "+1980-00-00T00:00:00Z"),
-                ("start_time", "+1975-00-00T00:00:00Z"),
-            ],
-            ["Volume 4, Page 2"],
-        ),
-        ([circa, ("start_time", "+1974-00-00T00:00:00Z")], []),
+    return [
+        statement
+        for statements in found["claims"].values()
+        for statement in statements
     ]
+
+
+def _qualifier_values(client, statement, prop_key):
+    properties, _ = client.vocabulary()
+    return [
+        snak["datavalue"]["value"].get("time")
+        or snak["datavalue"]["value"]["id"]
+        for snak in statement.get("qualifiers", {}).get(
+            properties[prop_key], []
+        )
+    ]
+
+
+def test_gedcom_family_is_a_marriage_bounded_by_its_events(
+    client, gedcom_artifact
+):
+    """The family lands as a marriage item, whose couple take part in it
+    with the role spouse; it is started by a wedding item, which holds a
+    point in time of 1975, cited to the marriage register at its page, and
+    one of about 1974, and ended by a divorce item, which holds a point in
+    time of 1980 and its place (ADR-0036 §5)."""
+    _, export = gedcom_artifact
+    write = BatchWriter(client).write_batch(
+        adapt_gedcom(GEDCOM, artifact=export).batch
+    )
+    union_qid = write.created_items["f1"]
+    wedding_qid = write.created_items["f1-wedding"]
+    divorce_qid = write.created_items["f1-divorce"]
+    court_town_qid = write.created_items["pl2"]
+    properties, items = client.vocabulary()
+
+    def kinds(qid):
+        return {v["id"] for v in _claim_values(client, qid, "instance_of")}
+
+    assert kinds(union_qid) == {items["marriage"]}
+    assert kinds(wedding_qid) == {items["wedding"]}
+    assert kinds(divorce_qid) == {items["divorce"]}
+    couple = sorted(
+        (
+            statement["mainsnak"]["datavalue"]["value"]["id"],
+            _qualifier_values(client, statement, "object_has_role"),
+        )
+        for statement in _statements(client, union_qid, "participant")
+    )
+    assert couple == sorted(
+        [
+            (write.created_items["i1"], [items["spouse"]]),
+            (write.created_items["i2"], [items["spouse"]]),
+        ]
+    )
+    assert {
+        v["id"] for v in _claim_values(client, union_qid, "started_by")
+    } == {wedding_qid}
+    assert {v["id"] for v in _claim_values(client, union_qid, "ended_by")} == {
+        divorce_qid
+    }
+
+    def pages(statement):
+        return sorted(
+            snak["datavalue"]["value"]
+            for ref in statement.get("references", [])
+            for snak in ref["snaks"].get(properties["page_number"], [])
+        )
+
+    weddings = sorted(
+        (
+            statement["mainsnak"]["datavalue"]["value"]["time"],
+            _qualifier_values(client, statement, "sourcing_circumstances"),
+            pages(statement),
+        )
+        for statement in _statements(client, wedding_qid, "point_in_time")
+    )
+    assert weddings == [
+        ("+1974-00-00T00:00:00Z", [items["circa"]], []),
+        ("+1975-00-00T00:00:00Z", [], ["Volume 4, Page 2"]),
+    ]
+    assert [
+        v["time"] for v in _claim_values(client, divorce_qid, "point_in_time")
+    ] == ["+1980-00-00T00:00:00Z"]
+    assert [
+        v["id"] for v in _claim_values(client, divorce_qid, "location")
+    ] == [court_town_qid]
+
+
+def test_gedcom_divorce_without_a_wedding_is_of_a_marriage(
+    client, gedcom_artifact
+):
+    """A family whose only event is a dated DIV lands as a marriage item,
+    its couple spouses, ended by a divorce of 1970 and started by
+    nothing: a divorce ends a marriage, whose wedding the export does
+    not state (ADR-0036, #408)."""
+    _, export = gedcom_artifact
+    write = BatchWriter(client).write_batch(
+        adapt_gedcom(GEDCOM, artifact=export).batch
+    )
+    union_qid = write.created_items["f2"]
+    divorce_qid = write.created_items["f2-divorce"]
+    _, items = client.vocabulary()
+    assert {
+        v["id"] for v in _claim_values(client, union_qid, "instance_of")
+    } == {items["marriage"]}
+    assert _claim_values(client, union_qid, "started_by") == []
+    assert {v["id"] for v in _claim_values(client, union_qid, "ended_by")} == {
+        divorce_qid
+    }
+    couple = sorted(
+        (
+            statement["mainsnak"]["datavalue"]["value"]["id"],
+            _qualifier_values(client, statement, "object_has_role"),
+        )
+        for statement in _statements(client, union_qid, "participant")
+    )
+    assert couple == sorted(
+        [
+            (write.created_items["i1"], [items["spouse"]]),
+            (write.created_items["i3"], [items["spouse"]]),
+        ]
+    )
+    assert [
+        v["time"] for v in _claim_values(client, divorce_qid, "point_in_time")
+    ] == ["+1970-00-00T00:00:00Z"]
+
+
+def test_gedcom_excerpts_of_an_export_without_a_language_are_undetermined(
+    client, gedcom_artifact
+):
+    """The export's HEAD has no LANG: the excerpt of each statement lands
+    with the language `und`, which the instance takes for a monolingual
+    text (ADR-0035 §6)."""
+    _, export = gedcom_artifact
+    write = BatchWriter(client).write_batch(
+        adapt_gedcom(GEDCOM, artifact=export).batch
+    )
+    properties, _ = client.vocabulary()
+    excerpts = [
+        snak["datavalue"]["value"]
+        for statement in _statements(
+            client, write.created_items["i1"], "date_of_birth"
+        )
+        for ref in statement.get("references", [])
+        for snak in ref["snaks"].get(properties["transcription_excerpt"], [])
+    ]
+    assert excerpts
+    assert {excerpt["language"] for excerpt in excerpts} == {"und"}
+
+
+def test_every_code_the_adapter_maps_to_is_one_the_instance_takes(client):
+    """Each code of GEDCOM_LANGUAGES, and `und`, is a language the
+    instance takes for a monolingual text: a code it refused would fail
+    the write of every statement cited to such an export rather than be
+    counted (ADR-0035 §6)."""
+    found = client.api_get(
+        {
+            "action": "query",
+            "meta": "wbcontentlanguages",
+            "wbclcontext": "monolingualtext",
+        }
+    )
+    accepted = set(found["query"]["wbcontentlanguages"])
+    wanted = {*GEDCOM_LANGUAGES.values(), UNDETERMINED}
+    assert sorted(wanted - accepted) == []
 
 
 def test_gedcom_undated_death_is_a_death_event(client, gedcom_artifact):
     """`1 DEAT Y`, with a citation and nothing else beneath it, lands as a
     death event: an item that is an instance of `death`, with the spouse
-    as its participant at normal rank, cited to the export at the
-    citation's page. The spouse has no date of death (#323)."""
+    as its principal participant at normal rank, cited to the export at
+    the citation's page. The spouse has no date of death (#323, #408)."""
     export_qid, export = gedcom_artifact
     write = BatchWriter(client).write_batch(
         adapt_gedcom(GEDCOM, artifact=export).batch
@@ -352,6 +539,9 @@ def test_gedcom_undated_death_is_a_death_event(client, gedcom_artifact):
         for statement in statements
     ]
     assert participant["mainsnak"]["datavalue"]["value"]["id"] == spouse_qid
+    assert _qualifier_values(client, participant, "object_has_role") == [
+        items["principal"]
+    ]
     assert participant["rank"] == "normal"
     references = participant.get("references", [])
     stated_in = {

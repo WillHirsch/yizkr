@@ -60,6 +60,155 @@ ADR-0018's `referred_to_as`, never an alias and never a record nickname
 name. The `courtesy` status is a courtesy title or other relational
 appellation that is no literal relation.
 
+Amended by #408 (2026-09-29): the GEDCOM adapter fills §6 as follows.
+The label of a NAME leaves out its bracketed parts, each of which is an
+alias and an `unsplit` form; a NAME whose value gives a name only in
+brackets that hold a word, with no part that gives a name, is labelled
+by the brackets as written ("(Peppi)"), so that its person keeps an
+entity and its claims. A NAME
+without slashes, whose parts no GIVN or SURN gives, gives no typed-name
+claim, whatever its TYPE; one with more than one pair of slashes is
+read so too, counted apart (`NAME slashes not one pair`). Given names
+are the words of the part before the slashes and of each GIVN piece; a
+NICK, less one pair of quotes that encloses it, and a `_MARNM` are
+aliases, so the record adds no name (§5); the alias hygiene keeps a
+form that alone carries a part of the record. An NPFX or NSFX that the
+value does not restate reaches its field beside the value's name, as
+the table says, and the full form is an alias, counted as `NAME parts
+not restated`; only in a NAME with no value, whose parts give no given
+name or surname, is a prefix or a suffix counted instead (`NAME part
+without a name`). A particle that the value's surname holds is no
+particle without a surname. A `_MARNM` gives a `married` surname and a
+`married_name` claim only where its slashes hold a surname; otherwise it
+is `unsplit`, counted, with no typed-name claim, as a NAME without
+slashes gives none. HEAD.LANG maps GEDCOM 5.5.1's language names to BCP 47 where the
+instance is known to take the code; an absent or unmapped one gives
+`und`. The live
+GEDCOM tests check that the instance takes `und` and every mapped code
+for a monolingual text. What §6 counts is counted in the adapter's
+outcomes, beside its census of unmapped tags, and reaches the run's
+document state and log.
+
+Amended by #408 (2026-09-29; decided by the orchestrator, the owner may
+override): a NAME without slashes that has only a GIVN or only a SURN
+keeps its whole value as an `unsplit` form beside that part, counted
+(`NAME without slashes, one part given`), so that no word the part does
+not place is dropped silently. The table's `unsplit` row is the NAME
+with neither. A HEAD.LANG that is already one of the map's codes ("de")
+is taken as it is. The export's `NICK Gustl` is a nickname and
+an alias in Gustav's record, which clustering (#409) meets the postcard's
+"Gustl" on.
+
+Amended by #408 (2026-10-02; decided by the orchestrator, the owner may
+override). The rule behind each: never drop a person who has a word, and
+never narrow or guess.
+
+- **A placeholder names nothing.** A word that holds no letter or digit
+  ("?", "-", "…", "_", "()", "(?)") is a placeholder for an unknown name
+  or part. Wherever it stands, in a NAME's value, a bracket, a quote, a
+  GIVN, SURN, NPFX, NSFX or SPFX piece, a NICK or a `_MARNM`, it is left
+  out and counted (`NAME part without a word`), never placed: "Eugen
+  /?/" is labelled "Eugen" with no surname, `GIVN Eugen ?` gives the
+  given name Eugen, and a record left with no given name, surname,
+  nickname or unsplit form is none. A bracket or a quote keeps its marks
+  around the words left in it ("(Peppi ?)" is "(Peppi)", "'? Muckel'" is
+  "'Muckel'"), and one with none left goes whole. Leaving a placeholder
+  out can give two people one label ("Eugen ? /Löbig/" and "Eugen
+  /Löbig/" are both "Eugen Löbig"), as exact namesakes already share one.
+- **A typed name with a placeholder gives no typed claim** (decision K).
+  A NAME with a TYPE that held a placeholder anywhere, in its value
+  (inside its brackets too: "Eugen (?) /Löbig/", "Eugen /(?)/"), its
+  quotes, or its GIVN, SURN, NPFX, NSFX or SPFX ("GIVN Agnes (?)"), a
+  stray bracket ("Eugen) /Löbig/") or an empty bracket nested in another
+  ("(Peppi ())") included, gives no typed-name claim, counted (`typed NAME with a placeholder`):
+  a tree writes "(?)" to say it is unsure of the name, and the claim
+  would narrow it (rule 5). A NICK's placeholder does not block it, as a
+  NICK is no part of the typed name. A `_MARNM` whose slashes still hold
+  a surname but that held a placeholder gives none either. Their forms
+  stay aliases.
+- **The label falls back, tier by tier, to any word.** A person's label
+  is the first name form a NAME gives. Where none gives one, it is the
+  first of: a NAME value's brackets that hold a word ("(Peppi)", so that
+  `1 NAME (Peppi)` then `1 NAME Ida /Sörne/` is labelled "Ida Sörne",
+  with "Peppi" an alias); a GIVN's quoted or bracketed part; a NICK; a
+  `_MARNM`. Each such label keeps the source's marks as written (`GIVN
+  (Peppi)` gives "(Peppi)", `GIVN 'Peppi'` "'Peppi'", `NICK 'Muckel'`
+  "'Muckel'"), so that, where the source wrote any marks, a person known
+  only so meets no one whose name is the bare word (decision L); an
+  unmarked `NICK Muckel` still gives the label "Muckel". A person with any word in
+  any name keeps an entity and its claims. A person none of these gives
+  a word is skipped with the adapter's warning, as one whose NAME is
+  empty is, and counted (`person without a name`): the writer finds an
+  item by its label and would make every person labelled "?" one item.
+  A prefix, a suffix or a particle alone gives no label, since "Wwe."
+  would make everyone it stood for one item too.
+- **An NPFX is a title, as the export tags it.** An NPFX the value
+  restates is a title, whatever the word: `Dr. /Löbig/` + NPFX Dr. gives
+  the title Dr. and no given name, and so does `Eugen /Löbig/` + NPFX
+  Eugen, counted (`NPFX restated as the whole given part`); telling a
+  mis-tagged given name from a title would need a word list (§10). An
+  NPFX the value states in part ("Dr. Eugen" + NPFX "Dr. med.", or
+  "Eugen" + NPFX "Dr. Eugen") gives the form "Dr. med. Eugen Löbig" or
+  "Dr. Eugen Löbig", writing no word twice, and a prefix is matched by
+  its words folded ("Dr med" is "Dr. med.").
+- **Quotes and brackets.** A quoted word after the surname ("Eugen
+  /Löbig/ 'Muckel'") is a nickname, and each run of words between such
+  quotes is a suffix of its own. A slashless NAME with a quoted word
+  between its words ("Eugen 'Muckel' Löbig") keeps the form without it
+  ("Eugen Löbig") as an alias beside its unsplit form. A `_MARNM`'s
+  unsplit form leaves its brackets out ("(Peppi)" gives "Peppi"). A
+  GIVN's quotes and brackets are read before the GIVN is split at its
+  commas, and as the value's are: a quoted part ("Ida 'Peppi'", "'Ida,
+  Peppi'") is one nickname beside the given name, and a bracketed part
+  ("Ida (Peppi)") an alias and an unsplit form, counted (`NAME bracketed
+  part`). This corrects re-review 1's decision 5, which made a GIVN's
+  bracket a nickname, to follow the owner's bracket rule (§6, 2026-09-29:
+  a bracket may hold a maiden name, a later name or a note as well as a
+  nickname). Either still gives the label of a person no other name
+  gives one, as the tier above says; a GIVN's quoted part also gives a
+  nickname claim cited to its NAME, as a NICK does, and its bracketed
+  part none. A bracket within a bracket is read by the outermost pair
+  ("(Pep(pi))" gives "Peppi"); a '(' never closed or a ')' never opened
+  is left out, counted. A quote whose only content is a bracket ("Ida
+  '(Peppi)'") is the bracket, its marks no placeholder; such a quote
+  opens and closes a word as any quote does, or stands against a slash
+  or a GIVN's comma ("Ida '(Peppi)', Agnes"), so a bracket between two
+  quotes ("Eugen 'Muckel' (Peppi) 'Cilli' /Löbig/") leaves both
+  nicknames, Muckel and Cilli. Any quote may stand against a slash
+  ("Eugen 'Muckel'/Löbig/"). German low quotes ("„Peppi“", "‚Peppi‘")
+  and guillemets ("»Peppi«", "«Peppi»") mark a nickname as the others
+  do, and a NICK loses any opening and closing mark around it, matched
+  or not ("„Peppi”"), as a quote in a value does. A placeholder in a
+  nested bracket ("(Peppi (?))") is counted once. A malformed nest ("Ida (Pep(pi) /Sörne/") is read by the pair that
+  closes ("(pi)" an alias, "Pep" a given name) and its stray '(' counted:
+  the adapter does not guess which bracket the tree meant. A bracket name
+  keeps an NPFX or NSFX beside it as a title or suffix, its full form an
+  alias ("Frau Peppi").
+- **Connectors** (decisions M, W, Y). A single dash (of any width) or
+  "&" between two words of one field is a connector, kept as written
+  ("Ida /Löbig - Sörne/" keeps the surname "Löbig - Sörne"). Its
+  neighbours are read within its own field, before the slashes become
+  spaces: at a field's edge, against a slash, a bracket or a quote
+  ("Agnes - /Löbig/", "Agnes /- Löbig/", "Ida - (Peppi) /Sörne/",
+  `_MARNM Agnes - /Löbig/`), or standing as a whole part or value
+  ("/-/"), it is a placeholder, dropped, counted and blocking a typed
+  claim (K) (decision Y). "+" and runs such as "--" are never
+  connectors (decision W): a word made only of them is a placeholder,
+  since in German trees "+" often marks a death, which is no part of a
+  name.
+- **Particles** (decision X). As many SPFX slots (comma-separated, an
+  empty one or one holding only a placeholder included) as SURN slots
+  pair by position ("von, de" + "Löbig, Sörne" gives "von Löbig" and
+  "de Sörne"; "von," gives "von Löbig" and "Sörne"; "?, de" gives
+  "Löbig" and "de Sörne"), an empty slot giving no particle. Otherwise the SPFX pieces together go on each
+  SURN piece ("von" + "Löbig, Sörne" gives "von Löbig" and "von
+  Sörne"), and the mismatch is counted (`SPFX particles not matching
+  SURN pieces`).
+- **A prefix that holds the whole name.** An NPFX that writes the name
+  the value gives anywhere within it ("Dr. Eugen Löbig Jr." beside
+  "Eugen /Löbig/") is that form whole, the name not written twice.
+- **Language.** A HEAD.LANG of `und` is taken as it is, uncounted.
+
 **Decided by the owner (2026-09-29):**
 
 - Before scratch run 1 (#145), extraction hands over the structure of
@@ -172,7 +321,8 @@ same kind of reading well beyond the lists:
   form that adds a letter to it, while "Gustl" never meets "Gustav"
   (658-680, 1213-1227);
 - the GEDCOM adapter types any short bracketed part of a name as a
-  nickname, "(geb. Laudler)" included (`pipeline/gedcom.py:646-665`);
+  nickname, "(geb. Laudler)" included (`pipeline/gedcom.py` before
+  #408);
 - place structure read from commas and token length, so a toponym of
   three letters or fewer never keys (`pipeline/clustering.py:1002-1022`,
   `pipeline/clustering.yaml:21`);
@@ -774,7 +924,7 @@ and brackets in a NAME value, which §10 names.
 | any other TYPE, or none | `other`, with no typed-name claim |
 | `_MARNM` | a `married` surname: the part between its slashes; a value without them is `unsplit` |
 | PLAC | its first non-empty component is the place's name and the rest are `within`, each as written, with no head or toponym split: GEDCOM lists jurisdictions from the lowest |
-| HEAD.LANG | GEDCOM 5.5.1's language name, mapped to a BCP 47 code, sets the language of the adapter's texts instead of a fixed `en` (`pipeline/gedcom.py:982`, 1230-1234, 1413-1421); an absent or unknown one gives undetermined (`und`), counted |
+| HEAD.LANG | GEDCOM 5.5.1's language name, mapped to a BCP 47 code, sets the language of the adapter's texts instead of a fixed `en` (`GEDCOM_LANGUAGES`, `UNDETERMINED` in `pipeline/gedcom.py`); an absent or unknown one gives undetermined (`und`), counted |
 | a DEAT that states the death and gives no date, place or cause | a `death` event with the person as principal |
 
 - **No NAME part is dropped without a count** (#352). A part the NAME's
@@ -982,15 +1132,17 @@ into "fix first, and measure in run 1": under the pre-baseline exception
 - Containers compared as written: an abbreviation ("Kr. Peiltal" beside
   "Kreis Peiltal") misses, and the pair stays ambiguous.
 - GEDCOM's grammar and vocabulary: slashes, comma-separated pieces, NAME
-  TYPE values (`pipeline/gedcom.py:631-644`), PLAC's order of
+  TYPE values (`_NAME_TYPE_PROPERTY` in `pipeline/gedcom.py`), PLAC's order of
   jurisdictions and HEAD.LANG's language names. With them, the tree
   keepers' inline convention: a quote marks a nickname, a bracket an
-  untyped form (§6). An initial or a placeholder in an export keys as
-  written, and meets only the same form. A title an export writes in a
+  untyped form (§6). An initial or a lettered stand-in ("N.N.") in an
+  export keys as written, and meets only the same form; a placeholder
+  with no letter or digit ("?") is no key at all, since the adapter
+  leaves it out (the 2026-10-02 amendment above). A title an export writes in a
   NAME's given part with no NPFX ("Dr.") keys as a given name: an
   accepted limitation.
 - GEDCOM dates: month names beyond the standard's abbreviations come from
-  an English and German table (`pipeline/gedcom.py:168-179`); a date in
+  an English and German table (`MONTHS` in `pipeline/gedcom.py`); a date in
   any other language gives no claim and a warning, as now.
 - #361's date thresholds (`circa-years`, `max-corroborating-years`):
   numbers, not wording.

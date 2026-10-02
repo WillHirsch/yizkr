@@ -566,9 +566,12 @@ class TestRetiredProperty:
         (problem,) = problems(claim("leopold", "spouse", existing))
         assert "is retired" in problem
 
-    def test_a_caller_may_let_it_through(self):
-        spouse = claim("leopold", "spouse", item("agnes"))
-        assert problems(spouse, allow_retired=frozenset({"spouse"})) == []
+    def test_even_one_of_another_datatype(self):
+        # refused as retired before its value is read, so the refusal is
+        # the one problem, never a datatype mismatch
+        text = {"type": "string", "value": "Agnes"}
+        (problem,) = problems(claim("leopold", "spouse", text))
+        assert "is retired" in problem
 
     def test_and_salvage_counts_it(self):
         valid, rejects = salvage_valid_claims(

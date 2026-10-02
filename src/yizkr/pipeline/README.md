@@ -152,7 +152,13 @@ its control file; their thresholds are in `anomalies.yaml` here, and
 `$YIZKR_ANOMALIES` names a file of an operator's own over them
 ([docs/ANOMALIES.md](../../../docs/ANOMALIES.md)).
 GEDCOM (`.ged`) files take a deterministic adapter in place of
-transcribe/extract; the gates, resolve, and write are identical.
+transcribe/extract; the gates, resolve, and write are identical. The
+adapter fills each person's and place's mention record from the export's
+tags (ADR-0035 §6) and makes each family with two partners a marriage or
+a partnership bounded by its weddings, divorce and annulment (ADR-0036
+§5); it reports the tags it does not map, and counts the outcomes worth
+reporting (unions and events by kind, name parts kept unsplit or
+counted, an undetermined language) in the document's state and log.
 
 ```sh
 uv sync --dev            # from the repo root
@@ -240,7 +246,10 @@ re-running one step in isolation — but for a normal ingest you only ever run
   registered. Registration and resolve (below) are the steps before the
   write that use the wiki: registration until write-time registration
   (#103) takes its place, and resolve's label match until the
-  identity-map writer (#109).
+  identity-map writer (#109). An item whose bytes a file another item
+  names holds, or whose title is the label of an item with no hash, is
+  flagged, never adopted: each write raises it as a `shared-file` or
+  `unhashed-title` alert while that holds (#371; docs/ANOMALIES.md).
 - **derived media** (decks) — records the images a deck embeds in the
   deck's state directory, not on the wiki: `derived-media.json` keys each
   distinct image by the SHA-1 of its bytes (ADR-0010), with its names in

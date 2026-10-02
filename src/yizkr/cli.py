@@ -26,6 +26,7 @@ Connection settings come from deploy/.env (or $YIZKR_ENV_FILE /
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import math
 import sys
@@ -289,7 +290,7 @@ def cmd_register(args) -> int:
         description=args.description,
         pages=args.pages,
     )
-    print(json.dumps(result.__dict__, indent=2))
+    print(json.dumps(dataclasses.asdict(result), indent=2))
     return 0
 
 
@@ -476,6 +477,12 @@ def cmd_gedcom(args) -> int:
         print(
             "unsupported GEDCOM tags (counted, not extracted): "
             + format_unsupported_tags(result.unsupported_tags),
+            file=sys.stderr,
+        )
+    if result.outcomes:
+        print(
+            "GEDCOM outcomes (counted): "
+            + format_unsupported_tags(result.outcomes),
             file=sys.stderr,
         )
     return 0

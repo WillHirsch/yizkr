@@ -13,9 +13,11 @@ everything needed to rebuild the instance, plus a non-privileged export:
   possibly-living person (R7, docs/MODELING.md "Living persons and
   privacy"). Nothing about a possibly-living person leaves the instance
   in it: every triple that mentions an excluded person — as subject,
-  statement node, or object of someone else's claim — is dropped. All
-  else leaves as it is, text included: whatever is recorded about a
-  person the check releases, and about the other items it keeps.
+  statement node, or object of someone else's claim — is dropped, and a
+  statement whose value, or a qualifier's value, is an item left out
+  goes whole, with its rank, dates, qualifiers and references. All else
+  leaves as it is, text included: whatever is recorded about a person
+  the check releases, and about the other items it keeps.
 
 Exclusion is CONSERVATIVE by design and computed at RUNTIME — there is
 no stored "living" flag (ADR-0020). A person is excluded unless the graph
@@ -42,11 +44,29 @@ closed:
   vocabulary and the classes its items are typed with are kept.
 * It drops every family too, released or not: a family stands for its
   people, any of whom may be living (``privacy.FAMILY_CLASS``).
-* It drops every event that an item it drops took part in, at any rank:
-  what the event records, its date and place, is that participant's too.
-  So it drops every event of a person kind that names no participant,
-  as whom it happened to is unknown, and the events that start and end
-  a union it drops (ADR-0036), a partner's own death aside.
+* It drops every event that an item it drops took part in, at any rank,
+  as a `participant` statement's value or as an item a qualifier of
+  that statement names, whatever the statement's value, an unknown one
+  or none included: what the event records, its date and place, is that
+  participant's too. It drops every event that any of its statements
+  links to a person it drops, or to an item it drops as one that may be
+  a person, as the value or a qualifier's value, whatever the property;
+  a union is no event (ADR-0036), nor is an item typed human at normal
+  or preferred rank, unless typed a family too. An item it drops only as
+  untyped, or as a released group, takes no event of no person kind
+  that merely names it. A released group, a family (or any item named a
+  `member of`) that names members, read through the groups among them,
+  each of which names a member, has no participant of unknown value and,
+  if it has person evidence, was released, and whose members it all
+  released, takes no event it took part in either, unless of a person
+  kind (a class the dump makes a subclass of one included), which is its
+  members' own, however it names the group. A person named a `member
+  of` is a member whose standing counts, and whose own members are read
+  too; a person is never a released group. It drops every event
+  of a person kind that names no participant, and every event that has
+  participant statements all of unknown value, as whom it happened to is
+  unknown; and the events that start and end a union it drops, a
+  partner's own death aside.
 * It drops the extractor's judgement notes, its remarks on its own
   reading, and any line it cannot read (``filter_public_export``), and
   refuses a dump that holds what it is not made to filter: a sitelink,
@@ -91,6 +111,7 @@ from yizkr.core.privacy import (
     latest_births,
     people_selection,
 )
+from yizkr.model.schema import load_manifest
 from yizkr.queries.publish import prefix_block
 
 TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
@@ -322,6 +343,34 @@ _ENTITY_DATA = re.compile(r"<[^<>]*/Special:EntityData/[QP][1-9]\d*>")
 # vocabulary does not hold reads nothing.
 UNION_BOUNDS = ("started_by", "ended_by")
 
+# The class of every event, a key of the model manifest: an item typed with
+# it, or with a subclass of it, is linked to every item its statements name
+# (``read_dump``). The person kinds of event (``PERSON_EVENTS``) are events
+# too, and so is every item that has a `participant` statement; but never a
+# union (``UNION_CLASS``) or an item typed human.
+EVENT_CLASS = "event"
+
+
+# The class of every union, a partnership or a marriage (ADR-0036): an
+# entity, not an event. Its `started_by` and `ended_by` statements point to
+# its events, which go with it (``BOUND_LEFT_OUT``), never the other way.
+UNION_CLASS = "partnership"
+
+
+def event_kinds(root: str = EVENT_CLASS) -> set[str]:
+    """The keys of the model manifest's classes under `root`: `root` itself
+    and every item the manifest makes a subclass of it, directly or
+    through another; by default the event classes (``EVENT_CLASS``)."""
+    manifest = load_manifest()
+    kinds = {root}
+    while wider := {
+        key
+        for key, spec in manifest.items.items()
+        if spec.subclass_of in kinds and key not in kinds
+    }:
+        kinds |= wider
+    return kinds
+
 
 @dataclass
 class DumpReading:
@@ -330,9 +379,22 @@ class DumpReading:
     `untyped`, every item that states no type, the vocabulary and classes
     aside, and `families`, every item typed as a family (``read_dump``);
     `participants`, the items that take part in each event, at every
-    rank; `unattended`, every event of a person kind that names no item
-    taking part; `bounds`, the events that start and end each union, a
-    partner's own death aside; `redirects`, each redirect's target;
+    rank, those a qualifier of a `participant` statement names included;
+    `links`, the items that each event's statements name, as their value
+    or a qualifier's, at every rank, whatever the property; `members`, the
+    items each item is named a `member of` by, at every rank, through
+    redirects; `takers`, the values of each item's own `participant`
+    statements, at every rank, its qualifiers aside; `unknown_takers`, the
+    items with a `participant` statement of unknown value; `person_events`,
+    the items typed, at any rank, as a person kind of event; `names`, the items
+    that each item's statements name, as their value or a qualifier's, at
+    every rank, whatever the item;
+    `unattended`, every event of a person kind whose `participant`
+    statements name no item as their value, and every item whose
+    `participant` statements all hold an unknown value or none; `bounds`,
+    the events that
+    start and end each union, a partner's own death aside; `redirects`,
+    each redirect's target;
     `revisions`, the revision of every item and property that is not a
     redirect; `property_types`, each property's type as the dump names it;
     and `sitelinks`, every entity that a sitelink is about."""
@@ -341,6 +403,12 @@ class DumpReading:
     untyped: set[str] = field(default_factory=set)
     families: set[str] = field(default_factory=set)
     participants: dict[str, set[str]] = field(default_factory=dict)
+    links: dict[str, set[str]] = field(default_factory=dict)
+    members: dict[str, set[str]] = field(default_factory=dict)
+    takers: dict[str, set[str]] = field(default_factory=dict)
+    unknown_takers: set[str] = field(default_factory=set)
+    person_events: set[str] = field(default_factory=set)
+    names: dict[str, set[str]] = field(default_factory=dict)
     unattended: set[str] = field(default_factory=set)
     bounds: dict[str, set[str]] = field(default_factory=dict)
     redirects: dict[str, str] = field(default_factory=dict)
@@ -394,10 +462,32 @@ def read_dump(
 
     The items that take part in each event are read at every rank,
     whatever the event's type: every item a `participant` statement's
-    value names. An event of a person kind that names none (no
-    `participant` statement, or only one whose value is unknown) is
-    unattended. So are read, at every rank, the events that start and end
-    each union (``UNION_BOUNDS``), but a `death` event, which is a
+    value names, and every item a qualifier of such a statement names,
+    whatever the statement's value, an unknown one or none included.
+    Taking part so is no person evidence of its own (a role such a
+    qualifier gives is vocabulary), and attends no event: an event of a
+    person kind whose `participant` statements name no item as their
+    value (none, or only ones whose value is unknown, however qualified)
+    is unattended, and so is any item that has `participant` statements,
+    all of an unknown value or none, whatever its kind; an item of no
+    person kind with no `participant` statement names no one, and is not.
+
+    An event is an item typed, at any rank, with `event` (``EVENT_CLASS``)
+    or a class the manifest makes a subclass of it (``event_kinds``), a
+    person kind of event, or a class the dump makes a subclass of one, at
+    any rank and through redirects; or an item with a `participant`
+    statement; but never a union, an item typed, at normal or preferred
+    rank, as a partnership, a marriage (``UNION_CLASS``) or a class the
+    dump makes a subclass of one at any rank, whose events go with it and
+    not it with them; and never an item typed human at normal or
+    preferred rank, unless typed a family too, for the participant, link
+    or unattended rule. Who is a `member of` each item is read too, at
+    every rank (``members``).
+    Each is linked to every item that any of its statements names, as its
+    value or a qualifier's, at every rank (``links``).
+
+    So are read, at every rank, the events that start and
+    end each union (``UNION_BOUNDS``), but a `death` event, which is a
     partner's own; and each property's type, and every sitelink, whose
     page is anything but an entity's data node.
 
@@ -405,13 +495,14 @@ def read_dump(
     instance_of = properties["instance_of"]
     subclass_of = properties["subclass_of"]
     participant = properties["participant"]
+    member_of = properties.get("member_of")
     bound_links = {
         properties[key] for key in UNION_BOUNDS if key in properties
     }
     subject_links = {properties[key] for key in PERSON_SUBJECT_PROPERTIES}
     value_links = {properties[key] for key in PERSON_VALUE_PROPERTIES}
     human = items[PERSON_CLASS]
-    event_kinds = {items[key] for key in PERSON_EVENTS}
+    person_kinds = {items[key] for key in PERSON_EVENTS}
     non_person_kinds = {items[key] for key in NON_PERSON_CLASSES}
 
     reading = DumpReading()
@@ -421,6 +512,16 @@ def read_dump(
     kinds: dict[str, str] = {}  # statement -> the type it gives
     events: dict[str, str] = {}  # statement -> the event it is part of
     participants: dict[str, str] = {}  # statement -> the participant
+    qualified: dict[str, set[str]] = {}  # statement -> items qualifiers name
+    owners: dict[str, str] = {}  # statement -> the item it is of
+    named: dict[
+        str, set[str]
+    ] = {}  # statement -> items it or a qualifier names
+    narrows: dict[str, str] = {}  # statement -> the class it makes a subclass
+    broader: dict[str, str] = {}  # statement -> the class it is a subclass of
+    # statement -> the group it makes its subject a member of
+    memberships: dict[str, str] = {}
+    unknown_parts: set[str] = set()  # participant statements of unknown value
     unions: dict[str, str] = {}  # statement -> the union it bounds
     bounds: dict[str, str] = {}  # statement -> the event it points to
     deprecated: set[str] = set()  # statements a curator deprecated
@@ -477,8 +578,11 @@ def read_dump(
                 item = _item(subject)
                 if item is None:
                     continue
+                owners[term] = item
                 if pid == instance_of:
                     typed[term] = item
+                if pid == subclass_of:
+                    narrows[term] = item
                 if pid == participant:
                     events[term] = item
                 if pid in bound_links:
@@ -488,18 +592,29 @@ def read_dump(
                 continue
             item = _item(term)
             if item is None:
+                if (
+                    pid == participant
+                    and role == "value"
+                    and _unknown(rest.split(" ", 1)[0])
+                ):
+                    unknown_parts.add(subject)
                 continue
             if pid in value_links:
                 reading.people.add(item)
+            named.setdefault(subject, set()).add(item)
             if role == "qualifier":
+                qualified.setdefault(subject, set()).add(item)
                 continue
             if pid == instance_of:
                 kinds[subject] = item
                 classes.add(item)
             if pid == subclass_of:
                 classes.add(item)
+                broader[subject] = item
             if pid == participant:
                 participants[subject] = item
+            if pid == member_of:
+                memberships[subject] = item
             if pid in bound_links:
                 bounds[subject] = item
 
@@ -525,7 +640,30 @@ def read_dump(
         }
 
     reading.people |= typed_as({human})
-    person_events = typed_as(event_kinds)
+    # the subclasses the dump declares, read through redirects
+    subclasses = {
+        (
+            _redirected(reading.redirects, narrows[statement]),
+            _redirected(reading.redirects, kind),
+        )
+        for statement, kind in broader.items()
+        if statement in narrows
+    }
+
+    def closed(kinds: set[str]) -> set[str]:
+        """`kinds` and every class the dump makes a subclass of one."""
+        kinds = set(kinds)
+        while wider := {
+            narrow
+            for narrow, kind in subclasses
+            if kind in kinds and narrow not in kinds
+        }:
+            kinds |= wider
+        return kinds
+
+    # a class the dump makes a subclass of a person kind is one too
+    person_events = typed_as(closed(person_kinds))
+    reading.person_events = person_events
     set_aside = typed_as(non_person_kinds, ranked=True)
     reading.people.update(
         person
@@ -535,7 +673,66 @@ def read_dump(
     for statement, part in participants.items():
         if statement in events:
             reading.participants.setdefault(events[statement], set()).add(part)
-    reading.unattended = person_events - set(reading.participants)
+    # an event is attended by its participant statements' values alone; an
+    # item a qualifier names takes part all the same, but a role names no
+    # one who was there. An event of a person kind that names no item so is
+    # unattended, and so is any item that has participant statements, each
+    # of an unknown value or none; an item of no person kind with no
+    # participant statement names no one, and is not. An item typed human,
+    # at normal or preferred rank, unless typed a family too, is never an
+    # event for the participant, link or unattended rule
+    humans = typed_as({human}, ranked=True)
+    reading.families = typed_as({items[FAMILY_CLASS]}, ranked=True)
+    # a family stays a family, a human type beside it notwithstanding
+    persons = humans - reading.families
+    reading.unattended = (person_events | set(events.values())) - (
+        set(reading.participants) | persons
+    )
+    reading.takers = {
+        item: set(parts) for item, parts in reading.participants.items()
+    }
+    reading.unknown_takers = {
+        events[statement] for statement in unknown_parts if statement in events
+    }
+    for person in persons:
+        reading.participants.pop(person, None)
+    for statement, names in qualified.items():
+        if statement in events and events[statement] not in persons:
+            reading.participants.setdefault(events[statement], set()).update(
+                names
+            )
+    for statement, group in memberships.items():
+        if statement in owners:
+            reading.members.setdefault(
+                _redirected(reading.redirects, group), set()
+            ).add(owners[statement])
+    # the event classes: `event` and the manifest's subclasses of it, the
+    # person kinds, and every class the dump makes a subclass of one of
+    # them, at any rank, read through redirects
+    event_classes = person_kinds | {
+        items[key] for key in event_kinds() if key in items
+    }
+    event_classes = closed(event_classes)
+    # a union is no event, whatever its kind: a marriage is a person kind
+    # for the unattended rule, and its partners are its participants. Its
+    # classes are the manifest's and those the dump makes subclasses of one
+    unions_typed = typed_as(
+        closed(
+            {items[key] for key in event_kinds(UNION_CLASS) if key in items}
+        ),
+        ranked=True,
+    )
+    # an event is linked to every item that a statement of it names, as its
+    # value or a qualifier's, at any rank, whatever the property
+    linked = (typed_as(event_classes) | set(events.values())) - (
+        unions_typed | persons
+    )
+    for statement, event in owners.items():
+        if event in linked and statement in named:
+            reading.links.setdefault(event, set()).update(named[statement])
+    for statement, owner in owners.items():
+        if statement in named:
+            reading.names.setdefault(owner, set()).update(named[statement])
     deaths = typed_as({items["death"]})
     for statement, event in bounds.items():
         if statement in unions and event not in deaths:
@@ -547,14 +744,14 @@ def read_dump(
         - typed_as(None, ranked=True)
         - classes
     )
-    reading.families = typed_as({items[FAMILY_CLASS]}, ranked=True)
     return reading
 
 
 # Why the export drops an item with person evidence that the check did
-# not assess, one that states no type, a family, an event of a person kind
-# that names no participant, an event that items it drops took part in,
-# and one that starts or ends a union it drops (the braces take QIDs).
+# not assess, one that states no type, a family, an event that names no
+# participant, an event that items it drops took part in or that one of
+# its statements names, and one that starts or ends a union it drops (the
+# braces take QIDs).
 NOT_ASSESSED = (
     "person evidence in the dump, but the check did not assess this item: "
     "unknown means excluded"
@@ -568,12 +765,16 @@ NO_TYPE = (
     "item): unknown means excluded"
 )
 UNATTENDED = (
-    "an event of a person kind that names no participant: unknown means "
-    "excluded"
+    "an event that names no participant (of a person kind), or whose "
+    "participants are all of unknown value: unknown means excluded"
 )
 PARTICIPANT_LEFT_OUT = (
     "a participant the export leaves out ({}): what this event records "
     "is theirs too"
+)
+LINKED_LEFT_OUT = (
+    "a statement of it names an item the export leaves out ({}): what this "
+    "event records is theirs too"
 )
 BOUND_LEFT_OUT = (
     "it starts or ends a union the export leaves out ({}): it is the couple's"
@@ -591,13 +792,32 @@ def public_exclusions(
     * each item that states no type (``NO_TYPE``), even one the check
       released;
     * each family (``FAMILY``), whatever it holds, released or not;
-    * each event of a person kind that names no participant
-      (``UNATTENDED``): whom it happened to is unknown;
-    * each event that an item it drops takes part in, at any rank
-      (``PARTICIPANT_LEFT_OUT``, naming them), and each event that starts
-      or ends a union it drops (``BOUND_LEFT_OUT``, naming the union),
-      read through redirects; and so on until no more go, as an event
-      dropped so may itself be a participant, or a union.
+    * each event of a person kind that names no participant, and each
+      item whose `participant` statements all hold an unknown value or
+      none (``UNATTENDED``): whom it happened to is unknown;
+    * each event that an item it drops takes part in, at any rank, as a
+      `participant` statement's value or named in its qualifiers, unless
+      that item is a released group (a family, or any item named a
+      `member of`, that names at least one member, read through the groups
+      among its members, each of which names a member, has no participant
+      of unknown value and, if it has person evidence, was released, all
+      of them released, and no participant of unknown value; a person
+      among its members is a member whose standing counts, and whose own
+      members are read too), which takes part harmlessly,
+      except in a person kind of event, which is its members' own
+      (``PARTICIPANT_LEFT_OUT``, naming them); each event that a statement
+      of it names an item it drops, as its value or a qualifier's,
+      whatever the property, unless it drops that item only as untyped, or
+      as a released group (as defined above) in an event of no person
+      kind, which protects no one: an item that may be a person, through
+      redirects, that the participant or unattended rule drops too, a
+      statement of which names an item that protects people, or that is
+      named a `member of` that is not a released group, is not dropped
+      only so
+      (``LINKED_LEFT_OUT``, naming them); and each event that
+      starts or ends a union it drops (``BOUND_LEFT_OUT``, naming the
+      union), read through redirects; and so on until no more go, as an
+      event dropped so may itself be a participant, or a union.
 
     A redirect stands for the item it redirects to: it is dropped when
     that item is, and when it has person evidence of its own and that item
@@ -621,6 +841,53 @@ def public_exclusions(
             return UNATTENDED
         return None
 
+    # what is left out only as untyped or as a family protects no one, so an
+    # event that merely names it stays (the statement naming it goes): not
+    # an item that may be a person, read through redirects, nor one the
+    # unattended rule leaves out, nor a group (a family, or any item named
+    # a member of) that names no member, its participant statements' values
+    # and those named a member of it, or one with a member the check did
+    # not release; and what names an item left out, in the loop below
+    unreleased = {target(qid) for qid in people} - report.included
+    groups = reading.families | set(reading.members)
+
+    # a person named a group, a household recorded under its head, say, is
+    # a member whose standing counts, and whose own members are read too;
+    # a person is never a released group
+    walked = groups - (people - reading.families)
+
+    def released(group: str) -> bool:
+        """Whether `group` names at least one member, read through the
+        groups among its members, and the check released every one: each
+        group so read names a member, has no participant of unknown value
+        and, if it has person evidence, was released. A person among them
+        counts as a member, and their own members are read too."""
+        seen, stack, found = set(), [group], set()
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            if current in reading.unknown_takers or current in unreleased:
+                return False
+            members = reading.members.get(current, set()) | (
+                reading.takers.get(current, set())
+            )
+            if not members:
+                return False
+            for member in members:
+                member = target(member)
+                if member in groups:
+                    stack.append(member)
+                if member not in walked:
+                    found.add(member)
+        return bool(found) and found <= report.included
+
+    released_groups = {group for group in walked if released(group)}
+    impersonal = (reading.untyped | reading.families) - (
+        (groups - released_groups) | unreleased | reading.unattended
+    )
+
     excluded = {}
     candidates = (
         people | reading.untyped | reading.families | reading.unattended
@@ -639,13 +906,59 @@ def public_exclusions(
     # drops that it starts or ends; a redirect goes with the event
     while True:
         left_out = set(excluded)
+        shielding = {
+            qid
+            for qid in left_out
+            if target(qid) not in impersonal
+            or reading.participants.get(target(qid), set())
+            & {
+                part
+                for part in left_out
+                if target(part) not in released_groups
+            }
+        }
+        # and what names an item that protects people protects them too
+        while grow := {
+            qid
+            for qid in left_out - shielding
+            if reading.names.get(target(qid), set()) & shielding
+        }:
+            shielding |= grow
+        # a group whose members are all released takes part harmlessly,
+        # but never in a person kind of event, which is its members' own,
+        # however that event names it
+        harmless = {
+            qid
+            for qid in left_out - shielding
+            if target(qid) in released_groups
+        }
+        guarded = shielding | harmless
         gone = {
-            event: PARTICIPANT_LEFT_OUT.format(
-                ", ".join(sorted(parts & left_out, key=_order))
+            event: LINKED_LEFT_OUT.format(
+                ", ".join(sorted(naming, key=_order))
+            )
+            for event, named in reading.links.items()
+            if event not in left_out
+            and (
+                naming := named
+                & (guarded if event in reading.person_events else shielding)
+            )
+        }
+        harmed = left_out - harmless
+        gone.update(
+            (
+                event,
+                PARTICIPANT_LEFT_OUT.format(
+                    ", ".join(sorted(parts & taking, key=_order))
+                ),
             )
             for event, parts in reading.participants.items()
-            if event not in left_out and parts & left_out
-        }
+            if event not in left_out
+            and (
+                taking := parts
+                & (left_out if event in reading.person_events else harmed)
+            )
+        )
         for union, bounds in reading.bounds.items():
             if union in left_out:
                 for event in {target(bound) for bound in bounds}:
@@ -826,6 +1139,142 @@ _TRIPLE = re.compile(
     rf"(?:@[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*|\^\^{_IRI})?) \."
 )
 
+# The statement links the export reads to tell which statements go whole,
+# each with its property: an entity's link to its statement (``p:``), the
+# statement's value (``ps:``) and its normalized value (``psn:``), and a
+# qualifier's value (``pq:``). A best-ranked statement also gives its
+# value to its entity as a truthy triple (``wdt:``, and ``wdtn:`` for the
+# normalized value). A statement of no value types its node with its
+# property's "no value" class (``wdno:``), and so the entity it is
+# best-ranked on.
+_CLAIM_NORMALIZED = re.compile(
+    r"<[^<>]*/prop/statement/value-normalized/(P[1-9]\d*)>"
+)
+_TRUTHY = re.compile(r"<[^<>]*/prop/direct(-normalized)?/(P[1-9]\d*)>")
+_NO_VALUE = re.compile(r"<[^<>]*/prop/novalue/(P[1-9]\d*)>")
+_TYPE = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"
+
+
+def _unknown(term: str) -> bool:
+    """Whether `term` is an unknown value: a blank node, as dumpRdf.php
+    writes one, or a skolem IRI, as the query service writes one."""
+    return term.startswith("_:") or "/.well-known/genid/" in term
+
+
+def _statement_link(predicate: str) -> tuple[str, str] | None:
+    """What a predicate links a statement to, with its property: "claim"
+    (an entity to its statement), "value", "normalized" or "qualifier";
+    "rank" or "type", with none; None for anything else."""
+    if predicate == _RANK:
+        return "rank", ""
+    if predicate == _TYPE:
+        return "type", ""
+    for role, pattern in (
+        ("claim", _CLAIM),
+        ("value", _CLAIM_VALUE),
+        ("normalized", _CLAIM_NORMALIZED),
+        ("qualifier", _QUALIFIER_VALUE),
+    ):
+        if match := pattern.fullmatch(predicate):
+            return role, match.group(1)
+    return None
+
+
+def statements_left_out(
+    full_dump: Path, excluded: set[str]
+) -> tuple[set[str], set[tuple[str, str, str, str]]]:
+    """The statements of the dump that go whole, and the truthy triples
+    that go with them.
+
+    A statement goes whole when its value, or the value of any of its
+    qualifiers, is an item of `excluded`, at any rank: its node and every
+    triple that holds it (the returned node IRIs). A truthy triple goes
+    with it when it gave it, and no statement that stays gives it too:
+    when the entity, the property and the value (the normalized value,
+    for a normalized truthy triple; the "no value" class, for a statement
+    of no value, one with no value triple) are those of a statement that
+    goes at normal or preferred rank, and of no statement of that entity
+    and property that stays at normal or preferred rank. A deprecated
+    statement gives no truthy triple, so one that goes takes none.
+    An unknown value is a blank node (or a skolem IRI) of its statement's
+    own, and so is the one its truthy triple holds, under another label.
+    The export does not reproduce Wikibase's labels, so it does not read
+    which truthy triple of unknown value a statement gave: when a
+    statement of unknown value goes, every truthy triple of unknown value
+    of its entity and property goes with it, a kept statement's included,
+    whose own node stays ("_:" stands for any such value). Each is
+    returned as (entity IRI, property, "" or "-normalized", value).
+
+    The lines may come in any order: a statement is joined to its entity
+    once the whole dump is read."""
+    owners: dict[str, tuple[str, str]] = {}  # statement -> entity, property
+    # (statement, form, value): its value (any unknown one as "_:") and
+    # its normalized value
+    values: set[tuple[str, str, str]] = set()
+    # each "no value" class a statement's node is typed with, its own or a
+    # qualifier's: its own only when it has no value triple
+    no_value_types: dict[str, set[str]] = {}
+    valued: set[str] = set()  # statements with a value triple
+    deprecated: set[str] = set()  # statements a curator deprecated
+    left_out: set[str] = set()
+    links: dict[str, tuple[str, str] | None] = {}
+    no_values: dict[str, bool] = {}  # a type -> whether it is "no value"
+    with gzip.open(full_dump, "rt", encoding="utf-8", newline="\n") as source:
+        for line in source:
+            triple = _TRIPLE.fullmatch(line.removesuffix("\n"))
+            if triple is None:
+                continue
+            subject, predicate, value = triple.groups()
+            if predicate not in links:
+                links[predicate] = _statement_link(predicate)
+            link = links[predicate]
+            if link is None:
+                continue
+            role, pid = link
+            if role == "claim":
+                owners[value] = (subject, pid)
+            elif role == "rank":
+                if value == _DEPRECATED:
+                    deprecated.add(subject)
+            elif role == "type":
+                if value not in no_values:
+                    no_values[value] = bool(_NO_VALUE.fullmatch(value))
+                if no_values[value]:
+                    no_value_types.setdefault(subject, set()).add(value)
+            else:
+                if role in ("value", "qualifier") and _item(value) in excluded:
+                    left_out.add(subject)
+                if role == "qualifier":
+                    continue
+                if role == "value":
+                    valued.add(subject)
+                if _unknown(value):
+                    value = "_:"
+                form = "-normalized" if role == "normalized" else ""
+                values.add((subject, form, value))
+
+    # what the statements that go give their entities, and what those that
+    # stay at normal or preferred rank do; an unknown value is no other
+    # statement's, so a kept one keeps no truthy triple of one that goes
+    values.update(
+        (statement, "", kind)
+        for statement, kinds in no_value_types.items()
+        if statement not in valued
+        for kind in kinds
+    )
+    gone: set[tuple[str, str, str, str]] = set()
+    kept: set[tuple[str, str, str, str]] = set()
+    for statement, form, value in values:
+        if statement not in owners or statement in deprecated:
+            continue
+        given = (*owners[statement], form, value)
+        if statement in left_out:
+            gone.add(given)
+        elif value != "_:":
+            kept.add(given)
+    return left_out, gone - kept
+
+
 # The properties whose snaks the export drops, wherever one is written:
 # the extractor's judgement notes (ADR-0035), its remarks on its own
 # reading, which are no information on anyone. Keys of the model manifest;
@@ -839,7 +1288,7 @@ def filter_public_export(
     excluded: set[str],
     dropped_pids: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[int, int]:
-    """Produce the export's dump: four filters over N-triples. `excluded`
+    """Produce the export's dump: five filters over N-triples. `excluded`
     holds every item to drop: for the export, every item with person
     evidence that the check did not release, and the rest
     ``public_exclusions`` names. `dropped_pids` holds the properties whose
@@ -849,13 +1298,20 @@ def filter_public_export(
        (``_TRIPLE``): what the filter cannot read, it does not pass on.
        Lines end at a newline alone.
     2. Drop every triple that mentions an excluded entity: entity URIs,
-       statement node URIs (entity/statement/Q76-...), and object
-       references all carry the QID as a delimited token, so token
-       matching catches a person wherever they appear — including in
-       other people's claims.
-    3. Drop every triple of a property of `dropped_pids`, in any form: a
+       statement node URIs (entity/statement/Q76-...) of its own
+       statements, and object references all carry the QID as a
+       delimited token, so token matching catches a person wherever they
+       appear — including in other people's claims.
+    3. Drop whole every statement whose value, or a qualifier's value,
+       is an excluded item (``statements_left_out``): a statement node
+       carries its subject's QID, not its value's, so a kept item's
+       statement about an excluded one would otherwise keep its rank,
+       its qualifiers (a wedding's date, say) and its references. Every
+       triple whose subject or object is such a node goes, and so does a
+       truthy triple that only such a statement gave.
+    4. Drop every triple of a property of `dropped_pids`, in any form: a
        statement's value, a qualifier's, a reference's, or a truthy one.
-    4. Sweep orphaned provenance nodes. Reference/value nodes are
+    5. Sweep orphaned provenance nodes. Reference/value nodes are
        shared, content-addressed resources; once the statements using
        them are dropped, their triples would still leak what those
        statements recorded about an excluded person. Only nodes still
@@ -865,10 +1321,43 @@ def filter_public_export(
     descriptions and aliases of the items kept, their statements' values,
     and the excerpts of the references their statements keep.
 
-    Returns (kept, dropped) line counts. Streams the gzipped dump three
-    times, holding only node-hash sets in memory.
+    Returns (kept, dropped) line counts. Streams the gzipped dump four
+    times (three when `excluded` is empty). It holds in memory the nodes
+    of the statements that go, the truthy triples that go with them and
+    the hashes of the provenance nodes kept; and, while it reads which
+    statements go, each statement's entity, property and value, and the
+    statements deprecated.
     """
     dropped_predicates = tuple(f"/{pid}>" for pid in dropped_pids)
+    left_out, truthy_left_out = (
+        statements_left_out(full_dump, excluded)
+        if excluded
+        else (set(), set())
+    )
+    # what each predicate of a truthy triple gives, and whether each type
+    # is a property's "no value" class, read once
+    forms: dict[str, tuple[str, str] | None] = {}
+    no_values: dict[str, re.Match | None] = {}
+
+    def truthy(subject: str, predicate: str, value: str) -> tuple | None:
+        """The triple as ``statements_left_out`` returns a truthy one, an
+        unknown value as "_:", or None when it is none."""
+        if predicate == _TYPE:
+            if value not in no_values:
+                no_values[value] = _NO_VALUE.fullmatch(value)
+            no_value = no_values[value]
+            if no_value is None:
+                return None
+            return subject, no_value.group(1), "", value
+        if predicate not in forms:
+            match = _TRUTHY.fullmatch(predicate)
+            forms[predicate] = (
+                (match.group(2), match.group(1) or "") if match else None
+            )
+        form = forms[predicate]
+        if form is None:
+            return None
+        return subject, *form, "_:" if _unknown(value) else value
 
     def suppressed(line: str) -> bool:
         triple = _TRIPLE.fullmatch(line.removesuffix("\n"))
@@ -878,7 +1367,13 @@ def filter_public_export(
             token in excluded for token in _QID_TOKEN.findall(line)
         ):
             return True
-        predicate = triple.group(2)
+        subject, predicate, value = triple.groups()
+        if subject in left_out or value in left_out:
+            return True
+        if truthy_left_out and truthy(subject, predicate, value) in (
+            truthy_left_out
+        ):
+            return True
         return "/prop/" in predicate and predicate.endswith(dropped_predicates)
 
     def subject_hash(line: str) -> str | None:
@@ -968,7 +1463,9 @@ def export_public(
     it has run: a graph that changed meanwhile raises QueryServiceLag.
     Either refusal writes nothing. Every item with person evidence that
     the check did not release is then dropped (``public_exclusions``),
-    and so are the judgement notes (``filter_public_export``). The
+    and so are the judgement notes and every statement whose value or a
+    qualifier's value is an item dropped, whole (``filter_public_export``,
+    ``statements_left_out``). The
     queries go to the instance's query service, with its vocabulary,
     unless `run` and `vocabulary` are given."""
     if vocabulary is None:

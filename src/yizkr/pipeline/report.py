@@ -301,6 +301,12 @@ FAILURE_LABELS = frozenset(
 )
 CHECKS = frozenset(name.replace("_", "-") for name in Checks.model_fields)
 CHECKS = CHECKS | {"anomaly-config"}
+# the checks registration raises as alerts of the write, and the stage they
+# name: a copy of yizkr.pipeline.registrar.REGISTRATION_CHECKS, which a unit
+# test keeps equal to it
+REGISTRATION_CHECKS = frozenset({"shared-file", "unhashed-title"})
+CHECKS = CHECKS | REGISTRATION_CHECKS
+WRITE = "write"
 
 _RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{1,32}")
 _STAGE = re.compile(r"[a-z][a-z0-9-]{0,39}")
@@ -312,6 +318,7 @@ _MODEL = re.compile(
 _VERSION = re.compile(r"[0-9]+(?:\.[0-9]+){0,3}(?:[-+][A-Za-z0-9.]{1,20})?")
 _HEX = re.compile(r"[0-9a-f]{12,64}")
 _PREFIX = re.compile(r"[0-9a-f]{4,40}")
+_QID = re.compile(r"Q[1-9][0-9]*")
 _STOP = re.compile(r"(run|stage:[a-z][a-z0-9-]*|kind:[a-z]+) (paused|aborted)")
 # the claims a failed extraction's reason says it could not use
 # (chunking.ExtractionFailed), read as the anomaly checks read them
@@ -1198,11 +1205,26 @@ def _alerts(path: Path, documents: dict[str, Document]) -> _Alerts | None:
                         "status": status,
                         "value": _value(alert.get("value")),
                         "limit": _value(alert.get("limit")),
+                        # a registration flag's items, by QID
+                        "artifact": _qid(alert.get("artifact")),
+                        "others": _qids(alert.get("others")),
                     }
                 )
     except OSError:
         return None
     return counts
+
+
+def _qid(value: Any) -> str | None:
+    """`value` when it is an item's QID, else None."""
+    return value if isinstance(value, str) and _QID.fullmatch(value) else None
+
+
+def _qids(value: Any) -> list[str] | None:
+    """The QIDs among `value`, a list, or None when it is not one."""
+    if not isinstance(value, list):
+        return None
+    return [qid for qid in map(_qid, value) if qid is not None]
 
 
 def _match(subject: str, known: list[str]) -> str | None:
@@ -2102,7 +2124,7 @@ def _aggregate_alerts(
     for (_subject, stage, check), status in alerts.findings.items():
         by_check.setdefault(_known(check, CHECKS), Counter())[status] += 1
         # an alert on the run as a whole (its thresholds) names no stage
-        shown = RUN if stage == RUN else vocabulary.stage(stage)
+        shown = stage if stage in (RUN, WRITE) else vocabulary.stage(stage)
         by_stage.setdefault(shown, Counter())[status] += 1
     lines = _folded(alerts.by_check, lambda value: _known(value, CHECKS))
     statuses = Counter(alerts.findings.values())
@@ -3596,10 +3618,11 @@ def _html_document(document: Mapping[str, Any]) -> str:
         body.append(
             _html_table(
                 _table(
-                    ("At", "Stage", "Check", "Status", "Value", "Limit"),
+                    ("At", "Stage", "Check", "Status", "Value", "Limit",
+                     "Items"),
                     [
                         (a["at"], a["stage"], a["check"], a["status"],
-                         a["value"], a["limit"])
+                         a["value"], a["limit"], _alert_items(a))
                         for a in document["alerts"]
                     ],
                 )
@@ -3609,6 +3632,15 @@ def _html_document(document: Mapping[str, Any]) -> str:
         f'<details id="{_doc_anchor(document["sha1"])}"><summary>{summary}'
         f"</summary>{''.join(body)}</details>"
     )
+
+
+def _alert_items(alert: Mapping[str, Any]) -> str | None:
+    """A registration flag's items, ``"<artifact> against <others>"``, or
+    None for an alert that names none."""
+    if not alert.get("artifact"):
+        return None
+    others = ", ".join(alert.get("others") or [])
+    return f"{alert['artifact']} against {others}" if others else None
 
 
 def render_json(report: Mapping[str, Any]) -> str:

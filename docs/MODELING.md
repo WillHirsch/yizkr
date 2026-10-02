@@ -138,9 +138,9 @@ hold.
 **A retired property** stays in the instance and takes no new claim: it
 accepts nothing, validation refuses every claim of it, and no prompt that
 the manifest renders offers it. `spouse` is retired (ADR-0036): the spouse
-link is derived from a marriage's participants. The GEDCOM adapter still
-states a couple as a pair of spouse claims, which its own check lets
-through, until it makes marriages (ADR-0036 §5).
+link is derived from a marriage's participants. The GEDCOM adapter makes
+marriages and partnerships (ADR-0036 §5, "Marriages, residences and other
+periods" below), so no batch carries a spouse claim.
 
 ## Reference pattern (see ADR-0003)
 
@@ -294,6 +294,25 @@ artifact a new QID, changes neither.
   media. Nothing before the write has an artifact item, and a write that
   runs again (a changed review, say) registers again, finding by SHA-1
   what the earlier write registered.
+- **An item that may be an older artifact is flagged, never adopted**
+  (ADR-0010 as amended by #371). An item with no hash has no `media
+  SHA-1` and names a `media file`, as an artifact registered before
+  content hashing does, or is an `instance of` an artifact kind, as a
+  GEDCOM media object's item is (a label, no file). Each time
+  registration makes or finds an artifact or derived medium while
+  another item names a wiki file holding its bytes (`shared-file`), or
+  while its title, or its own label before its content tag, is an
+  unhashed item's label (`unhashed-title`), `ingest run` raises the
+  flag as an alert of the write naming the items by QID, for a person
+  to look at; it repeats on every write until a curator acts on the
+  older item. A new item is made as any other, and neither item is
+  changed. Registration writes `media file` and `media SHA-1` together,
+  so a reset instance never raises `shared-file`; it raises
+  `unhashed-title` only for an artifact or derived medium registered
+  under exactly a GEDCOM media object's label, and only when the
+  GEDCOM's write made that media object's item first (a GEDCOM written
+  after the artifact joins its media object to it by the label, #109,
+  and makes no item to flag).
 - **A page fragment is keyed by its artifact.** The fragment for page
   *n* is the item that is an `instance of artifact fragment` and `part
   of` the artifact with `page number` *n*, whatever its label. A new one
@@ -330,7 +349,7 @@ artifact a new QID, changes neither.
   writer keeps labels by (above: trimmed, then U+FFFE and U+FFFF made
   U+FFFD, then NFC; #369, #403), an artifact's description goes in that
   form too, and a title longer than the 250 characters Wikibase takes,
-  as it is or once tagged, is refused. The tag
+  as it is or once tagged, is cut to fit, ending in "…" (#371). The tag
   is a stopgap until labels need not be unique for artifacts (#94), and
   which homonym bears it depends on registration order: nothing may key
   on an artifact's label, only on its `media SHA-1`.
@@ -620,8 +639,34 @@ Names are modelled in **two layers**:
   it never narrows or infers (a maiden name is recorded only when the
   source says so, never derived from gender + marriage).
 - The GEDCOM adapter emits these from NAME TYPE, the NICK and `_MARNM`
-  tags, and the universal inline convention (a quoted or parenthetical
-  token is a nickname). Typed names also feed reconciliation: a married
+  tags, and the inline convention that a quoted part is a nickname
+  ("Cäcilie 'Cilli' Tarle"). A bracketed part ("Ida (Peppi) Sörne") may
+  hold a nickname, a maiden name or a note, so it is an alias and an
+  unsplit form of the mention record, typed as nothing and counted, and
+  the label leaves it out; a NAME
+  without slashes, whose parts no GIVN or SURN gives, is an unsplit form
+  too, and its TYPE gives no claim, and one with only a GIVN or only a
+  SURN keeps its whole value as an unsplit form beside that part. A
+  `_MARNM` gives a married-name claim only where its slashes hold a
+  surname; otherwise it is an unsplit form too (ADR-0035 §6). A GIVN's
+  quotes and brackets read as the value's do: a quoted part is a
+  nickname, a bracketed part an alias and an unsplit form. A word
+  that holds no letter or digit ("?", "_", "()") is a placeholder, in a
+  value, a bracket, a quote, a part or a NICK: it names nothing, so it
+  is counted, not placed ("Eugen /?/" is labelled "Eugen"), and a typed
+  name that held one anywhere but in a NICK, a stray bracket included,
+  gives no typed claim; a single dash or "&" between two words of one
+  field is a connector, kept, and one against a slash, a bracket or a
+  quote, a "+" or a run ("--") is a placeholder. As many SPFX slots as
+  SURN slots pair by position, empty slots included. German low quotes and guillemets mark a
+  nickname as other quotes do. Where no NAME gives a
+  name, the label falls back, marks and all, to brackets that hold a word
+  ("(Peppi)"), then a GIVN's quotes or brackets, then a NICK, then a
+  `_MARNM`; a person with
+  none of these words is skipped and counted, as one with an empty NAME
+  is. The adapter's texts are in the export's language (HEAD.LANG,
+  mapped to BCP 47), or undetermined (`und`) where it states none.
+  Typed names also feed reconciliation: a married
   name matching another's birth name (a marriage name change) is strong
   identity evidence.
 
@@ -676,7 +721,16 @@ data. A record may divide and label a name, never add to it: every part
 must occur in the label or an alias, folded, as whole words (a standard
 form and an organisation's places aside). A record that fails that, or
 that does not parse, is set aside and counted, and the entity keeps its
-label, aliases and kind. What a marker in a name asserts (a widow's
+label, aliases and kind. The GEDCOM adapter fills each person's record
+from the NAME's value and its GIVN, SURN, SPFX, NPFX, NSFX, NICK and
+`_MARNM` (ADR-0035 §6): a part the value does not restate reaches its
+field, and the name it completes (the name the parts give, or an NPFX
+or NSFX beside the value's name: "Dr. Eugen Löbig") becomes an alias,
+counted; in a NAME with no value, a prefix or suffix with no given name
+or surname beside it is counted instead, so none is dropped silently. A
+NICK and a `_MARNM` are aliases too. A place's record takes its PLAC's
+first component as its name and the rest as the places it is within.
+What a marker in a name asserts (a widow's
 marker, "the late", a patronymic's father, a married-name marker) is a
 claim: a `civil_status`, a death, a `father`, a `married_name`.
 
@@ -774,6 +828,8 @@ primitive network and the *same* term set describes any pair:
   `informant` who reported it, a `witness` or the `officiant`; in a
   partnership or marriage, a `partner` or a `spouse`. One claim may carry
   several roles, but a death's principal is never also its informant.
+  The GEDCOM adapter makes each death event it makes with the person as
+  its `principal`, and each union's couple its `spouse`s or `partner`s.
 
 ## Residence and co-residence (see ADR-0014)
 
@@ -804,41 +860,67 @@ part in the marriage (or partnership) with the role `spouse` (or
 divorce, an annulment, a partner's death, or an event of unstated kind
 where the source does not say how it ended, and each of those events
 carries its own date and place. Until the rest of the pipeline moves to
-marriages, the GEDCOM adapter still writes the spouse statements
-described here, and the readers of spouse statements (the disagreement
-report, the timeline, the kinship query) still read them; extraction
-refuses and counts any spouse claim.
+marriages, the readers of spouse statements (among them the disagreement
+report, the timeline, the kinship query, reconciliation, clustering and
+the static site) still read them; extraction refuses and counts any
+spouse claim.
 
-A statement that holds for a period, such as a marriage (`spouse`), a
-residence, an occupation or a membership, is dated as Wikidata dates
-spouse (P26):
+**The GEDCOM adapter makes unions (ADR-0036 §5).** A family with two
+partners (its `HUSB` and `WIFE`, or, with no `WIFE` or no `HUSB`, two
+`HUSB`s or two `WIFE`s, counted, the second a partner only and never
+the children's parent) is a `marriage` when a `MARR` of it states a
+wedding, or when a `DIV` or `ANUL` states its end with no such `MARR`
+(a marriage with no wedding, counted), otherwise a `partnership` (the
+export gives Felix and Ida no `MARR`, so theirs is a partnership); its
+couple are its participants with the role `spouse` or `partner`. A family
+whose `HUSB` and `WIFE` name the same person gives no union and no
+parent claim, counted. A `MARR` states its
+wedding as a `DIV` its divorce, by a `Y` or a `DATE` or `PLAC` with a
+value: a `MARR N`, or one that states nothing, makes no wedding and is
+counted. The family's `MARR`s of one kind are one wedding, which the
+union is `started_by`: a `civil_wedding` or a `religious_wedding` where
+the `MARR`'s `TYPE` names the ceremony (`civil`, `religious`, `church`,
+and their German forms), else a `wedding`, which a `MARR` whose `TYPE`
+names no known kind joins, that `TYPE` counted. Its `DIV`s are one
+divorce and its `ANUL`s one annulment, which the union is `ended_by`,
+each `PLAC` the event's `location`, and a `DIV Y` an undated divorce,
+counted, as is one whose `DATE` gives no date. Each
+date and place of each record is a claim of its own on that event: its
+`point_in_time`, with the range and circa its `DATE` states. A `FROM … TO
+…` on a `MARR` dates the wedding by the `FROM` and an end of unstated kind
+(an `event`) by the `TO`; on a `DIV` or an `ANUL` it is the event's own
+`start_time` and `end_time`, as an imprisonment is dated. No end is
+inferred from a partner's `DEAT`. A `SOUR` beneath a `MARR`, `DIV` or
+`ANUL` cites that event's claims and the union's claim that points to
+it; the family record's own `SOUR`s cite the couple's claims.
 
-- **A marriage's date is the `start_time` of the spouse statement**, and
-  the date it ended (a divorce, an annulment, or widowhood, when the
-  source dates the end itself) is its `end_time`: Leopold and Agnes's
-  marriage, from 8 February 1947 until the divorce of 2 January 1957 per
-  the judgment, is a spouse statement with that start time and end time.
-  Each partner's spouse statement carries the dates its source gives, and
-  the GEDCOM adapter writes a family's `MARR` date as the start time of
-  both partners' statements and its `DIV` date as their end time. A
-  family that repeats a `MARR` or a `DIV`, as GEDCOM states an
-  alternative, gets a pair of statements of its own for each alternative
-  date or place it gives, with its own circa, beside the pair that its
-  first marriage and first divorce date: an export that dates Leopold and
-  Agnes's marriage both 8 February 1947 and 1947 gives one pair that
-  starts on 8 February 1947 and one that starts in 1947. A move
-  in and a move out date a residence the same way, and the adapter reads
+A statement that holds for a period, such as a residence, an occupation
+or a membership, is dated as Wikidata dates spouse (P26); a marriage is
+dated by its events (ADR-0036), and the retired spouse statement's
+dating below is the convention its readers still interpret:
+
+- **A retired spouse statement's `start_time` dates the marriage**, and
+  its `end_time` the date it ended (a divorce, an annulment, or
+  widowhood, when the source dated the end itself): under that
+  convention, Leopold and Agnes's marriage, from 8 February 1947 until
+  the divorce of 2 January 1957 per the judgment, was a spouse statement
+  with that start time and end time, each partner's carrying the dates
+  its source gave. Nothing writes one now: the judgment's marriage is a
+  `marriage` `started_by` its wedding and `ended_by` the divorce. A
+  move in and a move out date a residence by `start_time` and
+  `end_time`, and the GEDCOM adapter reads
   a residence's or an occupation's date period (`FROM 1939 TO 1952`) as
   its start and end time, each with the range its own date gives, and
   with one circa when either end is approximate.
 - **`point_in_time` on a spouse or residence statement dates an
   observation**: a date at which the source presents the marriage or the
   residence as holding (a directory's listing, a census) without dating
-  its start or end. It never carries a wedding date. A source that merely
-  names a spouse, without dating the marriage, gives an undated spouse
-  statement: the document's own date is not an observation of the
-  marriage (Ida's registration card of 1945 names Felix, dead since 1931,
-  as her husband).
+  its start or end. It never carried a wedding date. A source that merely
+  named a spouse, without dating the marriage, gave an undated spouse
+  statement: the document's own date was no observation of the marriage
+  (Ida's registration card of 1945 names Felix, dead since 1931, as her
+  husband). Now such a source gives a union with no date, and the
+  document's date is still no observation of it.
 - **Each end has a range of its own.** A statement has one start and
   one end, and a source may bound either, so each end takes its own pair
   of qualifiers, as on Wikidata since `latest start date` (P8555) and
@@ -849,7 +931,7 @@ spouse (P26):
   `earliest_date` and `latest_date` are thus the outer bounds of the
   period: the earliest it can have begun and the latest it can still have
   held. A marriage "between 1946 and 1947" is a start time of 1946 (the
-  first date, as the GEDCOM adapter stores a range) with an earliest date
+  first date, as a range is stored) with an earliest date
   of 1946 and a latest start date of 1947; a divorce "before 1958" is an
   end time of 1958 with a latest date of 1958. An earliest date never
   bounds an end, nor a latest date a start.
@@ -867,9 +949,8 @@ spouse (P26):
   range, since there those dates bound the period.
 - **Circa** (`sourcing_circumstances`) qualifies the whole statement. On
   a spouse statement with a start and an end, it says that the source
-  gives at least one of them approximately, and cannot say which: the
-  GEDCOM adapter writes one circa when the marriage's or the divorce's
-  date is approximate, rather than drop it (rule 5).
+  gives at least one of them approximately, and cannot say which, rather
+  than drop it (rule 5).
 
 The disagreement report compares a residence's or a spouse's start and
 end times, each through its own range ("Contradictions" below); the
@@ -1031,7 +1112,20 @@ not a signal to grow the schema on.
   `DEFAULT_CUTOFF_YEARS` in `yizkr.core.privacy`). **Unknown means
   excluded.** Exclusion removes every mention (other people's claims
   about them, orphaned provenance nodes), and a transcription excerpt —
-  a raw source quotation — leaves only with a statement it attests.
+  a raw source quotation — leaves only with a statement it attests. A
+  statement whose value, or any qualifier's value, is an item left out
+  goes whole, on a kept item too, with its rank, qualifiers and
+  references (ADR-0020, as amended by #364): an appellation of a
+  released person whose `perspective` is a possibly living relative
+  goes, its text included, and a statement naming a possibly living
+  partner takes its start time and its excerpt with it. Its truthy
+  triple goes too, unless a kept statement of the same item and
+  property, at normal or preferred rank, gives the same value; a
+  statement of unknown value that goes takes every truthy triple of
+  unknown value of its item and property, as the export does not read
+  which one it gave (it does not reproduce Wikibase's blank-node
+  labels). A reference or value node that a kept statement uses too
+  stays, its excerpt included.
 - **Who is a person fails closed too** (ADR-0020, as amended by #344).
   An item is a person when it has any person evidence, read at every
   rank, deprecated included: a `human` type; a statement of a property
@@ -1079,12 +1173,58 @@ not a signal to grow the schema on.
   #363). An event's date and place are its participants' too, and its
   label is written after them, so the export leaves out every event,
   whatever its kind, that has a `participant` statement at any rank
-  whose value it leaves out, a redirect to one included. An event so
-  left out may itself be a participant, and the rule applies again. An
-  event of a person kind that names no participant (none, or only one of
-  unknown value) is left out too: whom it happened to is unknown. And
-  the events that start and end a union it leaves out go with the union
-  (`started_by`, `ended_by`; ADR-0036 §6), a partner's own death aside.
+  whose value it leaves out, a redirect to one included, or one with a
+  qualifier that names such an item, whatever the statement's value, an
+  unknown one or none included (#364). An event goes, too, with any item
+  that one of its statements names, as its value or a qualifier's,
+  whatever the property: a divorce `carried out by` an organization left
+  out for its person evidence goes with it (the orchestrator,
+  2026-10-02). The rule follows only items left out to protect people:
+  an untyped place, or a family (or any item named a `member of`) with
+  recorded members all released, names no
+  one, so a released person's birth at an untyped place stays, without
+  the statement naming it; a family with a member who may be living, or
+  that names no member, takes the event with it, and so does an untyped
+  item that may be a person (through redirects), that the participant
+  or unattended rule leaves out too, or that names an item left out to
+  protect people. Such a group whose members are all released takes
+  part in an event harmlessly, as a released person does, except in a
+  person kind of event, which is its members' own, however the event
+  names it (as a participant or, say, `carried out by`). Members are
+  read through the groups among them, through redirects, ending on
+  cycles: a member group with a member not released, that names no
+  one, or that has person evidence and was not released by the check
+  makes the outer group take events with it, and so does a
+  `participant` of unknown value. A person named a `member of` (a
+  household recorded under its head) is a member whose standing
+  counts, and whose own members are read too; a person is never a
+  released group. An event that names the released head of a
+  household stays, whoever is recorded under that head: a released
+  person is judged on their own standing alone, and only a group by its
+  members. An untyped item with members is judged as a group, on its
+  members. A class the dump makes a subclass of a person kind of
+  event is a person kind too, everywhere in the export's reading of the
+  dump; the check's own selection of people does not follow such
+  classes, so a participant of one that the dump alone makes a person is
+  left out as not assessed, failing closed. An
+  event is an item typed `event`, a subclass of it or a person kind of
+  event, or an item with a `participant` statement, but never a union (a
+  partnership or a marriage, or a subclass of one), whose events go with
+  it and not it with them, nor an item typed human at normal or
+  preferred rank, unless typed a family too (for the participant rule
+  too). An
+  event so left out may itself be a participant, or named by another
+  event, and the rule applies again. An event of a person kind that
+  names no participant (none, or only one of unknown value, however
+  qualified: what a qualifier names, a role included, is no person
+  evidence and attends no event on that alone) is left out too: whom it
+  happened to is unknown; and so is an event of any kind that has
+  participant statements, every one of an unknown value or none (the
+  orchestrator, 2026-10-02, failing closed as ADR-0036 §6 does for
+  unions), while one of no person kind with no participant statement at
+  all names no one and stays. And the events that start and end a union
+  it leaves out go with the union (`started_by`, `ended_by`;
+  ADR-0036 §6), a partner's own death aside.
 - **Everything about a released person stays, text included** (ADR-0020,
   as amended by #363). The owner decided (2026-09-29): "I don't intend
   to make a completely public copy, so any non-privileged view can

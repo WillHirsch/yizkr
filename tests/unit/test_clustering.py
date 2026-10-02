@@ -383,6 +383,11 @@ GEDCOM_TRUTH = {
     "Studio portrait of the Löbig family": "studio-photo-1890s",
 }
 
+GEDCOM_UNION_KINDS = {
+    "partnership", "marriage", "wedding", "civil_wedding",
+    "religious_wedding", "divorce", "annulment", "event",
+}  # fmt: skip
+
 
 def gedcom() -> Doc:
     raw = u.GEDCOM_FIXTURE.read_bytes()
@@ -393,8 +398,15 @@ def gedcom() -> Doc:
         for person in u.PEOPLE
         if person.gedcom_xref
     }
+    # a union and its events are the export's own, as the universe holds
+    # no marriage entity yet (ADR-0036)
     truth = {
-        record.id: people.get(record.id) or GEDCOM_TRUTH[record.label]
+        record.id: people.get(record.id)
+        or (
+            f"gedcom-{record.id}"
+            if record.kind in GEDCOM_UNION_KINDS
+            else GEDCOM_TRUTH[record.label]
+        )
         for record in batch.entities
     }
     return Doc("gedcom", Manifest(artifact.sha1, batch, GEDCOM), truth)

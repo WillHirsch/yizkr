@@ -1,8 +1,8 @@
 """Live validation that the non-privileged export (public.nt.gz) keeps
 only the people the check releases, and leaves out what states no type
-(#344) and the events of those it leaves out, while every text about what
-it keeps stays (#363; ADR-0020; docs/MODELING.md, "Living persons and
-privacy").
+(#344), the events of those it leaves out (#363) and the statements that
+name them (#364), while every text about what it keeps stays (#363;
+ADR-0020; docs/MODELING.md, "Living persons and privacy").
 
 A fictional fixture writes, under labels that carry a marker of the
 fixture's content (test_live_privacy.py's write_fixture):
@@ -27,7 +27,22 @@ fixture's content (test_live_privacy.py's write_fixture):
   The letter is the source of their birth, and the excerpt of the
   released person's death names them too;
 * a birth, labelled for "Named In Text" and dated 1990, that names no
-  participant, as a claim refused or cut short leaves one.
+  participant, as a claim refused or cut short leaves one;
+* two statements of the released person that name "Named In Text": a
+  spouse statement whose value is them, dated by a 1938 start time (a
+  property ADR-0036 retired, which a graph may still hold), and an
+  appellation ("referred to as") whose `perspective` qualifier is them,
+  each with an excerpt of its own;
+* a talk, an event of no person kind dated 1938, that the released
+  person took part in, with another participant statement of unknown
+  value whose `said to be the same as` qualifier names "Named In Text"
+  (added through WikibaseIntegrator, as the writer writes no unknown
+  value);
+* a hearing, an event of no person kind dated 1957, carried out by the
+  organization born in 1990;
+* two children of the released person, of unknown value, added so too:
+  one with a `said to be the same as` qualifier naming "Named In Text",
+  one with no qualifier.
 
 The two whose type a curator deprecated or outranked carry a religion
 beside it, which is no person evidence, so that their type is what marks
@@ -42,23 +57,40 @@ person, but a `human` type at any rank does. An item that states no type
 is left out, whatever else it holds, and a redirect goes with the item it
 redirects to. An event that one of those left out takes part in is left
 out too: the migration, for its vessel typed human, and the birth; so is
-a person event that names no participant, the unrecorded birth. Every
-text about what the export keeps stays, one naming a possibly living
-person included (owner, 2026-09-29).
+a person event that names no participant, the unrecorded birth; an
+event whose one participant left out is named only in a qualifier, the
+talk; and an event another of whose statements names one left out, the
+hearing. A statement of the released person whose value, or a qualifier's
+value, is an item left out goes whole: its node, its rank, its
+qualifiers, its dates among them, the reference that holds its excerpt,
+and the truthy triple it gave; the run's reference, which the released
+person's death cites too, stays. Of the two children of unknown value,
+the one said to be "Named In Text" goes whole, and the truthy triple it
+gave goes with it; which truthy triple of unknown value a statement gave
+is not read from the dump (the export does not reproduce Wikibase's
+blank-node labels), so the other's goes too, and its statement stays.
+Every text about what the export keeps stays, one naming a possibly
+living person included (owner, 2026-09-29).
 
-The test dumps the graph as `yizkr backup` does (dumpRdf.php), writes the
-export from it, and reads public.nt.gz: it mentions the released person,
-the plain vessel, the letter and its page by QID, and none of the others,
-the label-only item, the family, the redirect, the migration and both
-births included. The released person's description and death excerpt,
+The test dumps the graph as `yizkr backup` does (dumpRdf.php), writes
+the export from it, and reads public.nt.gz: it mentions the released
+person, the plain vessel, the letter and its page by QID, and none of
+the others, the label-only item, the family, the redirect, the
+migration, both births, the talk and the hearing included. Of the
+released person's two statements that name "Named In Text", no triple of
+their nodes leaves, nor the truthy triple either gave, nor their
+excerpts, nor a reference or value node that only they used. Of the two
+children of unknown value, the one said to be "Named In Text" leaves no
+triple of its node, the other's node leaves, and no truthy child of
+unknown value does. The released person's description and death excerpt,
 the letter's title and its page's label and description leave as
 written, "Named In Text" and all; the labels of the person named and of
 both births, and the family's description, do not; and the vocabulary
 keeps its terms. The export first waits for the query service to hold
 the dump's revision of every item and property, a redirect's aside, so
 on a stack at rest, a merge included, the export must run, not refuse.
-The site lists the eight that have person evidence, and badges the
-seven the export drops.
+The site lists the eight that have person evidence, and badges the seven
+the export drops.
 
 Like every live test it writes fictional data to the one instance, so
 the session that runs it ends by clearing the recorded instance-contents
@@ -77,6 +109,7 @@ from wikibaseintegrator.wbi_enums import WikibaseRank
 
 from yizkr.backup import (
     FAMILY,
+    LINKED_LEFT_OUT,
     NO_TYPE,
     PARTICIPANT_LEFT_OUT,
     UNATTENDED,
@@ -92,6 +125,8 @@ pytestmark = pytest.mark.live
 
 DEPLOY = Path("deploy")
 QID_TOKEN = re.compile(r"Q[1-9]\d*\b")
+# a reference or value node, as the dump names one
+PROVENANCE = re.compile(r"<[^<>]*/(?:reference|value)/[0-9a-f]+>")
 LABEL_ONLY = "Export Fixture Label Only"
 MERGED_AWAY = "Export Fixture Merged Away"
 # the person whom texts on other items name, the export leaves out (born
@@ -153,7 +188,19 @@ ENTITIES = {
         kind="birth",
         label=f"Birth of {NAMED}, participant unrecorded",
     ),
+    # an event of no person kind that the released person took part in,
+    # with another participant, of unknown value, that a qualifier says is
+    # "Named In Text"
+    "talk": local("talk", kind="event"),
+    # an event of no person kind carried out by the organization born in
+    # 1990, which the export leaves out
+    "hearing": local("hearing", kind="event"),
 }
+# the excerpts and the appellation of the released person's statements
+# that name "Named In Text", which go whole with them
+WEDDING = "the export fixture's father wed in 1938"
+APPELLATION = "Export Fixture Papa"
+CALLED = "the export fixture's father, as his child called him"
 # the roles public.nt.gz mentions; every other one (the item with a label
 # only, and the redirect a merge leaves, too) it leaves out
 PRESENT = {"released", "vessel", "letter", "letter page"}
@@ -176,12 +223,16 @@ def claim(
     value: dict,
     artifact,
     excerpt: str = "fictional export fixture",
+    qualifiers=(),
 ) -> dict:
     return {
         "subject": ENTITIES[subject],
         "property": prop,
         "value": value,
-        "qualifiers": [],
+        "qualifiers": [
+            {"property": key, "value": qualifier}
+            for key, qualifier in qualifiers
+        ],
         "source": {
             "artifact": artifact.model_dump(mode="json"),
             "page_number": "1",
@@ -272,6 +323,53 @@ def add_type(
         action_if_exists=ActionIfExists.FORCE_APPEND,
     )
     entity.write(summary="integration test: a curator's type")
+
+
+def add_unknown(
+    client,
+    subject: str,
+    key: str,
+    artifact_qid: str,
+    same_as: str | None = None,
+) -> None:
+    """A statement of `key` of unknown value on `subject`, with a `said to
+    be the same as` qualifier naming `same_as` when one is given, stated
+    in the artifact `artifact_qid` on its first page (rule 1, ADR-0003):
+    the writer writes no unknown
+    value, so it is added here. Idempotent: it is not added again when
+    `subject` holds one of unknown value of `key`, so qualified or not."""
+    from wikibaseintegrator.datatypes import Item, String
+    from wikibaseintegrator.models import Qualifiers, Reference, References
+    from wikibaseintegrator.wbi_enums import ActionIfExists, WikibaseSnakType
+
+    properties, _ = client.vocabulary()
+    said = properties["said_to_be_the_same_as"]
+    entity = client.wbi.item.get(subject)
+    unknown = WikibaseSnakType.UNKNOWN_VALUE
+    if any(
+        statement.mainsnak.snaktype == unknown
+        and bool(statement.qualifiers.get(said)) == (same_as is not None)
+        for statement in entity.claims.get(properties[key])
+    ):
+        return
+    qualifiers = Qualifiers()
+    if same_as is not None:
+        qualifiers.add(Item(prop_nr=said, value=same_as))
+    reference = Reference()
+    reference.add(Item(prop_nr=properties["stated_in"], value=artifact_qid))
+    reference.add(String(prop_nr=properties["page_number"], value="1"))
+    references = References()
+    references.add(reference)
+    entity.claims.add(
+        Item(
+            prop_nr=properties[key],
+            snaktype=unknown,
+            qualifiers=qualifiers,
+            references=references,
+        ),
+        action_if_exists=ActionIfExists.FORCE_APPEND,
+    )
+    entity.write(summary="integration test: a statement of unknown value")
 
 
 def redirects_to(client, target: str) -> set[str]:
@@ -383,6 +481,54 @@ def fixture_graph(client, config):
                 {"type": "time", "year": 1990},
                 source.ref,
             ),
+            claim(
+                "released",
+                "spouse",
+                {"type": "item", "value": ENTITIES["named in text"]},
+                source.ref,
+                excerpt=WEDDING,
+                qualifiers=[("start_time", {"type": "time", "year": 1938})],
+            ),
+            claim(
+                "released",
+                "referred_to_as",
+                {
+                    "type": "monolingual",
+                    "value": {"text": APPELLATION, "language": "en"},
+                },
+                source.ref,
+                excerpt=CALLED,
+                qualifiers=[
+                    (
+                        "perspective",
+                        {"type": "item", "value": ENTITIES["named in text"]},
+                    )
+                ],
+            ),
+            claim(
+                "talk",
+                "point_in_time",
+                {"type": "time", "year": 1938},
+                source.ref,
+            ),
+            claim(
+                "talk",
+                "participant",
+                {"type": "item", "value": ENTITIES["released"]},
+                source.ref,
+            ),
+            claim(
+                "hearing",
+                "carried_out_by",
+                {"type": "item", "value": ENTITIES["organization born"]},
+                source.ref,
+            ),
+            claim(
+                "hearing",
+                "point_in_time",
+                {"type": "time", "year": 1957},
+                source.ref,
+            ),
         ],
     )
     qids = {
@@ -406,6 +552,10 @@ def fixture_graph(client, config):
         WikibaseRank.DEPRECATED,
         source.qid,
     )
+    named = qids["named in text"]
+    add_unknown(client, qids["talk"], "participant", source.qid, named)
+    add_unknown(client, qids["released"], "child", source.qid, named)
+    add_unknown(client, qids["released"], "child", source.qid)
     qids["label only"] = label_only(client)
     wait_for_query_service(config, client, list(qids.values()))
     qids["merged away"] = merged_away(client, qids["merge target"], source.qid)
@@ -457,6 +607,24 @@ def test_the_fixture_takes_the_shapes_the_truthy_type_missed(
     # the unrecorded birth names no participant
     unrecorded = client.wbi.item.get(fixture_graph["unrecorded birth"])
     assert unrecorded.claims.get(properties["participant"]) == []
+    # the talk's participants: the released person, and one of unknown
+    # value that a qualifier names as the person the export leaves out
+    talk = client.wbi.item.get(fixture_graph["talk"])
+    participants = talk.claims.get(properties["participant"])
+    (taking_part,) = [
+        statement
+        for statement in participants
+        if statement.mainsnak.snaktype.value == "somevalue"
+    ]
+    assert [
+        statement.mainsnak.datavalue["value"]["id"]
+        for statement in participants
+        if statement.mainsnak.snaktype.value == "value"
+    ] == [fixture_graph["released"]]
+    (same_as,) = taking_part.qualifiers.get(
+        properties["said_to_be_the_same_as"]
+    )
+    assert same_as.datavalue["value"]["id"] == fixture_graph["named in text"]
     # the texts name the person the export leaves out: an event's label, a
     # family's and a released person's description, a letter's title and
     # its page's label and description
@@ -472,9 +640,13 @@ def test_the_fixture_takes_the_shapes_the_truthy_type_missed(
         assert NAMED in str(getattr(entity, terms).get("en"))
 
 
-def public_lines(exported: Path) -> list[str]:
-    with gzip.open(exported / "public.nt.gz", "rt", encoding="utf-8") as dump:
+def dump_lines(exported: Path, name: str) -> list[str]:
+    with gzip.open(exported / name, "rt", encoding="utf-8") as dump:
         return dump.read().splitlines()
+
+
+def public_lines(exported: Path) -> list[str]:
+    return dump_lines(exported, "public.nt.gz")
 
 
 def test_only_released_people_are_in_the_public_export(
@@ -501,14 +673,21 @@ def test_the_exclusions_name_whom_the_export_drops(fixture_graph, exported):
     assert exclusions["excluded"][fixture_graph["merged away"]] == (
         f"a redirect to {target}: {exclusions['excluded'][target]}"
     )
-    # an event goes with a participant the export leaves out
+    # an event goes with a participant the export leaves out, one named
+    # only in a qualifier of a participant of unknown value included
     for event, part in (
         ("birth of named in text", "named in text"),
         ("migration", "vessel typed human"),
+        ("talk", "named in text"),
     ):
         assert exclusions["excluded"][fixture_graph[event]] == (
             PARTICIPANT_LEFT_OUT.format(fixture_graph[part])
         )
+    # an event goes with an item another statement of it names: the
+    # hearing, with the organization born in 1990 that carried it out
+    assert exclusions["excluded"][fixture_graph["hearing"]] == (
+        LINKED_LEFT_OUT.format(fixture_graph["organization born"])
+    )
     # and a person event that names no participant goes: unknown means
     # excluded
     assert exclusions["excluded"][fixture_graph["unrecorded birth"]] == (
@@ -552,6 +731,114 @@ def test_what_is_kept_leaves_with_its_text(
     _, items = client.vocabulary()
     human = f"<{config.concept_uri}/entity/{items['human']}>"
     assert f'{human} {TERMS[0]} "human"@en .' in lines
+
+
+def test_a_statement_naming_one_left_out_goes_whole(
+    config, client, fixture_graph, exported
+):
+    # the released person's spouse statement, whose value is "Named In
+    # Text", and their appellation, whose perspective qualifier is, go
+    # whole, though each node carries the released person's QID: the
+    # node's triples (its rank, its qualifiers, the 1938 start time
+    # among them), the truthy triple it gave, its excerpt's reference,
+    # and every reference or value node only it used. The run's
+    # reference, which the released person's death cites too, stays,
+    # linked from what is kept alone (#364)
+    properties, _ = client.vocabulary()
+    full = dump_lines(exported, "full.nt.gz")
+    lines = public_lines(exported)
+    text = "\n".join(lines)
+    concept = config.concept_uri
+    released = client.wbi.item.get(fixture_graph["released"])
+    subject = f"<{concept}/entity/{fixture_graph['released']}>"
+    derived = "<http://www.w3.org/ns/prov#wasDerivedFrom>"
+    excerpt = properties["transcription_excerpt"]
+
+    def node_of(statement) -> str:
+        return f"<{concept}/entity/statement/{statement.id.replace('$', '-')}>"
+
+    (death,) = released.claims.get(properties["date_of_death"])
+    death_cites = {reference.hash for reference in death.references}
+    for key, qualifier in (
+        ("spouse", "start_time"),
+        ("referred_to_as", "perspective"),
+    ):
+        (statement,) = released.claims.get(properties[key])
+        node = node_of(statement)
+        held = [line for line in full if line.startswith(f"{node} ")]
+        assert [
+            line
+            for line in held
+            if f"/prop/qualifier/{properties[qualifier]}> " in line
+        ]
+        assert not [line for line in lines if node in line]
+        truthy = f"{subject} <{concept}/prop/direct/{properties[key]}> "
+        assert [line for line in full if line.startswith(truthy)]
+        assert not [line for line in lines if line.startswith(truthy)]
+        # its references (ADR-0003): the source's, with the excerpt, which
+        # it alone cites, goes; the run's, which the released person's
+        # death cites too, as one write made both, stays with the death
+        assert [r for r in statement.references if r.snaks.get(excerpt)]
+        assert {r.hash for r in statement.references} & death_cites
+        for reference in statement.references:
+            cited = f"<{concept}/reference/{reference.hash}>"
+            assert f"{node} {derived} {cited} ." in held
+            if reference.snaks.get(excerpt):
+                assert cited not in text
+            elif reference.hash in death_cites:
+                assert f"{node_of(death)} {derived} {cited} ." in lines
+        for used in {
+            found for line in held for found in PROVENANCE.findall(line)
+        }:
+            if any(line.startswith(f"{used} ") for line in lines):
+                assert any(line.endswith(f" {used} .") for line in lines)
+    (spouse,) = released.claims.get(properties["spouse"])
+    named = fixture_graph["named in text"]
+    assert spouse.mainsnak.datavalue["value"]["id"] == named
+    for written in (WEDDING, CALLED, APPELLATION):
+        assert any(written in line for line in full)
+        assert written not in text
+    # the released person stays, with the rest of what is recorded
+    assert f'"the father of {NAMED} died in 1995"@en' in text
+
+
+def test_a_truthy_triple_of_unknown_value_goes_with_every_one(
+    config, client, fixture_graph, exported
+):
+    # the released person's two children of unknown value: the one said
+    # to be "Named In Text" goes whole, with the truthy triple it gave.
+    # Each unknown value is a blank node of its own, and the export does
+    # not read which truthy one a statement gave (it does not reproduce
+    # Wikibase's labels), so the other child's truthy triple goes too,
+    # while its statement stays (#364)
+    properties, _ = client.vocabulary()
+    full = dump_lines(exported, "full.nt.gz")
+    lines = public_lines(exported)
+    concept = config.concept_uri
+    child = properties["child"]
+    said = properties["said_to_be_the_same_as"]
+    released = client.wbi.item.get(fixture_graph["released"])
+    truthy = (
+        f"<{concept}/entity/{fixture_graph['released']}> "
+        f"<{concept}/prop/direct/{child}> _:"
+    )
+    unknown = [
+        statement
+        for statement in released.claims.get(child)
+        if statement.mainsnak.snaktype.value == "somevalue"
+    ]
+    assert sorted(bool(s.qualifiers.get(said)) for s in unknown) == [
+        False,
+        True,
+    ]
+    for statement in unknown:
+        goes = bool(statement.qualifiers.get(said))
+        node = f"<{concept}/entity/statement/{statement.id.replace('$', '-')}>"
+        assert any(line.startswith(f"{node} ") for line in full)
+        assert any(line.startswith(f"{node} ") for line in lines) is not goes
+        assert any(line.endswith(f" {node} .") for line in lines) is not goes
+    assert len([line for line in full if line.startswith(truthy)]) == 2
+    assert not [line for line in lines if line.startswith(truthy)]
 
 
 def test_the_site_badges_whom_the_export_drops(

@@ -73,6 +73,16 @@ names the instance's newest revision and log entry, so any write the
 scratch write stage did not make voids it, a manual edit included; §1,
 §6 and §8 are amended in place.
 
+Amended by #371 (2026-10-02): registration's flags, an item that may be
+an artifact registered before content hashing or a GEDCOM media
+object's item (ADR-0010), are alerts of the write; on a reset instance
+the only one raised is `unhashed-title`, for an artifact or derived
+medium whose title, or own label before its content tag, is exactly a
+GEDCOM media object's label, when the GEDCOM's write made that media
+object's item first (written after, the GEDCOM joins the media object
+to that artifact by its label, #109, and no flag is raised). §3 is
+amended in place.
+
 ## Context
 
 ADR-0024 §7 set up a *development stage*: until the owner declares a
@@ -323,7 +333,19 @@ futile, and explain itself afterwards.
   output) or *carried* (on a reused one). Thresholds live in one
   documented config, and changing them re-evaluates stored outputs
   without recomputing any stage. Alerts are signals for the operator and
-  the report. They never alter or drop a claim (ADR-0002).
+  the report. They never alter or drop a claim (ADR-0002). Registration
+  raises alerts of the write too (amended by #371): an item whose bytes
+  a file another item names holds, or whose title is the label of an
+  item with no hash (ADR-0010), on every write that registers the item
+  while that holds. Every
+  item a reset instance holds that names a file carries its hash, so a
+  scratch run never raises `shared-file`; it imports the GEDCOM, whose
+  media objects' items have no hash, so it raises `unhashed-title` for an
+  artifact or derived medium whose title (a derived medium's first
+  label), or own label before its content tag, is exactly such an item's
+  label, when the GEDCOM's write made that item first: a GEDCOM written
+  after the artifact joins its media object to it by the label (#109),
+  so no such item is made and no flag is raised.
 - **Per-slice fail-fast pauses.** A slice is a stage or a source kind. A
   check marked fail-fast pauses only its slice, through the run's control
   file, and other slices keep running. If the operator does not resume
