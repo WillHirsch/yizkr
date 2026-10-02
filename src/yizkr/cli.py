@@ -116,6 +116,29 @@ def cmd_smoke_test(args) -> int:
     return 0
 
 
+class _SkipNonprivilegedExport(argparse.Action):
+    """``--no-nonprivileged-export``, and its former spelling
+    ``--no-public-export``, which works until the keeper run and says so
+    on stderr in one line."""
+
+    OLD = "--no-public-export"
+
+    def __init__(self, option_strings, dest, **kwargs):
+        super().__init__(
+            option_strings, dest, nargs=0, default=False, **kwargs
+        )
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        if option_string == self.OLD:
+            print(
+                f"yizkr backup: {self.OLD} is renamed "
+                "--no-nonprivileged-export; the old spelling goes at the "
+                "keeper run",
+                file=sys.stderr,
+            )
+        setattr(namespace, self.dest, True)
+
+
 def cmd_backup(args) -> int:
     from yizkr.backup import NonprivilegedExportRefused, run_backup
 
@@ -1157,9 +1180,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-nonprivileged-export",
         "--no-public-export",
         dest="no_nonprivileged_export",
-        action="store_true",
+        action=_SkipNonprivilegedExport,
         help="skip the possibly-living-excluded export (--no-public-export: "
-        "alias, removed in the next release)",
+        "alias until the keeper run)",
     )
     p.add_argument(
         "--cutoff-years",

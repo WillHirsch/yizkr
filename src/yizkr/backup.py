@@ -76,6 +76,9 @@ closed:
   revision of every item and property, and refuses to run when it does
   not, or when the graph changes while the check runs
   (``QueryServiceLag``).
+* It writes each file under a ``.partial`` name and moves it onto its
+  own once whole, the exclusions before the dump, so a dump under its
+  shareable name is always complete and has its exclusions beside it.
 
 Scheduling is the host's job (this is a home-server deployment): see
 deploy/README.md for the cron line. Retention: ``--keep N`` prunes the
@@ -87,6 +90,7 @@ from __future__ import annotations
 import datetime
 import gzip
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -997,6 +1001,11 @@ _HELD_ENTITY = re.compile(r".*/entity/([QP][1-9]\d*)")
 # The files the non-privileged export writes into a backup's directory.
 NONPRIVILEGED_DUMP = "nonprivileged.nt.gz"
 NONPRIVILEGED_EXCLUSIONS = "nonprivileged-exclusions.json"
+# The export writes each file under its name plus this suffix and moves it
+# onto that name once it is whole: the exclusions first, then the dump, so
+# a dump under NONPRIVILEGED_DUMP is always complete and always has its
+# exclusions beside it. A failure removes what it left half-written.
+PARTIAL_SUFFIX = ".partial"
 
 # How long the export waits for the query service to hold the dump's
 # revisions, and how often it asks.
@@ -1593,7 +1602,11 @@ def export_nonprivileged(
     qualifier's value is an item dropped, whole
     (``filter_nonprivileged_export``, ``statements_left_out``). The queries
     go to the instance's query service, with its vocabulary,
-    unless `run` and `vocabulary` are given."""
+    unless `run` and `vocabulary` are given.
+
+    Both files are written under their names plus PARTIAL_SUFFIX and moved
+    onto their names once whole, the exclusions first: any failure removes
+    the partial files and leaves no dump under NONPRIVILEGED_DUMP."""
     if vocabulary is None:
         from yizkr.core.wiki import WikiClient
 
@@ -1627,24 +1640,41 @@ def export_nonprivileged(
         )
     excluded = nonprivileged_exclusions(reading, report)
     included = report.included - set(excluded)
-    kept, dropped = filter_nonprivileged_export(
-        full_dump,
-        out_dir / NONPRIVILEGED_DUMP,
-        set(excluded),
-        dropped_pids={
-            properties[key] for key in DROPPED_PROPERTIES if key in properties
-        },
-    )
-    (out_dir / NONPRIVILEGED_EXCLUSIONS).write_text(
-        json.dumps(
-            {
-                "cutoff_years": cutoff_years,
-                "excluded": {qid: excluded[qid] for qid in sorted(excluded)},
-                "included_persons": sorted(included),
+    dump = out_dir / NONPRIVILEGED_DUMP
+    exclusions = out_dir / NONPRIVILEGED_EXCLUSIONS
+    dump_partial = out_dir / (NONPRIVILEGED_DUMP + PARTIAL_SUFFIX)
+    exclusions_partial = out_dir / (NONPRIVILEGED_EXCLUSIONS + PARTIAL_SUFFIX)
+    try:
+        kept, dropped = filter_nonprivileged_export(
+            full_dump,
+            dump_partial,
+            set(excluded),
+            dropped_pids={
+                properties[key]
+                for key in DROPPED_PROPERTIES
+                if key in properties
             },
-            indent=2,
         )
-    )
+        exclusions_partial.write_text(
+            json.dumps(
+                {
+                    "cutoff_years": cutoff_years,
+                    "excluded": {
+                        qid: excluded[qid] for qid in sorted(excluded)
+                    },
+                    "included_persons": sorted(included),
+                },
+                indent=2,
+            )
+        )
+        os.replace(exclusions_partial, exclusions)
+        os.replace(dump_partial, dump)
+    except BaseException:
+        for path in (dump_partial, exclusions_partial):
+            path.unlink(missing_ok=True)
+        if not dump.exists():
+            exclusions.unlink(missing_ok=True)
+        raise
     return {
         "excluded_persons": len(excluded),
         "included_persons": len(included),
@@ -1720,8 +1750,8 @@ def run_backup(
 
 
 # The export's former Python names resolve, with a DeprecationWarning that
-# names the new one, for one release (ADR-0020); they are removed in the
-# next release. The file names have no alias: a backup's directory holds
+# names the new one, until the keeper run, when they are removed
+# (ADR-0020). The file names have no alias: a backup's directory holds
 # NONPRIVILEGED_DUMP and NONPRIVILEGED_EXCLUSIONS only.
 _RENAMED = {
     "PublicExportRefused": "NonprivilegedExportRefused",
@@ -1737,7 +1767,7 @@ def __getattr__(name: str):
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     warnings.warn(
         f"yizkr.backup.{name} is renamed yizkr.backup.{new}; the old name "
-        "is removed in the next release",
+        "is removed at the keeper run",
         DeprecationWarning,
         stacklevel=2,
     )

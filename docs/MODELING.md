@@ -283,10 +283,11 @@ artifact a new QID, changes neither.
   any reference (a curator's deprecation stands), it gains that
   statement, stated in itself. This holds for the pipeline's extraction
   runs and for the place-hierarchy pass's runs alike. An untyped item is
-  missing from the public copy until it is typed ("Living persons and
-  privacy"), and every statement it backs loses its run reference there:
-  an extraction's claims would read as curated, and the place-hierarchy
-  pass's containment, which cites the run alone, as unreferenced.
+  missing from the non-privileged export until it is typed ("Living
+  persons and privacy"), and every statement it backs loses its run
+  reference there: an extraction's claims would read as curated, and the
+  place-hierarchy pass's containment, which cites the run alone, as
+  unreferenced.
 - **Registration is part of the write** (ADR-0025 §2; ADR-0010 as
   amended by #103). `ingest run` registers a document just before it
   writes the claims that cite it: its artifact item, its page fragments
@@ -1160,17 +1161,17 @@ not a signal to grow the schema on.
   none). The vocabulary is kept: the manifest's items, and every item
   that is the value of an `instance of` or `subclass of` statement. An
   item left untyped (a write cut short between its label and its type, a
-  reference that gives no kind) is missing from the public copy until it
-  is typed. A run item left so is typed by the next run that finds it
-  ("Artifacts and registration").
-- **A family is never public** (ADR-0020, as amended by #344). A family
-  stands for its people, the people recorded as `member of` it, and is
-  private while any of them may be living. The model cannot state that a
-  family's membership is complete (there is no household statement
-  enumerating occupants, above), so the export leaves out every item
-  typed `family` at normal or preferred rank, whatever it holds, released
-  or not, and the site badges it. #374 holds the full rule, with a way
-  to mark a family's membership complete.
+  reference that gives no kind) is missing from the non-privileged
+  export until it is typed. A run item left so is typed by the next run
+  that finds it ("Artifacts and registration").
+- **A family never enters the non-privileged export** (ADR-0020, as
+  amended by #344). A family stands for its people, the people recorded
+  as `member of` it, and is private while any of them may be living. The
+  model cannot state that a family's membership is complete (there is no
+  household statement enumerating occupants, above), so the export
+  leaves out every item typed `family` at normal or preferred rank,
+  whatever it holds, released or not, and the site badges it. #374 holds
+  the full rule, with a way to mark a family's membership complete.
 - **An event goes with its participants** (ADR-0020, as amended by
   #363). An event's date and place are its participants' too, and its
   label is written after them, so the export leaves out every event,
@@ -1273,9 +1274,9 @@ not a signal to grow the schema on.
 - The private static site (`yizkr publish-site`) includes everyone but
   badges each subject the export would drop ("possibly living — never
   in the non-privileged export"), using the same runtime call, except a
-  person with no type, whom the export leaves out even when released; the site shows no
-  badge. A family it lists is always badged. Its people are the items
-  with person evidence, selected as the check selects them; the export
-  also drops what the site lists as no person, an untyped item without
-  person evidence, a family without person evidence, a redirect and an
-  event that one it drops took part in.
+  person with no type, whom the export leaves out even when released;
+  the site shows no badge. A family it lists is always badged. Its
+  people are the items with person evidence, selected as the check
+  selects them; the export also drops what the site lists as no person,
+  an untyped item without person evidence, a family without person
+  evidence, a redirect and an event that one it drops took part in.

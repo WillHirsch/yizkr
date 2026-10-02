@@ -96,7 +96,8 @@ The query service's own munger (munge.sh from wikibase/wdqs:2, the image
 the stack runs, in a container with no network) reads the export as it
 reads the full dump: it exits 0, logs no error, warning or dropped
 statement, and munges every entity the export has entity data for,
-naming none of those the export leaves out. The same run over the full
+naming none of those the export leaves out; and every item the export
+states anything of has its entity data there (#412). The same run over the full
 dump is the control: a failure there is the stack's, not the filter's.
 The munger tests skip when docker, its daemon or the image is missing;
 an offline mirror of the munger's blocks (tests/munger_blocks.py) reads
@@ -111,8 +112,10 @@ key (docs/AGENT_PROTOCOL.md §5).
 
 from __future__ import annotations
 
+import contextlib
 import gzip
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -940,11 +943,31 @@ def munge(
     (inbox / dump.name).chmod(0o644)
     outbox.chmod(0o777)
     host = urlparse(config.concept_uri).netloc
-    done = subprocess.run(
+    # a name of its own, so a run that times out can be killed: the
+    # timeout stops the docker client, not the container
+    name = f"yizkr-munge-{os.getpid()}-{work.name}"
+    try:
+        done = munge_in(docker, name, inbox, outbox, dump.name, config, host)
+    finally:
+        # gone already once it has run (--rm): any error is ignored
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            subprocess.run(
+                [docker, "kill", name], capture_output=True, timeout=60
+            )
+    return done, sorted(outbox.glob("wikidump-*.ttl.gz"))
+
+
+def munge_in(
+    docker: str, name: str, inbox: Path, outbox: Path, dump: str, config, host
+) -> subprocess.CompletedProcess:
+    """munge.sh over `inbox/dump`, in a container named `name`."""
+    return subprocess.run(
         [
             docker,
             "run",
             "--rm",
+            "--name",
+            name,
             "--network",
             "none",
             "--workdir",
@@ -957,7 +980,7 @@ def munge(
             f"{outbox}:/out",
             WDQS_IMAGE,
             "-f",
-            f"/in/{dump.name}",
+            f"/in/{dump}",
             "-d",
             "/out",
             "--",
@@ -970,7 +993,6 @@ def munge(
         text=True,
         timeout=MUNGE_TIMEOUT,
     )
-    return done, sorted(outbox.glob("wikidump-*.ttl.gz"))
 
 
 def entities_about(dump: Path) -> set[str]:
@@ -983,6 +1005,28 @@ def entities_about(dump: Path) -> set[str]:
             if ENTITY_DATA in line.split(" ", 1)[0]
             and line.split(" ", 2)[1] == ABOUT
         }
+
+
+def entity_subjects(dump: Path, concept_uri: str) -> set[str]:
+    """Every item the dump says anything of, as a subject: each must have
+    its entity data too, or the munger has nothing to munge it by."""
+    subject = re.compile(rf"<({re.escape(concept_uri)}/entity/Q[1-9]\d*)> ")
+    with gzip.open(dump, "rt", encoding="utf-8") as handle:
+        return {
+            match.group(1)
+            for line in handle
+            if (match := subject.match(line)) is not None
+        }
+
+
+def predicate_of(line: str) -> str | None:
+    """The predicate a line of the munger's Turtle states: the token after
+    the subject on a subject's own line, the first one on an indented line
+    that follows it. A literal that holds a predicate's name is no
+    predicate."""
+    tokens = line.split()
+    at = 1 if not line[0].isspace() else 0
+    return tokens[at] if len(tokens) > at else None
 
 
 def munged_entities(chunks: list[Path]) -> tuple[set[str], str]:
@@ -1008,7 +1052,7 @@ def munged_entities(chunks: list[Path]) -> tuple[set[str], str]:
                 elif ":" in token:
                     prefix, local = token.split(":", 1)
                     subject = prefixes.get(prefix, f"{prefix}:") + local
-            if subject and any(term in line for term in VERSIONS):
+            if subject and predicate_of(line) in VERSIONS:
                 versioned.add(subject)
     return versioned, "\n".join(texts)
 
@@ -1023,6 +1067,9 @@ def assert_munges(docker, config, dump: Path, work: Path, what: str) -> str:
     versioned, text = munged_entities(chunks)
     about = entities_about(dump)
     assert about, f"{what} holds no entity data"
+    # every item the dump states anything of keeps its entity data
+    unabout = entity_subjects(dump, config.concept_uri) - about
+    assert not unabout, f"{what} has no entity data for {sorted(unabout)}"
     # an entity the munger cannot munge is dropped with exit status 0
     assert about <= versioned, (
         f"the munger drops entities of {what}: {sorted(about - versioned)}"

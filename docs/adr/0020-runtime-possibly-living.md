@@ -142,17 +142,24 @@ non-privileged view. It writes `nonprivileged.nt.gz` and
 `filter_nonprivileged_export`, `nonprivileged_exclusions` and
 `NonprivilegedExportRefused`, the base of `QueryServiceLag` and
 `UnfilterableDump`, and the old Python names resolve with a
-DeprecationWarning for one release, then go. The backup's manifest
-records the export as `nonprivileged_export` and a refusal as
+DeprecationWarning until the keeper run (#159), then go. The backup's
+manifest records the export as `nonprivileged_export` and a refusal as
 `nonprivileged_export_refused`; `--no-nonprivileged-export` skips it,
-with `--no-public-export` an alias for one release. Backups made earlier
-keep their files as named. The site's badge reads "possibly living —
-never in the non-privileged export". Every refusal, `UnfilterableDump`
-as well as `QueryServiceLag`, makes `yizkr backup` print the dumps it
-kept and the reason on one line and exit 1, with no traceback. A live
-test runs the query service's own munger (wikibase/wdqs:2, no network)
-over the export and the full dump, and requires that it logs no error
-and drops no entity (§4). The body's earlier names stand as written.
+with `--no-public-export` an alias until the keeper run (#159), which
+says on one stderr line that it is renamed. Backups made earlier keep
+their files as named. The site's badge reads "possibly living — never
+in the non-privileged export". Every refusal, `UnfilterableDump` as
+well as `QueryServiceLag`, makes `yizkr backup` print the dumps it kept
+and the reason on one line and exit 1, with no traceback; any other
+failure (a dump command failing, say) propagates as before and is never
+reported as a refusal. The export writes each of its two files under
+its name plus `.partial` and moves it onto its name once whole, the
+exclusions first, so `nonprivileged.nt.gz` never exists cut short or
+without its exclusions; a failure removes what it left. A live test
+(`tests/integration/test_live_nonprivileged_export.py`) runs the query
+service's own munger (wikibase/wdqs:2, no network) over the export and
+the full dump, and requires that it logs no error and drops no entity
+(§4). The body's earlier names stand as written.
 Amended by #412 (2026-10-02): the export keeps what the query service
 can load. Its munger reads the dump entity by entity and keeps a value
 or reference node only in the block of an entity whose lines name it;

@@ -3,9 +3,9 @@
 There is **no stored "living" flag**. Whether a person is possibly living
 is computed at the moment a privacy-sensitive action runs — the
 non-privileged export (`yizkr backup`) and the private static-site badge —
-from the *absence of death evidence* in the graph. The call is conservative by
-design: unknown means possibly living, hence excluded from anything
-public.
+from the *absence of death evidence* in the graph. The call is
+conservative by design: unknown means possibly living, hence left out
+of the non-privileged export.
 
 A person is *not* possibly living when the graph holds positive evidence
 of death, or when every birth it records lies beyond the cutoff. "Death
@@ -46,8 +46,8 @@ reads the same evidence from its own dump, and keeps an item that has any
 of it only once this check has released it; it leaves out an item that
 states no type, so no type at all hides no one either. A family
 (``FAMILY_CLASS``) stands for its people, any of whom may be living, so
-it is never public, whatever it holds: the export leaves it out and the
-site badges it.
+it never enters the non-privileged export, whatever it holds: the
+export leaves it out and the site badges it.
 """
 
 from __future__ import annotations
@@ -157,7 +157,8 @@ SAME_AS = "<http://www.w3.org/2002/07/owl#sameAs>"
 # any of its people may be living, and the graph cannot state that a
 # family's membership is complete, so every item typed as one, at normal
 # or preferred rank (read through redirects, as every type is), stays
-# out of anything public, whatever else it holds, released or not.
+# out of the non-privileged export, whatever else it holds, released or
+# not.
 FAMILY_CLASS = "family"
 
 # Whether ?person is typed as a family, as `FAMILY_CLASS` says: a

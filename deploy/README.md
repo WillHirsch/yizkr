@@ -222,13 +222,13 @@ directory under `var/backups/` containing:
 - `full.nt.gz` — complete RDF dump. Portable export; also what a full
   WDQS reload imports (WDQS state itself is derived and not backed up).
 - `nonprivileged.nt.gz` + `nonprivileged-exclusions.json` — the
-  non-privileged export, which leaves out every possibly-living person (R7, ADR-0020).
-  "Possibly living" is a runtime determination from the absence of death
-  evidence, not a stored flag. Conservative by construction: a person is
-  included only on positive evidence they are not living (any death
-  evidence — a date, place, or cause of death, a burial place, or a
-  death event — or births that all lie beyond the cutoff,
-  `--cutoff-years` (by default `DEFAULT_CUTOFF_YEARS` in
+  non-privileged export, which leaves out every possibly-living person
+  (R7, ADR-0020). "Possibly living" is a runtime determination from the
+  absence of death evidence, not a stored flag. Conservative by
+  construction: a person is included only on positive evidence they are
+  not living (any death evidence — a date, place, or cause of death, a
+  burial place, or a death event — or births that all lie beyond the
+  cutoff, `--cutoff-years` (by default `DEFAULT_CUTOFF_YEARS` in
   `yizkr.core.privacy`), each read at the latest year it allows:
   docs/MODELING.md, "Living persons and privacy"); *unknown means
   excluded*. Every triple that mentions an excluded person is dropped —
@@ -294,8 +294,17 @@ directory under `var/backups/` containing:
   an unreviewed type, is recorded in `manifest.json` under
   `nonprivileged_export_refused`, printed after the dumps kept as one
   stderr line, `non-privileged export refused: <reason>`, with no
-  traceback, and makes `yizkr backup` exit 1. `--no-nonprivileged-export`
-  skips the export.
+  traceback, and makes `yizkr backup` exit 1. Any other failure (a dump
+  command failing, a full disk) is no refusal: it ends `yizkr backup`
+  with its error. `--no-nonprivileged-export` skips the export.
+
+  The export writes each file under its name plus `.partial`
+  (`nonprivileged.nt.gz.partial`,
+  `nonprivileged-exclusions.json.partial`) and moves it onto its name
+  once whole, the exclusions first: a `nonprivileged.nt.gz` is always
+  complete and has its exclusions beside it. A failure part way removes
+  what it wrote, so a run that fails leaves no export, cut short or
+  whole.
 
   Renamed (#412, 2026-10-02): the export was named "public" though it is
   a non-privileged view, not a public copy. Backups made since write
@@ -306,7 +315,8 @@ directory under `var/backups/` containing:
   the new names (the manifest's component entry names its file). Backups
   made earlier keep their `public.nt.gz` and `public-exclusions.json`,
   and pruning removes them as before. `--no-public-export` still works,
-  as an alias of `--no-nonprivileged-export`, for one release.
+  as an alias of `--no-nonprivileged-export`, until the keeper run
+  (#159), and says so on one stderr line each time it is used.
 
 Schedule it with cron on the host, e.g. nightly at 03:15 keeping two
 weeks:
@@ -325,8 +335,8 @@ nightly after the backup, for example:
 `var/site` is built from the LIVE graph and therefore includes living
 people: serve it on the LAN only (any static server works, e.g.
 `python -m http.server -d var/site 8080`). An internet-facing variant
-needs a public copy, which `nonprivileged.nt.gz` is not: its texts can name a
-possibly living relative of a released person (#163).
+needs a public copy, which `nonprivileged.nt.gz` is not: its texts can
+name a possibly living relative of a released person (#163).
 
 Copy `var/backups/` off-machine (rsync, restic, a NAS — anything);
 a backup that lives only on the server it backs up is not a backup.

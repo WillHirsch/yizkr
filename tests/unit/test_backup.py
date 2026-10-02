@@ -13,9 +13,12 @@ goes whole, and an item a participant statement's qualifier names takes
 part in the event (#364)."""
 
 import datetime
+import errno
 import gzip
 import hashlib
+import io
 import json
+import os
 import re
 import threading
 from pathlib import Path
@@ -4124,6 +4127,86 @@ class TestExportNonprivileged:
             )
         assert not (tmp_path / "nonprivileged.nt.gz").exists()
 
+    EXPORT_FILES = {"nonprivileged.nt.gz", "nonprivileged-exclusions.json"}
+
+    @staticmethod
+    def written(tmp_path) -> set[str]:
+        return {path.name for path in tmp_path.iterdir()} - {"full.nt.gz"}
+
+    def test_a_whole_export_leaves_no_partial_file(self, tmp_path, vocabulary):
+        self.export(tmp_path, vocabulary)
+        assert self.written(tmp_path) == self.EXPORT_FILES
+
+    def test_a_failure_mid_dump_leaves_no_dump(
+        self, tmp_path, vocabulary, monkeypatch
+    ):
+        # the disk fills after 50 lines of the dump (#412): neither a
+        # cut-short dump under its shareable name nor a partial one is left
+        opened, sinks = gzip.open, []
+
+        class Full:
+            def __init__(self, handle):
+                self.handle, self.lines = handle, 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self.handle.close()
+
+            def write(self, line):
+                self.lines += 1
+                if self.lines > 50:
+                    raise OSError(errno.ENOSPC, "No space left on device")
+                return self.handle.write(line)
+
+        def open_(path, mode="rb", *args, **options):
+            handle = opened(path, mode, *args, **options)
+            if Path(path).name.startswith("nonprivileged"):
+                sinks.append(Full(handle))
+                return sinks[-1]
+            return handle
+
+        monkeypatch.setattr(backup.gzip, "open", open_)
+        with pytest.raises(OSError, match="No space left"):
+            self.export(tmp_path, vocabulary)
+        # it failed in the export's own dump, after its first 50 lines
+        assert [sink.lines for sink in sinks] == [51]
+        assert self.written(tmp_path) == set()
+
+    def test_a_failure_writing_the_exclusions_leaves_no_dump(
+        self, tmp_path, vocabulary, monkeypatch
+    ):
+        written = Path.write_text
+
+        def full(path, text, *args, **options):
+            if path.name.startswith("nonprivileged-exclusions"):
+                written(path, text[:10], *args, **options)
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return written(path, text, *args, **options)
+
+        monkeypatch.setattr(Path, "write_text", full)
+        with pytest.raises(OSError, match="No space left"):
+            self.export(tmp_path, vocabulary)
+        assert self.written(tmp_path) == set()
+
+    def test_a_failure_moving_the_dump_leaves_no_exclusions_alone(
+        self, tmp_path, vocabulary, monkeypatch
+    ):
+        # the exclusions are moved onto their name first: if the dump then
+        # cannot follow, neither is left
+        replace = os.replace
+
+        def failing(source, target):
+            if Path(target).name == "nonprivileged.nt.gz":
+                raise OSError(errno.EIO, "Input/output error")
+            return replace(source, target)
+
+        monkeypatch.setattr(backup.os, "replace", failing)
+        with pytest.raises(OSError, match="Input/output"):
+            self.export(tmp_path, vocabulary)
+        assert self.written(tmp_path) == set()
+
 
 class TestTheBackupsNonprivilegedExport:
     """`yizkr backup` writes its non-privileged export as
@@ -4235,18 +4318,59 @@ class TestTheBackupsNonprivilegedExport:
         assert not (out_dir / "nonprivileged.nt.gz").exists()
         assert refused.value.manifest == manifest
 
+    @pytest.mark.parametrize("kind", ["unfilterable", "lag", "changed"])
     def test_the_command_reports_an_unfilterable_dump_without_a_traceback(
-        self, tmp_path, backed_up, capsys
+        self, tmp_path, vocabulary, backed_up, monkeypatch, kind
     ):
-        # the sitelink refusal from run_backup itself, through `yizkr backup`
-        sitelink = (
-            "<https://el.example/wiki/Page> <http://schema.org/about> "
-            f"{entity('Q401')} ."
-        )
-        assert backed_up(lines=[sitelink], command=True) == 1
-        out, err = capsys.readouterr()
+        # each refusal kind from run_backup itself, through `yizkr backup`:
+        # a sitelink (#363), the query service behind the dump, and the
+        # graph changing while the export assessed it (#412)
+        dumped = export_dump(vocabulary).revisions
+        backing, named = {
+            "unfilterable": (
+                {
+                    "lines": [
+                        "<https://el.example/wiki/Page> "
+                        "<http://schema.org/about> "
+                        f"{entity('Q401')} ."
+                    ]
+                },
+                "Q401 (a sitelink)",
+            ),
+            "lag": (
+                {"revisions": [{**dumped, "Q404": 1}]},
+                "still does not hold the dump's revision of 1 entity (Q404)",
+            ),
+            "changed": (
+                {"revisions": [dumped, {**dumped, "Q401": 999}]},
+                "the graph changed while the non-privileged export "
+                "assessed it: the query service now holds another revision "
+                "than the dump of 1 entity (Q401)",
+            ),
+        }[kind]
+
+        class Stream:
+            """One of stdout and stderr: what it is given, and the two
+            streams together, in the order they were written."""
+
+            def __init__(self, both):
+                self.both, self.own = both, io.StringIO()
+
+            def write(self, text):
+                self.both.write(text)
+                return self.own.write(text)
+
+            def flush(self):
+                pass
+
+        both = io.StringIO()
+        stdout, stderr = Stream(both), Stream(both)
+        monkeypatch.setattr("sys.stdout", stdout)
+        monkeypatch.setattr("sys.stderr", stderr)
+        assert backed_up(command=True, **backing) == 1
+        out, err = stdout.own.getvalue(), stderr.own.getvalue()
         (out_dir,) = tmp_path.iterdir()
-        assert out.splitlines() == [
+        kept = [
             f"{name}: {out_dir / file}, "
             f"bytes={(out_dir / file).stat().st_size}"
             for name, file in (
@@ -4255,10 +4379,15 @@ class TestTheBackupsNonprivilegedExport:
                 ("rdf", "full.nt.gz"),
             )
         ]
+        assert out.splitlines() == kept
         assert err.startswith("non-privileged export refused: ")
-        assert "Q401 (a sitelink)" in err
+        assert named in err
         assert err.count("\n") == 1
         assert "Traceback" not in err
+        # the refusal is the last line, after the dumps it kept
+        assert both.getvalue().splitlines() == [*kept, err.rstrip("\n")]
+        # and nothing of the export is left, under any name
+        assert not list(out_dir.glob("nonprivileged*"))
 
 
 class TestTheBackupCommand:
@@ -4329,10 +4458,42 @@ class TestTheBackupCommand:
         assert out == ""
         assert err == "non-privileged export refused: Q401 (a sitelink)\n"
 
+    def test_an_infrastructure_failure_is_not_a_refusal(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # a failing pg_dump or docker, or a missing query service setting,
+        # propagates: it never reads as a privacy refusal in cron's log
+        from yizkr import cli
+
+        def failed(*args, **options):
+            raise RuntimeError("mariadb-dump exited 2")
+
+        monkeypatch.setattr(backup, "run_backup", failed)
+        monkeypatch.setattr(cli.Config, "load", lambda env_file=None: None)
+        args = cli.build_parser().parse_args(
+            ["backup", "--out", str(tmp_path)]
+        )
+        with pytest.raises(RuntimeError, match="mariadb-dump exited 2"):
+            args.func(args)
+        assert "refused" not in capsys.readouterr().err
+
     @pytest.mark.parametrize(
-        "flag", ["--no-nonprivileged-export", "--no-public-export"]
+        ("flag", "notice"),
+        [
+            ("--no-nonprivileged-export", ""),
+            (
+                "--no-public-export",
+                "yizkr backup: --no-public-export is renamed "
+                "--no-nonprivileged-export; the old spelling goes at the "
+                "keeper run\n",
+            ),
+        ],
     )
-    def test_the_export_can_be_skipped(self, tmp_path, monkeypatch, flag):
+    def test_the_export_can_be_skipped(
+        self, tmp_path, monkeypatch, capsys, flag, notice
+    ):
+        # the old spelling still works, until the keeper run (#159), and
+        # says so on one stderr line; the new one says nothing
         from yizkr import cli
 
         asked = {}
@@ -4350,8 +4511,10 @@ class TestTheBackupCommand:
         args = cli.build_parser().parse_args(
             ["backup", "--out", str(tmp_path), flag]
         )
+        assert capsys.readouterr().err == notice
         assert args.func(args) == 0
         assert asked["nonprivileged_export"] is False
+        assert capsys.readouterr().err == ""
 
     def test_the_export_runs_by_default(self, tmp_path, monkeypatch):
         from yizkr import cli
@@ -4377,7 +4540,8 @@ class TestTheBackupCommand:
 
 class TestTheFormerNames:
     """The export's former Python names resolve to the new objects, with a
-    DeprecationWarning naming the new name, for one release (#412)."""
+    DeprecationWarning naming both names, until the keeper run (#159,
+    #412)."""
 
     @pytest.mark.parametrize(
         ("old", "new"),
@@ -4390,7 +4554,11 @@ class TestTheFormerNames:
     )
     def test_an_old_name_warns_and_resolves(self, old, new):
         with pytest.warns(
-            DeprecationWarning, match=f"yizkr.backup.{new}"
+            DeprecationWarning,
+            match=re.escape(
+                f"yizkr.backup.{old} is renamed yizkr.backup.{new}; the old "
+                "name is removed at the keeper run"
+            ),
         ) as caught:
             resolved = getattr(backup, old)
         assert resolved is getattr(backup, new)

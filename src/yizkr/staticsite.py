@@ -76,9 +76,9 @@ def qid_of(binding: dict, name: str) -> str:
 # the person as participant — none of which needs a date. Births, for the
 # birth-recency cutoff, are read statement by statement with the query the
 # non-privileged export reads them with (core/privacy.py). ?family is true for
-# a family (``{family_type}``, the privacy module's test), which is never
-# public, released or not. No stored "living" flag is read; the badge is
-# derived, like the non-privileged export.
+# a family (``{family_type}``, the privacy module's test), which never
+# enters the non-privileged export, released or not. No stored "living"
+# flag is read; the badge is derived, like the non-privileged export.
 PEOPLE_QUERY = """\
 SELECT ?person ?personLabel ?personDescription ?deceased ?family
        (GROUP_CONCAT(DISTINCT ?alias; separator="|") AS ?aliases)
