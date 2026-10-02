@@ -1460,10 +1460,12 @@ class TestForks:
         self.run_conversation(tmp_path, Engine(conversation_answers), [])
         at_lock = WaitCountingLock()
         replayed = []
+        arrived = []  # forks come to the lock as the replay answers
 
         def held(kind, prompt, opening):
             if kind == OPEN:
                 replayed.append(at_lock.wait_for(6, timeout=HANG_GUARD))
+                arrived.append(at_lock.arrivals)
             return conversation_answers(kind, prompt, opening)
 
         engine = Engine(held)
@@ -1480,7 +1482,7 @@ class TestForks:
             thread.join(timeout=HANG_GUARD)
             assert not thread.is_alive()
         assert replayed == [True]
-        assert at_lock.arrivals >= 6
+        assert arrived == [6]
         assert kinds(engine).count(OPEN) == 1
         assert kinds(engine).count(FORK) == 6
 
