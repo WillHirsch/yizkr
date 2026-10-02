@@ -584,7 +584,9 @@ Names are modelled in **two layers**:
   too, and its TYPE gives no claim, and one with only a GIVN or only a
   SURN keeps its whole value as an unsplit form beside that part. A
   `_MARNM` gives a married-name claim only where its slashes hold a
-  surname; otherwise it is an unsplit form too (ADR-0035 §6). A word
+  surname; otherwise it is an unsplit form too (ADR-0035 §6). A GIVN's
+  quotes and brackets read as the value's do: a quoted part is a
+  nickname, a bracketed part an alias and an unsplit form. A word
   that holds no letter or digit ("?", "_", "()") is a placeholder, in a
   value, a bracket, a quote, a part or a NICK: it names nothing, so it
   is counted, not placed ("Eugen /?/" is labelled "Eugen"), and a typed

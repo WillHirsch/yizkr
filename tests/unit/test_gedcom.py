@@ -3423,7 +3423,13 @@ class TestRepeatedNicknames:
         ] == [POSTCARD, TREE]
 
     def test_one_name_that_gives_a_nickname_twice_gives_one_claim(self):
-        # (here) Ida's NAME gives Peppi inline and by a NICK
+        # (here) Ida's NAME gives Peppi in quotes and by a NICK
+        text = person("I7", "Ida 'Peppi' /Sörne/", "2 NICK Peppi")
+        assert stated(text, "i7", "nickname") == [("Peppi", [])]
+
+    def test_a_bracket_beside_a_nick_gives_only_the_nicks_claim(self):
+        # a bracket is no nickname (ADR-0035 §6), so the NICK alone gives
+        # the claim
         text = person("I7", "Ida (Peppi) /Sörne/", "2 NICK Peppi")
         assert stated(text, "i7", "nickname") == [("Peppi", [])]
 
@@ -5482,20 +5488,26 @@ class TestRound2Readings:
         assert parts(ida.structure)["unsplit"] == ["Peppi"]
         assert ida.aliases == ["Peppi"]
 
-    def test_a_given_name_parts_bracket_is_a_nickname(self):
+    def test_a_given_name_parts_bracket_is_an_unsplit_form(self):
+        # a bracket in a GIVN reads as one in the value does: it may hold
+        # a maiden or a later name or a note as well as a nickname, so it
+        # is an alias and an unsplit form, typed as nothing and counted
         text = person("I7", "Ida /Sörne/", "2 GIVN Ida (Peppi)")
-        ida, _ = record_of(text, "i7")
+        ida, outcomes = record_of(text, "i7")
         assert parts(ida.structure) == {
             "given": ["Ida"],
             "surnames": [("Sörne", "other")],
-            "nicknames": ["Peppi"],
+            "unsplit": ["Peppi"],
         }
         assert ida.aliases == ["Peppi"]
+        assert outcomes["NAME bracketed part"] == 1
+        assert stated(text, "i7", "nickname") == []
         assert structure_problems(ida) == []
 
     def test_a_given_name_parts_quote_is_a_nickname(self):
         text = person("I2", "Cäcilie /Tarle/", "2 GIVN Cäcilie 'Cilli'")
-        caecilie, _ = record_of(text, "i2")
+        caecilie, outcomes = record_of(text, "i2")
+        assert "NAME bracketed part" not in outcomes
         assert parts(caecilie.structure)["given"] == ["Cäcilie"]
         assert parts(caecilie.structure)["nicknames"] == ["Cilli"]
 
@@ -5891,3 +5903,32 @@ def test_a_particle_and_surname_restated_apart_give_their_form():
     assert ("de Sörne", "other") in parts(ida.structure)["surnames"]
     assert "de Sörne" in ida.aliases
     assert outcomes["NAME parts not restated"] == 1
+
+
+class TestGivnBracketsAndQuotes:
+    """A GIVN's brackets and quotes read as the value's do (ADR-0035 §6):
+    a quote marks a nickname, and a bracket, which may hold a maiden name,
+    a later name or a note, is an alias and an unsplit form. Either keeps
+    a person whose only word it holds."""
+
+    def test_a_givn_bracket_alone_keeps_its_person_as_an_unsplit_form(self):
+        ida, outcomes = record_of(person("I7", "", "2 GIVN (Peppi)"), "i7")
+        assert (ida.label, ida.aliases) == ("Peppi", [])
+        assert parts(ida.structure) == {"unsplit": ["Peppi"]}
+        assert outcomes["NAME bracketed part"] == 1
+
+    def test_a_givn_quote_alone_keeps_its_person_as_a_nickname(self):
+        text = person("I7", "", "2 GIVN 'Peppi'")
+        ida, outcomes = record_of(text, "i7")
+        assert (ida.label, ida.aliases) == ("Peppi", [])
+        assert parts(ida.structure) == {"nicknames": ["Peppi"]}
+        assert "NAME bracketed part" not in outcomes
+
+    def test_an_aka_name_with_a_quote_gives_both_nickname_claims(self):
+        # the aka types the whole name as a nickname, and the quote marks
+        # one within it: each is a claim
+        text = person("I1", "Eugen 'Muckel' /Löbig/", "2 TYPE aka")
+        assert stated(text, "i1", "nickname") == [
+            ("Eugen 'Muckel' Löbig", []),
+            ("Muckel", []),
+        ]

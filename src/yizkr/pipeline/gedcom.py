@@ -552,7 +552,8 @@ def _name_pieces(name: Record) -> tuple[dict[str, list[str]], int]:
     pieces, cleaned and less their placeholders (_worded_count), in
     order, a piece left with no word dropped; and how many placeholders
     they held. A GIVN leaves out its quoted and bracketed parts, which
-    are nicknames (_givn_nicknames), before it is split at its commas."""
+    read_name reads apart (_givn_inline), before it is split at its
+    commas."""
     found: dict[str, list[str]] = {}
     dropped = 0
     for tag in _NAME_PARTS:
@@ -571,25 +572,30 @@ def _name_pieces(name: Record) -> tuple[dict[str, list[str]], int]:
     return found, dropped
 
 
-def _givn_nicknames(name: Record) -> tuple[list[str], int]:
-    """The nicknames a NAME's GIVNs give in quotes or brackets ('Ida
-    (Peppi)' -> 'Peppi'), each less its placeholders and kept only if a
-    word is left, and how many placeholders they held."""
-    found: list[str] = []
+def _givn_inline(name: Record) -> tuple[list[str], list[str], int]:
+    """What a NAME's GIVNs hold in quotes ("Ida 'Peppi'" -> 'Peppi') and in
+    brackets ('Ida (Peppi)' -> 'Peppi'), each less its placeholders and
+    kept only if a word is left, and how many placeholders they held. As
+    in a NAME's value, a quoted part is a nickname, and a bracketed part,
+    which may hold a nickname, a maiden or a later name or a note, is an
+    unsplit form (read_name)."""
+    quoted: list[str] = []
+    bracketed: list[str] = []
     dropped = 0
     for part in name.all("GIVN"):
         unbracketed = _sub_brackets(part.value, lambda held: " ")
-        for held in [
-            *_brackets(part.value),
-            *_QUOTED_NAME.findall(unbracketed),
-        ]:
-            text, count = _worded_count(held)
-            if text:
-                found.append(text)
-                dropped += count
-            else:
-                dropped += max(count, 1)
-    return found, dropped
+        for found, inline in (
+            (bracketed, _brackets(part.value)),
+            (quoted, _QUOTED_NAME.findall(unbracketed)),
+        ):
+            for held in inline:
+                text, count = _worded_count(held)
+                if text:
+                    found.append(text)
+                    dropped += count
+                else:
+                    dropped += max(count, 1)
+    return quoted, bracketed, dropped
 
 
 def _parts_text(pieces: dict[str, list[str]]) -> str:
@@ -719,11 +725,12 @@ def read_name(name: Record) -> NameReading:
       an `unsplit` form, and gives no typed-name claim; where only a GIVN
       or only a SURN gives its part, the value is an `unsplit` form beside
       it, counted.
-    * GIVN gives given names, and its quoted or bracketed parts
-      nicknames; SURN surnames (each whole with the SPFX particle before
-      it), NPFX titles and NSFX suffixes; NICK and a quoted part give
-      nicknames. Given names are separated by spaces, as the NAME value
-      writes them, and pieces by commas.
+    * GIVN gives given names, its quoted parts nicknames and its
+      bracketed parts unsplit forms, as the value's do; SURN surnames
+      (each whole with the SPFX particle before it), NPFX titles and NSFX
+      suffixes; NICK and a quoted part give nicknames. Given names are
+      separated by spaces, as the NAME value writes them, and pieces by
+      commas.
     * TYPE birth or maiden types the surname `birth`, married or marriage
       `married`, and aka, nick or nickname makes the given names
       nicknames.
@@ -769,11 +776,14 @@ def read_name(name: Record) -> NameReading:
             unnamed += count
         else:
             unnamed += max(count, 1)
-    # a GIVN's quoted and bracketed parts are nicknames, as a NICK is
-    givn_nicknames, count = _givn_nicknames(name)
+    # a GIVN's quoted part is a nickname and its bracketed part an
+    # unsplit form, as in the value
+    givn_quoted, givn_bracketed, count = _givn_inline(name)
     unnamed += count
-    reading.nicknames += givn_nicknames
-    reading.forms += givn_nicknames
+    reading.nicknames += givn_quoted
+    reading.forms += givn_quoted + givn_bracketed
+    reading.unsplit += givn_bracketed
+    reading.counts += ["NAME bracketed part"] * len(givn_bracketed)
     bare = _sub_brackets(value, lambda held: " ")
     display, count = _worded_count(bare)
     placeholders += count
@@ -1274,7 +1284,12 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         return (
             [text for name in names if (text := _name_text(name))]
             or [text for name in names if (text := _bracket_text(name))]
-            or [text for name in names for text in _givn_nicknames(name)[0]]
+            or [
+                text
+                for name in names
+                for inline in _givn_inline(name)[:2]
+                for text in inline
+            ]
             or [
                 text
                 for name in names

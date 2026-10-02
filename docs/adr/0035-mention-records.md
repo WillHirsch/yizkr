@@ -121,9 +121,15 @@ never narrow or guess.
   between its words ("Eugen 'Muckel' Löbig") keeps the form without it
   ("Eugen Löbig") as an alias beside its unsplit form. A `_MARNM`'s
   unsplit form leaves its brackets out ("(Peppi)" gives "Peppi"). A
-  GIVN's quoted or bracketed part ("Ida (Peppi)", "'Ida, Peppi'") is
-  one nickname beside the given name, read before the GIVN is split at
-  its commas. A bracket within a bracket is read by the outermost pair
+  GIVN's quotes and brackets are read before the GIVN is split at its
+  commas, and as the value's are: a quoted part ("Ida 'Peppi'", "'Ida,
+  Peppi'") is one nickname beside the given name, and a bracketed part
+  ("Ida (Peppi)") an alias and an unsplit form, counted (`NAME bracketed
+  part`). This corrects re-review 1's decision 5, which made a GIVN's
+  bracket a nickname, to follow the owner's bracket rule (§6, 2026-09-29:
+  a bracket may hold a maiden name, a later name or a note as well as a
+  nickname). Either still gives the label of a person no other name
+  gives one, as the tier above says. A bracket within a bracket is read by the outermost pair
   ("(Pep(pi))" gives "Peppi"), and a bracket never closed is none. A
   bracket name keeps an NPFX or NSFX beside it as a title or suffix, its
   full form an alias ("Frau Peppi").
@@ -1043,8 +1049,9 @@ into "fix first, and measure in run 1": under the pre-baseline exception
   TYPE values (`_NAME_TYPE_PROPERTY` in `pipeline/gedcom.py`), PLAC's order of
   jurisdictions and HEAD.LANG's language names. With them, the tree
   keepers' inline convention: a quote marks a nickname, a bracket an
-  untyped form (§6). An initial or a placeholder in an export keys as
-  written, and meets only the same form. A title an export writes in a
+  untyped form (§6). An initial in an export keys as written, and meets
+  only the same form; a placeholder with no letter or digit ("?") is no
+  key at all, since the adapter leaves it out (#408's 2026-10-02 line). A title an export writes in a
   NAME's given part with no NPFX ("Dr.") keys as a given name: an
   accepted limitation.
 - GEDCOM dates: month names beyond the standard's abbreviations come from
