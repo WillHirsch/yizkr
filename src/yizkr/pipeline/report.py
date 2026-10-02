@@ -245,20 +245,15 @@ HOLDS = frozenset(
 REQUESTERS = frozenset({"operator", "monitor", "anomaly"})
 ACTIONS = frozenset({"pause", "resume", "abort"})
 FALLBACK_TIERS = frozenset({"manifest", "segmentation"})
-# the leading labels of the reasons an extraction sets a mention record or
-# a judgement note aside by (ADR-0035 §5): claims.set_aside_structure's
-# `schema`, claims.structure_problems' own, and the note check's `note`
+# the leading labels of the reasons an extraction sets a mention record
+# aside by (ADR-0035 §5): claims.set_aside_structure's `schema` and
+# claims.structure_problems' own
 SET_ASIDE_REASONS = frozenset(
-    {
-        "schema",
-        "kind",
-        "addition",
-        "initial",
-        "no name part",
-        "no toponym",
-        "note",
-    }
+    {"schema", "kind", "addition", "initial", "no name part", "no toponym"}
 )
+# the reason an entity's judgement note is set aside by (ADR-0035 §5),
+# which coverage.json counts among the records' reasons, once a note
+NOTE_SET_ASIDE = "note"
 # a judgement note's categories (ADR-0035 §4)
 NOTE_CATEGORIES = frozenset(
     get_args(JudgementNote.model_fields["category"].annotation)
@@ -964,7 +959,7 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
     transcription's language, route and how its language was resolved;
     the batch's entities by kind and claims by property; the extraction's
     coverage (chunks, rejects, fallback tiers, and the mention records
-    and judgement notes it counts: None for each when it counts none);
+    and judgement notes it counts: None for both unless it counts both);
     and the critique's findings by class. A view that is missing or
     cannot be read counts nothing, and is noted."""
     document.directory = directory.name
@@ -1028,21 +1023,38 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
 
 def _records(coverage: dict) -> dict[str, Any]:
     """The mention records and judgement notes an extraction's coverage
-    counts (ADR-0035 §4, §5): the records given, recordless and set aside
-    by reason, and the notes by category. Each is None when the coverage
-    holds no such count, as the line-range tier's and one written before
-    these counts do: absent, never zero."""
-    records = coverage.get("records")
+    counts (ADR-0035 §4, §5): the records given, the mentions recordless,
+    and the reasons records were set aside by, by category; and the notes
+    by category, and the notes set aside.
+
+    The coverage's `set_aside` counts reasons, not records: a record
+    counts once for each problem found in it, and an entity's note set
+    aside once, as `note`, which is told apart here as a note set aside.
+    The extraction writes its records and its notes together, so both
+    are None unless the coverage holds both, as the line-range tier's and
+    one written before these counts do not: absent, never zero."""
+    records, notes = coverage.get("records"), _tally(coverage.get("notes"))
+    if not isinstance(records, dict) or notes is None:
+        return {"records": None, "notes": None}
+    reasons = _tally(records.get("set_aside")) or {}
+    noted = reasons.pop(NOTE_SET_ASIDE, 0)
     return {
         "records": {
             "given": _count(records.get("given")),
             "recordless": _count(records.get("recordless")),
-            "set_aside": _tally(records.get("set_aside")) or {},
-        }
-        if isinstance(records, dict)
-        else None,
-        "notes": _tally(coverage.get("notes")),
+            "set_aside_by_reason": reasons,
+        },
+        "notes": {"by_category": notes, "set_aside": noted},
     }
+
+
+def _uncounted(coverage: Mapping[str, Any]) -> str:
+    """Why an extraction's coverage counts no mention records or notes:
+    `line_range` when its entity manifest fell back to line ranges, a tier
+    that counts none and leaves every mention recordless; else
+    `predating`, a coverage written before these counts (or holding only
+    one half of them, which the extraction never writes)."""
+    return "line_range" if "manifest" in coverage["fallback"] else "predating"
 
 
 def _critique(findings: list) -> dict[str, Any]:
@@ -2054,7 +2066,7 @@ def _aggregate_content(
     set_aside: Counter = Counter()
     notes: Counter = Counter()
     absent: Counter = Counter()
-    record_extractions = records_given = recordless = 0
+    record_extractions = records_given = recordless = notes_set_aside = 0
     batches = not_extracted = zero_entities = 0
     extractions = chunks = rejected = unread = with_rejects = given = 0
     failed_rejecting = critiques = with_findings = findings = invalid = 0
@@ -2083,18 +2095,16 @@ def _aggregate_content(
             fallbacks.update(
                 _known(tier, FALLBACK_TIERS) for tier in coverage["fallback"]
             )
-            records = coverage.get("records")
-            if records is None or coverage.get("notes") is None:
-                # the line-range tier counts no records: its mentions are
-                # all recordless
-                line_range = "manifest" in coverage["fallback"]
-                absent["line_range" if line_range else "predating"] += 1
+            records, noted = coverage["records"], coverage["notes"]
+            if records is None:
+                absent[_uncounted(coverage)] += 1
             else:
                 record_extractions += 1
                 records_given += records["given"]
                 recordless += records["recordless"]
-                set_aside.update(records["set_aside"])
-                notes.update(coverage["notes"])
+                set_aside.update(records["set_aside_by_reason"])
+                notes.update(noted["by_category"])
+                notes_set_aside += noted["set_aside"]
         failed_rejecting += document.unusable is not None
         if "critique" in document.views:
             critique = document.views["critique"]
@@ -2141,7 +2151,7 @@ def _aggregate_content(
             "extractions": record_extractions,
             "given": records_given,
             "recordless": recordless,
-            "set_aside": set_aside.total(),
+            "set_aside_reasons": set_aside.total(),
             "set_aside_by_reason": _folded(
                 set_aside, lambda value: _known(value, SET_ASIDE_REASONS)
             ),
@@ -2155,6 +2165,7 @@ def _aggregate_content(
             "by_category": _folded(
                 notes, lambda value: _known(value, NOTE_CATEGORIES)
             ),
+            "set_aside": notes_set_aside,
         },
         "critic": {
             "critiques": critiques,
@@ -2847,19 +2858,26 @@ def _records_blocks(
 ) -> list[Any]:
     absent = records["absent"]
     blocks: list[Any] = [
-        f"Mention records given: {_n(records['given'])}; recordless: "
-        f"{_n(records['recordless'])}; set aside: "
-        f"{_n(records['set_aside'])}; judgement notes: "
-        f"{_n(notes['total'])}; in {_n(records['extractions'])} "
-        "extractions. Not counted: "
-        f"{_n(absent['predating'])} extractions whose coverage predates "
-        f"these counts, and {_n(absent['line_range'])} that fell back to "
-        "line ranges (all their mentions recordless)."
+        [
+            f"Extractions counted: {_n(records['extractions'])}; mention "
+            f"records given: {_n(records['given'])}; recordless mentions "
+            "(no record given, or it was set aside): "
+            f"{_n(records['recordless'])}",
+            "Reasons records were set aside: "
+            f"{_n(records['set_aside_reasons'])} (a record can give "
+            "several)",
+            f"Judgement notes: {_n(notes['total'])}; notes set aside: "
+            f"{_n(notes['set_aside'])}",
+            "Extractions not counted: "
+            f"{_n(absent['predating'])} whose coverage predates these "
+            f"counts; {_n(absent['line_range'])} that fell back to line "
+            "ranges (all their mentions recordless)",
+        ]
     ]
     if records["set_aside_by_reason"]:
         blocks.append(
             _table(
-                ("Reason set aside", "Records"),
+                ("Set-aside reason", "Reasons"),
                 records["set_aside_by_reason"].items(),
                 numbers=(1,),
             )
@@ -3376,15 +3394,22 @@ def _html_document(document: Mapping[str, Any]) -> str:
         )
         records, notes = coverage.get("records"), coverage.get("notes")
         if records is None or notes is None:
+            why = (
+                "it fell back to line ranges (all its mentions recordless)"
+                if _uncounted(coverage) == "line_range"
+                else "its coverage predates these counts"
+            )
             items.append(
-                "Mention records and judgement notes: its coverage counts none"
+                f"Mention records and judgement notes: not counted, as {why}"
             )
         else:
             items.append(
                 f"Mention records given: {records['given']}; recordless: "
-                f"{records['recordless']}; set aside: "
-                f"{_listed(_by_count(records['set_aside']))}; judgement "
-                f"notes: {_listed(_by_count(notes))}"
+                f"{records['recordless']}; reasons set aside: "
+                f"{_listed(_by_count(records['set_aside_by_reason']))}; "
+                "judgement notes: "
+                f"{_listed(_by_count(notes['by_category']))}; notes set "
+                f"aside: {notes['set_aside']}"
             )
     if document["critique"] is not None:
         critique = document["critique"]

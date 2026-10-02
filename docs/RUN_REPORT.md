@@ -178,26 +178,44 @@ rechecks.
 - zero-claim documents, by kind, and batches with no entity; the chunks
   and the fallback tiers taken;
 - mention records and judgement notes, summed from each extraction's
-  `coverage.json` (ADR-0035 §4, §5, #420): the records given, recordless
-  and set aside, the set-aside reasons by category (`schema`, `kind`,
-  `addition`, `initial`, `no name part`, `no toponym`, and `note` for a
-  judgement note set aside; `report.SET_ASIDE_REASONS`), and the notes by
-  category (`kind`, `relation`, `date_reading`, `identity`, `other`, the
-  categories of `claims.JudgementNote`). Counts only, never a label, a
-  reason's text or a note's text. An extraction whose coverage holds no
-  such counts is counted apart, never as zero, and the report says how
-  many there were of each: one whose entity manifest fell back to line
-  ranges (the line-range tier counts no records, and all its mentions are
-  recordless), and one whose coverage predates these counts. So the
+  `coverage.json` (ADR-0035 §4, §5, #420): the mention records given;
+  the recordless mentions; the reasons records were set aside by, by
+  category (`schema`, `kind`, `addition`, `initial`, `no name part`,
+  `no toponym`; `report.SET_ASIDE_REASONS`); the notes by category
+  (`kind`, `relation`, `date_reading`, `identity`, `other`, the
+  categories of `claims.JudgementNote`); and the notes set aside. Counts
+  only, never a label, a reason's text or a note's text.
+  `coverage.json` counts reasons, not records: a record gives one for
+  each problem found in it (two names no form of the entity holds give
+  `addition` twice), so the reasons can outnumber the records set aside,
+  and no count of those records is kept; counting them would change what
+  the extraction writes, a stage before write, so it waits for its own
+  issue. A record set aside on a mention of a kind that takes one (a
+  person, place, organisation or family) leaves that mention recordless,
+  so the recordless mentions are those given no record and those whose
+  record was set aside. `coverage.json` counts an entity's note set aside
+  among the same reasons, once, as `note`; the report counts it as a note
+  set aside, never as a record's reason (a claim whose note fails is a
+  counted reject instead). A reason or category the report does not know
+  is counted as `other`, as everywhere in the aggregates; since `other`
+  is also a note category, the notes' `other` holds both. An extraction
+  whose coverage holds no such counts is counted apart, never as zero,
+  and the report says how many there were of each: one whose entity
+  manifest fell back to line ranges (the line-range tier counts no
+  records, and all its mentions are recordless), and one whose coverage
+  predates these counts (or holds its records without its notes, or its
+  notes without its records, which the extraction never writes). So the
   clustering stage's recordless figure, which also counts the line-range
-  fallback's mentions, need not equal the records' recordless count.
+  fallback's mentions, need not equal the records' recordless count. An
+  extraction whose `coverage.json` is missing, cannot be read or holds no
+  object is in none of these figures, as in none of the rejects'.
   Each document's own counts are in `report.json` and `report.html`, and
   `report.json`'s `aggregate.content.records` (`extractions`, `given`,
-  `recordless`, `set_aside`, `set_aside_by_reason`, `absent.predating`,
-  `absent.line_range`) and `aggregate.content.notes` (`total`,
-  `by_category`) sit beside the rejects, chunks and fallback tiers, where
-  the run-to-run diff (#198) is to compare them with the other extraction
-  counts;
+  `recordless`, `set_aside_reasons`, `set_aside_by_reason`,
+  `absent.predating`, `absent.line_range`) and `aggregate.content.notes`
+  (`total`, `by_category`, `set_aside`) sit beside the rejects, chunks
+  and fallback tiers, where the run-to-run diff (#198) is to compare them
+  with the other extraction counts;
 - critic findings by axis and by category: the statement-part each
   doubts (subject, predicate, value or existence, ADR-0023) and its
   category from the critic's fixed list (`critique.CATEGORIES`), and the

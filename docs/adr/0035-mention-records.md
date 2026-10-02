@@ -29,10 +29,13 @@ set aside and counted in `coverage.json` (`records`, `notes`), and a
 claim whose note fails is a counted reject.
 
 Amended by #420 (2026-09-29): the run report sums each extraction's
-`coverage.json` records (given, recordless, and set aside by reason) and
-notes by category, and counts apart, never as zero, an extraction whose
-coverage holds none: one that fell back to line ranges, and one whose
-coverage predates these counts. Records by status, `unsplit` forms and
+`coverage.json` records (given, recordless, and the reasons records were
+set aside by, by category: a record gives one for each problem found in
+it, so these count reasons, not records) and notes (by category, and
+those set aside, each counted there as one `note` reason), and counts
+apart, never as zero, an extraction whose coverage holds none: one that
+fell back to line ranges, and one whose coverage predates these counts.
+The number of records set aside, records by status, `unsplit` forms and
 notes written wait for their own issues.
 
 **Decided by the owner (2026-09-29):**
