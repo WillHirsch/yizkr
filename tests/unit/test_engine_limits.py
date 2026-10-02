@@ -648,6 +648,16 @@ class TestAskingAgain:
         assert woken == [True]
         assert reasons == [CLOSED]
 
+    def test_the_pacer_waits_by_default_on_the_stop_event(self):
+        """The pacer's default sleep is the one close() wakes: it waits
+        on the stop event, so a set event ends it at once, before any of
+        its seconds pass, and an unset one lets a wait of 0 run out."""
+        assert llm._Pacer()._sleep is llm._sleep
+        stop = threading.Event()
+        assert llm._sleep(0, stop) is True
+        stop.set()
+        assert llm._sleep(HANG_GUARD, stop) is False
+
 
 class TestSettings:
     def test_the_defaults(self, cli):
