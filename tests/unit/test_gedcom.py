@@ -5881,3 +5881,13 @@ class TestRound3Families:
         assert on(result.batch, "i12", "father") == []
         assert on(result.batch, "i12", "mother") == []
         assert result.outcomes["FAM one person as HUSB and WIFE"] == 1
+
+
+def test_a_particle_and_surname_restated_apart_give_their_form():
+    # the value holds 'de' and 'Sörne' but not 'de Sörne', which the parts
+    # make one surname: that form is a name form of the person's
+    text = person("I7", "de Ida /Sörne/", "2 SPFX de", "2 SURN Sörne")
+    ida, outcomes = record_of(text, "i7")
+    assert ("de Sörne", "other") in parts(ida.structure)["surnames"]
+    assert "de Sörne" in ida.aliases
+    assert outcomes["NAME parts not restated"] == 1

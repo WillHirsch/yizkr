@@ -633,12 +633,11 @@ def _name_text(name: Record) -> str:
 def _bracket_text(name: Record) -> str:
     """The display form of a NAME whose value gives a name only in
     brackets that hold a word ('(Peppi)'): the value, cleaned, less its
-    placeholders and its brackets that hold no word. A person's label
-    falls back to it only when none of the person's NAMEs gives a name
-    otherwise (_name_text), so that a person named only so keeps an
-    entity. Empty when no bracket holds a word."""
-    if not any(_has_word(held) for held in _brackets(name.value)):
-        return ""
+    placeholders and its brackets that hold no word (_worded_count). A
+    person's label falls back to it only when none of the person's NAMEs
+    gives a name otherwise (_name_text), where no word of the value stands
+    outside its brackets, so that a person named only so keeps an entity.
+    Empty when no bracket holds a word."""
     return _worded(name.value)
 
 
