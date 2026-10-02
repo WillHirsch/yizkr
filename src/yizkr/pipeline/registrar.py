@@ -73,6 +73,7 @@ from pathlib import Path, PurePosixPath
 from yizkr.core.corpus import ExclusionList, file_sha1, is_excluded
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.presentation import IMAGE_SUFFIXES, DerivedMediaRecord
+from yizkr.pipeline.writer import _is_mark
 
 # the most characters Wikibase takes in a label, a description or an alias
 # (its default limit on a term's length)
@@ -98,13 +99,42 @@ def _stored_term(term: str) -> str:
     return unicodedata.normalize("NFC", trimmed)
 
 
+# the zero-width joiner, which joins the characters either side of it
+# into one, and the regional indicators, two of which make one flag
+_JOINER = "\u200d"
+_REGIONAL_INDICATORS = range(0x1F1E6, 0x1F200)
+
+
+def _whole_letters(text: str, cut: str) -> str:
+    """`cut`, a start of `text`, backed off until it ends after a whole
+    letter: never between a letter and the combining marks that follow
+    it (writer._is_mark), never after a zero-width joiner, and never
+    halfway through a pair of regional indicators. A cut that would keep
+    a letter without its accents keeps neither."""
+    while cut and (
+        (len(cut) < len(text) and _is_mark(text[len(cut)]))
+        or cut.endswith(_JOINER)
+        or _half_flag(cut)
+    ):
+        cut = cut[:-1]
+    return cut
+
+
+def _half_flag(text: str) -> bool:
+    """Whether `text` ends in an odd run of regional indicators: the
+    first half of a flag whose second half was cut off."""
+    run = len(text) - len(text.rstrip("".join(map(chr, _REGIONAL_INDICATORS))))
+    return run % 2 == 1
+
+
 def _fitted(
     text: str, suffix: str = "", *, prefix: str = "", at: str | None = None
 ) -> str:
     """`prefix + text + suffix`, whose parts are in the stored form
     (_stored_term), within the TERM_LIMIT characters Wikibase takes: when
     the whole is longer, `text` is cut, at the last `at` within the room
-    when `at` is given, and ends in "…". The result is in the stored form
+    when `at` is given, never within a letter (_whole_letters), and ends
+    in "…". The result is in the stored form
     too, and the same parts always give the same result. For text that
     only displays, such as a deck's title in the labels of its slides and
     images: nothing finds an item by it."""
@@ -112,7 +142,7 @@ def _fitted(
     room = TERM_LIMIT - len(prefix) - len(suffix) - 1
     if len(whole) <= TERM_LIMIT or room < 1:
         return whole
-    cut = text[:room]
+    cut = _whole_letters(text, text[:room])
     if at is not None and at in cut:
         cut = cut.rsplit(at, 1)[0]
     return prefix + cut.rstrip() + "…" + suffix
@@ -185,11 +215,13 @@ def _file_name_part(text: str) -> str:
 
 
 def _cut_to_fit(text: str, end: str) -> str:
-    """The longest start of `text`, in whole characters, that leaves room
-    for `end` within UPLOAD_NAME_BYTES, none of it when `end` takes all
-    that room or more, its end space trimmed, then `end`."""
+    """The longest start of `text`, in whole letters (_whole_letters),
+    that leaves room for `end` within UPLOAD_NAME_BYTES, none of it when
+    `end` takes all that room or more, its end space trimmed, then
+    `end`."""
     room = max(0, UPLOAD_NAME_BYTES - len(end.encode()))
-    return text.encode()[:room].decode(errors="ignore").rstrip(" ") + end
+    cut = text.encode()[:room].decode(errors="ignore")
+    return _whole_letters(text, cut).rstrip(" ") + end
 
 
 def _unprohibited(name: str) -> str:
@@ -851,12 +883,14 @@ class Registrar:
         embed, or that is also ingested on its own, is one item, `part of`
         each container. It is labelled ``"<container title> — <name>"`` by
         its first name: in the deck's archive (``image1.png``), or its
-        first place in the PDF (``page 6, image 1``; ADR-0008), and its
-        other names become aliases, unless another item has one as its
-        label. Its bytes are uploaded from the file the record keeps, under
-        the name ``"<title> <name>"``, with the file's suffix when the name
-        has none, in the form MediaWiki takes, its title cut or left out
-        to fit (_upload_name), only when no file of the item holds them.
+        first place in the PDF (``page 6, image 1``; ADR-0008), or
+        ``image N``, N its place among the record's media, for a name the
+        stored form leaves nothing of; its other names become aliases,
+        unless another item has one as its label. Its bytes are uploaded
+        from the file the record keeps, under the name
+        ``"<title> <name>"``, with the file's suffix when the name has
+        none, in the form MediaWiki takes, its title cut or left out to
+        fit (_upload_name), only when no file of the item holds them.
         It is a `photograph` when that file is an image's, and an
         `artifact` otherwise.
 
@@ -885,7 +919,8 @@ class Registrar:
         media_sha1 = properties["media_sha1"]
         title = _stored_term(record.title)
         derived: dict[str, str] = {}
-        for key, medium in sorted(record.media.items()):
+        media = sorted(record.media.items())
+        for number, (key, medium) in enumerate(media, start=1):
             if self._excluded(medium.names, key):
                 continue
             path = directory / medium.file
@@ -899,7 +934,16 @@ class Registrar:
                 )
             # the container's title is cut to fit, if need be: a medium's
             # labels and aliases only display it
-            names = [_stored_term(name) for name in medium.names]
+            # a name the stored form leaves nothing of, such as one of
+            # control characters alone, is "image N", N the medium's place
+            # among the record's media: its label then ends in a name, as
+            # the instance keeps it, and a re-run finds it
+            names = list(
+                dict.fromkeys(
+                    _stored_term(name) or f"image {number}"
+                    for name in medium.names
+                )
+            )
             labels = [_fitted(title, f" — {name}") for name in names]
             found = instance.by_sha1.get(key)
             item = self.client.wbi.item.get(found) if found else None

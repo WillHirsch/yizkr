@@ -239,13 +239,15 @@ artifact a new QID, changes neither.
   and MediaWiki refuses the upload). A name these rules leave nothing of
   leaves the title as the name, or, with none, is `-`: never empty. At
   most 231 bytes in UTF-8: MediaWiki's 240, less the 9 a content-tagged
-  name adds. A longer name is cut, with "…" where the cut is: the title
+  name adds. A longer name is cut, never between a letter and its
+  combining marks, with "…" where the cut is: the title
   first, so the medium's own name stays whole; then the title left out,
   so a name that fits on its own is never cut; and then the name before
   its extension. A `media file` names the file as MediaWiki stores it,
   its first letter a capital.
-- An artifact's description is cut, ending in "…", to the 250
-  characters Wikibase takes: the one registration writes, ``"ingested
+- An artifact's description is put in the stored form, then cut,
+  ending in "…" and never between a letter and its combining marks, to
+  the 250 characters Wikibase takes: the one registration writes, ``"ingested
   by `yizkr ingest run` from <file name>"``, passes that for a long file
   name (ADR-0010 as amended by #373).
 - Registrar statements (`instance of`, `media file`, a fragment's

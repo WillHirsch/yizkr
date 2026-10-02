@@ -12,7 +12,7 @@ placed within its text-layer pages is read on its own: see Amendments.
 Amended by #397 (2026-09-29): each image placed within a PDF's text-layer
 pages that has a reading of its own is extracted as a document of its
 own, an excerpt, and the write registers the images: see Amendments.
-Amended by #373 (2026-09-29): a derived medium's file name keeps its
+Amended by #373 (2026-10-02): a derived medium's file name keeps its
 container's title, in the form MediaWiki takes and cut to fit its limit:
 see Amendments.
 
@@ -631,7 +631,7 @@ the compilation's.
   with, even when another places the image; and the anomaly checks'
   recheck does not read the excerpts' directories.
 
-Amended by #373 (2026-09-29): **a derived medium's file name keeps its
+Amended by #373 (2026-10-02): **a derived medium's file name keeps its
 container's title.** The names of the #103 amendment, `"<deck title>
 <name in the archive>"`, and of the #397 amendment, `"<title> page <n>,
 image <k>.<suffix>"`, kept only the title's ASCII letters, digits and
@@ -643,5 +643,9 @@ the name is now in the form MediaWiki takes as it is (ADR-0010, "File
 names MediaWiki takes"): every letter kept, `-` for each character or
 sequence it refuses, and the whole within 231 bytes, the title cut first,
 ending in "…", or left out, so the medium's own name stays whole
-whenever it fits on its own. The container's kind stands for a title of
-which that form leaves nothing.
+whenever it fits on its own; a cut never falls between a letter and its
+combining marks. The container's kind stands for a title of which that
+form leaves nothing. A medium whose name the stored form leaves nothing
+of (control characters alone) is labelled by `image N`, N its place
+among the record's media, so its label ends in a name the instance keeps
+as sent, and a re-run sends no edit.

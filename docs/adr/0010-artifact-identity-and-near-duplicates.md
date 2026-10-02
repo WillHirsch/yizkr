@@ -21,7 +21,7 @@ write time").
 Amended by #397 (2026-09-29): a written excerpt, an image a PDF places
 read as a document of its own (ADR-0008), seeds content dedup across
 runs as a written document does (§1).
-Amended by #373 (2026-09-29): a file is uploaded under a name in the form
+Amended by #373 (2026-10-02): a file is uploaded under a name in the form
 MediaWiki takes as it is, every letter kept, within MediaWiki's 240-byte
 limit with room for the content tag, and the description registration
 writes is cut to the 250 characters Wikibase takes (§1, "Two writes" and
@@ -168,8 +168,9 @@ register every document on the instance its reset emptied (#200).
 - **Two writes, and a registration cut short.** An artifact's own
   statements cite the item itself, so it is made in two writes: first
   with its description alone, then with its label and statements. The
-  description is cut, ending in "…", to the 250 characters Wikibase
-  takes (amended by #373): the one `ingest run` writes, ``"ingested by
+  description is put in the stored form, then cut, ending in "…" and
+  never between a letter and its combining marks, to the 250 characters
+  Wikibase takes (amended by #373): the one `ingest run` writes, ``"ingested by
   `yizkr ingest run` from <file name>"``, passes that for a file name of
   more than 214 characters, and Wikibase refused it, so no item was
   made. A registration cut short between the two writes leaves an item
@@ -223,7 +224,7 @@ now, one for the registrar and for derived media:
   changed source's item never takes the title of the artifact it was
   tagged against, and a re-run writes nothing.
 
-**File names MediaWiki takes** (amended by #373, 2026-09-29). An
+**File names MediaWiki takes** (amended by #373, 2026-10-02). An
 artifact's file was uploaded under its corpus file's name as it was, and
 a derived medium's under a name whose title kept only its ASCII letters,
 digits and ` _.-`: a deck titled "Familie Löbig" uploaded `Familie Lbig
@@ -300,8 +301,11 @@ deploy/config changes none (`$wgLegalTitleChars`, `$wgIllegalFileChars`,
   `FILENAME_TOO_LONG`: an archived version's name adds a timestamp and
   `!` within 255 bytes), counted on the name asked for, and the
   content-tagged name `upload_file` asks for when the name holds other
-  bytes is 9 bytes longer. A longer name is cut at a character's end,
-  counted in bytes, with `…` where the cut is: the title first, as far
+  bytes is 9 bytes longer. A longer name is cut, counted in bytes,
+  never between a letter and its combining marks (a stressed Cyrillic
+  vowel is a letter and U+0301: the cut steps back, and the whole letter
+  goes), nor after a zero-width joiner or within a flag, with `…` where
+  the cut is: the title first, as far
   as `"… <name>"`, so the medium's own name stays whole; past that, the
   name alone, the title left out, when it fits, so a name that fits on
   its own is never cut; a longer name before its extension; and, should
@@ -322,6 +326,17 @@ suffix whenever the record's file has one. The file page a `media file`
 names is the name MediaWiki stores, its first letter a capital. A file
 uploaded before keeps its name: registration uploads only bytes no file
 of the item holds.
+
+Two titles that differ only past the cut ask for one name. The first
+registered takes it; the second's bytes are other bytes under that name,
+so `upload_file` uploads them under its content-tagged form, which the 9
+bytes kept free let fit. Nothing is overwritten, which deck takes the
+plain name depends on the order they are registered in, and a re-run
+finds both files by their SHA-1. These rules are copied from MediaWiki
+1.45.4, the version the deploy's `wikibase/wikibase:7` image runs: when
+the image's MediaWiki changes, they are checked against its source again
+(the title characters, the file name limit, the sequences a title
+refuses and `$wgProhibitedFileExtensions`).
 
 The orchestrator adds **content dedup** ahead of the expensive steps. It
 hashes each file at the top of `advance`, and a file whose bytes were

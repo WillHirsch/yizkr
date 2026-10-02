@@ -56,6 +56,7 @@ from yizkr.pipeline.registrar import (
     _item_claim,
     _string_claim,
     _upload_name,
+    _whole_letters,
     ensure_self_typed,
     register_artifact,
     register_derived_media,
@@ -1036,6 +1037,19 @@ class TestTermsInTheStoredForm:
         register_deck(wiki, tmp_path, "a", decomposed, media)
         assert wiki.writes == writes
 
+    def test_a_name_that_leaves_nothing_once_stored_is_image_n(self, tmp_path):
+        """A medium named only by control characters keeps no name once
+        stored: it is "image N", N its place among the record's media, so
+        its label ends in a name the instance keeps as sent, and a second
+        write of the deck sends no edit."""
+        wiki = StoringWiki()
+        media = [("\x01\x02", IMAGE, [1])]
+        _, derived = register_deck(wiki, tmp_path, "a", SHOP, media)
+        assert label_of(wiki, derived[sha1(IMAGE)]) == f"{SHOP} — image 1"
+        writes = wiki.writes
+        register_deck(wiki, tmp_path, "a", SHOP, media)
+        assert wiki.writes == writes
+
 
 class TestLongDeckTitles:
     """A deck's title is part of the labels of its slides and images, and
@@ -1173,6 +1187,8 @@ class TestUploadNames:
             "Sipkje van 't Nijks (it tichelwurk fan Snylsjum)",
             # the 1912 directory's form, its dot at the end kept
             "Löbig, Ursula, Wwe.",
+            # a compatibility character, which only NFKC would change
+            "Brunnenring 35½",
         ],
     )
     @pytest.mark.parametrize("form", ["NFC", "NFD"])
@@ -1183,6 +1199,49 @@ class TestUploadNames:
         assert uploaded(wiki, sha1(IMAGE)) == f"File:{title} image1.png"
         # MediaWiki takes the name as it is: no warning overridden
         assert not overridden(wiki)
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            # the bidirectional isolates, which a title keeps
+            "Familie\N{LEFT-TO-RIGHT ISOLATE}Löbig\N{POP DIRECTIONAL ISOLATE}",
+            # "&;" names no character, so it is no reference
+            "Brief &; Markt",
+        ],
+    )
+    def test_a_title_mediawiki_takes_as_it_is_is_kept(self, tmp_path, title):
+        wiki = FakeWiki()
+        register_deck(wiki, tmp_path, "a", title, [("image1.png", IMAGE, [1])])
+        assert uploaded(wiki, sha1(IMAGE)) == f"File:{title} image1.png"
+        assert not overridden(wiki)
+
+    def test_two_titles_cut_to_one_name_are_told_apart_by_the_tag(
+        self, tmp_path
+    ):
+        """Two long titles that differ only past the cut ask for one name.
+        The first deck's image takes it; the second's bytes are other
+        bytes under that name, so they go under its content-tagged form.
+        Nothing is overwritten, and a re-run finds both by SHA-1."""
+        wiki = FakeWiki()
+        common = "Hutmacherei zum Blauen Hut, Brunnenring 35, Flörburg; " * 4
+        first, second = f"{common}Teil 1", f"{common}Teil 2"
+        register_deck(wiki, tmp_path, "a", first, [("image1.png", IMAGE, [1])])
+        register_deck(
+            wiki, tmp_path, "b", second, [("image1.png", OTHER_IMAGE, [1])]
+        )
+        taken = uploaded(wiki, sha1(IMAGE))
+        assert taken.endswith("… image1.png")
+        stem = taken.removesuffix(".png")
+        tagged = f"{stem} {sha1(OTHER_IMAGE)[:8]}.png"
+        assert uploaded(wiki, sha1(OTHER_IMAGE)) == tagged
+        assert name_bytes(tagged) <= 240
+        files, requests = dict(wiki.files), len(wiki.media.requests)
+        register_deck(wiki, tmp_path, "a", first, [("image1.png", IMAGE, [1])])
+        register_deck(
+            wiki, tmp_path, "b", second, [("image1.png", OTHER_IMAGE, [1])]
+        )
+        assert wiki.files == files
+        assert len(wiki.media.requests) == requests
 
     def test_characters_mediawiki_refuses_become_dashes(self, tmp_path):
         wiki = FakeWiki()
@@ -1619,6 +1678,85 @@ class TestUploadNames:
         result = register(wiki, path)
         assert result.file_page == "File:Brief -2 -1919- -~~ -Löbig-.png"
         assert not overridden(wiki)
+
+
+# "Калдовское районное бюро ЗАГС" with its stress marks: each stressed
+# vowel is a letter and a combining acute accent, which NFC leaves apart
+STRESS = "\N{COMBINING ACUTE ACCENT}"
+STRESSED = f"Калдо{STRESS}вское ра{STRESS}йонное бю{STRESS}ро ЗАГС"
+
+
+class TestCutsKeepWholeLetters:
+    """A cut never falls between a letter and the combining marks after
+    it: the letter goes with them. Each text is padded so that a cut by
+    bytes or characters alone would keep the letter and drop its
+    accent."""
+
+    def test_a_title_cut_keeps_whole_letters(self, tmp_path):
+        title = "Hutmacherei" + "x" * 5 + " " + ", ".join([STRESSED] * 4)
+        wiki = FakeWiki()
+        register_deck(wiki, tmp_path, "a", title, [("image1.png", IMAGE, [1])])
+        page = uploaded(wiki, sha1(IMAGE))
+        kept = page.removeprefix("File:").removesuffix("… image1.png")
+        assert title.startswith(kept) and kept.endswith(", Калд")
+        # the whole "о" with its accent went, not the accent alone
+        assert title[len(kept) :].startswith(f"о{STRESS}")
+        assert not overridden(wiki)
+
+    def test_a_name_cut_before_its_extension_keeps_whole_letters(self):
+        stem = "Brief" + "x" * 1 + " " + ", ".join([STRESSED] * 8)
+        name = _upload_name(f"{stem}.png")
+        assert name.endswith("….png")
+        kept = name.removesuffix("….png")
+        assert stem.startswith(kept) and kept.endswith("кое р")
+        assert stem[len(kept) :].startswith(f"а{STRESS}")
+
+    def test_a_description_cut_keeps_whole_letters(self, tmp_path):
+        wiki = StoringWiki()
+        description = (
+            "ingested by `yizkr ingest run` from Brief"
+            + "x" * 13
+            + " "
+            + ", ".join([STRESSED] * 12)
+            + ".pdf"
+        )
+        result = register_artifact(
+            wiki,
+            media_path=scan(tmp_path, PORTRAIT),
+            artifact_type="photograph",
+            title=TITLE,
+            description=description,
+        )
+        stored = wiki.entities[result.artifact_qid]["descriptions"]["en"]
+        # 249 characters would end in "бю", the accent of its "ю" cut off
+        assert description[248:250] == f"ю{STRESS}"
+        assert stored["value"] == description[:248] + "…"
+
+    DE = (
+        "\N{REGIONAL INDICATOR SYMBOL LETTER D}"
+        "\N{REGIONAL INDICATOR SYMBOL LETTER E}"
+    )
+
+    @pytest.mark.parametrize(
+        "text, cut, kept",
+        [
+            # a letter with two marks: all three go
+            (f"Ра{STRESS}{STRESS}йон", f"Ра{STRESS}", "Р"),
+            # the joiner goes, the letter before it stays
+            (
+                "Löbig a\N{ZERO WIDTH JOINER}b",
+                "Löbig a\N{ZERO WIDTH JOINER}",
+                "Löbig a",
+            ),
+            # half a flag goes, a whole one stays
+            (f"Flörburg {DE}{DE}", f"Flörburg {DE}{DE[0]}", f"Flörburg {DE}"),
+            (f"Flörburg {DE}{DE}", f"Flörburg {DE}", f"Flörburg {DE}"),
+            # a cut that ends after a whole letter is kept as it is
+            (f"ра{STRESS}йон", f"ра{STRESS}", f"ра{STRESS}"),
+        ],
+    )
+    def test_a_cut_ends_after_a_whole_letter(self, text, cut, kept):
+        assert _whole_letters(text, cut) == kept
 
 
 class TestLongDescriptions:
