@@ -52,10 +52,13 @@ closed:
   links to a person it drops, or to an item it drops as one that may be
   a person, as the value or a qualifier's value, whatever the property;
   a union is no event (ADR-0036), nor is an item typed human at normal
-  or preferred rank. An item it drops only as untyped, or as a family
-  (or any item named a `member of`) that names members and whose members
-  it all released, protects no one and takes no event with it, nor does
-  it take one it took part in, unless of a person kind. It drops every event
+  or preferred rank, unless typed a family too. An item it drops only as
+  untyped, or as a family (or any item named a `member of`) that names
+  members, read through the groups among them, and whose members it all
+  released, protects no one and takes no event with it, nor does it take
+  one it took part in, unless of a person kind, which is its members'
+  own. A group with a participant of unknown value is not so released.
+  It drops every event
   of a person kind that names no participant, and every event that has
   participant statements all of unknown value, as whom it happened to is
   unknown; and the events that start and end a union it drops, a
@@ -377,7 +380,9 @@ class DumpReading:
     or a qualifier's, at every rank, whatever the property; `members`, the
     items each item is named a `member of` by, at every rank, through
     redirects; `takers`, the values of each item's own `participant`
-    statements, at every rank, its qualifiers aside; `names`, the items
+    statements, at every rank, its qualifiers aside; `unknown_takers`, the
+    items with a `participant` statement of unknown value; `person_events`,
+    the items typed, at any rank, as a person kind of event; `names`, the items
     that each item's statements name, as their value or a qualifier's, at
     every rank, whatever the item;
     `unattended`, every event of a person kind whose `participant`
@@ -397,6 +402,8 @@ class DumpReading:
     links: dict[str, set[str]] = field(default_factory=dict)
     members: dict[str, set[str]] = field(default_factory=dict)
     takers: dict[str, set[str]] = field(default_factory=dict)
+    unknown_takers: set[str] = field(default_factory=set)
+    person_events: set[str] = field(default_factory=set)
     names: dict[str, set[str]] = field(default_factory=dict)
     unattended: set[str] = field(default_factory=set)
     bounds: dict[str, set[str]] = field(default_factory=dict)
@@ -469,8 +476,9 @@ def read_dump(
     rank, as a partnership, a marriage (``UNION_CLASS``) or a class the
     dump makes a subclass of one at any rank, whose events go with it and
     not it with them; and never an item typed human at normal or
-    preferred rank, for the participant, link or unattended rule. Who is
-    a `member of` each item is read too, at every rank (``members``).
+    preferred rank, unless typed a family too, for the participant, link
+    or unattended rule. Who is a `member of` each item is read too, at
+    every rank (``members``).
     Each is linked to every item that any of its statements names, as its
     value or a qualifier's, at every rank (``links``).
 
@@ -507,9 +515,9 @@ def read_dump(
     ] = {}  # statement -> items it or a qualifier names
     narrows: dict[str, str] = {}  # statement -> the class it makes a subclass
     broader: dict[str, str] = {}  # statement -> the class it is a subclass of
-    memberships: dict[
-        str, str
-    ] = {}  # statement -> what it makes one a member of
+    # statement -> the group it makes its subject a member of
+    memberships: dict[str, str] = {}
+    unknown_parts: set[str] = set()  # participant statements of unknown value
     unions: dict[str, str] = {}  # statement -> the union it bounds
     bounds: dict[str, str] = {}  # statement -> the event it points to
     deprecated: set[str] = set()  # statements a curator deprecated
@@ -580,6 +588,12 @@ def read_dump(
                 continue
             item = _item(term)
             if item is None:
+                if (
+                    pid == participant
+                    and role == "value"
+                    and _unknown(rest.split(" ", 1)[0])
+                ):
+                    unknown_parts.add(subject)
                 continue
             if pid in value_links:
                 reading.people.add(item)
@@ -623,6 +637,7 @@ def read_dump(
 
     reading.people |= typed_as({human})
     person_events = typed_as(person_kinds)
+    reading.person_events = person_events
     set_aside = typed_as(non_person_kinds, ranked=True)
     reading.people.update(
         person
@@ -638,18 +653,21 @@ def read_dump(
     # unattended, and so is any item that has participant statements, each
     # of an unknown value or none; an item of no person kind with no
     # participant statement names no one, and is not. An item typed human,
-    # at normal or preferred rank, is never an event for the participant,
-    # link or unattended rule
+    # at normal or preferred rank, unless typed a family too, is never an
+    # event for the participant, link or unattended rule
     humans = typed_as({human}, ranked=True)
     reading.families = typed_as({items[FAMILY_CLASS]}, ranked=True)
+    # a family stays a family, a human type beside it notwithstanding
+    persons = humans - reading.families
     reading.unattended = (person_events | set(events.values())) - (
-        set(reading.participants) | humans
+        set(reading.participants) | persons
     )
     reading.takers = {
         item: set(parts) for item, parts in reading.participants.items()
     }
-    # a family stays a family, a human type beside it notwithstanding
-    persons = humans - reading.families
+    reading.unknown_takers = {
+        events[statement] for statement in unknown_parts if statement in events
+    }
     for person in persons:
         reading.participants.pop(person, None)
     for statement, names in qualified.items():
@@ -772,16 +790,20 @@ def public_exclusions(
       item whose `participant` statements all hold an unknown value or
       none (``UNATTENDED``): whom it happened to is unknown;
     * each event that an item it drops takes part in, at any rank, as a
-      `participant` statement's value or named in its qualifiers
-      (``PARTICIPANT_LEFT_OUT``, naming them); each event that a statement
+      `participant` statement's value or named in its qualifiers, unless
+      that item is a released group (a family, or any item named a
+      `member of`, that names at least one member, read through the groups
+      among its members, all of them released, and no participant of
+      unknown value), which takes part harmlessly, except in a person
+      kind of event, which is its members' own (``PARTICIPANT_LEFT_OUT``,
+      naming them); each event that a statement
       of it names an item it drops, as its value or a qualifier's,
       whatever the property, unless it drops that item only as untyped, or
       as a family that names members, all of whom it released, which
       protects no one: an item that may be a person, through redirects,
       that the participant or unattended rule drops too, a statement of
       which names an item that protects people, or that is named a
-      `member of` with a member not released or with none, is not
-      dropped only so; such a group takes part in an event harmlessly
+      `member of` that is not a released group, is not dropped only so
       (``LINKED_LEFT_OUT``, naming them); and each event that
       starts or ends a union it drops (``BOUND_LEFT_OUT``, naming the
       union), read through redirects; and so on until no more go, as an
@@ -818,18 +840,31 @@ def public_exclusions(
     # not release; and what names an item left out, in the loop below
     unreleased = {target(qid) for qid in people} - report.included
     groups = reading.families | set(reading.members)
-    released_groups = {
-        group
-        for group in groups
-        if (
-            members := {
-                target(member)
-                for member in reading.members.get(group, set())
-                | reading.takers.get(group, set())
-            }
-        )
-        and members <= report.included
-    }
+
+    def released(group: str) -> bool:
+        """Whether `group` names at least one member, read through the
+        groups among its members, and the check released every one; a
+        group with a participant of unknown value is not."""
+        seen, stack, found = set(), [group], set()
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            if current in reading.unknown_takers:
+                return False
+            members = reading.members.get(current, set()) | (
+                reading.takers.get(current, set())
+            )
+            for member in members:
+                member = target(member)
+                if member in groups:
+                    stack.append(member)
+                else:
+                    found.add(member)
+        return bool(found) and found <= report.included
+
+    released_groups = {group for group in groups if released(group)}
     impersonal = (reading.untyped | reading.families) - (
         (groups - released_groups) | unreleased | reading.unattended
     )
@@ -856,7 +891,12 @@ def public_exclusions(
             qid
             for qid in left_out
             if target(qid) not in impersonal
-            or reading.participants.get(target(qid), set()) & left_out
+            or reading.participants.get(target(qid), set())
+            & {
+                part
+                for part in left_out
+                if target(part) not in released_groups
+            }
         }
         # and what names an item that protects people protects them too
         while grow := {
@@ -878,17 +918,22 @@ def public_exclusions(
             for event, named in reading.links.items()
             if event not in left_out and named & shielding
         }
+
+        # but never in a person kind of event, which is its members' own
+        harmed = left_out - harmless
         gone.update(
             (
                 event,
                 PARTICIPANT_LEFT_OUT.format(
-                    ", ".join(
-                        sorted(parts & (left_out - harmless), key=_order)
-                    )
+                    ", ".join(sorted(parts & taking, key=_order))
                 ),
             )
             for event, parts in reading.participants.items()
-            if event not in left_out and parts & (left_out - harmless)
+            if event not in left_out
+            and (
+                taking := parts
+                & (left_out if event in reading.person_events else harmed)
+            )
         )
         for union, bounds in reading.bounds.items():
             if union in left_out:

@@ -93,9 +93,20 @@ one member, all of them released, is a harmless participant, like a
 released person, so "Emigration of the Lobigs" with Gustav and such a
 family as participants stays; a group with a member not released, or
 with no recorded member, still takes the event (`PARTICIPANT_LEFT_OUT`),
-and a person kind of event (a migration) keeps its person rules, under
-which a family taking part is a person the check never assessed (R)
-(§4).
+and a person kind of event (a migration, a death, any person kind) is
+its members' own, so a group taking part takes it with it even when the
+check released every member, the group itself included (R, corrected
+the same day: such a group is not a person the check never assessed,
+as first written, as the check can release it) (§4).
+Amended by #364, orchestrator decisions U and V (2026-10-02, privacy
+first): a group with a `participant` statement of unknown value counts
+as not confirmed released, so it takes events with it and is never a
+harmless participant: Gustav and an unknown participant shield (U). And
+a group's members are read through the groups among them, transitively,
+through redirects, ending on cycles: a group whose members, so read,
+include at least one person, every one released, counts as released;
+a member group with a member not released, or of unknown value, makes
+the outer group take events with it (V) (§4).
 
 ## Context
 
@@ -418,7 +429,12 @@ keeps of the items it keeps follows:
   (the QIDs): what this event records is theirs too";
   `PARTICIPANT_LEFT_OUT`). An item that a qualifier of a `participant`
   statement names takes part as much, whatever the statement's value,
-  an unknown one or none included (#364). And an event goes with every
+  an unknown one or none included (#364). A released group (a family,
+  or any item named a `member of`, that names at least one member, read
+  through the groups among its members, every one released, and no
+  participant of unknown value; decisions J, Q, U and V) takes part
+  harmlessly, as a released person does, except in a person kind of
+  event, which is its members' own (decision R, as corrected). And an event goes with every
   item any of its statements names, as its value or a qualifier's,
   whatever the property, at any rank: a divorce carried out by an
   organization the export leaves out for its person evidence goes with
@@ -444,7 +460,8 @@ keeps of the items it keeps follows:
   an entity whose events go with it and not it with them: a released
   couple's marriage whose wedding goes stays, without the statement
   naming the wedding. Nor is an item typed human, at normal or preferred
-  rank, an event for the participant, link or unattended rule. An event so left out
+  rank, unless typed a family too, an event for the participant, link or
+  unattended rule. An event so left out
   may itself be a participant, or an item an event names, so the rule
   applies again until no more go, and a redirect to such an event goes
   with it. An event all of whose participants, and all the items its

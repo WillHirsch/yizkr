@@ -1071,12 +1071,16 @@ not a signal to grow the schema on.
   or unattended rule leaves out too, or that names an item left out to
   protect people. Such a group whose members are all released takes
   part in an event harmlessly, as a released person does, except in a
-  person kind of event. An
+  person kind of event, which is its members' own. Members are read
+  through the groups among them, through redirects, ending on cycles: a
+  member group with a member not released makes the outer group take
+  events with it, and so does a `participant` of unknown value. An
   event is an item typed `event`, a subclass of it or a person kind of
   event, or an item with a `participant` statement, but never a union (a
   partnership or a marriage, or a subclass of one), whose events go with
   it and not it with them, nor an item typed human at normal or
-  preferred rank (for the participant rule too). An
+  preferred rank, unless typed a family too (for the participant rule
+  too). An
   event so left out may itself be a participant, or named by another
   event, and the rule applies again. An event of a person kind that
   names no participant (none, or only one of unknown value, however
