@@ -3022,10 +3022,11 @@ class TestExportPublic:
             ("nested-family-not-released", True),
             ("nested-family-of-no-one", True),
             ("a-person-named-a-group", True),
-            ("nested-unknown-participant", True),
+            ("nested-family-unknown-participant", True),
             ("nested-only-an-unknown-participant", True),
-            ("nested-participant-possibly-living", True),
+            ("nested-family-participant-possibly-living", True),
             ("nested-family-of-its-participant", False),
+            ("a-released-person-named-a-group", False),
         ],
     )
     def test_a_groups_members_are_read_through_its_groups(
@@ -3042,8 +3043,9 @@ class TestExportPublic:
         # assessed (it took part in a migration), one that names no one,
         # or one with a participant of unknown value, takes the event with
         # it. Florence named a group (Gustav a member of her) is a member
-        # all the same, never a group to read through. A family known by
-        # its type and its participant alone, Gustav, is released
+        # all the same, never a group to read through, and so is Gustav
+        # (Florence a member of him), whose standing alone counts. A family
+        # known by its type and its participant alone, Gustav, is released
         _, items = vocabulary
         dump = export_dump(vocabulary)
         family = entity("Q446")
@@ -3053,6 +3055,9 @@ class TestExportPublic:
         elif case == "a-person-named-a-group":
             dump.says("Q405", "member_of", family)
             dump.says("Q401", "member_of", entity("Q405"))
+        elif case == "a-released-person-named-a-group":
+            dump.says("Q401", "member_of", family)
+            dump.says("Q405", "member_of", entity("Q401"))
         else:
             dump.entity("Q491", "the Lobig cousins", revision=491)
             dump.says("Q491", "member_of", family)
@@ -3076,15 +3081,15 @@ class TestExportPublic:
         if case in (
             "nested-family-of-no-one",
             "nested-only-an-unknown-participant",
-            "nested-participant-possibly-living",
+            "nested-family-participant-possibly-living",
         ):
             dump.says("Q401", "member_of", family)
-        if case == "nested-unknown-participant":
+        if case == "nested-family-unknown-participant":
             dump.says("Q491", "participant", entity("Q401"))
             dump.says("Q491", "participant", "_:genid9")
         if case == "nested-only-an-unknown-participant":
             dump.says("Q491", "participant", "_:genid9")
-        if case == "nested-participant-possibly-living":
+        if case == "nested-family-participant-possibly-living":
             dump.says("Q491", "participant", entity("Q405"))
         if case == "nested-family-of-its-participant":
             dump.says("Q491", "participant", entity("Q401"))
@@ -3110,6 +3115,30 @@ class TestExportPublic:
         text, mentioned = self.public(tmp_path)
         assert ("Q497" in mentioned) is not shields
         assert (dated(1975) in text) is not shields
+
+    @pytest.mark.parametrize("via", ["participant", "carried_out_by"])
+    def test_a_person_named_a_group_is_never_a_released_group(
+        self, tmp_path, vocabulary, via
+    ):
+        # Q495, who states no type, released by the check (a death of
+        # theirs, Q496), with Gustav (Q401) a member of them: a person is
+        # never a released group, so "Departure of the Lobigs", that names
+        # them as a participant or as who carried it out, goes
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.entity("Q495", "Q495", revision=495)
+        dump.entity("Q496", "a death", revision=496)
+        dump.says("Q496", "instance_of", entity(items["death"]))
+        dump.says("Q496", "participant", entity("Q495"))
+        dump.says("Q401", "member_of", entity("Q495"))
+        dump.entity("Q497", "Departure of the Lobigs", revision=497)
+        dump.says("Q497", "instance_of", entity(items["event"]))
+        dump.says("Q497", "point_in_time", dated(1975))
+        dump.says("Q497", via, entity("Q495"))
+        self.export_of(tmp_path, dump, vocabulary, released=("Q495",))
+        text, mentioned = self.public(tmp_path)
+        assert "Q497" not in mentioned
+        assert dated(1975) not in text
 
     @pytest.mark.parametrize(
         ("case", "goes"),
