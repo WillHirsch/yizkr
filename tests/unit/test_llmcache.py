@@ -3223,6 +3223,50 @@ class TestTheExtractor:
         assert [e["components"]["attempt"] for e in replaced] == [0]
         assert replaced[0]["gave_up"] is True
 
+    def test_a_refreshed_give_up_is_asked_once_per_run(self, tmp_path):
+        """A refresh asks a key once per run: an attempt that gives up
+        again under the refresh is served that new give-up for the rest of
+        the run, not asked a third time (#390)."""
+        asked = []
+
+        def answer(kind, prompt, opening):
+            asked.append(prompt)
+            raise OutputLimitReached()
+
+        first = for_attempt(client(tmp_path, Engine(answer)), 1)
+        with pytest.raises(OutputLimitReached):
+            first.complete("Wer war Klara Löbig?")
+        assert len(asked) == 1
+        caching = for_attempt(
+            client(tmp_path, Engine(answer), refresh={"extract"}), 1
+        )
+        for _ in range(2):
+            with pytest.raises(OutputLimitReached):
+                caching.complete("Wer war Klara Löbig?")
+        assert len(asked) == 2
+
+    def test_a_new_epoch_asks_a_give_up_again_and_leaves_it(self, tmp_path):
+        """A new epoch keys every attempt anew: the attempts the engine gave
+        up on are asked again, and their give-ups stay live under the old
+        epoch's key, not moved aside (#390)."""
+
+        def answer(kind, prompt, opening):
+            if "manifest of EVERY distinct entity" in prompt:
+                raise OutputLimitReached()
+            return segmenting(True)(kind, prompt, opening)
+
+        first, _ = extract(tmp_path, Engine(answer))
+        assert first.used_fallback_manifest
+        engine = Engine(extractor_answers())
+        again, batch = extract(tmp_path, engine, epochs={"extract": 1})
+        assert not again.used_fallback_manifest
+        assert len(batch.claims) == 2
+        assert kinds(engine)[0] == OPEN
+        gave_up = [e for e in live_entries(tmp_path) if e.get("gave_up")]
+        assert sorted(e["components"]["attempt"] for e in gave_up) == [0, 1]
+        assert {e["components"]["epoch"] for e in gave_up} == {0}
+        assert list((tmp_path / "cache").glob("*/*.replaced-*.json")) == []
+
     def test_a_chunk_give_up_is_kept_nowhere(self, tmp_path):
         """A chunk's retries share one key, so a give-up on a chunk is
         kept nowhere: the next run asks the chunk again (#390)."""
@@ -3582,3 +3626,17 @@ def test_the_cache_root_holds_only_entries(tmp_path):
         for name in names
     ), names
     assert sorted(os.listdir(tmp_path / "cache")) == [LOCK_FILE, shard]
+
+
+class TestTheStopReasonKept:
+    def test_only_a_stop_reason_kept_as_text_is_read(self):
+        """A hit carries the stop reason its entry keeps only when it is
+        text: anything else in its place reads as none (#390)."""
+        read = llmcache._stop_reason
+        assert read({"provenance": {"stop_reason": "max_tokens"}}) == (
+            "max_tokens"
+        )
+        assert read({"provenance": {"stop_reason": 7}}) is None
+        assert read({"provenance": {"stop_reason": ["max_tokens"]}}) is None
+        assert read({"provenance": "max_tokens"}) is None
+        assert read({}) is None

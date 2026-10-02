@@ -596,8 +596,12 @@ gave up on at the output limit is kept alike (#390), as a give-up entry
 match`) that raises `OutputLimitReached` again, with no call, so the run
 takes the same fallback. Only attempts keep their give-ups: a chunk's
 retries share one key, and a give-up kept there would fail every retry
-from the cache in every run. `--refresh extract` or a new epoch asks
-again, and the give-up entry is moved aside as replaced.
+from the cache in every run. `--refresh extract` asks again, and the
+give-up entry is moved aside as replaced by what the refreshed call
+stores, an answer or a new give-up; a refreshed call that answers empty
+or fails otherwise stores nothing, and the give-up stays live. A new
+epoch keys every attempt anew, so it asks again too, but the give-up
+stays where it is, under the old epoch's key.
 
 **A stricter parser replays a kept answer, rather than rejecting it.** An
 entity manifest or segmentation the cache kept, which the parser now
