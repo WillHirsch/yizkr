@@ -607,11 +607,20 @@ def test_the_fixture_takes_the_shapes_the_truthy_type_missed(
     # the unrecorded birth names no participant
     unrecorded = client.wbi.item.get(fixture_graph["unrecorded birth"])
     assert unrecorded.claims.get(properties["participant"]) == []
-    # the talk's one participant is of unknown value, and a qualifier
-    # names the person the export leaves out
+    # the talk's participants: the released person, and one of unknown
+    # value that a qualifier names as the person the export leaves out
     talk = client.wbi.item.get(fixture_graph["talk"])
-    (taking_part,) = talk.claims.get(properties["participant"])
-    assert taking_part.mainsnak.snaktype.value == "somevalue"
+    participants = talk.claims.get(properties["participant"])
+    (taking_part,) = [
+        statement
+        for statement in participants
+        if statement.mainsnak.snaktype.value == "somevalue"
+    ]
+    assert [
+        statement.mainsnak.datavalue["value"]["id"]
+        for statement in participants
+        if statement.mainsnak.snaktype.value == "value"
+    ] == [fixture_graph["released"]]
     (same_as,) = taking_part.qualifiers.get(
         properties["said_to_be_the_same_as"]
     )
