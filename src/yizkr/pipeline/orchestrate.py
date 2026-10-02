@@ -1448,14 +1448,13 @@ class Orchestrator:
         flag is no part of its content. It reads files only, and writes
         none."""
         from yizkr.pipeline.textlayer import VISION
-        from yizkr.pipeline.transcribe import PDF_PAGES
+        from yizkr.pipeline.transcribe import PDF_PAGES, check_vision_page
         from yizkr.pipeline.transcription_check import (
             TranscriptionCheckFailed,
             check_transcription,
             is_pdf,
             media_page_count,
         )
-        from yizkr.pipeline.transcription_record import record_text
 
         if not transcription.engine.startswith(f"{PDF_PAGES}:"):
             check = check_transcription(
@@ -1472,13 +1471,7 @@ class Orchestrator:
         flag = None
         for page in transcription.pages:
             if page.provenance.method == VISION:
-                record = transcription.page_record(page)
-                check = check_transcription(
-                    record_text(record.pages)[0] if record else "",
-                    pages=1,
-                    record=record,
-                    expect_record=True,
-                )
+                check = check_vision_page(transcription, page)
                 if not check.passed:
                     return (
                         f"{TranscriptionCheckFailed(check)} (page {page.page})"
@@ -1630,14 +1623,16 @@ class Orchestrator:
         derived_transcription), the first of them whose reading names the
         image and passes the check (`_image_failure`). No model is asked:
         the PDF's transcription read the image, through the LLM cache. Its
-        class, pages and flag are the reading's, and its language comes
-        from the reading's record (language.record_language), as a vision
-        transcription's does; from its text (language.resolve_language)
-        only for a reading with no record. RuntimeError when none keeps
-        one."""
+        class and pages are the reading's; its flag is the one the check
+        made now raises on the reading, as a reused view's is, not the one
+        stored with it; and its language comes from the reading's record
+        (language.record_language), as a vision transcription's does;
+        from its text (language.resolve_language) only for a reading with
+        no record. RuntimeError when none keeps one."""
         from yizkr.pipeline.language import record_language, resolve_language
         from yizkr.pipeline.presentation import derived_transcription
         from yizkr.pipeline.transcribe import Transcription
+        from yizkr.pipeline.transcription_check import check_transcription
 
         for container in doc.containers:
             path = derived_transcription(container.dir, doc.sha1)
@@ -1656,9 +1651,13 @@ class Orchestrator:
                     kept.text, self.language, fallback=self.fallback_language
                 )
             )
-            return kept.model_copy(update={"language": resolution.code}), (
-                resolution
+            check = check_transcription(
+                kept.text, pages=1, record=record, expect_record=True
             )
+            flag = check.signature if check.flagged else None
+            return kept.model_copy(
+                update={"language": resolution.code, "flag": flag}
+            ), resolution
         raise RuntimeError(
             f"no PDF that places image {doc.sha1[:12]} keeps a reading of it "
             "that passes the transcription check"
@@ -2029,17 +2028,18 @@ class Orchestrator:
         """The excerpts of a PDF read page by page (ExcerptRun), by their
         SHA-1s, from what its directory keeps: each image the record of
         its images names (_placed_images) that has a reading of its own
-        which passes the check (`_image_failure`), and in which the
-        record reads some text (`_image_reads_text`): an image whose
-        record calls no page transcribed (a photograph with no writing,
-        called blank; a colour chart, called not a document page) holds
-        nothing to extract. An image the never-ingest list names is left
-        out, asked again here, and so is one whose bytes a document of the
-        corpus has (`corpus`, their SHA-1s): that document is the witness,
-        and its bytes are not extracted again (ADR-0010). Each is found or
-        made by its SHA-1 among the run's excerpts, so an image that
-        several PDFs place is one excerpt, with each of them among its
-        containers. Reads files only, and writes none."""
+        which passes the check (`_image_failure`), and which shows a page
+        of a document (`_image_shows_a_page`): an image whose record calls
+        every page blank (a photograph with no writing) or not a document
+        page (a colour chart) holds nothing to extract. An illegible one
+        is an excerpt, so that a reader sees it was there. An image the
+        never-ingest list names is left out, asked again here, and so is
+        one whose bytes a document of the corpus has (`corpus`, their
+        SHA-1s): that document is the witness, and its bytes are not
+        extracted again (ADR-0010). Each is found or made by its SHA-1
+        among the run's excerpts, so an image that several PDFs place is
+        one excerpt, with each of them among its containers. Reads files
+        only, and writes none."""
         from yizkr.pipeline.presentation import derived_transcription
 
         record = self._placed_images(doc)
@@ -2052,7 +2052,7 @@ class Orchestrator:
                 or self._excluded_image(sha1)
                 or not derived_transcription(doc.dir, sha1).is_file()
                 or self._image_failure(doc, sha1) is not None
-                or not self._image_reads_text(doc, sha1)
+                or not self._image_shows_a_page(doc, sha1)
             ):
                 continue
             excerpt = self._excerpts.get(sha1)
@@ -2065,20 +2065,25 @@ class Orchestrator:
             found.append(excerpt)
         return found
 
-    def _image_reads_text(self, doc: DocumentRun, sha1: str) -> bool:
+    def _image_shows_a_page(self, doc: DocumentRun, sha1: str) -> bool:
         """Whether the reading the document's directory keeps of the image
-        with this SHA-1, one that passes the check, reads text: its record
-        calls a page transcribed (a reading with no record is judged by
-        its text alone, and does)."""
+        with this SHA-1, one that passes the check, shows a page of a
+        document: its record calls some page transcribed or illegible,
+        not every page blank or not a document page (a reading with no
+        record is judged by its text alone, and does)."""
         from yizkr.pipeline.presentation import derived_transcription
         from yizkr.pipeline.transcribe import Transcription
-        from yizkr.pipeline.transcription_record import TRANSCRIBED
+        from yizkr.pipeline.transcription_record import (
+            BLANK,
+            NOT_A_DOCUMENT_PAGE,
+        )
 
         kept = Transcription.model_validate_json(
             derived_transcription(doc.dir, sha1).read_text()
         )
         record = kept.record()
-        return record is None or TRANSCRIBED in record.statuses()
+        nothing = {BLANK, NOT_A_DOCUMENT_PAGE}
+        return record is None or not set(record.statuses()) <= nothing
 
     def _plan_excerpts(self, excerpts: Sequence[ExcerptRun]) -> None:
         """Add the excerpts the run plan does not hold yet to it, as the

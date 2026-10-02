@@ -330,11 +330,10 @@ re-running one step in isolation — but for a normal ingest you only ever run
   PDF renderer missing, a traceback, an API error) or an output that is
   wholly the engine's announcement ("Let me read the image."). Inside a
   record every signature only flags, and the flag tier reads each page's
-  notes too (ADR-0037 §3). A record's near-miss shapes (a page number
-  given as a number, null text, a code in capitals) are normalised, not
-  refused. Editorial
-  marks don't count, and a single image has no floor, since a photograph
-  may carry no text at all. The engine's phrases in English ("I couldn't
+  notes too (ADR-0037 §3). A record's near-miss shapes (a printed page
+  number given as a number, null text, a code in capitals) are
+  normalised, not refused. Editorial marks don't count, and a single
+  image has no floor, since a photograph may carry no text at all. The engine's phrases in English ("I couldn't
   open the PDF", "I can't transcribe this", "unable to comply with your
   request") only flag the output, since a printed email or letter could
   hold them too: the transcription goes on, carries the flag (`flag`) and

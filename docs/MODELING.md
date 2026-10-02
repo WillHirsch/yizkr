@@ -502,10 +502,11 @@ and reference the artifact itself or the producing run.
   image's item, after the PDF, before any claim that cites it (ADR-0008
   as amended by #397). The same image in several PDFs is one item and
   one excerpt; an image whose bytes a document of the corpus has is that
-  document. An image whose reading's record reads no text in it (a
-  photograph with no writing, a colour chart) is registered but is no
-  excerpt; an excerpt's language and class are its reading's record's
-  (ADR-0037). An image placed within a page read by vision is read with
+  document. An image whose reading's record calls every page blank or
+  not a document page (a photograph with no writing, a colour chart) is
+  registered but is no excerpt; an illegible one is an excerpt, so that
+  a reader sees it was there. An excerpt's language and class are its
+  reading's record's (ADR-0037). An image placed within a page read by vision is read with
   that page, as the compilation's.
 - A claim cites the witness that asserts it. A claim read from the
   compilation's own text cites the compilation, with its page as the

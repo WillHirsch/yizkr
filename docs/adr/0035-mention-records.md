@@ -11,12 +11,6 @@ grammar is resolved; and the review sheet's `critique_notes` puts each
 finding on exactly one row (its claim's, else the first row naming its
 entity), not on every row of its subject.
 
-Amended by #389 (2026-09-29): the transcription check, the stream
-assembly and language detection no longer read wording (§10): the check
-reads the transcription record (ADR-0037) and its English signatures
-only flag, the answer is the text after the last tool result, and
-detection reads a text outside its editorial marks.
-
 Amended by #407 (2026-09-29): the extraction prompts ask for records,
 roles, kinship classes, markers as claims, civil status, unions and
 judgement notes (§5). A claim names its own document as subject by an
@@ -33,6 +27,13 @@ source. A kinship term other than a cousin's with no "great-" has degree
 less `judgement_`. An entity's record or note that fails validation is
 set aside and counted in `coverage.json` (`records`, `notes`), and a
 claim whose note fails is a counted reject.
+
+Amended by #389 (2026-09-29): the transcription check, the stream
+assembly and language detection no longer read wording (§10): the check
+reads the transcription record (ADR-0037), and no wording fails a
+record, so its English signatures only flag one; the answer is the text
+after the last tool result; and detection reads a text outside its
+editorial marks.
 
 **Decided by the owner (2026-09-29):**
 

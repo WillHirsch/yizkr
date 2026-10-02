@@ -70,9 +70,10 @@ fields make, as its reading was checked when it was made (a page called
 blank needs no text), and the transcription of each image the
 document's directory keeps. Text read from a text layer is the
 document's own, read without an engine, and is never checked. A reused
-transcription that passes carries the flag of the check made now: the
-flag is no part of its content, so a change to the flag tier reaches
-every stored transcription without making one again. An image's
+transcription that passes carries the flag of the check made now, as
+does an excerpt made from a kept image reading: the flag is no part of
+its content, so a change to the flag tier reaches every stored
+transcription without making one again. An image's
 transcription that the check now fails is moved aside as
 `<sha1>.transcription.superseded-<n>.json` when the transcription is made
 again. `--refresh ROLE` makes the role's views again, in place, current or not

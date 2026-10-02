@@ -179,7 +179,10 @@ JSON object and nothing else, in this form:
 {document_class}
 - "pages": one object for each page, in order. An image is one page,
   unless it shows several pages of a document (an open book): then one
-  object for each page it shows.
+  object for each page it shows. A PDF gives one object for each page of
+  the PDF, never more: where a page of the PDF shows two pages of a
+  document (a spread), its object holds the text of both, in reading
+  order.
 - "page": the page's place, 1 for the first, 2 for the next, and so on.
 - "printed_page": the page number printed or written on the page,
   exactly as written ("iv", "12", "3a"), or null when it shows none.
@@ -450,6 +453,23 @@ class Transcription(BaseModel):
                 for page, (start, end) in zip(record.pages, spans, strict=True)
             ],
         )
+
+
+def check_vision_page(
+    transcription: Transcription, page: TranscribedPage
+) -> TranscriptionCheck:
+    """The transcription check of one page of a PDF read page by page
+    that the vision engine read: of the page's one-page record
+    (`Transcription.page_record`), as its reading was checked when the
+    page was made, so that a page the record calls blank needs no text
+    whenever it is checked again."""
+    record = transcription.page_record(page)
+    return check_transcription(
+        record_text(record.pages)[0] if record else "",
+        pages=1,
+        record=record,
+        expect_record=True,
+    )
 
 
 class Transcriber(Protocol):

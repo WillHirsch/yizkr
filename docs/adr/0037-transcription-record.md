@@ -45,7 +45,7 @@ transcription_record`):
 | Field | What it holds |
 |---|---|
 | `document_class` | the document's class: one of the manifest's artifact classes (the items that are a `subclass_of` artifact: `photograph`, `certificate`, `letter`, `census_page`, …), or `unclassified` when none fits |
-| `pages[]` | one object per page, in the media's order. An image is one page, unless it shows several pages of a document (an open book) |
+| `pages[]` | one object per page, in the media's order. An image is one page, unless it shows several pages of a document (an open book). A PDF gives one per page of the PDF, never more: a page of the PDF that shows a spread (two pages of a document) holds the text of both, in reading order |
 | `pages[].page` | the page's place in the media, from 1: the **physical index** |
 | `pages[].printed_page` | the page number printed or written on the page, exactly as written (`"iv"`, `"12"`, `"3a"`), or null: a field of its own, never the index |
 | `pages[].status` | `transcribed` (its text was read, in whole or in part), `blank` (no text), `illegible` (text of which nothing can be read) or `not-a-document-page` (a colour chart, a ruler, a scanner's cover) |
@@ -63,9 +63,11 @@ and bad page numbers fail the answer.
 A few harmless near-misses of the record's shape say what the record
 says, and are **normalised, not refused** (a Pydantic before-validator
 on each field): a `printed_page` given as a JSON number becomes its
-string (`12` is `"12"`); a `text`, `notes` or `languages` given as null
-is empty; and a language code is lower-cased (`"DE"` is `"de"`). A
-record's language code, as a claim's, may carry a region subtag, so
+string (`12` and `12.0` are `"12"`), though one that is not finite
+(`NaN` or `Infinity`, which Python's JSON reader takes as numbers)
+fails, since no page prints one; a `text`, `notes` or `languages` given
+as null is empty; and a language code is lower-cased (`"DE"` is `"de"`).
+A record's language code, as a claim's, may carry a region subtag, so
 `"de-DE"` is kept as `"de-de"`; were the record's language type ISO 639
 only, it would be reduced to its primary subtag instead.
 
@@ -91,10 +93,12 @@ a page's printed number, status, languages or notes, or to the class,
 changes the transcription's content hash, as a change to its text does,
 and extraction is made again. Each page's provenance (the method that
 read it and the engine) and the check's flag are not, as the engine is
-not (`TRANSCRIPTION_VOLATILE`). A reused view carries the flag of the
-check made on reuse, not the one it was made with, so a change to the
-flag tier reaches every stored transcription without making any of them
-again.
+not (`TRANSCRIPTION_VOLATILE`). A stored flag is recomputed everywhere
+it is read: a run's reuse of a view, an excerpt made from a kept image
+reading (ADR-0008, as amended by #397) and `yizkr anomalies recheck`
+each carry the flag of the check made now, not the one stored with the
+view or the reading, so a change to the flag tier reaches every stored
+transcription without making any of them again.
 
 **Vision pages of a PDF read page by page** (ADR-0008, as amended) fill
 the same fields: a page read by vision takes them from its reading's
@@ -113,8 +117,9 @@ on reuse either. The PDF's flag is its first vision page's.
 **Page numbers for extraction** are read from the record through
 `Transcription.printed_pages()`: the printed page numbers by physical
 index. Extraction's chunking does not read them yet: `printed_pages()`
-without a caller is this decision's scope, and extraction reading page
-numbers from the record is a follow-up.
+without a caller is this decision's scope, and extraction locating
+claims by the printed page numbers the record gives is a follow-up,
+#424.
 
 ### 3. The check reads the record
 
@@ -134,7 +139,10 @@ is transcribed again on the next run:
   more is allowed for an image, which may show an open book, but the
   record of a PDF read whole gives exactly the PDF's pages, and more
   fail (`pages-extra`), since its page markers would point at pages the
-  PDF lacks;
+  PDF lacks. The prompt says so: a PDF gives one record page for each
+  page of the PDF, and a page that shows a spread (two pages of a
+  document) holds the text of both, in reading order. Scratch run 1's
+  `pages-extra` count confirms that the engine keeps to it;
 - a blank output, or, for a document of two or more pages, fewer than
   three letters or digits per page the record calls `transcribed`
   (`too-short`); blank, illegible and not-a-document pages are the
@@ -170,14 +178,17 @@ language fails as not the record.
 
 A vision transcription's language is the one that holds most of the
 record's text: each page's letters and digits, outside the marks, count
-toward the first language it lists, and a tie goes to the language
-listed first; a record that names none takes the fallback code. The
-resolution is recorded as `record`. An explicit `--language` still
-forces its code. py3langid runs only on a text that has no record (a text
-file, a correction, slide text, a PDF read page by page), and reads it
-outside its editorial marks (ADR-0015, as amended). An excerpt (ADR-0008,
-as amended by #397) is the reading of its image, so its language, like
-its class and its pages, comes from that reading's record.
+toward the first language it lists, weighed by its primary subtag (so
+`de-de` and `de` are one language, given by its code as first listed),
+and a tie goes to the language listed first; a record that names none
+takes the fallback code. The resolution is recorded as `record`. An
+explicit `--language` still forces its code. py3langid runs only on a
+text that has no record (a text file, a correction, slide text, a PDF
+read page by page), and reads it outside its editorial marks (ADR-0015,
+as amended). An excerpt (ADR-0008, as amended by #397) is the reading of
+its image, so its language, like its class and its pages, comes from
+that reading's record, and its flag is the one the check made now raises
+on that reading (§2).
 
 ### 5. The answer is taken from the stream's structure
 
@@ -231,10 +242,26 @@ On the review's owner questions, following #389 and this ADR:
 5. **Whole-PDF page counts.** The record of a PDF read whole gives
    exactly the PDF's pages: more fail, as fewer already do (§3).
 6. **Page numbers.** `printed_pages()` without a caller is the intended
-   scope; extraction reading them is a follow-up (§2).
+   scope; extraction reading them is a follow-up, #424 (§2).
 7. **Refusals in other languages** written as a page's text pass
    unflagged: English-only flag signatures are an accepted known limit
    (§3).
+
+On the re-review's owner questions (2026-09-29; the owner may
+override):
+
+- **A. Stored flags** are recomputed everywhere they are read: a run's
+  reuse, an excerpt made from a stored image reading, and `yizkr
+  anomalies recheck` (§2).
+- **B. Illegible embedded images** stay excerpts, so that a reader sees
+  they were there. Only an image whose record calls every page `blank`
+  or `not-a-document-page` is no excerpt; a record of a transcribed page
+  and a blank one (an open book's written page and its blank verso) is
+  one (ADR-0008, as amended by #397).
+- **C. Two-page spreads in a PDF.** The prompt asks for one record page
+  per page of the PDF, with a spread's two halves in reading order
+  within that page. `pages-extra` stays a failure, and scratch run 1's
+  `pages-extra` count confirms it (§3).
 
 ## Consequences
 
@@ -247,8 +274,8 @@ On the review's owner questions, following #389 and this ADR:
   and is made again; with the prompt changed, its call misses the cache.
 - The prompt names the manifest's artifact classes, so a change to them
   changes the transcription calls' keys.
-- **Follow-ups.** Extraction reads page numbers from the record
-  (`Transcription.printed_pages()`), once #407's chunker lands; a text
+- **Follow-ups.** Extraction locates claims by the printed page numbers
+  the record gives (`Transcription.printed_pages()`, #424); a text
   with no record takes its class from the entity manifest, once the
   manifest states one; the flag tier's signatures are revisited with the
   first scratch runs' `transcription-flag` alerts (#214).

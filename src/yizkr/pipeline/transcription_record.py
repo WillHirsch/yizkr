@@ -48,6 +48,7 @@ Vater" is read as the German it is.
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Iterable, Sequence
 from functools import lru_cache
@@ -145,8 +146,12 @@ class RecordPage(BaseModel):
     @field_validator("printed_page", mode="before")
     @classmethod
     def _a_number_as_written(cls, value: object) -> object:
-        """A page number given as a JSON number is its string."""
+        """A page number given as a JSON number is its string ("12" for 12
+        or 12.0); one that is not finite (NaN, Infinity) is no number
+        printed on a page."""
         if isinstance(value, int | float) and not isinstance(value, bool):
+            if not math.isfinite(value):
+                raise ValueError("the printed page number is not finite")
             return str(int(value)) if float(value).is_integer() else str(value)
         return value
 
@@ -158,7 +163,7 @@ class RecordPage(BaseModel):
     @field_validator("languages", mode="before")
     @classmethod
     def _codes_in_lower_case(cls, value: object) -> object:
-        """No languages given as null is none; each code is lower-cased."""
+        """Languages given as null are none, and each code is lower-cased."""
         if value is None:
             return []
         if isinstance(value, list):
@@ -285,16 +290,21 @@ def merged(pages: Sequence[RecordPage], number: int) -> RecordPage:
 def main_language(pages: Iterable[RecordPage]) -> str | None:
     """The language that holds most of a record's text: each page's
     letters and digits (outside editorial marks) count toward the first
-    language it lists; a tie goes to the language listed first. None when
-    no page lists one."""
+    language it lists, weighed by its primary subtag, so that "de-de" and
+    "de" are one language; a tie goes to the language listed first. The
+    language is given by its code as first listed. None when no page
+    lists one."""
     weights: dict[str, int] = {}
+    codes: dict[str, str] = {}
     for page in pages:
         if page.languages:
             first = page.languages[0]
-            weights[first] = weights.get(first, 0) + letters(page.text)
+            primary = first.split("-", 1)[0]
+            codes.setdefault(primary, first)
+            weights[primary] = weights.get(primary, 0) + letters(page.text)
     if not weights:
         return None
-    return max(weights, key=lambda code: weights[code])
+    return codes[max(weights, key=lambda primary: weights[primary])]
 
 
 def printed_pages(pages: Iterable[object]) -> dict[int, str]:

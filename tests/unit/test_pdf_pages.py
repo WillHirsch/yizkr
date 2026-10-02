@@ -443,6 +443,11 @@ class TestTheRoute:
         transcription = transcription_of(doc)
         assert transcription.flag == "media-missing"
         assert transcription.pages[1].notes == "No image was provided."
+        # reused, the page's notes flag it again
+        again = run(tmp_path, corpus, reader)
+        assert set_asides(again) == []
+        assert again._transcription(doc).flag == "media-missing"
+        assert flag_alerts(again) == ["transcription-flag"]
 
     def test_a_garbled_text_layer_is_read_by_vision(self, tmp_path):
         """The second page's font extracts as private-use characters: the
@@ -828,6 +833,36 @@ def stricter_check(monkeypatch, phrase: str) -> None:
     records.stricter_check(monkeypatch, re.escape(phrase))
 
 
+def without_signature(monkeypatch, name: str) -> None:
+    """The transcription check without the signature `name`, as a
+    change to it would leave it."""
+    monkeypatch.setattr(
+        transcription_check,
+        "SIGNATURES",
+        tuple(s for s in transcription_check.SIGNATURES if s.name != name),
+    )
+
+
+def flag_alerts(orchestrator: CachedRun) -> list[str]:
+    """The transcription-flag alerts of this run."""
+    return [
+        event["check"]
+        for event in this_run(orchestrator, "alert")
+        if event.get("check") == "transcription-flag"
+    ]
+
+
+def unseen(text: str = SECOND) -> str:
+    """The record of one page holding `text`, whose note says the
+    engine saw no image: flagged media-missing."""
+    return json.dumps(
+        {
+            "document_class": "unclassified",
+            "pages": [record_page(1, text, notes="No image was provided.")],
+        }
+    )
+
+
 def set_asides(orchestrator: CachedRun, kind: str = "media") -> list[dict]:
     """The set-aside events of this run for documents of a kind: the
     PDFs' by default, since an excerpt's transcription is its image's
@@ -885,6 +920,108 @@ class TestReuse:
         doc = document(again, "family-history.pdf")
         assert transcription_of(doc).pages[1].status == status
         assert not (doc.dir / "transcription.superseded-1.json").exists()
+
+    def test_a_record_s_wording_fails_no_reused_page(self, tmp_path):
+        """A vision page whose record's text reads as an announcement is
+        a source's sentence when made and on every reuse: three runs read
+        it once and set nothing aside."""
+        corpus = folder(tmp_path, family_history=history(scanned()))
+        line = "I will bring the documents to Stupfield."
+        reader = Reader({"page-2": record_answer(line)})
+        for _run in range(3):
+            again = run(tmp_path, corpus, reader)
+            assert set_asides(again) == []
+        assert reader.names() == ["page-2.jpg"]
+        doc = document(again, "family-history.pdf")
+        assert again._transcription(doc).flag == "narration-only"
+
+    @pytest.mark.parametrize("whole", [False, True])
+    def test_a_stored_flag_the_check_raises_no_more_is_dropped(
+        self, tmp_path, monkeypatch, whole
+    ):
+        """Made flagged, a view reused once the check no longer raises
+        its flag carries none, and raises no alert, in a run's reuse and
+        in the anomaly recheck alike."""
+        from yizkr.pipeline.anomalies import recheck
+
+        if whole:
+            read_whole(monkeypatch)
+        corpus = folder(tmp_path, family_history=history(scanned()))
+        whole_record = json.dumps(
+            {
+                "document_class": "unclassified",
+                "pages": [
+                    record_page(1, FIRST),
+                    record_page(2, SECOND, notes="No image was provided."),
+                ],
+            }
+        )
+        reader = Reader(
+            {"page-2": unseen(), "family-history.pdf": whole_record}
+        )
+        first = run(tmp_path, corpus, reader)
+        doc = document(first, "family-history.pdf")
+        assert transcription_of(doc).flag == "media-missing"
+        assert flag_alerts(first) == ["transcription-flag"]
+
+        def rechecked():
+            return [
+                alert["check"]
+                for alert in recheck(tmp_path / "state")
+                if alert["check"] == "transcription-flag"
+            ]
+
+        assert rechecked() == ["transcription-flag"]
+        without_signature(monkeypatch, "media-missing")
+        again = run(tmp_path, corpus, reader)
+        assert set_asides(again) == []
+        assert (
+            again._transcription(document(again, doc.source.name)).flag is None
+        )
+        assert flag_alerts(again) == []
+        assert rechecked() == []
+        assert len(reader.names()) == 1
+
+    def test_the_first_flagged_vision_page_flags_the_pdf(self, tmp_path):
+        """Two vision pages flagged by two signatures: the first page's
+        flag is the PDF's, when made and on reuse."""
+        corpus = folder(
+            tmp_path, scans=pdfs.pdf([typed(FIRST), scanned(), scanned()])
+        )
+        reader = Reader(
+            {
+                "page-2": unseen(),
+                "page-3": record_answer("Let me take a look at the image."),
+            }
+        )
+        made = run(tmp_path, corpus, reader)
+        assert transcription_of(document(made, "scans.pdf")).flag == (
+            "media-missing"
+        )
+        again = run(tmp_path, corpus, reader)
+        assert set_asides(again) == []
+        assert again._transcription(document(again, "scans.pdf")).flag == (
+            "media-missing"
+        )
+
+    def test_a_text_file_s_flag_is_the_check_s_made_now(
+        self, tmp_path, monkeypatch
+    ):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        (corpus / "reply.txt").write_text(
+            "I'm sorry, but I can't help with that.\n"
+        )
+        reader = Reader({})
+        made = run(tmp_path, corpus, reader)
+        assert transcription_of(document(made, "reply.txt")).flag == (
+            "refusal-short"
+        )
+        without_signature(monkeypatch, "refusal-short")
+        again = run(tmp_path, corpus, reader)
+        assert set_asides(again, "text") == []
+        assert again._transcription(document(again, "reply.txt")).flag is None
+        assert flag_alerts(again) == []
 
     @pytest.mark.parametrize("whole", [False, True])
     def test_the_flag_is_the_one_the_check_raises_now(

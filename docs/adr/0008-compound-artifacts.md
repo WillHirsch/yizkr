@@ -615,17 +615,21 @@ the compilation's.
   (`transcription.corrected.txt`) replaces the PDF's own text only: its
   excerpts come from the record its reading kept.
 - **The transcription record (#389, ADR-0037).** An excerpt's
-  transcription is the kept reading, so its class, its pages and its flag
-  are the reading's record's, never its kind's, and its language is the
-  one that holds most of the record's text (resolution `record`);
-  py3langid guesses it only for a reading with no record. The kept
-  reading is judged by the record check, as any vision reading is.
-- **An image the record reads no text in is no excerpt.** An image whose
-  kept reading's record calls no page `transcribed` (a photograph with no
-  writing, called `blank`; a scanner's colour chart, called
-  `not-a-document-page`) passes the check and is kept, but holds nothing
-  to extract, so it is no excerpt; the write still registers it as the
-  PDF's image.
+  transcription is the kept reading, so its class and its pages are the
+  reading's record's, never its kind's; its language is the one that
+  holds most of the record's text (resolution `record`), and py3langid
+  guesses it only for a reading with no record; and its flag is the one
+  the check made now raises on the reading, not the one stored with it.
+  The kept reading is judged by the record check, as any vision reading
+  is.
+- **An image that shows no page of a document is no excerpt.** An image
+  whose kept reading's record calls every page `blank` (a photograph with
+  no writing) or `not-a-document-page` (a scanner's colour chart) passes
+  the check and is kept, but holds nothing to extract, so it is no
+  excerpt; the write still registers it as the PDF's image. An image the
+  record calls `illegible` is an excerpt, so that a reader sees it was
+  there, and so is one with a transcribed page beside a blank one (an
+  open book's written page and its blank verso).
 - **Decided by default** (the owner may override): an excerpt's status
   is independent of its PDF's; an excerpt's write may register its PDF's
   item (its identity, no claims) before the PDF's own review is

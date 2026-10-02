@@ -42,12 +42,14 @@ from tests.unit.test_pdf_pages import (
     booklet,
     document,
     excerpt_of,
+    flag_alerts,
     folder,
     renderer,  # noqa: F401
     run,
     set_asides,
     transcription_of,
     typed,
+    without_signature,
 )
 from tests.unit.test_registrar import (
     ITEMS,
@@ -109,6 +111,38 @@ def reprint(image: pdfs.Image = LETTER_IMAGE) -> bytes:
     page = pdfs.Page().image(image, 72, 520, 300, 200)
     page.text(pdfs.lines(TRANSLATION), y=500)
     return pdfs.pdf([typed(SOFTWARE), page])
+
+
+# the letter's reading, whose note says the engine saw no image: flagged
+# media-missing
+UNSEEN = json.dumps(
+    {
+        "document_class": "letter",
+        "pages": [
+            record_page(
+                1, EXCERPT, languages=["de"], notes="No image was provided."
+            )
+        ],
+    },
+    ensure_ascii=False,
+)
+
+
+def reading_of(*statuses: str) -> str:
+    """The record of an image whose pages have these statuses: the
+    letter's text on a transcribed page, the mark on an illegible one,
+    and nothing on the rest."""
+    text = {"transcribed": EXCERPT, "illegible": "[illegible]"}
+    return json.dumps(
+        {
+            "document_class": "letter",
+            "pages": [
+                record_page(n, text.get(status, ""), status=status)
+                for n, status in enumerate(statuses, 1)
+            ],
+        },
+        ensure_ascii=False,
+    )
 
 
 def batch_of(doc) -> ClaimBatch:
@@ -247,46 +281,117 @@ class TestAnExcerpt:
         assert excerpt.state.detail["language"]["source"] == "record"
         assert transcription.document_class == "letter"
 
-    @pytest.mark.parametrize("status", ["blank", "not-a-document-page"])
-    def test_an_image_the_record_reads_no_text_in_is_no_excerpt(
-        self, tmp_path, status
+    @pytest.mark.parametrize(
+        "options, languages, code, source",
+        [
+            # a record that names no language takes the run's fallback
+            ({"fallback_language": "de"}, [], "de", "fallback"),
+            # a language the run is given is forced, whatever the record
+            ({"language": "fy"}, ["de"], "fy", "override"),
+        ],
+    )
+    def test_an_excerpt_s_language_falls_back_or_is_forced(
+        self, tmp_path, options, languages, code, source
+    ):
+        corpus = folder(tmp_path, booklet=booklet())
+        reading = json.dumps(
+            {
+                "document_class": "letter",
+                "pages": [record_page(1, EXCERPT, languages=languages)],
+            },
+            ensure_ascii=False,
+        )
+        orchestrator = run(
+            tmp_path, corpus, Reader({LETTER_SHA1: reading}), **options
+        )
+        excerpt = excerpt_of(orchestrator, LETTER_SHA1)
+        assert transcription_of(excerpt).language == code
+        assert excerpt.state.detail["language"]["source"] == source
+
+    @pytest.mark.parametrize(
+        "statuses",
+        [
+            ["blank"],
+            ["not-a-document-page"],
+            ["blank", "not-a-document-page"],
+        ],
+    )
+    def test_an_image_that_shows_no_page_is_no_excerpt(
+        self, tmp_path, statuses
     ):
         """A photograph with no writing, or a colour chart: the reading
         passes, and is kept, but there is nothing to extract."""
         corpus = folder(tmp_path, booklet=booklet())
-        reading = json.dumps(
-            {
-                "document_class": "photograph",
-                "pages": [record_page(1, "", status=status)],
-            }
+        orchestrator = run(
+            tmp_path, corpus, Reader({LETTER_SHA1: reading_of(*statuses)})
         )
-        orchestrator = run(tmp_path, corpus, Reader({LETTER_SHA1: reading}))
         doc = document(orchestrator, "booklet.pdf")
         assert derived_transcription(doc.dir, LETTER_SHA1).is_file()
         assert orchestrator._excerpts == {}
         assert not (tmp_path / "state" / EXCERPTS_DIR).exists()
         assert LETTER_SHA1 not in planned(orchestrator)
 
+    @pytest.mark.parametrize(
+        "statuses",
+        [
+            ["illegible"],
+            ["transcribed", "blank"],
+            ["blank", "illegible"],
+        ],
+    )
+    def test_an_image_that_shows_a_page_is_an_excerpt(
+        self, tmp_path, statuses
+    ):
+        """A letter none of which can be read stays an excerpt, so that a
+        reader sees it was there; so does an open book's written page
+        beside its blank verso."""
+        corpus = folder(tmp_path, booklet=booklet())
+        orchestrator = run(
+            tmp_path, corpus, Reader({LETTER_SHA1: reading_of(*statuses)})
+        )
+        excerpt = excerpt_of(orchestrator, LETTER_SHA1)
+        assert planned(orchestrator)[LETTER_SHA1] == KIND
+        assert [p.status for p in transcription_of(excerpt).pages] == (
+            statuses
+        )
+
     def test_a_flagged_reading_is_an_excerpt_with_its_flag(self, tmp_path):
         corpus = folder(tmp_path, booklet=booklet())
-        reading = json.dumps(
-            {
-                "document_class": "letter",
-                "pages": [
-                    record_page(
-                        1,
-                        EXCERPT,
-                        languages=["de"],
-                        notes="No image was provided.",
-                    )
-                ],
-            },
-            ensure_ascii=False,
-        )
-        orchestrator = run(tmp_path, corpus, Reader({LETTER_SHA1: reading}))
+        orchestrator = run(tmp_path, corpus, Reader({LETTER_SHA1: UNSEEN}))
         excerpt = excerpt_of(orchestrator, LETTER_SHA1)
         assert transcription_of(excerpt).flag == "media-missing"
         assert excerpt.batch.exists()
+
+    def test_an_excerpt_carries_the_flag_the_check_raises_now(
+        self, tmp_path, monkeypatch
+    ):
+        """The reading is kept flagged. Once the check no longer raises
+        that flag, an excerpt made from the kept reading (its directory
+        lost, say) carries none, as a reused view does, not the flag
+        stored with the reading."""
+        corpus = folder(tmp_path, booklet=booklet())
+        reader = Reader({LETTER_SHA1: UNSEEN})
+        first = run(tmp_path, corpus, reader)
+        assert transcription_of(excerpt_of(first, LETTER_SHA1)).flag == (
+            "media-missing"
+        )
+        doc = document(first, "booklet.pdf")
+        kept = json.loads(
+            derived_transcription(doc.dir, LETTER_SHA1).read_text()
+        )
+        without_signature(monkeypatch, "media-missing")
+        shutil.rmtree(tmp_path / "state" / EXCERPTS_DIR / LETTER_SHA1)
+        again = run(tmp_path, corpus, reader)
+        excerpt = excerpt_of(again, LETTER_SHA1)
+        assert transcription_of(excerpt).flag is None
+        assert flag_alerts(again) == []
+        # the kept reading stands as it was: nothing is read again
+        assert reader.names() == [f"{LETTER_SHA1}.png"]
+        assert kept["flag"] == "media-missing"
+        assert (
+            json.loads(derived_transcription(doc.dir, LETTER_SHA1).read_text())
+            == kept
+        )
 
     def test_an_image_without_a_reading_is_no_excerpt(self, tmp_path):
         corpus = folder(tmp_path, booklet=booklet())

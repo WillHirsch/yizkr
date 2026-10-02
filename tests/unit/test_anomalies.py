@@ -37,7 +37,7 @@ from tests.fixtures.records import record_answer
 from tests.unit.conftest import RecordedTimer
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.core.corpus import ExclusionList
-from yizkr.pipeline import anomalies, rundir
+from yizkr.pipeline import anomalies, rundir, transcription_check
 from yizkr.pipeline.anomalies import (
     AnomalyChecks,
     AnomalyConfigError,
@@ -2850,6 +2850,44 @@ class TestRecheck:
             ),
         )
         assert [a for a in alerts if a["check"] == "claim-yield"] == []
+
+    def test_a_recheck_carries_the_flag_the_check_raises_now(
+        self, tmp_path, monkeypatch
+    ):
+        """A recheck reads a stored transcription's flag as a run's reuse
+        of it would: a flag the check raises now is raised, though the
+        view was made without it, and one it no longer raises is not,
+        though the view stores it (ADR-0037 §2)."""
+        state = tmp_path / "state"
+        a_recorded_document(
+            state, "gained.png", text=MARRIAGE, engine="llm-vision:fake-model"
+        )
+        dropped = a_recorded_document(
+            state,
+            "dropped.png",
+            text=NATURALISATION,
+            engine="llm-vision:fake-model",
+        )
+        view = json.loads((dropped / "transcription.json").read_text())
+        (dropped / "transcription.json").write_text(
+            json.dumps({**view, "flag": "media-missing"})
+        )
+        flagging = transcription_check._signature(
+            "flagged-now",
+            transcription_check.TOOL_FAILURE,
+            r"Standesamt Flörburg",
+        )
+        monkeypatch.setattr(
+            transcription_check,
+            "SIGNATURES",
+            (*transcription_check.SIGNATURES, flagging),
+        )
+        alerts = recheck(state, load_config())
+        assert [
+            (alert["subject"], alert["signature"])
+            for alert in alerts
+            if alert["check"] == "transcription-flag"
+        ] == [(sha1_of("gained.png")[:12], "flagged-now")]
 
     def test_a_whole_pdf_s_record_gives_exactly_its_pages(self, tmp_path):
         """A record of two pages is too many for a PDF of one, read whole,

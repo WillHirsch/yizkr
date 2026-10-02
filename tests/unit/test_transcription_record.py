@@ -13,6 +13,7 @@ its English, German, Russian and Frisian, or invented engine text.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -41,6 +42,7 @@ from yizkr.pipeline.transcription_check import (
     TranscriptionCheckFailed,
     check_answer,
     check_transcription,
+    is_pdf,
 )
 from yizkr.pipeline.transcription_record import (
     EDITORIAL_MARKS,
@@ -183,6 +185,36 @@ class TestTheRecord:
     )
     def test_bad_page_numbers_and_statuses_still_fail(self, page):
         with pytest.raises(RecordError):
+            parse_record(a_record(page))
+
+    def test_a_printed_page_number_is_written_as_printed(self):
+        """A whole number given as a JSON float is the number printed
+        ("12", never "12.0"); a fraction keeps its digits."""
+        pages = parse_record(
+            a_record(
+                {"page": 1, "printed_page": 12.0, "status": "blank"},
+                {"page": 2, "printed_page": 12.5, "status": "blank"},
+            )
+        ).pages
+        assert [page.printed_page for page in pages] == ["12", "12.5"]
+
+    @pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity"])
+    def test_a_printed_page_number_that_is_not_finite_fails(self, token):
+        """Python's JSON reader takes these tokens as numbers; no page
+        prints one."""
+        answer = (
+            '{"document_class": "letter", "pages": [{"page": 1, '
+            f'"printed_page": {token}, "status": "blank"}}]}}'
+        )
+        with pytest.raises(RecordError, match="printed_page"):
+            parse_record(answer)
+
+    @pytest.mark.parametrize("languages", [[" de"], "de"])
+    def test_languages_other_than_a_list_of_codes_fail(self, languages):
+        """A code with a space, or a bare string in place of the list, is
+        no harmless near-miss."""
+        page = {"page": 1, "status": "blank", "languages": languages}
+        with pytest.raises(RecordError, match="languages"):
             parse_record(a_record(page))
 
     @pytest.mark.parametrize(
@@ -389,6 +421,41 @@ class TestTheCheckReadsTheRecord:
         assert check.signature == "refusal-request"
         assert record is not None
 
+    def test_a_note_in_the_words_of_a_failing_signature_only_flags(self):
+        """The notes are read with every signature, the fail tier's
+        included, and only flag the record."""
+        answer = a_record(
+            record_page(
+                1,
+                "Liebe Klara",
+                languages=["de"],
+                notes="Let me take a look at the image.",
+            )
+        )
+        check, _record = check_answer(answer, pages=1)
+        assert (check.passed, check.flagged) == (True, True)
+        assert check.signature == "narration-only"
+        assert "page 1's notes" in check.reason
+
+    def test_the_first_page_s_notes_give_the_flag(self):
+        answer = a_record(
+            record_page(1, "", status="blank", notes="No image was provided."),
+            record_page(
+                2,
+                "Liebe Klara",
+                languages=["de"],
+                notes="Let me take a look at the image.",
+            ),
+        )
+        check, _record = check_answer(answer, pages=2)
+        assert check.signature == "media-missing"
+        assert "page 1's notes" in check.reason
+
+    def test_a_pdf_is_known_by_its_suffix_in_any_case(self):
+        assert is_pdf(Path("FAMILY-HISTORY.PDF"))
+        assert is_pdf(Path("family-history.pdf"))
+        assert not is_pdf(Path("letter-excerpt-1939.png"))
+
     @pytest.mark.parametrize(
         "line, signature",
         [
@@ -528,6 +595,13 @@ class TestTheTranscriber:
         for status in ("transcribed", "blank", "illegible"):
             assert f'"{status}"' in TRANSCRIPTION_PROMPT
         assert '"not-a-document-page"' in TRANSCRIPTION_PROMPT
+        # a PDF's record gives exactly its pages, a spread in one of them
+        # (ADR-0037 §3)
+        assert (
+            "A PDF gives one object for each page of the PDF, never more: "
+            "where a page of the PDF shows two pages of a document (a "
+            "spread), its object holds the text of both, in reading order."
+        ) in " ".join(TRANSCRIPTION_PROMPT.split())
 
     def test_the_record_reaches_the_view(self, tmp_path):
         answer = a_record(
@@ -701,6 +775,35 @@ class TestLanguageOutsideTheMarks:
         assert main_language(tie) == "fy"
         assert record_language(pages, "auto").code == "de"
         assert record_language(pages, "en").source == "override"
+
+    def test_a_language_is_weighed_by_its_primary_subtag(self):
+        """German tagged "de-de" on one page and "de" on another is one
+        language: either page alone holds less text than the English one,
+        and the two together more. It is given by its code as first
+        listed."""
+        pages = [
+            RecordPage(
+                page=1,
+                status="transcribed",
+                text="Liebe Klara",
+                languages=["de-de"],
+            ),
+            RecordPage(
+                page=2,
+                status="transcribed",
+                text="Dein Vater",
+                languages=["de"],
+            ),
+            RecordPage(
+                page=3,
+                status="transcribed",
+                text="Wastl to Klara",
+                languages=["en"],
+            ),
+        ]
+        assert main_language([pages[0], pages[2]]) == "en"
+        assert main_language([pages[1], pages[2]]) == "en"
+        assert main_language(pages) == "de-de"
 
 
 def stream(*events: dict) -> str:

@@ -112,9 +112,10 @@ engine's voice that a letter may also write (a refusal, a note that the
 media could not be read); for a transcription with a record, any
 signature, in a page's text or in its notes (ADR-0037 §3). The
 transcription goes on downstream; its stage output carries the flag
-(`flag`), which this check reads, for review. A reused transcription
-carries the flag of the check made on reuse. Value `true`; `signature`
-is the signature's name.
+(`flag`), which this check reads, for review. A stored transcription
+carries the flag of the check made now wherever it is read: a run's
+reuse of it, an excerpt made from a kept image reading, and a recheck
+(ADR-0037 §2). Value `true`; `signature` is the signature's name.
 
 **`transcription-sparse`**: a vision transcription with fewer letters and
 digits per page than `min-chars-per-page`, for a document of at least
@@ -436,7 +437,9 @@ again, under the thresholds as they are now (`--config` names a file of
 thresholds in place of the one `$YIZKR_ANOMALIES` names), without
 dispatching anything or recomputing any stage (`anomalies.recheck`).
 Each stored vision or text-file transcription meets the transcription
-check as it is now, as a run's reuse of it would, and every output meets
+check as it is now, as a run's reuse of it would, and each stored
+transcription, a PDF read page by page's included, carries the flag the
+check raises now, not the one stored with it; and every output meets
 the per-output checks and the distributions over the whole run. The rate
 checks, which read a run's dispatches and calls rather than its outputs,
 are not checked again. Its alerts, all carried, are appended to the

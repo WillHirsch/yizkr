@@ -598,6 +598,53 @@ def check_verdict(
     return verdict(check.failure, check.signature)
 
 
+def current_flag(
+    *,
+    text: str,
+    engine: Any,
+    page_count: int | None,
+    transcription: Any = None,
+    whole_pdf: bool = False,
+) -> str | None:
+    """The flag the transcription check made now raises on a stored
+    transcription, as a run's reuse of it sets it (the flag is no part of
+    its content, so a check changed since the view was made may flag it
+    otherwise): a vision or text-file transcription's, from the check of
+    its text and record; a PDF read page by page's, from its first vision
+    page the check flags (transcribe.check_vision_page); None for one the
+    check fails, or a route it never judges."""
+    from yizkr.pipeline.textlayer import VISION as BY_VISION
+    from yizkr.pipeline.transcribe import (
+        PDF_PAGES,
+        Transcription,
+        check_vision_page,
+    )
+
+    kind = route(engine)
+    if kind in CHECKED_ROUTES:
+        vision = kind == VISION
+        check = check_transcription(
+            text,
+            pages=page_count,
+            record=_record(transcription) if vision else None,
+            expect_record=vision,
+            whole_pdf=whole_pdf,
+        )
+        return check.signature if check.passed and check.flagged else None
+    if kind != PDF_PAGES or not isinstance(transcription, Mapping):
+        return None
+    try:
+        stored = Transcription.model_validate(transcription)
+    except (ValueError, TypeError):
+        return None
+    for page in stored.pages or ():
+        if page.provenance.method == BY_VISION:
+            check = check_vision_page(stored, page)
+            if check.flagged:
+                return check.signature
+    return None
+
+
 # How the transcription check's failure reads (transcription_check.
 # TranscriptionCheckFailed): in a stage's `failed` event, after the
 # exception's name, and in the `set-aside` event of a reused view it fails
@@ -2057,22 +2104,27 @@ def _median_without(ordered: Sequence[float], index: int) -> float:
 
 
 def _recheck_document(checks: AnomalyChecks, doc: _Recorded) -> None:
-    """Check one document's stored outputs again (recheck)."""
+    """Check one document's stored outputs again (recheck). A stored
+    transcription is judged, and carries the flag, as a run's reuse of it
+    would: the check made now decides both (`check_verdict`,
+    `current_flag`)."""
     transcription = _read_json(doc.transcription)
     if isinstance(transcription, Mapping):
         text = transcription.get("text")
+        judged = {
+            "text": text,
+            "engine": transcription.get("engine"),
+            "page_count": checks._medium_pages(doc),
+            "transcription": transcription,
+            "whole_pdf": doc.kind == "media" and is_pdf(Path(doc.source)),
+        }
         finding = (
-            check_verdict(
-                checks.config,
-                text=text,
-                engine=transcription.get("engine"),
-                page_count=checks._medium_pages(doc),
-                transcription=transcription,
-                whole_pdf=doc.kind == "media" and is_pdf(Path(doc.source)),
-            )
+            check_verdict(checks.config, **judged)
             if isinstance(text, str)
             else None
         )
+        if isinstance(text, str):
+            transcription = {**transcription, "flag": current_flag(**judged)}
         if finding is not None:
             checks._raise(
                 finding,
