@@ -24,6 +24,9 @@ Amended by #369 (2026-09-29): labels are compared and set by the one rule
 the writer keeps labels by: see Amendments (#103's).
 Amended by #403 (2026-09-29): that rule makes U+FFFE and U+FFFF U+FFFD
 once it has trimmed a label, as Wikibase does: see Amendments (#103's).
+Amended by #373 (2026-10-02): a derived medium's file name keeps its
+container's title, in the form MediaWiki takes and cut to fit its limit:
+see Amendments.
 
 ## Context
 
@@ -442,8 +445,9 @@ time"):
   found by its SHA-1 alone, and a new image whose label another item
   already has takes a content-tagged label. Its bytes are uploaded from
   the file the record keeps, under the name `"<deck title> <name in the
-  archive>"`. Bytes the archive holds under several names are one
-  medium: the first name labels it (`"<deck title> — <name>"`), and the
+  archive>"` (in the form MediaWiki takes, as amended by #373). Bytes the
+  archive holds under several names are one medium: the first name
+  labels it (`"<deck title> — <name>"`), and the
   others are its aliases. Labels are compared and set in the form
   Wikibase stores them in, by the rule the writer keeps labels by (each
   run of control characters and line or paragraph separators made one
@@ -599,8 +603,9 @@ the compilation's.
   number, a `photograph` (the Decision's class for a raster image, which
   the #289 amendment's fourth question leaves open), its description
   naming the pages. Its file is uploaded under `"<title> page <n>, image
-  <k>.<suffix>"`. The write of an excerpt registers each PDF that places
-  it, with its images, and cites the image's item. The public export
+  <k>.<suffix>"` (in the form MediaWiki takes, as amended by #373). The
+  write of an excerpt registers each PDF that places it, with its
+  images, and cites the image's item. The public export
   needs no change: an image states its kind, stated in the PDF, as any
   artifact does.
 - **Reuse.** A PDF's transcription that passes the check is still set
@@ -652,3 +657,25 @@ the compilation's.
   when one of the PDFs that place it no longer has the bytes it was read
   with, even when another places the image; and the anomaly checks'
   recheck does not read the excerpts' directories.
+
+Amended by #373 (2026-10-02): **a derived medium's file name keeps its
+container's title.** The names of the #103 amendment, `"<deck title>
+<name in the archive>"`, and of the #397 amendment, `"<title> page <n>,
+image <k>.<suffix>"`, kept only the title's ASCII letters, digits and
+` _.-`, and nothing bounded their length: a deck titled "Familie Löbig"
+uploaded `Familie Lbig image1.png`, a title in Russian left only
+`presentation` or `pdf`, and a long title passed MediaWiki's limit, so
+the upload was refused once the container's item was made. Each part of
+the name is now in the form MediaWiki takes as it is (ADR-0010, "File
+names MediaWiki takes"): every letter kept, `-` for each character or
+sequence it refuses, and the whole within 231 bytes, the title cut first,
+ending in "…", or left out, so the medium's own name stays whole
+whenever it fits on its own; a cut never falls between a letter and its
+combining marks. The container's kind stands for a title of which that
+form leaves nothing. A medium is labelled by the first of its names that
+shows something once stored; a name that shows nothing (control
+characters, a zero-width space or bidirectional marks alone) is no
+alias. A medium with no such name is labelled
+and uploaded as `image N`, N its place among the record's media in the
+order of their SHA-1s, excluded media counted, so its label ends in a
+name the instance keeps as sent, and a re-run sends no edit.
