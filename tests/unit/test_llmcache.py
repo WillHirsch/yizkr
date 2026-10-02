@@ -42,10 +42,12 @@ from tests.unit.test_orchestrate import (
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import llm, llmcache
 from yizkr.pipeline.chunking import ChunkedClaimExtractor
+from yizkr.pipeline.critique import run_critique
 from yizkr.pipeline.extract import LlmClaimExtractor
 from yizkr.pipeline.llm import (
     ConversationalLlmClient,
     ConversationChanged,
+    OutputLimitReached,
     PassPaused,
     RejectingLlmClient,
     cached_client,
@@ -74,7 +76,11 @@ from yizkr.pipeline.orchestrate import (
 )
 from yizkr.pipeline.rundir import RunDir, run_state
 from yizkr.pipeline.stages import content_hash
-from yizkr.pipeline.transcribe import TRANSCRIPTION_PROMPT, Transcription
+from yizkr.pipeline.transcribe import (
+    TRANSCRIPTION_PROMPT,
+    LlmVisionTranscriber,
+    Transcription,
+)
 
 
 class Engine:
@@ -242,6 +248,11 @@ def client(tmp_path, engine, *, role="extract", run=None, **cache_options):
     )
 
 
+def entry_path(tmp_path, key: str) -> Path:
+    """Where the live entry under `key` lives."""
+    return tmp_path / "cache" / key[:2] / f"{key}.json"
+
+
 def entry_files(tmp_path) -> list[Path]:
     return sorted((tmp_path / "cache").glob("*/*.json"))
 
@@ -361,8 +372,13 @@ class TestKeys:
         falls back, asks each attempt through llm.for_attempt: the cache
         keys, and keeps, each attempt apart (#225)."""
         caching = client(tmp_path, Engine())
-        second = for_attempt(caching, 1)
-        assert for_attempt(caching, 0) is caching
+        first, second = for_attempt(caching, 0), for_attempt(caching, 1)
+        # attempt 0 is keyed as the client's own calls are, and asked as an
+        # attempt, whose give-up is kept (#390)
+        assert first.complete_key("Read it.") == caching.complete_key(
+            "Read it."
+        )
+        assert first._attempted and not caching._attempted
         assert second is not caching and second.cache is caching.cache
         assert second.complete_key("Read it.") != (
             caching.complete_key("Read it.")
@@ -692,9 +708,13 @@ class TestStorage:
             assert stat.S_IMODE(directory.stat().st_mode) == 0o700
 
     def test_a_response_copies_and_pickles_with_its_key(self, tmp_path):
-        client(tmp_path, Engine()).complete("Read it.")
+        first = client(tmp_path, Engine()).complete("Read it.")
+        path = entry_path(tmp_path, first.key)
+        entry = json.loads(path.read_text())
+        entry["provenance"]["stop_reason"] = "max_tokens"
+        path.write_text(json.dumps(entry))
         response = client(tmp_path, Engine()).complete("Read it.")
-        assert response.hit
+        assert response.hit and response.stop_reason == "max_tokens"
         for twin in (
             copy.copy(response),
             copy.deepcopy(response),
@@ -704,6 +724,7 @@ class TestStorage:
             assert twin == response
             assert twin.key == response.key
             assert twin.hit
+            assert twin.stop_reason == "max_tokens"
 
     def test_nothing_is_stored_until_a_call_is_answered(self, tmp_path):
         """Opening a cache makes its root, private, and locks it (#236);
@@ -3159,6 +3180,234 @@ class TestTheExtractor:
             assert engine.calls == []
             assert replayed.claims == batch.claims
 
+    def test_a_give_up_replays_as_it_went(self, tmp_path):
+        """The engine gives up on the manifest at its output limit in both
+        attempts, and the extraction falls back to segmentation. Each
+        give-up is kept under its attempt's key, as a refused answer is: a
+        later run gives up again from the cache, without asking the
+        engine, and takes the same fallback to the same batch (#390)."""
+
+        def answer(kind, prompt, opening):
+            if "manifest of EVERY distinct entity" in prompt:
+                raise OutputLimitReached()
+            return segmenting(True)(kind, prompt, opening)
+
+        engine = Engine(answer)
+        first, batch = extract(tmp_path, engine)
+        assert first.used_fallback_manifest
+        assert len(batch.claims) == 2
+        gave_up = [e for e in live_entries(tmp_path) if e.get("gave_up")]
+        assert sorted(e["components"]["attempt"] for e in gave_up) == [0, 1]
+        assert {e["response"] for e in gave_up} == {""}
+        assert {e["components"]["call"] for e in gave_up} == {OPEN}
+        run = RunDir(tmp_path / "run")
+        again, replayed = extract(
+            tmp_path, Refusing(segmenting(True)), run=run
+        )
+        assert again.used_fallback_manifest
+        assert replayed.claims == batch.claims
+        assert events(run, "cache-miss") == []
+        hits = events(run, "cache-hit")
+        assert {e["reason"] for e in hits} == {"key match"}
+        # the hits on the give-ups say so; no other hit carries gave_up
+        assert [e["call"] for e in hits if e.get("gave_up") is True] == [
+            OPEN,
+            OPEN,
+        ]
+        assert [
+            e for e in hits if "gave_up" in e and e["gave_up"] is not True
+        ] == []
+        assert len(hits) > 2
+
+    def test_a_refresh_asks_a_give_up_again(self, tmp_path):
+        """A refreshed role asks the attempts the engine gave up on again;
+        their give-ups are kept aside, replaced (#390)."""
+
+        def answer(kind, prompt, opening):
+            if "manifest of EVERY distinct entity" in prompt:
+                raise OutputLimitReached()
+            return segmenting(True)(kind, prompt, opening)
+
+        first, _ = extract(tmp_path, Engine(answer))
+        assert first.used_fallback_manifest
+        engine = Engine(extractor_answers())
+        again, batch = extract(tmp_path, engine, refresh={"extract"})
+        assert not again.used_fallback_manifest
+        assert len(batch.claims) == 2
+        assert kinds(engine)[0] == OPEN
+        # the first attempt answered; the second, never asked, keeps its own
+        assert [
+            e["components"]["attempt"]
+            for e in live_entries(tmp_path)
+            if e.get("gave_up")
+        ] == [1]
+        replaced = [
+            json.loads(path.read_text())
+            for path in (tmp_path / "cache").glob("*/*.replaced-*.json")
+        ]
+        assert [e["components"]["attempt"] for e in replaced] == [0]
+        assert replaced[0]["gave_up"] is True
+
+    def test_a_refreshed_give_up_is_asked_once_per_run(self, tmp_path):
+        """A refresh asks a key once per run: an attempt that gives up
+        again under the refresh is served that new give-up for the rest of
+        the run, not asked a third time (#390)."""
+        asked = []
+
+        def answer(kind, prompt, opening):
+            asked.append(prompt)
+            raise OutputLimitReached()
+
+        first = for_attempt(client(tmp_path, Engine(answer)), 1)
+        with pytest.raises(OutputLimitReached):
+            first.complete("Wer war Klara Löbig?")
+        assert len(asked) == 1
+        caching = for_attempt(
+            client(tmp_path, Engine(answer), refresh={"extract"}), 1
+        )
+        for _ in range(2):
+            with pytest.raises(OutputLimitReached):
+                caching.complete("Wer war Klara Löbig?")
+        assert len(asked) == 2
+
+    def test_a_new_epoch_asks_a_give_up_again_and_leaves_it(self, tmp_path):
+        """A new epoch keys every attempt anew: the attempts the engine gave
+        up on are asked again, and their give-ups stay live under the old
+        epoch's key, not moved aside (#390)."""
+
+        def answer(kind, prompt, opening):
+            if "manifest of EVERY distinct entity" in prompt:
+                raise OutputLimitReached()
+            return segmenting(True)(kind, prompt, opening)
+
+        first, _ = extract(tmp_path, Engine(answer))
+        assert first.used_fallback_manifest
+        engine = Engine(extractor_answers())
+        again, batch = extract(tmp_path, engine, epochs={"extract": 1})
+        assert not again.used_fallback_manifest
+        assert len(batch.claims) == 2
+        assert kinds(engine)[0] == OPEN
+        gave_up = [e for e in live_entries(tmp_path) if e.get("gave_up")]
+        assert sorted(e["components"]["attempt"] for e in gave_up) == [0, 1]
+        assert {e["components"]["epoch"] for e in gave_up} == {0}
+        assert list((tmp_path / "cache").glob("*/*.replaced-*.json")) == []
+
+    @pytest.mark.parametrize(
+        "other",
+        [{"model": "model-b"}, {"effort": "high"}, {"config": "config-2"}],
+        ids=["model", "effort", "config"],
+    )
+    def test_a_give_up_is_replayed_for_its_own_engine_alone(
+        self, tmp_path, other
+    ):
+        """A give-up is kept under its attempt's key, which names the
+        engine's model, effort and configuration: an extraction under
+        another asks the engine, and takes no fallback (#390)."""
+
+        def answer(kind, prompt, opening):
+            if "manifest of EVERY distinct entity" in prompt:
+                raise OutputLimitReached()
+            return segmenting(True)(kind, prompt, opening)
+
+        first, _ = extract(tmp_path, Engine(answer))
+        assert first.used_fallback_manifest
+        engine = Engine(extractor_answers(), **other)
+        again, batch = extract(tmp_path, engine)
+        assert not again.used_fallback_manifest
+        assert len(batch.claims) == 2
+        assert kinds(engine)[0] == OPEN
+        assert "manifest of EVERY distinct entity" in engine.calls[0][1]
+
+    def test_a_plain_call_is_served_attempt_0_s_give_up(self, tmp_path):
+        """Attempt 0 is keyed as the client's own calls are, so a call made
+        outside for_attempt with the same components is served attempt 0's
+        give-up: it raises OutputLimitReached, and asks nothing."""
+
+        def answer(kind, prompt, opening):
+            raise OutputLimitReached()
+
+        attempt = for_attempt(client(tmp_path, Engine(answer)), 0)
+        with pytest.raises(OutputLimitReached):
+            attempt.complete("Wer war Klara Löbig?")
+        run = RunDir(tmp_path / "run")
+        plain = client(tmp_path, Refusing(), run=run)
+        with pytest.raises(OutputLimitReached):
+            plain.complete("Wer war Klara Löbig?")
+        (hit,) = events(run, "cache-hit")
+        assert hit["gave_up"] is True
+
+    @pytest.mark.parametrize("flag", ["true", 1, None])
+    def test_a_give_up_flag_that_is_no_boolean_is_damage(self, tmp_path, flag):
+        """An entry whose gave_up is no boolean is damaged: no entry, so
+        the attempt asks the engine, and its answer moves the damaged entry
+        aside as replaced (#390)."""
+
+        def answer(kind, prompt, opening):
+            raise OutputLimitReached()
+
+        attempt = for_attempt(client(tmp_path, Engine(answer)), 0)
+        with pytest.raises(OutputLimitReached):
+            attempt.complete("Wer war Klara Löbig?")
+        key = attempt.complete_key("Wer war Klara Löbig?")
+        path = entry_path(tmp_path, key)
+        entry = json.loads(path.read_text())
+        entry["gave_up"] = flag
+        path.write_text(json.dumps(entry))
+        engine = Engine()
+        answered = for_attempt(client(tmp_path, engine), 0).complete(
+            "Wer war Klara Löbig?"
+        )
+        assert answered == "Wer war Klara Löbig?"[::-1]
+        assert not answered.hit and kinds(engine) == [COMPLETE]
+        (live,) = live_entries(tmp_path)
+        assert "gave_up" not in live
+        (aside,) = (tmp_path / "cache").glob("*/*.replaced-*.json")
+        assert json.loads(aside.read_text())["gave_up"] == flag
+
+    def test_a_refresh_given_up_on_outside_an_attempt_asks_again(
+        self, tmp_path
+    ):
+        """A call outside an attempt that the engine gives up on under a
+        refresh stores nothing, so the key is not yet refreshed: the call
+        asked again reaches the engine, and its answer replaces the answer
+        kept before the refresh (#390)."""
+        client(tmp_path, Engine()).complete("Wer war Klara Löbig?")
+        asked = []
+
+        def answer(kind, prompt, opening):
+            asked.append(prompt)
+            if len(asked) == 1:
+                raise OutputLimitReached()
+            return "Klara Löbig, Hutmacherin"
+
+        caching = client(tmp_path, Engine(answer), refresh={"extract"})
+        with pytest.raises(OutputLimitReached):
+            caching.complete("Wer war Klara Löbig?")
+        again = caching.complete("Wer war Klara Löbig?")
+        assert again == "Klara Löbig, Hutmacherin" and not again.hit
+        assert len(asked) == 2
+        (live,) = live_entries(tmp_path)
+        assert live["response"] == "Klara Löbig, Hutmacherin"
+        assert not live.get("gave_up")
+
+    def test_a_chunk_give_up_is_kept_nowhere(self, tmp_path):
+        """A chunk's retries share one key, so a give-up on a chunk is
+        kept nowhere: the next run asks the chunk again (#390)."""
+
+        def answer(kind, prompt, opening):
+            if kind == FORK and "- e1:" in prompt:
+                raise OutputLimitReached()
+            return extractor_answers()(kind, prompt, opening)
+
+        extractor, _ = extract(tmp_path, Engine(answer))
+        assert extractor.failed_chunks == ["c001"]
+        assert not [e for e in live_entries(tmp_path) if e.get("gave_up")]
+        engine = Engine(extractor_answers())
+        extractor, batch = extract(tmp_path, engine)
+        assert extractor.failed_chunks == []
+        assert len(batch.claims) == 2
+        assert kinds(engine) == [OPEN, FORK]
+
     def test_a_replay_with_other_ids_does_not_mix_them(self, tmp_path):
         """A fork misses behind a cached manifest (here a chunk cut off in
         the last run), and the replay of the manifest numbers the people
@@ -3500,3 +3749,67 @@ def test_the_cache_root_holds_only_entries(tmp_path):
         for name in names
     ), names
     assert sorted(os.listdir(tmp_path / "cache")) == [LOCK_FILE, shard]
+
+
+class TestTheStopReasonKept:
+    def kept_cut_off(self, tmp_path, key: str) -> None:
+        """Make the entry under `key` record that the engine cut its answer
+        off at the output limit."""
+        path = entry_path(tmp_path, key)
+        entry = json.loads(path.read_text())
+        entry["provenance"]["stop_reason"] = "max_tokens"
+        path.write_text(json.dumps(entry))
+
+    def test_a_kept_cut_off_transcription_is_rejected(self, tmp_path):
+        """A transcription the cache kept whose entry records a max_tokens
+        stop is cut off when served again, as a fresh one is: it is
+        rejected, and the engine is asked once more (#390)."""
+        scan = tmp_path / "scan.png"
+        scan.write_bytes(b"a fictional scan of a Loebig letter")
+        first = client(tmp_path, Engine(pipeline_answers), role="transcribe")
+        made = LlmVisionTranscriber(first).transcribe(scan)
+        key = first.complete_key(TRANSCRIPTION_PROMPT, [scan])
+        self.kept_cut_off(tmp_path, key)
+        run = RunDir(tmp_path / "run")
+        engine = Engine(pipeline_answers)
+        again = LlmVisionTranscriber(
+            client(tmp_path, engine, role="transcribe", run=run)
+        ).transcribe(scan)
+        assert again.text == made.text
+        assert transcriptions(engine) == 1
+        (rejected,) = events(run, "cache-reject")
+        assert "failed (cut-off)" in rejected["reason"]
+        assert [e["reason"] for e in events(run, "cache-miss")] == ["rejected"]
+
+    def test_a_kept_cut_off_critique_is_rejected(self, tmp_path):
+        """A critique the cache kept whose entry records a max_tokens stop
+        is cut off when served again: it is rejected, and the critic is
+        asked once more (#390)."""
+        from tests.unit.test_critique import batch
+
+        first = client(tmp_path, Engine(pipeline_answers), role="critique")
+        assert run_critique(first, batch()) == []
+        (entry,) = live_entries(tmp_path)
+        self.kept_cut_off(tmp_path, entry["key"])
+        run = RunDir(tmp_path / "run")
+        engine = Engine(pipeline_answers)
+        attention: list[str] = []
+        caching = client(tmp_path, engine, role="critique", run=run)
+        assert run_critique(caching, batch(), attention=attention) == []
+        assert attention == []
+        assert len(engine.calls) == 1
+        (rejected,) = events(run, "cache-reject")
+        assert rejected["reason"] == "critique: cut off at max_tokens"
+        assert [e["reason"] for e in events(run, "cache-miss")] == ["rejected"]
+
+    def test_only_a_stop_reason_kept_as_text_is_read(self):
+        """A hit carries the stop reason its entry keeps only when it is
+        text: anything else in its place reads as none (#390)."""
+        read = llmcache._stop_reason
+        assert read({"provenance": {"stop_reason": "max_tokens"}}) == (
+            "max_tokens"
+        )
+        assert read({"provenance": {"stop_reason": 7}}) is None
+        assert read({"provenance": {"stop_reason": ["max_tokens"]}}) is None
+        assert read({"provenance": "max_tokens"}) is None
+        assert read({}) is None

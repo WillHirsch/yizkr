@@ -1106,7 +1106,8 @@ def hostile_stream() -> list:
         # an engine call: its role, stage, outcome, hold and error
         event(7300, "call", THIRD, subject=CERT, kind="media", role=HOSTILE,
               stage=HOSTILE, outcome=HOSTILE, held=HOSTILE, error=LOWER,
-              duration_s=1.0, usage={"input_tokens": 1}),
+              duration_s=1.0, usage={"input_tokens": 1},
+              stop_reason="max_tokens"),
         # the cache's answers: a hit's reason, as a stage's reuse reason
         # too, and a miss's
         event(7301, "started", THIRD, subject=CARD, kind="text",
@@ -1116,7 +1117,7 @@ def hostile_stream() -> list:
         event(7303, "done", THIRD, subject=CARD, kind="text",
               stage="critique"),
         event(7304, "cache-hit", THIRD, subject=CERT, kind="media",
-              role=HOSTILE, reason=HOSTILE),
+              role=HOSTILE, reason=HOSTILE, gave_up=True),
         event(7305, "cache-miss", THIRD, subject=CERT, kind="media",
               role="extract", reason=HOSTILE),
         # a stage and a kind no plan knows, and an attention label that is
@@ -1380,6 +1381,11 @@ class TestAggregateOnly:
         (corpus,) = [s for s in aggregate["corpus_stages"] if s["failure"]]
         assert (corpus["name"], corpus["failure"]) == (OTHER, OTHER)
         assert aggregate["documents"]["failed_by_label"][OTHER] == 1
+        assert aggregate["calls"]["output_limit_stops"][OTHER] == {
+            "cut_off": 1,
+            "gave_up": 0,
+        }
+        assert aggregate["calls"]["give_ups_replayed"] == {OTHER: 1}
         content = aggregate["content"]
         assert content["fallbacks"][OTHER] == 1
         assert content["records"]["set_aside_by_reason"][OTHER] == 1
@@ -2592,6 +2598,127 @@ class TestCallsAndTime:
         assert models == {SONNET: 3, OPUS: 2, OTHER: 1}
         text = render_markdown(made["aggregate"])
         assert "| all |  | 16 | 5 | 3,400 | 650 | 90 | 800 |" in text
+
+    def test_stops_at_the_output_limit_by_stage(self, made, tmp_path):
+        """The calls stopped at the output limit, per stage, from the call
+        events (#390): an answer whose stop reason is max_tokens is cut
+        off; a call that raised OutputLimitReached was given up on, told by
+        its error alone, never by its API error's class. An answer that
+        ended otherwise is no stop."""
+        stops = [
+            call(7400, DIRECTORY, "extract", THIRD, 1.0,
+                 stop_reason="max_tokens"),
+            call(7401, DIRECTORY, "extract", THIRD, 1.0, outcome="error",
+                 error="OutputLimitReached", api_error="max_output_tokens",
+                 stop_reason="stop_sequence"),
+            call(7402, DIRECTORY, "extract", THIRD, 1.0, outcome="error",
+                 error="OutputLimitReached"),
+            call(7403, CERT, "critique", THIRD, 1.0,
+                 stop_reason="max_tokens"),
+            # a crash after the notice: an error of another class
+            call(7404, CERT, "critique", THIRD, 1.0, outcome="error",
+                 error="RuntimeError", api_error="max_output_tokens"),
+            call(7405, CERT, "transcribe", THIRD, 1.0,
+                 stop_reason="end_turn"),
+            call(7406, CERT, "transcribe", THIRD, 1.0,
+                 stop_reason="stop_sequence"),
+        ]  # fmt: skip
+        built = build(record(tmp_path / "run", [*STREAM, *stops]), now=NOW)
+        aggregate = built["aggregate"]
+        assert aggregate["calls"]["output_limit_stops"] == {
+            "critique": {"cut_off": 1, "gave_up": 0},
+            "extraction": {"cut_off": 1, "gave_up": 2},
+        }
+        assert (
+            "Stops at the output limit by stage: critique: 1 cut off, 0 "
+            "given up; extraction: 1 cut off, 2 given up"
+        ) in render_markdown(aggregate)
+
+    def test_stops_not_recorded_are_not_read_as_none(self, made):
+        """A run whose call events carry no stop reason (one made before
+        the engine recorded why a call stopped) does not say that none
+        stopped at the output limit: it says the stops were not recorded,
+        as its usage does (#390)."""
+        calls = made["aggregate"]["calls"]
+        assert calls["output_limit_stops"] == {"recorded": False}
+        text = render_markdown(made["aggregate"])
+        assert (
+            "Stops at the output limit by stage: not recorded: the run's "
+            "call events carry no stop reason"
+        ) in text
+        assert "Stops at the output limit by stage: none" not in text
+
+    @pytest.mark.parametrize(
+        "recorded",
+        [
+            {"stop_reason": "end_turn"},
+            {"api_error": "overloaded_error", "outcome": "error",
+             "error": "EngineError"},
+        ],
+    )  # fmt: skip
+    def test_stops_recorded_but_none_read_as_none(self, tmp_path, recorded):
+        """A run whose call events record why their calls stopped, none at
+        the output limit, has no stops: "none" (#390)."""
+        fields = {"outcome": "ok"} | recorded
+        outcome = fields.pop("outcome")
+        stream = [
+            *STREAM,
+            call(7400, CERT, "transcribe", THIRD, 1.0, outcome, **fields),
+        ]
+        aggregate = build(record(tmp_path / "run", stream), now=NOW)[
+            "aggregate"
+        ]
+        assert aggregate["calls"]["output_limit_stops"] == {}
+        assert "Stops at the output limit by stage: none" in (
+            render_markdown(aggregate)
+        )
+
+    def test_a_give_up_alone_records_stops(self, tmp_path):
+        """A give-up whose call event carries no stop reason and no API
+        error still records the run's stops: it is counted, not read as
+        "not recorded" (#390)."""
+        stream = [
+            *STREAM,
+            call(7400, CERT, "extract", THIRD, 1.0, "error",
+                 error="OutputLimitReached"),
+        ]  # fmt: skip
+        aggregate = build(record(tmp_path / "run", stream), now=NOW)[
+            "aggregate"
+        ]
+        assert aggregate["calls"]["output_limit_stops"] == {
+            "extraction": {"cut_off": 0, "gave_up": 1}
+        }
+
+    def test_give_ups_replayed_from_the_cache_by_stage(self, made, tmp_path):
+        """A hit on a give-up the cache kept made no call, so it is no stop
+        at the output limit: the cache section counts it per stage of its
+        role, apart from the stops (#390). A hit whose gave_up is not true
+        is no give-up."""
+        assert made["aggregate"]["calls"]["give_ups_replayed"] == {}
+        assert (
+            "Give-ups replayed from the cache by stage (no call made): none"
+        ) in render_markdown(made["aggregate"])
+        hits = [
+            cache("cache-hit", 7400, DIRECTORY, "extract", THIRD,
+                  call="open", reason="key match", gave_up=True),
+            cache("cache-hit", 7401, DIRECTORY, "extract", THIRD,
+                  call="open", reason="key match", gave_up=True),
+            cache("cache-hit", 7402, CERT, "critique", THIRD,
+                  call="complete", reason="key match", gave_up=True),
+            cache("cache-hit", 7403, CERT, "critique", THIRD,
+                  call="complete", reason="key match", gave_up="true"),
+            cache("cache-hit", 7404, CERT, "transcribe", THIRD,
+                  call="complete", reason="key match"),
+        ]  # fmt: skip
+        built = build(record(tmp_path / "run", [*STREAM, *hits]), now=NOW)
+        calls = built["aggregate"]["calls"]
+        assert calls["give_ups_replayed"] == {"extraction": 2, "critique": 1}
+        assert calls["output_limit_stops"] == {"recorded": False}
+        assert calls["cached"] == made["aggregate"]["calls"]["cached"] + 5
+        assert (
+            "Give-ups replayed from the cache by stage (no call made): "
+            "extraction 2, critique 1"
+        ) in render_markdown(built["aggregate"])
 
     def test_a_run_without_the_cache_counts_its_call_events(self, tmp_path):
         """A run made without the LLM cache (`ingest run --no-cache`) has

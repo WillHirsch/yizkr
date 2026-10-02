@@ -1112,6 +1112,26 @@ class TestMoreParts:
         )
         assert structure_problems(ida) == []
 
+    def test_a_nickname_outside_the_label_and_aliases_is_an_addition(self):
+        """A record nickname must stand in the label or an alias. What one
+        person calls another is `referred_to_as`, never an alias (ADR-0018,
+        #434), so beside a label that names the person it cannot be a
+        nickname: Nicholas's "Nana Maisie" is no name form of Maisie
+        Cutmore."""
+        maisie = record(
+            "Maisie Cutmore",
+            "human",
+            {
+                "kind": "human",
+                "given": [{"written": "Maisie"}],
+                "surnames": [{"written": "Cutmore", "type": "other"}],
+                "nicknames": ["Nana Maisie"],
+            },
+        )
+        assert structure_problems(maisie) == [
+            "addition: 'Nana Maisie' occurs in neither the label nor an alias"
+        ]
+
     def test_an_unsplit_form_is_a_name_part(self):
         # the 1912 directory's "Löbig Ursula" when its order is unsettled
         ursula = record(

@@ -216,8 +216,9 @@ Rules — these mirror the archive's non-negotiable conventions:
   aliases, and which part of it is which lives in the manifest's record;
   do NOT restate either as a claim. Use the typed name properties only
   when the source marks a name's TYPE: birth_name (a name/maiden name
-  given at birth), married_name (taken on marriage), nickname (an
-  informal/pet name or "aka"), official_name (a formal or legal change).
+  given at birth), married_name (taken on marriage), nickname (a name
+  marked as what the person is called, such as an "aka"), official_name
+  (a formal or legal change).
   The marker may be CONTEXTUAL (a maiden-name cue such as "geb." or
   "née", a married-name cue such as "по мужу", a stated legal or
   immigration change), not only an explicit tag. Type only what a source
@@ -264,17 +265,26 @@ Rules — these mirror the archive's non-negotiable conventions:
   kin_grandparent of degree 1; a bare "cousin" states no degree. A
   spousal term ("my husband") gives a marriage (below), never a kinship
   class.
+- Nicknames and relational appellations (ADR-0018). A name the source
+  gives as what the person is called, by anyone, is a nickname ("Peppi",
+  "Gustl"): an alias, a record nickname, and a `nickname` claim only where
+  the source marks the type. A name the source gives as what one person
+  calls another, with or without a stated perspective, or that names the
+  person through a relation but is no literal kinship term ("Bubele",
+  "Nana Maisie", "Рудольфиха"), is `referred_to_as`: never an alias and
+  never a record nickname. A name a writer simply uses for someone, in a
+  greeting ("Liebes Pünktchen!") or a mention, is their name.
 - Relational / perspectival appellations (ADR-0018): a reference like
   "our great grandmother", "meine Oma", "Aunt Pünktchen", "Mem" is NOT a
   name and never an alias. Two cases:
   * If it is a LITERAL kinship term, record the kinship, as above.
-  * If it is a courtesy title or family/pet name that is NOT a literal
-    relation (a "Tante" who is no aunt, "Nana Maisie"), record it as
-    `referred_to_as` (the term verbatim), and add a `perspective`
-    qualifier naming the ego (the person or family whose viewpoint it is)
-    ONLY when that ego is an entity you can point to. Omit `perspective`
-    when the ego is a bare "our"/"we" with no named person or family —
-    never invent an entity to fill it.
+  * If it is NOT a literal relation (a courtesy title such as a "Tante"
+    who is no aunt, "Nana Maisie", or a name one person calls another,
+    "Bubele"), record it as `referred_to_as` (the term verbatim), and
+    add a `perspective` qualifier naming the ego (the person or family
+    whose viewpoint it is) ONLY when that ego is an entity you can point
+    to. Omit `perspective` when the ego is a bare "our"/"we" with no
+    named person or family — never invent an entity to fill it.
   When unsure whether a term is literal kinship, prefer `referred_to_as`
   (it asserts only that the term was used, never a relation).
 - Events and their participants (ADR-0035 §3.2): a `participant` claim
@@ -487,13 +497,22 @@ Aliases are actual NAMES the document uses for the entity. They are NOT:
   husband", "Aunt Pünktchen", "Oma", "Mem", "the deceased". These
   describe a relationship or viewpoint, not a name; they are captured as
   claims at extraction, not as aliases (a literal kinship term becomes
-  `relative` + `kinship_type`; a courtesy/pet name becomes
-  `referred_to_as`). Never record any of these as an alias (ADR-0018);
+  `relative` + `kinship_type`; a spousal term gives a marriage; any other
+  relational appellation becomes `referred_to_as`). Never record any of
+  these as an alias (ADR-0018);
 - for a place, a deictic or locative reference back to it ("dort",
   "hier", "daselbst", "ebenda", "there") or a generic one ("the
   village"): a place's alias is a toponym;
 - for an organization, a generic phrase that names no one ("die Firma",
   "the company", "the bank"): an organization's alias is a name.
+A name the source gives as what the person is called, by anyone, is a
+nickname ("Peppi", "Gustl"): an alias, a record nickname, and a `nickname`
+claim only where the source marks the type. A name the source gives as what
+one person calls another, with or without a stated perspective, or that
+names the person through a relation but is no literal kinship term
+("Bubele", "Nana Maisie", "Рудольфиха"), is `referred_to_as`: never an
+alias and never a record nickname. A name a writer simply uses for someone,
+in a greeting ("Liebes Pünktchen!") or a mention, is their name.
 A person the document does not name is labelled with the document's own
 words for them: the postcard's writer signs "Dein Vater", so that is his
 label. Only where the document has no words for a person at all do you
@@ -529,10 +548,10 @@ not settle: each is optional.
   * status says what the label is: `name` where it names the person;
     `role`, a role or form-field label (INFORMANT) or an office the
     source names alone ("the consul"); `kinship`, a literal kinship term
-    ("Dein Vater", "Mem"); `courtesy`, a courtesy title or pet
-    appellation that is no literal relation ("Nana Maisie"); `placeholder`,
-    the source's stand-in for a name it does not know ("N.N. Löbig");
-    `description`, a label you composed.
+    ("Dein Vater", "Mem"); `courtesy`, a courtesy title or other
+    relational appellation that is no literal relation ("Nana Maisie");
+    `placeholder`, the source's stand-in for a name it does not know
+    ("N.N. Löbig"); `description`, a label you composed.
   * The document's conventions decide which part is which. A register,
     card or form that writes the surname first, or in capitals, is read
     so: the card's "LÖBIG, Ida, née SÖRNE" gives the given name Ida and
@@ -550,8 +569,19 @@ not settle: each is optional.
     where the document supports it: the 2008 family history's "became
     Gustave Lobig here, Gus to everyone" makes its Gus Gustave. A full
     name is its own standard form; a standard form is never a
-    translation; an initial has none. A pet name that stands for no given
-    name ("Peppi") is a nickname.
+    translation; an initial has none.
+  * A name the source gives as what the person is called, by anyone, is a
+    nickname ("Peppi", "Gustl"): an alias, a record nickname, and a
+    `nickname` claim only where the source marks the type. A name the
+    source gives as what one person calls another, with or without a
+    stated perspective, or that names the person through a relation but
+    is no literal kinship term ("Bubele", "Nana Maisie", "Рудольфиха"),
+    is `referred_to_as`: never an alias and never a record nickname. A
+    name a writer simply uses for someone, in a greeting ("Liebes
+    Pünktchen!") or a mention, is their name. A nickname that is a form
+    of a given name ("Gustl", "Gus") is also that given name, with its
+    standard form where the document supports it; one that stands for no
+    given name ("Peppi") has no standard form.
   * A patronymic, a name formed from the father's given name, is a part
     of its own, never a surname. Titles (Mrs, Dr., Fräulein, Mefrou) and
     suffixes (generational and status words, such as "Wwe.") never name
@@ -942,9 +972,9 @@ class ChunkedClaimExtractor:
     The entity manifest and the segmentation are asked in two attempts
     each, keyed apart behind the cache (llm.for_attempt): a refused
     answer is kept, so a later run replays the same attempts and takes the
-    same fallback. An attempt the engine gave up on at its output limit
-    stores nothing, so a later run asks it again, and takes that fallback
-    again only if the engine gives up again. When a conversation behind
+    same fallback. An attempt the engine gave up on at its output limit is
+    kept alike, as a give-up, so a later run gives up on it again without
+    asking the engine, and takes the same fallback. When a conversation behind
     the cache has to be opened again and answers differently
     (llm.ConversationChanged), the extraction starts over from the new
     answer.
@@ -1048,8 +1078,9 @@ class ChunkedClaimExtractor:
         attempt fails when the engine raises or its answer is refused, and
         each gives its own reason. An answer the engine gave up on at its
         output limit (OutputLimitReached) is an answer refused, not a call
-        unanswered: the engine answered, past its limit. Being an error, it
-        is kept nowhere, so a later run asks that attempt again. No handle
+        unanswered: the engine answered, past its limit. Behind the cache
+        it is kept under its attempt, as a refused answer is, so a later
+        run raises it again without asking the engine. No handle
         survives a refused answer: forking would plant known-bad output in
         every chunk's context."""
         handle = None
