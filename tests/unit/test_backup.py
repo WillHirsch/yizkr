@@ -2630,6 +2630,7 @@ class TestExportPublic:
             "released-family-carried-out",
             "redirect-to-the-deportation",
             "untyped-with-an-untyped-participant",
+            "redirect-to-an-untyped-with-an-untyped-participant",
         ],
     )
     def test_an_untyped_or_family_event_of_someone_left_out_shields(
@@ -2652,6 +2653,11 @@ class TestExportPublic:
         if case == "redirect-to-the-deportation":
             part = "Q498"
             dump.redirect("Q498", "Q416", revision=498)
+        if case == "redirect-to-an-untyped-with-an-untyped-participant":
+            part = "Q498"
+            dump.entity("Q491", "an untyped item", revision=491)
+            dump.says("Q491", "participant", entity("Q429"))
+            dump.redirect("Q498", "Q491", revision=498)
         if case in (
             "deprecated-type-carried-out",
             "untyped-carried-out",
