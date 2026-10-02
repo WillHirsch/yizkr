@@ -1115,6 +1115,25 @@ class TestTermsInTheStoredForm:
         for number, key in enumerate(sorted(derived), start=1):
             assert label_of(wiki, derived[key]) == f"{SHOP} — image {number}"
 
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "\N{ZERO WIDTH SPACE}",
+            "\N{LEFT-TO-RIGHT MARK}",
+            "\N{ZERO WIDTH SPACE}\N{RIGHT-TO-LEFT MARK}",
+        ],
+    )
+    def test_a_name_that_shows_nothing_is_image_n(self, tmp_path, name):
+        """A name of characters that show nothing is no name: its label
+        would end in an invisible character."""
+        wiki = StoringWiki()
+        media = [(name, IMAGE, [1])]
+        _, derived = register_deck(wiki, tmp_path, "a", SHOP, media)
+        assert label_of(wiki, derived[sha1(IMAGE)]) == f"{SHOP} — image 1"
+        writes = wiki.writes
+        register_deck(wiki, tmp_path, "a", SHOP, media)
+        assert wiki.writes == writes
+
     def test_a_nameless_medium_is_uploaded_as_image_n(self, tmp_path):
         """Its file takes the name its label ends in, with no extension,
         as its record's file has none: MediaWiki adds its type's."""

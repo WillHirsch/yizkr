@@ -78,69 +78,39 @@ from yizkr.pipeline.presentation import IMAGE_SUFFIXES, DerivedMediaRecord
 # Wikibase stores a label, a description or an alias in, by the writer's
 # rule (_stored_term), and TERM_LIMIT is the most characters it takes in
 # one: in any other form, a label another item holds would look free, and
-# an alias the item has would look missing
-from yizkr.pipeline.writer import TERM_LIMIT, _is_mark
+# an alias the item has would look missing; a cut keeps whole letters by
+# the writer's rule too (extends, half_flag)
+from yizkr.pipeline.writer import TERM_LIMIT, extends, half_flag
 from yizkr.pipeline.writer import stored_term as _stored_term
 
-# the zero-width joiner, which joins the characters either side of it
-# into one, and the regional indicators, two of which make one flag
-_JOINER = "\u200d"
-_REGIONAL_INDICATORS = range(0x1F1E6, 0x1F200)
+# the categories of the characters that show nothing: format characters
+# (such as the zero-width space and the bidirectional marks), controls,
+# and separators
+_UNSEEN = ("Cf", "Cc", "Zs", "Zl", "Zp")
 
 
-# the characters that extend the letter before them, besides combining
-# marks: the zero-width non-joiner and joiner, the emoji skin tones, the
-# tag characters that spell a subdivision's flag, the halfwidth kana's
-# sound marks, and the Hangul vowel and final jamo that NFC leaves apart
-_EXTENDERS = (
-    range(0x200C, 0x200E),
-    range(0x1F3FB, 0x1F400),
-    range(0xE0020, 0xE0080),
-    range(0xFF9E, 0xFFA0),
-    range(0x1160, 0x1200),
-    range(0xD7B0, 0xD800),
-)
-# the canonical combining class of a virama, which joins the letter after
-# it to the one before (an Indic conjunct)
-_VIRAMA = 9
-
-
-def _extends(char: str, before: str) -> bool:
-    """Whether `char`, coming right after `before`, belongs to the same
-    letter, so that no cut falls between them: a combining mark
-    (writer._is_mark), a character of _EXTENDERS, any character after a
-    zero-width joiner, or a letter after a virama. A narrower rule than
-    Unicode's grapheme clusters (Unicode Standard Annex 29), which it
-    follows for these sequences alone (ADR-0010)."""
-    code = ord(char)
-    return (
-        _is_mark(char)
-        or any(code in extenders for extenders in _EXTENDERS)
-        or before == _JOINER
-        or (char.isalpha() and unicodedata.combining(before) == _VIRAMA)
+def _shows(name: str) -> bool:
+    """Whether `name`, in the form Wikibase stores a term in, holds a
+    character that shows: one a label can end in and a reader see."""
+    return any(
+        unicodedata.category(char) not in _UNSEEN
+        for char in _stored_term(name)
     )
 
 
 def _whole_letters(text: str, cut: str) -> str:
     """`cut`, a start of `text`, backed off until it ends after a whole
     letter: never before a character that extends the letter it ends in
-    (_extends), which keeps a zero-width joiner with the letters either
+    (writer.extends), which keeps a zero-width joiner with the letters either
     side of it, and never halfway through a pair of regional indicators.
     A cut that would keep a letter without its accents keeps neither,
     and one that keeps no whole letter is empty."""
     while cut and (
-        (len(cut) < len(text) and _extends(text[len(cut)], cut[-1]))
-        or _half_flag(cut)
+        (len(cut) < len(text) and extends(text[len(cut)], cut[-1]))
+        or half_flag(cut)
     ):
         cut = cut[:-1]
     return cut
-
-
-def _half_flag(text: str) -> bool:
-    """Whether `text` ends in an odd run of regional indicators: the
-    first half of a flag whose second half was cut off."""
-    run = len(text) - len(text.rstrip("".join(map(chr, _REGIONAL_INDICATORS))))
-    return run % 2 == 1
 
 
 def _fitted(
@@ -900,8 +870,8 @@ class Registrar:
         each container. It is labelled ``"<container title> — <name>"`` by
         its first name: in the deck's archive (``image1.png``), or its
         first place in the PDF (``page 6, image 1``; ADR-0008), of the
-        names the stored form leaves something of, or ``image N`` when it
-        leaves nothing of any, N its place among the record's media in
+        names that show something once stored (_shows), or ``image N``
+        when none does, N its place among the record's media in
         the order of their SHA-1s, excluded media counted; its other
         names become aliases, unless another item has one as its label.
         Its bytes are uploaded from the file the record keeps, under the
@@ -949,13 +919,13 @@ class Registrar:
                     f"{medium.file} does not hold the bytes its record "
                     f"names; nothing of it was registered or uploaded"
                 )
-            # the names the stored form leaves something of, in their
-            # order: a medium with none, its names control characters
-            # alone, say, is "image N", N its place among the record's
-            # media in the order of their SHA-1s, excluded media counted;
-            # its label then ends in a name the instance keeps as sent,
-            # and a re-run finds it
-            kept = [name for name in medium.names if _stored_term(name)]
+            # the names that show something once stored (_shows), in
+            # their order: a medium with none, its names control
+            # characters or a zero-width space alone, say, is "image N",
+            # N its place among the record's media in the order of their
+            # SHA-1s, excluded media counted; its label then ends in a
+            # name the instance keeps as sent, and a re-run finds it
+            kept = [name for name in medium.names if _shows(name)]
             first = kept[0] if kept else f"image {number}"
             names = list(dict.fromkeys(map(_stored_term, kept))) or [first]
             # the container's title is cut to fit, if need be: a medium's

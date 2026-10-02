@@ -519,6 +519,53 @@ def _is_mark(char: str) -> bool:
     return unicodedata.category(char).startswith("M")
 
 
+# the zero-width joiner, which joins the characters either side of it
+# into one, and the regional indicators, two of which make one flag
+_JOINER = "\u200d"
+_REGIONAL_INDICATORS = range(0x1F1E6, 0x1F200)
+
+
+# the characters that extend the letter before them, besides combining
+# marks: the zero-width non-joiner and joiner, the emoji skin tones, the
+# tag characters that spell a subdivision's flag, the halfwidth kana's
+# sound marks, and the Hangul vowel and final jamo that NFC leaves apart
+_EXTENDERS = (
+    range(0x200C, 0x200E),
+    range(0x1F3FB, 0x1F400),
+    range(0xE0020, 0xE0080),
+    range(0xFF9E, 0xFFA0),
+    range(0x1160, 0x1200),
+    range(0xD7B0, 0xD800),
+)
+# the canonical combining class of a virama, which joins the letter after
+# it to the one before (an Indic conjunct)
+_VIRAMA = 9
+
+
+def extends(char: str, before: str) -> bool:
+    """Whether `char`, coming right after `before`, belongs to the same
+    letter, so that no cut falls between them: a combining mark
+    (_is_mark), a character of _EXTENDERS, any character after a
+    zero-width joiner, or a letter after a virama. A narrower rule than
+    Unicode's grapheme clusters (Unicode Standard Annex 29), which it
+    follows for these sequences alone (ADR-0010). The writer's cuts and
+    the registrar's keep to it."""
+    code = ord(char)
+    return (
+        _is_mark(char)
+        or any(code in extenders for extenders in _EXTENDERS)
+        or before == _JOINER
+        or (char.isalpha() and unicodedata.combining(before) == _VIRAMA)
+    )
+
+
+def half_flag(text: str) -> bool:
+    """Whether `text` ends in an odd run of regional indicators: the
+    first half of a flag whose second half was cut off."""
+    run = len(text) - len(text.rstrip("".join(map(chr, _REGIONAL_INDICATORS))))
+    return run % 2 == 1
+
+
 def _in_word(text: str, index: int, inner: str = INNER_PUNCTUATION) -> bool:
     """Whether text[index] belongs to a word: a letter, a digit or a
     combining mark, or `inner` punctuation with a letter, digit or mark
@@ -536,11 +583,14 @@ def _in_word(text: str, index: int, inner: str = INNER_PUNCTUATION) -> bool:
 
 def _joined(text: str, end: int, inner: str = INNER_PUNCTUATION) -> bool:
     """Whether a cut of `text` before text[end] would split what reads as
-    one: a combining mark from the character before it, or a word, whose
-    parts `inner` punctuation joins. With no `inner` punctuation, a word
-    is a run of letters, digits and marks."""
-    return _is_mark(text[end]) or (
-        _in_word(text, end - 1, inner) and _in_word(text, end, inner)
+    one: a letter, from a character that extends it (extends) or half of
+    a flag (half_flag), or a word, whose parts `inner` punctuation joins.
+    With no `inner` punctuation, a word is a run of letters, digits and
+    marks."""
+    return (
+        extends(text[end], text[end - 1])
+        or half_flag(text[:end])
+        or (_in_word(text, end - 1, inner) and _in_word(text, end, inner))
     )
 
 
@@ -614,13 +664,15 @@ def _cut(text: str, limit: int) -> str:
     between words and leaves room for the mark, and the mark follows it:
     CUT_MARK, then "sha1" and the first 12 hex digits of the SHA-1 of the
     whole text. So no word is kept in part: a page "112" is never kept as
-    "11", nor "1.234" as "1" (INNER_PUNCTUATION), and no letter loses a
-    combining mark. When one word fills the room, as a list of pages with
+    "11", nor "1.234" as "1" (INNER_PUNCTUATION), and no letter is kept
+    in part: none loses a combining mark or another character that
+    extends it, and no flag is halved (extends, half_flag). When one word
+    fills the room, as a list of pages with
     no spaces ("2,3,4") can, the cut falls at its last point, comma or
     apostrophe, so no number in it is kept in part either; and only when
     no such start holds anything but spaces, as when one run of letters
     and digits fills the room, is the text cut inside the run, each letter
-    kept with its marks. The digest keeps two texts that agree up to the
+    kept whole. The digest keeps two texts that agree up to the
     cut apart, and apart from a text that reads as the cut's start: the
     places a source asserts a value in stay a reference block each (step 4
     of the module docstring), and two labels that agree up to the cut name
@@ -646,7 +698,9 @@ def _cut(text: str, limit: int) -> str:
     if not kept:
         # one run of letters and digits fills the room
         end = room
-        while end and _is_mark(text[end]):
+        while end and (
+            extends(text[end], text[end - 1]) or half_flag(text[:end])
+        ):
             end -= 1
         kept = text[:end] or text[:room]
     return kept + mark

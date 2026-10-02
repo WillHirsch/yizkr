@@ -326,7 +326,10 @@ deploy/config changes none (`$wgLegalTitleChars`, `$wgIllegalFileChars`,
   syllable's jamo, which NFC leaves apart (U+1160 to U+11FF, U+D7B0 to
   U+D7FF); and an Indic conjunct, a letter after a virama. It is not
   Unicode's full grapheme cluster rule (UAX #29), and keeps only these
-  sequences whole. The cut is made: the title first, as far
+  sequences whole. It is the writer's rule (`writer.extends`,
+  `writer.half_flag`), by which the writer also cuts a label or another
+  term it sends, so labels and file names are cut alike. The cut is
+  made: the title first, as far
   as `"… <name>"`, so the medium's own name stays whole; past that, the
   name alone, the title left out, when it fits, so a name that fits on
   its own is never cut; a longer name before its extension; and, should

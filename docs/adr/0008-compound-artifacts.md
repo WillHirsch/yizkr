@@ -672,9 +672,10 @@ sequence it refuses, and the whole within 231 bytes, the title cut first,
 ending in "…", or left out, so the medium's own name stays whole
 whenever it fits on its own; a cut never falls between a letter and its
 combining marks. The container's kind stands for a title of which that
-form leaves nothing. A medium is labelled by the first of its names the
-stored form leaves something of; a name it leaves nothing of (control
-characters alone) is no alias. A medium with no such name is labelled
+form leaves nothing. A medium is labelled by the first of its names that
+shows something once stored; a name that shows nothing (control
+characters, a zero-width space or bidirectional marks alone) is no
+alias. A medium with no such name is labelled
 and uploaded as `image N`, N its place among the record's media in the
 order of their SHA-1s, excluded media counted, so its label ends in a
 name the instance keeps as sent, and a re-run sends no edit.
