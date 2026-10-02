@@ -92,6 +92,22 @@ stop reason (a run from before the engine recorded one, a run on the
 Anthropic API engine, or a run that made no call); a give-up replayed from the cache makes no call, and its
 `cache-hit` says `gave_up: true`, so the report counts those hits per
 stage in its cache section, apart from the stops (§3, §4, §5, §8).
+Amended in turn by #441 below.
+
+Amended by #441 (2026-10-02): a call event on the Anthropic API engine
+carries the model the API's response says answered and the stop reason
+it gave, verbatim, of an answered call (none of a call that gave no
+answer, and nothing else of the engine's report), as the claude-code
+engine's events carry its stream's, so the run report counts that
+engine's calls by model and its answers cut off at the output limit,
+which its callers already rejected. Only `max_tokens` counts as a cut-
+off; any other stop reason (`end_turn`, `refusal`, `pause_turn`,
+`stop_sequence`) only makes the run's stops recorded. The report says
+`not recorded` only for a run from before the engine recorded a stop,
+one that made no call, or one whose every call gave no stop reason (on
+that engine, every call failed or its response gave none as a plain
+token); the model and the stop reason stay in an entry's provenance,
+never in its key (§8).
 
 ## Context
 
@@ -484,9 +500,10 @@ counts per role, as totals over every invocation of the run directory.
 Every call that reaches the engine is a `call` event too, with or
 without the cache (#101): a wrapper beneath the cache reports it, so a
 hit is none, and a miss or a replay is one. It carries what the call's
-stream reported of it but the session, and a replay's says it is one
-(#98). The run report counts, per stage, the call events stopped at the
-output limit: answers whose stop reason is `max_tokens`, and calls that
+stream reported of it but the session, or, on the Anthropic API engine,
+the model and the stop reason its response gave of an answered call
+(#441), and a replay's says it is one (#98). The run report counts, per
+stage, the call events stopped at the output limit: answers whose stop reason is `max_tokens`, and calls that
 raised `OutputLimitReached` (#390). A give-up served from the cache is a
 hit, and no call.
 
