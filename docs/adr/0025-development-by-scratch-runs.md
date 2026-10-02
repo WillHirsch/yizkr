@@ -329,10 +329,11 @@ futile, and explain itself afterwards.
   file, and other slices keep running. If the operator does not resume
   it within a configurable timeout, the paused slice is aborted, so an
   overnight run never stalls indefinitely. Amended by #432 (2026-10-02):
-  the timer that times a pause out waits on the monotonic clock, and once
-  it has run its full wait the pause counts as timed out, whatever the
-  wall clock reads, so a wall clock that steps back never delays the
-  abort (docs/ANOMALIES.md).
+  the timeout is measured on the process's monotonic clock, which the
+  timer that looks at the pause waits on too, from the checks' request
+  for the pause; the wall clock only stamps the control file, so a wall
+  clock that steps or is corrected either way neither delays nor brings
+  forward an abort (docs/ANOMALIES.md).
 - **Abort and resume.** Ctrl-C, `yizkr scratch abort`, or a request in
   the control file from the monitor or an anomaly check stops dispatch
   for the whole run or for one slice. In-flight calls finish or are

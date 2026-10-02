@@ -154,16 +154,28 @@ def a_doc(tmp_path, name, kind="text", text=None, **detail) -> Doc:
 
 
 class Clock:
-    """The checks' clock, moved on by hand; the `clock` fixture makes it
-    the run directory's too, which stamps the control file's requests."""
+    """The checks' clocks, moved on by hand: the wall clock, which the
+    `clock` fixture makes the run directory's too, to stamp the control
+    file's requests, and the monotonic clock (`monotonic`), which times
+    the pauses out and which the fake Timers wait on. `advance` moves both;
+    `step` moves the wall clock alone, as a wall clock that is set or
+    corrected moves while the monotonic clock goes on."""
 
     def __init__(self) -> None:
         self.at = datetime.now(UTC)
+        self.elapsed = 0.0
 
     def __call__(self) -> datetime:
         return self.at
 
+    def monotonic(self) -> float:
+        return self.elapsed
+
     def advance(self, seconds: float) -> None:
+        self.at += timedelta(seconds=seconds)
+        self.elapsed += seconds
+
+    def step(self, seconds: float) -> None:
         self.at += timedelta(seconds=seconds)
 
 
@@ -178,19 +190,17 @@ def clock(monkeypatch) -> Clock:
 
 class Timers:
     """The timers the checks start, recorded instead of started. Each
-    waits on `clock`, the checks' clock once checks are made with these
-    timers (make_checks, checks_of): `fire` runs each one neither run nor
-    cancelled yet whose wait has run out on it, as a real timer runs once
-    when its time has come, and `run_out` runs every such one whatever
-    the clock reads, as a real timer runs once its wait has run out on the
-    monotonic clock while the wall clock lags. `waiting` lists them. While
-    `refuse` is above 0, a timer cannot start, as when no thread can, and
-    each refusal counts it down."""
+    waits on the monotonic clock of `clock`, the checks' clock once checks
+    are made with these timers (make_checks, checks_of): `fire` runs each
+    one neither run nor cancelled yet whose wait has run out on it, as a
+    real timer runs once when its time has come, and `waiting` lists them.
+    While `refuse` is above 0, a timer cannot start, as when no thread
+    can, and each refusal counts it down."""
 
     def __init__(self, clock=None) -> None:
         self.clock = clock
         self.started: list[RecordedTimer] = []
-        self._due: dict[int, datetime] = {}
+        self._due: dict[int, float] = {}
         self._run: set[int] = set()
         self.refuse = 0
 
@@ -200,9 +210,7 @@ class Timers:
             raise RuntimeError("can't start new thread")
         self.started.append(RecordedTimer(seconds, callback))
         if self.clock is not None:
-            self._due[id(self.started[-1])] = self.clock() + timedelta(
-                seconds=seconds
-            )
+            self._due[id(self.started[-1])] = self.clock.monotonic() + seconds
         return self.started[-1]
 
     def waiting(self) -> list[RecordedTimer]:
@@ -215,14 +223,9 @@ class Timers:
     def fire(self) -> None:
         for timer in self.waiting():
             due = self._due.get(id(timer))
-            if due is None or due <= self.clock():
+            if due is None or due <= self.clock.monotonic():
                 self._run.add(id(timer))
                 timer.callback()
-
-    def run_out(self) -> None:
-        for timer in self.waiting():
-            self._run.add(id(timer))
-            timer.callback()
 
     def on(self, clock):
         """These timers, waiting on `clock` unless they wait on another."""
@@ -236,7 +239,7 @@ def make_checks(tmp_path, overrides=None, pages=None, clock=None, timers=None):
     checks = AnomalyChecks(
         run,
         load_config(overrides=overrides or {}),
-        now=(clock := clock or Clock()),
+        monotonic=(clock := clock or Clock()).monotonic,
         timer=(timers if timers is not None else Timers()).on(clock),
         page_count=pages or (lambda source: None),
     )
@@ -1743,7 +1746,7 @@ def checks_of(run: RunDir, clock, timers=None) -> AnomalyChecks:
     return AnomalyChecks(
         run,
         load_config(),
-        now=clock,
+        monotonic=clock.monotonic,
         timer=(timers if timers is not None else Timers()).on(clock),
         page_count=lambda source: None,
     )
@@ -2008,21 +2011,21 @@ class TestFailFastPauses:
         assert run.control().stopped(kind="media") == "kind:media aborted"
 
     @pytest.mark.parametrize("lag", [1, 600, 1801, 3600])
-    def test_a_timer_that_has_run_its_full_wait_aborts_whatever_the_clock(
+    def test_a_pause_times_out_on_the_monotonic_clock_whatever_the_wall_clock(
         self, tmp_path, clock, lag
     ):
-        """The timer waits on the monotonic clock, the checks read the wall
-        clock: a timer armed for the pause's timeout that has run its full
-        wait aborts the slice even when the wall clock has fallen behind it
-        or stepped back meanwhile (#432), rather than finding the timeout
-        not yet reached and looking again."""
+        """The timer waits on the monotonic clock, and its look judges the
+        pause's age on that clock too: once the timeout has passed on it,
+        the slice is aborted even when the wall clock has fallen behind or
+        stepped back meanwhile (#432), and the next look comes a full
+        timeout and a second later on the same clock."""
         timers = Timers()
         run, _checks = paused_media(tmp_path, clock=clock, timers=timers)
         (first,) = timers.waiting()
-        # due a timeout and a second after the request's whole-second stamp
-        assert 1800 < first.seconds <= 1801
-        clock.advance(first.seconds - lag)
-        timers.run_out()
+        assert first.seconds == 1801
+        clock.advance(1801)
+        clock.step(-lag)
+        timers.fire()
         assert run.control().stopped(kind="media") == "kind:media aborted"
         abort = requests(run)[-1]
         assert (abort["action"], abort["by"], abort["check"]) == (
@@ -2031,22 +2034,97 @@ class TestFailFastPauses:
             "kind-failures",
         )
         # the slice stays watched, by one timer
-        assert len(timers.waiting()) == 1
+        (pending,) = timers.waiting()
+        assert pending.seconds == 1801
 
-    def test_a_check_on_a_lagging_clock_does_not_abort(self, tmp_path, clock):
-        """Only a timer's full wait stands for the time it was due: a
-        check's look reads the clock as it is, and a pause short of its
-        timeout on it stands, its timer still pending."""
+    @pytest.mark.parametrize("ahead", [600, 3600])
+    def test_a_wall_clock_ahead_aborts_nothing_early(
+        self, tmp_path, clock, ahead
+    ):
+        """A wall clock that reads ahead while the pause stands, at a
+        check's look or as a timer is armed, and is then corrected back,
+        neither aborts the slice before the timeout has passed on the
+        monotonic clock nor moves its timer."""
         timers = Timers()
+        clock.step(ahead)
         run, checks = paused_media(tmp_path, clock=clock, timers=timers)
         (first,) = timers.waiting()
+        assert first.seconds == 1801
+        clock.step(ahead)
         clock.advance(1799)
         checks.poll()
+        timers.fire()
         assert run.control().stopped(kind="media") == "kind:media paused"
         assert timers.waiting() == [first]
+        clock.step(-2 * ahead)
+        checks.poll()
+        assert run.control().stopped(kind="media") == "kind:media paused"
+        clock.advance(2)
+        timers.fire()
+        assert run.control().stopped(kind="media") == "kind:media aborted"
 
-    # the fake clock's offset from the real one: none, stepped back an
-    # hour or a year, and far ahead
+    def test_a_stale_carry_after_an_abort_on_a_lagging_wall_clock(
+        self, tmp_path, clock
+    ):
+        """The timer aborts the pause while the wall clock lags, and a
+        driver carries the pause from a reading older than the abort,
+        stamped on the lagging clock: the next look, the new invocation's
+        check, aborts it again at once."""
+        timers = Timers()
+        paused_media(tmp_path, clock=clock, timers=timers)
+        run = RunDir(tmp_path / "run")
+        carried = standing(run)
+        clock.advance(1801)
+        clock.step(-600)
+        timers.fire()
+        assert run.control().stopped(kind="media") == "kind:media aborted"
+        run.start()
+        carry(run, carried)
+        assert run.control().stopped(kind="media") == "kind:media paused"
+        checks_of(run, clock, timers).poll()
+        assert run.control().stopped(kind="media") == "kind:media aborted"
+
+    def test_a_timer_that_runs_early_aborts_nothing(self, tmp_path, clock):
+        """A timer whose look comes before its wait has run out on the
+        monotonic clock, as a wait cut short would, is not trusted for the
+        time: the look judges on the clock, so the pause stands, and the
+        next look comes when the checks' request reaches the timeout,
+        whether the pause still stands or a start marker has cleared
+        it."""
+        timers = Timers()
+        run, _checks = paused_media(tmp_path, clock=clock, timers=timers)
+        (first,) = timers.waiting()
+        clock.advance(1000)
+        first.callback()
+        assert run.control().stopped(kind="media") == "kind:media paused"
+        # called directly, the timers stay recorded as waiting
+        _first, second = timers.started
+        assert second.seconds == 801
+        run.start()
+        second.callback()
+        assert run.control().stopped(kind="media") is None
+        _first, _second, third = timers.started
+        assert third.seconds == 801
+
+    def test_a_fake_timer_runs_only_once_its_wait_has_run_out(
+        self, tmp_path, clock
+    ):
+        """The fake Timers run a timer only when its wait has run out on
+        the monotonic clock, as a real one runs, never just before."""
+        timers = Timers()
+        run, _checks = paused_media(tmp_path, clock=clock, timers=timers)
+        (first,) = timers.waiting()
+        clock.advance(first.seconds - 0.5)
+        timers.fire()
+        assert timers.waiting() == [first]
+        assert run.control().stopped(kind="media") == "kind:media paused"
+        clock.advance(0.5)
+        timers.fire()
+        assert first not in timers.waiting()
+        assert run.control().stopped(kind="media") == "kind:media aborted"
+
+    # the wall clock's offset from the real one: none, stepped back an hour
+    # or a year, and far ahead
     @pytest.mark.parametrize(
         "offset", [0, -3600, -365 * 86400, 10 * 365 * 86400]
     )
@@ -2054,21 +2132,21 @@ class TestFailFastPauses:
         self, tmp_path, clock, offset
     ):
         """With the real timer, started with no wait, and the checks' fake
-        clock, which never moves: an abort that no later check makes. The
-        pause stands when the check that asked for it ends, and the
-        timer's thread, of a daemon, aborts it in its own time, having run
-        its full wait; the slice stays watched, by the next timer. The
-        test waits on the thread (join), never on a time, and reads no
-        real clock, so the wall clock frozen, stepped back or far ahead
-        changes nothing."""
-        clock.advance(offset)
+        clocks: an abort that no later check makes. The pause stands when
+        the check that asked for it ends, and the timer's thread, of a
+        daemon, aborts it in its own time, once its wait has run out on
+        the fake monotonic clock; the slice stays watched, by the next
+        timer. The test waits on the thread (join), never on a time, and
+        reads no real clock, so the wall clock frozen, stepped back or far
+        ahead changes nothing."""
+        clock.step(offset)
         asked: list[float] = []
         started: list[threading.Timer] = []
         seen = threading.Event()
 
         def start(seconds, callback):
-            # the first timer runs at once, once the test has seen the
-            # pause; the next ones are only started
+            # the first timer runs at once, once the test has moved the
+            # monotonic clock to its due; the next ones are only started
             asked.append(seconds)
             if started:
                 started.append(START_TIMER(seconds, callback))
@@ -2086,7 +2164,7 @@ class TestFailFastPauses:
         checks = AnomalyChecks(
             run,
             load_config(overrides={"pause-timeout-s": 2}),
-            now=clock,
+            monotonic=clock.monotonic,
             timer=start,
         )
         try:
@@ -2094,9 +2172,9 @@ class TestFailFastPauses:
             checks.poll()
             assert run.control().stopped(kind="media") == "kind:media paused"
             first = started[0]
-            # due a timeout and a second after the request's whole-second
-            # stamp, on the fake clock
-            assert 2 < asked[0] <= 3
+            # due a timeout and a second on, on the monotonic clock
+            assert asked[0] == 3
+            clock.advance(asked[0])
             seen.set()
             # a hang guard only: the thread runs at once
             first.join(timeout=60)
@@ -2104,9 +2182,8 @@ class TestFailFastPauses:
             assert first.daemon
             assert run.control().stopped(kind="media") == "kind:media aborted"
             assert len(started) == 2 and started[1].daemon
-            # the next look a timeout and a second after the time the
-            # first timer was due, by the fake clock, which has not moved
-            assert asked[1] == pytest.approx(asked[0] + 3)
+            # the next look a full timeout and a second later
+            assert asked[1] == 3
         finally:
             seen.set()
             for timer in started:
@@ -2227,7 +2304,8 @@ class TestFailFastPauses:
         run.start()
         checks_of(run, clock, timers).poll()
         assert run.control().stopped(kind="media") is None
-        # the request's own timeout, not one from this look (1801 s later)
+        # the look keeps the pending timer, due when the checks' request
+        # reaches its timeout, not one a timeout from this look
         assert timers.waiting() == [first]
         carry(run, carried)
         clock.advance(1199)
@@ -2283,8 +2361,8 @@ class TestFailFastPauses:
         anomalies.attach(
             run,
             load_config(),
-            now=clock,
-            timer=timers,
+            monotonic=clock.monotonic,
+            timer=timers.on(clock),
             page_count=lambda source: None,
         )
         monkeypatch.setattr(
@@ -2322,8 +2400,12 @@ class TestFailFastPauses:
         run.request("pause", kind="media", by="anomaly", reason="kind")
         run.request("pause", stage="critique", by="anomaly", reason="calls")
         watch = anomalies._watch_of(run.path)
-        watch.watch("kind:media", "kind-failures", 1800.0, clock, timers)
-        watch.watch("stage:critique", "call-failures", 1800.0, clock, timers)
+        watch.watch(
+            "kind:media", "kind-failures", 1800.0, clock.monotonic, timers
+        )
+        watch.watch(
+            "stage:critique", "call-failures", 1800.0, clock.monotonic, timers
+        )
         monkeypatch.setattr(
             anomalies,
             "_locked_control",
@@ -2334,48 +2416,81 @@ class TestFailFastPauses:
         )
         with pytest.raises(OSError):
             watch.look()
-        # the failed look's timer comes a timeout from now; the other's when
-        # its pause, stamped in whole seconds, reaches the timeout
-        assert len(timers.waiting()) == 2
-        assert all(1800 < timer.seconds <= 1801 for timer in timers.waiting())
+        # the failed look's timer comes a timeout and a second from now; the
+        # other's when its pause reaches the timeout, and a second
+        assert [timer.seconds for timer in timers.waiting()] == [1801, 1801]
 
-    def test_a_clock_that_steps_back_brings_the_next_look_forward(
-        self, tmp_path, clock
-    ):
-        """The looks agree on when a slice is to be looked at again, so a
-        look wants a sooner timer only when the wall clock steps back: then
-        one is started for the look the slice needs, and the pending one
-        cancelled."""
+    def test_a_wall_clock_that_steps_moves_no_look(self, tmp_path, clock):
+        """The looks agree on when a slice is to be looked at again, on the
+        monotonic clock: a wall clock stepped back or ahead keeps the
+        pending timer."""
         timers = Timers()
         run, checks = paused_media(tmp_path, clock=clock, timers=timers)
-        clock.advance(1802)
+        clock.advance(1801)
         timers.fire()
         assert run.control().stopped(kind="media") == "kind:media aborted"
         (idle,) = timers.waiting()
-        clock.advance(-3600)
-        checks.poll()
+        for step in (-3600, 7200):
+            clock.step(step)
+            checks.poll()
+            assert timers.waiting() == [idle]
+            assert not idle.cancelled
+
+    def late_failed_look(self, tmp_path, clock, timers, monkeypatch):
+        """A slice watched from a pause of the checks, whose first look
+        comes 600 s later and fails, leaving a timer a timeout and a
+        second from then: later than the look the pause needs."""
+        run = RunDir(tmp_path / "run")
+        run.request("pause", kind="media", by="anomaly", reason="kind")
+        watch = anomalies._watch_of(run.path)
+        watch.watch(
+            "kind:media", "kind-failures", 1800.0, clock.monotonic, timers
+        )
+        clock.advance(600)
+        monkeypatch.setattr(
+            anomalies,
+            "_locked_control",
+            failing_once(
+                anomalies._locked_control,
+                OSError(errno.EIO, "Input/output error"),
+            ),
+        )
+        with pytest.raises(OSError):
+            watch.look()
+        (late,) = timers.waiting()
+        assert late.seconds == 1801
+        return watch, late
+
+    def test_a_look_after_a_late_failed_one_brings_the_next_look_forward(
+        self, tmp_path, clock, monkeypatch
+    ):
+        """A look that wants the slice looked at sooner than the pending
+        timer is due, as after a failed look's timer, starts one for the
+        look the slice needs, and cancels the pending one."""
+        timers = Timers().on(clock)
+        watch, late = self.late_failed_look(
+            tmp_path, clock, timers, monkeypatch
+        )
+        watch.look()
         (sooner,) = timers.waiting()
-        assert idle.cancelled
-        # the checks' request, stamped in whole seconds, reaches its timeout
-        # 3599 s from the stepped back clock
-        assert 3598 < sooner.seconds <= 3599
+        assert late.cancelled
+        # when the pause reaches its timeout, and a second
+        assert sooner.seconds == 1201
 
     def test_a_timer_that_cannot_start_leaves_the_pending_one(
-        self, tmp_path, clock
+        self, tmp_path, clock, monkeypatch
     ):
         """A sooner timer that cannot start, as when no thread can, leaves
         the pending one as it was, and the look raises."""
-        timers = Timers()
-        run, checks = paused_media(tmp_path, clock=clock, timers=timers)
-        clock.advance(1802)
-        timers.fire()
-        (idle,) = timers.waiting()
-        clock.advance(-3600)
+        timers = Timers().on(clock)
+        watch, late = self.late_failed_look(
+            tmp_path, clock, timers, monkeypatch
+        )
         timers.refuse = 1
         with pytest.raises(RuntimeError):
-            checks.poll()
-        assert timers.waiting() == [idle]
-        assert not idle.cancelled
+            watch.look()
+        assert timers.waiting() == [late]
+        assert not late.cancelled
 
     def test_a_slice_has_one_pending_timer(self, tmp_path, clock):
         """A look keeps the pending timer when it is due soon enough, and
