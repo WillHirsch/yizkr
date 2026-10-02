@@ -195,7 +195,31 @@ before it are written:
   run item's label, which holds the model's identifier, is made the same
   way. The registrar compares and sets an artifact's title by the same
   rule (yizkr.pipeline.registrar), so a title and a label that the
-  instance keeps alike are alike to both.
+  instance keeps alike are alike to both;
+* the instance puts text in NFC by the tables of Unicode 15.0
+  (INSTANCE_UNICODE: ICU 72.1 in the wikibase/wikibase:7 image, which
+  UtfNormal 4.0.0 reaches through PHP's intl), and the writer by Python's
+  (unicodedata.unidata_version, 14.0.0 on Python 3.11). By Unicode's
+  normalization stability policy the two give the same form to every
+  text whose characters Python's tables assign, so the writer sends no
+  text that holds a character they do not, noncharacters aside
+  (`unknown_characters`): a combining mark assigned since, such as
+  U+1E08F, may take another place in the instance's NFC, and a re-run
+  would not find what the first run wrote. Each text is read whole for
+  it, past TERM_LIMIT or TEXT_LIMIT too, before any cut. A claim whose
+  own text, or whose source block's page number, region or excerpt,
+  holds one is refused whole, as above. A description, an alias or a
+  type hint that holds one is left out, never changed, and the result's
+  `refused_terms` names it ("<local id>: <term>"), with a warning that
+  names its characters by their code points. An entity whose label
+  holds one has no item the writer can find or mint by it: each claim
+  that mentions it, as its subject, its value or a qualifier's, is
+  refused before the first write, and `refused_terms` names the label;
+  the label of an entity an approved equivalence names, which goes as an
+  alias of its item, is left out as an alias is. A run item's label or
+  description that holds one raises ValueError before anything is read
+  or written. The cuts read characters by Python's tables too (extends),
+  and no cut of such a text is sent.
 
 Nothing here auto-approves: the writer expects the output of
 `apply_review` and trusts the human decisions that produced it, except
@@ -319,6 +343,60 @@ _CLEAN_UP = str.maketrans(
 # word, which a cut keeps whole: a point or comma inside a number
 # ("1.234", "1,5"), an apostrophe inside a word
 INNER_PUNCTUATION = ".,'\u2019"
+# The Unicode version of the tables the instance puts text in NFC by.
+# Wikibase does it through UtfNormal 4.0.0, which MediaWiki pins and which
+# calls PHP's intl normalizer, and the PHP of the wikibase/wikibase:7
+# image (Debian 12) builds intl against ICU 72.1, whose tables are
+# Unicode 15.0 (ADR-0010). The writer puts text in NFC by Python's own
+# tables (unicodedata.unidata_version), which must be no newer than these.
+# Unicode's normalization stability policy then makes the two agree on
+# every text whose characters Python's tables assign, and the writer sends
+# no other (unknown_characters). A test holds the interpreter to it.
+INSTANCE_UNICODE = "15.0.0"
+
+
+def _noncharacter(code: int) -> bool:
+    """Whether the code point `code` is a noncharacter: U+FDD0 to U+FDEF
+    and the last two code points of every plane, which Unicode never
+    assigns, so every version's NFC leaves them as they are."""
+    return 0xFDD0 <= code <= 0xFDEF or code & 0xFFFE == 0xFFFE
+
+
+def unknown_characters(text: str) -> list[str]:
+    """The characters of `text` that Python's Unicode tables do not
+    assign (category Cn), noncharacters aside, each once, in the order
+    they first come. Unicode may have assigned one since those tables, as
+    a combining mark with a combining class of its own, which the
+    instance's newer tables (INSTANCE_UNICODE) put in another order in
+    NFC than Python's do: U+1E08F, for one, which Unicode 15.0 assigns
+    after Python 3.11's 14.0.0. So a text that holds one may be kept in
+    another form than the writer sends, and a re-run would not find what
+    the first run wrote. Every other text the two put in the same form,
+    by Unicode's normalization stability policy, as long as Python's
+    tables are no newer than the instance's. The writer sends no text
+    that holds one (the module docstring)."""
+    return list(
+        dict.fromkeys(
+            char
+            for char in text
+            if unicodedata.category(char) == "Cn"
+            and not _noncharacter(ord(char))
+        )
+    )
+
+
+def _unknown_fault(chars: list[str]) -> str:
+    """What keeps the instance from holding a text that holds the
+    characters `chars` (unknown_characters) as the writer sends it: a
+    clause that reads after the words naming the text. It names each
+    character by its code point, quoting no text."""
+    codes = _listed([f"U+{ord(char):04X}" for char in chars])
+    which = "a character" if len(chars) == 1 else "characters"
+    return (
+        f"holds {codes}, {which} Python's Unicode "
+        f"{unicodedata.unidata_version} tables do not know, which the "
+        f"instance may put in another order in NFC"
+    )
 
 
 class UnapprovedDepictsError(ValueError):
@@ -381,9 +459,16 @@ class WriteResult:
     # unless the review corrected it) of each claim refused whole because
     # the instance cannot hold its own text as it is (over TEXT_LIMIT,
     # with a line break, a tab or whitespace at either end, or with a
-    # character it cleans up into U+FFFD), in batch order; a warning says
-    # why for each (the module docstring)
+    # character it cleans up into U+FFFD, with a character Python's
+    # Unicode tables do not know in it or its source block, or mentioning
+    # an entity whose label holds one), in batch order; a warning says why
+    # for each (the module docstring)
     refused: list[str] = field(default_factory=list)
+    # each label, description, alias or type hint of the batch's entities
+    # left out because it holds a character Python's Unicode tables do not
+    # know (unknown_characters), named "<local id>: <term>", in the order
+    # write_batch finds them before its first write; a warning names each
+    refused_terms: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -455,9 +540,10 @@ def _faults(text: str) -> list[str]:
     clause that reads after the words naming the text ("its value ...").
     None when the instance holds it: it has at most TEXT_LIMIT characters,
     holds no line break (LINE_BREAKS) or tab, has no whitespace
-    (WHITESPACE) at either end, and holds no other character the instance
+    (WHITESPACE) at either end, holds no other character the instance
     cleans up into U+FFFD (CLEANED_UP; a vertical tab and a form feed are
-    line breaks here)."""
+    line breaks here), and holds no character Python's Unicode tables do
+    not know (unknown_characters)."""
     faults = []
     if len(text) > TEXT_LIMIT:
         faults.append(
@@ -484,6 +570,9 @@ def _faults(text: str) -> list[str]:
             "holds a control character or a noncharacter, which Wikibase "
             "changes into U+FFFD"
         )
+    unknown = unknown_characters(text)
+    if unknown:
+        faults.append(_unknown_fault(unknown))
     return faults
 
 
@@ -555,7 +644,9 @@ def extends(char: str, before: str) -> bool:
     _SYLLABLES). A narrower rule than
     Unicode's grapheme clusters (Unicode Standard Annex 29), which it
     follows for these sequences alone (ADR-0010). The writer's cuts and
-    the registrar's keep to it."""
+    the registrar's keep to it. It reads `char` by Python's Unicode
+    tables, which take a mark assigned since them for no mark; the
+    writer sends no cut of a text that holds one (unknown_characters)."""
     code = ord(char)
     return (
         _is_mark(char)
@@ -664,9 +755,30 @@ def _term_text(text: str) -> str:
 
 def _terms(texts: list[str]) -> list[str]:
     """`texts`, a list of aliases, as the writer sends it: each alias as
-    it sends a term (_term_text), in their order, leaving out a repeat and
-    an alias with nothing the instance keeps, which it refuses."""
-    return [term for term in dict.fromkeys(map(_term_text, texts)) if term]
+    it sends a term (_term_text), in their order, leaving out a repeat, an
+    alias with nothing the instance keeps, which it refuses, and one that
+    holds a character Python's Unicode tables do not know anywhere in it,
+    past TERM_LIMIT too, which the instance may keep in another form and
+    which no cut of sends altered (unknown_characters; write_batch warns
+    of each before its first write)."""
+    return [
+        term
+        for term in dict.fromkeys(
+            _term_text(text) for text in texts if not unknown_characters(text)
+        )
+        if term
+    ]
+
+
+def _hint_sent(text: str) -> str:
+    """An entity's type hint as the writer records it (_hint_text), or ""
+    when it leaves the hint out: one over TEXT_LIMIT, or holding a
+    character Python's Unicode tables do not know (unknown_characters).
+    write_batch warns of each before its first write."""
+    hint = _hint_text(text)
+    if len(hint) > TEXT_LIMIT or unknown_characters(hint):
+        return ""
+    return hint
 
 
 def _cut(text: str, limit: int) -> str:
@@ -717,6 +829,39 @@ def _cut(text: str, limit: int) -> str:
             end -= 1
         kept = text[:end] or text[:room]
     return kept + mark
+
+
+def _run_terms(batch: ClaimBatch) -> tuple[str, str]:
+    """The label and description of the batch's run item, as the writer
+    looks for and writes them: in the form the instance keeps a term in,
+    cut with a digest of the whole when a long model identifier takes the
+    label past what the instance holds, so each batch's run item keeps a
+    label of its own (_term_text). Raises ValueError, naming the
+    characters, when either holds a character Python's Unicode tables do
+    not know (unknown_characters), whole, before any cut: the instance
+    may keep it in another form, and a re-run would mint the run item
+    again. Both are machine
+    text, from the run's own settings, so the batch is refused before
+    anything is read or written rather than its run left unlabelled."""
+    run = batch.extraction_run
+    label = (
+        f"extraction run {run.started_at.date().isoformat()} "
+        f"{run.model_identifier} {batch_fingerprint(batch)}"
+    )
+    description = (
+        f"pipeline {run.pipeline_version}"
+        + (f", commit {run.software_commit}" if run.software_commit else "")
+        + f", started {run.started_at.isoformat()}"
+    )
+    for what, term in (("label", label), ("description", description)):
+        unknown = unknown_characters(term)
+        if unknown:
+            raise ValueError(
+                f"the extraction run's {what} {_unknown_fault(unknown)}: "
+                f"give the run's model identifier, pipeline version and "
+                f"commit without it. Nothing was written"
+            )
+    return _term_text(label), _term_text(description)
 
 
 class BatchWriter:
@@ -858,7 +1003,12 @@ class BatchWriter:
         # instance keeps a term, cut to what it holds (_term_text), and not
         # at all when that is the label, as Wikibase refuses an item whose
         # label and description are the same; a warning says so, in a dry
-        # run too
+        # run too. One that holds a character Python's Unicode tables do
+        # not know anywhere in it, past TERM_LIMIT too, is left out whole,
+        # never sent cut, with the warning write_batch gave before its
+        # first write (unknown_characters)
+        if unknown_characters(description or ""):
+            description = ""
         description = _term_text(description or "")
         if description == label:
             description = ""
@@ -896,10 +1046,10 @@ class BatchWriter:
         # entity actually is, so the gap is queryable, not lost. It goes
         # with its spacing made single spaces and cleaned up as the
         # instance gives it back (_hint_text), and a hint the instance
-        # cannot hold is left out, with the warning write_batch gave before
-        # its first write
-        type_hint = _hint_text(record.type_hint or "") if record else ""
-        if type_hint and len(type_hint) <= TEXT_LIMIT and source_artifact_qid:
+        # cannot hold, or may keep in another form, is left out, with the
+        # warning write_batch gave before its first write (_hint_sent)
+        type_hint = _hint_sent(record.type_hint or "") if record else ""
+        if type_hint and source_artifact_qid:
             from wikibaseintegrator.datatypes import String
 
             hint = String(
@@ -1096,16 +1246,7 @@ class BatchWriter:
     # -- extraction-run item -------------------------------------------------
 
     def ensure_run_item(self, batch: ClaimBatch) -> str:
-        run = batch.extraction_run
-        fingerprint = batch_fingerprint(batch)
-        # looked for, and written, in the form the instance keeps labels
-        # in, cut with a digest of the whole when a long model identifier
-        # takes it past what the instance holds, so each batch's run item
-        # keeps a label of its own (_term_text)
-        label = _term_text(
-            f"extraction run {run.started_at.date().isoformat()} "
-            f"{run.model_identifier} {fingerprint}"
-        )
+        label, description = _run_terms(batch)
         from yizkr.pipeline.registrar import ensure_self_typed
 
         existing = self.client.find_item_by_label(label)
@@ -1125,18 +1266,7 @@ class BatchWriter:
             return "(new:run)"
         item = self.client.wbi.item.new()
         item.labels.set("en", label)
-        item.descriptions.set(
-            "en",
-            _term_text(
-                f"pipeline {run.pipeline_version}"
-                + (
-                    f", commit {run.software_commit}"
-                    if run.software_commit
-                    else ""
-                )
-                + f", started {run.started_at.isoformat()}"
-            ),
-        )
+        item.descriptions.set("en", description)
         item = item.write(summary="ingest: extraction run")
         # The run item is the document of its own execution (same
         # convention as the model manifest, docs/MODELING.md): its kind
@@ -1282,8 +1412,11 @@ class BatchWriter:
         the resolve step made. Only in that last case have the
         record's aliases not reached the item yet. A record whose label
         holds nothing the instance keeps names no item this way, as an
-        item with no English label matches no record. A local ref without
-        a manifest record that the writer matched by exact label gives the
+        item with no English label matches no record, and nor does one
+        whose label holds a character Python's Unicode tables do not know
+        anywhere in it, past TERM_LIMIT too (unknown_characters), which
+        the instance may keep in another form. A local ref without a
+        manifest record that the writer matched by exact label gives the
         kind on its own `instance_of`, cited to its own claim's artifact.
         """
         found: list[_FoundEntity] = []
@@ -1292,7 +1425,7 @@ class BatchWriter:
             qid = record.qid or result.created_items.get(record.id)
             if qid is None:
                 stored_label = _term_text(record.label)
-                if stored_label:
+                if stored_label and not unknown_characters(record.label):
                     by_label.setdefault(stored_label, []).append(record)
             else:
                 found.append(_FoundEntity(qid, record.kind, record.type_hint))
@@ -1420,17 +1553,124 @@ class BatchWriter:
                     artifact_qid,
                     result,
                 )
-            # and so is a type hint the instance cannot hold; one it holds
-            # goes with its spacing made single spaces and cleaned up as
-            # the instance gives it back (_hint_text)
-            hint = _hint_text(found.type_hint or "")
-            if hint and len(hint) <= TEXT_LIMIT:
+            # and so is a type hint the instance cannot hold, or may keep
+            # in another form; one it holds goes with its spacing made
+            # single spaces and cleaned up as the instance gives it back
+            # (_hint_sent)
+            hint = _hint_sent(found.type_hint or "")
+            if hint:
                 self._record_type_statement(
                     found.qid,
                     String(prop_nr=self.properties["type_hint"], value=hint),
                     artifact_qid,
                     result,
                 )
+
+    @staticmethod
+    def _refs(claim: Claim) -> list:
+        """The refs of `claim`, in the order the writer resolves them: its
+        subject, then its value, then its qualifiers' values."""
+        refs = [claim.subject]
+        if isinstance(claim.value, ItemValue):
+            refs.append(claim.value.value)
+        refs.extend(
+            qualifier.value.value
+            for qualifier in claim.qualifiers
+            if isinstance(qualifier.value, ItemValue)
+        )
+        return refs
+
+    def _unnamed(self, batch: ClaimBatch) -> dict[str, list[str]]:
+        """The local ids of the entities the writer can neither find nor
+        mint an item for, each with the characters Python's Unicode tables
+        do not know that its label holds (unknown_characters): the
+        instance may keep such a label in another form, so a re-run would
+        not find the item by it. A local id's label is its manifest
+        record's when it has one without an approved equivalence (one
+        with an equivalence names its item by QID), and otherwise that of
+        each ref to the id in the batch, any of which may be the first the
+        writer resolves."""
+        unnamed: dict[str, list[str]] = {}
+        for record in self._entity_records.values():
+            unknown = unknown_characters(record.label)
+            if unknown and not record.qid:
+                unnamed[record.id] = unknown
+        for claim in batch.claims:
+            for ref in self._refs(claim):
+                if (
+                    isinstance(ref, LocalRef)
+                    and ref.local_id not in self._entity_records
+                ):
+                    unknown = unknown_characters(ref.label or "")
+                    if unknown:
+                        known = unnamed.setdefault(ref.local_id, [])
+                        known.extend(c for c in unknown if c not in known)
+        return unnamed
+
+    def _unknown_terms(
+        self,
+        batch: ClaimBatch,
+        refused: Collection[int],
+        unnamed: Mapping[str, list[str]],
+    ) -> tuple[list[str], list[str]]:
+        """The terms of the batch's entities the writer leaves out because
+        they hold a character Python's Unicode tables do not know
+        (unknown_characters), which the instance may keep in another form:
+        each named "<local id>: <term>" (label, description, alias or type
+        hint), and a warning for each that names the entity and the
+        characters, quoting no text. `unnamed` holds the entities whose
+        label keeps the writer from finding or minting their item
+        (_unnamed): their label is named, and nothing else of them, as
+        nothing else of them is sent. An approved equivalence's record
+        gives its label as an alias of its item, and no description, as
+        the writer sends none to an item it names. A local id without a
+        manifest record gives the description of the first ref to it in a
+        claim the writer writes, as `_unknown_kinds` reads its kind;
+        `refused` holds the places in the batch of the claims the writer
+        refuses."""
+        named: list[str] = []
+        warnings: list[str] = []
+
+        def leave_out(local_id: str, term: str, text: str | None) -> None:
+            unknown = unknown_characters(text or "")
+            if unknown:
+                named.append(f"{local_id}: {term}")
+                article = "an" if term.startswith("a") else "a"
+                warnings.append(
+                    f"entity {local_id!r} has {article} {term} that "
+                    f"{_unknown_fault(unknown)}: it is left out"
+                )
+
+        for local_id, unknown in unnamed.items():
+            named.append(f"{local_id}: label")
+            warnings.append(
+                f"entity {local_id!r} has a label that "
+                f"{_unknown_fault(unknown)}: no item is found or made by it, "
+                f"and any claim that mentions it is refused"
+            )
+        for record in self._entity_records.values():
+            if record.id in unnamed:
+                continue
+            if record.qid:
+                leave_out(record.id, "label", record.label)
+            else:
+                leave_out(record.id, "description", record.summary)
+            for alias in record.aliases:
+                leave_out(record.id, "alias", alias)
+            leave_out(record.id, "type hint", record.type_hint)
+        first: dict[str, LocalRef] = {}
+        for index, claim in enumerate(batch.claims):
+            if index in refused:
+                continue
+            for ref in self._refs(claim):
+                if (
+                    isinstance(ref, LocalRef)
+                    and ref.local_id not in self._entity_records
+                ):
+                    first.setdefault(ref.local_id, ref)
+        for local_id, ref in first.items():
+            leave_out(local_id, "description", ref.description)
+        return named, warnings
 
     def _unknown_kinds(
         self, batch: ClaimBatch, refused: Collection[int]
@@ -1448,15 +1688,7 @@ class BatchWriter:
         for index, claim in enumerate(batch.claims):
             if index in refused:
                 continue
-            refs = [claim.subject]
-            if isinstance(claim.value, ItemValue):
-                refs.append(claim.value.value)
-            refs.extend(
-                qualifier.value.value
-                for qualifier in claim.qualifiers
-                if isinstance(qualifier.value, ItemValue)
-            )
-            for ref in refs:
+            for ref in self._refs(claim):
                 if isinstance(ref, LocalRef):
                     kinds.setdefault(ref.local_id, ref.instance_of)
         return [
@@ -1466,8 +1698,9 @@ class BatchWriter:
             if kind and kind not in self.items
         ]
 
-    @staticmethod
-    def _refusals(batch: ClaimBatch) -> dict[int, str]:
+    def _refusals(
+        self, batch: ClaimBatch, unnamed: Mapping[str, list[str]]
+    ) -> dict[int, str]:
         """The claims of `batch` the writer refuses, by their place in the
         batch, each with the warning that names it by its claim id and
         property and says why (the module docstring):
@@ -1481,7 +1714,16 @@ class BatchWriter:
           instance from holding it in the form the writer sends it in
           (_faults): its length, a line break or a tab, whitespace at
           either end, a control character or a noncharacter the instance
-          changes into U+FFFD. The warning quotes none of the texts."""
+          changes into U+FFFD, a character Python's Unicode tables do not
+          know (unknown_characters);
+        * a claim whose source block's page number, region or excerpt
+          holds a character Python's Unicode tables do not know: the
+          instance may keep the block in another form, and a re-run would
+          add it again beside the first;
+        * a claim that mentions an entity whose label keeps the writer
+          from finding or minting its item (`unnamed`, from _unnamed).
+
+        The warning quotes none of the texts."""
         document_subjects = load_acceptance().document_subjects
         refusals = {}
         for index, claim in enumerate(batch.claims):
@@ -1517,6 +1759,37 @@ class BatchWriter:
                 for where, value in texts
                 for fault in _faults(_value_text(value) or "")
             ]
+            source = claim.source
+            locators = [
+                ("its page number", source.page_number),
+                (
+                    "its region",
+                    source.region.as_wikibase_string()
+                    if source.region
+                    else None,
+                ),
+                (
+                    "its excerpt",
+                    source.transcription_excerpt.text
+                    if source.transcription_excerpt
+                    else None,
+                ),
+            ]
+            faults.extend(
+                f"{where} {_unknown_fault(unknown)}"
+                for where, text in locators
+                if (unknown := unknown_characters(text or ""))
+            )
+            faults.extend(
+                f"it mentions entity {local_id!r}, whose label "
+                f"{_unknown_fault(unnamed[local_id])}, so that no item is "
+                f"found or made by it"
+                for local_id in dict.fromkeys(
+                    ref.local_id
+                    for ref in self._refs(claim)
+                    if isinstance(ref, LocalRef) and ref.local_id in unnamed
+                )
+            )
             if faults:
                 refusals[index] = (
                     f"claim {claim_id(claim)} ({claim.property}) is "
@@ -1546,13 +1819,19 @@ class BatchWriter:
     ) -> WriteResult:
         """Write `batch`. Raises UnapprovedDepictsError, before reading
         from or writing to the instance, when a depicts claim in it lacks
-        its row approval (the module docstring), in a dry run too. A
-        claim whose own text the instance cannot hold raises nothing: it
-        is refused alone, and the rest of the batch is written (the
-        module docstring)."""
+        its row approval (the module docstring), in a dry run too, and
+        ValueError, then too, when the run item's label or description
+        holds a character Python's Unicode tables do not know
+        (_run_terms). A claim whose own text the instance cannot hold
+        raises nothing: it is refused alone, and the rest of the batch is
+        written (the module docstring)."""
         unapproved = unapproved_depicts(batch)
         if unapproved:
             raise UnapprovedDepictsError(unapproved)
+        # the run item's terms are machine text: one the instance may keep
+        # in another form refuses the batch before anything is read or
+        # written (_run_terms)
+        _run_terms(batch)
         # a bulk-accepted batch (whole-sheet accept-all, ADR-0023) gets a
         # distinct edit summary so MediaWiki history is the low-scrutiny
         # reappraisal queue — no graph flag, no staleness.
@@ -1571,12 +1850,18 @@ class BatchWriter:
         # found before the first write, in a dry run as well: the claims
         # whose own text the instance cannot hold, which the loop below
         # leaves out whole
-        refusals = self._refusals(batch)
+        unnamed = self._unnamed(batch)
+        refusals = self._refusals(batch, unnamed)
         # found before the first write too: the kinds the vocabulary lacks,
-        # of the claims the writer writes, and the type hints the instance
-        # cannot hold, each skipped wherever the writer would record it
+        # of the claims the writer writes, the type hints the instance
+        # cannot hold, and the terms it may keep in another form, each
+        # skipped wherever the writer would record it
         warnings = self._unknown_kinds(batch, refusals)
         warnings += [*refusals.values(), *self._type_hints_over_limit()]
+        refused_terms, term_warnings = self._unknown_terms(
+            batch, refusals, unnamed
+        )
+        warnings += term_warnings
         # reviewed equivalences (ADR-0007): resolve replaced these
         # entities' refs with QIDs, so materialization never sees them —
         # contribute the document's aliases to the existing items here
@@ -1587,7 +1872,9 @@ class BatchWriter:
                         record.qid, [record.label, *record.aliases]
                     )
         result = WriteResult(
-            run_qid=self.ensure_run_item(batch), warnings=warnings
+            run_qid=self.ensure_run_item(batch),
+            warnings=warnings,
+            refused_terms=refused_terms,
         )
         for index, claim in enumerate(batch.claims):
             if index in refusals:

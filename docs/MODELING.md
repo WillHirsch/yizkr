@@ -36,6 +36,21 @@
   label, which holds the model's identifier, keeps its batch's
   fingerprint in the digest. An entity whose description would be its
   label gets none, with a warning (#384).
+- Wikibase puts a term, and every text, in NFC by the tables of Unicode
+  15.0 (ICU 72.1 in the wikibase/wikibase:7 image), and the writer by
+  Python's (14.0.0 on Python 3.11). Unicode's normalization stability
+  policy makes the two agree on every text whose characters Python's
+  tables assign, so the writer sends no term that holds a character they
+  do not, noncharacters aside, read whole, past the cut too, so that no
+  cut of such a term is sent either: a combining mark assigned since,
+  such as U+1E08F, the combining Cyrillic Byelorussian-Ukrainian i, may
+  take another place in the instance's NFC. A description, an alias or
+  a type hint that holds one is left out, never changed, and the write's
+  result names it in `refused_terms`, with a warning. An entity whose label
+  holds one is neither found nor minted, and each claim that mentions
+  it is refused. The registrar makes no alias of a title that holds one.
+  The interpreter's tables must be no newer than the instance's, which a
+  unit test checks (writer's INSTANCE_UNICODE; ADR-0010, #431).
 - Schema-level statements (e.g. the subclass hierarchy) carry
   references too (ADR-0003): a `stated in` reference to the *model
   manifest* item, which represents `model/manifest.yaml` — the document that
@@ -198,7 +213,9 @@ in its source, as an excerpt only helps a reader check it there, and the
 digest keeps two places whose locators or excerpts agree up to the cut
 two references. A claim whose own text, its value or a qualifier's, is
 over the limit, or holds a line break or a tab, or has whitespace at
-either end, or holds a character the instance cleans up, is refused,
+either end, or holds a character the instance cleans up, or holds a
+character Python's Unicode tables do not know (above; its page number,
+region or excerpt holding one refuses it too, #431), is refused,
 never cut, trimmed or cleaned up, since that would alter what the source
 says: nothing of it is written, and the write's result
 names it by its claim id (its review-sheet id, unless the review

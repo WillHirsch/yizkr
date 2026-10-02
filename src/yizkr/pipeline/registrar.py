@@ -88,10 +88,14 @@ Idempotent. A Registrar reads the instance once, lag-free
 writes. A statement that exists already is skipped when it cites the
 source that asserts it, and otherwise gains that source's reference, as
 an agreeing source's (ADR-0002); nothing existing is changed or removed
-(CLAUDE.md rule 3). The bytes are uploaded only when no file of
-the item holds them, and an upload never overwrites a wiki file or stores
-bytes the wiki already holds (`WikiClient.upload_file`), so every `media
-file` holds the bytes its item's `media SHA-1` names.
+(CLAUDE.md rule 3). A title, or a derived medium's name, that holds a
+character Python's Unicode tables do not know never becomes an alias
+(writer.unknown_characters): the instance may keep it in another form,
+and it would look missing on every registration. The bytes are uploaded
+only when no file of the item holds them, and an upload never overwrites
+a wiki file or stores bytes the wiki already holds
+(`WikiClient.upload_file`), so every `media file` holds the bytes its
+item's `media SHA-1` names.
 """
 
 from __future__ import annotations
@@ -112,8 +116,15 @@ from yizkr.pipeline.presentation import IMAGE_SUFFIXES, DerivedMediaRecord
 # rule (_stored_term), and TERM_LIMIT is the most characters it takes in
 # one: in any other form, a label another item holds would look free, and
 # an alias the item has would look missing; a cut keeps whole letters by
-# the writer's rule too (extends, half_flag)
-from yizkr.pipeline.writer import TERM_LIMIT, extends, half_flag
+# the writer's rule too (extends, half_flag), and a name holding a
+# character Python's Unicode tables do not know, which the instance may
+# keep in another form, never looks missing (unknown_characters)
+from yizkr.pipeline.writer import (
+    TERM_LIMIT,
+    extends,
+    half_flag,
+    unknown_characters,
+)
 from yizkr.pipeline.writer import stored_term as _stored_term
 
 # the categories of the characters that show nothing: format characters
@@ -853,8 +864,12 @@ class Registrar:
         belongs to other content: another item's label, or the plain form
         of this item's content-tagged label (tagged because that name was
         taken). Aliasing it would cross-link two artifacts. Nor does a
-        name longer than Wikibase takes. `name` is in the stored form
-        (_stored_term), as the item's terms are.
+        name longer than Wikibase takes, nor one that holds a character
+        Python's Unicode tables do not know (unknown_characters): the
+        instance may keep it in another form than the item's label or
+        alias that came of it, so it would look missing on every
+        registration. `name` is in the stored form (_stored_term), as the
+        item's terms are.
         """
         current = str(item.labels.get("en") or "")
         aliases = {str(alias) for alias in item.aliases.get("en") or []}
@@ -862,6 +877,7 @@ class Registrar:
             name != current
             and name not in aliases
             and len(name) <= TERM_LIMIT
+            and not unknown_characters(name)
             and current != f"{name} [{content_sha1[:8]}]"
             and self._read().labels.get(name, set()) <= {item.id}
         )

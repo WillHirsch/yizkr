@@ -2061,6 +2061,7 @@ class Orchestrator:
             "type_statements_referenced": result.type_statements_referenced,
             "created_items": result.created_items,
             "refused": result.refused,
+            "refused_terms": result.refused_terms,
             "approved_claims": len(approved.claims),
         }
 
