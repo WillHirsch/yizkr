@@ -88,7 +88,8 @@ no boolean is damaged. A give-up of a call that is not an attempt (a
 chunk, a critique, a transcription) still stores nothing. The run report
 counts the calls stopped at the output limit per stage, from the call
 events, and says `not recorded` for a run whose call events carry no
-stop reason; a give-up replayed from the cache makes no call, and its
+stop reason (a run from before the engine recorded one, a run on the
+Anthropic API engine, or a run that made no call); a give-up replayed from the cache makes no call, and its
 `cache-hit` says `gave_up: true`, so the report counts those hits per
 stage in its cache section, apart from the stops (§3, §4, §5, §8).
 
