@@ -17,6 +17,7 @@ import gzip
 import hashlib
 import json
 import re
+import threading
 from pathlib import Path
 
 import pytest
@@ -59,6 +60,9 @@ from yizkr.core.config import Config
 from yizkr.core.privacy import BIRTHS_QUERY, people_selection
 from yizkr.model.schema import load_manifest, read_manifest_data
 from yizkr.queries.publish import prefix_block
+
+# how long a run that should end at once may take before it counts as hung
+HANG_GUARD = 30
 
 
 @pytest.fixture(scope="module")
@@ -2590,18 +2594,19 @@ class TestExportPublic:
         self, tmp_path, vocabulary
     ):
         # Gustav's birth (Q401, released) at a place with no type (Q429),
-        # and a migration of his carried out by a family (Q446) whose one
+        # and a reunion of his carried out by a family (Q446) whose one
         # member is Gustav: untyped items and families of released members
         # are left out, but protect no one, so the events stay; the
-        # statements naming them go whole
+        # statements naming them go whole. A migration the family carried
+        # out is its members' own, and goes (decision AC)
         properties, items = vocabulary
         dump = export_dump(vocabulary)
         dump.entity("Q480", "a birth", revision=480)
         dump.says("Q480", "instance_of", entity(items["birth"]))
         dump.says("Q480", "participant", entity("Q401"))
         dump.says("Q480", "location", entity("Q429"))
-        dump.entity("Q481", "a migration", revision=481)
-        dump.says("Q481", "instance_of", entity(items["migration"]))
+        dump.entity("Q481", "a reunion", revision=481)
+        dump.says("Q481", "instance_of", entity(items["event"]))
         dump.says("Q481", "participant", entity("Q401"))
         dump.says("Q481", "carried_out_by", entity("Q446"))
         dump.says("Q401", "member_of", entity("Q446"))
@@ -3005,6 +3010,7 @@ class TestExportPublic:
             backup.PARTICIPANT_LEFT_OUT.format("Q405")
         )
 
+    @pytest.mark.parametrize("via", ["carried_out_by", "participant"])
     @pytest.mark.parametrize(
         ("case", "shields"),
         [
@@ -3013,50 +3019,159 @@ class TestExportPublic:
             ("nested-possibly-living", True),
             ("a-cycle-of-no-one", True),
             ("a-cycle-with-a-released-member", False),
+            ("nested-family-not-released", True),
+            ("nested-family-of-no-one", True),
+            ("a-person-named-a-group", True),
+            ("nested-unknown-participant", True),
+            ("nested-only-an-unknown-participant", True),
+            ("nested-participant-possibly-living", True),
+            ("nested-family-of-its-participant", False),
         ],
     )
     def test_a_groups_members_are_read_through_its_groups(
-        self, tmp_path, vocabulary, case, shields
+        self, tmp_path, vocabulary, case, shields, via
     ):
-        # "Departure of the Lobigs", carried out by the family Q446: one
-        # whose own participants are Gustav (Q401) and someone unknown is
-        # not confirmed released, and takes the event with it. Its members
-        # are read through the groups among them (Q491, a member of Q446),
-        # however deep, and a cycle of groups ends: released through
-        # them, the event stays; with Florence (Q405) a member of Q491, or
-        # no one at all, it goes
+        # "Departure of the Lobigs", that the family Q446 carried out or
+        # took part in: one whose own participants are Gustav (Q401) and
+        # someone unknown is not confirmed released, and takes the event
+        # with it. Its members are read through the groups among them
+        # (Q491, a member of Q446), however deep, and a cycle of groups
+        # ends: released through them, the event stays; with Florence
+        # (Q405) a member of Q491, or no one at all, it goes. Each group so
+        # read must be released too: Q491 a family the check never
+        # assessed (it took part in a migration), one that names no one,
+        # or one with a participant of unknown value, takes the event with
+        # it. Florence named a group (Gustav a member of her) is a member
+        # all the same, never a group to read through. A family known by
+        # its type and its participant alone, Gustav, is released
         _, items = vocabulary
         dump = export_dump(vocabulary)
         family = entity("Q446")
         if case == "an-unknown-participant":
             dump.says("Q446", "participant", entity("Q401"))
             dump.says("Q446", "participant", "_:genid9")
+        elif case == "a-person-named-a-group":
+            dump.says("Q405", "member_of", family)
+            dump.says("Q401", "member_of", entity("Q405"))
         else:
-            dump.entity("Q491", "the Löbig cousins", revision=491)
+            dump.entity("Q491", "the Lobig cousins", revision=491)
             dump.says("Q491", "member_of", family)
-        if case in ("nested-released", "a-cycle-with-a-released-member"):
+        if case.startswith("nested-family") or case.startswith("nested-only"):
+            dump.says("Q491", "instance_of", entity(items["family"]))
+        if case in (
+            "nested-released",
+            "a-cycle-with-a-released-member",
+            "nested-family-not-released",
+        ):
             dump.says("Q401", "member_of", entity("Q491"))
         if case == "nested-possibly-living":
             dump.says("Q401", "member_of", entity("Q491"))
             dump.says("Q405", "member_of", entity("Q491"))
         if case.startswith("a-cycle"):
             dump.says("Q446", "member_of", entity("Q491"))
+        if case == "nested-family-not-released":
+            dump.entity("Q492", "a migration", revision=492)
+            dump.says("Q492", "instance_of", entity(items["migration"]))
+            dump.says("Q492", "participant", entity("Q491"))
+        if case in (
+            "nested-family-of-no-one",
+            "nested-only-an-unknown-participant",
+            "nested-participant-possibly-living",
+        ):
+            dump.says("Q401", "member_of", family)
+        if case == "nested-unknown-participant":
+            dump.says("Q491", "participant", entity("Q401"))
+            dump.says("Q491", "participant", "_:genid9")
+        if case == "nested-only-an-unknown-participant":
+            dump.says("Q491", "participant", "_:genid9")
+        if case == "nested-participant-possibly-living":
+            dump.says("Q491", "participant", entity("Q405"))
+        if case == "nested-family-of-its-participant":
+            dump.says("Q491", "participant", entity("Q401"))
         dump.entity("Q497", "Departure of the Lobigs", revision=497)
         dump.says("Q497", "instance_of", entity(items["event"]))
         dump.says("Q497", "point_in_time", dated(1975))
-        dump.says("Q497", "carried_out_by", family)
-        self.export_of(tmp_path, dump, vocabulary)
+        dump.says("Q497", via, family)
+        # a cycle of groups must end: a hang fails, rather than stalls
+        failures = []
+
+        def export():
+            try:
+                self.export_of(tmp_path, dump, vocabulary)
+            except BaseException as error:  # noqa: BLE001 - re-raised below
+                failures.append(error)
+
+        worker = threading.Thread(target=export, daemon=True)
+        worker.start()
+        worker.join(HANG_GUARD)
+        assert not worker.is_alive(), "the members walk did not end"
+        if failures:
+            raise failures[0]
         text, mentioned = self.public(tmp_path)
         assert ("Q497" in mentioned) is not shields
         assert (dated(1975) in text) is not shields
 
-    @pytest.mark.parametrize("participant", ["Q446", "Q401"])
+    @pytest.mark.parametrize(
+        ("case", "goes"),
+        [
+            ("carried-out-by-a-released-family", True),
+            ("carried-out-by-a-family-with-a-member-left-out", True),
+            ("a-curator-subclass-of-migration", True),
+            ("carried-out-by-a-released-family-not-a-person-kind", False),
+        ],
+    )
+    def test_a_person_kind_of_event_goes_with_any_group_it_names(
+        self, tmp_path, vocabulary, case, goes
+    ):
+        # "Emigration of the Lobigs", a migration of Gustav's (Q401)
+        # carried out by the family Q446: the event is its members' own,
+        # so it goes, the family's members all released (Gustav) or not
+        # (Florence, Q405, too). So does one typed with a class a curator
+        # made a subclass of migration (Q493), that the family took part
+        # in. An event of no person kind it carried out stays
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.says("Q401", "member_of", entity("Q446"))
+        if case == "carried-out-by-a-family-with-a-member-left-out":
+            dump.says("Q405", "member_of", entity("Q446"))
+        kind = entity(items["migration"])
+        if case == "a-curator-subclass-of-migration":
+            dump.entity("Q493", "a passage", revision=493)
+            dump.says("Q493", "subclass_of", kind)
+            kind = entity("Q493")
+        if case.endswith("not-a-person-kind"):
+            kind = entity(items["event"])
+        dump.entity("Q497", "Emigration of the Lobigs", revision=497)
+        dump.says("Q497", "instance_of", kind)
+        dump.says("Q497", "point_in_time", dated(1975))
+        dump.says("Q497", "participant", entity("Q401"))
+        if case == "a-curator-subclass-of-migration":
+            dump.says("Q497", "participant", entity("Q446"))
+        else:
+            dump.says("Q497", "carried_out_by", entity("Q446"))
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert ("Q497" in mentioned) is not goes
+        assert (dated(1975) in text) is not goes
+        if goes:
+            exclusions = json.loads(
+                (tmp_path / "public-exclusions.json").read_text()
+            )
+            reason = (
+                backup.PARTICIPANT_LEFT_OUT
+                if case == "a-curator-subclass-of-migration"
+                else backup.LINKED_LEFT_OUT
+            )
+            assert exclusions["excluded"]["Q497"] == reason.format("Q446")
+
+    @pytest.mark.parametrize("participant", ["Q446", "Q401", "Q464"])
     def test_an_untyped_event_of_a_released_group_shields_nothing(
         self, tmp_path, vocabulary, participant
     ):
         # an untyped gathering (Q491) that the Lobigs (Q446, Gustav their
-        # one member) or Gustav himself took part in: neither protects
-        # anyone, so an event part of it stays, without its statement
+        # one member, or Q464, a redirect to them) or Gustav himself took
+        # part in: neither protects anyone, so an event part of it stays,
+        # without its statement
         properties, items = vocabulary
         dump = export_dump(vocabulary)
         dump.says("Q401", "member_of", entity("Q446"))

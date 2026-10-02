@@ -245,12 +245,13 @@ directory under `var/backups/` containing:
   whose people may include a living person, every event that any of
   these took part in (named as a participant, or in a participant
   statement's qualifier) or that any statement of it names (unless that
-  item is left out only as untyped, or as a family or other group with
-  recorded members all released, read through its member groups, which
-  also takes part harmlessly in an event of no person kind; one that
-  names no member, or a participant of unknown value, takes it too; a
-  union, or an item typed human and not a family, is no event for
-  this), every
+  item is left out only as untyped, or, in an event of no person kind
+  (a subclass a curator makes of one counts as one), as a family or other
+  group with recorded members all released, read through its member
+  groups, each of which names a member and was not held back by the
+  check; one that names no member, or a participant of unknown value,
+  takes it too; a union, or an item typed human and not a family, is
+  no event for this), every
   person event that names no participant, every event that has
   participant statements, all of an unknown value or none, and the
   events that start and

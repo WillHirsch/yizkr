@@ -1073,10 +1073,16 @@ not a signal to grow the schema on.
   or unattended rule leaves out too, or that names an item left out to
   protect people. Such a group whose members are all released takes
   part in an event harmlessly, as a released person does, except in a
-  person kind of event, which is its members' own. Members are read
-  through the groups among them, through redirects, ending on cycles: a
-  member group with a member not released makes the outer group take
-  events with it, and so does a `participant` of unknown value. An
+  person kind of event, which is its members' own, however the event
+  names it (as a participant or, say, `carried out by`). Members are
+  read through the groups among them, through redirects, ending on
+  cycles: a member group with a member not released, that names no
+  one, or that the check assessed and did not release makes the outer
+  group take events with it, and so does a `participant` of unknown
+  value. A person named a `member of` (a household recorded under its
+  head) is a member whose standing counts, never a group read through.
+  A class the dump makes a subclass of a person kind of event is a
+  person kind too, everywhere in the export. An
   event is an item typed `event`, a subclass of it or a person kind of
   event, or an item with a `participant` statement, but never a union (a
   partnership or a marriage, or a subclass of one), whose events go with

@@ -53,12 +53,15 @@ closed:
   a person, as the value or a qualifier's value, whatever the property;
   a union is no event (ADR-0036), nor is an item typed human at normal
   or preferred rank, unless typed a family too. An item it drops only as
-  untyped, or as a family (or any item named a `member of`) that names
-  members, read through the groups among them, and whose members it all
-  released, protects no one and takes no event with it, nor does it take
-  one it took part in, unless of a person kind, which is its members'
-  own. A group with a participant of unknown value is not so released.
-  It drops every event
+  untyped, or as a released group, takes no event that merely names it.
+  A released group, a family (or any item named a `member of`) that
+  names members, read through the groups among them, each of which
+  names a member, has no participant of unknown value and was not held
+  back by the check, and whose members it all released, takes no event
+  it took part in either, unless of a person kind (a class the dump
+  makes a subclass of one included), which is its members' own, however
+  it names the group. A person named a `member of` is a member, never a
+  group to read through. It drops every event
   of a person kind that names no participant, and every event that has
   participant statements all of unknown value, as whom it happened to is
   unknown; and the events that start and end a union it drops, a
@@ -636,7 +639,29 @@ def read_dump(
         }
 
     reading.people |= typed_as({human})
-    person_events = typed_as(person_kinds)
+    # the subclasses the dump declares, read through redirects
+    subclasses = {
+        (
+            _redirected(reading.redirects, narrows[statement]),
+            _redirected(reading.redirects, kind),
+        )
+        for statement, kind in broader.items()
+        if statement in narrows
+    }
+
+    def closed(kinds: set[str]) -> set[str]:
+        """`kinds` and every class the dump makes a subclass of one."""
+        kinds = set(kinds)
+        while wider := {
+            narrow
+            for narrow, kind in subclasses
+            if kind in kinds and narrow not in kinds
+        }:
+            kinds |= wider
+        return kinds
+
+    # a class the dump makes a subclass of a person kind is one too
+    person_events = typed_as(closed(person_kinds))
     reading.person_events = person_events
     set_aside = typed_as(non_person_kinds, ranked=True)
     reading.people.update(
@@ -686,26 +711,6 @@ def read_dump(
     event_classes = person_kinds | {
         items[key] for key in event_kinds() if key in items
     }
-    subclasses = {
-        (
-            _redirected(reading.redirects, narrows[statement]),
-            _redirected(reading.redirects, kind),
-        )
-        for statement, kind in broader.items()
-        if statement in narrows
-    }
-
-    def closed(kinds: set[str]) -> set[str]:
-        """`kinds` and every class the dump makes a subclass of one."""
-        kinds = set(kinds)
-        while wider := {
-            narrow
-            for narrow, kind in subclasses
-            if kind in kinds and narrow not in kinds
-        }:
-            kinds |= wider
-        return kinds
-
     event_classes = closed(event_classes)
     # a union is no event, whatever its kind: a marriage is a person kind
     # for the unattended rule, and its partners are its participants. Its
@@ -719,7 +724,7 @@ def read_dump(
     # an event is linked to every item that a statement of it names, as its
     # value or a qualifier's, at any rank, whatever the property
     linked = (typed_as(event_classes) | set(events.values())) - (
-        unions_typed | humans
+        unions_typed | persons
     )
     for statement, event in owners.items():
         if event in linked and statement in named:
@@ -793,17 +798,20 @@ def public_exclusions(
       `participant` statement's value or named in its qualifiers, unless
       that item is a released group (a family, or any item named a
       `member of`, that names at least one member, read through the groups
-      among its members, all of them released, and no participant of
-      unknown value), which takes part harmlessly, except in a person
-      kind of event, which is its members' own (``PARTICIPANT_LEFT_OUT``,
-      naming them); each event that a statement
+      among its members, each of which names a member, has no participant
+      of unknown value and is not one the check held back, all of them
+      released, and no participant of unknown value; a person among its
+      members is a member, never a group), which takes part harmlessly,
+      except in a person kind of event, which is its members' own
+      (``PARTICIPANT_LEFT_OUT``, naming them); each event that a statement
       of it names an item it drops, as its value or a qualifier's,
       whatever the property, unless it drops that item only as untyped, or
-      as a family that names members, all of whom it released, which
-      protects no one: an item that may be a person, through redirects,
-      that the participant or unattended rule drops too, a statement of
-      which names an item that protects people, or that is named a
-      `member of` that is not a released group, is not dropped only so
+      as a released group (as defined above) in an event of no person
+      kind, which protects no one: an item that may be a person, through
+      redirects, that the participant or unattended rule drops too, a
+      statement of which names an item that protects people, or that is
+      named a `member of` that is not a released group, is not dropped
+      only so
       (``LINKED_LEFT_OUT``, naming them); and each event that
       starts or ends a union it drops (``BOUND_LEFT_OUT``, naming the
       union), read through redirects; and so on until no more go, as an
@@ -841,30 +849,37 @@ def public_exclusions(
     unreleased = {target(qid) for qid in people} - report.included
     groups = reading.families | set(reading.members)
 
+    # a person named a group, a household recorded under its head, say, is
+    # a member whose standing counts, never a group to read through
+    walked = groups - (people - reading.families)
+
     def released(group: str) -> bool:
         """Whether `group` names at least one member, read through the
-        groups among its members, and the check released every one; a
-        group with a participant of unknown value is not."""
+        groups among its members, and the check released every one: each
+        group so read names a member, has no participant of unknown value
+        and, if the check assessed it, was released."""
         seen, stack, found = set(), [group], set()
         while stack:
             current = stack.pop()
             if current in seen:
                 continue
             seen.add(current)
-            if current in reading.unknown_takers:
+            if current in reading.unknown_takers or current in unreleased:
                 return False
             members = reading.members.get(current, set()) | (
                 reading.takers.get(current, set())
             )
+            if not members:
+                return False
             for member in members:
                 member = target(member)
-                if member in groups:
+                if member in walked:
                     stack.append(member)
                 else:
                     found.add(member)
         return bool(found) and found <= report.included
 
-    released_groups = {group for group in groups if released(group)}
+    released_groups = {group for group in walked if released(group)}
     impersonal = (reading.untyped | reading.families) - (
         (groups - released_groups) | unreleased | reading.unattended
     )
@@ -905,21 +920,26 @@ def public_exclusions(
             if reading.names.get(target(qid), set()) & shielding
         }:
             shielding |= grow
-        # a group whose members are all released takes part harmlessly
+        # a group whose members are all released takes part harmlessly,
+        # but never in a person kind of event, which is its members' own,
+        # however that event names it
         harmless = {
             qid
             for qid in left_out - shielding
             if target(qid) in released_groups
         }
+        guarded = shielding | harmless
         gone = {
             event: LINKED_LEFT_OUT.format(
-                ", ".join(sorted(named & shielding, key=_order))
+                ", ".join(sorted(naming, key=_order))
             )
             for event, named in reading.links.items()
-            if event not in left_out and named & shielding
+            if event not in left_out
+            and (
+                naming := named
+                & (guarded if event in reading.person_events else shielding)
+            )
         }
-
-        # but never in a person kind of event, which is its members' own
         harmed = left_out - harmless
         gone.update(
             (

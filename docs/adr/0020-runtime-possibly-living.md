@@ -107,6 +107,22 @@ through redirects, ending on cycles: a group whose members, so read,
 include at least one person, every one released, counts as released;
 a member group with a member not released, or of unknown value, makes
 the outer group take events with it (V) (§4).
+Amended by #364, orchestrator decisions AA, AB and AC (2026-10-02,
+privacy first, on the fifth re-review's owner questions): J holds at
+every level of the walk, so a member group that names no one, has a
+participant of unknown value, or that the check assessed and did not
+release keeps the outer group unreleased; and a `member of` may name a
+person (a household recorded under its head), who is then a member whose
+standing counts, never a group to read through (AA). A class the dump
+makes a subclass of a person kind of event, at any rank and through
+redirects, is a person kind everywhere in the export (AB). And a person
+kind of event goes with any group any of its statements names, as it
+does with one taking part (R): "Emigration of the Lobigs" carried out
+by the Lobigs goes, whether or not their members are all released. This
+narrows decision I's example: a released person's migration that a
+family carried out now goes; an event of no person kind that a released
+group carried out still stays, without the statement naming it (AC)
+(§4).
 
 ## Context
 
@@ -434,25 +450,28 @@ keeps of the items it keeps follows:
   through the groups among its members, every one released, and no
   participant of unknown value; decisions J, Q, U and V) takes part
   harmlessly, as a released person does, except in a person kind of
-  event, which is its members' own (decision R, as corrected). And an event goes with every
-  item any of its statements names, as its value or a qualifier's,
+  event, which is its members' own (decision R, as corrected). Each
+  group so read must name a member, have no participant of unknown
+  value, and, if the check assessed it, have been released; a person
+  named a `member of` is a member, never a group read through
+  (decision AA). A person kind is one of `PERSON_EVENTS` or a class the
+  dump makes a subclass of one (decision AB). And an event goes with
+  every item any of its statements names, as its value or a qualifier's,
   whatever the property, at any rank: a divorce carried out by an
   organization the export leaves out for its person evidence goes with
   it (`public-exclusions.json`: "a statement of it names an item the
   export leaves out (the QIDs): what this event records is theirs too";
   `LINKED_LEFT_OUT`; the orchestrator, 2026-10-02). It follows only
   items left out to protect people, a possibly-living person or an item
-  that may be one: an item left out only as untyped, or as a family
-  with at least one recorded member, all of them released (decision J,
-  as corrected), takes no event with it,
-  though the statement naming it goes whole. An untyped item or a family
+  that may be one: an item left out only as untyped, or as a released
+  group (decision J, as corrected), takes no event with it, though the
+  statement naming it goes whole; but a released group takes a person
+  kind of event that names it (decision AC). An untyped item or a family
   that may be a person (read through redirects), that the participant
   or unattended rule leaves out too, or a statement of which names an
   item left out to protect people, is not left out only so; nor is an
-  item named a `member of` with a member not released, or with none
-  (decision Q).
-  An
-  event is an item typed `event`, a subclass of it (the manifest's, or
+  item named a `member of` that is not a released group (decision Q).
+  An event is an item typed `event`, a subclass of it (the manifest's, or
   the dump's at any rank), or a person kind of event, at any rank, or an
   item with a `participant` statement; but never a union (a partnership
   or a marriage, or a class the dump makes a subclass of one at any
@@ -584,10 +603,10 @@ is strictly safer, since the determination is now absence-of-death only.
   #363; the owner, 2026-09-29): every text recorded about a released
   person or another item it keeps leaves with it, a source's excerpt
   included, so a text can name a possibly living relative. A person
-  event that names no participant is left out, whatever else it records. An event with
-  a participant left out goes whole: a marriage of a released person and
-  a possibly living one, and, while every family is left out, every
-  event a family took part in. An item that is no event but carries a
+  event that names no participant is left out, whatever else it
+  records. An event with a participant left out goes whole: a marriage
+  of a released person and a possibly living one, and, while every
+  family is left out, every event a family took part in. An item that is no event but carries a
   `participant` statement goes by the same rule. A dump that holds a
   sitelink or a property of another type than the model's makes the
   export refuse until it is removed: the backup keeps its other dumps and
