@@ -245,7 +245,7 @@ directory under `var/backups/` containing:
   whose people may include a living person, every event that any of
   these took part in (named as a participant, or in a participant
   statement's qualifier) or that any statement of it names (unless that
-  item is left out only as untyped, or as a family whose members are all
+  item is left out only as untyped, or as a family with recorded members all
   released; a union, or an item typed human, is no event for this), every
   person event that names no participant, every event that has
   participant statements, all of an unknown value or none, and the

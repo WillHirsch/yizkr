@@ -78,6 +78,12 @@ of` statements that name it, through redirects, at any rank. So
 possibly-living member, goes whole; a family whose members are all
 released, or that names none, is left out only as a family and takes no
 event with it, as decision I says (§4).
+Amended by #364, orchestrator correction to decision J (2026-10-02,
+unknown means excluded): a family shields events unless it has at least
+one recorded member and every recorded member is released. A family
+whose members the dump does not name cannot be confirmed released, so it
+shields: "Departure of the Lobigs, 1975", carried out by a family with
+no recorded member, goes whole (§4).
 
 ## Context
 
@@ -409,7 +415,8 @@ keeps of the items it keeps follows:
   `LINKED_LEFT_OUT`; the orchestrator, 2026-10-02). It follows only
   items left out to protect people, a possibly-living person or an item
   that may be one: an item left out only as untyped, or as a family
-  whose members are all released (decision J), takes no event with it,
+  with at least one recorded member, all of them released (decision J,
+  as corrected), takes no event with it,
   though the statement naming it goes whole. An untyped item or a family
   that may be a person (read through redirects), or that the
   participant or unattended rule leaves out too, is not left out only so.

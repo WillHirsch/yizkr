@@ -2587,9 +2587,10 @@ class TestExportPublic:
         self, tmp_path, vocabulary
     ):
         # Gustav's birth (Q401, released) at a place with no type (Q429),
-        # and a migration of his carried out by a family (Q446): untyped
-        # items and families are left out, but protect no one, so the
-        # events stay; the statements naming them go whole
+        # and a migration of his carried out by a family (Q446) whose one
+        # member is Gustav: untyped items and families of released members
+        # are left out, but protect no one, so the events stay; the
+        # statements naming them go whole
         properties, items = vocabulary
         dump = export_dump(vocabulary)
         dump.entity("Q480", "a birth", revision=480)
@@ -2600,6 +2601,7 @@ class TestExportPublic:
         dump.says("Q481", "instance_of", entity(items["migration"]))
         dump.says("Q481", "participant", entity("Q401"))
         dump.says("Q481", "carried_out_by", entity("Q446"))
+        dump.says("Q401", "member_of", entity("Q446"))
         self.export_of(tmp_path, dump, vocabulary)
         text, mentioned = self.public(tmp_path)
         assert {"Q480", "Q481"} <= mentioned
@@ -2744,7 +2746,7 @@ class TestExportPublic:
     @pytest.mark.parametrize("named", ["family", "redirect"])
     @pytest.mark.parametrize(
         ("member", "shields"),
-        [("Q405", True), ("Q401", False), (None, False)],
+        [("Q405", True), ("Q401", False), (None, True)],
         ids=["possibly-living", "released", "none"],
     )
     def test_a_family_shields_unless_its_members_are_released(
@@ -2752,9 +2754,10 @@ class TestExportPublic:
     ):
         # "Departure of the Lobigs", carried out by the family Q446, named
         # so or through its redirect Q464: a member who may be living
-        # (Florence, Q405, a member of it) takes the event with the family;
-        # a family whose members are all released (Gustav, Q401), or that
-        # names none, is left out only as a family, and the event stays
+        # (Florence, Q405, a member of it) takes the event with the family,
+        # and so does a family that names no member, whose members cannot
+        # be known released; one whose members are all released (Gustav,
+        # Q401) is left out only as a family, and the event stays
         _, items = vocabulary
         dump = export_dump(vocabulary)
         if member:
@@ -2771,6 +2774,14 @@ class TestExportPublic:
         text, mentioned = self.public(tmp_path)
         assert ("Q497" in mentioned) is not shields
         assert (dated(1975) in text) is not shields
+        if shields:
+            exclusions = json.loads(
+                (tmp_path / "public-exclusions.json").read_text()
+            )
+            family = "Q446" if named == "family" else "Q464"
+            assert exclusions["excluded"]["Q497"] == (
+                backup.LINKED_LEFT_OUT.format(family)
+            )
 
     @pytest.mark.parametrize("kind", ["marriage", "partnership"])
     def test_a_union_is_no_event_its_wedding_takes(

@@ -1062,7 +1062,7 @@ not a signal to grow the schema on.
   whatever the property: a divorce `carried out by` an organization left
   out for its person evidence goes with it (the orchestrator,
   2026-10-02). The rule follows only items left out to protect people:
-  an untyped place, or a family whose members are all released, names no
+  an untyped place, or a family with recorded members all released, names no
   one, so a released person's birth at an untyped place stays, without
   the statement naming it; a family with a member who may be living
   takes the event with it, and so does an untyped item that may be a

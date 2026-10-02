@@ -53,8 +53,8 @@ closed:
   a person, as the value or a qualifier's value, whatever the property;
   a union is no event (ADR-0036), nor is an item typed human at normal
   or preferred rank. An item it drops only as untyped, or as a family
-  whose members it all released, protects no one and takes no event with
-  it. It drops every event
+  that names members and whose members it all released, protects no one
+  and takes no event with it. It drops every event
   of a person kind that names no participant, and every event that has
   participant statements all of unknown value, as whom it happened to is
   unknown; and the events that start and end a union it drops, a
@@ -762,7 +762,8 @@ def public_exclusions(
       (``PARTICIPANT_LEFT_OUT``, naming them); each event that a statement
       of it names an item it drops, as its value or a qualifier's,
       whatever the property, unless it drops that item only as untyped, or
-      as a family whose members it all released, which protects no one: an
+      as a family that names members, all of whom it released, which
+      protects no one: an
       item that may be a person, through redirects, or that the participant
       or unattended rule drops too, is not dropped only so
       (``LINKED_LEFT_OUT``, naming them); and each event that
@@ -795,19 +796,21 @@ def public_exclusions(
     # what is left out only as untyped or as a family protects no one, so an
     # event that merely names it stays (the statement naming it goes): not
     # an item that may be a person, read through redirects, nor one the
-    # unattended rule leaves out, nor a family any of whose members (its
-    # participants, and those named a member of it) the check did not
-    # release; and the participant rule's are read in the loop below
+    # unattended rule leaves out, nor a family that names no member (its
+    # participants, and those named a member of it) or one the check did
+    # not release; and the participant rule's are read in the loop below
     unreleased = {target(qid) for qid in people} - report.included
     released_families = {
         family
         for family in reading.families
-        if {
-            target(member)
-            for member in reading.members.get(family, set())
-            | reading.participants.get(family, set())
-        }
-        <= report.included
+        if (
+            members := {
+                target(member)
+                for member in reading.members.get(family, set())
+                | reading.participants.get(family, set())
+            }
+        )
+        and members <= report.included
     }
     impersonal = (reading.untyped | released_families) - (
         unreleased | reading.unattended
