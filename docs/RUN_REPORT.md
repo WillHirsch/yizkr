@@ -266,10 +266,12 @@ A run whose call events carry no stop reason, no API error and no
 give-up has
 `{"recorded": false}` there, and reads `not recorded: the run's call
 events carry no stop reason`, never `none`, which says the stops were
-recorded and there were none. Three kinds of run read so: one made
-before the engine recorded why a call stopped; one on the Anthropic API
-engine, whose calls give the report no stop reason; and one that made
-no call, every answer coming from the cache. A give-up an attempt replays from the
+recorded and there were none. Two kinds of run read so: one made
+before the engine recorded why a call stopped (before #441, every run on
+the Anthropic API engine); and one that made no call, every answer
+coming from the cache. On either engine an answered call's event
+carries the stop reason the engine gave: the claude-code engine's from
+the call's stream, the Anthropic API engine's from its response (#441). A give-up an attempt replays from the
 cache makes no call, so it is no stop: its `cache-hit` says `gave_up:
 true`, and the cache's lines count those hits per stage of their role,
 as `give-ups replayed from the cache` (`aggregate.calls.give_ups_replayed`,

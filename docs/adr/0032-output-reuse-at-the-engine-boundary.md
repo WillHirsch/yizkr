@@ -93,6 +93,15 @@ Anthropic API engine, or a run that made no call); a give-up replayed from the c
 `cache-hit` says `gave_up: true`, so the report counts those hits per
 stage in its cache section, apart from the stops (§3, §4, §5, §8).
 
+Amended by #441 (2026-10-02): a call event on the Anthropic API engine
+carries the stop reason the API's response gave of an answered call
+(none of a call that failed, and nothing else of the engine's report),
+so the run report counts that engine's answers cut off at the output
+limit, which its callers already rejected, and says `not recorded` only
+for a run from before the engine recorded a stop or one that made no
+call; the stop reason stays in an entry's provenance, never in its key
+(§8).
+
 ## Context
 
 ADR-0025 made whole-corpus scratch runs the way the pipeline is developed,
@@ -484,8 +493,9 @@ counts per role, as totals over every invocation of the run directory.
 Every call that reaches the engine is a `call` event too, with or
 without the cache (#101): a wrapper beneath the cache reports it, so a
 hit is none, and a miss or a replay is one. It carries what the call's
-stream reported of it but the session, and a replay's says it is one
-(#98). The run report counts, per stage, the call events stopped at the
+stream reported of it but the session, or, on the Anthropic API engine,
+the stop reason its response gave of an answered call (#441), and a
+replay's says it is one (#98). The run report counts, per stage, the call events stopped at the
 output limit: answers whose stop reason is `max_tokens`, and calls that
 raised `OutputLimitReached` (#390). A give-up served from the cache is a
 hit, and no call.

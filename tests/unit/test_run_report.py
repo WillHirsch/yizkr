@@ -2634,6 +2634,41 @@ class TestCallsAndTime:
             "given up; extraction: 1 cut off, 2 given up"
         ) in render_markdown(aggregate)
 
+    def test_stops_of_the_api_engine_are_recorded(self, tmp_path, monkeypatch):
+        """A run on the Anthropic API engine records why its answered calls
+        stopped, as its responses said: an answer cut off at the output
+        limit is counted, and the stops do not read not recorded (#441)."""
+        from tests.unit.test_stream_events import api_engine
+
+        stops: list = []
+
+        def emit(name, **fields):
+            stops.append(
+                event(7400 + len(stops), name, THIRD, subject=CERT,
+                      kind=FILES[CERT][1], **fields)
+            )  # fmt: skip
+
+        engine = api_engine(
+            monkeypatch,
+            ("Pauline Brenner, Hutmacherin", "max_tokens"),
+            ("Pauline Brenner, Hutmacherin, Flörburg", "end_turn"),
+            ConnectionError("the network is down"),
+        )
+        client = llm.observed_client(engine, role="extract", events=emit)
+        client.complete("Extract the claims.")
+        client.complete("Extract the claims.")
+        with pytest.raises(ConnectionError):
+            client.complete("Extract the claims.")
+        built = build(record(tmp_path / "run", [*STREAM, *stops]), now=NOW)
+        aggregate = built["aggregate"]
+        assert aggregate["calls"]["output_limit_stops"] == {
+            "extraction": {"cut_off": 1, "gave_up": 0}
+        }
+        assert (
+            "Stops at the output limit by stage: extraction: 1 cut off, 0 "
+            "given up"
+        ) in render_markdown(aggregate)
+
     def test_stops_not_recorded_are_not_read_as_none(self, made):
         """A run whose call events carry no stop reason (one made before
         the engine recorded why a call stopped) does not say that none
