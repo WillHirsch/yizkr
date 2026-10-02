@@ -6,7 +6,7 @@ birth statement does so by the cutoff (#334). The check assesses every
 item with person evidence, read at every rank, so no type hides a person
 from it (#344).
 
-CASES is shared with the public export's tests (test_backup.py) and the
+CASES is shared with the non-privileged export's tests (test_backup.py) and the
 site's (test_staticsite.py), so both paths are held to one table.
 """
 

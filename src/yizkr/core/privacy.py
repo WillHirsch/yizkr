@@ -1,9 +1,9 @@
 """Runtime "possibly living" determination (privacy-first, R7 / ADR-0020).
 
 There is **no stored "living" flag**. Whether a person is possibly living
-is computed at the moment a privacy-sensitive action runs — the public
-export (`yizkr backup`) and the private static-site badge — from the
-*absence of death evidence* in the graph. The call is conservative by
+is computed at the moment a privacy-sensitive action runs — the
+non-privileged export (`yizkr backup`) and the private static-site badge —
+from the *absence of death evidence* in the graph. The call is conservative by
 design: unknown means possibly living, hence excluded from anything
 public.
 
@@ -30,7 +30,7 @@ value is sampled or left out. Each statement allows a birth as late as
 last year of a decade, a century or a millennium) and the range its
 source states. A person is released by birth only when every one of those
 years is at or before the cutoff year; a statement that allows no latest
-year keeps them possibly living. The public export and the site read
+year keeps them possibly living. The non-privileged export and the site read
 births with this one query and this one reading.
 
 Who counts as a person fails closed too. The check assesses every item
@@ -41,7 +41,7 @@ happens to people, each read through its statement node at every rank, so
 that a deprecated or outranked `human` type hides no one. An item typed,
 at normal or preferred rank, as a vessel, a military unit or an
 organization (``NON_PERSON_CLASSES``) is taken at its type on its part in
-such an event: any other evidence makes it a person. The public export
+such an event: any other evidence makes it a person. The non-privileged export
 reads the same evidence from its own dump, and keeps an item that has any
 of it only once this check has released it; it leaves out an item that
 states no type, so no type at all hides no one either. A family
@@ -57,7 +57,7 @@ from collections.abc import Iterable, Mapping, Sequence
 
 # Birth-recency cutoff: a birth at least this many years ago is taken as
 # proof the person is not living, absent any death evidence. Shared by
-# the public export and the private static-site badge so both agree.
+# the non-privileged export and the private static-site badge so both agree.
 DEFAULT_CUTOFF_YEARS = 123
 
 # Statement properties (manifest keys) that presuppose the subject's

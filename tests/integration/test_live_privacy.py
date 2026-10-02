@@ -1,4 +1,4 @@
-"""Live validation of the public export's possibly-living exclusions
+"""Live validation of the non-privileged export's possibly-living exclusions
 (#334; ADR-0020; docs/MODELING.md, "Living persons and privacy").
 
 A fictional fixture writes people whose births take each shape the check
@@ -325,7 +325,7 @@ def test_the_site_badges_whom_the_export_drops(
     badged = {
         qid
         for qid in fixture
-        if "possibly living — never in public exports"
+        if "possibly living — never in the non-privileged export"
         in builder.person_page(people[qid], [])
     }
     assert badged == report.excluded & fixture

@@ -1,7 +1,7 @@
 """Offline tests for backup/export logic. No stack, no docker. The
 possibly-living determination itself is tested in test_privacy.py.
 
-The public export keeps only the people the check releases (#344): it
+The non-privileged export keeps only the people the check releases (#344): it
 reads person evidence from its own dump, at every rank, and drops every
 item with any that the check did not release, and every item that states
 no type; and it refuses to run while the query service, where the check
@@ -45,13 +45,15 @@ from yizkr.backup import (
     REVISIONS_QUERY,
     DumpReading,
     ExclusionReport,
+    NonprivilegedExportRefused,
     QueryServiceLag,
+    UnfilterableDump,
     await_query_service,
     exclusion_report,
-    export_public,
-    filter_public_export,
+    export_nonprivileged,
+    filter_nonprivileged_export,
+    nonprivileged_exclusions,
     prune_old_backups,
-    public_exclusions,
     read_dump,
     run_backup,
     stale_entities,
@@ -105,8 +107,8 @@ FACTS = [
 
 
 class TestExclusionReport:
-    """The public export's call (ADR-0020): every person the facts query
-    lists, with the births the privacy module's query reads (#334)."""
+    """The non-privileged export's call (ADR-0020): every person the facts
+    query lists, with the births the privacy module's query reads (#334)."""
 
     def report(self, vocabulary, facts=FACTS, births=BIRTHS, **options):
         calls = []
@@ -234,7 +236,7 @@ def nt(text: str) -> str:
     )
 
 
-class TestPublicFilter:
+class TestNonprivilegedFilter:
     LINES = [
         # the excluded person's own triples: entity, statement node, sitelink
         f'<http://w.lan/entity/Q76> {RDFS_LABEL} "Nicholas"@en .',
@@ -263,10 +265,10 @@ class TestPublicFilter:
         self, tmp_path: Path, excluded: set[str], dropped_pids=frozenset()
     ):
         full = tmp_path / "full.nt.gz"
-        public = tmp_path / "public.nt.gz"
+        public = tmp_path / "nonprivileged.nt.gz"
         with gzip.open(full, "wt") as handle:
             handle.write("\n".join(self.LINES) + "\n")
-        kept, dropped = filter_public_export(
+        kept, dropped = filter_nonprivileged_export(
             full, public, excluded, dropped_pids
         )
         with gzip.open(public, "rt") as handle:
@@ -528,10 +530,10 @@ class TestAStatementGoesWhole:
     @staticmethod
     def filter(tmp_path: Path, lines, excluded) -> tuple[int, int, list[str]]:
         full = tmp_path / "full.nt.gz"
-        public = tmp_path / "public.nt.gz"
+        public = tmp_path / "nonprivileged.nt.gz"
         with gzip.open(full, "wt") as handle:
             handle.write("\n".join(lines) + "\n")
-        kept, dropped = filter_public_export(full, public, excluded)
+        kept, dropped = filter_nonprivileged_export(full, public, excluded)
         with gzip.open(public, "rt") as handle:
             return kept, dropped, handle.read().splitlines()
 
@@ -932,12 +934,14 @@ class TestWhatTheFilterReads:
 
     def filter(self, tmp_path: Path, dropped_pids) -> tuple[int, int, list]:
         full = tmp_path / "full.nt.gz"
-        public = tmp_path / "public.nt.gz"
+        public = tmp_path / "nonprivileged.nt.gz"
         with gzip.open(full, "wt", encoding="utf-8") as handle:
             handle.write(
                 "\n".join(self.READABLE + self.NOTES + self.UNREADABLE) + "\n"
             )
-        kept, dropped = filter_public_export(full, public, set(), dropped_pids)
+        kept, dropped = filter_nonprivileged_export(
+            full, public, set(), dropped_pids
+        )
         with gzip.open(public, "rt", encoding="utf-8", newline="\n") as handle:
             return kept, dropped, handle.read().split("\n")[:-1]
 
@@ -994,7 +998,7 @@ class TestPruning:
         assert (tmp_path / "20260101T000000Z").exists()
 
 
-# -- the public export keeps only released people (#344) --------------------
+# -- the non-privileged export keeps only released people (#344) -----------
 
 DATA = f"{CONCEPT}/wiki/Special:EntityData/"
 
@@ -1883,7 +1887,7 @@ def report_of(included=(), excluded=()) -> ExclusionReport:
     )
 
 
-class TestPublicExclusions:
+class TestNonprivilegedExclusions:
     """Every item with person evidence that the check did not release is
     dropped: an item it never assessed is dropped, not kept, and so is an
     item that states no type, and every family (#344), and every event
@@ -1905,7 +1909,7 @@ class TestPublicExclusions:
     DROPPED = DROPPED | {"Q420"}
 
     def test_only_released_people_are_kept(self):
-        dropped = public_exclusions(
+        dropped = nonprivileged_exclusions(
             self.reading, report_of({"Q401"}, set(PEOPLE) - {"Q401"})
         )
         assert set(dropped) == self.DROPPED
@@ -1914,29 +1918,31 @@ class TestPublicExclusions:
     def test_a_person_the_check_never_assessed_is_dropped(self):
         # as the truthy human type selected them: none of Q402-Q406, Q415
         # or Q424-Q428
-        dropped = public_exclusions(self.reading, report_of({"Q401"}))
+        dropped = nonprivileged_exclusions(self.reading, report_of({"Q401"}))
         assert set(dropped) == self.DROPPED
         assert dropped["Q403"] == NOT_ASSESSED
         # person evidence explains more than a missing type
         assert dropped["Q428"] == NOT_ASSESSED
 
     def test_a_person_only_the_check_found_is_dropped(self):
-        dropped = public_exclusions(
+        dropped = nonprivileged_exclusions(
             DumpReading(), report_of({"Q401"}, {"Q499"})
         )
         assert dropped == {"Q499": "possibly living (Q499)"}
 
     def test_an_item_that_states_no_type_is_dropped(self):
-        dropped = public_exclusions(self.reading, report_of({"Q401"}))
+        dropped = nonprivileged_exclusions(self.reading, report_of({"Q401"}))
         assert dropped["Q429"] == dropped["Q434"] == backup.NO_TYPE
 
     def test_one_the_check_released_too(self):
         # an untyped person with a death, say: released, and still dropped
-        dropped = public_exclusions(self.reading, report_of({"Q401", "Q404"}))
+        dropped = nonprivileged_exclusions(
+            self.reading, report_of({"Q401", "Q404"})
+        )
         assert dropped["Q404"] == backup.NO_TYPE
 
     def test_a_redirect_goes_with_the_item_it_redirects_to(self):
-        dropped = public_exclusions(
+        dropped = nonprivileged_exclusions(
             self.reading, report_of({"Q401"}, {"Q402"})
         )
         # to a person not released, through a chain too, with no evidence
@@ -1951,13 +1957,13 @@ class TestPublicExclusions:
         assert not {"Q421", "Q422"} & set(dropped)
 
     def test_items_without_person_evidence_are_kept(self):
-        dropped = public_exclusions(self.reading, report_of({"Q401"}))
+        dropped = nonprivileged_exclusions(self.reading, report_of({"Q401"}))
         assert not set(OTHERS) & set(dropped)
 
     def test_a_family_is_dropped_whatever_it_holds(self):
         # released or not, with person evidence (Q437) or none (Q446), and
         # a redirect to one goes with it
-        dropped = public_exclusions(
+        dropped = nonprivileged_exclusions(
             self.reading, report_of({"Q401", "Q437"}, {"Q446"})
         )
         assert dropped["Q437"] == dropped["Q446"] == backup.FAMILY
@@ -1967,7 +1973,7 @@ class TestPublicExclusions:
     def test_an_event_goes_with_a_participant_left_out(self):
         # a part at deprecated rank counts; a family, left out, takes its
         # events with it; the reason names every participant left out
-        dropped = public_exclusions(
+        dropped = nonprivileged_exclusions(
             self.reading, report_of({"Q401"}, set(PEOPLE) - {"Q401"})
         )
         left_out = backup.PARTICIPANT_LEFT_OUT.format
@@ -1987,7 +1993,7 @@ class TestPublicExclusions:
             redirects={"Q494": "Q493"},
             participants={"Q495": {"Q493"}},
         )
-        assert public_exclusions(reading, report_of()) == {
+        assert nonprivileged_exclusions(reading, report_of()) == {
             "Q493": backup.UNATTENDED,
             "Q494": f"a redirect to Q493: {backup.UNATTENDED}",
             "Q495": backup.PARTICIPANT_LEFT_OUT.format("Q493"),
@@ -2008,7 +2014,7 @@ class TestPublicExclusions:
             bounds={"Q490": {"Q491", "Q496"}, "Q497": {"Q498"}},
             redirects={"Q496": "Q492"},
         )
-        dropped = public_exclusions(
+        dropped = nonprivileged_exclusions(
             reading, report_of({"Q401", "Q403"}, {"Q402"})
         )
         bound = backup.BOUND_LEFT_OUT.format("Q490")
@@ -2029,7 +2035,7 @@ class TestPublicExclusions:
             untyped={"Q429"},
             participants={"Q480": {"Q401", "Q446"}, "Q481": {"Q429"}},
         )
-        dropped = public_exclusions(reading, report_of({"Q401"}))
+        dropped = nonprivileged_exclusions(reading, report_of({"Q401"}))
         left_out = backup.PARTICIPANT_LEFT_OUT.format
         assert dropped["Q480"] == left_out("Q446")
         assert dropped["Q481"] == left_out("Q429")
@@ -2039,7 +2045,7 @@ class TestPublicExclusions:
         reading = DumpReading(
             people={"Q401"}, participants={"Q471": {"Q401", "Q472"}}
         )
-        assert public_exclusions(reading, report_of({"Q401"})) == {}
+        assert nonprivileged_exclusions(reading, report_of({"Q401"})) == {}
 
     def test_a_participant_named_through_a_redirect(self):
         # Q410 redirects to Q402, whom the check does not release, and
@@ -2049,7 +2055,9 @@ class TestPublicExclusions:
             redirects={"Q410": "Q402", "Q418": "Q401"},
             participants={"Q471": {"Q410"}, "Q472": {"Q418"}},
         )
-        dropped = public_exclusions(reading, report_of({"Q401"}, {"Q402"}))
+        dropped = nonprivileged_exclusions(
+            reading, report_of({"Q401"}, {"Q402"})
+        )
         assert dropped["Q471"] == backup.PARTICIPANT_LEFT_OUT.format("Q410")
         assert "Q472" not in dropped
 
@@ -2068,7 +2076,9 @@ class TestPublicExclusions:
                 "Q478": {"Q479"},
             },
         )
-        dropped = public_exclusions(reading, report_of(excluded={"Q402"}))
+        dropped = nonprivileged_exclusions(
+            reading, report_of(excluded={"Q402"})
+        )
         left_out = backup.PARTICIPANT_LEFT_OUT.format
         assert dropped == {
             "Q402": "possibly living (Q402)",
@@ -2202,8 +2212,8 @@ def facts_row(qid: str, died: bool = False) -> dict:
 
 
 class ExportRun:
-    """The query service for export_public: the check's facts and births,
-    and each answer to REVISIONS_QUERY in turn (the last one again once
+    """The query service for export_nonprivileged: the check's facts and
+    births, and each answer to REVISIONS_QUERY in turn (the last one again once
     they run out). `selected` are the people the facts query selects, and
     `released` those of them it gives a death."""
 
@@ -2229,8 +2239,8 @@ class ExportRun:
         raise AssertionError(f"unexpected query: {query}")
 
 
-class TestExportPublic:
-    """The public export end to end, offline: a fictional dump, and the
+class TestExportNonprivileged:
+    """The non-privileged export end to end, offline: a fictional dump, and the
     query service's answers."""
 
     def export(
@@ -2241,13 +2251,14 @@ class TestExportPublic:
         answering=None,
         **run,
     ):
-        """export_public over the fictional dump, answered by `answering`
-        (ExportRun unless given), on a clock that only its naps move on."""
+        """export_nonprivileged over the fictional dump, answered by
+        `answering` (ExportRun unless given), on a clock that only its naps
+        move on."""
         dump = export_dump(vocabulary)
         dump.write(tmp_path / "full.nt.gz")
         clock = Clock()
         runner = (answering or ExportRun)(dump.revisions, selected, **run)
-        counts = export_public(
+        counts = export_nonprivileged(
             config(),
             tmp_path,
             run=runner,
@@ -2260,7 +2271,7 @@ class TestExportPublic:
 
     @staticmethod
     def public(tmp_path) -> tuple[str, set[str]]:
-        with gzip.open(tmp_path / "public.nt.gz", "rt") as handle:
+        with gzip.open(tmp_path / "nonprivileged.nt.gz", "rt") as handle:
             text = handle.read()
         return text, set(re.findall(r"Q[1-9]\d*\b", text))
 
@@ -2310,12 +2321,12 @@ class TestExportPublic:
 
     @staticmethod
     def export_of(tmp_path, dump, vocabulary, released=()) -> None:
-        """export_public over `dump`, with the check selecting the
+        """export_nonprivileged over `dump`, with the check selecting the
         fixture's people and releasing Q401, and selecting and releasing
         `released` too, on a clock that only its naps move on."""
         dump.write(tmp_path / "full.nt.gz")
         clock = Clock()
-        export_public(
+        export_nonprivileged(
             config(),
             tmp_path,
             run=ExportRun(
@@ -2344,7 +2355,7 @@ class TestExportPublic:
         assert "Q470" not in mentioned
         assert "Birth of Nicholas Lobig" not in text
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q470"] == backup.UNATTENDED
 
@@ -2430,7 +2441,7 @@ class TestExportPublic:
         assert dated(1938) not in text
         assert principal in mentioned
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q470"] == (
             backup.PARTICIPANT_LEFT_OUT.format("Q405")
@@ -2458,7 +2469,7 @@ class TestExportPublic:
         assert label not in text
         assert principal in mentioned
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q470"] == backup.UNATTENDED
         assert principal not in exclusions["excluded"]
@@ -2480,7 +2491,7 @@ class TestExportPublic:
         assert "Q470" not in mentioned
         assert dated(1938) not in text
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q470"] == backup.UNATTENDED
 
@@ -2517,7 +2528,7 @@ class TestExportPublic:
         assert dated(1957) not in text
         assert "Q472" in mentioned
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q470"] == (
             backup.LINKED_LEFT_OUT.format("Q426")
@@ -2581,7 +2592,7 @@ class TestExportPublic:
         text, mentioned = self.public(tmp_path)
         assert "Q401" in mentioned
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert "Q401" not in exclusions["excluded"]
         sibling = f"<{CONCEPT}/prop/{properties['sibling']}>"
@@ -2614,7 +2625,7 @@ class TestExportPublic:
         text, mentioned = self.public(tmp_path)
         assert {"Q480", "Q481"} <= mentioned
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert not {"Q480", "Q481"} & set(exclusions["excluded"])
         location = f"<{CONCEPT}/prop/{properties['location']}>"
@@ -2727,7 +2738,7 @@ class TestExportPublic:
         assert "Q490" not in mentioned
         assert dated(1961) not in text
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q490"] == (
             backup.LINKED_LEFT_OUT.format(part)
@@ -2842,7 +2853,7 @@ class TestExportPublic:
         assert "Q497" not in mentioned
         assert dated(1975) not in text
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q497"] == (
             backup.LINKED_LEFT_OUT.format("Q498")
@@ -2984,7 +2995,7 @@ class TestExportPublic:
         assert (dated(1975) in text) is not goes
         if goes:
             exclusions = json.loads(
-                (tmp_path / "public-exclusions.json").read_text()
+                (tmp_path / "nonprivileged-exclusions.json").read_text()
             )
             assert exclusions["excluded"]["Q497"] == (
                 backup.PARTICIPANT_LEFT_OUT.format(group)
@@ -3004,7 +3015,7 @@ class TestExportPublic:
         dump.says("Q497", "participant", entity("Q446"))
         self.export_of(tmp_path, dump, vocabulary)
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q497"] == (
             backup.PARTICIPANT_LEFT_OUT.format("Q405")
@@ -3219,7 +3230,7 @@ class TestExportPublic:
         assert "Q494" not in mentioned
         assert dated(1975) not in text
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )["excluded"]
         if case == "naming-no-one":
             assert exclusions["Q494"] == backup.UNATTENDED
@@ -3275,7 +3286,7 @@ class TestExportPublic:
         assert (dated(1975) in text) is not goes
         if goes:
             exclusions = json.loads(
-                (tmp_path / "public-exclusions.json").read_text()
+                (tmp_path / "nonprivileged-exclusions.json").read_text()
             )
             reason = (
                 backup.PARTICIPANT_LEFT_OUT
@@ -3386,7 +3397,7 @@ class TestExportPublic:
         )
         _, mentioned = self.public(tmp_path)
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert "Q492" in exclusions["excluded"]
         assert ("Q493" in mentioned) is released
@@ -3407,7 +3418,7 @@ class TestExportPublic:
         dump.says("Q494", "participant", "_:genid9")
         self.export_of(tmp_path, dump, vocabulary, released=("Q494",))
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q494"] == backup.UNATTENDED
 
@@ -3444,7 +3455,7 @@ class TestExportPublic:
         assert (dated(1975) in text) is not shields
         if shields:
             exclusions = json.loads(
-                (tmp_path / "public-exclusions.json").read_text()
+                (tmp_path / "nonprivileged-exclusions.json").read_text()
             )
             family = "Q446" if named == "family" else "Q464"
             assert exclusions["excluded"]["Q497"] == (
@@ -3511,7 +3522,7 @@ class TestExportPublic:
         assert not set(EVENTS) & mentioned
         assert "Q412" in mentioned
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q431"] == (
             backup.PARTICIPANT_LEFT_OUT.format("Q427")
@@ -3524,7 +3535,7 @@ class TestExportPublic:
         _, mentioned = self.public(tmp_path)
         assert not set(UNTYPED) & mentioned
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q429"] == backup.NO_TYPE
 
@@ -3537,14 +3548,14 @@ class TestExportPublic:
         _, mentioned = self.public(tmp_path)
         assert not (set(PEOPLE) - {"Q401"}) & mentioned
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q402"] == NOT_ASSESSED
 
     def test_the_exclusions_say_who_and_why(self, tmp_path, vocabulary):
         counts, _ = self.export(tmp_path, vocabulary)
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert set(exclusions["excluded"]) == DROPPED
         assert "born as late as 1990" in exclusions["excluded"]["Q404"]
@@ -3570,7 +3581,7 @@ class TestExportPublic:
 
         counts, _ = self.export(tmp_path, vocabulary, answering=Released)
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q404"] == backup.NO_TYPE
         assert exclusions["included_persons"] == ["Q401"]
@@ -3600,8 +3611,8 @@ class TestExportPublic:
         behind = {**export_dump(vocabulary).revisions, "Q404": 1}
         with pytest.raises(QueryServiceLag, match="Q404"):
             self.export(tmp_path, vocabulary, revisions=[behind])
-        assert not (tmp_path / "public.nt.gz").exists()
-        assert not (tmp_path / "public-exclusions.json").exists()
+        assert not (tmp_path / "nonprivileged.nt.gz").exists()
+        assert not (tmp_path / "nonprivileged-exclusions.json").exists()
 
     @pytest.mark.parametrize(
         ("line", "named"),
@@ -3632,7 +3643,7 @@ class TestExportPublic:
         runner = ExportRun(dump.revisions, tuple(PEOPLE))
         clock = Clock()
         with pytest.raises(backup.UnfilterableDump, match=re.escape(named)):
-            export_public(
+            export_nonprivileged(
                 config(),
                 tmp_path,
                 run=runner,
@@ -3643,8 +3654,8 @@ class TestExportPublic:
             )
         # refused before the query service is asked, and nothing written
         assert runner.queries == []
-        assert not (tmp_path / "public.nt.gz").exists()
-        assert not (tmp_path / "public-exclusions.json").exists()
+        assert not (tmp_path / "nonprivileged.nt.gz").exists()
+        assert not (tmp_path / "nonprivileged-exclusions.json").exists()
 
     def test_the_export_refuses_when_the_graph_changes_meanwhile(
         self, tmp_path, vocabulary
@@ -3656,12 +3667,13 @@ class TestExportPublic:
                 vocabulary,
                 revisions=[dumped, {**dumped, "Q401": 999}],
             )
-        assert not (tmp_path / "public.nt.gz").exists()
+        assert not (tmp_path / "nonprivileged.nt.gz").exists()
 
 
-class TestTheBackupsPublicExport:
-    """`yizkr backup` writes its public export as export_public does, with
-    the dumps and the query service stood in for."""
+class TestTheBackupsNonprivilegedExport:
+    """`yizkr backup` writes its non-privileged export as
+    export_nonprivileged does, with the dumps and the query service stood
+    in for."""
 
     @pytest.fixture
     def backed_up(self, tmp_path, vocabulary, monkeypatch):
@@ -3698,10 +3710,26 @@ class TestTheBackupsPublicExport:
             ),
         )
 
-        def backed_up(revisions=None, keep=0, lines=()):
+        def backed_up(revisions=None, keep=0, lines=(), command=False):
             extra[:] = lines
             runner = ExportRun(dump.revisions, ["Q401"], revisions)
             monkeypatch.setattr(backup.sparql, "runner", lambda config: runner)
+            if command:  # through `yizkr backup`, which returns its exit code
+                from yizkr import cli
+
+                monkeypatch.setattr(
+                    cli.Config, "load", lambda env_file=None: config()
+                )
+                args = cli.build_parser().parse_args(
+                    [
+                        "backup",
+                        "--out",
+                        str(tmp_path),
+                        "--deploy-dir",
+                        str(tmp_path),
+                    ]
+                )
+                return args.func(args)
             return run_backup(
                 config(), tmp_path, deploy_dir=tmp_path, keep=keep
             )
@@ -3713,10 +3741,10 @@ class TestTheBackupsPublicExport:
     ):
         manifest = backed_up()
         out_dir = tmp_path / manifest["timestamp"]
-        export = manifest["components"]["public_export"]
+        export = manifest["components"]["nonprivileged_export"]
         assert export["included_persons"] == 1
         assert export["excluded_persons"] == len(DROPPED)
-        _, mentioned = TestExportPublic.public(out_dir)
+        _, mentioned = TestExportNonprivileged.public(out_dir)
         assert not (set(PEOPLE) - {"Q401"}) & mentioned
 
     def test_a_refused_export_leaves_the_backup_recorded(
@@ -3729,9 +3757,9 @@ class TestTheBackupsPublicExport:
         (out_dir,) = tmp_path.iterdir()
         manifest = json.loads((out_dir / "manifest.json").read_text())
         assert set(manifest["components"]) == {"database", "media", "rdf"}
-        assert "Q404" in manifest["public_export_refused"]
+        assert "Q404" in manifest["nonprivileged_export_refused"]
         assert manifest["pruned"] == ["20260101T000000Z"]
-        assert not (out_dir / "public.nt.gz").exists()
+        assert not (out_dir / "nonprivileged.nt.gz").exists()
         # the refusal carries the manifest, for the command to report
         assert refused.value.manifest == manifest
 
@@ -3748,28 +3776,64 @@ class TestTheBackupsPublicExport:
         (out_dir,) = tmp_path.iterdir()
         manifest = json.loads((out_dir / "manifest.json").read_text())
         assert set(manifest["components"]) == {"database", "media", "rdf"}
-        assert "Q401 (a sitelink)" in manifest["public_export_refused"]
-        assert not (out_dir / "public.nt.gz").exists()
+        assert "Q401 (a sitelink)" in manifest["nonprivileged_export_refused"]
+        assert not (out_dir / "nonprivileged.nt.gz").exists()
         assert refused.value.manifest == manifest
+
+    def test_the_command_reports_an_unfilterable_dump_without_a_traceback(
+        self, tmp_path, backed_up, capsys
+    ):
+        # the sitelink refusal from run_backup itself, through `yizkr backup`
+        sitelink = (
+            "<https://el.example/wiki/Page> <http://schema.org/about> "
+            f"{entity('Q401')} ."
+        )
+        assert backed_up(lines=[sitelink], command=True) == 1
+        out, err = capsys.readouterr()
+        (out_dir,) = tmp_path.iterdir()
+        assert out.splitlines() == [
+            f"{name}: {out_dir / file}, "
+            f"bytes={(out_dir / file).stat().st_size}"
+            for name, file in (
+                ("database", "database.sql.gz"),
+                ("media", "media.tar.gz"),
+                ("rdf", "full.nt.gz"),
+            )
+        ]
+        assert err.startswith("non-privileged export refused: ")
+        assert "Q401 (a sitelink)" in err
+        assert err.count("\n") == 1
+        assert "Traceback" not in err
 
 
 class TestTheBackupCommand:
-    """`yizkr backup` reports a refused public export on one line, after
-    the dumps it kept, and exits non-zero (#344)."""
+    """`yizkr backup` reports any refused non-privileged export on one line,
+    after the dumps it kept, and exits non-zero without a traceback (#344,
+    #412)."""
 
+    @pytest.mark.parametrize(
+        "refusal",
+        [
+            QueryServiceLag("the query service lags (Q404)"),
+            UnfilterableDump(
+                "the dump holds what the export is not made to filter: "
+                "Q401 (a sitelink)"
+            ),
+        ],
+        ids=["lag", "unfilterable"],
+    )
     def test_a_refusal_is_one_line_after_the_dumps_it_kept(
-        self, tmp_path, monkeypatch, capsys
+        self, tmp_path, monkeypatch, capsys, refusal
     ):
         from yizkr import cli
 
-        refusal = QueryServiceLag("the query service lags (Q404)")
         refusal.manifest = {
             "timestamp": "20260929T031500Z",
             "components": {
                 "database": {"file": "database.sql.gz", "bytes": 9},
                 "rdf": {"file": "full.nt.gz", "bytes": 7},
             },
-            "public_export_refused": str(refusal),
+            "nonprivileged_export_refused": str(refusal),
             "pruned": ["20260101T000000Z"],
         }
 
@@ -3789,4 +3853,107 @@ class TestTheBackupCommand:
             f"rdf: {run / 'full.nt.gz'}, bytes=7",
             "pruned old backups: 20260101T000000Z",
         ]
-        assert err == "public export refused: the query service lags (Q404)\n"
+        assert err == f"non-privileged export refused: {refusal}\n"
+        assert "Traceback" not in err
+
+    def test_a_refusal_before_any_manifest_is_still_one_line(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        from yizkr import cli
+
+        def refused(*args, **options):
+            raise UnfilterableDump("Q401 (a sitelink)")
+
+        monkeypatch.setattr(backup, "run_backup", refused)
+        monkeypatch.setattr(cli.Config, "load", lambda env_file=None: None)
+        args = cli.build_parser().parse_args(
+            ["backup", "--out", str(tmp_path)]
+        )
+        assert args.func(args) == 1
+        out, err = capsys.readouterr()
+        assert out == ""
+        assert err == "non-privileged export refused: Q401 (a sitelink)\n"
+
+    @pytest.mark.parametrize(
+        "flag", ["--no-nonprivileged-export", "--no-public-export"]
+    )
+    def test_the_export_can_be_skipped(self, tmp_path, monkeypatch, flag):
+        from yizkr import cli
+
+        asked = {}
+
+        def ran(config, **options):
+            asked.update(options)
+            return {
+                "timestamp": "20260929T031500Z",
+                "components": {},
+                "pruned": [],
+            }
+
+        monkeypatch.setattr(backup, "run_backup", ran)
+        monkeypatch.setattr(cli.Config, "load", lambda env_file=None: None)
+        args = cli.build_parser().parse_args(
+            ["backup", "--out", str(tmp_path), flag]
+        )
+        assert args.func(args) == 0
+        assert asked["nonprivileged_export"] is False
+
+    def test_the_export_runs_by_default(self, tmp_path, monkeypatch):
+        from yizkr import cli
+
+        asked = {}
+
+        def ran(config, **options):
+            asked.update(options)
+            return {
+                "timestamp": "20260929T031500Z",
+                "components": {},
+                "pruned": [],
+            }
+
+        monkeypatch.setattr(backup, "run_backup", ran)
+        monkeypatch.setattr(cli.Config, "load", lambda env_file=None: None)
+        args = cli.build_parser().parse_args(
+            ["backup", "--out", str(tmp_path)]
+        )
+        assert args.func(args) == 0
+        assert asked["nonprivileged_export"] is True
+
+
+class TestTheFormerNames:
+    """The export's former Python names resolve to the new objects, with a
+    DeprecationWarning naming the new name, for one release (#412)."""
+
+    @pytest.mark.parametrize(
+        ("old", "new"),
+        [
+            ("export_public", "export_nonprivileged"),
+            ("filter_public_export", "filter_nonprivileged_export"),
+            ("public_exclusions", "nonprivileged_exclusions"),
+            ("PublicExportRefused", "NonprivilegedExportRefused"),
+        ],
+    )
+    def test_an_old_name_warns_and_resolves(self, old, new):
+        with pytest.warns(
+            DeprecationWarning, match=f"yizkr.backup.{new}"
+        ) as caught:
+            resolved = getattr(backup, old)
+        assert resolved is getattr(backup, new)
+        # the warning points at the caller's line, not at backup.py
+        assert caught[0].filename == __file__
+
+    def test_an_old_import_warns_and_resolves(self):
+        with pytest.warns(DeprecationWarning, match="export_nonprivileged"):
+            from yizkr.backup import export_public
+        assert export_public is export_nonprivileged
+
+    def test_the_old_refusal_still_catches_every_refusal(self):
+        with pytest.warns(DeprecationWarning):
+            old = backup.PublicExportRefused
+        assert old is NonprivilegedExportRefused
+        assert issubclass(QueryServiceLag, old)
+        assert issubclass(UnfilterableDump, old)
+
+    def test_an_unknown_name_is_still_an_attribute_error(self):
+        with pytest.raises(AttributeError, match="no_such_name"):
+            backup.no_such_name  # noqa: B018

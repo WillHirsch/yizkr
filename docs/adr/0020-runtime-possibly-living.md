@@ -135,6 +135,24 @@ attributed to a released household head, Gustav, stays, even with
 Florence, who may be living, recorded under Gustav, as the export keeps
 everything on released people; only a group (a family, or an item
 someone names a `member of`) is judged by its members (AE) (§4).
+Amended by #412 (2026-10-02): the export's names say what it is, a
+non-privileged view. It writes `nonprivileged.nt.gz` and
+`nonprivileged-exclusions.json` (not `public.nt.gz` and
+`public-exclusions.json`); the code is `export_nonprivileged`,
+`filter_nonprivileged_export`, `nonprivileged_exclusions` and
+`NonprivilegedExportRefused`, the base of `QueryServiceLag` and
+`UnfilterableDump`, and the old Python names resolve with a
+DeprecationWarning for one release, then go. The backup's manifest
+records the export as `nonprivileged_export` and a refusal as
+`nonprivileged_export_refused`; `--no-nonprivileged-export` skips it,
+with `--no-public-export` an alias for one release. Backups made earlier
+keep their files as named. The site's badge reads "possibly living —
+never in the non-privileged export". Every refusal, `UnfilterableDump`
+as well as `QueryServiceLag`, makes `yizkr backup` print the dumps it
+kept and the reason on one line and exit 1, with no traceback. A live
+test runs the query service's own munger (wikibase/wdqs:2, no network)
+over the export and the full dump, and requires that it logs no error
+and drops no entity (§4). The body's earlier names stand as written.
 
 ## Context
 

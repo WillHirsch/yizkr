@@ -28,6 +28,10 @@ less `judgement_`. An entity's record or note that fails validation is
 set aside and counted in `coverage.json` (`records`, `notes`), and a
 claim whose note fails is a counted reject.
 
+Amended by #412 (2026-10-02): the non-privileged export is written as
+`nonprivileged.nt.gz` (ADR-0020); §4's `public.nt.gz` names it as it
+was then.
+
 Amended by #420 (2026-09-29): the run report sums each extraction's
 `coverage.json` records (given, by status, the `unsplit` forms they
 hold, recordless, the records set aside, and the reasons records were

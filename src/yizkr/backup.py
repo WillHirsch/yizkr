@@ -9,8 +9,8 @@ everything needed to rebuild the instance, plus a non-privileged export:
 * ``full.nt.gz`` — complete RDF dump (portable export; also the input
   for the non-privileged variant). WDQS state is derived and never
   backed up: it reloads from this dump.
-* ``public.nt.gz`` — the non-privileged export, which leaves out every
-  possibly-living person (R7, docs/MODELING.md "Living persons and
+* ``nonprivileged.nt.gz`` — the non-privileged export, which leaves out
+  every possibly-living person (R7, docs/MODELING.md "Living persons and
   privacy"). Nothing about a possibly-living person leaves the instance
   in it: every triple that mentions an excluded person — as subject,
   statement node, or object of someone else's claim — is dropped, and a
@@ -68,7 +68,7 @@ closed:
   unknown; and the events that start and end a union it drops, a
   partner's own death aside.
 * It drops the extractor's judgement notes, its remarks on its own
-  reading, and any line it cannot read (``filter_public_export``), and
+  reading, and any line it cannot read (``filter_nonprivileged_export``), and
   refuses a dump that holds what it is not made to filter: a sitelink,
   or a property of a type the model does not use (``UnfilterableDump``).
 * The check runs on the query service, the dump comes from the database:
@@ -91,6 +91,7 @@ import re
 import shutil
 import subprocess
 import time
+import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -226,7 +227,7 @@ def dump_rdf(deploy_dir: Path, out_path: Path, compose_files=None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# possibly-living exclusion (public export) — runtime, no stored flag
+# possibly-living exclusion (non-privileged export) — runtime, no stored flag
 # ---------------------------------------------------------------------------
 
 
@@ -274,7 +275,7 @@ def exclusion_report(
     run: sparql.Runner | None = None,
     vocabulary: tuple[dict[str, str], dict[str, str]] | None = None,
 ) -> ExclusionReport:
-    """Which people the public export must not mention, and why: every
+    """Which people the non-privileged export must not mention, and why: every
     item the privacy module's selection finds. The queries go to the
     instance's query service, with its vocabulary, unless `run` and
     `vocabulary` are given."""
@@ -374,7 +375,7 @@ def event_kinds(root: str = EVENT_CLASS) -> set[str]:
 
 @dataclass
 class DumpReading:
-    """What the public export reads from its own dump: `people`, every
+    """What the non-privileged export reads from its own dump: `people`, every
     item with person evidence (the privacy module's, at every rank);
     `untyped`, every item that states no type, the vocabulary and classes
     aside, and `families`, every item typed as a family (``read_dump``);
@@ -781,10 +782,10 @@ BOUND_LEFT_OUT = (
 )
 
 
-def public_exclusions(
+def nonprivileged_exclusions(
     reading: DumpReading, report: ExclusionReport
 ) -> dict[str, str]:
-    """Every item the public export drops, with why:
+    """Every item the non-privileged export drops, with why:
 
     * each item with person evidence, in the dump or at the query service,
       that the check did not release: an item it did not assess is
@@ -993,13 +994,17 @@ SELECT ?entity ?version WHERE {
 
 _HELD_ENTITY = re.compile(r".*/entity/([QP][1-9]\d*)")
 
+# The files the non-privileged export writes into a backup's directory.
+NONPRIVILEGED_DUMP = "nonprivileged.nt.gz"
+NONPRIVILEGED_EXCLUSIONS = "nonprivileged-exclusions.json"
+
 # How long the export waits for the query service to hold the dump's
 # revisions, and how often it asks.
 LAG_TIMEOUT = 180.0
 LAG_POLL = 5.0
 
 
-class PublicExportRefused(RuntimeError):
+class NonprivilegedExportRefused(RuntimeError):
     """The non-privileged export refuses to run, and writes nothing.
     `manifest` is the backup's, once ``run_backup`` has recorded the
     refusal in it."""
@@ -1007,13 +1012,13 @@ class PublicExportRefused(RuntimeError):
     manifest: dict | None = None
 
 
-class QueryServiceLag(PublicExportRefused):
+class QueryServiceLag(NonprivilegedExportRefused):
     """The query service does not hold the dump's revisions. The check
     assesses people there, so its release of anyone would not be about
     what the dump holds: the export refuses to run."""
 
 
-class UnfilterableDump(PublicExportRefused):
+class UnfilterableDump(NonprivilegedExportRefused):
     """The dump holds what the export is not made to filter. A sitelink:
     its page's own triples (its name, its language, its site) never name
     the entity it is about, so leaving that entity out would leave its
@@ -1114,14 +1119,15 @@ def await_query_service(
         if clock() >= deadline:
             raise QueryServiceLag(
                 f"after {timeout:.0f} s the query service still does not "
-                f"hold the dump's revision of {_named(stale)}. The public "
-                "export assesses people there, so it refuses to run until "
-                "the two agree. Run the backup again once the graph is at "
-                "rest and the updater has caught up (docker compose logs "
-                "wdqs-updater). An entity whose revision never reaches the "
-                "query service keeps the export refusing, with the entity "
-                "named here, until it is edited again or the query service "
-                "is reloaded from a full dump (deploy/README.md)."
+                f"hold the dump's revision of {_named(stale)}. The "
+                "non-privileged export assesses people there, so it refuses "
+                "to run until the two agree. Run the backup again once the "
+                "graph is at rest and the updater has caught up (docker "
+                "compose logs wdqs-updater). An entity whose revision never "
+                "reaches the query service keeps the export refusing, with "
+                "the entity named here, until it is edited again or the "
+                "query service is reloaded from a full dump "
+                "(deploy/README.md)."
             )
         sleep(poll)
 
@@ -1282,17 +1288,17 @@ def statements_left_out(
 DROPPED_PROPERTIES = ("judgement", "judgement_note")
 
 
-def filter_public_export(
+def filter_nonprivileged_export(
     full_dump: Path,
-    public_dump: Path,
+    nonprivileged_dump: Path,
     excluded: set[str],
     dropped_pids: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[int, int]:
     """Produce the export's dump: five filters over N-triples. `excluded`
     holds every item to drop: for the export, every item with person
     evidence that the check did not release, and the rest
-    ``public_exclusions`` names. `dropped_pids` holds the properties whose
-    snaks are dropped: for the export, those of ``DROPPED_PROPERTIES``.
+    ``nonprivileged_exclusions`` names. `dropped_pids` holds the properties
+    whose snaks are dropped: for the export, those of ``DROPPED_PROPERTIES``.
 
     1. Drop every line that is not a triple as dumpRdf.php writes one
        (``_TRIPLE``): what the filter cannot read, it does not pass on.
@@ -1405,7 +1411,11 @@ def filter_public_export(
     with (
         dump_lines() as source,
         gzip.open(
-            public_dump, "wt", encoding="utf-8", newline="\n", compresslevel=6
+            nonprivileged_dump,
+            "wt",
+            encoding="utf-8",
+            newline="\n",
+            compresslevel=6,
         ) as sink,
     ):
         for line in source:
@@ -1438,7 +1448,7 @@ def prune_old_backups(backup_root: Path, keep: int) -> list[str]:
     return doomed
 
 
-def export_public(
+def export_nonprivileged(
     config: Config,
     out_dir: Path,
     cutoff_years: int = DEFAULT_CUTOFF_YEARS,
@@ -1449,9 +1459,10 @@ def export_public(
     clock: Callable[[], float] = time.monotonic,
 ) -> dict:
     """Write the non-privileged export of the dump ``out_dir/full.nt.gz``:
-    ``public.nt.gz``, and ``public-exclusions.json``, which lists every
-    item dropped for privacy with why (``public_exclusions``: people,
-    untyped items, families and the events such items took part in,
+    ``nonprivileged.nt.gz`` (NONPRIVILEGED_DUMP), and
+    ``nonprivileged-exclusions.json`` (NONPRIVILEGED_EXCLUSIONS), which lists
+    every item dropped for privacy with why (``nonprivileged_exclusions``:
+    people, untyped items, families and the events such items took part in,
     redirects to them included), and the people released and kept.
     Returns the counts the backup's manifest records: its
     `excluded_persons` counts every item dropped.
@@ -1462,11 +1473,11 @@ def export_public(
     (``await_query_service``), runs the check there, and asks again once
     it has run: a graph that changed meanwhile raises QueryServiceLag.
     Either refusal writes nothing. Every item with person evidence that
-    the check did not release is then dropped (``public_exclusions``),
+    the check did not release is then dropped (``nonprivileged_exclusions``),
     and so are the judgement notes and every statement whose value or a
-    qualifier's value is an item dropped, whole (``filter_public_export``,
-    ``statements_left_out``). The
-    queries go to the instance's query service, with its vocabulary,
+    qualifier's value is an item dropped, whole
+    (``filter_nonprivileged_export``, ``statements_left_out``). The queries
+    go to the instance's query service, with its vocabulary,
     unless `run` and `vocabulary` are given."""
     if vocabulary is None:
         from yizkr.core.wiki import WikiClient
@@ -1494,22 +1505,22 @@ def export_public(
     changed = stale_entities(run, reading.revisions)
     if changed:
         raise QueryServiceLag(
-            "the graph changed while the public export assessed it: the "
-            "query service now holds another revision than the dump of "
+            "the graph changed while the non-privileged export assessed it: "
+            "the query service now holds another revision than the dump of "
             f"{_named(changed)}. The export refuses to run; run the backup "
             "again."
         )
-    excluded = public_exclusions(reading, report)
+    excluded = nonprivileged_exclusions(reading, report)
     included = report.included - set(excluded)
-    kept, dropped = filter_public_export(
+    kept, dropped = filter_nonprivileged_export(
         full_dump,
-        out_dir / "public.nt.gz",
+        out_dir / NONPRIVILEGED_DUMP,
         set(excluded),
         dropped_pids={
             properties[key] for key in DROPPED_PROPERTIES if key in properties
         },
     )
-    (out_dir / "public-exclusions.json").write_text(
+    (out_dir / NONPRIVILEGED_EXCLUSIONS).write_text(
         json.dumps(
             {
                 "cutoff_years": cutoff_years,
@@ -1533,16 +1544,17 @@ def run_backup(
     deploy_dir: Path,
     compose_files: list[str] | None = None,
     skip_media: bool = False,
-    public_export: bool = True,
+    nonprivileged_export: bool = True,
     cutoff_years: int = DEFAULT_CUTOFF_YEARS,
     keep: int = 0,
 ) -> dict:
     """Full backup run; returns the manifest that is also written to disk.
 
-    A non-privileged export that refuses to run (PublicExportRefused: the
-    query service lags, or the dump holds what the export is not made to
-    filter) leaves the other dumps in place: the manifest records them and
-    the refusal, old runs are pruned, and the refusal is raised."""
+    A non-privileged export that refuses to run
+    (NonprivilegedExportRefused: the query service lags, or the dump holds
+    what the export is not made to filter) leaves the other dumps in place:
+    the manifest records them and the refusal, old runs are pruned, and the
+    refusal is raised."""
     stamp = datetime.datetime.now(datetime.UTC).strftime(TIMESTAMP_FORMAT)
     out_dir = backup_root / stamp
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1566,20 +1578,22 @@ def run_backup(
     record("rdf", out_dir / "full.nt.gz")
 
     refused = None
-    if public_export:
+    if nonprivileged_export:
         if not config.sparql_url:
             raise RuntimeError(
-                "public export needs the query service (WDQS_PUBLIC_HOST) to "
-                "compute possibly-living exclusions"
+                "the non-privileged export needs the query service "
+                "(WDQS_PUBLIC_HOST) to compute possibly-living exclusions"
             )
         try:
             record(
-                "public_export",
-                out_dir / "public.nt.gz",
-                **export_public(config, out_dir, cutoff_years=cutoff_years),
+                "nonprivileged_export",
+                out_dir / NONPRIVILEGED_DUMP,
+                **export_nonprivileged(
+                    config, out_dir, cutoff_years=cutoff_years
+                ),
             )
-        except PublicExportRefused as refusal:
-            manifest["public_export_refused"] = str(refusal)
+        except NonprivilegedExportRefused as refusal:
+            manifest["nonprivileged_export_refused"] = str(refusal)
             refused = refusal
 
     manifest["pruned"] = prune_old_backups(backup_root, keep) if keep else []
@@ -1588,3 +1602,28 @@ def run_backup(
         refused.manifest = manifest
         raise refused
     return manifest
+
+
+# The export's former Python names resolve, with a DeprecationWarning that
+# names the new one, for one release (ADR-0020); they are removed in the
+# next release. The file names have no alias: a backup's directory holds
+# NONPRIVILEGED_DUMP and NONPRIVILEGED_EXCLUSIONS only.
+_RENAMED = {
+    "PublicExportRefused": "NonprivilegedExportRefused",
+    "export_public": "export_nonprivileged",
+    "filter_public_export": "filter_nonprivileged_export",
+    "public_exclusions": "nonprivileged_exclusions",
+}
+
+
+def __getattr__(name: str):
+    new = _RENAMED.get(name)
+    if new is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    warnings.warn(
+        f"yizkr.backup.{name} is renamed yizkr.backup.{new}; the old name "
+        "is removed in the next release",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return globals()[new]

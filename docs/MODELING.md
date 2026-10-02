@@ -1089,7 +1089,7 @@ not a signal to grow the schema on.
 - **No stored "living" flag.** Whether a person is *possibly living* is
   never recorded and never a review decision; it is a **runtime
   determination** made whenever a privacy-sensitive action runs (the
-  public export, an internet-facing publish), computed from the
+  non-privileged export, an internet-facing publish), computed from the
   **absence of death evidence** in the graph. The determination lives in
   `yizkr.core.privacy` and both the export and the private static-site
   badge call it, so they always agree.
@@ -1105,9 +1105,9 @@ not a signal to grow the schema on.
   and nothing the reviewer must decide. Privacy falls out of what
   sources already assert; a curator who knows a person is dead records
   that as an ordinary death assertion, not a flag.
-- The export (`yizkr backup`'s `public.nt.gz`, a non-privileged view,
-  not a public copy) is **conservative**: a person enters it only on
-  positive evidence they are not living — any death evidence above, or
+- The export (`yizkr backup`'s `nonprivileged.nt.gz`, a non-privileged
+  view, not a public copy) is **conservative**: a person enters it only
+  on positive evidence they are not living — any death evidence above, or
   births beyond the cutoff (`--cutoff-years`, by default
   `DEFAULT_CUTOFF_YEARS` in `yizkr.core.privacy`). **Unknown means
   excluded.** Exclusion removes every mention (other people's claims
@@ -1151,7 +1151,7 @@ not a signal to grow the schema on.
   dump and **keeps a person only once the check has released them**: an
   item the check never assessed is dropped, and a redirect goes with the
   item it redirects to.
-- **What states no type is left out of the public export**, whatever
+- **What states no type is left out of the non-privileged export**, whatever
   else it holds, so no type at all hides no one either: an item none of
   whose `instance of` statements at normal or preferred rank names an
   item (an unknown or no value, or a type a curator deprecated, names
@@ -1269,9 +1269,9 @@ not a signal to grow the schema on.
   earliest date. A readable latest date bounds even a birth whose value
   is unknown, unreadable or coarser than a millennium.
 - The private static site (`yizkr publish-site`) includes everyone but
-  badges each subject the export would drop ("possibly living — never in
-  public exports"), using the same runtime call, except a person with no
-  type, whom the export leaves out even when released; the site shows no
+  badges each subject the export would drop ("possibly living — never
+  in the non-privileged export"), using the same runtime call, except a
+  person with no type, whom the export leaves out even when released; the site shows no
   badge. A family it lists is always badged. Its people are the items
   with person evidence, selected as the check selects them; the export
   also drops what the site lists as no person, an untyped item without

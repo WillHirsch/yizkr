@@ -489,7 +489,7 @@ def ensure_self_typed(
 
     The statement cites the item, so it is written once the item has an
     id, in a write after the one that makes it. A write cut short between
-    the two leaves an item with no kind, which the public export leaves
+    the two leaves an item with no kind, which the non-privileged export leaves
     out (yizkr.backup), and the statements that cite it lose that
     reference there. So whatever finds such an item again, as a re-run
     finds its run item by its label, calls this, and the item gets its

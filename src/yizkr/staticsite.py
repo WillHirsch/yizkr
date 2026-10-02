@@ -12,7 +12,7 @@ Design constraints:
 * Generates FROM THE LIVE ENDPOINT (curator decision): the site
   includes possibly-living people, so it is for LAN/private serving
   only. An internet-facing build must come from the
-  possibly-living-excluded public export instead (later rung). The
+  possibly-living-excluded non-privileged export instead (later rung). The
   private site still marks who that export would drop, via a badge
   computed at render time from the absence of death evidence — the same
   runtime determination the export uses (ADR-0020, `core/privacy.py`) —
@@ -66,20 +66,19 @@ def qid_of(binding: dict, name: str) -> str:
     return cell(binding, name).rsplit("/", 1)[-1]
 
 
-# people roster with labels/descriptions/aliases and a RUNTIME
-# possibly-living signal (ADR-0020). The people are the items the public
-# export's check assesses: ``{people}`` is the privacy module's selection,
-# every item with person evidence at any rank, so a person whose `human`
-# type a curator deprecated or outranked, or who has no type but other
-# evidence, is listed and badged too. ?deceased is true when the graph
-# holds any death-implying statement (date/place/cause of death, place of
-# burial) or a death event with the person as participant — none of which
-# needs a date. Births, for the birth-recency cutoff, are read statement
-# by statement with the query the public export reads them with
-# (core/privacy.py). ?family is true for a family (``{family_type}``, the
-# privacy module's test), which is never public, released or not. No
-# stored "living" flag is read; the badge is derived, like the public
-# export.
+# people roster with labels/descriptions/aliases and a RUNTIME possibly-living
+# signal (ADR-0020). The people are the items the non-privileged export's check
+# assesses: ``{people}`` is the privacy module's selection, every item with
+# person evidence at any rank, so a person whose `human` type a curator
+# deprecated or outranked, or who has no type but other evidence, is listed and
+# badged too. ?deceased is true when the graph holds any death-implying
+# statement (date/place/cause of death, place of burial) or a death event with
+# the person as participant — none of which needs a date. Births, for the
+# birth-recency cutoff, are read statement by statement with the query the
+# non-privileged export reads them with (core/privacy.py). ?family is true for
+# a family (``{family_type}``, the privacy module's test), which is never
+# public, released or not. No stored "living" flag is read; the badge is
+# derived, like the non-privileged export.
 PEOPLE_QUERY = """\
 SELECT ?person ?personLabel ?personDescription ?deceased ?family
        (GROUP_CONCAT(DISTINCT ?alias; separator="|") AS ?aliases)
@@ -363,13 +362,13 @@ class SiteBuilder:
     @cached_property
     def _latest_births(self) -> dict[str, list[int | None]]:
         """The latest year each birth statement allows, by person, read
-        with the query and the reading the public export uses."""
+        with the query and the reading the non-privileged export uses."""
         return latest_births(self.run(self._instance_query(BIRTHS_QUERY)))
 
     def _possibly_living(self, person: dict) -> bool:
         """Runtime privacy determination (ADR-0020): possibly living
         unless the graph holds death evidence, or every birth it records
-        lies beyond the cutoff. The same call the public export makes —
+        lies beyond the cutoff. The same call the non-privileged export makes —
         here it only decides a display badge on the (private) site. A
         family is badged whatever its evidence, as the export leaves every
         family out: any of its people may be living."""
@@ -516,8 +515,8 @@ class SiteBuilder:
         body = [f"<h1>{esc(label)}"]
         if self._possibly_living(person):
             body.append(
-                ' <span class="badge">possibly living — never in '
-                "public exports</span>"
+                ' <span class="badge">possibly living — never in the '
+                "non-privileged export</span>"
             )
         body.append("</h1>")
         description = cell(person, "personDescription")
