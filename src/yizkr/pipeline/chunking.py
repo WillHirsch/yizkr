@@ -33,6 +33,7 @@ from yizkr.claims import (
     ClaimBatch,
     EntityRecord,
     JudgementNote,
+    PersonStructure,
     load_vocabulary,
     set_aside_structure,
 )
@@ -1005,8 +1006,10 @@ class ChunkedClaimExtractor:
         # parser could not read (parse_chunk_unread)
         self._unread: dict[str, list[dict]] = {}
         # the entity manifest's mention records and judgement notes set
-        # aside, counted by the category of each reason
+        # aside, counted by the category of each reason, and the number of
+        # entities whose mention record was set aside
         self._set_aside: dict[str, int] = {}
+        self._set_aside_records = 0
         # how chunk calls saw the document: fork, inline or compressed
         self.context_mode: str | None = None
         self.attention: list[str] = []
@@ -1112,7 +1115,8 @@ class ChunkedClaimExtractor:
         An entity's mention record or judgement note that fails validation
         is set aside, never repaired and never the reason the manifest is
         refused (ADR-0035 §5): the entity keeps its label, aliases and
-        kind, and the manifest counts each reason by its category."""
+        kind, and the manifest counts each reason by its category, and the
+        records set aside (one record can give several reasons)."""
         _, item_keys = load_vocabulary()
         for obj in scan_json_objects(response):
             if "entities" not in obj:
@@ -1123,6 +1127,7 @@ class ChunkedClaimExtractor:
                     f"'entities' is not a list ({type(listed).__name__})"
                 ]
             set_aside: dict[str, int] = {}
+            set_aside_records = 0
             try:
                 records = []
                 for raw in listed or []:
@@ -1130,6 +1135,7 @@ class ChunkedClaimExtractor:
                     data.pop("qid", None)  # resolution state, never model-set
                     data, reasons = _set_aside_note(data)
                     data, more = set_aside_structure(data)
+                    set_aside_records += bool(more)
                     for reason in reasons + more:
                         category = reason.split(":", 1)[0]
                         set_aside[category] = set_aside.get(category, 0) + 1
@@ -1154,7 +1160,7 @@ class ChunkedClaimExtractor:
                     for number in record.mention_lines
                     if 1 <= number <= line_count
                 ]
-            return _Manifest(records, set_aside), problems
+            return _Manifest(records, set_aside, set_aside_records), problems
         return None, ["no JSON object with an 'entities' array"]
 
     # -- phase 1b: line-range segmentation (fallback tier) -----------------
@@ -1238,6 +1244,7 @@ class ChunkedClaimExtractor:
         )
         if manifest is not None:
             self._set_aside = manifest.set_aside
+            self._set_aside_records = manifest.set_aside_records
             return manifest.entities, None, handle
         if not answered:
             raise RuntimeError(
@@ -1439,6 +1446,7 @@ class ChunkedClaimExtractor:
         self._refusals = {}
         self._unread = {}
         self._set_aside = {}
+        self._set_aside_records = 0
 
         entities, segmentation, handle = self._phase_one(
             transcription, artifact
@@ -1760,10 +1768,13 @@ class ChunkedClaimExtractor:
         """Advisory completeness report, entity flavour (ADR-0007), in
         place of the line-range path's unit audit (`_coverage`): the
         manifest entities with zero claims, and counts of the mention
-        records and judgement notes the extraction gave (ADR-0035 §5).
-        A mention of a kind that takes a record but has none is
-        recordless: its record was set aside, or never given. Nothing in
-        it quotes a label."""
+        records and judgement notes the extraction gave (ADR-0035 §5):
+        the records given, by status, and the unsplit name forms they
+        hold; the mentions recordless; the records set aside, and the
+        reasons they and the notes were set aside by, by category; and
+        the notes by category. A mention of a kind that takes a record
+        but has none is recordless: its record was set aside, or never
+        given. Nothing in it quotes a label."""
         subject_ids = {
             claim.subject.local_id
             for claim in batch.claims
@@ -1797,6 +1808,12 @@ class ChunkedClaimExtractor:
                 "given": sum(e.structure is not None for e in structured),
                 "recordless": sum(e.structure is None for e in structured),
                 "by_status": dict(sorted(statuses.items())),
+                "unsplit_forms": sum(
+                    len(entity.structure.unsplit)
+                    for entity in structured
+                    if isinstance(entity.structure, PersonStructure)
+                ),
+                "set_aside_records": self._set_aside_records,
                 "set_aside": dict(sorted(self._set_aside.items())),
             },
             "notes": dict(sorted(notes.items())),
@@ -1837,12 +1854,14 @@ class ChunkedClaimExtractor:
 
 
 class _Manifest(NamedTuple):
-    """An entity manifest as parsed: its entities, and the mention records
+    """An entity manifest as parsed: its entities; the mention records
     and judgement notes set aside, counted by the category of each
-    reason."""
+    reason; and the number of entities whose mention record was set
+    aside."""
 
     entities: list[EntityRecord]
     set_aside: dict[str, int]
+    set_aside_records: int
 
 
 def _set_aside_note(entity: dict) -> tuple[dict, list[str]]:
