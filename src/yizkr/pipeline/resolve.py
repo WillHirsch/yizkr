@@ -6,16 +6,18 @@ exact label match only; anything fuzzier needs the human reviewer, who
 sees the resolution outcome in the review CSV (resolved QID or
 "NEW:<local_id>") and can reject claims that would create duplicates.
 
-A ref of an artifact kind (artifact, or a class the manifest makes a
-`subclass_of` it), by the batch's entity-manifest record of its id when
-there is one and otherwise by its own `instance_of`, is never resolved by
-its label: an artifact is never matched by its title or label (ADR-0010),
-and the writer decides what such a ref becomes (yizkr.pipeline.writer,
-step 2). Nor is any other ref resolved to an artifact or a part of one
-(`is_artifact_item` in yizkr.pipeline.writer): the labels a batch is
-resolved against are the instance's item labels without those items'
-(`resolvable_labels`), so such a ref stays local and the writer gives
-it an item of its own (ADR-0010).
+A ref on the artifact side (of an artifact kind, artifact or a class
+the manifest makes a `subclass_of` it, or of artifact fragment;
+`is_artifact_kind` in yizkr.pipeline.writer), by the batch's
+entity-manifest record of its id when there is one and otherwise by its
+own `instance_of`, is never resolved by its label: an artifact is never
+matched by its title or label (ADR-0010), and the writer decides what
+such a ref becomes (yizkr.pipeline.writer, step 2). Nor is any other
+ref resolved to an artifact or a part of one (`is_artifact_item` in
+yizkr.pipeline.writer): the labels a batch is resolved against are the
+instance's item labels without those items' (`resolvable_labels`), so
+such a ref stays local and the writer gives it an item of its own
+(ADR-0010).
 
 Unresolved local refs are left in place: the writer creates new items
 for them at write time.
@@ -25,7 +27,7 @@ from __future__ import annotations
 
 from yizkr.claims import Claim, ClaimBatch, ItemValue, LocalRef, QidRef
 from yizkr.pipeline.review import entity_records
-from yizkr.pipeline.writer import artifact_kinds, is_artifact_item
+from yizkr.pipeline.writer import is_artifact_item, is_artifact_kind
 
 
 def resolvable_labels(client) -> dict[str, str]:
@@ -82,15 +84,14 @@ def resolve_batch(
     batch: ClaimBatch, label_to_qid: dict[str, str]
 ) -> ClaimBatch:
     """Return a copy of the batch with exact-label local refs resolved,
-    but those of an artifact kind (the module docstring)."""
+    but those on the artifact side (the module docstring)."""
     # a ref's kind is its record's, as the writer reads the record
     # (entity_records), and otherwise its own
     records = entity_records(batch)
-    kinds = artifact_kinds()
 
     def is_artifact(ref: LocalRef) -> bool:
         record = records.get(ref.local_id)
-        return (record.kind if record else ref.instance_of) in kinds
+        return is_artifact_kind(record.kind if record else ref.instance_of)
 
     return batch.model_copy(
         update={

@@ -378,7 +378,7 @@ and the step's `refused` count: a media object refused with no artifact
 registered under its label, or with no item yet under its tagged label
 (another entity of the batch takes it), and a person, place or other
 entity refused because artifacts hold both its name and its tagged
-label (`"<name> [human]"`, say). None of them is an artifact registered
+label (`"<name> [not an artifact]"`). None of them is an artifact registered
 under the title of another item that may be the same object, the one
 question `unhashed-title` asks a curator; each is a clash of labels
 that no artifact registration on a reset instance makes, and the

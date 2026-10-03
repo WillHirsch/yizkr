@@ -321,7 +321,9 @@ artifact a new QID, changes neither.
   of one; a person, a place or any other entity never joins an artifact
   or a part of one. An entity that may not join the item under its label
   takes an item of its own under its label tagged `" [media object]"`,
-  or with its kind (`" [human]"`), its name an alias; one that may join
+  or, whatever its kind or none, `" [not an artifact]"` (one tag for
+  every kind, so refs of two kinds naming one person meet on one item;
+  amended by #444, 2026-10-03), its name an alias; one that may join
   neither label's item is refused, with its claims, before the write.
 - **A page fragment is keyed by its artifact.** The fragment for page
   *n* is the item that is an `instance of artifact fragment` and `part

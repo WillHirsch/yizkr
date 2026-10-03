@@ -76,8 +76,17 @@ joins by its label only an item with no hash that is itself an artifact
 or a part of one, never a person, a place or another item (AM); a
 person, a place or any other entity never joins by its label an
 artifact or a part of one, and takes an item of its own under its label
-tagged with its kind (AN); and a first dry run reports the pair a write
-would flag against the media object's placeholder (AO).
+tagged (AN); and a first dry run reports the pair a write would flag
+against the media object's placeholder (AO).
+On the second review (amended by #444, 2026-10-03): every entity not
+on the artifact side (of an artifact kind or of artifact fragment) takes
+one shared tag, `" [not an artifact]"`, whatever its kind or none, so
+refs of two kinds naming one person meet on one item, as they do under a label no artifact holds
+(AZ); an `instance of` counts whatever its rank, as a `media SHA-1`
+does (AY); an entity of the kind artifact fragment is on the artifact
+side, in the writer and in resolve, as its item is an artifact's part;
+and only an artifact's own content tag makes a label one of its
+title's.
 The kinds still matched by label, and why, are listed in §1 ("What is
 still matched by label").
 
@@ -493,14 +502,22 @@ batch and across runs (efficiency), which were the concrete costs.
 artifact-kind entity is matched to a registered artifact, no other
 entity to an artifact or a part of one, and no artifact is adopted, by
 its title or label. Registration finds an artifact by its SHA-1 alone.
-Resolve's exact-label step never resolves a ref of an artifact kind
-(artifact, or a class the manifest makes a `subclass_of` it), and
+Resolve's exact-label step never resolves a ref on the artifact side
+(of an artifact kind, artifact or a class the manifest makes a
+`subclass_of` it, or of artifact fragment, as in the writer's
+`is_artifact_kind`; amended by #444, 2026-10-03), and
 resolves no ref to an artifact or a part of one: it matches against the
 instance's labels without those items' (`resolvable_labels`). An
 artifact or a part of one is an item that carries a `media SHA-1`,
 names a `media file`, or is an `instance of` an artifact kind or of
-artifact fragment (the writer's `is_artifact_item`). The writer finds an
-item by its label before it makes one, on the entity's own side only:
+artifact fragment (the writer's `is_artifact_item`). A statement counts
+whatever its rank (AY, amended by #444, 2026-10-03), as a `media SHA-1`
+does wherever the writer and the registrar read one: a curator's
+deprecated `instance of photograph` on a person's item still makes it
+an artifact item until the statement is removed. The writer finds an
+item by its label before it makes one, on the entity's own side only,
+an entity of an artifact kind or of artifact fragment (the writer's
+`is_artifact_kind`) being on the artifact side:
 
 * an artifact-kind entity, such as a GEDCOM media object, never joins an
   item registration made, one that carries a `media SHA-1` or a page
@@ -513,11 +530,11 @@ item by its label before it makes one, on the entity's own side only:
 * an entity that may not join the item under its label is found, or
   made, under its tagged label (the writer's `tagged_label`): an
   artifact-kind entity's ends in `" [media object]"`
-  (`media_object_label`), any other's in its kind, `" [human]"` or
-  `" [place]"` say (`" [entity]"` without one), its own label an alias
-  of that item. The tag depends on the label and the kind alone, so a
-  re-run finds the item again, and nothing about the item under the
-  plain label changes. Labels stay unique, as the wiki client's label
+  (`media_object_label`), any other's in `" [not an artifact]"`, one
+  tag whatever its kind or none (AZ, amended by #444, 2026-10-03), its
+  own label an alias of that item. The tag depends on the label and the
+  side alone, so a re-run finds the item again, and nothing about the
+  item under the plain label changes. Labels stay unique, as the wiki client's label
   index fails on two items with one English label (and Wikibase refuses
   two with one label and description), so the entity cannot take the
   plain label while another item holds it; the artifact keeps its title,
@@ -531,18 +548,22 @@ item by its label before it makes one, on the entity's own side only:
   every entity that is not of an artifact kind before any that is, so
   of a person and a media object of one batch under a label no item
   holds, the person takes it and the media object its tagged label,
-  whichever the batch names first. The tag names the kind, so one
-  person named under a label an artifact holds by refs of two kinds (a
-  GEDCOM's `human` and an extraction's ref with no kind, say) is two
-  items, `"<name> [human]"` and `"<name> [entity]"`, until a curator
-  merges them; without the clash they would meet on one item. A media
+  whichever the batch names first. The tag is one for every kind, so
+  one person named under a label an artifact holds by refs of two kinds
+  (a GEDCOM's `human` and an extraction's ref with no kind, say) is one
+  item, `"<name> [not an artifact]"`, as without the clash the two meet
+  on the item under the plain name; a tag naming the kind would split
+  them into two items until a curator merged them. A media
   object that does not take its label raises unhashed-title against its
   item on every artifact registered under that label, whatever item
   holds it: the artifact under it, and every artifact under it with one
   content tag in it (a re-scan, `"<title> [<sha1[:8]>]"`, or its
   fragment, `"<title> [<sha1[:8]>], page <n>"`; a tag is one when
-  taking it out leaves the title, so a title with a bracketed date of
-  eight digits is compared whole), in the order of their items. Under a
+  taking it out leaves the title, and only the artifact's own tag, its
+  SHA-1's first eight hex digits, is one, as the registrar takes out
+  only its own: a title with a bracketed date of eight digits is
+  compared whole, and another artifact registered under
+  `"<title> [18950312]"` is not flagged), in the order of their items. Under a
   person's name the artifact is content-tagged, as registration came
   after the person, and is flagged all the same, as registration flags
   it against the media object's item in the other order; with no
@@ -623,8 +644,12 @@ registers the artifact its counts do not depend on the order. Where N
 writes register it, as excerpts of two PDFs that place one image do,
 the GEDCOM first gives N flags, and k of them before the GEDCOM give
 N - k + 1; that dependence is accepted too, as a count above zero still
-says the pair exists. Which items are joined never depends on the
-order.
+says the pair exists. Whether a media object and an artifact are one
+item never depends on the order. Nor does whether refs naming one person, of
+whatever kinds, meet on one item (AN, above): written before an
+artifact takes the name, the person keeps the plain label and later
+refs join it there; written after, every ref joins the item under the
+tagged label. Only which label that item bears depends on the order.
 
 ### 2 & 3. Near-duplicates and versions (deferred, designed here)
 

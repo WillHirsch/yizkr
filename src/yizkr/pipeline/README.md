@@ -428,13 +428,14 @@ re-running one step in isolation — but for a normal ingest you only ever run
   an artifact with a hash or its page fragment, and any other entity
   reuses an item that is neither. An entity that may not reuse the item
   under its label takes an item of its own under its label tagged
-  `[media object]`, or with its kind, `[human]` say, its name an alias;
-  people and places are placed before media objects, so a person takes
-  a label no item holds. Each artifact registered under the label of a
-  media object that does not take it, content-tagged or not, is raised
-  as an `unhashed-title` alert, and a media object whose tagged label a
-  registered item holds too is refused, with its claims, before the
-  first write;
+  `[media object]`, or, whatever its kind, `[not an artifact]`, its name
+  an alias; people and places are placed before media objects, so a
+  person takes a label no item holds. Each artifact registered under the
+  label of a media object that does not take it, content-tagged or not,
+  is raised as an `unhashed-title` alert, and an entity that may reuse
+  neither the item under its label nor the one under its tagged label,
+  as a media object whose tagged label a registered item holds too, is
+  refused, with its claims, before the first write;
   ADR-0010 as amended by #444), writes each claim
   at normal rank with two references: `stated in → artifact/fragment`
   (with page/region/excerpt locator qualifiers) and `inferred from
@@ -447,7 +448,7 @@ In `ingest run`, reconcile matches a document's entities against nothing
 **Resolve** still does, by exact label: it replaces a `local` ref whose
 label exactly matches an existing item's, so a document meets the
 artifacts written before it under the same names only. A ref of an
-artifact kind is never resolved so, nor is any ref resolved to an
+artifact kind or of artifact fragment is never resolved so, nor is any ref resolved to an
 artifact or a part of one: no artifact-kind entity is matched to a
 registered artifact (one with a hash, or its page fragment), no other
 entity to an artifact or a part of one, and no artifact is adopted, by

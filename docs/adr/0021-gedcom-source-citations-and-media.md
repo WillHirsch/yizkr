@@ -112,8 +112,9 @@ one, or when a person, a place or any other item that is no artifact
 holds it, as a portrait titled with its sitter's name never becomes
 the person's item (ADR-0010 as amended by #444, 2026-10-02). The
 media object's item carries **no `media file` and no `media SHA-1`**
-(a person or place whose name an artifact holds is tagged with its kind
-in the same way, `[human]` say, its name an alias) — the absence
+(a person or place whose name an artifact holds is tagged in the same
+way, ` [not an artifact]`, one tag for every kind, its name an alias;
+amended by #444, 2026-10-03) — the absence
 of a content hash *is* the un-held marker. The person links to it with the
 new **`image`** property (P18 semantics: media of the subject),
 `point_in_time`-qualified when the object is dated. Objects are deduped by

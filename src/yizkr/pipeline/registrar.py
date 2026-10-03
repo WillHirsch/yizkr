@@ -78,8 +78,9 @@ writer makes the media object an item of its own under the label with a
 tag at its end (`media_object_label` in yizkr.pipeline.writer) and
 flags the pair itself, the artifact against the media object's item, as
 registration flags it, and with it every artifact registered under that
-label with one content tag in it, at its end or before a fragment's ",
-page <n>"; and registration compares each title with that tagged label
+label with its own content tag in it ([sha1[:8]] of its media, or of
+the fragment's whole), at its end or before a fragment's ", page <n>";
+and registration compares each title with that tagged label
 too, so the flag is raised on every later write of either. The writer
 also raises it for a media object it refuses, as registered items hold
 both its label and its tagged label: each artifact registered under the
