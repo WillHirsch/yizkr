@@ -213,6 +213,152 @@ never narrow or guess.
   "Eugen /Löbig/") is that form whole, the name not written twice.
 - **Language.** A HEAD.LANG of `und` is taken as it is, uncounted.
 
+Amended by #409 (2026-09-29): clustering keys on the records as §7 says,
+and settles what §7 leaves open. A person's kin agree only on a key a
+record gives (never on a recordless kin's name), and the couple of a
+union count as each other's spouses. A lone given name, and a key only a
+GEDCOM `unsplit` form gives, pair but never make a link confident; a
+document's own `unsplit` form keys like its typed parts. Two places that
+share a name with containers neither equal nor nested stay ambiguous;
+their containers are a record's `within` and the places the manifest's
+`part_of` and `location` claims put them in. Rule 6's places stand as
+written: a place an organisation's `location` claims name agrees with the
+other's when the two would link under rule 5 (`exact` or `nested`), or
+when one would link so with a place the other lies in by the `part_of`
+and `location` claims of its manifest. A place without a record, which
+rule 5 cannot link, is compared by its exact names, which leave the
+places unknown when shared and differ otherwise; it never makes them
+agree. Containment that only a record's `within` states does not count
+here: a civil registry at "Fläckfeld, Kreis Mockburg" and one located at
+Kreis Mockburg stay apart, the safe direction. Places a record names
+carry no containers, and agree with the other's places only as rule 5
+would let them (below), counting only places with records. Places differ
+when both sides state places and none of this holds. An organisation
+without a proper name keys and links on kind and place only against
+another without one. §5's verdict on a record is extraction's, taken on
+the alias bag before the cleanup of §8 and never again after it;
+clustering reads any record of the entity's kind. A birth or death with
+no principal, or several, or one whose own date of that kind conflicts
+with it, is nobody's own and meets nothing through its other
+participants (§3.2; rule 9). The alias cleanup (§8) leaves an entity
+without a standing record its aliases, blanks and duplicates aside, and
+keeps a person's first alias that alone holds a title or suffix the
+record gives, preferring one that also gives a name part, so that the
+record names no part its forms do not hold ("Frau Löbig" beside "Ida
+Löbig" stays where her record titles her Frau, decision 11 below). A
+spelling variant is never derivable: an alias that spells a part
+otherwise than the label does stays ("Gustav Lobig" beside "Gustav
+Löbig", "Hans Xxx Löbig" beside "Hans-Xxx Löbig"), while a reorder or a
+case-only variant goes. The GEDCOM adapter cleans by the record it fills, as extraction
+does, so an alias that restates its bracketed label ("Peppi" beside
+"(Peppi)") is derivable and goes. A mention without a record meets only
+mentions without one, so a document's mention whose record was set aside
+never meets the export, whose people and places all have records. The
+run report counts recordless mentions (`summary.recordless_mentions`),
+and #420 counts the records and the judgement notes of §4 in it.
+
+Amended by #409 (2026-09-29), decided by the orchestrator (the owner may
+override; conservative, since a missed merge is safe and a false
+confident link is not):
+
+- Rule 6 on places stays as written above for places that location
+  claims name: a place name the two share is not enough for their places
+  to agree.
+- Two organisations named only by a kind, or by a kind and a proper name
+  of one word (such as "Firma Löbig"), never link confidently where
+  either states no place: a proper name of one word links only on places
+  that agree, a shared kind notwithstanding, since no rule can tell a
+  surname from another one-word name. Containment of stated places still
+  agrees: a nameless Landgericht at Rekau, which its manifest puts in
+  Hesse, links with a nameless Landgericht at Hesse.
+- Rule 1: a given part that folds like any of the person's own surnames
+  or a kin's pairs with no kin's surname; a kin without a record lends
+  the words of its label to that test, and to nothing else. Two
+  registers that misread the sisters "Löbig Ursula" and "Löbig Klara",
+  daughters of Hildegard Laudler, with "Löbig" as a given name, never key
+  (Löbig, Laudler), whether their father is named with a record, without
+  one, or not at all. A child named after a parent without a record (a
+  "Sebastian" whose father is a "Sebastian Löbig" without one) pairs
+  with no kin's surname either, so two such registers may never pair:
+  the safe direction.
+- Rule 3: a given name also keys by its written form, not only its
+  standard form, so a "Gustl" whose record gives the standard form
+  Gustav meets a "Gustl" whose record gives none. Meeting is not
+  merging: the pair is still judged.
+- A known limit, to revisit after scratch run 1 (#145): a record that
+  gives both "Bad Flörburg" (with the head "Bad") and "Flörburg" drops
+  "Flörburg" as a short form, so it never meets a plain Flörburg. That
+  keeps two mentions apart, which is safe.
+
+Amended by #409 (2026-10-02), decided by the orchestrator (the owner may
+override; conservative as above):
+
+- Rules 3 and 8: a shared key neither makes a link confident nor makes
+  kin agree (it is `weak`) when it joins two given parts that cannot be
+  one name. A given part is a given name or a word of a document's
+  `unsplit` form, which states no standard form.
+  - Two given parts whose records give standard forms that share no
+    key: a "Gustl" read as Gustav and a "Gustl" read as another name
+    meet, and stay ambiguous.
+  - Two nicknames, where both records give given names or unsplit
+    words that share no key: two brothers with two given names and one
+    family nickname never merge, nor do they where one brother's name is
+    an unsplit form ("Xxx Löbig", or an export's NAME without slashes).
+  - A given part against a nickname, only where the given part states a
+    standard form that shares no key with the nickname holder's given
+    names. So "Gustav 'Gustl' Löbig" against a "Gustl Löbig" whose
+    record gives no standard form, or Gustav, merges on corroboration
+    (a shared father), and against a "Gustl" read as Xxx stays
+    ambiguous. A nickname holder with no given names bars nothing: a
+    "Wastl" read as Sebastian against a nickname-only "Wastl Löbig"
+    keeps the key. A word of an `unsplit` form states no standard form,
+    so "Wastl Löbig" written unsplit against "Sebastian 'Wastl' Löbig"
+    keeps it too. (A one-word `unsplit` form makes no key with a
+    surname; it meets only as a lone name, rule 1.)
+
+  A "Gustl" read as Gustav and a "Gustl" with no standard form still
+  meet, and merge only on corroboration. An export's given name is its
+  own standard form (§6), so an export's "Gustl /Löbig/" never merges
+  confidently with a document's "Gustl" read as Gustav: the safe
+  direction.
+- Rule 6, places a record names: they agree with the other's only as
+  rule 5 would let them. Each side is one list of parts: a record's
+  places, or the places the other's location claims reach and every
+  place those lie in, a place without a record counting by its exact
+  names. Where one list lies among the other, the places agree if a part
+  with a record is shared, and read `unknown` if only a part without one
+  is. Otherwise they differ: a shared name whose other stated places
+  differ ("Fläckfeld, Kreis Mockburg" against "Fläckfeld, Kreis
+  Peiltal"), whether or not the located side's district has a record,
+  and lists naming places at different levels (`["Flörburg", "Hesse"]`
+  against `["Kreis Peiltal", "Hesse"]`).
+- Rule 6, this ADR's own clause "on a proper name of one word only with
+  a shared kind or place": the decision of 2026-09-29 above narrows it to
+  "only with a place that agrees". It is recorded here as an in-place
+  amendment for the owner to confirm at merge, or to move to a new ADR
+  (AGENT_PROTOCOL §8).
+- Rule 5 compares the containers that `part_of` and `location` claims
+  give a place, through the places its manifest puts it in, as well as
+  its record's `within`. Two Fläckfelds that such claims put in Kreis
+  Mockburg and in Kreis Peiltal stay ambiguous, and so do nameless
+  organisations at each, whether or not the districts have records; a
+  claimed container is one part, its own containers apart. Containers
+  stated at different levels keep a pair apart too: a Flörburg that
+  part_of puts in Kreis Peiltal and one located in Hesse stay
+  ambiguous, the safe direction. A place whose record and claims give
+  contradictory containers (Kreis Peiltal and Kreis Mockburg) nests in
+  both namesakes; its component stays ambiguous, which is safe.
+
+Amended by #409 (2026-10-02), decided by the orchestrator (the owner may
+override): **decision 11, §8's "Frau Löbig" example narrowed.** §8 drops
+"Frau Löbig" beside "Ida Löbig" as derivable. Where her record titles her
+Frau and no other form holds the title, it now stays, so that the record
+names no part its forms do not hold; where the record gives no title, or
+the label or another kept alias holds it, it still goes. Of several
+holders, one that also gives a name part is kept before a role phrase
+("Frau Mutter") or a bare title. This is an in-place narrowing of §8's
+example, for the owner to confirm at merge, as decision 9 is.
+
 **Decided by the owner (2026-09-29):**
 
 - Before scratch run 1 (#145), extraction hands over the structure of

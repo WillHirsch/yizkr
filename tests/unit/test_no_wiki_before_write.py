@@ -305,6 +305,18 @@ class ScriptedEngine:
                             "label": self.person,
                             "kind": "human",
                             "mention_lines": [1],
+                            # the mention record extraction hands over
+                            # (ADR-0035 §2)
+                            "structure": {
+                                "kind": "human",
+                                "given": [{"written": self.person.split()[0]}],
+                                "surnames": [
+                                    {
+                                        "written": self.person.split()[1],
+                                        "type": "other",
+                                    }
+                                ],
+                            },
                         }
                     ]
                 }
@@ -611,17 +623,21 @@ def test_corpus_clustering_asks_nothing_of_the_wiki(tmp_path, refusals):
     identity = json.loads(
         (context.directory / "identity-map.json").read_text()
     )
-    # the portrait's Eugen and the deck's meet the export's, whose dates
-    # agree; the postcard's Klara meets hers
-    merged = {
+    # the portrait's Eugen and the deck's meet the export's, and the
+    # postcard's Klara meets hers: each document's mention has a record
+    # (ADR-0035 §2), keys on its given name and surname, and the birth
+    # year corroborates it, so each merges with the export's
+    merged = sorted(
         tuple(sorted(identity["mentions"][m]["label"] for m in members))
         for entry in identity["clusters"].values()
         if len(members := entry["members"]) > 1
-    }
-    assert merged == {
+    )
+    assert merged == [
         ("Eugen Löbig", "Eugen Löbig", "Eugen Löbig"),
         ("Klara Löbig", "Klara Löbig"),
-    }
+    ]
+    assert identity["review"] == []
+    assert identity["summary"]["clusters"]["confident"] == 2
 
 
 class ScriptedAdjudicator:

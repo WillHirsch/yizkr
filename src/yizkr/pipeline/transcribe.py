@@ -153,6 +153,7 @@ from yizkr.pipeline.transcription_record import (
     merged,
     page_marker,
     printed_pages,
+    prompt_text,
     record_text,
 )
 
@@ -418,6 +419,15 @@ class Transcription(BaseModel):
         physical index is its place in the media; the number printed on
         it may differ, or be no number at all ("iv")."""
         return printed_pages(self.pages or ())
+
+    def prompt_text(self) -> str:
+        """The text as the extraction prompts carry it: each page's
+        printed page number, where its record gives one, beside its
+        `[Page N]` marker on the marker's line, so that every line number
+        into `text` holds (transcription_record.prompt_text). `text`
+        itself, the transcription's content, is unchanged; with no printed
+        page number the two are the same."""
+        return prompt_text(self.text, self.pages or ())
 
     @classmethod
     def from_record(

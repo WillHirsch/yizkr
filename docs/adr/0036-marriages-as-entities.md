@@ -59,6 +59,17 @@ children, counted as `FAM one person as HUSB and WIFE`: one person as
 both father and mother is a reading the record cannot mean, so it is not
 guessed.
 
+Amended by #409 (2026-09-29): §3's union that names only one of its
+couple is ambiguous with every other union of that person, whether or
+not a second union of theirs is known, since clustering cannot count a
+person's unions before it has clustered them. A union's couple are its
+participants as spouses or partners, or every participant where none
+has such a role.
+
+Amended by #409 (2026-09-29), decided by the orchestrator (the owner may
+override): a union that names only one of its couple stays ambiguous,
+as the line above says; that can only keep two unions apart.
+
 ## Context
 
 MODELING.md dates a marriage as Wikidata dates spouse (P26): a statement

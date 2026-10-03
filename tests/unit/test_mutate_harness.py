@@ -13,19 +13,31 @@ The repository has live tests too, which stand in for ones that use the
 stack, and a copy of the live-stack lock's module
 (tests/integration/live_lock.py). Every harness here uses a scratch
 lock, never the real one.
+
+No test here waits out real time (#437). A test waits for what it waits
+on to happen: a process that the tests start tells it, through a Cue,
+that it has reached the point the test waits for, a pidfd says that a
+process has ended, and a pipe's lines come as the harness writes them.
+Each such wait is bounded only by HANG_GUARD, after which the test
+fails. The harness's --timeout runs on a fake clock, in-process.
 """
 
 from __future__ import annotations
 
 import fcntl
 import importlib.util
+import inspect
 import json
 import os
 import py_compile
+import select
+import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from stat import S_IMODE
@@ -33,6 +45,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.fixtures.exits import pid_exit_fd
 from tests.integration import live_lock
 from tests.integration.live_lock import LOCK_ENV, SHARED_ENV, TIMEOUT_ENV
 
@@ -43,6 +56,9 @@ mutate = importlib.util.module_from_spec(_spec)
 sys.modules["mutate_harness"] = mutate
 _spec.loader.exec_module(mutate)
 ENV_FILE = mutate.ENV_FILE
+
+# the bound on a wait that an event ends, after which the test fails
+HANG_GUARD = 120
 
 GIT_ENV = {
     "GIT_CONFIG_GLOBAL": os.devnull,
@@ -56,14 +72,24 @@ GIT_ENV = {
 # that loses it cannot pass by accident (2001-09-09)
 STAMP = 1_000_000_000 * 10**9
 
-CALC = '''\
+# A program that runs until a signal ends it: a grandchild, or a shell's
+# background job, that only the harness's SIGKILL to the group stops.
+PAUSE = "import signal; signal.pause()"
+# The shell command that starts PAUSE as a background job, and prints the
+# job's pid.
+PAUSE_JOB = (
+    f"{shlex.quote(sys.executable)} -c {shlex.quote(PAUSE)} "
+    ">/dev/null 2>&1 & echo $!"
+)
+
+CALC = f'''\
 """A tiny module for the mutation harness's tests."""
 
 import os
 import signal
+import socket
 import subprocess
 import sys
-import time
 
 
 def add(a, b):
@@ -75,28 +101,37 @@ def double(n):
 
 
 def hang(stubborn=False):
-    """Start two processes, note their pids and pytest's, then block for
-    far longer than any test waits. One is a Python grandchild. The other
-    is a shell's background job, which ignores SIGINT, as POSIX has it.
+    """Start two processes, send their pids and pytest's to the cue
+    socket that $CALC_CUE names, then block until a signal ends it. One
+    is a Python grandchild. The other is a shell's background job, which
+    ignores SIGINT, as POSIX has it. Neither ends by itself.
 
     A stubborn hang ignores SIGINT itself, and so does its grandchild."""
     if stubborn:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
-    child = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(10)"]
-    )
+    child = subprocess.Popen([sys.executable, "-c", {PAUSE!r}])
     job = subprocess.run(
-        ["sh", "-c", "sleep 10 >/dev/null 2>&1 & echo $!"],
+        ["sh", "-c", {PAUSE_JOB!r}],
         capture_output=True,
         text=True,
         check=True,
     )
-    pidfile = os.environ.get("CALC_PIDFILE")
-    if pidfile:
-        with open(pidfile + ".tmp", "w") as out:
-            out.write(f"{os.getpid()} {child.pid} {job.stdout.strip()}")
-        os.replace(pidfile + ".tmp", pidfile)
-    time.sleep(10)
+    if not stubborn:
+        # A SIGINT from here on stays pending until sigwait takes it. One
+        # that came between a pause()'s check for signals and its start
+        # would be lost, and pytest would hang (#437).
+        signal.pthread_sigmask(signal.SIG_BLOCK, {{signal.SIGINT}})
+    cue = os.environ.get("CALC_CUE")
+    if cue:
+        with socket.socket(socket.AF_UNIX) as sent:
+            sent.connect(cue)
+            pids = f"{{os.getpid()}} {{child.pid}} {{job.stdout.strip()}}\\n"
+            sent.sendall(pids.encode())
+    if not stubborn:
+        signal.sigwait({{signal.SIGINT}})
+        raise KeyboardInterrupt
+    while True:
+        signal.pause()
 '''
 
 TEST_CALC = """\
@@ -132,7 +167,7 @@ def test_compile_calc():
 '''
 
 
-TEST_HELPER = '''\
+TEST_HELPER = f'''\
 import os
 import signal
 import subprocess
@@ -141,10 +176,11 @@ from calc import add
 
 
 def test_add_beside_a_background_job():
-    """Start a shell's background job, and stop it only if the test gets
-    that far, as a test that cleans up at the end of its body does."""
+    """Start a shell's background job, which runs until a signal ends it,
+    and stop it only if the test gets that far, as a test that cleans up
+    at the end of its body does."""
     job = subprocess.run(
-        ["sh", "-c", "sleep 10 >/dev/null 2>&1 & echo $!"],
+        ["sh", "-c", {PAUSE_JOB!r}],
         capture_output=True,
         text=True,
         check=True,
@@ -153,7 +189,7 @@ def test_add_beside_a_background_job():
     pidfile = os.environ.get("HELPER_PIDS")
     if pidfile:
         with open(pidfile, "a") as out:
-            out.write(f"{pid}\\n")
+            out.write(f"{{pid}}\\n")
     assert add(2, 3) == 5
     os.kill(pid, signal.SIGKILL)
 '''
@@ -252,15 +288,16 @@ LIVE = "tests/integration/test_stack.py"
 
 # Live tests whose first starts a shell's background job, which outlives
 # the run, before any test uses the stack: os.system passes the job every
-# inheritable descriptor. The second uses the stack, and holds the run
-# until the file that $RUN_GO names appears. Each notes a pid in the file
-# that $JOB_PID or $RUN_PID names, and the first notes, in the file that
-# $EARLY_HELD names, whether the lock is held exclusively as it runs.
-EARLY_JOB = """\
+# inheritable descriptor. It notes the job's pid in the file that $JOB_PID
+# names, and, in the file that $EARLY_HELD names, whether the lock is held
+# exclusively as it runs. The second uses the stack: it sends its pid to
+# the cue socket that $RUN_CUE names, and holds the run until the test
+# answers "go", or closes the socket.
+EARLY_JOB = f"""\
 import fcntl
 import os
 import shlex
-import time
+import socket
 from pathlib import Path
 
 import pytest
@@ -285,17 +322,14 @@ def test_start_a_job_before_the_stack():
     held = held_exclusively(lock_path())
     Path(os.environ["EARLY_HELD"]).write_text(str(held))
     pidfile = shlex.quote(os.environ["JOB_PID"])
-    assert os.system(f"sleep 60 >/dev/null 2>&1 & echo $! >{pidfile}") == 0
+    assert os.system({PAUSE_JOB!r} + " >" + pidfile) == 0
 
 
 def test_hold_the_stack(live_stack_lock):
-    noted = Path(os.environ["RUN_PID"] + ".tmp")
-    noted.write_text(str(os.getpid()))
-    noted.replace(os.environ["RUN_PID"])
-    deadline = time.monotonic() + 60
-    while not Path(os.environ["RUN_GO"]).exists():
-        assert time.monotonic() < deadline, "never told to end"
-        time.sleep(0.02)
+    with socket.socket(socket.AF_UNIX) as cue:
+        cue.connect(os.environ["RUN_CUE"])
+        cue.sendall(f"{{os.getpid()}}\\n".encode())
+        assert cue.makefile().readline() == "go\\n", "never told to end"
 """
 
 EARLY = "tests/integration/test_early_job.py"
@@ -406,7 +440,7 @@ def harness(repo, spec, *options, env=None):
         env=env or environment(),
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=HANG_GUARD,
     )
 
 
@@ -470,22 +504,141 @@ def running(pid):
     return True
 
 
-def wait_until(condition, timeout=30.0):
-    deadline = time.monotonic() + timeout
-    while not condition():
-        if time.monotonic() > deadline:
-            pytest.fail(f"gave up waiting for {condition}")
-        time.sleep(0.02)
+def pidfd(pid):
+    """A pidfd of `pid`, which turns readable once the process ends, as a
+    zombie awaiting reaping or reaped; None when it has ended already
+    (tests/fixtures/exits.py, with or without os.pidfd_open)."""
+    return pid_exit_fd(pid)
 
 
-def kill_leftovers(pidfile):
-    """Clean up after a failure: kill the processes that a test noted in
-    `pidfile`, if any still run."""
-    if not pidfile.exists():
-        return
-    for pid in map(int, pidfile.read_text().split()):
+def until_ended(pids):
+    """Wait for each of `pids` to end: the event, not a time, ends the
+    wait, which HANG_GUARD bounds."""
+    for pid in pids:
+        fd = pidfd(pid)
+        if fd is None:
+            continue
+        try:
+            ready, _, _ = select.select([fd], [], [], HANG_GUARD)
+        finally:
+            os.close(fd)
+        assert ready, f"pid {pid} still runs"
+        assert not running(pid)
+
+
+def kill_leftovers(pids):
+    """Clean up after a failure: kill those of `pids` that still run."""
+    for pid in pids:
         if running(pid):
             os.kill(pid, signal.SIGKILL)
+
+
+class Cue:
+    """A socket at `path`, to which a process that the test starts,
+    however far down, connects as it reaches the point the test waits
+    for, and says so in a line. The test may answer on the connection, to
+    let the process go on."""
+
+    def __init__(self, path):
+        self.path = path
+        self.listener = socket.socket(socket.AF_UNIX)
+        self.listener.bind(str(path))
+        self.listener.listen()
+        self.connection = None
+
+    def receive(self, ended=None):
+        """The line the process sends, once it connects. None if the
+        process whose pidfd is `ended` ends first, without a cue."""
+        waits = [self.listener] + ([] if ended is None else [ended])
+        ready, _, _ = select.select(waits, [], [], HANG_GUARD)
+        if self.listener not in ready:
+            assert ready, "no cue came"
+            return None
+        self.connection, _ = self.listener.accept()
+        self.connection.settimeout(HANG_GUARD)
+        with self.connection.makefile() as lines:
+            return lines.readline()
+
+    def go(self):
+        if self.connection is not None:
+            self.connection.sendall(b"go\n")
+
+    def close(self):
+        if self.connection is not None:
+            self.connection.close()
+        self.listener.close()
+
+
+class Lines:
+    """The lines that a process writes to `pipe`, read on a thread as they
+    come."""
+
+    def __init__(self, pipe):
+        self.lines = []
+        self.ended = False
+        self.changed = threading.Condition()
+        self.reader = threading.Thread(target=self._read, args=(pipe,))
+        self.reader.start()
+
+    def _read(self, pipe):
+        for line in pipe:
+            with self.changed:
+                self.lines.append(line)
+                self.changed.notify_all()
+        with self.changed:
+            self.ended = True
+            self.changed.notify_all()
+
+    def until(self, text):
+        """Whether a line holding `text` comes before the pipe's end."""
+        with self.changed:
+            while not any(text in line for line in self.lines):
+                if self.ended:
+                    return False
+                assert self.changed.wait(HANG_GUARD), f"no {text!r}"
+            return True
+
+    def text(self):
+        """All the lines, once the pipe has ended."""
+        self.reader.join(timeout=HANG_GUARD)
+        assert not self.reader.is_alive(), "the pipe never ended"
+        return "".join(self.lines)
+
+
+class Clock:
+    """A fake monotonic clock that stands still until its `advance`, the
+    sleep, moves it on: a wait timed by it takes no real time. `ready`,
+    if given, runs as the first sleep starts, so that the clock moves only
+    once whatever `ready` waits for has happened.
+
+    It fails the test when it is read READS times without a sleep, or
+    sleeps past `limit`: code that ignored it, timing its waits on the
+    real clock instead, would spin or hang rather than fail."""
+
+    READS = 20
+
+    def __init__(self, limit, ready=None):
+        self.now = 0.0
+        self.limit = limit
+        self.ready = ready
+        self.reads = 0
+        self.slept = []
+
+    def read(self):
+        self.reads += 1
+        if self.reads > self.READS:
+            pytest.fail("the clock was read over and over, with no sleep")
+        return self.now
+
+    def advance(self, seconds):
+        if self.ready is not None:
+            ready, self.ready = self.ready, None
+            ready()
+        self.reads = 0
+        self.slept.append(seconds)
+        self.now += seconds
+        if self.now > self.limit:
+            pytest.fail(f"slept {self.now:g} s, past {self.limit:g} s")
 
 
 # -- a default run, shared by the tests below ------------------------------
@@ -545,7 +698,7 @@ def default_run(template, tmp_path_factory):
         **{LOCK_ENV: str(lock), ENV_FILE: str(stack_settings(scratch))},
     )
     result = harness(repo, spec, "--json", str(report), env=env)
-    yield SimpleNamespace(
+    run = SimpleNamespace(
         repo=repo,
         calc=calc,
         before=before,
@@ -555,7 +708,9 @@ def default_run(template, tmp_path_factory):
         helper_pids=helper_pids,
         lock=lock,
     )
-    kill_leftovers(helper_pids)
+    yield run
+    if helper_pids.exists():
+        kill_leftovers(map(int, helper_pids.read_text().split()))
 
 
 def test_a_killed_mutant_is_reported(default_run):
@@ -579,7 +734,7 @@ def test_nothing_the_tests_started_outlives_their_run(default_run):
     # mutant's run, which pytest left behind when it exited.
     pids = [int(pid) for pid in default_run.helper_pids.read_text().split()]
     assert len(pids) == 2
-    wait_until(lambda: not any(running(pid) for pid in pids), timeout=5)
+    until_ended(pids)
 
 
 def test_pytest_runs_without_the_callers_pytest_addopts(default_run):
@@ -835,38 +990,228 @@ def test_a_collection_error_is_an_error_and_the_file_is_restored(repo):
     assert snapshot(calc) == before
 
 
+# the --timeout of a run that hangs, on a fake clock
+TIMEOUT = 30
+
+
 def test_a_timeout_is_an_error_that_stops_all_the_tests_started(
-    repo, tmp_path
+    repo, tmp_path, monkeypatch, capsys
 ):
-    """pytest exits on the harness's SIGINT at once, but the shell's
-    background job that hang() started ignores SIGINT: only SIGKILL to
-    the group, once pytest has exited, stops it. The job must have started
-    before the timeout, so a busy machine gets longer timeouts."""
+    """pytest exits on the harness's SIGINT, but the shell's background
+    job that hang() started ignores SIGINT: only SIGKILL to the group, once
+    pytest has exited or the grace is over, stops it. The harness runs
+    in-process, on a fake clock that stands still until hang() has
+    started its processes and sent the cue, and then moves on only as the
+    harness sleeps: the run times out once hang() is in place, in no real
+    time (#437). The SIGINT returns only once pytest has exited, so the
+    harness always finds it gone within the grace, and stops waiting
+    there, however long pytest takes to exit."""
     calc = repo / "calc.py"
     before = snapshot(calc)
-    spec = mutation("sum hangs", "return a + b", "return hang()")
-    pidfile = tmp_path / "pids"
-    env = environment(CALC_PIDFILE=str(pidfile))
+    spec = repo.parent / "spec.toml"
+    spec.write_text(mutation("sum hangs", "return a + b", "return hang()"))
+    report = tmp_path / "report.json"
+    cue = Cue(tmp_path / "cue")
+    pids = []
+    cued_at = []
+    runs = []
+    waiting = mutate.Harness._wait
+    signalling = mutate.signal_group
+    interrupted = []
+
+    def signal_then_until_exited(child, signum):
+        signalling(child, signum)
+        if signum == signal.SIGINT:
+            interrupted.append(clock.now)
+            until_ended([child.pid])
+
+    def noting_the_run(self, child, deadline):
+        runs.append(child)
+        return waiting(self, child, deadline)
+
+    def cued():
+        ended = pidfd(runs[-1].pid)
+        try:
+            cued = cue.receive(ended=ended)
+        finally:
+            if ended is not None:
+                os.close(ended)
+        assert cued is not None, "pytest ended before hang() sent its cue"
+        pids.extend(map(int, cued.split()))
+        cued_at.append(clock.now)
+
+    clock = Clock(limit=TIMEOUT + mutate.DEFAULT_GRACE + 1, ready=cued)
+    monkeypatch.setattr(mutate.Harness, "_wait", noting_the_run)
+    monkeypatch.setattr(mutate, "signal_group", signal_then_until_exited)
+    for key, value in GIT_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("CALC_CUE", str(cue.path))
+    monkeypatch.chdir(repo)
     try:
-        for timeout in ("1.5", "5", "15"):
-            result = harness(
-                repo, spec, "--no-baseline", "--timeout", timeout, env=env
-            )
-            if pidfile.exists():
-                break
-        else:
-            pytest.fail("the tests never reached hang() before the timeout")
-        assert result.returncode == 2, result.stdout + result.stderr
-        row = results(result.stdout)["sum hangs"]
+        status = mutate.main(
+            [str(spec), "--no-baseline", "--timeout", str(TIMEOUT)]
+            + ["--json", str(report)],
+            monotonic=clock.read,
+            sleep=clock.advance,
+        )
+        captured = capsys.readouterr()
+        assert status == 2, captured.out + captured.err
+        # the clock stood still until the cue, the harness waited out its
+        # timeout on it, and it stopped waiting out the grace once pytest
+        # had exited on the SIGINT
+        assert cued_at == [0]
+        assert len(pids) == 3
+        [halted_at] = interrupted
+        assert halted_at >= TIMEOUT
+        assert clock.now < halted_at + mutate.DEFAULT_GRACE
+        row = results(captured.out)["sum hangs"]
         assert (row["result"], row["detail"]) == (
             "error",
-            f"timed out after {timeout} s",
+            f"timed out after {TIMEOUT} s",
+        )
+        [entry] = json.loads(report.read_text())["mutations"]
+        assert entry["seconds"] == round(clock.now, 3)
+        # pytest ended as interrupted: hang() took the SIGINT
+        assert entry["returncode"] == pytest.ExitCode.INTERRUPTED
+        assert snapshot(calc) == before
+        until_ended(pids)
+    finally:
+        cue.close()
+        kill_leftovers(pids)
+
+
+def test_a_timeout_waits_out_the_grace_on_the_clock_for_tests_that_ignore_it(
+    repo, tmp_path, monkeypatch, capsys
+):
+    """The twin of the timeout test above, with a stubborn hang(): pytest
+    and its grandchild ignore the harness's SIGINT, so the harness waits
+    out the whole grace, on the fake clock, before SIGKILL to the group
+    stops them all. A grace waited out on the real clock instead leaves
+    the fake one where the SIGINT found it."""
+    calc = repo / "calc.py"
+    before = snapshot(calc)
+    spec = repo.parent / "spec.toml"
+    spec.write_text(
+        mutation("sum hangs", "return a + b", "return hang(stubborn=True)")
+    )
+    cue = Cue(tmp_path / "cue")
+    pids = []
+    runs = []
+    waiting = mutate.Harness._wait
+    signalling = mutate.signal_group
+    interrupted = []
+
+    def noting_the_sigint(child, signum):
+        if signum == signal.SIGINT:
+            interrupted.append(clock.now)
+        signalling(child, signum)
+
+    def noting_the_run(self, child, deadline):
+        runs.append(child)
+        return waiting(self, child, deadline)
+
+    def cued():
+        ended = pidfd(runs[-1].pid)
+        try:
+            cued = cue.receive(ended=ended)
+        finally:
+            if ended is not None:
+                os.close(ended)
+        assert cued is not None, "pytest ended before hang() sent its cue"
+        pids.extend(map(int, cued.split()))
+
+    clock = Clock(limit=TIMEOUT + mutate.DEFAULT_GRACE + 1, ready=cued)
+    monkeypatch.setattr(mutate.Harness, "_wait", noting_the_run)
+    monkeypatch.setattr(mutate, "signal_group", noting_the_sigint)
+    for key, value in GIT_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("CALC_CUE", str(cue.path))
+    monkeypatch.chdir(repo)
+    try:
+        status = mutate.main(
+            [str(spec), "--no-baseline", "--timeout", str(TIMEOUT)],
+            monotonic=clock.read,
+            sleep=clock.advance,
+        )
+        captured = capsys.readouterr()
+        assert status == 2, captured.out + captured.err
+        assert len(pids) == 3
+        [halted_at] = interrupted
+        assert halted_at >= TIMEOUT
+        # the grace was waited out on the fake clock, after the SIGINT
+        assert clock.now >= halted_at + mutate.DEFAULT_GRACE
+        row = results(captured.out)["sum hangs"]
+        assert (row["result"], row["detail"]) == (
+            "error",
+            f"timed out after {TIMEOUT} s",
         )
         assert snapshot(calc) == before
-        pids = [int(pid) for pid in pidfile.read_text().split()]
-        wait_until(lambda: not any(running(pid) for pid in pids), timeout=5)
+        until_ended(pids)
     finally:
-        kill_leftovers(pidfile)
+        cue.close()
+        kill_leftovers(pids)
+
+
+def test_the_harness_defaults_to_the_real_clock():
+    """main, Harness and exited time their waits on the real clock unless
+    they are given another."""
+    for waits in (mutate.main, mutate.Harness, mutate.exited):
+        parameters = inspect.signature(waits).parameters
+        assert parameters["monotonic"].default is time.monotonic
+        assert parameters["sleep"].default is time.sleep
+
+
+def test_main_times_the_harness_on_the_clock_it_is_given(
+    tmp_path, monkeypatch
+):
+    made = []
+
+    class Noted(mutate.Harness):
+        def __init__(self, args, **clocks):
+            made.append(clocks)
+            super().__init__(args, **clocks)
+
+        def run(self):
+            assert (self.monotonic, self.sleep) == (clock.read, clock.advance)
+            return 0
+
+    monkeypatch.setattr(mutate, "Harness", Noted)
+    clock = Clock(limit=1)
+    spec = str(tmp_path / "spec.toml")
+    assert mutate.main([spec], monotonic=clock.read, sleep=clock.advance) == 0
+    assert made == [{"monotonic": clock.read, "sleep": clock.advance}]
+
+
+def test_exited_times_its_wait_on_the_clock_it_is_given(tmp_path):
+    """exited() waits out its timeout on the clock it is given, looking
+    again after each sleep, and does not sleep for a child that has
+    exited, though it is unreaped."""
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import sys; sys.stdin.read()"],
+        stdin=subprocess.PIPE,
+    )
+    try:
+        clock = Clock(limit=10)
+        assert not mutate.exited(
+            child, 5, monotonic=clock.read, sleep=clock.advance
+        )
+        assert 5 <= clock.now < 5.02
+        assert set(clock.slept) == {0.01}
+        child.stdin.close()
+        ended = pidfd(child.pid)
+        if ended is not None:
+            ready, _, _ = select.select([ended], [], [], HANG_GUARD)
+            os.close(ended)
+            assert ready, "the child never exited"
+        clock = Clock(limit=10)
+        assert mutate.exited(
+            child, 5, monotonic=clock.read, sleep=clock.advance
+        )
+        assert clock.slept == []
+        assert child.returncode is None
+    finally:
+        child.kill()
+        child.wait(timeout=HANG_GUARD)
 
 
 # Runs the harness after undoing any "ignore" of its stop signals that
@@ -886,10 +1231,11 @@ def test_sigint_stops_the_tests_even_if_they_ignore_it_and_restores(
     repo, tmp_path
 ):
     """The tests ignore SIGINT, and so do the processes they started: the
-    harness passes SIGINT on to them, then SIGKILL after --grace."""
+    harness passes SIGINT on to them, then SIGKILL after --grace. The test
+    sends SIGINT once hang() has sent its cue."""
     calc = repo / "calc.py"
     before = snapshot(calc)
-    pidfile = tmp_path / "pids"
+    cue = Cue(tmp_path / "cue")
     spec = tmp_path / "spec.toml"
     spec.write_text(
         mutation("sum hangs", "return a + b", "return hang(stubborn=True)")
@@ -898,30 +1244,34 @@ def test_sigint_stops_the_tests_even_if_they_ignore_it_and_restores(
         [sys.executable, "-c", LAUNCH, str(SCRIPT), str(spec)]
         + ["--no-baseline", "--grace", "0.2"],
         cwd=repo,
-        env=environment(CALC_PIDFILE=str(pidfile)),
+        env=environment(CALC_CUE=str(cue.path)),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
+    harness_ended = pidfd(process.pid)
     pids = []
     try:
-        wait_until(lambda: pidfile.exists() or process.poll() is not None)
-        assert pidfile.exists(), process.communicate()
+        cued = cue.receive(ended=harness_ended)
+        assert cued is not None, process.communicate()
         # pytest, and the processes it started, are running the mutant
-        pids = [int(pid) for pid in pidfile.read_text().split()]
+        pids = [int(pid) for pid in cued.split()]
         assert b"return hang(" in calc.read_bytes()
         process.send_signal(signal.SIGINT)
-        stdout, stderr = process.communicate(timeout=30)
+        stdout, stderr = process.communicate(timeout=HANG_GUARD)
         assert process.returncode == 128 + signal.SIGINT, stderr
         assert "stopped by SIGINT; files restored" in stderr
         assert outcomes(stdout) == {"sum hangs": "interrupted"}
         assert snapshot(calc) == before
-        wait_until(lambda: not any(running(pid) for pid in pids), timeout=5)
+        until_ended(pids)
     finally:
         if process.poll() is None:
             process.kill()
             process.communicate()
-        kill_leftovers(pidfile)
+        if harness_ended is not None:
+            os.close(harness_ended)
+        cue.close()
+        kill_leftovers(pids)
 
 
 # Runs the harness in a fresh interpreter that inherits an ignored
@@ -956,7 +1306,7 @@ def test_an_inherited_sigchld_ignore_cannot_hide_a_failing_baseline(
         env=environment(),
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=HANG_GUARD,
     )
     assert result.returncode == 2, result.stdout + result.stderr
     assert "fail unmutated (1 failed, 1 passed)" in result.stderr
@@ -1339,7 +1689,8 @@ def test_a_live_spec_waits_for_the_lock_and_gives_up_naming_the_holder(
 ):
     """Nothing runs: not the baseline, nor any mutant. A baseline run
     without the lock would only error at its fixture's setup, which leaves
-    no trace but the report (#304 review)."""
+    no trace but the report (#304 review). A timeout of 0 gives up at the
+    first refusal, so that the test waits out no time (#437)."""
     calc = repo / "calc.py"
     before = snapshot(calc)
     lock = tmp_path / "live-stack.lock"
@@ -1350,14 +1701,14 @@ def test_a_live_spec_waits_for_the_lock_and_gives_up_naming_the_holder(
         LIVE_LOG=str(log),
         **{
             LOCK_ENV: str(lock),
-            TIMEOUT_ENV: "0.3",
+            TIMEOUT_ENV: "0",
             ENV_FILE: str(stack_settings(tmp_path)),
         },
     )
     result = harness(repo, LIVE_SUM, "--json", str(report), env=env)
     assert result.returncode == 2, result.stdout + result.stderr
     assert (
-        "mutate: Gave up after 0.3 s waiting for the live-stack lock "
+        "mutate: Gave up after 0 s waiting for the live-stack lock "
         f"{lock}, held by pid {held.pid} " in result.stderr
     )
     assert "internal error" not in result.stderr
@@ -1382,7 +1733,6 @@ def test_a_signal_ends_the_wait_for_the_lock_at_once(repo, tmp_path, holder):
     log = tmp_path / "live-log"
     spec = tmp_path / "spec.toml"
     spec.write_text(LIVE_SUM)
-    errors = tmp_path / "stderr"
     env = environment(
         LIVE_LOG=str(log),
         **{
@@ -1391,30 +1741,27 @@ def test_a_signal_ends_the_wait_for_the_lock_at_once(repo, tmp_path, holder):
             ENV_FILE: str(stack_settings(tmp_path)),
         },
     )
-    with errors.open("w") as stderr:
-        process = subprocess.Popen(
-            [sys.executable, "-c", LAUNCH, str(SCRIPT), str(spec), "-q"],
-            cwd=repo,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=stderr,
-            text=True,
-        )
+    process = subprocess.Popen(
+        [sys.executable, "-c", LAUNCH, str(SCRIPT), str(spec), "-q"],
+        cwd=repo,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    errors = Lines(process.stderr)
     announced = (
         f"mutate: The live-stack lock {lock} is held by pid {held.pid} "
     )
     try:
-        wait_until(
-            lambda: (
-                announced in errors.read_text() or process.poll() is not None
-            )
-        )
-        assert process.poll() is None, errors.read_text()
+        # the harness announces the wait, and then waits
+        assert errors.until(announced), errors.text()
         process.send_signal(signal.SIGINT)
-        stdout, _ = process.communicate(timeout=10)
-        assert process.returncode == 128 + signal.SIGINT, errors.read_text()
-        assert "mutate: stopped by SIGINT" in errors.read_text()
-        assert stdout == ""
+        process.wait(timeout=HANG_GUARD)
+        stderr = errors.text()
+        assert process.returncode == 128 + signal.SIGINT, stderr
+        assert "mutate: stopped by SIGINT" in stderr
+        assert process.stdout.read() == ""
         assert not log.exists()
         assert snapshot(calc) == before
         assert json.loads(lock.read_text())["pid"] == held.pid
@@ -1438,14 +1785,14 @@ def test_a_killed_harness_leaves_the_lock_to_its_run_until_the_run_ends(
     started, the lock was held, exclusively (#330 review)."""
     monkeypatch.setattr(live_lock, "RECORD_INTERVAL", 0)
     lock = tmp_path / "live-stack.lock"
-    job_pid, run_pid, go = (tmp_path / name for name in ("job", "run", "go"))
+    job_pid = tmp_path / "job"
+    cue = Cue(tmp_path / "cue")
     early_held = tmp_path / "early-held"
     spec = tmp_path / "spec.toml"
     spec.write_text(mutation("live sum", "a + b", "a - b", [EARLY], live=True))
     env = environment(
         JOB_PID=str(job_pid),
-        RUN_PID=str(run_pid),
-        RUN_GO=str(go),
+        RUN_CUE=str(cue.path),
         EARLY_HELD=str(early_held),
         **{
             LOCK_ENV: str(lock),
@@ -1463,17 +1810,17 @@ def test_a_killed_harness_leaves_the_lock_to_its_run_until_the_run_ends(
             stdout=out,
             stderr=subprocess.STDOUT,
         )
+    harness_ended = pidfd(process.pid)
     pids = []
     try:
         # the baseline's run: the job has started, and the stack test runs
-        wait_until(lambda: run_pid.exists() or process.poll() is not None)
-        assert run_pid.exists(), output.read_text()
-        for noted in (run_pid, job_pid):
-            pids.append(int(noted.read_text()))
+        cued = cue.receive(ended=harness_ended)
+        assert cued is not None, output.read_text()
+        pids += [int(cued), int(job_pid.read_text())]
         run, job = pids
         assert early_held.read_text() == "True"
         process.kill()
-        process.wait(timeout=30)
+        process.wait(timeout=HANG_GUARD)
         with (
             pytest.raises(live_lock.LiveStackBusy) as waited,
             live_lock.hold(lock, timeout=0, announce=lambda _: None),
@@ -1484,18 +1831,18 @@ def test_a_killed_harness_leaves_the_lock_to_its_run_until_the_run_ends(
             f"  pid {process.pid} has ended; the lock is held by a process "
             "with no record of its own" in str(waited.value)
         )
-        go.touch()
-        wait_until(lambda: not running(run))
+        cue.go()
+        until_ended([run])
         assert running(job)
         assert not taken(lock)
     finally:
-        go.touch()
+        cue.close()
         if process.poll() is None:
             process.kill()
             process.wait()
-        for pid in pids:
-            if running(pid):
-                os.kill(pid, signal.SIGKILL)
+        if harness_ended is not None:
+            os.close(harness_ended)
+        kill_leftovers(pids)
 
 
 def test_a_process_given_the_holders_descriptor_shares_its_hold(
@@ -1624,7 +1971,7 @@ def test_the_integration_conftest_closes_the_window_as_it_loads(tmp_path):
         env=environment(PYTHONPATH=str(REPO), **{LOCK_ENV: str(lock)}),
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=HANG_GUARD,
     )
     assert loaded.stdout == "False\n", loaded.stdout + loaded.stderr
 
@@ -1670,7 +2017,8 @@ def test_a_descriptor_of_the_lock_that_does_not_hold_it_gets_nobody_in(
     """While one open file description holds the lock, a process named
     another one of the lock file waits its turn like any other: here it
     gives up. So it does after a process has shared the hold, which leaves
-    the lock exclusive: a shared lock would let the stray one share it."""
+    the lock exclusive: a shared lock would let the stray one share it.
+    The wait for the lock runs on a fake clock (#437)."""
     lock = tmp_path / "live-stack.lock"
     with live_lock.hold(lock, timeout=0) as fd:
         if shared:
@@ -1680,9 +2028,16 @@ def test_a_descriptor_of_the_lock_that_does_not_hold_it_gets_nobody_in(
         stray = os.open(lock, os.O_RDWR)
         try:
             monkeypatch.setenv(SHARED_ENV, str(stray))
+            clock = Clock(limit=1)
             with (
                 pytest.raises(live_lock.LiveStackBusy),
-                live_lock.hold(lock, timeout=0.05, announce=lambda _: None),
+                live_lock.hold(
+                    lock,
+                    timeout=0.05,
+                    announce=lambda _: None,
+                    monotonic=clock.read,
+                    sleep=clock.advance,
+                ),
             ):
                 pytest.fail("got past a lock that another description held")
         finally:
@@ -1698,7 +2053,8 @@ def test_a_waiter_names_a_recorded_holder_that_has_ended(
     names the recorded holder, with the working directory it ran in, and
     says that it has ended, rather than that nothing is recorded, and that
     the lock is held by a process with no record of its own, without
-    claiming that this process shares the recorded one's hold (#314)."""
+    claiming that this process shares the recorded one's hold (#314).
+    The wait for the lock runs on a fake clock (#437)."""
     monkeypatch.setattr(live_lock, "RECORD_INTERVAL", 0)
     ended = subprocess.run(
         [sys.executable, "-c", "import os; print(os.getpid())"],
@@ -1714,9 +2070,16 @@ def test_a_waiter_names_a_recorded_holder_that_has_ended(
         os.ftruncate(fd, 0)
         os.pwrite(fd, json.dumps(record).encode(), 0)
         announced = []
+        clock = Clock(limit=1)
         with (
             pytest.raises(live_lock.LiveStackBusy) as gave_up,
-            live_lock.hold(lock, timeout=0.05, announce=announced.append),
+            live_lock.hold(
+                lock,
+                timeout=0.05,
+                announce=announced.append,
+                monotonic=clock.read,
+                sleep=clock.advance,
+            ),
         ):
             pytest.fail("took a lock that another description held")
     for message in (*announced, str(gave_up.value)):

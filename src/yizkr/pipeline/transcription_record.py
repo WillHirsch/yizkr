@@ -36,7 +36,9 @@ region subtag).
 A record's text (`record_text`) is its pages' texts in order, each opened
 by its `[Page N]` marker, N the physical index, so that every claim read
 from it can carry its page. A page with nothing to read is its marker
-alone.
+alone. The text the extraction prompts carry (`prompt_text`) shows each
+page's printed number, where its record gives one, beside its marker on
+the marker's own line, and is otherwise the text itself.
 
 Language detection and the anomaly checks read a text outside its
 editorial marks (`outside_editorial_marks`): `EDITORIAL_MARK` is any
@@ -73,6 +75,9 @@ EDITORIAL_MARKS = (ILLEGIBLE, UNCERTAIN, REDACTED)
 # such as [illegible], [?], [redacted], [stamp] or [Page 2]. Longer
 # bracketed runs are left alone.
 EDITORIAL_MARK = re.compile(r"\[[^\[\]\n]{0,200}\]")
+
+# a UTF-16 surrogate standing alone, which no UTF-8 text can hold
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
 
 TRANSCRIBED = "transcribed"
 BLANK = "blank"
@@ -153,6 +158,9 @@ class RecordPage(BaseModel):
             if not math.isfinite(value):
                 raise ValueError("the printed page number is not finite")
             return str(int(value)) if float(value).is_integer() else str(value)
+        if isinstance(value, str) and _LONE_SURROGATE.search(value):
+            # a transcription's text refuses one, so its page number does
+            raise ValueError("the printed page number holds a lone surrogate")
         return value
 
     @field_validator("text", "notes", mode="before")
@@ -305,6 +313,61 @@ def main_language(pages: Iterable[RecordPage]) -> str | None:
     if not weights:
         return None
     return codes[max(weights, key=lambda primary: weights[primary])]
+
+
+def printed_page_note(printed: str) -> str:
+    """What a page's marker line shows beside the marker for the page
+    number printed on it: the number exactly as given, quoted as a JSON
+    string, so that it stays on the marker's line whatever it holds: each
+    character that would break the line (str.splitlines) is escaped."""
+    quoted = json.dumps(printed, ensure_ascii=False)
+    for breaking in "\x85\u2028\u2029":
+        quoted = quoted.replace(breaking, f"\\u{ord(breaking):04x}")
+    return f" (printed page number {quoted})"
+
+
+def prompt_text(text: str, pages: Iterable[object]) -> str:
+    """A transcription's `text` as the extraction prompts carry it: each
+    page (a transcription's page, with its `page`, `start`, `end` and
+    `printed_page`) whose record gives a printed page number shows it
+    beside its own `[Page N]` marker, on that marker's line
+    (printed_page_note), so the prompt has as many lines as the text and
+    every line number into the text holds. The marker is looked for only
+    between the end of the page before and the start of the page's text,
+    where its opening lies, as a whole line; the image markers there
+    (`[Page N, image k: sha1:...]`) are left as they are, and a page whose
+    marker is not found there shows no number. A printed page number of
+    whitespace alone is none, as no claim is ever given it
+    (extract.printed_page_number). With no printed page number, the
+    text is returned as it is."""
+    pieces, cursor, last = [], 0, 0
+    for page in pages:
+        printed = getattr(page, "printed_page", None)
+        if printed and printed.strip():
+            marker = page_marker(page.page)
+            at = _marker_line(text, marker, last, page.start)
+            if at is not None:
+                end = at + len(marker)
+                pieces += [text[cursor:end], printed_page_note(printed)]
+                cursor = end
+        last = page.end
+    if not pieces:
+        return text
+    return "".join(pieces) + text[cursor:]
+
+
+def _marker_line(text: str, marker: str, start: int, end: int) -> int | None:
+    """Where `marker` stands as a line of its own in text[start:end], or
+    None."""
+    at = text.find(marker, start, end)
+    while at != -1:
+        after = at + len(marker)
+        opens = at == 0 or text[at - 1] == "\n"
+        closes = after == len(text) or text[after] == "\n"
+        if opens and closes:
+            return at
+        at = text.find(marker, at + 1, end)
+    return None
 
 
 def printed_pages(pages: Iterable[object]) -> dict[int, str]:

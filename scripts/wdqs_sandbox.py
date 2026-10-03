@@ -134,6 +134,10 @@ KILL_CURL = (
     '*"$1"*) kill "$pid" ;; esac'
 )
 PLACEHOLDER = re.compile(r"\{([PQ]):([a-z][a-z0-9_]*)\}")
+# The clock the waits below read, and the sleep they poll with; a test
+# replaces both with a fake clock that only its sleeps move.
+monotonic = time.monotonic
+sleep = time.sleep
 
 
 class SandboxError(Exception):
@@ -363,14 +367,14 @@ def tar_of(name: str, data: bytes) -> bytes:
 
 
 def wait_ready(box: Sandbox, timeout: float) -> float:
-    start = time.monotonic()
-    while time.monotonic() - start < timeout:
+    start = monotonic()
+    while monotonic() - start < timeout:
         probe = docker(
             "exec", box.name, "curl", "-sS", "-m", "5",
             f"{ENDPOINT}?query=ASK%7B%7D", check=False,
         )  # fmt: skip
         if b"true" in probe.stdout:
-            return time.monotonic() - start
+            return monotonic() - start
         now = sandbox(box.name)
         if now is None or now.status != "running":
             status = now.status if now else "gone"
@@ -381,7 +385,7 @@ def wait_ready(box: Sandbox, timeout: float) -> float:
             if marker in output:
                 line = next(x for x in output.splitlines() if marker in x)
                 raise SandboxError(f"the engine failed to start: {line}")
-        time.sleep(1)
+        sleep(1)
     raise SandboxError(f"the engine was not ready after {timeout:.0f}s")
 
 
@@ -389,15 +393,15 @@ def discard(state_path: Path, name: str, grace: float) -> None:
     """Remove the container `up` was starting, waiting up to `grace`
     seconds for an interrupted create to land on the daemon, and then the
     state file."""
-    deadline = time.monotonic() + grace
+    deadline = monotonic() + grace
     while True:
         box = sandbox(name)
         if box is not None:
             remove(box)
             break
-        if time.monotonic() >= deadline:
+        if monotonic() >= deadline:
             break
-        time.sleep(0.25)
+        sleep(0.25)
     with contextlib.suppress(FileNotFoundError):
         state_path.unlink()
 
@@ -584,10 +588,10 @@ class Work:
         saying so when it has to wait; returns whether it did."""
         self.kill()
         self.clean()
-        deadline = time.monotonic() + SETTLE
+        deadline = monotonic() + SETTLE
         waiting = False
         while engine_tasks(self.box) != []:
-            if time.monotonic() >= deadline:
+            if monotonic() >= deadline:
                 return False
             if not waiting:
                 waiting = True
@@ -597,7 +601,7 @@ class Work:
                     file=sys.stderr,
                     flush=True,
                 )
-            time.sleep(0.5)
+            sleep(0.5)
         return True
 
     def clean(self) -> None:
