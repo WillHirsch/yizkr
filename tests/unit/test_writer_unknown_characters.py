@@ -376,14 +376,20 @@ class TestClaimsRefused:
         assert _same_counts(written, again)
         assert (again.written, again.skipped) == (0, 1)
 
-    @pytest.mark.parametrize("where", ["page number", "region", "excerpt"])
+    @pytest.mark.parametrize(
+        "where", ["page number", "printed page number", "region", "excerpt"]
+    )
     def test_a_locator_refuses_its_claim(self, where, monkeypatch):
         # a page number or excerpt the copy gives with Nina's surname in
-        # it, and a region in a form that holds the mark
+        # it, a printed page number holding the mark, and a region in a
+        # form that holds the mark
         claim = copy.deepcopy(_named("Нина Сартина"))
         source = claim["source"]
         if where == "page number":
             source["page_number"] = f"лист 2, {MARKED}"
+        elif where == "printed page number":
+            source["page_number"] = "2"
+            source["printed_page_number"] = f"2{MARK}"
         elif where == "excerpt":
             source["transcription_excerpt"]["text"] = f"Нина {MARKED}"
         else:

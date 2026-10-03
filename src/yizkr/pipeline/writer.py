@@ -1787,6 +1787,7 @@ class BatchWriter:
             source = claim.source
             locators = [
                 ("its page number", source.page_number),
+                ("its printed page number", source.printed_page_number),
                 (
                     "its region",
                     source.region.as_wikibase_string()
