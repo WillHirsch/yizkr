@@ -25,7 +25,6 @@ import stat
 import subprocess
 import sys
 import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -81,6 +80,37 @@ from yizkr.pipeline.transcribe import (
     LlmVisionTranscriber,
     Transcription,
 )
+
+# seconds a test waits for an event before it fails as hung (#437)
+HANG_GUARD = 60
+
+
+class WaitCountingLock:
+    """A lock that counts the threads come to take it, each counted just
+    before it blocks on the lock, so a test can keep the lock's holder
+    until the others are waiting on it."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._arrived = threading.Condition()
+        self.arrivals = 0
+
+    def __enter__(self):
+        with self._arrived:
+            self.arrivals += 1
+            self._arrived.notify_all()
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._lock.release()
+
+    def wait_for(self, count: int, timeout: float) -> bool:
+        """Whether `count` threads came to the lock within `timeout`."""
+        with self._arrived:
+            return self._arrived.wait_for(
+                lambda: self.arrivals >= count, timeout
+            )
 
 
 class Engine:
@@ -659,7 +689,7 @@ class TestStorage:
         # machine (a sleep would let a late thread hit the first answer).
         # Calls kept apart under one key would break the barrier at its
         # timeout and fail the test.
-        in_flight = threading.Barrier(8, timeout=30)
+        in_flight = threading.Barrier(8, timeout=HANG_GUARD)
 
         def answer(kind, prompt, opening):
             in_flight.wait()
@@ -1050,7 +1080,7 @@ def another_process(root: Path):
     finally:
         if process.poll() is None:
             process.stdin.close()
-        process.wait(timeout=60)
+        process.wait(timeout=HANG_GUARD)
         for stream in (process.stdin, process.stdout, process.stderr):
             stream.close()
 
@@ -1062,7 +1092,7 @@ def opened_elsewhere(root: Path) -> subprocess.CompletedProcess:
         input="",
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=HANG_GUARD,
     )
 
 
@@ -1110,7 +1140,7 @@ class TestOneProcess:
         root = tmp_path / "cache"
         with another_process(root) as holder:
             holder.kill()
-            holder.wait(timeout=60)
+            assert holder.wait(timeout=HANG_GUARD) is not None
             assert lock_record(root)["pid"] == holder.pid
             with caplog.at_level(logging.WARNING, logger=llmcache.__name__):
                 cache = EngineCache(root)
@@ -1424,18 +1454,24 @@ class TestForks:
 
     def test_parallel_fork_misses_replay_once(self, tmp_path):
         """Forks that miss at once share one replay: the conversation's
-        lock holds the others while it takes a moment, as a real
-        engine's does."""
+        lock holds the others while it is under way. The replay answers
+        only once all six forks have come to the lock, so the other five
+        are waiting on it however loaded the machine."""
         self.run_conversation(tmp_path, Engine(conversation_answers), [])
+        at_lock = WaitCountingLock()
+        replayed = []
+        arrived = []  # forks come to the lock as the replay answers
 
-        def slow(kind, prompt, opening):
+        def held(kind, prompt, opening):
             if kind == OPEN:
-                time.sleep(0.05)
+                replayed.append(at_lock.wait_for(6, timeout=HANG_GUARD))
+                arrived.append(at_lock.arrivals)
             return conversation_answers(kind, prompt, opening)
 
-        engine = Engine(slow)
+        engine = Engine(held)
         caching = client(tmp_path, engine)
         _, handle = caching.open_conversation("the document")
+        handle.lock = at_lock
         threads = [
             threading.Thread(target=caching.fork, args=(handle, f"c{n}"))
             for n in range(6)
@@ -1443,7 +1479,10 @@ class TestForks:
         for thread in threads:
             thread.start()
         for thread in threads:
-            thread.join()
+            thread.join(timeout=HANG_GUARD)
+            assert not thread.is_alive()
+        assert replayed == [True]
+        assert arrived == [6]
         assert kinds(engine).count(OPEN) == 1
         assert kinds(engine).count(FORK) == 6
 
