@@ -246,7 +246,8 @@ two references. A claim whose own text, its value or a qualifier's, is
 over the limit, or holds a line break or a tab, or has whitespace at
 either end, or holds a character the instance cleans up, or holds a
 character Python's Unicode tables do not know (above; its page number,
-region or excerpt holding one refuses it too, #431), is refused,
+printed page number, region or excerpt holding one refuses it too,
+#431), is refused,
 never cut, trimmed or cleaned up, since that would alter what the source
 says: nothing of it is written, and the write's result
 names it by its claim id (its review-sheet id, unless the review

@@ -14,9 +14,9 @@ below after it, the instance's NFC puts the dot first, and Python 3.11's
 leaves them as they are. So the writer refuses what holds such a
 character rather than send a text the instance may keep in another form:
 
-* a claim whose value, qualifier, page number, region or excerpt holds
-  one is refused whole, named in `refused`, with a warning naming the
-  code point and quoting no text;
+* a claim whose value, qualifier, page number, printed page number,
+  region or excerpt holds one is refused whole, named in `refused`,
+  with a warning naming the code point and quoting no text;
 * a description, an alias or a type hint that holds one is left out,
   never changed, named in `refused_terms`, with a warning;
 * an entity whose label holds one is neither found nor minted, and every
@@ -333,6 +333,30 @@ class TestTheInterpreter:
 # -- claims: refused whole ----------------------------------------------------
 
 
+LOCATORS = ["page number", "printed page number", "region", "excerpt"]
+
+
+def _mark_locator(source: dict, where: str, monkeypatch) -> None:
+    """Give `source` a locator `where` that holds the mark, in a form the
+    instance keeps in another order (`newer_tables`): a page number or
+    excerpt with Nina's surname in it, a printed page number "2а" with
+    the mark and a dot below, and a region in such a form."""
+    if where == "page number":
+        source["page_number"] = f"лист 2, {MARKED}"
+    elif where == "printed page number":
+        source["page_number"] = "2"
+        source["printed_page_number"] = f"2а{MARK}{DOT_BELOW}"
+    elif where == "excerpt":
+        source["transcription_excerpt"]["text"] = f"Нина {MARKED}"
+    else:
+        monkeypatch.setattr(
+            RegionPercent,
+            "as_wikibase_string",
+            lambda region: f"10%,20%,60%,10%{MARK}{DOT_BELOW}",
+        )
+        source["region"] = {"x": 10, "y": 20, "width": 60, "height": 10}
+
+
 @knows_the_mark
 @pytest.mark.usefixtures("newer_tables")
 class TestClaimsRefused:
@@ -376,29 +400,14 @@ class TestClaimsRefused:
         assert _same_counts(written, again)
         assert (again.written, again.skipped) == (0, 1)
 
-    @pytest.mark.parametrize(
-        "where", ["page number", "printed page number", "region", "excerpt"]
-    )
+    @pytest.mark.parametrize("where", LOCATORS)
     def test_a_locator_refuses_its_claim(self, where, monkeypatch):
         # a page number or excerpt the copy gives with Nina's surname in
-        # it, a printed page number holding the mark, and a region in a
-        # form that holds the mark
+        # it, a printed page number and a region in a form that holds the
+        # mark: each in a form the instance keeps in another order, so a
+        # block sent with it would be added again on a re-run
         claim = copy.deepcopy(_named("Нина Сартина"))
-        source = claim["source"]
-        if where == "page number":
-            source["page_number"] = f"лист 2, {MARKED}"
-        elif where == "printed page number":
-            source["page_number"] = "2"
-            source["printed_page_number"] = f"2{MARK}"
-        elif where == "excerpt":
-            source["transcription_excerpt"]["text"] = f"Нина {MARKED}"
-        else:
-            monkeypatch.setattr(
-                RegionPercent,
-                "as_wikibase_string",
-                lambda region: f"10%,20%,60%,10%{MARK}",
-            )
-            source["region"] = {"x": 10, "y": 20, "width": 60, "height": 10}
+        _mark_locator(claim["source"], where, monkeypatch)
         batch = _batch_of(claim, MARRIED)
         wiki = FakeWiki(LETTER, detached=True)
 
@@ -419,6 +428,47 @@ class TestClaimsRefused:
         again, unchanged = _written_again(wiki, batch)
         assert unchanged
         assert _same_counts(written, again)
+
+    @pytest.mark.parametrize("where", LOCATORS)
+    def test_a_locator_refusal_comes_before_any_item(self, where, monkeypatch):
+        # Nina as Rudolf's widow, the batch's only claim, cited with a
+        # marked locator: neither of the two is found or minted for it,
+        # in a dry run as in the write
+        claim = copy.deepcopy(_widow())
+        _mark_locator(claim["source"], where, monkeypatch)
+        batch = _batch_of(claim)
+        cid = claim_id(batch.claims[0])
+        wiki = FakeWiki(LETTER, detached=True)
+
+        planned = BatchWriter(wiki, dry_run=True).write_batch(batch)
+
+        assert wiki.wbi.item.writes == 0
+        assert planned.refused == [cid]
+        assert planned.created_items == {}
+        written = BatchWriter(wiki).write_batch(batch)
+        assert written.refused == [cid]
+        assert written.created_items == {}
+        assert _with_properties(wiki, "relative") == []
+        assert _same_counts(planned, written)
+
+    def test_two_locators_are_named_in_order(self):
+        # a page number and a printed page number, each holding the mark
+        claim = copy.deepcopy(_named("Нина Сартина"))
+        claim["source"]["page_number"] = f"лист 2, {MARKED}"
+        claim["source"]["printed_page_number"] = f"2а{MARK}{DOT_BELOW}"
+        batch = _batch_of(claim, MARRIED)
+        wiki = FakeWiki(LETTER, detached=True)
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        cid = claim_id(batch.claims[0])
+        assert written.refused == [cid]
+        assert written.warnings == [
+            f"claim {cid} (birth_name) is refused, and nothing of it is "
+            f"written: its page number {FAULT}; its printed page number "
+            f"{FAULT}. A cut or any other change would alter what the "
+            f"source says"
+        ]
 
     def test_each_character_is_named(self):
         # the surname with the mark, then the Kawi killer, which Unicode

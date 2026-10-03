@@ -185,9 +185,9 @@ before it are written:
   first 12 hex digits of the SHA-1 of the whole text (`_cut`). A locator
   or excerpt with nothing left is left out. Each depends on the text
   alone, so a re-run builds the block the instance keeps, and is skipped
-  (step 4). The digest keeps two page numbers, regions or excerpts that
-  agree up to the cut apart, so the two places a source asserts a value
-  in stay two reference blocks;
+  (step 4). The digest keeps two page numbers, printed page numbers,
+  regions or excerpts that agree up to the cut apart, so the two places
+  a source asserts a value in stay two reference blocks;
 * a label, a description or an alias the writer makes goes in the form
   the instance keeps a term in (`stored_term`: trimmed, cleaned up and
   in NFC, in that order, as Wikibase's trimToNFC does it), and one still
@@ -211,9 +211,10 @@ before it are written:
   U+1E08F, may take another place in the instance's NFC, and a re-run
   would not find what the first run wrote. Each text is read whole for
   it, past TERM_LIMIT or TEXT_LIMIT too, before any cut. A claim whose
-  own text, or whose source block's page number, region or excerpt,
-  holds one is refused whole, as above. A description, an alias or a
-  type hint that holds one is left out, never changed, and the result's
+  own text, or whose source block's page number, printed page number,
+  region or excerpt, holds one is refused whole, as above. A
+  description, an alias or a type hint that holds one is left out, never
+  changed, and the result's
   `refused_terms` names it ("<local id>: <term>"), with a warning that
   names its characters by their code points; a description is named
   only when a claim the writer writes mentions its entity, as it goes
@@ -1741,10 +1742,10 @@ class BatchWriter:
           either end, a control character or a noncharacter the instance
           changes into U+FFFD, a character Python's Unicode tables do not
           know (unknown_characters);
-        * a claim whose source block's page number, region or excerpt
-          holds a character Python's Unicode tables do not know: the
-          instance may keep the block in another form, and a re-run would
-          add it again beside the first;
+        * a claim whose source block's page number, printed page
+          number, region or excerpt holds a character Python's Unicode
+          tables do not know: the instance may keep the block in another
+          form, and a re-run would add it again beside the first;
         * a claim that mentions an entity whose label keeps the writer
           from finding or minting its item (`unnamed`, from _unnamed).
 
