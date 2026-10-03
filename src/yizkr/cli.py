@@ -448,7 +448,7 @@ def cmd_resolve(args) -> int:
             batch, approved, read_reviewed_aliases(args.equivalences)
         )
         print(f"applied {len(approved)} approved equivalences")
-    resolved = resolve_batch(batch, resolvable_labels(_client(args)))
+    resolved = resolve_batch(batch, resolvable_labels(_client(args), batch))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(resolved.model_dump_json(indent=2))
     print(f"wrote {args.out}")

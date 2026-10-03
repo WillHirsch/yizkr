@@ -203,6 +203,23 @@ def write_export(
     ).write_batch(batch)
 
 
+def naming(order: str, *labels: str) -> ClaimBatch:
+    """The export's first claim once for each of `labels`, its subject a
+    ref with that label, no kind and no record."""
+    text = export(order)
+    exported = ArtifactRef.from_bytes(text.encode())
+    given = adapt_gedcom(text, artifact=exported).batch.model_dump(mode="json")
+    claim = given["claims"][0]
+    given["claims"] = [
+        dict(
+            claim,
+            subject={"kind": "local", "local_id": f"e{n}", "label": label},
+        )
+        for n, label in enumerate(labels)
+    ]
+    return ClaimBatch.model_validate(given)
+
+
 def entity(client, qid: str, props: str = "claims|aliases|info") -> dict:
     return client.api_get(
         {"action": "wbgetentities", "ids": qid, "props": props}
@@ -392,7 +409,10 @@ def test_a_person_under_a_scans_label_is_an_item_of_its_own(client, tmp_path):
     assert after["lastrevid"] == before["lastrevid"]
     assert label(client, artifact) == person(order)
     assert flagged(written) == []
-    labels = resolvable_labels(client)
+    # the refs resolve reads the labels of: Sebastian, under his name and
+    # under his tagged label
+    named = (person(order), f"{person(order)}{ENTITY_TAG}")
+    labels = resolvable_labels(client, naming(order, *named))
     assert person(order) not in labels
     assert labels[f"{person(order)}{ENTITY_TAG}"] == sebastian
     again = write_export(client, tmp_path, order)
@@ -402,7 +422,7 @@ def test_a_person_under_a_scans_label_is_an_item_of_its_own(client, tmp_path):
     assert kindless.refused == []
     assert entity(client, artifact)["lastrevid"] == before["lastrevid"]
     assert label(client, artifact) == person(order)
-    labels = resolvable_labels(client)
+    labels = resolvable_labels(client, naming(order, *named))
     assert person(order) not in labels
     assert labels[f"{person(order)}{ENTITY_TAG}"] == sebastian
 

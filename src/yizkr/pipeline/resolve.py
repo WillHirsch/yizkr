@@ -15,9 +15,13 @@ matched by its title or label (ADR-0010), and the writer decides what
 such a ref becomes (yizkr.pipeline.writer, step 2). Nor is any other
 ref resolved to an artifact or a part of one (`is_artifact_item` in
 yizkr.pipeline.writer): the labels a batch is resolved against are the
-instance's item labels without those items' (`resolvable_labels`), so
-such a ref stays local and the writer gives it an item of its own
-(ADR-0010).
+instance's item labels its refs carry without those items'
+(`resolvable_labels`), so such a ref stays local and the writer gives it
+an item of its own (ADR-0010).
+
+What resolving a batch reads of the instance: its item labels once
+(`label_index`), and the statements of just the items the batch's refs
+name by label (`fetch_claims`), never every item's.
 
 Unresolved local refs are left in place: the writer creates new items
 for them at write time.
@@ -27,24 +31,52 @@ from __future__ import annotations
 
 from yizkr.claims import Claim, ClaimBatch, ItemValue, LocalRef, QidRef
 from yizkr.pipeline.review import entity_records
-from yizkr.pipeline.writer import is_artifact_item, is_artifact_kind
+from yizkr.pipeline.writer import (
+    is_artifact_item,
+    is_artifact_kind,
+    local_refs,
+)
 
 
-def resolvable_labels(client) -> dict[str, str]:
+def resolvable_labels(client, batch: ClaimBatch) -> dict[str, str]:
     """The item labels of the instance `client` reads (`label_index`),
-    label -> QID, that a ref is resolved against: every item's but an
-    artifact's or a part of one's (is_artifact_item), which no ref is
-    resolved to by its label (the module docstring)."""
-    properties, items = client.vocabulary()
+    label -> QID, that the refs of `batch` are resolved against: of the
+    labels its local refs not on the artifact side carry, each the
+    instance holds, but an artifact's or a part of one's
+    (is_artifact_item), which no ref is resolved to by its label (the
+    module docstring). The labels are read once, and the statements of
+    only the items those labels name (`fetch_claims`)."""
+    is_artifact = _artifact_side(batch)
+    wanted = {
+        ref.label
+        for claim in batch.claims
+        for ref in local_refs(claim)
+        if ref.label and not is_artifact(ref)
+    }
     _, labels = client.label_index()
-    artifacts = {
-        qid
-        for qid, entity in client.iter_entities("labels|claims")
-        if is_artifact_item(entity.get("claims") or {}, properties, items)
-    }
+    matched = {label: labels[label] for label in wanted if label in labels}
+    if not matched:
+        return {}
+    properties, items = client.vocabulary()
+    claims = client.fetch_claims(sorted(set(matched.values())))
     return {
-        label: qid for label, qid in labels.items() if qid not in artifacts
+        label: qid
+        for label, qid in matched.items()
+        if not is_artifact_item(claims.get(qid) or {}, properties, items)
     }
+
+
+def _artifact_side(batch: ClaimBatch):
+    """Is a local ref of `batch` on the artifact side (the module
+    docstring)? A ref's kind is its record's, as the writer reads the
+    record (entity_records), and otherwise its own."""
+    records = entity_records(batch)
+
+    def is_artifact(ref: LocalRef) -> bool:
+        record = records.get(ref.local_id)
+        return is_artifact_kind(record.kind if record else ref.instance_of)
+
+    return is_artifact
 
 
 def _resolve_ref(ref, label_to_qid: dict[str, str], is_artifact):
@@ -85,14 +117,7 @@ def resolve_batch(
 ) -> ClaimBatch:
     """Return a copy of the batch with exact-label local refs resolved,
     but those on the artifact side (the module docstring)."""
-    # a ref's kind is its record's, as the writer reads the record
-    # (entity_records), and otherwise its own
-    records = entity_records(batch)
-
-    def is_artifact(ref: LocalRef) -> bool:
-        record = records.get(ref.local_id)
-        return is_artifact_kind(record.kind if record else ref.instance_of)
-
+    is_artifact = _artifact_side(batch)
     return batch.model_copy(
         update={
             "claims": [

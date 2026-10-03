@@ -1527,10 +1527,11 @@ TWO_PEOPLE_GEDCOM = FAMILY_GEDCOM.replace(
 
 
 class WritingWiki(FakeWiki):
-    """The in-memory wiki with the surface the writer uses beside the
-    registrar's: its vocabulary, the label lookup and the label index,
-    which fail on a duplicate label as the wiki client's label index
-    does, and the media SHA-1 index."""
+    """The in-memory wiki with the surface the writer and resolve use
+    beside the registrar's: its vocabulary, the label lookup and the label
+    index, which fail on a duplicate label as the wiki client's label
+    index does, the statements of the entities asked for, and the media
+    SHA-1 index."""
 
     PROPERTIES = {
         **FakeWiki.PROPERTIES,
@@ -1552,6 +1553,13 @@ class WritingWiki(FakeWiki):
     def label_index(self) -> tuple[dict[str, str], dict[str, str]]:
         assert_labels_unique(self)
         return {}, {label_of(self, qid): qid for qid in self.entities}
+
+    def fetch_claims(self, ids: list[str]) -> dict[str, dict]:
+        return {
+            qid: copy.deepcopy(self.entities[qid]["claims"])
+            for qid in ids
+            if qid in self.entities
+        }
 
     def string_statement_index(self, pid: str) -> dict[str, str]:
         index: dict[str, str] = {}
@@ -1578,6 +1586,27 @@ def family_gedcom(wiki, text: str = FAMILY_GEDCOM):
             ("media_sha1", exported.sha1, None),
         )
     return adapt_gedcom(text, artifact=exported).batch
+
+
+def naming(*labels: str):
+    """A batch of the GEDCOM export's claim once for each of `labels`,
+    its subject a ref with that label, no kind and no record."""
+    from yizkr.claims import ArtifactRef, ClaimBatch
+    from yizkr.pipeline.gedcom import adapt_gedcom
+
+    exported = ArtifactRef.from_bytes(FAMILY_GEDCOM.encode())
+    given = adapt_gedcom(FAMILY_GEDCOM, artifact=exported).batch.model_dump(
+        mode="json"
+    )
+    (claim,) = given["claims"]
+    given["claims"] = [
+        dict(
+            claim,
+            subject={"kind": "local", "local_id": f"e{n}", "label": label},
+        )
+        for n, label in enumerate(labels)
+    ]
+    return ClaimBatch.model_validate(given)
 
 
 def write_gedcom(wiki, text: str = FAMILY_GEDCOM):
@@ -2518,7 +2547,9 @@ class TestOtherKindsStillMatchByLabel:
             ("instance_of", WritingWiki.ITEMS["human"], None),
         )
 
-        labels = resolvable_labels(wiki)
+        held = [label_of(wiki, qid) for qid in wiki.entities]
+
+        labels = resolvable_labels(wiki, naming(*held, "Gustav Löbig"))
 
         assert labels == {"Hildegard Löbig": person}
 
@@ -3138,3 +3169,411 @@ class TestTheWriteStepRaisesTheFlag:
         assert flag["kind"] == UNHASHED_TITLE
         assert flag["artifact"] == artifact
         assert flag["others"] == [printed["created_items"]["md1"]]
+
+
+# -- what resolve and a write read of the instance ----------------------------
+
+
+class CountingWiki(WritingWiki):
+    """The in-memory wiki counting what is read of it: each read of every
+    label (`label_index`, `find_item_by_label`, `snapshot` and
+    `list_entity_ids` each read them all, and `vocabulary` does, as
+    WikiClient.vocabulary does, when it is not yet known and no
+    `label_index` has been read since `uncache`), each read of every
+    entity (`iter_entities`, `string_statement_index`), the entities
+    whose statements are fetched and each fetch (`fetch_claims`), and the
+    items read one by one (`wbi.item.get`)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.vocabulary_known = False
+        self.label_reads: list[str] = []
+        self.whole_reads: list[str] = []
+        self.claims_of: list[str] = []
+        self.fetches = 0
+        self.items_read: list[str] = []
+        get = self.wbi.item.get
+
+        def counted(qid):
+            self.items_read.append(qid)
+            return get(qid)
+
+        self.wbi.item.get = counted
+
+    def forget(self) -> None:
+        """Count from here on."""
+        for reads in (
+            self.label_reads,
+            self.whole_reads,
+            self.claims_of,
+            self.items_read,
+        ):
+            reads.clear()
+        self.fetches = 0
+
+    def uncache(self) -> None:
+        """As a fresh WikiClient: its vocabulary not yet read."""
+        self.vocabulary_known = False
+
+    def vocabulary(self):
+        if not self.vocabulary_known:
+            self.label_reads.append("vocabulary")
+            self.vocabulary_known = True
+        return super().vocabulary()
+
+    def label_index(self):
+        self.label_reads.append("label_index")
+        self.vocabulary_known = True
+        return super().label_index()
+
+    def find_item_by_label(self, label):
+        self.label_reads.append("find_item_by_label")
+        return super().find_item_by_label(label)
+
+    def snapshot(self):
+        self.label_reads.append("snapshot")
+        return {
+            qid: {"label": label_of(self, qid), "datatype": None}
+            for qid in self.entities
+        }
+
+    def list_entity_ids(self):
+        self.label_reads.append("list_entity_ids")
+        return sorted(self.entities)
+
+    def iter_entities(self, props):
+        self.whole_reads.append("iter_entities")
+        return super().iter_entities(props)
+
+    def string_statement_index(self, pid):
+        self.whole_reads.append("string_statement_index")
+        return super().string_statement_index(pid)
+
+    def fetch_claims(self, ids):
+        self.fetches += 1
+        self.claims_of.extend(ids)
+        return super().fetch_claims(ids)
+
+
+class TestWhatResolveAndAWriteRead:
+    """Resolve reads the instance's labels once a batch, and the
+    statements of only the items its refs' labels name; a write reads the
+    labels once, and the statements of only the items it finds. Neither
+    reads every entity's statements, however many the instance holds
+    (ADR-0010, "What is still matched by label")."""
+
+    UNRELATED = 200
+
+    def instance(self, tmp_path):
+        """The wiki with UNRELATED people the batch never names, the scan
+        registered under the media object's title, and the GEDCOM export
+        registered: the wiki, the people, the scan's item and the
+        export's."""
+        wiki = CountingWiki()
+        people = [
+            wiki.item(
+                f"Unrelated person {n:04d}",
+                ("instance_of", WritingWiki.ITEMS["human"], None),
+            )
+            for n in range(self.UNRELATED)
+        ]
+        artifact = (
+            Registrar(wiki)
+            .register_artifact(scan(tmp_path, PORTRAIT), "photograph", TITLE)
+            .artifact_qid
+        )
+        batch = family_gedcom(wiki)
+        exported = wiki.string_statement_index(P["media_sha1"])[
+            batch.claims[0].source.artifact.sha1
+        ]
+        wiki.forget()
+        return wiki, people, artifact, exported
+
+    def test_resolve_reads_the_statements_of_the_items_named(self, tmp_path):
+        from yizkr.pipeline.resolve import resolvable_labels
+
+        wiki, people, artifact, _ = self.instance(tmp_path)
+
+        labels = resolvable_labels(
+            wiki, naming("Unrelated person 0007", TITLE, "Gustav Löbig")
+        )
+
+        assert labels == {"Unrelated person 0007": people[7]}
+        assert wiki.label_reads == ["label_index"]
+        assert sorted(wiki.claims_of) == sorted([people[7], artifact])
+        assert wiki.fetches == 1
+        assert wiki.whole_reads == []
+        assert wiki.items_read == []
+
+    def test_a_fresh_client_resolves_from_one_read_of_the_labels(
+        self, tmp_path
+    ):
+        """A client that has not read the vocabulary yet, as the CLI's
+        is, reads the labels once for the match and the vocabulary."""
+        from yizkr.pipeline.resolve import resolvable_labels
+
+        wiki, people, _, _ = self.instance(tmp_path)
+        wiki.uncache()
+
+        labels = resolvable_labels(wiki, naming("Unrelated person 0007"))
+        assert labels == {"Unrelated person 0007": people[7]}
+        assert wiki.label_reads == ["label_index"]
+
+        wiki.uncache()
+        wiki.forget()
+        assert resolvable_labels(wiki, naming("Gustav Löbig")) == {}
+        assert wiki.label_reads == ["label_index"]
+
+    def test_resolve_reads_no_statements_for_a_media_object(self, tmp_path):
+        """A ref of an artifact kind under the scan's title, as a GEDCOM
+        media object is, is never resolved by its label, so the scan's
+        statements are not read."""
+        from yizkr.claims import ClaimBatch
+        from yizkr.pipeline.resolve import resolvable_labels
+
+        wiki, *_ = self.instance(tmp_path)
+        given = naming(TITLE).model_dump(mode="json")
+        given["claims"][0]["subject"]["instance_of"] = "photograph"
+        batch = ClaimBatch.model_validate(given)
+        wiki.forget()
+
+        assert resolvable_labels(wiki, batch) == {}
+        assert wiki.label_reads == ["label_index"]
+        assert wiki.fetches == 0
+        assert wiki.whole_reads == []
+
+    def test_resolve_reads_no_statements_when_no_label_is_held(self, tmp_path):
+        from yizkr.pipeline.resolve import resolvable_labels
+
+        wiki, *_ = self.instance(tmp_path)
+
+        assert resolvable_labels(wiki, naming("Gustav Löbig")) == {}
+        assert wiki.label_reads == ["label_index"]
+        assert wiki.fetches == 0
+        assert wiki.whole_reads == []
+
+    def test_the_resolve_step_reads_as_resolve_does(self, tmp_path):
+        from types import SimpleNamespace
+
+        from yizkr.pipeline.orchestrate import Orchestrator
+
+        wiki, people, artifact, _ = self.instance(tmp_path)
+        doc = SimpleNamespace(equivalences_reviewed=tmp_path / "none.csv")
+        step = SimpleNamespace(client=wiki, log=lambda *a, **k: None)
+
+        Orchestrator._step_resolve(
+            step, doc, naming("Unrelated person 0007", TITLE)
+        )
+
+        assert wiki.label_reads == ["label_index"]
+        assert sorted(wiki.claims_of) == sorted([people[7], artifact])
+        assert wiki.whole_reads == []
+
+    def test_a_write_reads_the_labels_once(self, tmp_path):
+        """The GEDCOM written after the scan: its media object is placed
+        under its tagged label and flagged against the scan, its person
+        made, and its run item made, all from one read of the labels."""
+        from yizkr.pipeline.writer import BatchWriter
+
+        wiki, people, artifact, exported = self.instance(tmp_path)
+        batch = family_gedcom(wiki)
+        sha = batch.claims[0].source.artifact.sha1
+        wiki.forget()
+
+        written = BatchWriter(wiki, artifact_qids={sha: exported}).write_batch(
+            batch
+        )
+
+        assert [flag.artifact for flag in written.flags] == [artifact]
+        assert wiki.label_reads == ["label_index"]
+        assert wiki.whole_reads == []
+        assert wiki.claims_of == []
+        assert not set(wiki.items_read) & set(people)
+
+    def test_a_re_write_reads_the_labels_once_and_finds_its_items(
+        self, tmp_path
+    ):
+        from yizkr.pipeline.writer import BatchWriter
+
+        wiki, people, _, exported = self.instance(tmp_path)
+        batch = family_gedcom(wiki)
+        sha = batch.claims[0].source.artifact.sha1
+        first = BatchWriter(wiki, artifact_qids={sha: exported}).write_batch(
+            batch
+        )
+        wiki.forget()
+
+        again = BatchWriter(wiki, artifact_qids={sha: exported}).write_batch(
+            batch
+        )
+
+        assert again.created_items == first.created_items
+        assert again.run_qid == first.run_qid
+        assert wiki.label_reads == ["label_index"]
+        assert wiki.whole_reads == []
+        assert not set(wiki.items_read) & set(people)
+
+    def test_two_refs_under_one_label_meet_on_the_item_the_write_makes(
+        self, tmp_path
+    ):
+        """The labels are read once, before the write makes anything: a
+        second ref under a label the write has made an item under finds
+        that item, as it would under the label read afresh."""
+        from yizkr.pipeline.writer import BatchWriter
+
+        wiki, _, _, exported = self.instance(tmp_path)
+        batch = naming("Gustav Löbig", "Gustav Löbig")
+        sha = batch.claims[0].source.artifact.sha1
+
+        written = BatchWriter(wiki, artifact_qids={sha: exported}).write_batch(
+            batch
+        )
+
+        assert written.created_items["e0"] == written.created_items["e1"]
+        assert_labels_unique(wiki)
+        assert wiki.label_reads == ["label_index"]
+
+    def test_each_write_reads_the_labels_afresh(self, tmp_path):
+        """A writer that writes two batches reads the labels once for
+        each: an item made between them under a label the second names is
+        that entity's item."""
+        from yizkr.pipeline.writer import BatchWriter
+
+        wiki, _, _, exported = self.instance(tmp_path)
+        batch = family_gedcom(wiki)
+        sha = batch.claims[0].source.artifact.sha1
+        writer = BatchWriter(wiki, artifact_qids={sha: exported})
+        writer.write_batch(batch)
+        gustav = wiki.item(
+            "Gustav Löbig", ("instance_of", WritingWiki.ITEMS["human"], None)
+        )
+        wiki.forget()
+
+        written = writer.write_batch(naming("Gustav Löbig"))
+
+        assert written.created_items["e0"] == gustav
+        assert wiki.label_reads == ["label_index"]
+
+
+class TestTheClientsBoundedReads:
+    """WikiClient.fetch_claims asks for the entities named alone, 50 a
+    request, and WikiClient.vocabulary answers from the labels the client
+    has just read whole rather than reading them again."""
+
+    @staticmethod
+    def client():
+        from yizkr.core.config import Config
+        from yizkr.core.wiki import WikiClient
+
+        return WikiClient(
+            Config(
+                wikibase_url="http://wiki.invalid",
+                concept_uri="http://wiki.invalid/entity/",
+                admin_name="",
+                admin_pass="",
+                wdqs_url=None,
+                sparql_url=None,
+                env_file=None,
+            )
+        )
+
+    def test_fetch_claims_asks_for_the_ids_named_fifty_a_request(self):
+        client = self.client()
+        asked: list[dict] = []
+
+        def api_get(params):
+            asked.append(params)
+            return {
+                "entities": {
+                    qid: {"id": qid, "claims": {"P1": [qid]}}
+                    for qid in params["ids"].split("|")
+                }
+            }
+
+        client.api_get = api_get
+        ids = [f"Q{n}" for n in range(1, 121)]
+
+        claims = client.fetch_claims(ids)
+
+        assert [len(params["ids"].split("|")) for params in asked] == [
+            50,
+            50,
+            20,
+        ]
+        assert {params["props"] for params in asked} == {"claims"}
+        assert {params["action"] for params in asked} == {"wbgetentities"}
+        assert claims == {qid: {"P1": [qid]} for qid in ids}
+        asked.clear()
+        assert client.fetch_claims([]) == {}
+        assert asked == []
+
+    @staticmethod
+    def manifest_snapshot() -> dict[str, dict]:
+        import yaml
+
+        from yizkr.model.schema import DEFAULT_MANIFEST, read_manifest_data
+
+        raw = yaml.safe_load(read_manifest_data(DEFAULT_MANIFEST))
+        snapshot = {
+            f"P{n}": {"label": spec["label"], "datatype": None}
+            for n, spec in enumerate(raw["properties"].values(), 1)
+        }
+        snapshot.update(
+            {
+                f"Q{n}": {"label": spec["label"], "datatype": None}
+                for n, spec in enumerate(raw["items"].values(), 1)
+            }
+        )
+        return snapshot
+
+    def test_the_vocabulary_reuses_the_labels_just_read(self):
+        client = self.client()
+        whole = self.manifest_snapshot()
+        reads: list[str] = []
+
+        def snapshot():
+            reads.append("snapshot")
+            return dict(whole)
+
+        client.snapshot = snapshot
+
+        _, items = client.label_index()
+        properties, vocabulary_items = client.vocabulary()
+
+        assert reads == ["snapshot"]
+        assert set(vocabulary_items.values()) <= set(items.values())
+        assert properties
+
+    def test_the_vocabulary_reads_afresh_when_the_labels_lack_it(self):
+        client = self.client()
+        whole = self.manifest_snapshot()
+        first = {"Q1": whole["Q1"]}
+        given = [first, whole]
+        reads: list[str] = []
+
+        def snapshot():
+            reads.append("snapshot")
+            return dict(given.pop(0))
+
+        client.snapshot = snapshot
+
+        client.label_index()
+        client.vocabulary()
+
+        assert reads == ["snapshot", "snapshot"]
+
+    def test_the_vocabulary_reads_the_labels_when_none_were_read(self):
+        client = self.client()
+        reads: list[str] = []
+        whole = self.manifest_snapshot()
+
+        def snapshot():
+            reads.append("snapshot")
+            return dict(whole)
+
+        client.snapshot = snapshot
+
+        client.vocabulary()
+        client.vocabulary()
+
+        assert reads == ["snapshot"]

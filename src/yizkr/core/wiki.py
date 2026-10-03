@@ -33,6 +33,7 @@ class WikiClient:
         self._wbi = None
         self._login = None
         self._vocabulary: tuple[dict[str, str], dict[str, str]] | None = None
+        self._labels_read: tuple[dict[str, str], dict[str, str]] | None = None
 
     # -- plumbing ---------------------------------------------------------
 
@@ -130,6 +131,24 @@ class WikiClient:
                 }
         return entities
 
+    def fetch_claims(self, ids: list[str]) -> dict[str, dict]:
+        """id -> its statements, as `wbgetentities` gives them, for the
+        entities `ids` alone, 50 a request: what a reader that needs the
+        statements of a few entities asks, never the whole instance
+        (`iter_entities`). An id the instance does not hold has none."""
+        claims: dict[str, dict] = {}
+        for start in range(0, len(ids), 50):
+            data = self.api_get(
+                {
+                    "action": "wbgetentities",
+                    "ids": "|".join(ids[start : start + 50]),
+                    "props": "claims",
+                }
+            )
+            for entity_id, entity in data.get("entities", {}).items():
+                claims[entity_id] = entity.get("claims") or {}
+        return claims
+
     def snapshot(self) -> dict[str, dict]:
         """Everything on the instance: id -> {'label', 'datatype'}."""
         return self.fetch_entities(self.list_entity_ids())
@@ -157,29 +176,26 @@ class WikiClient:
                     f"idempotency key; resolve the duplicate on the wiki."
                 )
             table[label] = entity_id
+        if snapshot is None:
+            self._labels_read = (properties, items)
         return properties, items
 
     def vocabulary(self) -> tuple[dict[str, str], dict[str, str]]:
-        """(property key -> P id, item key -> Q id) via manifest labels."""
+        """(property key -> P id, item key -> Q id) via manifest labels.
+
+        The labels this client last read whole (`label_index`) answer it
+        when they hold the whole vocabulary, so a caller that has just
+        read them, as resolve does, costs no second read; otherwise the
+        labels are read afresh."""
         if self._vocabulary is not None:
             return self._vocabulary
         raw = yaml.safe_load(read_manifest_data(self.manifest_source))
-        property_labels, item_labels = self.label_index()
-        properties: dict[str, str] = {}
-        items: dict[str, str] = {}
-        missing: list[str] = []
-        for key, spec in raw["properties"].items():
-            pid = property_labels.get(spec["label"])
-            if pid is None:
-                missing.append(f"property {key!r}")
-            else:
-                properties[key] = pid
-        for key, spec in raw["items"].items():
-            qid = item_labels.get(spec["label"])
-            if qid is None:
-                missing.append(f"item {key!r}")
-            else:
-                items[key] = qid
+        if self._labels_read is not None:
+            found = _vocabulary_of(raw, *self._labels_read)
+            if not found[2]:
+                self._vocabulary = found[0], found[1]
+                return self._vocabulary
+        properties, items, missing = _vocabulary_of(raw, *self.label_index())
         if missing:
             raise RuntimeError(
                 f"Instance is missing manifest vocabulary: {missing}. "
@@ -471,3 +487,26 @@ NAME_WARNINGS = frozenset(
 def _file_page(name: str) -> str:
     """A file name as MediaWiki reports it -> its page title."""
     return f"File:{name.replace('_', ' ')}"
+
+
+def _vocabulary_of(
+    raw: dict, property_labels: dict[str, str], item_labels: dict[str, str]
+) -> tuple[dict[str, str], dict[str, str], list[str]]:
+    """(property key -> P id, item key -> Q id, the keys not found) of the
+    manifest `raw` under the instance's labels."""
+    properties: dict[str, str] = {}
+    items: dict[str, str] = {}
+    missing: list[str] = []
+    for key, spec in raw["properties"].items():
+        pid = property_labels.get(spec["label"])
+        if pid is None:
+            missing.append(f"property {key!r}")
+        else:
+            properties[key] = pid
+    for key, spec in raw["items"].items():
+        qid = item_labels.get(spec["label"])
+        if qid is None:
+            missing.append(f"item {key!r}")
+        else:
+            items[key] = qid
+    return properties, items, missing

@@ -507,7 +507,20 @@ Resolve's exact-label step never resolves a ref on the artifact side
 `subclass_of` it, or of artifact fragment, as in the writer's
 `is_artifact_kind`; amended by #444, 2026-10-03), and
 resolves no ref to an artifact or a part of one: it matches against the
-instance's labels without those items' (`resolvable_labels`). An
+instance's labels without those items' (`resolvable_labels`). What
+the two read stays bounded by the batch (amended by #444, 2026-10-03):
+resolve reads the instance's labels once a batch and the statements of
+only the items its refs' labels name (`WikiClient.fetch_claims`), and a
+write reads the labels once, for its plan, the artifacts registered
+under a label and every item it finds by label (the writer's
+`_FoundLabels`, with the items it makes), and the statements of only
+the items it finds. Neither label-matching read reads every item's
+statements; the writer's lookup of a cited artifact by its SHA-1
+(`resolve_artifacts`), when the caller does not supply that artifact,
+still reads the media SHA-1 index, the statements of every item. A
+write's one label snapshot assumes one process works on the instance at
+a time: an item another process makes under a label during the write is
+not seen until the next write. An
 artifact or a part of one is an item that carries a `media SHA-1`,
 names a `media file`, or is an `instance of` an artifact kind or of
 artifact fragment (the writer's `is_artifact_item`). A statement counts

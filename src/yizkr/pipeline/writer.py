@@ -40,7 +40,9 @@ Per batch, the writer:
    people: the label is matched and written in the form the instance
    keeps labels in, whatever form the batch gives it in: trimmed,
    cleaned up, in Unicode NFC, and cut to the characters the instance
-   holds in a label, `_term_text`),
+   holds in a label, `_term_text`; the instance's labels are read once a
+   write, and the run item and each entity are found among them and the
+   items the write makes, `_FoundLabels`),
    writing each minted item's `instance of`, and an
    unclassified entity's `type hint`, with two references: stated in ->
    the artifact that mentions the entity, and inferred from extraction
@@ -835,21 +837,40 @@ class _Placement:
 
 class _FoundLabels:
     """The item each label names on the instance, as the writer finds an
-    item by its label (`WikiClient.find_item_by_label`), each label asked
-    once: the plan reads them before the first write (BatchWriter._plan),
-    and nothing it reads changes until then."""
+    item by its label, for one write: the instance's item labels read
+    once, on first need (`WikiClient.label_index`, which fails on a
+    duplicate label), with each item the write makes for an entity under
+    its label since (`made`). The documents of a run are written one at a
+    time, and the write itself makes every item it gives a label, so the
+    labels read once stay current through the write: the plan
+    (BatchWriter._plan), the artifacts registered under a label
+    (BatchWriter._registered_under), the items found or made for the
+    batch's entities and its run item all read them, and a write reads
+    the instance's labels once. It assumes one process writes to the
+    instance at a time: an item another process makes under a label
+    during the write is not seen until the next write."""
 
     def __init__(self, client: WikiClient) -> None:
         self._client = client
-        self._found: dict[str, str | None] = {}
+        self._read: dict[str, str] | None = None
+        self._made: dict[str, str] = {}
+
+    def items(self) -> dict[str, str]:
+        """The item labels the instance held when first asked, label ->
+        QID."""
+        if self._read is None:
+            _, self._read = self._client.label_index()
+        return self._read
 
     def get(self, label: str, default: str | None = None) -> str | None:
-        if label not in self._found:
-            self._found[label] = self._client.find_item_by_label(label)
-        return self._found[label] or default
+        return self._made.get(label) or self.items().get(label) or default
+
+    def made(self, label: str, qid: str) -> None:
+        """The write made the item `qid` under `label`."""
+        self._made[label] = qid
 
 
-def _local_refs(claim: Claim) -> list[LocalRef]:
+def local_refs(claim: Claim) -> list[LocalRef]:
     """The local refs of `claim`, in the order the writer resolves them:
     its subject, its value, then its qualifiers' values."""
     refs = [claim.subject]
@@ -954,6 +975,9 @@ class BatchWriter:
         # per write_batch call: local id -> where step 2 puts its item,
         # settled before the first write (_plan)
         self._placements: dict[str, _Placement] = {}
+        # per write_batch call: the item each label names, the instance's
+        # labels read once (_FoundLabels)
+        self._labels = _FoundLabels(client)
 
     # -- artifact resolution (content-addressed sources) -------------------
 
@@ -1051,7 +1075,7 @@ class BatchWriter:
         label = placement.label
         if placement.alias:
             aliases = [placement.alias, *aliases]
-        existing = self.client.find_item_by_label(label)
+        existing = self._labels.get(label)
         if existing:
             self._flag_held(placement, existing, result)
             if aliases:
@@ -1095,6 +1119,7 @@ class BatchWriter:
             item.aliases.set("en", names)
         item = item.write(summary="ingest: entity proposed by extraction")
         qid = item.id
+        self._labels.made(label, qid)
         self._minted.add(qid)
         # The kind and type hint come from the extraction, never from
         # review, so they carry the run reference even when the claim
@@ -1227,7 +1252,7 @@ class BatchWriter:
         holder = labels.get(label, "")
         held: tuple[tuple[str, str], ...] = ()
         if artifact:
-            held = tuple(self._registered_under(label))
+            held = tuple(self._registered_under(label, labels))
         tagged = tagged_label(label, kind)
         if self._joins(tagged, artifact, labels, planned):
             planned.setdefault(tagged, artifact)
@@ -1246,7 +1271,7 @@ class BatchWriter:
         for the claims the writer writes, all but those at the places
         `refused`: an entity's label and kind are its manifest record's or,
         without one, its first ref's, in the order the writer resolves their
-        refs (_local_refs). Every entity not on the artifact side
+        refs (local_refs). Every entity not on the artifact side
         (is_artifact_kind) is placed first, then every entity on it, each in
         that order, so that of two entities of the batch under one label that
         no item holds, the person, place or other entity takes it and the
@@ -1258,7 +1283,7 @@ class BatchWriter:
         for index, claim in enumerate(batch.claims):
             if index in refused:
                 continue
-            for ref in _local_refs(claim):
+            for ref in local_refs(claim):
                 if ref.local_id in entities:
                     continue
                 record = self._entity_records.get(ref.local_id)
@@ -1297,7 +1322,7 @@ class BatchWriter:
         its tagged label. The plan is made again without the refused claims
         until no other entity is blocked (_plan), and settles `_placements`."""
         refused = set(refusals)
-        labels = _FoundLabels(self.client)
+        labels = self._labels
         stopped: dict[int, str] = {}
         warnings: list[str] = []
         flags: list[RegistrationFlag] = []
@@ -1311,7 +1336,7 @@ class BatchWriter:
             if not blocked:
                 break
             written = [
-                (index, {ref.local_id for ref in _local_refs(claim)})
+                (index, {ref.local_id for ref in local_refs(claim)})
                 for index, claim in enumerate(batch.claims)
                 if index not in refused
             ]
@@ -1338,7 +1363,9 @@ class BatchWriter:
         self._placements = placements
         return stopped, warnings, flags
 
-    def _registered_under(self, label: str) -> list[tuple[str, str]]:
+    def _registered_under(
+        self, label: str, labels: _FoundLabels
+    ) -> list[tuple[str, str]]:
         """Every artifact (_registered) whose item, or a fragment of which,
         has the label `label` as it is or with its own content tag in it,
         " [", the first 8 hex digits of the artifact's SHA-1 and "]", as
@@ -1350,11 +1377,12 @@ class BatchWriter:
         can be, is compared whole, and another artifact titled `label`
         with such a date is not one, as the registrar takes out only its
         own tag. The artifacts registered under that title, in the order
-        of their items, each once."""
-        _, labels = self.client.label_index()
+        of their items, each once. The labels are those the write read
+        (`labels`), and only the items under a label that is one are read
+        (_registered)."""
         found: list[tuple[str, str]] = []
         for other, qid in sorted(
-            labels.items(), key=lambda pair: int(pair[1][1:])
+            labels.items().items(), key=lambda pair: int(pair[1][1:])
         ):
             tags = {
                 tag.group()
@@ -1600,7 +1628,7 @@ class BatchWriter:
         )
         from yizkr.pipeline.registrar import ensure_self_typed
 
-        existing = self.client.find_item_by_label(label)
+        existing = self._labels.get(label)
         if existing:
             # a write cut short between the two below left the run item
             # without its kind, which it gains now; one that states it
@@ -1630,6 +1658,7 @@ class BatchWriter:
             ),
         )
         item = item.write(summary="ingest: extraction run")
+        self._labels.made(label, item.id)
         # The run item is the document of its own execution (same
         # convention as the model manifest, docs/MODELING.md): its kind
         # cites the item itself, so it is written once the item has an id.
@@ -1940,7 +1969,7 @@ class BatchWriter:
         for index, claim in enumerate(batch.claims):
             if index in refused:
                 continue
-            for ref in _local_refs(claim):
+            for ref in local_refs(claim):
                 kinds.setdefault(ref.local_id, ref.instance_of)
         return [
             f"entity {local_id!r} has the kind {kind!r}, which the "
@@ -2053,6 +2082,8 @@ class BatchWriter:
         self._mentions = {}
         self._minted = set()
         self._ref_kinds = {}
+        # the instance's labels, read once for the write, on first need
+        self._labels = _FoundLabels(self.client)
         # found before the first write, in a dry run as well: the claims
         # whose own text the instance cannot hold, which the loop below
         # leaves out whole

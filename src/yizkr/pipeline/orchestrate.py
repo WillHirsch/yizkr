@@ -1921,7 +1921,7 @@ class Orchestrator:
                 read_reviewed_aliases(doc.equivalences_reviewed),
             )
             self.log(f"  applied {len(approved)} approved equivalences")
-        return resolve_batch(batch, resolvable_labels(self.client))
+        return resolve_batch(batch, resolvable_labels(self.client, batch))
 
     def _step_export_review(self, doc: DocumentRun, batch: ClaimBatch) -> int:
         from yizkr.pipeline.review import export_review_csv
