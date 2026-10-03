@@ -458,7 +458,7 @@ def cmd_extract(args) -> int:
 
 
 def cmd_resolve(args) -> int:
-    from yizkr.pipeline.resolve import resolve_batch
+    from yizkr.pipeline.resolve import resolvable_labels, resolve_batch
 
     batch = _load_batch(args.batch)
     if args.equivalences:
@@ -473,8 +473,7 @@ def cmd_resolve(args) -> int:
             batch, approved, read_reviewed_aliases(args.equivalences)
         )
         print(f"applied {len(approved)} approved equivalences")
-    _, item_labels = _client(args).label_index()
-    resolved = resolve_batch(batch, item_labels)
+    resolved = resolve_batch(batch, resolvable_labels(_client(args), batch))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(resolved.model_dump_json(indent=2))
     print(f"wrote {args.out}")
@@ -653,7 +652,7 @@ def cmd_write(args) -> int:
     result = BatchWriter(_client(args), dry_run=args.dry_run).write_batch(
         batch
     )
-    print(json.dumps(result.__dict__, indent=2))
+    print(json.dumps(dataclasses.asdict(result), indent=2))
     if args.dry_run:
         print("(dry run: nothing written)")
     return 0

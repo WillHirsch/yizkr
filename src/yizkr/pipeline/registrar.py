@@ -46,8 +46,11 @@ found, reports it for a person to look at (RegistrationFlag), raised by
 `ingest run` as an alert of the write (docs/ANOMALIES.md), while either
 condition holds: another item names as its `media file` a wiki file that
 holds its bytes (``shared-file``; every such file, as MediaWiki lists
-them by their SHA-1), or its title, or its own label before its content
-tag, is the label of an item with no hash (``unhashed-title``). An item
+them by their SHA-1), or its title, its own label before its content
+tag, or the label one of its page fragments has before its content tag,
+is the label of an item with no hash, as it is or with the tag the
+writer gives a media object's item under a label it may not take
+(``unhashed-title``). An item
 with no hash has no `media SHA-1` and either names a `media file`, as an
 artifact registered before content hashing does, or is an `instance of`
 an artifact kind, as the item the GEDCOM import makes for a media object
@@ -68,9 +71,21 @@ with `media SHA-1`, shared-file is never raised: an item naming a file
 that holds these bytes carries this SHA-1, as an upload never overwrites
 a file, and is this item. Unhashed-title is raised there only for an
 artifact or derived medium registered under exactly the label of a media
-object's item that the GEDCOM import made, and so only when the GEDCOM's
-write made that item first: the GEDCOM's write joins a media object to
-an artifact registered before it under its label, and makes it no item.
+object, or an artifact one of whose page fragments has that label, in
+either order of the writes. A GEDCOM written after the artifact never
+joins its media object to it, or to its fragment, by that label: the
+writer makes the media object an item of its own under the label with a
+tag at its end (`media_object_label` in yizkr.pipeline.writer) and
+flags the pair itself, the artifact against the media object's item, as
+registration flags it, and with it every artifact registered under that
+label with its own content tag in it ([sha1[:8]] of its media, or of
+the fragment's whole), at its end or before a fragment's ", page <n>";
+and registration compares each title with that tagged label
+too, so the flag is raised on every later write of either. The writer
+also raises it for a media object it refuses, as registered items hold
+both its label and its tagged label: each artifact registered under the
+label, against the item under the tagged label, which is then a
+registered item with a hash, not one without.
 
 Provenance: an artifact asserts its own kind and its own composition by
 existing, so its `instance of`, `media file` and `media SHA-1`, and its
@@ -121,11 +136,14 @@ from yizkr.pipeline.presentation import IMAGE_SUFFIXES, DerivedMediaRecord
 # an alias the item has would look missing; a cut keeps whole letters by
 # the writer's rule too (extends, half_flag), and a name holding a
 # character Python's Unicode tables do not know, which the instance may
-# keep in another form, never looks missing (unknown_characters)
+# keep in another form, never looks missing (unknown_characters); a
+# title, and each fragment's label, is compared with a media object's
+# tagged label too (media_object_label)
 from yizkr.pipeline.writer import (
     TERM_LIMIT,
     extends,
     half_flag,
+    media_object_label,
     unknown_characters,
 )
 from yizkr.pipeline.writer import stored_term as _stored_term
@@ -339,7 +357,10 @@ class RegistrationFlag:
     `kind` is SHARED_FILE when the `others` name as their `media file` a
     wiki file that holds the item's bytes, and UNHASHED_TITLE when its
     title, or its own label before its content tag, is the label of the
-    `others`, items with no hash (`_Instance.unhashed`). `artifact` is
+    `others`, items with no hash (`_Instance.unhashed`); the writer
+    raises it too for a media object it refuses, the `others` then the
+    item under the media object's tagged label, a registered item with a
+    hash (BatchWriter._blocked in yizkr.pipeline.writer). `artifact` is
     the item, and `sha1` the SHA-1 of its media. Every field is an id or
     a hash, none a title or a file name, so a flag can be raised as an
     alert as it is."""
@@ -793,19 +814,37 @@ class Registrar:
         )
 
     def _flags(
-        self, qid: str, sha1: str, held: Iterable[str], titles: Iterable[str]
+        self,
+        qid: str,
+        sha1: str,
+        held: Iterable[str],
+        titles: Iterable[str],
+        pages: Iterable[int] = (),
     ) -> list[RegistrationFlag]:
         """What the item `qid` is flagged for, each flag gathered (_flag)
         as it is found. First by its names (_Instance.title_flags), each
-        title compared with and without its content tag, which needs
-        nothing of the wiki; then by its files (_Instance.file_flags), its
-        bytes, of SHA-1 `sha1`, held by the files `held` and by every file
-        MediaWiki lists for that SHA-1 (_files_with_bytes). A listing that
-        fails fails the registration, as any other wiki call does, with
-        the flags by its names gathered already."""
+        title compared with and without its content tag, and as the label
+        of its fragment for each of `pages` (_fragment) is before its
+        content tag, each of those with the writer's tag for a media
+        object's item too (media_object_label), which needs nothing of the
+        wiki; then by its files
+        (_Instance.file_flags), its bytes, of SHA-1 `sha1`, held by the
+        files `held` and by every file MediaWiki lists for that SHA-1
+        (_files_with_bytes). A listing that fails fails the registration,
+        as any other wiki call does, with the flags by its names gathered
+        already."""
         instance = self._read()
         tag = f" [{sha1[:8]}]"
-        names = {title.removesuffix(tag) for title in titles if title}
+        titles = {title for title in titles if title}
+        names = {title.removesuffix(tag) for title in titles}
+        names |= {
+            _fitted(name, f", page {page}")
+            for name in names | titles
+            for page in pages
+        }
+        # and under each name as the writer tags the label of an artifact-
+        # kind entity's item when a registered item holds that name
+        names |= {media_object_label(name) for name in names}
         titled = instance.title_flags(qid, sha1, names)
         self._flag(titled)
         pages = {*held, *_files_with_bytes(self.client, sha1)}
@@ -1023,11 +1062,20 @@ class Registrar:
             for page in range(1, pages + 1)
         }
         # flagged on every registration while a condition holds, under its
-        # title and its label before its content tag, once the item and
-        # its fragments are complete: a file listing that fails leaves
-        # nothing half-registered
+        # title, its label before its content tag and the labels of its
+        # fragments, every fragment it has, once the item and its
+        # fragments are complete: a file listing that fails leaves nothing
+        # half-registered
         flags = self._flags(
-            artifact_qid, content_sha1, [file_page, *held], [title, label]
+            artifact_qid,
+            content_sha1,
+            [file_page, *held],
+            [title, label],
+            sorted(
+                int(page)
+                for whole, page in instance.fragments
+                if whole == artifact_qid
+            ),
         )
         return RegistrationResult(
             artifact_qid=artifact_qid,

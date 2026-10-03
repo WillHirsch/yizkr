@@ -875,8 +875,9 @@ class TestTermsLeftOut:
     ):
         # her one claim is refused for its value, so no item is minted for
         # her and her description would never be sent: it is not named.
-        # Her alias still is, as the writer may send it to an item the
-        # resolve step matched her record to
+        # Nor is her alias (#444): the only claim that names her by a
+        # local ref is refused, so nothing of her record is sent, nor is
+        # it matched to an item by its label
         batch = _batch_of(
             _named(f"Нина {MARKED}"),
             entities=(
@@ -894,7 +895,7 @@ class TestTermsLeftOut:
         written = BatchWriter(wiki).write_batch(batch)
 
         assert written.refused == [claim_id(batch.claims[0])]
-        assert written.refused_terms == ["nina: alias"]
+        assert written.refused_terms == []
         assert "nina" not in written.created_items
 
     def test_each_term_left_out_is_named(self):

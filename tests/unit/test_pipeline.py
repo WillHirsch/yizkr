@@ -1710,6 +1710,17 @@ class FakeWiki:
                 return qid
         return None
 
+    def label_index(self):
+        """(property labels, item labels) as the wiki client's label index
+        gives them: the first item under a label, as find_item_by_label
+        finds it."""
+        items: dict[str, str] = {}
+        for qid, item in self.wbi.item.store.items():
+            label = str(item.labels.get("en") or "")
+            if label:
+                items.setdefault(label, qid)
+        return {}, items
+
     def string_statement_index(self, property_pid):
         assert property_pid == PROPERTIES["media_sha1"]
         self.index_reads += 1

@@ -53,8 +53,13 @@
   label, so two same-named copies stay two items whatever form the
   instance keeps the first one's label in. A description is named in
   `refused_terms` only when a claim the writer writes mentions its
-  entity, as only the item such a claim mints would take it. A run
-  item's label holding one, an extraction run's or the place-hierarchy
+  entity, as only the item such a claim mints would take it: a claim
+  refused for its text, as a misplaced document subject (ADR-0035
+  §3.4), or with an entity that may join neither the item under its
+  label nor the one under its tagged label (ADR-0010), mints nothing. A manifest record whose local refs only such refused
+  claims hold has nothing of it sent, so its aliases and type hint are
+  not named in `refused_terms` either (amended by #444, 2026-10-03).
+  A run item's label holding one, an extraction run's or the place-hierarchy
   pass's, or an extraction run's description, raises ValueError before
   the run item is looked up, and so before anything is written, as a
   re-run would not find the item by it.
@@ -359,10 +364,22 @@ artifact a new QID, changes neither.
   changed. Registration writes `media file` and `media SHA-1` together,
   so a reset instance never raises `shared-file`; it raises
   `unhashed-title` only for an artifact or derived medium registered
-  under exactly a GEDCOM media object's label, and only when the
-  GEDCOM's write made that media object's item first (a GEDCOM written
-  after the artifact joins its media object to it by the label, #109,
-  and makes no item to flag).
+  under exactly a GEDCOM media object's label, or with a page fragment
+  under it, whichever is written first: a GEDCOM written after the
+  artifact never joins its media object to it, or to its fragment, by
+  the label, but makes it an item of its own, labelled `"<label> [media
+  object]"`, and its write raises the flag, on every artifact registered
+  under that label, content-tagged or not (ADR-0010).
+- **An item is matched by its label on its own side only** (ADR-0010 as
+  amended by #444). A media object, or any artifact-kind entity, joins
+  by its label only an item with no hash that is an artifact or a part
+  of one; a person, a place or any other entity never joins an artifact
+  or a part of one. An entity that may not join the item under its label
+  takes an item of its own under its label tagged `" [media object]"`,
+  or, whatever its kind or none, `" [not an artifact]"` (one tag for
+  every kind, so refs of two kinds naming one person meet on one item;
+  amended by #444, 2026-10-03), its name an alias; one that may join
+  neither label's item is refused, with its claims, before the write.
 - **A page fragment is keyed by its artifact.** The fragment for page
   *n* is the item that is an `instance of artifact fragment` and `part
   of` the artifact with `page number` *n*, whatever its label. A new one

@@ -427,7 +427,21 @@ re-running one step in isolation — but for a normal ingest you only ever run
 - **write** — resolves each cited artifact's media SHA-1 to its artifact
   item (refusing the whole batch, before any write, if some media has
   no item), mints the extraction-run item, creates items for
-  unresolved subjects (reusing exact-label matches), writes each claim
+  unresolved subjects (reusing exact-label matches on the entity's own
+  side only: an artifact-kind entity such as a GEDCOM media object
+  reuses an artifact or a part of one, never an item registration made,
+  an artifact with a hash or its page fragment, and any other entity
+  reuses an item that is neither. An entity that may not reuse the item
+  under its label takes an item of its own under its label tagged
+  `[media object]`, or, whatever its kind, `[not an artifact]`, its name
+  an alias; people and places are placed before media objects, so a
+  person takes a label no item holds. Each artifact registered under the
+  label of a media object that does not take it, content-tagged or not,
+  is raised as an `unhashed-title` alert, and an entity that may reuse
+  neither the item under its label nor the one under its tagged label,
+  as a media object whose tagged label a registered item holds too, is
+  refused, with its claims, before the first write;
+  ADR-0010 as amended by #444), writes each claim
   at normal rank with two references: `stated in → artifact/fragment`
   (with page/region/excerpt locator qualifiers) and `inferred from
   extraction run → run item`. Re-runs skip existing statements.
@@ -438,7 +452,15 @@ In `ingest run`, reconcile matches a document's entities against nothing
 (above), so no Gate 1 row ties an entity to an item already in the graph.
 **Resolve** still does, by exact label: it replaces a `local` ref whose
 label exactly matches an existing item's, so a document meets the
-artifacts written before it under the same names only. By default the
+artifacts written before it under the same names only. A ref of an
+artifact kind or of artifact fragment is never resolved so, nor is any ref resolved to an
+artifact or a part of one: no artifact-kind entity is matched to a
+registered artifact (one with a hash, or its page fragment), no other
+entity to an artifact or a part of one, and no artifact is adopted, by
+its title or label (ADR-0010). It reads the instance's labels once a
+batch, and the statements of only the items its refs' labels name; the
+write reads the labels once too, with the vocabulary known (a fresh
+client reads them for the vocabulary as well). By default the
 loop takes every document to the gates in one pass, before any is
 written, so siblings in one folder run are invisible to each other, and
 two artifacts naming one person land as two items. A scratch run leaves

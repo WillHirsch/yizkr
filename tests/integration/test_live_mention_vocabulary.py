@@ -97,7 +97,7 @@ def mapping_page(client, title: str) -> tuple[int, str]:
 def test_bootstrap_creates_the_new_vocabulary_once(client):
     manifest = load_manifest()
     bootstrap_instance(client, manifest, log=lambda *_: None)
-    client._vocabulary = None  # drop cache; read the instance afresh
+    client.forget_vocabulary()  # read the instance afresh
     properties, items = client.vocabulary()
     snapshot = client.fetch_entities(
         [properties[key] for key in NEW_PROPERTIES]

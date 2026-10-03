@@ -78,9 +78,11 @@ an artifact registered before content hashing or a GEDCOM media
 object's item (ADR-0010), are alerts of the write; on a reset instance
 the only one raised is `unhashed-title`, for an artifact or derived
 medium whose title, or own label before its content tag, is exactly a
-GEDCOM media object's label, when the GEDCOM's write made that media
-object's item first (written after, the GEDCOM joins the media object
-to that artifact by its label, #109, and no flag is raised). §3 is
+GEDCOM media object's label, in either order of the writes.
+Amended by #444 (2026-10-02): a GEDCOM written after such an artifact
+never joins its media object to it, or to a page fragment of it, by the
+label; it makes the media object an item of its own and raises the flag
+itself (ADR-0010). §3 is
 amended in place.
 
 ## Context
@@ -343,9 +345,17 @@ futile, and explain itself afterwards.
   media objects' items have no hash, so it raises `unhashed-title` for an
   artifact or derived medium whose title (a derived medium's first
   label), or own label before its content tag, is exactly such an item's
-  label, when the GEDCOM's write made that item first: a GEDCOM written
-  after the artifact joins its media object to it by the label (#109),
-  so no such item is made and no flag is raised.
+  label, or with a page fragment under it, whichever is written first
+  (amended by #444, 2026-10-02): a GEDCOM written after the artifact
+  makes its media object an item of its own, never the artifact or its
+  fragment, and its write raises the flag; one whose label and tagged
+  label registered items both hold is refused, with its claims, before
+  the first write, and raised against the item under the tagged label.
+  A scratch run writes each document once on a reset instance, so its
+  alert counts do not depend on which of the two writes again where one
+  write registers the artifact; where several do (excerpts of two PDFs
+  placing one image), the count depends on how many come before the
+  GEDCOM, which is accepted (ADR-0010, AL).
 - **Per-slice fail-fast pauses.** A slice is a stage or a source kind. A
   check marked fail-fast pauses only its slice, through the run's control
   file, and other slices keep running. If the operator does not resume

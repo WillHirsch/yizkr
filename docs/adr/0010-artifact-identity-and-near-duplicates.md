@@ -49,10 +49,8 @@ every item whose `media file` holds the bytes, by MediaWiki's list of
 the files of its SHA-1 (Z3); and a GEDCOM media object's item, an
 artifact kind with no file and no hash, is an item with no hash, so a
 scratch run raises unhashed-title for an artifact or derived medium
-registered under exactly its label, when the GEDCOM's write made that
-item first: a GEDCOM written after such an artifact joins the media
-object to it by resolve's label matching (#109), makes no item for it
-and raises no flag (Z4). An artifact's label longer than Wikibase takes
+registered under exactly its label, in either order of the writes (Z4,
+as amended by #444). An artifact's label longer than Wikibase takes
 is cut to fit, as a derived medium's is.
 Amended by #431 (2026-10-02): the rule puts a term in NFC by Python's
 Unicode tables, 14.0.0 on the Python 3.11 the repository pins, while the
@@ -96,6 +94,58 @@ tables are no newer than the instance's, which the writer records as
 INSTANCE_UNICODE ("15.0.0") and a unit test checks, so an interpreter
 with newer tables (Python 3.13's 15.1.0, 3.14's 16.0.0) fails the suite
 rather than send text the instance keeps in another form (§1).
+Amended by #444 (2026-10-02): a media object, or any entity of an
+artifact kind, is never joined by its label to an item registration
+made: an artifact, which carries a `media SHA-1`, or one of its page
+fragments. Written after the artifact, the GEDCOM makes the media
+object an item of its own under its label with the tag " [media
+object]", and the write raises unhashed-title on every artifact
+registered under that label, as it is or content-tagged (a scan and a
+re-scan under one title), or holding it as a fragment's label, as
+registration does when it comes second; registration compares a title,
+and each of its fragments' labels, with the plain and the tagged label,
+so the flag repeats on every later registration, and, the media
+object's item tagged, on every later write of the GEDCOM. Resolve's
+exact-label step never resolves an artifact-kind ref, nor any ref to an
+artifact or a part of one. The owner's decisions on the review (AK to
+AO), each in §1 ("What is still matched by label"): a media object whose
+label and tagged label registered items both hold is refused, with the
+claims that name it, before the first write, each artifact registered
+under its label raised as an alert and any other refusal warned of, the
+rest of the batch written (AK); the alert counts that depend on
+which of the two writes again are accepted (AL); an artifact-kind entity
+joins by its label only an item with no hash that is itself an artifact
+or a part of one, never a person, a place or another item (AM); a
+person, a place or any other entity never joins by its label an
+artifact or a part of one, and takes an item of its own under its label
+tagged (AN); and a first dry run reports the pair a write would flag
+against the media object's placeholder (AO).
+On the second review (amended by #444, 2026-10-03): every entity not
+on the artifact side (of an artifact kind or of artifact fragment) takes
+one shared tag, `" [not an artifact]"`, whatever its kind or none, so
+refs of two kinds naming one person meet on one item, as they do under a label no artifact holds
+(AZ); an `instance of` counts whatever its rank, as a `media SHA-1`
+does (AY); an entity of the kind artifact fragment is on the artifact
+side, in the writer and in resolve, as its item is an artifact's part;
+and only an artifact's own content tag makes a label one of its
+title's.
+With the rule of #431 (amended by #444, 2026-10-03): the plan is made
+without the claims refused before it (for their text, or as a
+misplaced document subject, ADR-0035 §3.4), so an entity whose label
+holds a character Python's tables do not know is never placed nor its
+label looked up, and a media object named only by claims refused
+before the plan is never placed either, so it is neither blocked nor
+flagged; a description is named in `refused_terms` only when a claim
+written mentions its entity, not a claim refused before the plan nor
+one refused with an entity the plan blocks; a manifest record that only
+such refused claims name by a local ref has nothing of it sent, so its
+aliases and type hint are not named in `refused_terms` either, nor is
+it matched to an item by its label; and the kind of a ref without a
+manifest record is warned of, when the vocabulary lacks it, only when a
+written claim mentions it, while a record's kind is warned of whatever
+its claims.
+The kinds still matched by label, and why, are listed in §1 ("What is
+still matched by label").
 
 ## Context
 
@@ -186,9 +236,18 @@ never by name (amended by #103, 2026-09-29):
   for an artifact or derived medium whose title (a derived medium's
   first label), or own label before its content tag, is exactly a media
   object's label: its title, or without one a fallback such as its
-  file's name (ADR-0021), when the GEDCOM's write made the media
-  object's item first (written after, the GEDCOM joins the media object
-  to that artifact by its label, #109, and no flag is raised).
+  file's name (ADR-0021), whichever of the two is written first
+  (amended by #444, 2026-10-02): written after the artifact, the
+  GEDCOM's write makes the media object an item of its own, labelled
+  `"<label> [media object]"` (the writer's `media_object_label`), never
+  the artifact, and raises the flag on the artifact against it, its
+  `medium` the artifact's SHA-1, as registration does; registration
+  compares a title with that tagged label too. The same holds for every
+  artifact registered under that label with a content tag (a re-scan
+  under the scan's title), and for an artifact one of whose page
+  fragments has the media object's label (`"<title>, page <n>"`): the
+  media object is never joined to the fragment, and the flag is on the
+  fragment's artifact.
   When the title is already another item's label, the new item's label
   takes a short content tag (`"<title> [<sha1[:8]>]"`), so labels stay
   unique (the wiki client's label index; #94 would scope that rule away
@@ -502,6 +561,179 @@ only `written` documents seed the map (docs/LLM_CACHE.md).
 Together these close the "two items, one blob" leak (correctness) and
 skip redundant LLM passes for renamed-identical files both within a
 batch and across runs (efficiency), which were the concrete costs.
+
+**What is still matched by label** (amended by #444, 2026-10-02). No
+artifact-kind entity is matched to a registered artifact, no other
+entity to an artifact or a part of one, and no artifact is adopted, by
+its title or label. Registration finds an artifact by its SHA-1 alone.
+Resolve's exact-label step never resolves a ref on the artifact side
+(of an artifact kind, artifact or a class the manifest makes a
+`subclass_of` it, or of artifact fragment, as in the writer's
+`is_artifact_kind`; amended by #444, 2026-10-03), and
+resolves no ref to an artifact or a part of one: it matches against the
+instance's labels without those items' (`resolvable_labels`). The
+writer, finding the item a manifest record names after resolve replaced
+its refs (its `_found_entities`), pairs a record and an item by label on
+the same terms, a record that no claim names as much as any other: a
+person's record never names a media object's item, nor a media object's
+record a registered scan (amended by #444, 2026-10-03). What
+the two read stays bounded by the batch (amended by #444, 2026-10-03):
+resolve reads the instance's labels once a batch and the statements of
+only the items its refs' labels name (`WikiClient.fetch_claims`), and a
+write reads the labels once, with the vocabulary known (a fresh client
+reads them for the vocabulary too, when the writer is made), for its
+plan, the artifacts registered under a label, looked up in an index of
+the labels made once a write, and every item it finds by label (the
+writer's `_FoundLabels`, with the items it makes), and the statements
+of only the items it finds. Neither label-matching read reads every item's
+statements; the writer's lookup of a cited artifact by its SHA-1
+(`resolve_artifacts`), when the caller does not supply that artifact,
+still reads the media SHA-1 index, the statements of every item. A
+write's one label snapshot assumes one process works on the instance at
+a time: an item another process makes under a label during the write is
+not seen until the next write. An
+artifact or a part of one is an item that carries a `media SHA-1`,
+names a `media file`, or is an `instance of` an artifact kind or of
+artifact fragment (the writer's `is_artifact_item`). A statement counts
+whatever its rank (AY, amended by #444, 2026-10-03), as a `media SHA-1`
+does wherever the writer and the registrar read one: a curator's
+deprecated `instance of photograph` on a person's item still makes it
+an artifact item until the statement is removed. The writer finds an
+item by its label before it makes one, on the entity's own side only,
+an entity of an artifact kind or of artifact fragment (the writer's
+`is_artifact_kind`) being on the artifact side:
+
+* an artifact-kind entity, such as a GEDCOM media object, never joins an
+  item registration made, one that carries a `media SHA-1` or a page
+  fragment `part of` one (above), nor any item that is no artifact or
+  part of one: a person, a place, a run item or an unclassified item
+  under its title (AM). A portrait titled with its sitter's name is thus
+  an item of its own, never the person's;
+* any other entity, a person, a place or one with no kind, never joins
+  an artifact or a part of one, registered or not (AN);
+* an entity that may not join the item under its label is found, or
+  made, under its tagged label (the writer's `tagged_label`): an
+  artifact-kind entity's ends in `" [media object]"`
+  (`media_object_label`), any other's in `" [not an artifact]"`, one
+  tag whatever its kind or none (AZ, amended by #444, 2026-10-03), its
+  own label an alias of that item. The tag depends on the label and the
+  side alone, so a re-run finds the item again, and nothing about the
+  item under the plain label changes. Labels stay unique, as the wiki client's label
+  index fails on two items with one English label (and Wikibase refuses
+  two with one label and description), so the entity cannot take the
+  plain label while another item holds it; the artifact keeps its title,
+  and a person keeps its name as an alias, the closest to its name the
+  wiki allows. Which side bears the tag depends on the order of the
+  writes, as a content tag does: a person written before an artifact
+  registered under its name keeps the plain label, and registration
+  content-tags the artifact (a person is no item with no hash, so
+  nothing is flagged); written after, the person is tagged. Within one
+  batch the order of its refs does not decide it: the writer places
+  every entity that is not of an artifact kind before any that is, so
+  of a person and a media object of one batch under a label no item
+  holds, the person takes it and the media object its tagged label,
+  whichever the batch names first. The tag is one for every kind, so
+  one person named under a label an artifact holds by refs of two kinds
+  (a GEDCOM's `human` and an extraction's ref with no kind, say) is one
+  item, `"<name> [not an artifact]"`, as without the clash the two meet
+  on the item under the plain name; a tag naming the kind would split
+  them into two items until a curator merged them. A media
+  object that does not take its label raises unhashed-title against its
+  item on every artifact registered under that label, whatever item
+  holds it: the artifact under it, and every artifact under it with one
+  content tag in it (a re-scan, `"<title> [<sha1[:8]>]"`, or its
+  fragment, `"<title> [<sha1[:8]>], page <n>"`; a tag is one when
+  taking it out leaves the title, and only the artifact's own tag, its
+  SHA-1's first eight hex digits, is one, as the registrar takes out
+  only its own: a title with a bracketed date of eight digits is
+  compared whole, and another artifact registered under
+  `"<title> [18950312]"` is not flagged), in the order of their items. Under a
+  person's name the artifact is content-tagged, as registration came
+  after the person, and is flagged all the same, as registration flags
+  it against the media object's item in the other order; with no
+  artifact registered under the label, nothing is raised. A first dry
+  run reports that flag against the media object's placeholder
+  (`(new:<id>)`), as the write would raise it (AO);
+* an entity that may join neither the item under its label nor the one
+  under its tagged label, as when registered items hold both a media
+  object's title and that title with `" [media object]"`, is refused,
+  with every claim that names it, before the first write, in a dry run
+  too, and the rest of the batch is written (AK): the write's `refused`
+  names the claims, a warning names the entity by its local id, its
+  claims by their claim ids and the two items by QID alone, and each
+  artifact registered under the media object's label is raised as
+  unhashed-title against the item under its tagged label: for such a
+  flag `others` is that item, a registered one, not an item with no
+  hash. The writer settles where each entity's item goes before its
+  first write, with the labels the batch itself makes items under, so no
+  entity is refused partway. The refusal holds on every write until a
+  curator relabels one of the two items. A refusal with no such pair
+  raises no alert, only the warning and the step's `refused` count: a
+  media object with no artifact registered under its label, or with no
+  item yet under its tagged label (another entity of the batch takes
+  it), and a person, place or other entity whose name and tagged label
+  artifacts both hold. None is an artifact registered under the title of
+  an item that may be the same object, the question unhashed-title puts
+  to a curator; each is a clash of labels that no registration on a
+  reset instance makes (it needs an item titled literally with a tag),
+  and the warning names its items by QID.
+
+Labels still match, until the identity map (#109), for:
+
+* every entity on its side, in resolve's exact-label step (the refs an
+  extraction labels; not an artifact-kind ref, and not to an artifact)
+  and in the writer: people, places, organisations, families, vessels,
+  legal instruments, military units, occupation classes, events
+  (births, deaths, weddings, divorces and the rest), partnerships and
+  marriages, and unclassified entities, each with an item that is no
+  artifact or part of one. It is the interim identity of a named entity,
+  so a re-run never duplicates one and two documents naming it alike
+  meet on one item (ADR-0021 relies on it for the GEDCOM import);
+* a media object, or another artifact-kind entity, and an item with no
+  hash that is an artifact or a part of one: two exports' media objects
+  under one title, two objects of one export under one title (both are
+  the one item, tagged or not), a media object and an artifact
+  registered before content hashing, as neither carries a hash to tell
+  them apart, and, on an instance from before content hashing, a media
+  object and a page fragment of an artifact with no hash (`"<title>,
+  page <n>"`), which the media object joins as it joins that artifact;
+  registration flags such an item when hashed bytes come under its
+  label. A fragment of an artifact with a hash is never found by its
+  label;
+* the extraction run's item, which the writer finds by a deterministic
+  label that holds a fingerprint of its batch, and the place hierarchy's
+  run item, which `places.ensure_places_run_item` finds the same way, so
+  the label is their key by construction;
+* an entity an approved equivalence names (ADR-0007): reconcile's
+  blocking may propose a media object against an artifact on the roster,
+  and an equivalence a curator approves sets the item (`record.qid`),
+  which the writer takes before anything above. It is a human decision,
+  not a label match;
+* the manifest's vocabulary, its properties and classes, which the wiki
+  client maps from their manifest labels.
+
+One case is a label join between two titles: an object titled literally
+`"<title> [media object]"` takes that label as its own when no item holds
+it, and an object titled `"<title>"`, written once a registered artifact
+holds `"<title>"`, finds that item under its tagged label and joins it.
+The tag cannot tell the two apart, and an export's title of that form is
+not expected; the flag on the artifact names the joined item.
+
+The alert counts depend on which side writes again (AL): every later
+registration of the artifact raises unhashed-title again, and, with the
+artifact first, every later write of the GEDCOM does too; with the
+GEDCOM first, a later write of the GEDCOM raises nothing. A scratch run
+writes each document once on a reset instance, so where one write
+registers the artifact its counts do not depend on the order. Where N
+writes register it, as excerpts of two PDFs that place one image do,
+the GEDCOM first gives N flags, and k of them before the GEDCOM give
+N - k + 1; that dependence is accepted too, as a count above zero still
+says the pair exists. Whether a media object and an artifact are one
+item never depends on the order. Nor does whether refs naming one person, of
+whatever kinds, meet on one item (AN, above): written before an
+artifact takes the name, the person keeps the plain label and later
+refs join it there; written after, every ref joins the item under the
+tagged label. Only which label that item bears depends on the order.
 
 ### 2 & 3. Near-duplicates and versions (deferred, designed here)
 

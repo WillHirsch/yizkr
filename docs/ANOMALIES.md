@@ -305,11 +305,16 @@ digest.
 ### Registration
 
 The write raises these as it registers a document
-(`Orchestrator._step_register`; ADR-0010 as amended by #371), outside
-the thresholds: they have no keys, cannot be turned off and pause
-nothing. Each flags an item registration made or found, an artifact or
-a derived medium, that may be an artifact registered before content
-hashing, or a GEDCOM media object's item; the item is made all the same
+(`Orchestrator._step_register`; ADR-0010 as amended by #371), and
+`unhashed-title` also as it writes a GEDCOM's batch after an artifact
+registered under one of its media objects' labels, or with a page
+fragment under one, or as it refuses a media object whose label and
+tagged label registered items both hold (`_step_write`; as amended by
+#444), outside the thresholds: they have no keys, cannot be turned off
+and pause nothing. Each flags an item registration made or found, an
+artifact or a derived medium, that may be an artifact registered before
+content hashing, a GEDCOM media object's item, or a media object the
+writer refused (below); the item is made all the same
 when it is new, and nothing is adopted or changed. An item is flagged on
 every write that registers it while the condition holds, so a flag
 repeats, run after run, until a curator acts on the older item (hashes,
@@ -323,8 +328,9 @@ items it is flagged against, in the order of their numbers; `medium`,
 the first 12 hex digits of the item's media SHA-1. It is the subject's
 own unless the item is one registered with the document: a deck's or
 PDF's image or, for an excerpt, a PDF that places it or another image
-that PDF places. One alert per item, check and write, so a deck may
-raise one for itself and one for each image.
+that PDF places; or unless the flag is a GEDCOM write's, whose item is
+the artifact registered before it. One alert per item, check and write,
+so a deck may raise one for itself and one for each image.
 
 **`shared-file`**: `others` name as their `media file` a wiki file that
 holds the item's bytes: the file its upload answered with, or any other
@@ -339,12 +345,44 @@ is raised all the same, and the next write that registers it raises
 
 **`unhashed-title`**: the item's title (for a derived medium, its first
 label before any content tag), or its own label before its content tag,
-is the label of `others`, items with no hash. An item with no hash has
+is the label of `others`, items with no hash; or, for a media object
+the writer refuses (below), `others` is the item under the media
+object's tagged label, which holds the place its item would take: a
+registered item, with a hash, when registered items hold both labels.
+An item with no hash has
 no `media SHA-1` and either names a `media file`, as an artifact
 registered before content hashing does, or is an `instance of` an
 artifact kind, as the GEDCOM import's item for a media object is (a
 label, no file). An artifact fragment, a run item, a person or any item
-of another kind is never one unless it names a `media file`.
+of another kind is never one unless it names a `media file`. A GEDCOM
+written after an artifact registered under exactly a media object's
+label, or under it with a content tag, or with a page fragment under it
+(`"<title>, page <n>"`), never joins the media object to the artifact or
+fragment: the writer makes the media object an item of its own,
+labelled `"<label> [media object]"`, and its write raises the flag on
+each such artifact against that item, in the order of their items;
+registration compares the artifact's title, and its fragments' labels,
+with that tagged label too. When registered items hold both the label
+and the tagged label, the writer refuses the media object, with the
+claims that name it, before its first write, writes the rest of the
+batch, and raises the flag on each artifact registered under the label
+against the item under the tagged label, as no item is made for the
+media object; the write's `refused` names the claims and a warning
+names the items by QID. A media object under the label of a person, a
+place or any item that is no artifact is an item of its own under the
+tagged label too, and its write raises the flag on each artifact
+registered under the label, content-tagged as the label is the
+person's, as registration does in the other order; with none, it raises
+nothing (ADR-0010). Any other refusal raises no alert, only the warning
+and the step's `refused` count: a media object refused with no artifact
+registered under its label, or with no item yet under its tagged label
+(another entity of the batch takes it), and a person, place or other
+entity refused because artifacts hold both its name and its tagged
+label (`"<name> [not an artifact]"`). None of them is an artifact registered
+under the title of another item that may be the same object, the one
+question `unhashed-title` asks a curator; each is a clash of labels
+that no artifact registration on a reset instance makes, and the
+warning names its items by QID.
 
 On a reset instance, a scratch run's, registration alone writes `media
 file`, always with `media SHA-1`, and an upload never overwrites a file,
@@ -352,14 +390,22 @@ so `shared-file` is never raised there. A scratch run imports the GEDCOM,
 though (ADR-0025 §1), so `unhashed-title` is raised there when an
 artifact or derived medium is registered under exactly the label of a
 media object's item (its title, or without one its file's name or a
-fallback), against that item, and on every write that registers it while
-the two share it. That depends on the order of the writes: the media
-object's item is there only when the GEDCOM's write made it first. A
-GEDCOM written after an artifact registered under exactly a media
-object's label joins the media object to that artifact by the label
-(resolve's label matching, #109), so no media object's item is made and
-no flag is raised. With no such homonym a scratch run raises no
-registration flag. The monitor shows them by name; the run report's
+fallback), or with a page fragment under it, against that item, and on
+every write that registers it while the two share it, whichever of the
+two is written first (#444). Which of the two writes raises the flag
+again does depend on the order (accepted by the owner, #444): every
+later registration of the artifact raises it, and, with the artifact
+first, every later write of the GEDCOM does too; with the GEDCOM first,
+a later write of the GEDCOM raises nothing. A scratch run writes each
+document once on a reset instance, so where one write registers the
+artifact its counts are the same in either order. Where several do, as
+when excerpts of two PDFs that place the same image are written, they
+are not: with the GEDCOM first, each of the N writes that register the
+artifact raises the flag; with k of them before the GEDCOM, those k
+raise nothing, the GEDCOM's write raises one and each later one raises
+one, N - k + 1 in all. That dependence is accepted too (#444): a
+count above zero still says the pair exists. With no such homonym a scratch run raises no registration
+flag. The monitor shows them by name; the run report's
 aggregates count them by check (`shared-file`, `unhashed-title`) and
 under the stage `write`, as counts only. The findings count flagged
 writes, not distinct items: a document's write and a check, once each,
