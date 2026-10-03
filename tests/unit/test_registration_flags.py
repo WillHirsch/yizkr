@@ -2151,6 +2151,35 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         left_out = [w for w in written.warnings if "'md1' has a" in w]
         assert len(left_out) == (2 if sent else 0)
 
+    @needs_unknown_mark
+    def test_an_equivalences_aliases_are_sent_whatever_its_claims(self):
+        """Sebastian's record names his item by an approved equivalence,
+        and his one claim is refused for its marked excerpt: the record's
+        aliases go on his item before any claim is written all the same,
+        so the alias the writer leaves out is named in refused_terms."""
+        from yizkr.claims import ClaimBatch
+        from yizkr.pipeline.writer import BatchWriter
+
+        wiki = WritingWiki()
+        sebastian = wiki.item(
+            "Sebastian Löbig",
+            ("instance_of", WritingWiki.ITEMS["human"], None),
+        )
+        given = family_gedcom(wiki).model_dump(mode="json")
+        for record in given["entities"]:
+            if record["id"] == "i1":
+                record["qid"] = sebastian
+                record["aliases"] = ["Bastian", f"Bastian {UNKNOWN_MARK}"]
+        batch = self.with_marked_excerpt(
+            ClaimBatch.model_validate(given), "md1"
+        )
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        assert len(written.refused) == 1
+        assert written.refused_terms == ["i1: alias"]
+        assert "Bastian" in str(wiki.entities[sebastian].get("aliases"))
+
     def test_a_blocked_records_terms_never_reach_the_item_under_its_label(
         self,
     ):
