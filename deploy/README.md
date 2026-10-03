@@ -302,9 +302,12 @@ directory under `var/backups/` containing:
   (`nonprivileged.nt.gz.partial`,
   `nonprivileged-exclusions.json.partial`) and moves it onto its name
   once whole, the exclusions first: a `nonprivileged.nt.gz` is always
-  complete and has its exclusions beside it. A failure part way removes
-  what it wrote, so a run that fails leaves no export, cut short or
-  whole.
+  complete and has its exclusions beside it. It first removes any
+  `.partial` file an earlier run left, before it reads or refuses
+  anything, so a stale one can never reach the dump. A failure part way
+  removes what it wrote; once the exclusions were moved onto their name
+  it removes them and any dump under its name, so a run that fails
+  leaves no export, cut short or whole.
 
   Renamed (#412, 2026-10-02): the export was named "public" though it is
   a non-privileged view, not a public copy. Backups made since write

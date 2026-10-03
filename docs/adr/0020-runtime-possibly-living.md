@@ -155,7 +155,10 @@ failure (a dump command failing, say) propagates as before and is never
 reported as a refusal. The export writes each of its two files under
 its name plus `.partial` and moves it onto its name once whole, the
 exclusions first, so `nonprivileged.nt.gz` never exists cut short or
-without its exclusions; a failure removes what it left. A live test
+without its exclusions; it removes any `.partial` file an earlier run
+left before anything else, refusals included, and a failure removes
+what it left, and once the exclusions were moved, them and any dump
+under its name. A live test
 (`tests/integration/test_live_nonprivileged_export.py`) runs the query
 service's own munger (wikibase/wdqs:2, no network) over the export and
 the full dump, and requires that it logs no error and drops no entity

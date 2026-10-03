@@ -9,23 +9,35 @@ subject is an entity's data node (``Special:EntityData/Q1``) starts a
 new block when a line of any other subject came since the last block
 began, and so does a redirect's ``owl:sameAs``; a line of the dump's
 header (``wikibase:Dump``) belongs to no block; every other line belongs
-to the block it falls in. Within a block, whatever the order of its
-lines:
+to the block it falls in. The block's entity is named by its last line
+that names one: a data node's ``schema:about``, or a redirect's subject.
+Its data nodes, the entity, a sitelink (a subject typed
+``schema:Article``), a property's own nodes (``/prop/...``) and a blank
+node are recognised.
 
-* the entity is the one its data node is ``schema:about`` (or the
-  redirect's subject); its data nodes, the entity, a sitelink (a subject
-  typed ``schema:Article``), a property's own nodes (``/prop/...``) and a
-  blank node are recognised;
-* a statement node is recognised when an entity's ``p:`` line names it;
-* a reference node, when a statement node's ``prov:wasDerivedFrom``
-  names it (whether or not that statement node is recognised);
-* a value node, when a recognised statement node's line names it, a
-  recognised reference node's ``prv:`` line names it, or any line's
-  ``wikibase:quantityNormalized`` does.
+The munger reads a block's lines once, in order. A line about a
+statement, reference or value node it has not yet registered is parked;
+when a later line registers that node, the node's parked lines are
+restored, but they are not read again, so they register nothing. As it
+reads a line:
 
-Anything else is unrecognised, and the munger drops it: a statement,
-value or reference node no line of its block registers, a line of
-another entity, or a line before the first block."""
+* the entity's ``p:`` line registers the statement node it names;
+* a statement node's ``prov:wasDerivedFrom`` registers the reference it
+  names, whether or not that statement node is registered;
+* a value node's ``wikibase:quantityNormalized`` registers the value
+  node it names, whether or not the first is registered;
+* a registered statement node's line registers the value node it names,
+  and a registered reference node's ``prv:`` line the value node it
+  names.
+
+A value node's ``rdf:type`` line is always kept. Any other line about a
+node no line of its block registers is unrecognised, and the munger
+drops it; so it does a line of another entity, and a line before the
+first block. The mirror is stricter than the munger in two ways: it
+flags a ``prov:wasDerivedFrom`` line of a statement node that is not
+registered, which the munger keeps, and the ``rdf:type`` line of a
+statement or reference node that is not registered, which the munger
+drops as uninteresting."""
 
 from __future__ import annotations
 
@@ -93,44 +105,45 @@ def blocks(lines: list[str]) -> list[list[str]]:
     return found
 
 
+def _entity_of(triples: list[tuple[str, str, str]]) -> str | None:
+    """The entity a block is of: named by its last data node's
+    ``schema:about`` or redirect line, None when no line names one."""
+    entity = None
+    for subject, predicate, value in triples:
+        if ENTITY_DATA in subject and predicate == ABOUT:
+            entity = value
+        elif predicate == SAME_AS and _entity(subject):
+            entity = subject
+    return entity
+
+
 def _registered(block: list[str]) -> set[str]:
-    """The statement, value and reference nodes `block` registers."""
+    """The statement, value and reference nodes `block` registers, read
+    once, in order: a line about a node not yet registered registers
+    nothing beyond what the munger reads before it checks the node."""
     triples = [_triple(line) for line in block]
-    entities = {
-        value
-        for subject, predicate, value in triples
-        if ENTITY_DATA in subject and predicate == ABOUT
-    } | {
-        subject
-        for subject, predicate, _ in triples
-        if predicate == SAME_AS and _entity(subject)
-    }
+    entity = _entity_of(triples)
     registered: set[str] = set()
-    grown = True
-    while grown:
-        before = len(registered)
-        for subject, predicate, value in triples:
-            kind = _kind(subject)
-            if subject in entities and _kind(value) == "statement":
-                if "/prop/" in predicate:
-                    registered.add(value)
-            elif kind == "statement":
-                if (
-                    predicate == DERIVED_FROM
-                    and _kind(value) == "reference"
-                    or subject in registered
-                    and _kind(value) == "value"
-                ):
-                    registered.add(value)
-            elif (
-                kind == "reference"
-                and subject in registered
-                and "/prop/reference/value" in predicate
+    for subject, predicate, value in triples:
+        kind = _kind(subject)
+        if kind is None:
+            if (
+                subject == entity
+                and "/prop/" in predicate
+                and _kind(value) == "statement"
             ):
                 registered.add(value)
-            if predicate == NORMALIZED and _kind(value) == "value":
+        elif kind == "statement":
+            if predicate == DERIVED_FROM:
+                if _kind(value) == "reference":
+                    registered.add(value)
+            elif subject in registered and _kind(value) == "value":
                 registered.add(value)
-        grown = len(registered) > before
+        elif kind == "reference":
+            if subject in registered and "/prop/reference/value" in predicate:
+                registered.add(value)
+        elif predicate == NORMALIZED:
+            registered.add(value)
     return registered
 
 
@@ -140,33 +153,30 @@ def misplaced(lines: list[str]) -> list[str]:
     found = []
     for number, block in enumerate(blocks(lines)):
         triples = [_triple(line) for line in block]
-        about = {
-            value
-            for subject, predicate, value in triples
-            if ENTITY_DATA in subject and predicate == ABOUT
-        } | {
-            subject
-            for subject, predicate, _ in triples
-            if predicate == SAME_AS and _entity(subject)
-        }
+        entity = _entity_of(triples)
         sitelinks = {
             subject
             for subject, predicate, value in triples
             if predicate == RDF_TYPE and value == ARTICLE
         }
         registered = _registered(block)
-        where = ", ".join(sorted(about)) or f"block {number}, of no entity"
-        for line, (subject, _, _) in zip(block, triples, strict=True):
-            if not about:
+        where = entity or f"block {number}, of no entity"
+        for line, (subject, predicate, _) in zip(block, triples, strict=True):
+            kind = _kind(subject)
+            if entity is None:
                 found.append(f"{where}: {line}")
             elif (
-                ENTITY_DATA in subject
-                or subject in about
-                or subject in sitelinks
-                or subject.startswith("_:")
+                (
+                    ENTITY_DATA in subject
+                    or subject == entity
+                    or subject in sitelinks
+                    or subject.startswith("_:")
+                )
+                or kind == "value"
+                and predicate == RDF_TYPE
             ):
                 continue
-            elif _kind(subject) is not None:
+            elif kind is not None:
                 if subject not in registered:
                     found.append(f"{where}: {line}")
             elif _entity(subject):

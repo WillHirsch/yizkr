@@ -1295,8 +1295,13 @@ def statements_left_out(
 # starts a block when any line of another subject came since the last one
 # began, and so does a redirect's ``owl:sameAs``; a line of the dump's
 # header (``wikibase:Dump``) is of no block; every other line is of the
-# block it falls in. Within a block, the munger keeps a statement, value
-# or reference node's lines only when a line of that block names it.
+# block it falls in. A redirect's line is matched for an item only, as
+# the model has no property redirects and no lexemes. Within a block, the
+# munger keeps a statement, value or reference node's lines only when a
+# line of that block names it; it reads the block once, in order, and a
+# node's lines read before the line that names it register nothing, so
+# the export writes each node at the end of its block, after every line
+# that names it.
 _DUMP_HEADER = "<http://wikiba.se/ontology#Dump>"
 _SAME_AS = "<http://www.w3.org/2002/07/owl#sameAs>"
 
@@ -1605,8 +1610,18 @@ def export_nonprivileged(
     unless `run` and `vocabulary` are given.
 
     Both files are written under their names plus PARTIAL_SUFFIX and moved
-    onto their names once whole, the exclusions first: any failure removes
-    the partial files and leaves no dump under NONPRIVILEGED_DUMP."""
+    onto their names once whole, the exclusions first. Partial files an
+    earlier run left are removed before anything else, refusals included,
+    so none can reach the dump. Any failure removes the partial files; a
+    failure after the exclusions moved removes them and any dump under its
+    name, so a failure leaves no dump without its exclusions, and neither
+    file once the exclusions moved."""
+    dump = out_dir / NONPRIVILEGED_DUMP
+    exclusions = out_dir / NONPRIVILEGED_EXCLUSIONS
+    dump_partial = out_dir / (NONPRIVILEGED_DUMP + PARTIAL_SUFFIX)
+    exclusions_partial = out_dir / (NONPRIVILEGED_EXCLUSIONS + PARTIAL_SUFFIX)
+    for path in (dump_partial, exclusions_partial):
+        path.unlink(missing_ok=True)
     if vocabulary is None:
         from yizkr.core.wiki import WikiClient
 
@@ -1640,10 +1655,7 @@ def export_nonprivileged(
         )
     excluded = nonprivileged_exclusions(reading, report)
     included = report.included - set(excluded)
-    dump = out_dir / NONPRIVILEGED_DUMP
-    exclusions = out_dir / NONPRIVILEGED_EXCLUSIONS
-    dump_partial = out_dir / (NONPRIVILEGED_DUMP + PARTIAL_SUFFIX)
-    exclusions_partial = out_dir / (NONPRIVILEGED_EXCLUSIONS + PARTIAL_SUFFIX)
+    moved = False  # whether this export's exclusions are under their name
     try:
         kept, dropped = filter_nonprivileged_export(
             full_dump,
@@ -1668,12 +1680,16 @@ def export_nonprivileged(
             )
         )
         os.replace(exclusions_partial, exclusions)
+        moved = True
         os.replace(dump_partial, dump)
     except BaseException:
         for path in (dump_partial, exclusions_partial):
             path.unlink(missing_ok=True)
-        if not dump.exists():
-            exclusions.unlink(missing_ok=True)
+        if moved:
+            # The exclusions under the name are this export's, so any dump
+            # under its name has lost its own exclusions and goes too.
+            for path in (exclusions, dump):
+                path.unlink(missing_ok=True)
         raise
     return {
         "excluded_persons": len(excluded),

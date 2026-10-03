@@ -1080,6 +1080,13 @@ def source(node: str, excerpt: str, day: str, dated: str) -> list[str]:
     ]
 
 
+def is_value_type(line: str) -> bool:
+    """Whether `line` is a value node's rdf:type line, which the munger
+    keeps wherever it sits."""
+    subject, predicate, _ = line.split(" ", 2)
+    return subject.startswith(f"<{W}/value/") and predicate == RDF_TYPE
+
+
 class TestEachNodeLeavesInABlockThatNamesIt:
     """The query service's munger reads a dump entity by entity, and keeps
     a value or reference node only in the block of an entity whose lines
@@ -1299,15 +1306,58 @@ class TestEachNodeLeavesInABlockThatNamesIt:
         # the kept lines in dump order, nothing moved: the letter, its date
         # and Rudolf's death sit in Koshnovka's block, which names none of
         # them, and the interview and its date in Gustav's, whose statement
-        # citing it went; the munger would drop each of their lines
+        # citing it went; the munger would drop each of their lines but a
+        # value node's type, which it always keeps
         gone = set(self.gone())
         unmoved = [line for line in self.LINES if line not in gone]
-        letter = self.nodes(VALUE_DEATH, REF_LETTER, VALUE_1958)
-        talk = self.nodes(REF_TALK, VALUE_2002)
+        letter = [
+            line
+            for line in self.nodes(VALUE_DEATH, REF_LETTER, VALUE_1958)
+            if not is_value_type(line)
+        ]
+        talk = [
+            line
+            for line in self.nodes(REF_TALK, VALUE_2002)
+            if not is_value_type(line)
+        ]
         assert sorted(misplaced(unmoved)) == sorted(
             [f"<{W}/entity/Q510>: {line}" for line in letter]
             + [f"<{W}/entity/Q506>: {line}" for line in talk]
         )
+
+
+class TestARedirectStartsABlock:
+    """A redirect's bare ``owl:sameAs`` line starts a block of its own, as
+    the munger reads it: the export writes the nodes of the block before
+    it ahead of it (#412). Q520, a duplicate item for Rudolf Löbig (Q501)
+    merged into his, redirects to him between his block and Gustav's."""
+
+    REDIRECT = f"<{W}/entity/Q520> <{OWL}sameAs> <{W}/entity/Q501> ."
+    CASE = TestEachNodeLeavesInABlockThatNamesIt
+    LINES = [
+        *CASE.HEADER,
+        *CASE.PLACE,
+        *CASE.NINA,
+        *CASE.RUDOLF,
+        REDIRECT,
+        *CASE.GUSTAV,
+        *CASE.LEOPOLD,
+    ]
+
+    def test_the_nodes_of_the_block_before_leave_ahead_of_it(self, tmp_path):
+        full = tmp_path / "full.nt.gz"
+        public = tmp_path / "nonprivileged.nt.gz"
+        with gzip.open(full, "wt", encoding="utf-8") as handle:
+            handle.write("\n".join(self.LINES) + "\n")
+        filter_nonprivileged_export(full, public, self.CASE.EXCLUDED)
+        with gzip.open(public, "rt", encoding="utf-8", newline="\n") as handle:
+            lines = handle.read().split("\n")[:-1]
+        assert misplaced(lines) == []
+        letter = [
+            number for number, line in enumerate(lines) if REF_LETTER in line
+        ]
+        assert letter
+        assert max(letter) < lines.index(self.REDIRECT)
 
 
 class TestTheMungerBlockChecker:
@@ -1349,7 +1399,7 @@ class TestTheMungerBlockChecker:
         )
         value = time_value(VALUE_1958, "1958-12-25")
         assert misplaced(self.lines(reference, value)) == [
-            f"<{W}/entity/Q505>: {line}" for line in value
+            f"<{W}/entity/Q505>: {line}" for line in value[1:]
         ]
         assert misplaced(self.lines(reference + value, [])) == []
 
@@ -1381,10 +1431,121 @@ class TestTheMungerBlockChecker:
             f"{self.VALUE} {RDF_TYPE} <{ONTOLOGY}QuantityValue> .",
             f"{self.VALUE} <{ONTOLOGY}quantityNormalized> {normalized} .",
             f"{normalized} {RDF_TYPE} <{ONTOLOGY}QuantityValue> .",
+            f'{normalized} <{ONTOLOGY}quantityAmount> "+1"^^<{XSD}decimal> .',
         )
         assert misplaced(self.lines(quantity, [])) == []
         assert misplaced(self.lines(quantity[:-1], quantity[-1:])) == [
             f"<{W}/entity/Q505>: {quantity[-1]}"
+        ]
+
+    REFERENCE_LINE = (
+        f'<{W}/reference/{REF_LETTER}> <{W}/prop/reference/P8> "вдова" .'
+    )
+    REDIRECT = f"<{W}/entity/Q520> <{OWL}sameAs> <{W}/entity/Q501> ."
+
+    def test_a_node_after_a_redirect_is_of_the_redirect(self):
+        cited = self.statement(
+            f"{self.NODE} {DERIVED_FROM} {self.REFERENCE} ."
+        )
+        after = [*entity_block("Q501", "Rudolf Löbig"), *cited]
+        assert misplaced([*after, self.REDIRECT, self.REFERENCE_LINE]) == [
+            f"<{W}/entity/Q520>: {self.REFERENCE_LINE}"
+        ]
+        assert misplaced([*after, self.REFERENCE_LINE, self.REDIRECT]) == []
+
+    def test_a_reference_read_before_the_line_naming_it_registers_nothing(
+        self,
+    ):
+        # the munger reads a block once, in order: the reference's lines,
+        # parked until the statement derives from it, are restored but not
+        # read again, so its prv: line registers no value node
+        reference = [
+            f"{self.REFERENCE} {RDF_TYPE} <{ONTOLOGY}Reference> .",
+            f"{self.REFERENCE} <{W}/prop/reference/value/P577> {self.VALUE} .",
+        ]
+        value = time_value(VALUE_1958, "1958-12-25")
+        derived = f"{self.NODE} {DERIVED_FROM} {self.REFERENCE} ."
+        assert misplaced(
+            self.lines([*self.statement(), *reference, derived, *value], [])
+        ) == [f"<{W}/entity/Q501>: {line}" for line in value[1:]]
+        assert (
+            misplaced(
+                self.lines(
+                    [*self.statement(), derived, *reference, *value], []
+                )
+            )
+            == []
+        )
+
+    def test_a_statement_read_before_the_line_naming_it_registers_nothing(
+        self,
+    ):
+        statement = self.statement(
+            f"{self.NODE} <{W}/prop/statement/value/P570> {self.VALUE} ."
+        )
+        value = time_value(VALUE_1958, "1941-03-06")
+        assert misplaced(
+            self.lines([*statement[1:], statement[0], *value], [])
+        ) == [f"<{W}/entity/Q501>: {line}" for line in value[1:]]
+        assert misplaced(self.lines([*statement, *value], [])) == []
+
+    def test_lines_before_the_first_block_are_flagged(self):
+        before = time_value(VALUE_1958, "1958-12-25")
+        assert misplaced([*before, *self.lines([], [])]) == [
+            f"block 0, of no entity: {line}" for line in before
+        ]
+
+    def test_a_line_of_another_entity_is_flagged(self):
+        other = f'<{W}/entity/Q502> {RDFS_LABEL} "Nina Sartina"@en .'
+        assert misplaced(self.lines([other], [])) == [
+            f"<{W}/entity/Q501>: {other}"
+        ]
+
+    def test_a_statement_named_by_another_predicate_is_flagged(self):
+        statement = self.statement()
+        unlinked = [
+            f"<{W}/entity/Q501> "
+            f"<http://www.w3.org/2000/01/rdf-schema#seeAlso> {self.NODE} .",
+            *statement[1:],
+        ]
+        assert misplaced(self.lines(unlinked, [])) == [
+            f"<{W}/entity/Q501>: {statement[1]}"
+        ]
+
+    def test_a_value_nodes_type_is_kept_wherever_it_sits(self):
+        value = time_value(VALUE_1958, "1958-12-25")
+        flagged = misplaced(self.lines([], value))
+        assert flagged == [f"<{W}/entity/Q505>: {line}" for line in value[1:]]
+        assert not any(value[0] in line for line in flagged)
+
+    def test_only_the_last_entity_a_block_names_is_its_entity(self):
+        # two data nodes before any other line: one block, of the second
+        data = entity_block("Q502", "Nina Sartina")[:3]
+        lines = [*data, *entity_block("Q501", "Rudolf Löbig")]
+        assert blocks(lines) == [lines]
+        assert misplaced(lines) == []
+        label = f'<{W}/entity/Q502> {RDFS_LABEL} "Nina Sartina"@en .'
+        assert misplaced([*lines, label]) == [f"<{W}/entity/Q501>: {label}"]
+
+    def test_a_normalized_quantity_registers_only_from_a_value_node(self):
+        normalized = f"<{W}/value/{VALUE_2002}>"
+        amount = (
+            f'{normalized} <{ONTOLOGY}quantityAmount> "+1"^^<{XSD}decimal> .'
+        )
+        from_entity = [
+            f"<{W}/entity/Q501> <{ONTOLOGY}quantityNormalized> {normalized} .",
+            amount,
+        ]
+        assert misplaced(self.lines(from_entity, [])) == [
+            f"<{W}/entity/Q501>: {amount}"
+        ]
+        # from a value node no line registers, it registers the one it names
+        from_value = [
+            f"{self.VALUE} <{ONTOLOGY}quantityNormalized> {normalized} .",
+            amount,
+        ]
+        assert misplaced(self.lines(from_value, [])) == [
+            f"<{W}/entity/Q501>: {from_value[0]}"
         ]
 
     def test_a_reference_of_a_statement_no_entity_names_is_kept(self):
@@ -4137,11 +4298,20 @@ class TestExportNonprivileged:
         self.export(tmp_path, vocabulary)
         assert self.written(tmp_path) == self.EXPORT_FILES
 
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            OSError(errno.ENOSPC, "No space left on device"),
+            KeyboardInterrupt(),
+        ],
+        ids=["disk-full", "interrupted"],
+    )
     def test_a_failure_mid_dump_leaves_no_dump(
-        self, tmp_path, vocabulary, monkeypatch
+        self, tmp_path, vocabulary, monkeypatch, failure
     ):
-        # the disk fills after 50 lines of the dump (#412): neither a
-        # cut-short dump under its shareable name nor a partial one is left
+        # the disk fills, or the run is interrupted, after 50 lines of the
+        # dump (#412): neither a cut-short dump under its shareable name nor
+        # a partial one is left
         opened, sinks = gzip.open, []
 
         class Full:
@@ -4157,7 +4327,7 @@ class TestExportNonprivileged:
             def write(self, line):
                 self.lines += 1
                 if self.lines > 50:
-                    raise OSError(errno.ENOSPC, "No space left on device")
+                    raise failure
                 return self.handle.write(line)
 
         def open_(path, mode="rb", *args, **options):
@@ -4168,7 +4338,7 @@ class TestExportNonprivileged:
             return handle
 
         monkeypatch.setattr(backup.gzip, "open", open_)
-        with pytest.raises(OSError, match="No space left"):
+        with pytest.raises(type(failure)):
             self.export(tmp_path, vocabulary)
         # it failed in the export's own dump, after its first 50 lines
         assert [sink.lines for sink in sinks] == [51]
@@ -4205,6 +4375,104 @@ class TestExportNonprivileged:
         monkeypatch.setattr(backup.os, "replace", failing)
         with pytest.raises(OSError, match="Input/output"):
             self.export(tmp_path, vocabulary)
+        assert self.written(tmp_path) == set()
+
+    def test_a_failure_moving_the_dump_removes_the_exclusions_moved(
+        self, tmp_path, vocabulary, monkeypatch
+    ):
+        # into a directory an earlier export wrote (#412): the exclusions
+        # this run moved onto their name go when its dump cannot follow,
+        # and so does the earlier run's dump, whose exclusions they replaced
+        earlier = {"cutoff_years": 77, "excluded": {}, "included_persons": []}
+        (tmp_path / "nonprivileged-exclusions.json").write_text(
+            json.dumps(earlier)
+        )
+        with gzip.open(tmp_path / "nonprivileged.nt.gz", "wt") as handle:
+            handle.write(f'{entity("Q401")} {RDFS_LABEL} "Gustav"@en .\n')
+        replace = os.replace
+
+        def failing(source, target):
+            if Path(target).name == "nonprivileged.nt.gz":
+                raise OSError(errno.EIO, "Input/output error")
+            return replace(source, target)
+
+        monkeypatch.setattr(backup.os, "replace", failing)
+        with pytest.raises(OSError, match="Input/output"):
+            self.export(tmp_path, vocabulary)
+        assert self.written(tmp_path) == set()
+        assert not any(
+            path.name.endswith(".partial") for path in tmp_path.iterdir()
+        )
+
+    STALE = f'{entity("Q502")} {RDFS_LABEL} "Nina Sartina"@en .\n'
+
+    def stale_partials(self, tmp_path) -> None:
+        """Partial files an earlier run left, the dump's naming Nina
+        Sartina (Q502), whom no export lets out."""
+        with gzip.open(
+            tmp_path / "nonprivileged.nt.gz.partial", "wt"
+        ) as handle:
+            handle.write(self.STALE)
+        (tmp_path / "nonprivileged-exclusions.json.partial").write_text(
+            json.dumps(
+                {
+                    "cutoff_years": 77,
+                    "excluded": {},
+                    "included_persons": ["Q502"],
+                }
+            )
+        )
+
+    def test_a_stale_partial_file_never_reaches_the_export(
+        self, tmp_path, vocabulary
+    ):
+        self.stale_partials(tmp_path)
+        self.export(tmp_path, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert "Q502" not in mentioned
+        assert self.STALE.strip() not in text
+        exclusions = json.loads(
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
+        )
+        assert "Q502" not in exclusions["included_persons"]
+        assert self.written(tmp_path) == self.EXPORT_FILES
+
+    def test_a_refusal_leaves_no_stale_partial_file(
+        self, tmp_path, vocabulary
+    ):
+        # the partial files go before anything is read or refused
+        self.stale_partials(tmp_path)
+        dumped = export_dump(vocabulary).revisions
+        with pytest.raises(QueryServiceLag):
+            self.export(
+                tmp_path,
+                vocabulary,
+                revisions=[dumped, {**dumped, "Q401": 999}],
+            )
+        assert self.written(tmp_path) == set()
+
+    def test_an_unfilterable_dump_leaves_no_stale_partial_file(
+        self, tmp_path, vocabulary
+    ):
+        self.stale_partials(tmp_path)
+        dump = export_dump(vocabulary)
+        sitelink = (
+            "<https://el.example/wiki/Page> <http://schema.org/about> "
+            f"{entity('Q401')} ."
+        )
+        dump.write(tmp_path / "full.nt.gz", [*dump.lines, sitelink])
+        runner = ExportRun(dump.revisions, tuple(PEOPLE))
+        clock = Clock()
+        with pytest.raises(backup.UnfilterableDump):
+            export_nonprivileged(
+                config(),
+                tmp_path,
+                run=runner,
+                vocabulary=vocabulary,
+                lag_timeout=60,
+                sleep=clock.sleep,
+                clock=clock,
+            )
         assert self.written(tmp_path) == set()
 
     def test_a_failure_moving_the_exclusions_leaves_no_dump(
