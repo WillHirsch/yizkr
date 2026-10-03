@@ -48,10 +48,15 @@ fictional scan registered under exactly its media object's title:
 Fictional synthetic data only (docs/EXAMPLES.md): Sebastian and
 Hildegard Löbig, the Löbig family's studio portrait of the 1890s and
 the 1905 wedding portrait. Every title, name and file
-carries a marker, eight hex digits of a hash over the fixture and over
+carries a marker, eight hex digits of a hash over the fixture, over
 the source of the registrar, the writer, resolve, the GEDCOM adapter and
-the wiki client, so each version of the fixture and of that code meets the
-fixture as a first write does. Like every live test it writes fictional
+the wiki client, and over eight random bytes drawn once a session, so
+each session, and each version of the fixture and of that code, meets the
+fixture as a first write does: an earlier session's items would change
+what a later one is flagged for, as a scan registered again under a
+title an earlier session's media object holds is flagged against it.
+Within a session a rewrite finds its own items again. Like every live
+test it writes fictional
 data to the one instance, so the session that runs it ends by clearing
 the recorded instance-contents key (docs/AGENT_PROTOCOL.md §5).
 """
@@ -59,6 +64,7 @@ the recorded instance-contents key (docs/AGENT_PROTOCOL.md §5).
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
@@ -99,6 +105,7 @@ MARK = hashlib.sha256(
         Path(module.__file__).read_bytes()
         for module in (registrar, writer, resolve, gedcom, wiki)
     )
+    + os.urandom(8)
 ).hexdigest()[:8]
 
 # the export, with {order} and the marker in each label it gives an item
