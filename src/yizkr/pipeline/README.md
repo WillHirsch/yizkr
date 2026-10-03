@@ -372,8 +372,13 @@ re-running one step in isolation — but for a normal ingest you only ever run
   --file`, with the `textfile` engine too, never the text file; in
   `ingest run`, the source file's bytes). The prompts name the artifact
   by that key, never by QID, and ask each claim to cite it, so neither
-  a transcription nor a prompt changes with the instance or a reset. A
-  prepared file's claims cite their artifacts themselves. The GEDCOM
+  a transcription nor a prompt changes with the instance or a reset.
+  Where the transcription record gives a page's printed number, the
+  prompts show it beside the page's `[Page N]` marker, and the extractor
+  sets a claim's `printed_page_number` from the record for the one
+  physical page its `page_number` names, never from the model
+  (ADR-0037 §2). A prepared file's claims cite their artifacts
+  themselves. The GEDCOM
   adapter (`ingest gedcom`) cites the export's own bytes.
 - **reconcile** — in `ingest run`, proposes nothing. A proposal matches
   one of the document's entities to an entity of a roster, and a stage

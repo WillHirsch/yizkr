@@ -1331,6 +1331,7 @@ PROPERTIES = {
     "whg_place_id": "P23",
     "cause_of_death": "P24",
     "sibling": "P25",
+    "printed_page_number": "P26",
 }
 ITEMS = {
     "human": "Q1",

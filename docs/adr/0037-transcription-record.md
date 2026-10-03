@@ -7,6 +7,13 @@ becomes the fallback for wording), amends ADR-0008 and ADR-0015 in place,
 and resolves the transcription items of ADR-0035 §10. It lands before
 scratch run 1.
 
+Amended by #424 (2026-10-02): extraction locates claims by the printed
+page numbers the record gives. Every extraction prompt shows a page's
+printed number beside its `[Page N]` marker, on the marker's own line;
+a claim keeps the physical page as its `page number` and gains the
+printed one, from the record and never guessed, as a `printed page
+number` in its source block (§2, "Page numbers for extraction").
+
 ## Context
 
 The vision transcriber answered one block of text per document, and code
@@ -116,10 +123,52 @@ on reuse either. The PDF's flag is its first vision page's.
 
 **Page numbers for extraction** are read from the record through
 `Transcription.printed_pages()`: the printed page numbers by physical
-index. Extraction's chunking does not read them yet: `printed_pages()`
-without a caller is this decision's scope, and extraction locating
-claims by the printed page numbers the record gives is a follow-up,
-#424.
+index. Amended by #424 (2026-10-02): extraction reads them in two
+places.
+
+- **The prompts.** The text every extraction prompt carries (the entity
+  manifest's, the segmentation's, each chunk's document, units and
+  mention lines, and the single call's) is `Transcription.prompt_text()`:
+  the transcription's text with each page's printed number beside its
+  own `[Page N]` marker, on that line, as `[Page 6] (printed page number
+  "4")`, the number exactly as the record gives it (a page that shows
+  two printed pages, `"12, 13"`, as joined). The line count is the
+  text's, so every line number into the text (mention lines, segment
+  ranges, the coverage audits) holds. The marker is found where the
+  page's opening lies, between the page before's text and its own; an
+  image's marker (`[Page 6, image 1: sha1:…]`) keeps its physical page
+  and shows no number. `text` itself, the transcription's content, is
+  unchanged, and a transcription whose record gives no printed number
+  is carried as it is: its prompt text is the text itself. The chunk
+  prompt and the single call's prompt ask for `page_number` as the
+  physical N of the marker, never the printed number beside it, a rule
+  both state for every document, whether its record gives printed
+  numbers or not.
+- **The locator.** After the model answers, the extractor sets each
+  claim's printed page number itself, beside its source artifact
+  (`cite_artifact`): the record's printed number for the page the claim
+  cites, only when its `page_number` is one physical page, given as its
+  digits alone, and the record gives that page a printed number. A
+  range, a page given in words, a page with no printed number in the
+  record and a transcription with no record get none, and whatever the
+  model wrote there is dropped. The claim schema the prompts carry does
+  not show the field, and a source without one serialises as before.
+  The number describes the physical page the `page number` names: a
+  page that shows a spread with only one half numbered keeps that one
+  number for every claim read from it, the unnumbered half's included,
+  since a PDF read page by page and one read whole give that page the
+  same number. A printed number of whitespace alone is none, in the
+  prompt as in the locator. Validation refuses a source that gives a
+  printed page number without a page number, so a prepared claims file
+  cannot write one alone. A `printed_page` holding a lone surrogate
+  fails the record, as page text holding one fails the transcription.
+  The writer puts it in the claim's `stated in` block beside the page
+  number, as the reference property `printed page number` (MODELING.md,
+  "Reference pattern"; ADR-0003). An excerpt is extracted from its own
+  transcription, the reading of its image (ADR-0008, as amended by
+  #397), so its claims never take the printed number of the container's
+  page, and its `part of` the container keeps the container's physical
+  page.
 
 ### 3. The check reads the record
 
@@ -242,7 +291,9 @@ On the review's owner questions, following #389 and this ADR:
 5. **Whole-PDF page counts.** The record of a PDF read whole gives
    exactly the PDF's pages: more fail, as fewer already do (§3).
 6. **Page numbers.** `printed_pages()` without a caller is the intended
-   scope; extraction reading them is a follow-up, #424 (§2).
+   scope; extraction reading them is a follow-up, #424 (§2). Amended by
+   #424 (2026-10-02): extraction reads them, in its prompts and for each
+   claim's printed page number (§2).
 7. **Refusals in other languages** written as a page's text pass
    unflagged: English-only flag signatures are an accepted known limit
    (§3).
@@ -274,8 +325,11 @@ override):
   and is made again; with the prompt changed, its call misses the cache.
 - The prompt names the manifest's artifact classes, so a change to them
   changes the transcription calls' keys.
-- **Follow-ups.** Extraction locates claims by the printed page numbers
-  the record gives (`Transcription.printed_pages()`, #424); a text
-  with no record takes its class from the entity manifest, once the
-  manifest states one; the flag tier's signatures are revisited with the
+- The physical-page rule is in the chunk prompt and the single call's
+  prompt of every document, so every chunk and single-call key changes
+  once, printed numbers or not, as do the manifest and segmentation keys
+  of a document whose record gives printed numbers; the scratch diff
+  against main shows it (ADR-0025, ADR-0032).
+- **Follow-ups.** A text with no record takes its class from the entity
+  manifest, once the manifest states one; the flag tier's signatures are revisited with the
   first scratch runs' `transcription-flag` alerts (#214).
