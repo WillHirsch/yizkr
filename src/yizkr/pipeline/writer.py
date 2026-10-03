@@ -262,7 +262,9 @@ before it are written:
   `refused_terms` names it ("<local id>: <term>"), with a warning that
   names its characters by their code points; a description is named
   only when a claim the writer writes mentions its entity, as it goes
-  only on the item such a claim mints. An entity whose label
+  only on the item such a claim mints: not one only claims refused
+  mention, for their text or because they name an entity step 2
+  refuses. An entity whose label
   holds one has no item the writer can find or mint by it: each claim
   that mentions it, as its subject, its value or a qualifier's, is
   refused before the first write, and `refused_terms` names the label;
@@ -2395,7 +2397,8 @@ class BatchWriter:
         stopped, blocked, flags = self._blocked(batch, refusals)
         refused = {*refusals, *stopped}
         # found before the first write too: the kinds the vocabulary lacks,
-        # of the claims the writer writes, the type hints the instance
+        # of the claims the writer writes (all but those refused for their
+        # text and those the plan refuses), the type hints the instance
         # cannot hold, and the terms it may keep in another form, each
         # skipped wherever the writer would record it
         warnings = self._unknown_kinds(batch, refused)
@@ -2405,7 +2408,7 @@ class BatchWriter:
             *self._type_hints_over_limit(),
         ]
         refused_terms, term_warnings = self._unknown_terms(
-            batch, refusals, unnamed
+            batch, refused, unnamed
         )
         warnings += term_warnings
         # reviewed equivalences (ADR-0007): resolve replaced these

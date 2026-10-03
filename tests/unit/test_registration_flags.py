@@ -25,6 +25,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import unicodedata
 from argparse import Namespace
 
 import pytest
@@ -1526,6 +1527,15 @@ TWO_PEOPLE_GEDCOM = FAMILY_GEDCOM.replace(
 )
 
 
+# a combining mark Unicode 15.0 assigns and the Python 3.11 the repository
+# pins leaves unassigned: the writer refuses text that holds it
+UNKNOWN_MARK = "\U0001e08f"
+needs_unknown_mark = pytest.mark.skipif(
+    unicodedata.category(UNKNOWN_MARK) != "Cn",
+    reason="this interpreter's Unicode tables assign U+1E08F",
+)
+
+
 class WritingWiki(FakeWiki):
     """The in-memory wiki with the surface the writer and resolve use
     beside the registrar's: its vocabulary, the label lookup and the label
@@ -1914,6 +1924,96 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         assert flag_tuples(planned.flags) == flag_tuples(written.flags)
         made = set(wiki.entities) - set(before)
         assert made == {written.run_qid}
+
+    @staticmethod
+    def with_media_object(batch, **terms):
+        """`batch` with the terms `terms` of the media object md1's
+        manifest record replaced."""
+        from yizkr.claims import ClaimBatch
+
+        given = batch.model_dump(mode="json")
+        for record in given["entities"]:
+            if record["id"] == "md1":
+                record.update(terms)
+        return ClaimBatch.model_validate(given)
+
+    @needs_unknown_mark
+    @pytest.mark.parametrize("blocked", [True, False])
+    def test_a_blocked_entitys_marked_description_is_not_counted(
+        self, blocked
+    ):
+        """The media object's description holds a character Python's
+        Unicode tables do not know (#444, #431). Blocked, it is refused
+        with its claim, once, and its description, which only an item a
+        written claim mints would take, is neither named in
+        refused_terms nor warned of. Not blocked, its item is made and the
+        description is named, as the writer leaves it out."""
+        from yizkr.pipeline.review import claim_id
+        from yizkr.pipeline.writer import BatchWriter
+
+        wiki = WritingWiki()
+        if blocked:
+            self.both_labels_registered(wiki)
+        batch = self.with_media_object(
+            family_gedcom(wiki, TWO_PEOPLE_GEDCOM),
+            summary=f"the studio portrait, Flörburg {UNKNOWN_MARK}",
+        )
+        named = [
+            claim_id(claim)
+            for claim in batch.claims
+            if claim.value.value.local_id == "md1"
+        ]
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        assert written.refused == (named if blocked else [])
+        assert written.refused_terms == (
+            [] if blocked else ["md1: description"]
+        )
+        described = [
+            w for w in written.warnings if "'md1' has a description" in w
+        ]
+        assert len(described) == (0 if blocked else 1)
+        assert ("md1" in written.created_items) is not blocked
+
+    @needs_unknown_mark
+    def test_a_marked_label_is_refused_once_and_never_planned(
+        self, monkeypatch
+    ):
+        """A media object whose label holds a character Python's Unicode
+        tables do not know is refused by that rule, with its claim, once:
+        the plan is made without that claim, so it never places the
+        entity nor looks its label up, and no warning calls it blocked."""
+        from yizkr.pipeline.review import claim_id
+        from yizkr.pipeline.writer import BatchWriter
+
+        placed: list[str] = []
+        place = BatchWriter._place
+
+        def spied(self, label, *args):
+            placed.append(label)
+            return place(self, label, *args)
+
+        monkeypatch.setattr(BatchWriter, "_place", spied)
+        wiki = WritingWiki()
+        self.both_labels_registered(wiki)
+        batch = self.with_media_object(
+            family_gedcom(wiki, TWO_PEOPLE_GEDCOM),
+            label=f"{TITLE}{UNKNOWN_MARK}",
+        )
+        named = [
+            claim_id(claim)
+            for claim in batch.claims
+            if claim.value.value.local_id == "md1"
+        ]
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        assert written.refused == named
+        assert written.refused_terms == ["md1: label"]
+        assert placed and not [p for p in placed if UNKNOWN_MARK in p]
+        assert not [w for w in written.warnings if "is refused, with" in w]
+        assert "md1" not in written.created_items
 
     @pytest.mark.parametrize("order", ["artifact-first", "gedcom-first"])
     def test_a_scan_and_a_rescan_under_the_title_are_both_flagged(

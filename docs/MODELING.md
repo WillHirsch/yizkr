@@ -53,7 +53,10 @@
   label, so two same-named copies stay two items whatever form the
   instance keeps the first one's label in. A description is named in
   `refused_terms` only when a claim the writer writes mentions its
-  entity, as only the item such a claim mints would take it. A run
+  entity, as only the item such a claim mints would take it: a claim
+  refused for its text, or with an entity that may join neither the
+  item under its label nor the one under its tagged label (ADR-0010),
+  mints nothing. A run
   item's label holding one, an extraction run's or the place-hierarchy
   pass's, or an extraction run's description, raises ValueError before
   the run item is looked up, and so before anything is written, as a

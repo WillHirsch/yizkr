@@ -129,6 +129,13 @@ does (AY); an entity of the kind artifact fragment is on the artifact
 side, in the writer and in resolve, as its item is an artifact's part;
 and only an artifact's own content tag makes a label one of its
 title's.
+With the rule of #431 (amended by #444, 2026-10-03): the plan is made
+without the claims refused for their text, so an entity whose label
+holds a character Python's tables do not know is never placed nor its
+label looked up; and a description is named in `refused_terms`, and a
+kind the vocabulary lacks warned of, only when a claim written mentions
+its entity, not a claim refused for its text nor one refused with an
+entity the plan blocks.
 The kinds still matched by label, and why, are listed in §1 ("What is
 still matched by label").
 
