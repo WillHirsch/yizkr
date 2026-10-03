@@ -4821,9 +4821,10 @@ def names_of_batch(text: str) -> dict[str, tuple[str, list[str]]]:
 
 class TestABracketAlone:
     """A person whose only NAME is a bracketed part keeps an entity: its
-    label is the bracket as written, its alias and unsplit form the
-    bracket's content, the part is counted, and its claims stay (ADR-0035
-    §6)."""
+    label is the bracket as written, its unsplit form the bracket's
+    content, the part is counted, and its claims stay (ADR-0035 §6). The
+    content as an alias gives no part the label lacks, so the alias
+    cleanup drops it as derivable (§8)."""
 
     @pytest.mark.parametrize(
         ("name", "label"),
@@ -4837,7 +4838,7 @@ class TestABracketAlone:
         text = person("I7", name, "1 BIRT", "2 DATE 17 APR 1881")
         result = adapt_gedcom(text, artifact=EXPORT)
         (ida,) = result.batch.entities
-        assert (ida.id, ida.label, ida.aliases) == ("i7", label, ["Peppi"])
+        assert (ida.id, ida.label, ida.aliases) == ("i7", label, [])
         assert parts(ida.structure) == {"unsplit": ["Peppi"]}
         assert structure_problems(ida) == []
         assert result.outcomes["NAME bracketed part"] == 1
@@ -5090,6 +5091,43 @@ class TestAliasHygiene:
         text = person("I16", "Ursula Maria /Löbig/", "1 NAME Maria /Löbig/")
         ursula, _ = record_of(text, "i16")
         assert ursula.aliases == []
+
+    @pytest.mark.parametrize(
+        ("first", "second", "alias"),
+        [
+            ("Gustav /Löbig/", "Gustav /Lobig/", "Gustav Lobig"),
+            ("Cäcilie /Tarle/", "Cacilie /Tarle/", "Cacilie Tarle"),
+            ("Eugen /Fläckfeld/", "Eugen /Flackfeld/", "Eugen Flackfeld"),
+            ("Ida /Sörne/", "Ida /Sorne/", "Ida Sorne"),
+            ("Hans-Xxx /Löbig/", "Hans Xxx /Löbig/", "Hans Xxx Löbig"),
+        ],
+    )
+    def test_an_untyped_spelling_variant_stays(self, first, second, alias):
+        """A second, untyped NAME that spells the label's parts otherwise
+        (an umlaut written plain, a hyphen as a space) gives no claim, so
+        the alias is the one place its spelling lands: a spelling variant
+        is never derivable (ADR-0035 §8)."""
+        found, _ = record_of(person("I8", first, f"1 NAME {second}"), "i8")
+        assert found.aliases == [alias]
+
+    def test_the_cleanup_reads_the_record(self):
+        """The adapter cleans a person's aliases by its record (ADR-0035
+        §8): Gustav's second NAME 'Gustav /Löbig/' is derivable and goes,
+        while his NICK 'Gustl', a part the label lacks, stays, and so does
+        'Herr Löbig', the only form holding his NPFX title."""
+        text = person(
+            "I8",
+            "Gustav /Löbig/",
+            "2 NICK Gustl",
+            "1 NAME Gustav /Löbig/",
+            "1 NAME Herr /Löbig/",
+            "2 NPFX Herr",
+        )
+        gustav, _ = record_of(text, "i8")
+        assert "Gustl" in gustav.aliases
+        assert "Gustav Löbig" not in gustav.aliases
+        assert parts(gustav.structure)["titles"] == ["Herr"]
+        assert [a for a in gustav.aliases if "Herr" in a] == ["Herr Löbig"]
 
 
 class TestTheFixturesNicknames:
@@ -5365,7 +5403,7 @@ class TestNamesWithoutWords:
 
     def test_brackets_without_a_word_beside_a_word(self):
         entity, outcomes = record_of(person("I7", "(Peppi) (?)"), "i7")
-        assert (entity.label, entity.aliases) == ("(Peppi)", ["Peppi"])
+        assert (entity.label, entity.aliases) == ("(Peppi)", [])
         assert outcomes["NAME part without a word"] == 1
         entity, outcomes = record_of(person("I1", "Eugen (?) /Löbig/"), "i1")
         assert entity.label == "Eugen Löbig"
@@ -5529,7 +5567,7 @@ class TestRound2Readings:
             "titles": ["Frau"],
             "unsplit": ["Peppi"],
         }
-        assert ida.aliases == ["Peppi", "Frau Peppi"]
+        assert ida.aliases == ["Frau Peppi"]
         assert outcomes["NAME parts not restated"] == 1
         assert "NAME part without a name" not in outcomes
         assert structure_problems(ida) == []
@@ -5717,7 +5755,7 @@ class TestRound3Names:
         ida, _ = record_of(
             person("I7", "", "2 GIVN (Peppi)", "2 NICK Muckel"), "i7"
         )
-        assert (ida.label, ida.aliases) == ("(Peppi)", ["Peppi", "Muckel"])
+        assert (ida.label, ida.aliases) == ("(Peppi)", ["Muckel"])
 
     @pytest.mark.parametrize(
         ("name", "lines", "label"),
@@ -5738,14 +5776,14 @@ class TestRound3Names:
         assert outcomes["NAME part without a word"] == 1
         assert structure_problems(entity) == []
         if lines:
-            assert entity.aliases == ["Peppi", "Frau Peppi"]
+            assert entity.aliases == ["Frau Peppi"]
 
     def test_a_bracket_of_brackets_is_read_by_its_outermost_pair(self):
         entity, outcomes = record_of(person("I7", "(Pep(pi))"), "i7")
-        assert (entity.label, entity.aliases) == ("(Peppi)", ["Peppi"])
+        assert (entity.label, entity.aliases) == ("(Peppi)", [])
         assert outcomes["NAME bracketed part"] == 1
         entity, _ = record_of(person("I7", "((Peppi))"), "i7")
-        assert entity.aliases == ["Peppi"]
+        assert entity.aliases == []
 
     def test_an_unclosed_bracket_reads_as_the_whole_value_does(self):
         entity, _ = record_of(person("I7", "Ida ( /Sörne (Peppi)/"), "i7")
@@ -5915,14 +5953,14 @@ class TestGivnBracketsAndQuotes:
 
     def test_a_givn_bracket_alone_keeps_its_person_as_an_unsplit_form(self):
         ida, outcomes = record_of(person("I7", "", "2 GIVN (Peppi)"), "i7")
-        assert (ida.label, ida.aliases) == ("(Peppi)", ["Peppi"])
+        assert (ida.label, ida.aliases) == ("(Peppi)", [])
         assert parts(ida.structure) == {"unsplit": ["Peppi"]}
         assert outcomes["NAME bracketed part"] == 1
 
     def test_a_givn_quote_alone_keeps_its_person_as_a_nickname(self):
         text = person("I7", "", "2 GIVN 'Peppi'")
         ida, outcomes = record_of(text, "i7")
-        assert (ida.label, ida.aliases) == ("'Peppi'", ["Peppi"])
+        assert (ida.label, ida.aliases) == ("'Peppi'", [])
         assert parts(ida.structure) == {"nicknames": ["Peppi"]}
         assert stated(text, "i7", "nickname") == [("Peppi", [])]
         assert "NAME bracketed part" not in outcomes
@@ -6280,7 +6318,7 @@ class TestRound5:
         )
         agnes, outcomes = record_of(text, "i1")
         assert stated(text, "i1", "married_name") == []
-        assert agnes.aliases == ["Agnes Peppi Löbig"]
+        assert agnes.aliases == []
         assert outcomes["NAME part without a word"] == 1
 
     @pytest.mark.parametrize(

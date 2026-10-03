@@ -24,71 +24,81 @@ death events are mentions too. Only mentions the manifest marks for
 extraction are clustered; the others are each a cluster of their own
 ("unclustered").
 
+**Records.** Clustering keys and judges on each mention's record, what
+extraction says its names are made of (`EntityRecord.structure`,
+ADR-0035 §2), never on the wording, word order or punctuation of its
+label. A person, a place, an organisation or a family without a record
+(none given, one extraction set aside under ADR-0035 §5, a record of
+another kind, or a batch without a manifest) is *recordless*
+(ADR-0035 §7, rule 1): it keys on its exact normalised name, from its
+label and each alias, meets only mentions without a record, and never
+links confidently. The summary counts recordless mentions by kind.
+
 **Lifting.** Relations the manifest states between its own local ids are
 lifted into mention space: kin (father, mother, child, spouse and
 sibling, each seen from both ends, so a father claim and a child claim
-say the same), the human participants of events, place containment
-(`part_of`, `location`), typed names and nicknames, and dates. A birth
-or death event is its participant's own, and its date is theirs too,
-when it has only one participant, and that person's own date of the kind
-(from their claims, never one an event passed them) does not conflict
-with it. Only what the manifests assert is used: no containment or
-kinship is read from the graph, and none is inferred.
+say the same, and the couple of a union as spouses), the human
+participants of events and unions with their roles (`object_has_role`),
+the events a union is started and ended by, place containment
+(`part_of`, `location`), dates, stated sexes and stated civil statuses.
+A birth or death event is its principal's own, and its date is theirs
+too, when it has exactly one principal, and that person's own date of
+the kind (from their claims, never one an event passed them) does not
+conflict with it (ADR-0035 §3.2). A union's own date is an observation,
+never a key: its dates are its weddings'. Only what the manifests assert
+is used: no containment or kinship is read from the graph, and none is
+inferred.
 
-**Names.** A person's names are its label, its aliases and its typed
-birth, married and official names, each read as a name:
+**Parts.** Every part compares by `normal`: case and accents folded after
+Unicode normalisation, each word's edge punctuation stripped, and single
+spaces. A part holding an umlaut keys twice (DIN 5007-2, ADR-0035 §7):
+once folded (Flörburg as `florburg`) and once with the umlaut written out
+(`floerburg`); two parts match when they share a key. A two-letter
+spelling is never turned back into an umlaut.
 
-- a bracketed part is a form of its own, and a marker at its start
-  ("formerly", "later", "genannt") is dropped: "Gustave Lobig (formerly
-  Gustav Löbig)" gives "Gustave Lobig" and "Gustav Löbig";
-- a name written surname first is read given name first, and past its
-  given names only maiden parts stay: "Löbig, Ursula, Wwe." gives
-  "Ursula Löbig", "LÖBIG, Ida, née SÖRNE" and "Löbig, Ida née Sörne"
-  "Ida Löbig née Sörne"; an occupation where the given names would stand
-  gives none ("Löbig, Hutmacher" names a surname alone);
-- "X Y née Z" gives the forms "X Y" and "X Z", and "X née Z" gives "X"
-  and "X Z"; a marker with no name after it gives no second form;
-- accents are folded, and titles ("Frau", "Dr"), kin and courtesy words
-  ("Tante", "Dad", "Nana"), particles and initials are no name tokens.
+**Keys** (ADR-0035 §7, rule 1), from typed parts only:
 
-A form of one token after a title, a placeholder ("N.N.") or an initial
-names a surname alone, and so does a lone token that the person's other
-forms or its kin use as a surname. A surname alone names no one: it
-makes no key, no name match and no kin agreement ("Frau Löbig", "N.N.
-Löbig").
+- *A person* whose record's status is `name`: each given name, by its
+  standard form and as written, and each nickname, with each of its own
+  surnames and patronymics and each surname of the kin its document
+  names. No key pairs two parts that share a key, and a given part that
+  shares a key with any of those surnames, or with a word of the label of
+  a kin without a record (a surname misread as a given name), pairs with
+  no kin's surname. An `unsplit` form keys each ordered pair of its
+  distinct words, never
+  with a kin's surname, and a one-word one counts as a given name. With
+  no surname of either kind, its given names alone (`lone`), which pair
+  only with the GEDCOM export's people of that given name. Any other
+  status keys nothing.
+- *A place* whose status is `toponym`: each of its names as written, its
+  address among them, save a short form that is another of its names'
+  toponym ("Klurnau" beside "Lager Klurnau"). Its `within` never key.
+- *An organisation*: each proper name; without one, each kind with each
+  of its places. Its places are those its record names, or else the
+  places its `location` claims point to, with every place its manifest
+  puts them in; a place without a record is named by its exact names.
+- *A family*: each surname.
+- *Events*: the same kind (a wedding of any kind together; a divorce, an
+  annulment and an end of unstated kind together), through people: a
+  birth or death its principal's own through that principal, a union
+  through its couple, a union's wedding or end through its union's
+  couple, any other event through its participants. An event without
+  any keys on its whole name.
+- *Everything else*, and a recordless mention: its exact normalised name.
 
-**Blocking** proposes candidate pairs by keys of their own kind, never
-by one shared token:
-
-- *People*: a given-name token with another, surname token. The surname
-  is any later token of the same form, or a surname of the person's
-  lifted kin, taken with the first token of each form. Nicknames stand
-  in for given names. Two keys match on the same surname and given names
-  one of which starts with the other ("Hilde", "Hildegard").
-- *Places*: each token of `min-place-token` characters or more in the
-  part of a name before its first comma, but a generic head ("Kreis",
-  "Lager", "Friedhof"). Region and country parts after it never key.
-- *Organizations*: one name's distinctive tokens all in the other's.
-- *Events* (births, deaths, marriages, migrations, deportations,
-  imprisonments, releases, military service, other events and legal
-  instruments): the same kind, with participants whose person keys
-  match; an event without participants keys on its whole name.
-- *Everything else*: the whole name, normalised.
-
-With `gedcom-anchored`, a mention (of any kind but an event's) that
-key-matches a mention of a GEDCOM export pairs with those GEDCOM anchors
-only, never with other mentions, so the export is the roster documents
-meet. A person named by one token only, with no kin to key a surname,
-pairs only with GEDCOM people whose given name is compatible. A key that
-more than `max-key-mentions` mentions of one kind share (a hub) is
-blocked on by none of them: the mentions only it would join stay apart,
-the summary counts the hubs and the mentions that hold one, and `review`
-lists them. A key that finds a GEDCOM mention is never a hub, whatever
-its count, when the export anchors its kind by key (every kind but an
-organization and an event): each mention holding it pairs with its
-anchors only. Nor is a person's lone token, which only meets the export.
-Blocking looks keys up in indexes, so its work grows with the mentions
-and the pairs it proposes, never with every pair of mentions.
+With `gedcom-anchored`, a mention (of any kind but an event's or a
+union's) that key-matches a mention of a GEDCOM export pairs with those
+GEDCOM anchors only, never with other mentions, so the export is the
+roster documents meet. A key that more than `max-key-mentions` mentions
+of one kind share (a hub) is blocked on by none of them: the mentions
+only it would join stay apart, the summary counts the hubs and the
+mentions that hold one, and `review` lists them. A key that finds a
+GEDCOM mention is never a hub, whatever its count, when the export
+anchors its kind by key (every kind but an organisation, an event and a
+union): each mention holding it pairs with its anchors only. Nor is a
+person's lone given name, which only meets the export. Blocking looks
+keys up in indexes, so its work grows with the mentions and the pairs it
+proposes, never with every pair of mentions.
 
 **Cannot-link.** Two ids of one manifest are kept apart (soft): the
 manifest already unified what it could. The places and occupations of a
@@ -104,26 +114,64 @@ pair (ADR-0002, ADR-0017).
 **Links.** Each candidate pair is a confident link or an ambiguous one,
 by deterministic evidence alone:
 
-- a person pair is confident when the names match (exactly, or by key)
-  and kin that agree, or dates that agree, corroborate it;
-- a place pair when the names match exactly, or one name's
-  comma-separated parts are all among the other's ("Fläckfeld" and
-  "Fläckfeld, Kreis Mockburg");
-- an organization or a family pair when they share a name of two
-  distinctive tokens or more ("Familie Löbig" has one), and, when every
-  one is a word of an institution's kind ("Städtische Realschule"), when
-  they are located in one place: a place of each, or one it lies in,
-  named alike exactly or nested;
-- an event pair when every participant of the one with fewer is merged
-  into one cluster with a participant of the other, and their dates
-  agree; two births or two deaths, each its one participant's own, need
-  no date, since a person has one of each (so an undated birth naming
-  only a mother reads as hers: nothing in the manifest says otherwise);
+- a person pair is confident when they share a key (`key`), and kin that
+  agree, or dates that agree, corroborate it. A shared key counts only
+  through given parts that may be one name (a given part is a given name
+  or a word of an `unsplit` form, which states no standard form): not
+  two given parts whose records give standard forms that share no key;
+  not two nicknames whose holders' records both give given names,
+  sharing no key; and not a given part against a nickname where the
+  given part states a standard form that shares no key with the
+  nickname holder's given names, a holder with no given names barring
+  nothing. A shared key that does not count is `weak`. A key only a GEDCOM
+  `unsplit` form gives (`weak`) and a lone given name (`given`) never
+  make a link confident. Stated sexes that differ, or civil statuses
+  that cannot both hold (`unmarried` at a date wholly after a `married`,
+  `widowed` or `divorced` one), keep a pair ambiguous and never
+  corroborate;
+- a place pair when they share a name and their containers (a record's
+  `within`, and the places its manifest's `part_of` and `location`
+  claims put it in) are equal (`exact`) or one's are all among the
+  other's (`nested`); a shared name with containers that differ (`key`)
+  stays ambiguous;
+- an organisation pair on a shared proper name of two words or more
+  (`exact`); on a shared proper name of one word (`key`) only with places
+  that agree, a shared kind notwithstanding; and, when neither has a
+  proper name, on a shared kind with places that agree (`kind`). Places
+  its `location` claims name agree when a place of one would link with a
+  place of the other, or with a place that one lies in, as places do
+  (`exact` or `nested`; ADR-0035 §7, rule 6); a place without a record,
+  which cannot link, leaves them unknown where it shares an exact name
+  with the other's. Places its record names carry no containers: as one
+  list of parts, against the other's (its record's, or the places its
+  location claims reach and every place they lie in, one without a
+  record by its exact names), they agree when one list lies among the
+  other and a part with a record is shared, and are unknown when only a
+  part without one is; otherwise they differ, whether they share a part
+  (a namesake in another district, or places named at different levels)
+  or nothing. Places differ when both
+  state places and none of that holds, and places that differ keep a
+  pair ambiguous whatever its name;
+- a family pair never: every pair goes to adjudication;
+- a union pair when both name a couple of two and each of one's couple
+  merged with one of the other's, and their weddings' dates do not
+  conflict;
+- a wedding or an end of a union when their unions merged, their kinds
+  can be one (a civil and a religious wedding are two ceremonies; an end
+  of unstated kind meets any end) and their dates agree;
+- two births or two deaths, each its principal's own, when the
+  principals merged, with no date needed, since a person has one of each;
+  a birth or death that is nobody's own (no principal, several, or one
+  whose own date conflicts with it) never, whoever else took part;
+- any other event pair when every participant of the one with fewer is
+  merged into one cluster with a participant of the other, and their
+  dates agree;
 - any other pair when the names match exactly;
-- and never when the two give dates that cannot overlap, when a mention
-  has no kind, or when either matches more than `max-anchors` GEDCOM
-  anchors (a place counting only the anchors it matches exactly, and
-  those it nests in as one).
+- and never when the two give dates that cannot overlap, when either is
+  recordless of a kind that takes a record, when a mention has no kind,
+  or when either matches more than `max-anchors` GEDCOM anchors (a place
+  counting only the anchors it matches exactly, and those it nests in as
+  one).
 
 Dates are compared as ranges, at the precision their source states: a
 decade is ten years, a circa date is widened by `circa-years`, a range's
@@ -131,25 +179,27 @@ bounds widen it, and a bound on one side only leaves the other open, so
 a date is never narrowed to be compared (rule 5). Two dates agree when
 their ranges overlap and both are at most `max-corroborating-years`
 wide; a wider one (a century, a lone "before") agrees with nothing, and
-conflicts only when it cannot overlap. Kin agree on a relation when a
-kin's names match by more than a surname and their dates do not
-conflict.
+conflicts only when it cannot overlap. Kin agree on a relation when they
+share a key, never a surname alone, and their dates do not conflict.
 
 **Clusters.** The closure over every candidate pair gives the candidate
 clusters, the units a review takes. A cluster is *conflicting* when it
 joins a cannot-link pair: *hard* when the impossibility filter rules the
 two out, *soft* when they are only two ids of one manifest. Otherwise it
 is *ambiguous* when any of its links is, or when two of its members that
-were never a pair contradict each other: dates that cannot overlap, kin
-of one relation and one name whose dates conflict, or names that do not
-match at all (for places, neither exactly nor nested). Blocking is not
-transitive, through anchors, given-name prefixes and kin surnames, so
-the closure can join what no pair of its members says. Otherwise it is
-*confident*. Only confident clusters merge: their members share one
-cluster. The members of ambiguous and conflicting clusters stay apart,
-each a cluster of its own, and are counted. A mention with no candidate
-pair is a singleton. Events are clustered after everything else, since
-their links read the clusters their participants end in.
+were never a pair contradict each other: dates that cannot overlap,
+stated sexes or civil statuses that cannot both hold, kin of one
+relation and one name whose dates conflict, event kinds that cannot be
+one, or names that do not match at all (for places, neither exactly nor
+nested; for organisations, places that differ). Blocking is not
+transitive, through anchors and kin surnames, so the closure can join
+what no pair of its members says. Otherwise it is *confident*. Only
+confident clusters merge: their members share one cluster. The members
+of ambiguous and conflicting clusters stay apart, each a cluster of its
+own, and are counted. A mention with no candidate pair is a singleton.
+Unions are clustered after people, places and organisations, and events
+after unions, since their links read the clusters their people and
+unions end in.
 
 **The identity map** (`identity-map.json`, format FORMAT):
 
@@ -166,7 +216,8 @@ their links read the clusters their participants end in.
   that makes it conflict and how, or the two members never linked that
   contradict each other; then each hub (`hub`), with its key and the
   mentions holding it;
-- `summary`: counts only, the adjudication-call estimate among them;
+- `summary`: counts only, the adjudication-call estimate and the
+  recordless mentions among them;
 - `inputs`: the key it is reused under (VERSION, the digest of CODE's
   source, the Unicode version, the thresholds' digest, and each
   document's SHA-1, source and batch content hash); `config`: the
@@ -179,12 +230,10 @@ events, is counts within labels of its own, never a document's words.
 
 from __future__ import annotations
 
-import bisect
 import functools
 import hashlib
 import json
 import os
-import re
 import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -196,7 +245,18 @@ from typing import Any, Literal, Protocol
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from yizkr.claims import ClaimBatch, ItemValue, LocalRef, TimeValue
+from yizkr.claims import (
+    STRUCTURED_KINDS,
+    ClaimBatch,
+    FamilyStructure,
+    ItemValue,
+    LocalRef,
+    OrganizationStructure,
+    PersonStructure,
+    PlaceStructure,
+    TimeValue,
+    VocabRef,
+)
 from yizkr.pipeline.fingerprints import (
     Mention,
     cluster_id,
@@ -220,7 +280,7 @@ from yizkr.pipeline.stages import (
 # what cluster_corpus makes of a set of manifests: bumped whenever the same
 # manifests and thresholds would give another identity map, so that a
 # stored map is made again
-VERSION = 1
+VERSION = 2
 # the layout of identity-map.json
 FORMAT = 1
 STAGE = "clustering"
@@ -255,22 +315,34 @@ HUB = "hub"
 HUMAN = "human"
 ORGANIZATION = "organization"
 FAMILY = "family"
+# a couple's relationship, and a marriage, which is one (ADR-0036): its
+# identity is its couple's
+UNION_KINDS = frozenset({"partnership", "marriage"})
+# the ceremonies that start a union, and the ends a court or an authority
+# pronounces
+WEDDING_KINDS = frozenset({"wedding", "civil_wedding", "religious_wedding"})
+END_KINDS = frozenset({"divorce", "annulment"})
+# an end of unstated kind, which meets any end
+UNSTATED = "event"
 # kinds whose identity is anchored by who took part, not by a name
-EVENT_KINDS = frozenset(
-    {
-        "birth",
-        "death",
-        "marriage",
-        "migration",
-        "deportation",
-        "imprisonment",
-        "release",
-        "military_service",
-        "event",
-        "legal_instrument",
-    }
+EVENT_KINDS = (
+    frozenset(
+        {
+            "birth",
+            "death",
+            "migration",
+            "deportation",
+            "imprisonment",
+            "release",
+            "military_service",
+            UNSTATED,
+            "legal_instrument",
+        }
+    )
+    | WEDDING_KINDS
+    | END_KINDS
 )
-# the events a person takes part in once: their participants decide them
+# the events a person takes part in once: their principals decide them
 ONE_PER_PERSON = frozenset({"birth", "death"})
 # the kinds the GEDCOM adapter makes one entity of per distinct string:
 # two of them in one export never say that they differ
@@ -284,128 +356,40 @@ RELATION = {
     "spouse": ("spouse", "spouse"),
     "sibling": ("sibling", "sibling"),
 }
-TYPED_NAME_PROPERTIES = ("birth_name", "married_name", "official_name")
 CONTAINMENT_PROPERTIES = ("part_of", "location")
 # the date properties of an event, and of the events a person is born or
 # dies in
 EVENT_DATE_PROPERTIES = ("point_in_time", "start_time")
+# the participant roles (ADR-0035 §3.2) clustering reads: the one an event
+# happens to, and a union's couple
+PRINCIPAL = "principal"
+COUPLE_ROLES = frozenset({"spouse", "partner"})
+# a civil status that cannot hold after any of the others (ADR-0035 §7,
+# rule 2)
+UNMARRIED = "unmarried"
+EVER_MARRIED = frozenset({"married", "widowed", "divorced"})
+# the stated sex of a person
+SEX = "sex_or_gender"
+CIVIL_STATUS = "civil_status"
 _STRIP = ".,;:()\"'[]"
-# titles, which stand before a surname named alone ("Frau Löbig") or a
-# whole name
-TITLES = frozenset(
-    {
-        "mr", "mrs", "ms", "miss", "mister", "dr", "doctor", "prof",
-        "professor", "herr", "frau", "fraulein", "frl", "rabbi", "rev",
-        "reverend", "sir", "lady", "lord", "mme", "madame", "monsieur",
-        "mlle", "dame", "widow", "witwe", "wwe", "verw",
-    }
-)  # fmt: skip
-# kin and courtesy words, which stand before a given name ("Tante Ida",
-# "Nana Maisie") or for a person on their own ("Dad", "Dein Vater")
-KIN_WORDS = frozenset(
-    {
-        "uncle", "aunt", "auntie", "tante", "onkel", "oma", "opa", "omi",
-        "opi", "nana", "nan", "granny", "grandma", "grandpa", "grandmother",
-        "grandfather", "great", "mother", "father", "mutter", "vater",
-        "mutti", "vati", "mama", "papa", "mum", "mom", "dad", "daddy",
-        "brother", "sister", "bruder", "schwester", "cousin", "cousine",
-        "vetter", "son", "sohn", "daughter", "tochter", "dein", "deine",
-        "mein", "meine", "unser", "unsere", "my", "your", "our",
-    }
-)  # fmt: skip
-# particles and words a name is not known by
-PARTICLES = frozenset(
-    {
-        "the", "and", "und", "von", "van", "der", "den", "del", "della",
-        "les", "ben", "bat", "bar", "ibn", "zur", "auf", "sen", "jun",
-        "senior", "junior",
-    }
-)  # fmt: skip
-# words that start another form of the same name ("formerly Gustav
-# Löbig"); the form after one is read without it
-FORM_MARKERS = frozenset(
-    {
-        "formerly", "later", "previously", "alias", "aka", "called",
-        "fruher", "vormals", "spater", "genannt", "gen",
-    }
-)  # fmt: skip
-# a name form "X née Y" carries a second surname
-MAIDEN_MARKERS = frozenset({"nee", "geb", "geborene", "born"})
-NOT_A_NAME = TITLES | KIN_WORDS | PARTICLES | FORM_MARKERS | MAIDEN_MARKERS
-# what stands for the given names a surname-first name leaves out
-# ("Löbig, Hutmacher"): a placeholder, so the surname is named alone
-_NO_GIVEN = "N.N."
-# occupations, which a surname-first name may give where its given names
-# would stand ("Löbig, Hutmacher"), and endings only occupations have
-OCCUPATIONS = frozenset(
-    {
-        "kaufmann", "kauffrau", "schneider", "schneiderin", "schuster",
-        "backer", "metzger", "fleischer", "schlosser", "tischler",
-        "schreiner", "maurer", "maler", "weber", "gerber", "sattler",
-        "schmied", "wirt", "gastwirt", "landwirt", "bauer", "fabrikant",
-        "lehrer", "lehrerin", "arzt", "arztin", "rabbiner", "kantor",
-        "beamter", "angestellter", "rentner", "rentnerin", "privatier",
-        "student", "studentin", "hausfrau", "naherin", "modistin",
-        "buchhalter", "vertreter", "reisender", "makler", "prokurist",
-        "inhaber", "inhaberin", "hatter", "milliner", "merchant", "tailor",
-        "clerk", "labourer", "laborer", "teacher", "retired", "housewife",
-        "shopkeeper", "dealer", "salesman", "baker", "butcher", "farmer",
-        "weaver", "worker",
-    }
-)  # fmt: skip
-OCCUPATION_ENDINGS = (
-    "macher", "macherin", "meister", "meisterin", "handler", "handlerin",
-    "arbeiter", "arbeiterin",
-)  # fmt: skip
-# words no organization or family is known by
-ORG_GENERIC = frozenset(
-    {
-        "the", "and", "und", "der", "die", "das", "des", "von", "for",
-        "company", "firm", "firma", "gmbh", "inc", "ltd", "limited",
-        "co", "cie", "bros", "brothers", "sons", "sohn", "sohne",
-        "family", "familie",
-    }
-)  # fmt: skip
-# the words of an institution's kind, which many towns' institutions share
-# ("Städtische Realschule"): a name of these alone names no one
-# institution without a place
-ORG_INSTITUTIONAL = frozenset(
-    {
-        "stadtische", "stadtischen", "stadtisches", "staatliche",
-        "staatlichen", "konigliche", "koniglichen", "evangelische",
-        "katholische", "judische", "israelitische", "schule", "realschule",
-        "volksschule", "oberschule", "mittelschule", "grundschule",
-        "handelsschule", "gewerbeschule", "gymnasium", "lyzeum",
-        "hochschule", "universitat", "krankenhaus", "hospital", "klinik",
-        "kirche", "synagoge", "gemeinde", "kultusgemeinde", "rathaus",
-        "standesamt", "polizei", "gericht", "amtsgericht", "landgericht",
-        "finanzamt", "postamt", "sparkasse", "bank", "bahnhof", "museum",
-        "bibliothek", "theater", "verein", "school", "high", "grammar",
-        "primary", "college", "university", "church", "synagogue",
-        "congregation", "council", "court", "police", "station", "library",
-        "society", "club", "municipal", "public", "state", "national",
-        "royal", "city", "town", "county", "district",
-    }
-)  # fmt: skip
-# the generic heads of place names, which key no place
-PLACE_GENERIC = frozenset(
-    {
-        "kreis", "landkreis", "stadtkreis", "bezirk", "gemeinde", "stadt",
-        "dorf", "lager", "friedhof", "county", "district", "province",
-        "provinz", "region", "parish", "road", "street", "strasse",
-        "gasse", "platz", "allee", "lane", "avenue", "camp", "cemetery",
-    }
-)  # fmt: skip
-# the shortest token an organization's distinctive tokens hold
-_MIN_ORG_TOKEN = 3
+# DIN 5007-2: an umlaut written out
+_UMLAUTS = str.maketrans(
+    {"ä": "ae", "ö": "oe", "ü": "ue", "Ä": "Ae", "Ö": "Oe", "Ü": "Ue"}
+)
+# the name levels of a pair, strongest first, for an event's evidence
+_LEVELS = ("exact", "key", "nested", "kind", "weak", "given", "none")
 # an interval's open end
 _OPEN = float("inf")
 
 Pair = tuple[str, str]
 # a key a mention is blocked on: ("key", given name, surname) for a
-# person, ("lone", token) for a person of one name token, ("token",
-# token) for a place or an organization, ("name", name) otherwise
+# person, ("lone", given name) for a person with no surname, ("place",
+# name), ("org", name) or ("orgkind", kind, place), ("family", surname),
+# ("name", name) for an event keyed by its own name, and ("exact", name)
+# for a recordless mention and any kind that takes no record
 BlockingKey = tuple[str, ...]
+# a part's keys: its normal form, and its umlauts written out
+Part = frozenset[str]
 
 
 # -- the thresholds -----------------------------------------------------------
@@ -430,8 +414,6 @@ class _Settings(BaseModel):
 
 
 class Blocking(_Settings):
-    min_name_token: int = Field(ge=1)
-    min_place_token: int = Field(ge=1)
     gedcom_anchored: bool
     max_key_mentions: int = Field(ge=2)
 
@@ -516,7 +498,7 @@ def load_config(
         ) from exc
 
 
-# -- names --------------------------------------------------------------------
+# -- parts --------------------------------------------------------------------
 
 
 @functools.lru_cache(maxsize=1 << 16)
@@ -527,167 +509,72 @@ def fold(text: str) -> str:
     return stripped.casefold().replace("ß", "ss")
 
 
-def _folded_tokens(name: str) -> list[str]:
-    return list(_folded(name))
+def _words(text: str) -> list[str]:
+    """A part's words as written, each without its edge punctuation."""
+    return [word for raw in text.split() if (word := raw.strip(_STRIP))]
 
 
 @functools.lru_cache(maxsize=1 << 16)
-def _folded(name: str) -> tuple[str, ...]:
-    return tuple(
-        token for raw in name.split() if (token := fold(raw.strip(_STRIP)))
-    )
-
-
 def normal(name: str) -> str:
-    """A whole name as its folded tokens, one space apart."""
-    return " ".join(_folded_tokens(name))
+    """A whole part as its folded words, one space apart."""
+    return " ".join(token for word in _words(name) if (token := fold(word)))
 
 
-def _letters(token: str) -> bool:
-    """A token of letters, with hyphens or apostrophes inside ("hans-otto")
-    but no digit, and no dot inside (initials, "N.N.")."""
-    return token.replace("-", "").replace("'", "").isalpha()
+def umlauts_written_out(text: str) -> str:
+    """A part with each umlaut written out (DIN 5007-2): "Flörburg" as
+    "Floerburg". A two-letter spelling is left as it stands."""
+    return unicodedata.normalize("NFC", text).translate(_UMLAUTS)
 
 
-_BRACKETED = re.compile(r"[(\[]([^()\[\]]*)[)\]]")
-
-
-def _segments(name: str) -> list[str]:
-    """A name's parts: the text outside its brackets, and each bracketed
-    part ("Ida (Peppi) Sörne" gives "Ida Sörne" and "Peppi")."""
-    return [_BRACKETED.sub(" ", name), *_BRACKETED.findall(name)]
-
-
-def _maiden_split(part: str) -> tuple[str, str]:
-    """A part's words before its first maiden marker, and those from the
-    marker on ("Hildegard geb. Laudler" gives "Hildegard" and "geb.
-    Laudler")."""
-    words = part.split()
-    for position, word in enumerate(words):
-        if fold(word.strip(_STRIP)) in MAIDEN_MARKERS:
-            return " ".join(words[:position]), " ".join(words[position:])
-    return part, ""
-
-
-def _occupation(part: str) -> bool:
-    """Whether a part starts with an occupation ("Hutmacher",
-    "Hutmachermeister"), which no given name is."""
-    tokens = _folded_tokens(part)
-    return bool(tokens) and (
-        tokens[0] in OCCUPATIONS or tokens[0].endswith(OCCUPATION_ENDINGS)
-    )
-
-
-def _given_first(segment: str) -> str:
-    """A name written surname first ("Löbig, Ursula, Wwe."), given names
-    first ("Ursula Löbig"). The part after the first comma gives the given
-    names, unless it is an occupation ("Löbig, Hutmacher"); past it only
-    maiden parts stay ("née Sörne", or "geb. Laudler" after the given
-    names), and an occupation or a title there is dropped. A surname with
-    no given name reads as a placeholder's (_NO_GIVEN), so it names a
-    surname alone."""
-    parts = [part.strip() for part in segment.split(",")]
-    if len(parts) == 1:
-        return segment
-    head, head_maiden = _maiden_split(parts[0])
-    maiden = [head_maiden] if head_maiden else []
-    given = ""
-    for position, part in enumerate(part for part in parts[1:] if part):
-        before, after = _maiden_split(part)
-        if position == 0 and not _occupation(before):
-            given = before
-        if after:
-            maiden.append(after)
-    if len(_folded_tokens(head)) != 1:
-        return " ".join([head, *maiden])
-    return " ".join([given or _NO_GIVEN, head, *maiden])
-
-
-def _significant(token: str, min_token: int) -> bool:
-    return (
-        len(token) >= min_token and _letters(token) and token not in NOT_A_NAME
-    )
-
-
-def _before_a_surname(token: str) -> bool:
-    """A title, a placeholder or an initial: what stands before a surname
-    named alone ("Frau Löbig", "N.N. Löbig", "J. Löbig")."""
-    return token in TITLES or not _letters(token) or len(token) == 1
-
-
-def person_forms(
-    name: str, min_token: int
-) -> list[tuple[tuple[str, ...], bool]]:
-    """The forms of one person's name (the module docstring says how a
-    name is read): each form's significant tokens, and whether the form
-    names a surname alone."""
-    forms = []
-    for segment in _segments(name):
-        # a form marker ("formerly") is no name token, so the form after
-        # one is read as it stands
-        tokens = _folded_tokens(_given_first(segment))
-        marker = next(
-            (i for i, token in enumerate(tokens) if token in MAIDEN_MARKERS),
-            None,
-        )
-        if marker is None:
-            parts = [tokens]
-        else:
-            before = tokens[:marker]
-            given = before[:-1] if len(before) >= 2 else before
-            # the maiden name: the last name token after the marker, when
-            # there is one ("born 1911" gives none)
-            maiden = [
-                token
-                for token in tokens[marker + 1 :]
-                if _significant(token, min_token)
-            ][-1:]
-            parts = [before, given + maiden] if maiden else [before]
-        for part in parts:
-            significant = tuple(
-                token for token in part if _significant(token, min_token)
-            )
-            if significant:
-                surname = len(significant) == 1 and any(
-                    _before_a_surname(token) for token in part
-                )
-                forms.append((significant, surname))
-    return forms
-
-
-def _given_match(first: str, second: str) -> bool:
-    return first.startswith(second) or second.startswith(first)
-
-
-def _key_map(keys: Iterable[tuple[str, str]]) -> dict[str, frozenset[str]]:
-    by_surname: dict[str, set[str]] = defaultdict(set)
-    for given, surname in keys:
-        by_surname[surname].add(given)
-    return {surname: frozenset(g) for surname, g in by_surname.items()}
-
-
-def keys_match(
-    first: Mapping[str, frozenset[str]], second: Mapping[str, frozenset[str]]
-) -> bool:
-    """Whether two people's keys (surname -> given names) share a surname
-    with given names one of which starts with the other."""
-    return any(
-        _given_match(one, other)
-        for surname, givens in first.items()
-        if surname in second
-        for one in givens
-        for other in second[surname]
-    )
-
-
-def _distinctive(name: str) -> frozenset[str]:
-    """An organization's or a family's normal name, as the tokens it is
-    known by."""
+@functools.lru_cache(maxsize=1 << 16)
+def part_keys(text: str) -> Part:
+    """What a part keys on: its normal form, and, when it holds an
+    umlaut, its normal form with the umlaut written out. Two parts match
+    when they share a key."""
     return frozenset(
-        token
-        for token in name.split()
-        if len(token) >= _MIN_ORG_TOKEN and token not in ORG_GENERIC
+        key for key in (normal(text), normal(umlauts_written_out(text))) if key
     )
+
+
+def _all(parts: Iterable[Part]) -> frozenset[str]:
+    return frozenset(key for part in parts for key in part)
+
+
+def _pairs(firsts: Sequence[Part], seconds: Sequence[Part]) -> set[Pair]:
+    """Each key of a first part with each key of a second one, but for two
+    parts that share a key."""
+    return {
+        (one, other)
+        for first in firsts
+        for second in seconds
+        if not first & second
+        for one in first
+        for other in second
+    }
+
+
+def _distinct_words(form: str) -> list[Part]:
+    """The words of an unsplit form, each once, by their keys."""
+    found: list[Part] = []
+    for word in _words(form):
+        keys = part_keys(word)
+        if keys and not any(keys & seen for seen in found):
+            found.append(keys)
+    return found
+
+
+def _person_names(record: PersonStructure) -> tuple[list[Part], list[Part]]:
+    """(given names and nicknames, surnames and patronymics) of a person's
+    record, as parts: a given name keys by its standard form and as
+    written."""
+    givens = [
+        part_keys(name.written) | part_keys(name.standard or "")
+        for name in record.given
+    ] + [part_keys(name) for name in record.nicknames]
+    surnames = [part_keys(name.written) for name in record.surnames] + [
+        part_keys(name) for name in record.patronymics
+    ]
+    return [p for p in givens if p], [p for p in surnames if p]
 
 
 # -- dates --------------------------------------------------------------------
@@ -788,6 +675,19 @@ def _combine_dates(*results: str) -> str:
     return "agree" if "agree" in results else "unknown"
 
 
+def _never_married_after(
+    first: Sequence[tuple[str, Interval]],
+    second: Sequence[tuple[str, Interval]],
+) -> bool:
+    """Whether the first states `unmarried` at a date wholly after one
+    the second states `married`, `widowed` or `divorced` at."""
+    return any(
+        status == UNMARRIED and other in EVER_MARRIED and when.start > then.end
+        for status, when in first
+        for other, then in second
+    )
+
+
 # -- mentions -----------------------------------------------------------------
 
 
@@ -802,43 +702,87 @@ class Manifest:
     source: str = DOCUMENT
 
 
+@dataclass(frozen=True)
+class _Given:
+    """A given part of a person's record: its keys, the keys of the
+    standard form its record gives (empty without one), and whether it is
+    a nickname."""
+
+    keys: Part
+    standard: Part = frozenset()
+    nickname: bool = False
+
+
 @dataclass(eq=False)
 class _Node:
-    """A mention, with what its manifest says about it lifted into mention
-    space (kin, participants and containers by fingerprint), and the keys
-    blocking and evidence read."""
+    """A mention, with its record, what its manifest says about it lifted
+    into mention space (kin, participants and containers by fingerprint),
+    and the keys blocking and evidence read."""
 
     mention: Mention
     source: str
     # whether its manifest keeps it apart from the manifest's other ids
     exclusive: bool
     aliases: list[str]
-    typed_names: list[str] = field(default_factory=list)
-    nicknames: list[str] = field(default_factory=list)
+    # the mention record, when its entity has one of its own kind
+    record: Any = None
     kin: set[tuple[str, str]] = field(default_factory=set)
+    # an event's or a union's people, and the roles each took part in
     participants: set[str] = field(default_factory=set)
+    roles: dict[str, set[str]] = field(default_factory=dict)
     containers: set[str] = field(default_factory=set)
-    # the places an organization is located in
+    # the places an organisation is located in
     places: set[str] = field(default_factory=set)
+    # a union's weddings and ends; the union an event starts or ends
+    starts: set[str] = field(default_factory=set)
+    ends: set[str] = field(default_factory=set)
+    union: str | None = None
     births: list[Interval] = field(default_factory=list)
     deaths: list[Interval] = field(default_factory=list)
     when: list[Interval] = field(default_factory=list)
-    # a birth or death event its one participant's own (_nodes)
-    own: bool = False
+    sexes: set[str] = field(default_factory=set)
+    civil: list[tuple[str, Interval]] = field(default_factory=list)
+    # a birth or death event its one principal's own (_nodes), and who
+    principal: str | None = None
     # computed once every node of the corpus is lifted (_derive): a
-    # person's name forms, each with whether it names a surname alone
-    forms: list[tuple[tuple[str, ...], bool]] = field(default_factory=list)
-    keys: dict[str, frozenset[str]] = field(default_factory=dict)
+    # person's keys (every one, and those that may make a link
+    # confident), its lone given names, and the given names a lone name
+    # meets
+    keys: frozenset[Pair] = frozenset()
+    strong: frozenset[Pair] = frozenset()
     lone: frozenset[str] = frozenset()
     givens: frozenset[str] = frozenset()
-    place_keys: frozenset[str] = frozenset()
-    place_parts: tuple[frozenset[str], ...] = ()
-    org_sets: tuple[frozenset[str], ...] = ()
-    # every name, normalised, and those that match another's exactly (for
-    # a person, those that name more than a surname)
-    label_keys: frozenset[str] = frozenset()
-    named_keys: frozenset[str] = frozenset()
-    # the keys it is blocked on, hub keys left out (_hubs)
+    # a person's given parts (_Given), and the keys of its given names
+    given_parts: tuple[_Given, ...] = ()
+    given_names: frozenset[str] = frozenset()
+    # a place's keyed names, its containers as its record writes them,
+    # and those with every place its manifest puts it in (_contain)
+    place_names: tuple[Part, ...] = ()
+    within: tuple[Part, ...] = ()
+    containing: tuple[Part, ...] = ()
+    # an organisation's proper names (with their word counts), kinds, the
+    # keys of the places it is in, and of those with every place they lie
+    # in; and, for places its location claims name, the places by
+    # fingerprint, and those with every place they lie in
+    org_names: tuple[tuple[Part, int], ...] = ()
+    org_kinds: frozenset[str] = frozenset()
+    org_primary: frozenset[str] = frozenset()
+    org_all: frozenset[str] = frozenset()
+    org_places: tuple[str, ...] = ()
+    org_closure: frozenset[str] = frozenset()
+    # the places it is in as one list of parts, from its record's places
+    # or from the places with records its location claims reach; and the
+    # places without records they reach, each by its exact names
+    org_set: tuple[Part, ...] = ()
+    org_loose: tuple[Part, ...] = ()
+    # a family's surnames
+    family: frozenset[str] = frozenset()
+    # a recordless mention's (or one of a kind without records) every
+    # name, normalised
+    exact: frozenset[str] = frozenset()
+    # the keys it would be blocked on, and those it is, hub keys left
+    # out (_hubs)
+    raw: frozenset[BlockingKey] = frozenset()
     blocking: frozenset[BlockingKey] = frozenset()
     # the mention's fingerprint, artifact, kind and label, read on every
     # pair
@@ -855,26 +799,55 @@ class _Node:
 
     @property
     def names(self) -> list[str]:
-        return [
-            name
-            for name in (self.label, *self.aliases, *self.typed_names)
-            if name
-        ]
+        return [name for name in (self.label, *self.aliases) if name]
 
     @property
     def kin_ids(self) -> set[str]:
         return {node_id for _relation, node_id in self.kin}
+
+    @property
+    def recordless(self) -> bool:
+        """A mention of a kind that takes a record, without one."""
+        return self.kind in STRUCTURED_KINDS and self.record is None
+
+    @property
+    def couple(self) -> list[str]:
+        """A union's couple: its participants as spouses or partners, or
+        every participant where none has such a role."""
+        paired = sorted(
+            person
+            for person, roles in self.roles.items()
+            if roles & COUPLE_ROLES
+        )
+        return paired or sorted(self.participants)
 
 
 def _local_id(ref: Any) -> str | None:
     return ref.local_id if isinstance(ref, LocalRef) else None
 
 
+def _vocabulary(value: Any) -> str | None:
+    """The vocabulary key an item value names, if it names one."""
+    if isinstance(value, ItemValue) and isinstance(value.value, VocabRef):
+        return value.value.key
+    return None
+
+
 def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
-    """One node per mention of the manifest, with the relations the
-    manifest states between its local ids lifted into mention space."""
+    """One node per mention of the manifest, with its record and the
+    relations the manifest states between its local ids lifted into
+    mention space."""
     batch = manifest.batch
     mentions = mentions_of(manifest.sha1, batch)
+    # whether a record stands (ADR-0035 §5) is extraction's verdict,
+    # taken on the alias bag before the cleanup of §8; a record of another
+    # kind is read as none
+    records = {
+        entity.id: entity.structure
+        for entity in batch.entities
+        if entity.structure is not None
+        and entity.structure.kind == entity.kind
+    }
     if batch.entities:
         aliases = {
             entity.id: list(entity.aliases) for entity in batch.entities
@@ -899,6 +872,7 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
                 for alias in aliases.get(mention.local_id, [])
                 if alias != mention.label
             ],
+            record=records.get(mention.local_id),
         )
     for claim in batch.claims:
         subject = by_local.get(_local_id(claim.subject) or "")
@@ -915,11 +889,22 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
             forward, backward = RELATION[prop]
             subject.kin.add((forward, target.id))
             target.kin.add((backward, subject.id))
-        elif prop == "participant" and target is not None:
-            if target.kind == HUMAN:
-                subject.participants.add(target.id)
-            elif subject.kind == HUMAN and target.kind in EVENT_KINDS:
-                target.participants.add(subject.id)
+        elif (
+            prop == "participant"
+            and target is not None
+            and target.kind == HUMAN
+        ):
+            subject.participants.add(target.id)
+            subject.roles.setdefault(target.id, set()).update(
+                role
+                for qualifier in claim.qualifiers
+                if qualifier.property == "object_has_role"
+                and (role := _vocabulary(qualifier.value))
+            )
+        elif prop == "started_by" and target is not None:
+            subject.starts.add(target.id)
+        elif prop == "ended_by" and target is not None:
+            subject.ends.add(target.id)
         elif (
             prop in CONTAINMENT_PROPERTIES
             and target is not None
@@ -935,10 +920,15 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
             and target.kind == PLACE_KIND
         ):
             subject.places.add(target.id)
-        elif prop in TYPED_NAME_PROPERTIES and value.type == "monolingual":
-            subject.typed_names.append(value.value.text)
-        elif prop == "nickname" and value.type == "monolingual":
-            subject.nicknames.append(value.value.text)
+        elif prop == SEX and (sex := _vocabulary(value)):
+            subject.sexes.add(sex)
+        elif prop == CIVIL_STATUS and (status := _vocabulary(value)):
+            subject.civil.extend(
+                (status, date_interval(q.value, claim.qualifiers, circa_years))
+                for q in claim.qualifiers
+                if q.property == "point_in_time"
+                and isinstance(q.value, TimeValue)
+            )
         elif isinstance(value, TimeValue):
             interval = date_interval(value, claim.qualifiers, circa_years)
             if prop == "date_of_birth":
@@ -948,135 +938,269 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
             elif prop in EVENT_DATE_PROPERTIES:
                 subject.when.append(interval)
     by_id = {node.id: node for node in by_local.values()}
+    for union in by_local.values():
+        if union.kind not in UNION_KINDS:
+            continue
+        # the couple are each other's spouses, as a spouse claim says
+        couple = union.couple
+        for person in couple:
+            by_id[person].kin.update(
+                ("spouse", other) for other in couple if other != person
+            )
+        # its weddings date it, never its own date, an observation; they
+        # and its ends are keyed by it, save a partner's death, which
+        # stays its principal's own
+        for event_id in sorted(union.starts | union.ends):
+            event = by_id[event_id]
+            if event.kind == "death" or event.union is not None:
+                continue
+            event.union = union.id
+        union.when = [
+            interval
+            for event_id in sorted(union.starts)
+            for interval in by_id[event_id].when
+        ]
     # each person's own dates, from its claims, before any event's pass
     own_dates = {
         node.id: (list(node.births), list(node.deaths))
         for node in by_local.values()
     }
     for node in by_local.values():
-        # a birth or death event is its participant's own, and its date is
-        # theirs, when it has one participant (of several, a child and a
-        # parent, none says who was born) whose own date of the kind its
+        # a birth or death event is its principal's own, and its date is
+        # theirs, when it has one principal whose own date of the kind its
         # date does not conflict with
-        if node.kind not in ONE_PER_PERSON or len(node.participants) != 1:
+        if node.kind not in ONE_PER_PERSON:
             continue
-        (person_id,) = node.participants
+        principals = [
+            person
+            for person, roles in sorted(node.roles.items())
+            if PRINCIPAL in roles
+        ]
+        if len(principals) != 1:
+            continue
+        (person_id,) = principals
         births, deaths = own_dates[person_id]
         if _conflict(node.when, births if node.kind == "birth" else deaths):
             continue
-        node.own = True
+        node.principal = person_id
         person = by_id[person_id]
         dates = person.births if node.kind == "birth" else person.deaths
         dates.extend(node.when)
     return list(by_local.values())
 
 
-def _surnames(node: _Node) -> set[str]:
-    """The surnames a person's forms give: the final token of each form of
-    two tokens or more, and each surname named alone."""
-    return {
-        tokens[-1] for tokens, alone in node.forms if alone or len(tokens) >= 2
-    }
-
-
-def _derive(nodes: Sequence[_Node], config: ClusteringConfig) -> None:
-    """Every key a node is blocked and compared by. A person's keys take
-    the surnames of its lifted kin, so every person's forms come first."""
-    min_name = config.blocking.min_name_token
-    min_place = config.blocking.min_place_token
+def _derive(nodes: Sequence[_Node]) -> None:
+    """Every key a node is blocked and compared by, from its record
+    alone; a recordless one's exact names. An organisation's places read
+    its places' keys, so every place comes first."""
     by_id = {node.id: node for node in nodes}
     for node in nodes:
-        if node.kind == HUMAN:
-            node.forms = [
-                form
-                for name in node.names
-                for form in person_forms(name, min_name)
-            ]
+        record = node.record
+        if record is None:
+            node.exact = frozenset(
+                key for name in node.names for key in part_keys(name)
+            )
+            if node.kind not in EVENT_KINDS | UNION_KINDS:
+                node.raw = frozenset(("exact", name) for name in node.exact)
+        elif isinstance(record, PersonStructure):
+            _derive_person(node, record, by_id)
+        elif isinstance(record, PlaceStructure):
+            _derive_place(node, record)
+        elif isinstance(record, FamilyStructure):
+            node.family = _all(part_keys(name) for name in record.surnames)
+            node.raw = frozenset(("family", key) for key in node.family)
     for node in nodes:
-        node.label_keys = frozenset(
-            key for name in node.names if (key := normal(name))
-        )
-        node.named_keys = node.label_keys
-        if node.kind == HUMAN:
-            _derive_person(node, by_id, min_name)
-        elif node.kind == PLACE_KIND:
-            firsts = [name.split(",")[0] for name in node.names]
-            node.place_keys = frozenset(
-                token
-                for first in firsts
-                for token in _folded_tokens(first)
-                if len(token) >= min_place
-                and _letters(token)
-                and token not in PLACE_GENERIC
-            )
-            node.place_parts = tuple(
-                parts
-                for name in node.names
-                if (
-                    parts := frozenset(
-                        part
-                        for piece in name.split(",")
-                        if (part := normal(piece))
-                    )
-                )
-            )
-        elif node.kind == ORGANIZATION:
-            node.org_sets = tuple(
-                tokens
-                for name in node.names
-                if (
-                    tokens := frozenset(
-                        token
-                        for token in _folded_tokens(name)
-                        if len(token) >= _MIN_ORG_TOKEN
-                        and token not in ORG_GENERIC
-                    )
-                )
-            )
+        if isinstance(node.record, PlaceStructure):
+            _contain(node, by_id)
+    for node in nodes:
+        if isinstance(node.record, OrganizationStructure):
+            _derive_organization(node, node.record, by_id)
 
 
 def _derive_person(
-    node: _Node, by_id: Mapping[str, _Node], min_name: int
+    node: _Node, record: PersonStructure, by_id: Mapping[str, _Node]
 ) -> None:
-    kin_surnames = set().union(
-        *(_surnames(by_id[kin_id]) for kin_id in node.kin_ids)
-    )
-    own = {tokens[-1] for tokens, _alone in node.forms if len(tokens) >= 2}
-    # the forms that name someone: not a surname alone, nor a lone token
-    # the person's forms or kin use as a surname
-    named = [
-        tokens
-        for tokens, alone in node.forms
-        if not alone
-        and not (len(tokens) == 1 and tokens[0] in own | kin_surnames)
+    if record.status != "name":
+        return
+    givens, surnames = _person_names(record)
+    kin_surnames = [
+        part
+        for kin_id in sorted(node.kin_ids)
+        if isinstance(kin := by_id[kin_id].record, PersonStructure)
+        for part in _person_names(kin)[1]
     ]
-    nicknames = {
-        tokens[0]
-        for nickname in node.nicknames
-        for tokens, alone in person_forms(nickname, min_name)
-        if not alone
-    }
-    firsts = {tokens[0] for tokens in named} | nicknames
-    keys = {
-        (given, surname)
-        for tokens in named
-        for position, given in enumerate(tokens[:-1])
-        for surname in tokens[position + 1 :]
-    }
-    keys.update((nick, surname) for nick in nicknames for surname in own)
-    keys.update(
-        (given, surname) for surname in kin_surnames for given in firsts
+    # the words of a kin's label where it has no record, which may be its
+    # surname: they only keep a given part from pairing
+    unread = [
+        part_keys(word)
+        for kin_id in sorted(node.kin_ids)
+        if by_id[kin_id].record is None and by_id[kin_id].kind == HUMAN
+        for word in _words(by_id[kin_id].label)
+    ]
+    # a given part that folds like any surname, its own or a kin's (a
+    # surname misread as a given name), pairs with no kin's surname
+    surname_keys = _all(surnames + kin_surnames + unread)
+    typed = _pairs(givens, surnames) | _pairs(
+        [part for part in givens if not part & surname_keys], kin_surnames
     )
-    # a given name that is its own surname keys on one shared token
-    node.keys = _key_map(
-        (given, surname) for given, surname in keys if given != surname
+    unsplit: set[Pair] = set()
+    alone: list[Part] = []
+    for form in record.unsplit:
+        words = _distinct_words(form)
+        if len(words) == 1:
+            alone.extend(words)
+        for position, first in enumerate(words):
+            unsplit |= _pairs(
+                [first], words[:position] + words[position + 1 :]
+            )
+    # the export does not say which word of an unsplit form is which, and
+    # some may be markers: its keys pair but never make a link confident
+    strong = typed if node.source == GEDCOM else typed | unsplit
+    node.keys = frozenset(typed | unsplit)
+    node.strong = frozenset(strong)
+    node.given_parts = tuple(
+        [
+            _Given(
+                part_keys(name.written) | part_keys(name.standard or ""),
+                part_keys(name.standard or ""),
+            )
+            for name in record.given
+        ]
+        + [_Given(part_keys(name), nickname=True) for name in record.nicknames]
+        + [
+            _Given(word)
+            for form in record.unsplit
+            for word in _distinct_words(form)
+        ]
     )
-    node.named_keys = frozenset(" ".join(tokens) for tokens in named)
-    node.lone = frozenset(tokens[0] for tokens in named if len(tokens) == 1)
-    givens = set(nicknames)
-    for tokens in named:
-        givens.update(tokens[:-1] if len(tokens) >= 2 else tokens)
-    node.givens = frozenset(givens)
+    # the given names a nickname is weighed against: the given names and
+    # the words of the unsplit forms
+    node.given_names = _all(
+        part.keys
+        for part in node.given_parts
+        if part.keys and not part.nickname
+    )
+    node.givens = _all(givens + alone)
+    node.lone = frozenset() if node.keys else node.givens
+    node.raw = frozenset(
+        {("key", given, surname) for given, surname in node.keys}
+        | {("lone", given) for given in node.lone}
+    )
+
+
+def _derive_place(node: _Node, record: PlaceStructure) -> None:
+    if record.status != "toponym":
+        return
+    # a short form that is another of its names' toponym keys nothing
+    toponyms = _all(
+        part_keys(name.toponym)
+        for name in record.names
+        if name.toponym and normal(name.toponym) != normal(name.written)
+    )
+    names = [
+        keys
+        for name in record.names
+        if (keys := part_keys(name.written)) and not keys & toponyms
+    ]
+    if record.address is not None and (
+        keys := part_keys(record.address.written)
+    ):
+        names.append(keys)
+    within: list[Part] = []
+    for container in record.within:
+        keys = part_keys(container)
+        if keys and not any(keys & seen for seen in within):
+            within.append(keys)
+    node.place_names = tuple(names)
+    node.within = tuple(within)
+    node.raw = frozenset(("place", key) for key in _all(names))
+
+
+def _closure(start: Iterable[str], by_id: Mapping[str, _Node]) -> set[str]:
+    """The places given, and every place their manifest puts them in."""
+    seen: set[str] = set()
+    stack = sorted(start)
+    while stack:
+        place_id = stack.pop()
+        if place_id in seen:
+            continue
+        seen.add(place_id)
+        stack.extend(sorted(by_id[place_id].containers))
+    return seen
+
+
+def _contain(node: _Node, by_id: Mapping[str, _Node]) -> None:
+    """A place's containers for rule 5: its record's `within`, and each
+    place its manifest's `part_of` and `location` claims put it in, as
+    one part each (a recordless one by its exact names)."""
+    containing = list(node.within)
+    for place_id in sorted(_closure(node.containers, by_id) - {node.id}):
+        keys = _place_names(by_id[place_id])
+        if keys and not any(keys & seen for seen in containing):
+            containing.append(keys)
+    node.containing = tuple(containing)
+
+
+def _place_names(node: _Node) -> frozenset[str]:
+    """The keys a place is named by: a recordless one's exact names."""
+    return _all(node.place_names) or node.exact
+
+
+def _place_keys(node: _Node) -> frozenset[str]:
+    """The keys a place is named by, and those of the places its record
+    puts it in; a recordless one's exact names."""
+    return (_all(node.place_names) | _all(node.within)) or node.exact
+
+
+def _derive_organization(
+    node: _Node, record: OrganizationStructure, by_id: Mapping[str, _Node]
+) -> None:
+    node.org_names = tuple(
+        (keys, len(normal(name).split()))
+        for name in record.names
+        if (keys := part_keys(name))
+    )
+    node.org_kinds = _all(part_keys(kind) for kind in record.kinds)
+    if record.places:
+        node.org_set = tuple(
+            keys for place in record.places if (keys := part_keys(place))
+        )
+        node.org_primary = node.org_all = _all(node.org_set)
+    else:
+        # the places its location claims name, and every place its
+        # manifest puts one of them inside
+        seen = _closure(node.places, by_id)
+        node.org_set = tuple(
+            part
+            for place_id in sorted(seen)
+            if by_id[place_id].record is not None
+            for part in (*by_id[place_id].place_names, *by_id[place_id].within)
+        )
+        node.org_loose = tuple(
+            by_id[place_id].exact
+            for place_id in sorted(seen)
+            if by_id[place_id].record is None and by_id[place_id].exact
+        )
+        node.org_places = tuple(sorted(node.places))
+        node.org_closure = frozenset(seen)
+        node.org_primary = frozenset(
+            key
+            for place_id in node.places
+            for key in _place_names(by_id[place_id])
+        )
+        node.org_all = frozenset(
+            key for place_id in seen for key in _place_keys(by_id[place_id])
+        )
+    keys: set[BlockingKey] = {
+        ("org", key) for name, _count in node.org_names for key in name
+    }
+    if not node.org_names:
+        keys |= {
+            ("orgkind", kind, place)
+            for kind in node.org_kinds
+            for place in node.org_all
+        }
+    node.raw = frozenset(keys)
 
 
 # -- blocking -----------------------------------------------------------------
@@ -1086,54 +1210,53 @@ def _pair(first: str, second: str) -> Pair:
     return (first, second) if first < second else (second, first)
 
 
+def _group(node: _Node) -> str:
+    """The kinds a mention is blocked and counted with: its own, but a
+    wedding of any kind together, a union of any class together, and a
+    divorce, an annulment and an end of unstated kind together."""
+    if node.kind in WEDDING_KINDS:
+        return "wedding"
+    if node.kind in UNION_KINDS:
+        return "union"
+    if node.kind in END_KINDS or (
+        node.kind == UNSTATED and node.union is not None
+    ):
+        return "end"
+    return node.kind
+
+
+def _timed(node: _Node) -> bool:
+    """A union or an event: clustered after what it takes place between."""
+    return node.kind in EVENT_KINDS or node.kind in UNION_KINDS
+
+
+def _people(node: _Node, index: Mapping[str, _Node]) -> list[str]:
+    """The people an event or a union is keyed through: a union's couple,
+    the couple of the union a wedding or an end belongs to, a birth's or
+    a death's principal when it is theirs, or else every participant."""
+    if node.kind in UNION_KINDS:
+        return node.couple
+    if node.union is not None:
+        return index[node.union].couple
+    if node.principal is not None:
+        return [node.principal]
+    return sorted(node.participants)
+
+
 def _raw_keys(node: _Node, index: Mapping[str, _Node]) -> set[BlockingKey]:
-    """The keys a mention would be blocked on (BlockingKey)."""
-    if node.kind == HUMAN:
-        return {
-            ("key", given, surname)
-            for surname, givens in node.keys.items()
-            for given in givens
-        } | {("lone", token) for token in node.lone}
-    if node.kind == PLACE_KIND:
-        return {("token", token) for token in node.place_keys}
-    if node.kind == ORGANIZATION:
-        return {
-            ("token", token) for tokens in node.org_sets for token in tokens
-        }
-    if node.kind in EVENT_KINDS and node.participants:
-        return {
-            ("key", given, surname)
-            for person_id in node.participants
-            for surname, givens in index[person_id].keys.items()
-            for given in givens
-        }
-    return {("name", name) for name in node.label_keys}
-
-
-def _export_holds(
-    gedcom: Sequence[_Node], own: Mapping[str, set[BlockingKey]]
-) -> Callable[[BlockingKey], bool]:
-    """Whether a key finds a GEDCOM mention of a kind, given the export's
-    mentions of it and each one's keys: for a person, a GEDCOM person
-    whose keys have the surname and a compatible given name; otherwise a
-    GEDCOM mention with the same key."""
-    people = _GivenIndex()
-    held: set[BlockingKey] = set()
-    for node in gedcom:
-        people.add(
-            node.id,
-            _key_map(
-                (key[1], key[2]) for key in own[node.id] if key[0] == "key"
-            ),
-        )
-        held.update(own[node.id])
-
-    def holds(key: BlockingKey) -> bool:
-        if key[0] == "key":
-            return next(people.find(key[1], key[2]), None) is not None
-        return key in held
-
-    return holds
+    """The keys a mention would be blocked on (BlockingKey): an event's
+    and a union's are its people's, and without people its own name."""
+    if not _timed(node):
+        return set(node.raw)
+    people = _people(node, index)
+    if not people:
+        return {("name", name) for name in node.exact}
+    return {
+        key
+        for person in people
+        for key in index[person].raw
+        if key[0] != "lone"
+    }
 
 
 def _hubs(
@@ -1143,245 +1266,103 @@ def _hubs(
     anchored: bool,
 ) -> list[tuple[str, BlockingKey, list[str]]]:
     """Give each mention the keys it is blocked on: its own, but for the
-    keys more than `limit` mentions of its kind share (the hubs). A lone
-    token is never a hub, since it only ever meets the GEDCOM export; and
-    with `anchored` nor is a key that finds a GEDCOM mention of a kind the
-    export anchors by key (anything but an organization or an event),
-    since every mention holding it pairs with the export's anchors only,
-    a pair each. Returns each hub: its kind, the key, and the mentions
-    holding it."""
-    by_kind: dict[str, list[_Node]] = defaultdict(list)
+    keys more than `limit` mentions of its group (_group) share (the
+    hubs). A lone given name is never a hub, since it only ever meets the
+    GEDCOM export; and with `anchored` nor is a key that a GEDCOM mention
+    of a group the export anchors by key holds (anything but an
+    organisation, an event or a union), since every mention holding it
+    pairs with the export's anchors only, a pair each. Returns each hub:
+    its group, the key, and the mentions holding it."""
+    by_group: dict[str, list[_Node]] = defaultdict(list)
     for node in nodes:
-        by_kind[node.kind].append(node)
+        by_group[_group(node)].append(node)
     hubs_found: list[tuple[str, BlockingKey, list[str]]] = []
-    for kind, group in sorted(by_kind.items()):
-        own = {node.id: _raw_keys(node, index) for node in group}
+    for group, members in sorted(by_group.items()):
+        own = {node.id: _raw_keys(node, index) for node in members}
         counts = Counter(key for keys in own.values() for key in keys)
-        holds = (
-            _export_holds(
-                [node for node in group if node.source == GEDCOM], own
-            )
-            if anchored and kind != ORGANIZATION and kind not in EVENT_KINDS
-            else None
+        held: set[BlockingKey] = (
+            {
+                key
+                for node in members
+                if node.source == GEDCOM
+                for key in own[node.id]
+            }
+            if anchored
+            and group != ORGANIZATION
+            and not any(_timed(node) for node in members)
+            else set()
         )
         hubs = {
             key
             for key, count in counts.items()
-            if count > limit
-            and key[0] != "lone"
-            and not (holds is not None and holds(key))
+            if count > limit and key[0] != "lone" and key not in held
         }
         holders: dict[BlockingKey, list[str]] = defaultdict(list)
-        for node in group:
+        for node in members:
             node.blocking = frozenset(own[node.id] - hubs)
             for key in own[node.id] & hubs:
                 holders[key].append(node.id)
         hubs_found.extend(
-            (kind, key, sorted(holders[key])) for key in sorted(hubs)
+            (group, key, sorted(holders[key])) for key in sorted(hubs)
         )
     return hubs_found
 
 
-def _blocking(node: _Node, tag: str) -> list[BlockingKey]:
-    return sorted(key for key in node.blocking if key[0] == tag)
-
-
-def _blocking_keys(node: _Node) -> dict[str, frozenset[str]]:
-    return _key_map(
-        (given, surname) for _, given, surname in _blocking(node, "key")
-    )
-
-
-class _GivenIndex:
-    """Keys (given name, surname) of nodes, looked up by a surname and a
-    given name one of which starts with the other: each lookup costs the
-    length of the name and the matches it finds, never a scan of every
-    key."""
-
-    def __init__(self) -> None:
-        self._givens: dict[str, dict[str, list[str]]] = defaultdict(
-            lambda: defaultdict(list)
-        )
-        self._sorted: dict[str, list[str]] = {}
-
-    def add(self, node_id: str, keys: Mapping[str, Iterable[str]]) -> None:
-        for surname, givens in keys.items():
-            for given in givens:
-                self._givens[surname][given].append(node_id)
-        self._sorted = {}
-
-    def find(self, given: str, surname: str) -> Iterator[str]:
-        givens = self._givens.get(surname)
-        if not givens:
-            return
-        # the given names this one starts with, itself included
-        for end in range(1, len(given) + 1):
-            yield from givens.get(given[:end], ())
-        # and the longer ones that start with it
-        ordered = self._sorted.get(surname)
-        if ordered is None:
-            ordered = self._sorted[surname] = sorted(givens)
-        for other in ordered[bisect.bisect_right(ordered, given) :]:
-            if not other.startswith(given):
-                break
-            yield from givens[other]
-
-
-class _Matcher(Protocol):
-    def find(self, node: _Node) -> set[str]: ...
-
-
-class _People:
-    """People by their keys; with `lone`, a person of one name token finds
-    the people whose given names are compatible with it."""
+class _Keys:
+    """Mentions by the keys they are blocked on, each lookup reading the
+    buckets of its own keys; with `lone`, a person with no surname finds
+    the people of its given name too."""
 
     def __init__(self, nodes: Sequence[_Node], *, lone: bool) -> None:
-        self._keys = _GivenIndex()
         self._lone = lone
-        self._givens = _GivenIndex()
-        for node in nodes:
-            self._keys.add(node.id, _blocking_keys(node))
-            if lone:
-                self._givens.add(node.id, {"": node.givens})
-
-    def find(self, node: _Node) -> set[str]:
-        keys = _blocking_keys(node)
-        if keys:
-            found = {
-                other
-                for surname, givens in keys.items()
-                for given in givens
-                for other in self._keys.find(given, surname)
-            }
-        elif self._lone and node.source != GEDCOM:
-            found = {
-                other
-                for _, token in _blocking(node, "lone")
-                for other in self._givens.find(token, "")
-            }
-        else:
-            found = set()
-        found.discard(node.id)
-        return found
-
-
-class _Tokens:
-    """Nodes by the blocking keys of one tag they must share one of."""
-
-    def __init__(self, nodes: Sequence[_Node], tag: str) -> None:
-        self._tag = tag
         self._buckets: dict[BlockingKey, list[str]] = defaultdict(list)
+        self._givens: dict[str, list[str]] = defaultdict(list)
         for node in nodes:
-            for key in _blocking(node, tag):
-                self._buckets[key].append(node.id)
+            for key in node.blocking:
+                if key[0] != "lone":
+                    self._buckets[key].append(node.id)
+            if lone:
+                for given in node.givens:
+                    self._givens[given].append(node.id)
 
     def find(self, node: _Node) -> set[str]:
         found = {
             other
-            for key in _blocking(node, self._tag)
+            for key in node.blocking
+            if key[0] != "lone"
             for other in self._buckets.get(key, ())
         }
-        found.discard(node.id)
-        return found
-
-
-class _Organizations:
-    """Organizations one of whose distinctive token sets holds all of the
-    other's. The sets that hold every token of a set hold its rarest one,
-    so a lookup reads one small bucket, never every organization that
-    shares a token; of two sets one of which holds the other, the smaller
-    one's lookup finds the pair."""
-
-    def __init__(self, nodes: Sequence[_Node]) -> None:
-        self._nodes = {node.id: node for node in nodes}
-        self._count = Counter(
-            key[1] for node in nodes for key in _blocking(node, "token")
-        )
-        self._holding: dict[str, list[str]] = defaultdict(list)
-        for node in nodes:
-            for _, token in _blocking(node, "token"):
-                self._holding[token].append(node.id)
-
-    def find(self, node: _Node) -> set[str]:
-        usable = {key[1] for key in _blocking(node, "token")}
-        found: set[str] = set()
-        for tokens in node.org_sets:
-            if not tokens & usable:
-                continue
-            rarest = min(
-                tokens & usable,
-                key=lambda token: (self._count[token], token),
+        if self._lone and node.source != GEDCOM:
+            found.update(
+                other
+                for key in node.blocking
+                if key[0] == "lone"
+                for other in self._givens.get(key[1], ())
             )
-            for other in self._holding.get(rarest, ()):
-                if any(
-                    tokens <= theirs for theirs in self._nodes[other].org_sets
-                ):
-                    found.add(other)
         found.discard(node.id)
         return found
 
 
-class _Events:
-    """Events of one kind whose participants' keys match; an event without
-    participants, by its whole name, among those without."""
-
-    def __init__(self, nodes: Sequence[_Node]) -> None:
-        self._keys = _GivenIndex()
-        for node in nodes:
-            if node.participants:
-                self._keys.add(node.id, _blocking_keys(node))
-        self._named = _Tokens(
-            [node for node in nodes if not node.participants], "name"
-        )
-
-    def find(self, node: _Node) -> set[str]:
-        if not node.participants:
-            return self._named.find(node)
-        found = {
-            other
-            for surname, givens in _blocking_keys(node).items()
-            for given in givens
-            for other in self._keys.find(given, surname)
-        }
-        found.discard(node.id)
-        return found
-
-
-def _matcher(kind: str) -> Callable[[Sequence[_Node], bool], _Matcher]:
-    """How mentions of a kind (other than an event's) find their
-    candidates: (the nodes to index, whether they are GEDCOM mentions)
-    -> the matcher."""
-    if kind == HUMAN:
-        return lambda nodes, gedcom: _People(nodes, lone=gedcom)
-    if kind == PLACE_KIND:
-        return lambda nodes, gedcom: _Tokens(nodes, "token")
-    if kind == ORGANIZATION:
-        return lambda nodes, gedcom: _Organizations(nodes)
-    return lambda nodes, gedcom: _Tokens(nodes, "name")
-
-
-def _within(nodes: Sequence[_Node], matcher: _Matcher) -> set[Pair]:
+def _within(nodes: Sequence[_Node], matcher: _Keys) -> set[Pair]:
     return {
         _pair(node.id, other) for node in nodes for other in matcher.find(node)
     }
 
 
-def _block_kind(
-    nodes: Sequence[_Node],
-    make: Callable[[Sequence[_Node], bool], _Matcher],
-    anchored: bool,
+def _block_group(
+    nodes: Sequence[_Node], anchored: bool
 ) -> tuple[set[Pair], dict[str, frozenset[str]]]:
-    """The blocked pairs of the mentions of one kind, and each GEDCOM
+    """The blocked pairs of the mentions of one group, and each GEDCOM
     anchor's mentions: with `anchored`, a mention that finds GEDCOM
     mentions pairs with them only, and the others among themselves."""
     if not anchored:
-        return _within(nodes, make(nodes, False)), {}
+        return _within(nodes, _Keys(nodes, lone=False)), {}
     gedcom = [node for node in nodes if node.source == GEDCOM]
     others = [node for node in nodes if node.source != GEDCOM]
     pairs: set[Pair] = set()
     anchors: dict[str, frozenset[str]] = {}
     if gedcom:
-        roster = make(gedcom, True)
+        roster = _Keys(gedcom, lone=True)
         pairs |= _within(gedcom, roster)
         for node in others:
             found = roster.find(node)
@@ -1389,7 +1370,7 @@ def _block_kind(
                 anchors[node.id] = frozenset(found)
                 pairs.update(_pair(node.id, other) for other in found)
     free = [node for node in others if node.id not in anchors]
-    return pairs | _within(free, make(free, False)), anchors
+    return pairs | _within(free, _Keys(free, lone=False)), anchors
 
 
 def _block(
@@ -1397,19 +1378,19 @@ def _block(
 ) -> tuple[set[Pair], dict[str, frozenset[str]]]:
     """Every blocked pair of the mentions to cluster, and the GEDCOM
     anchors each anchored mention found."""
-    by_kind: dict[str, list[_Node]] = defaultdict(list)
+    by_group: dict[str, list[_Node]] = defaultdict(list)
     for node in nodes:
-        by_kind[node.kind].append(node)
+        by_group[_group(node)].append(node)
     pairs: set[Pair] = set()
     anchors: dict[str, frozenset[str]] = {}
-    for kind, group in sorted(by_kind.items()):
-        if kind in EVENT_KINDS:
-            # events meet through their participants, an export's death
-            # events among them, and never through an anchor
-            pairs |= _within(group, _Events(group))
+    for _group_name, members in sorted(by_group.items()):
+        if any(_timed(node) for node in members):
+            # events and unions meet through their people, an export's
+            # death events among them, and never through an anchor
+            pairs |= _within(members, _Keys(members, lone=False))
             continue
-        found, anchored = _block_kind(
-            group, _matcher(kind), config.blocking.gedcom_anchored
+        found, anchored = _block_group(
+            members, config.blocking.gedcom_anchored
         )
         pairs |= found
         anchors.update(anchored)
@@ -1458,6 +1439,63 @@ def _apart(first: _Node, second: _Node) -> bool:
 # -- evidence -----------------------------------------------------------------
 
 
+def _one_given(a: _Node, one: _Given, b: _Node, other: _Given) -> bool:
+    """Whether two given parts that share a key may be one name
+    (ADR-0035 §7, rules 1 and 3). A given part is a given name or a word
+    of an `unsplit` form, which states no standard form. Not two given
+    parts whose records give standard forms that share no key; not two
+    nicknames whose holders' records both give given names, sharing no
+    key; and not a given part against a nickname where the given part
+    states a standard form that shares no key with the nickname holder's
+    given names. A nickname holder with no given names bars nothing."""
+    if one.nickname and other.nickname:
+        return not (
+            a.given_names
+            and b.given_names
+            and not a.given_names & b.given_names
+        )
+    if one.nickname or other.nickname:
+        # a given part against the other's nickname: it counts unless
+        # it states a standard form the nickname holder's given names
+        # share no key with
+        given, named = (other, a) if one.nickname else (one, b)
+        return not (
+            given.standard
+            and named.given_names
+            and not given.standard & named.given_names
+        )
+    return not (
+        one.standard and other.standard and not one.standard & other.standard
+    )
+
+
+def _strong_shared(a: _Node, b: _Node) -> bool:
+    """Whether two people share a key that may make a link confident,
+    through given parts that may be one name (_one_given)."""
+    return any(
+        _one_given(a, one, b, other)
+        for given, _surname in sorted(a.strong & b.strong)
+        for one in a.given_parts
+        if given in one.keys
+        for other in b.given_parts
+        if given in other.keys
+    )
+
+
+def _one_event(first: str, second: str) -> bool:
+    """Whether two event or union kinds can be one: the same kind, or
+    two unions of any class; a wedding
+    of unstated kind and a civil or a religious one, but never a civil
+    and a religious one, which are two ceremonies; an end of unstated
+    kind and any end."""
+    kinds = {first, second}
+    if first == second or kinds <= UNION_KINDS:
+        return True
+    if kinds <= WEDDING_KINDS:
+        return "wedding" in kinds
+    return kinds <= END_KINDS | {UNSTATED} and UNSTATED in kinds
+
+
 class _Judge:
     """The deterministic evidence for a pair, and the link it makes."""
 
@@ -1482,24 +1520,137 @@ class _Judge:
         )
 
     def name_level(self, a: _Node, b: _Node) -> str:
-        if a.named_keys & b.named_keys:
-            return "exact"
-        if a.kind == HUMAN and keys_match(a.keys, b.keys):
-            return "key"
-        if a.kind == PLACE_KIND and a.place_keys & b.place_keys:
-            nested = any(
-                one <= other or other <= one
-                for one in a.place_parts
-                for other in b.place_parts
-            )
-            return "nested" if nested else "key"
-        if a.kind == ORGANIZATION and any(
-            one <= other or other <= one
-            for one in a.org_sets
-            for other in b.org_sets
+        """How two mentions' names match: for a recordless mention, or one
+        of a kind without records, `exact` on a shared normalised name;
+        for people `key`, `weak` (a shared key that may not make a link
+        confident: one only a GEDCOM unsplit form gives, or one through
+        given parts that cannot be one name, _one_given) or `given` (a
+        lone given name); for places `exact`, `nested` or
+        `key` (a shared name, containers that differ); for organisations
+        `exact`, `key` or `kind` (_organizations); for families `key`;
+        else `none`."""
+        if a.record is None or b.record is None:
+            return "exact" if a.exact & b.exact else "none"
+        if a.kind == HUMAN:
+            if _strong_shared(a, b):
+                return "key"
+            if a.keys & b.keys:
+                return "weak"
+            if a.lone & b.givens or b.lone & a.givens:
+                return "given"
+            return "none"
+        if a.kind == PLACE_KIND:
+            return self._places(a, b)
+        if a.kind == ORGANIZATION:
+            return self._organizations(a, b)[0]
+        return "key" if a.family & b.family else "none"
+
+    @staticmethod
+    def _places(a: _Node, b: _Node) -> str:
+        """Two places sharing a name: `exact` when their containers (its
+        record's `within` and the places its manifest puts it in) are one
+        set, `nested` when one's are all among the other's, `key`
+        otherwise; `none` without a shared name."""
+        if not any(
+            one & other for one in a.place_names for other in b.place_names
         ):
-            return "key"
-        return "none"
+            return "none"
+        among = [
+            all(any(one & other for other in theirs) for one in ours)
+            for ours, theirs in (
+                (a.containing, b.containing),
+                (b.containing, a.containing),
+            )
+        ]
+        if all(among):
+            return "exact"
+        return "nested" if any(among) else "key"
+
+    def _located(self, a: _Node, b: _Node) -> str:
+        """Whether the places two organisations' location claims name
+        agree (ADR-0035 §7, rule 6): a place of one would link with a place
+        of the other, or with a place it lies in, under rule 5 (`exact` or
+        `nested`). A place is one of its own manifest's nodes, and two
+        organisations of one manifest are never a candidate pair, so a
+        place shared by node needs no test of its own. They are `unknown`
+        when neither holds but a recordless place shares a name with the
+        other's, and differ otherwise."""
+        unknown = False
+        for ours, theirs in ((a, b), (b, a)):
+            for place_id in ours.org_places:
+                one = self._nodes[place_id]
+                for other_id in sorted(theirs.org_closure):
+                    other = self._nodes[other_id]
+                    if one.record is None or other.record is None:
+                        unknown = unknown or bool(
+                            _place_names(one) & _place_names(other)
+                        )
+                    elif self._places(one, other) in ("exact", "nested"):
+                        return "agree"
+        return "unknown" if unknown else "differ"
+
+    @staticmethod
+    def _listed(a: _Node, b: _Node) -> str:
+        """Whether two organisations' places agree where a record names
+        one's places (ADR-0035 §7, rule 6, as rule 5 would let them): as
+        one list of parts, with the places a location claim reaches and
+        every place they lie in, a place without a record by its exact
+        names. When one list lies among the other, as a place nests, they
+        agree if a part with a record is shared, and are `unknown` if only
+        a part without one is. Otherwise they differ: a namesake in
+        another district, or nothing shared."""
+        ours = a.org_set + a.org_loose
+        theirs = b.org_set + b.org_loose
+        among = [
+            bool(one) and all(any(p & q for q in two) for p in one)
+            for one, two in ((ours, theirs), (theirs, ours))
+        ]
+        if not any(among):
+            return "differ"
+        if any(p & q for p in a.org_set for q in b.org_set):
+            return "agree"
+        return "unknown"
+
+    def _organizations(self, a: _Node, b: _Node) -> tuple[str, str]:
+        """(name, places) of two organisations. The name is `exact` for a
+        shared proper name of two words or more, `key` for one of one
+        word, `kind` for a shared kind where neither has a proper name
+        and their places agree, else `none`. The places are `unknown`
+        when either states none. Places both name by location claims
+        agree as `_located` says; otherwise as `_listed` says."""
+        if not a.org_primary or not b.org_primary:
+            places = "unknown"
+        elif a.org_places and b.org_places:
+            places = self._located(a, b)
+        else:
+            places = self._listed(a, b)
+        shared = [
+            words
+            for name, words in a.org_names
+            if any(name & other for other, _words in b.org_names)
+        ]
+        if shared:
+            return ("exact" if max(shared) >= 2 else "key"), places
+        if (
+            not a.org_names
+            and not b.org_names
+            and a.org_kinds & b.org_kinds
+            and places == "agree"
+        ):
+            return "kind", places
+        return "none", places
+
+    @staticmethod
+    def blocked(a: _Node, b: _Node) -> str | None:
+        """What keeps two people apart whatever else agrees: stated sexes
+        that differ, or civil statuses that cannot both hold."""
+        if a.sexes and b.sexes and not a.sexes & b.sexes:
+            return "sex"
+        if _never_married_after(a.civil, b.civil) or _never_married_after(
+            b.civil, a.civil
+        ):
+            return "civil status"
+        return None
 
     def _kin_pairs(self, a: _Node, b: _Node) -> Iterator[tuple[_Node, _Node]]:
         """Each kin of `a` and kin of `b` in one relation to them."""
@@ -1513,40 +1664,46 @@ class _Judge:
                     yield first, second
 
     def kin_agree(self, a: _Node, b: _Node) -> bool:
-        """Whether a kin of each, in one relation, is named alike (by more
-        than a surname), without dates that conflict."""
+        """Whether a kin of each, in one relation, shares a key that may
+        make a link confident (never a surname alone), without dates that
+        conflict."""
         return any(
-            (
-                first.named_keys & second.named_keys
-                or keys_match(first.keys, second.keys)
-            )
+            _strong_shared(first, second)
             and self.life(first, second) != "conflict"
             for first, second in self._kin_pairs(a, b)
         )
 
     def kin_conflict(self, a: _Node, b: _Node) -> bool:
-        """Whether kin of one relation and one name give dates that
-        conflict, while no kin agree."""
+        """Whether kin of one relation and one name (a key, or an exact
+        name) give dates that conflict, while no kin agree."""
         return not self.kin_agree(a, b) and any(
-            first.named_keys & second.named_keys
+            (first.keys & second.keys or first.exact & second.exact)
             and self.life(first, second) == "conflict"
             for first, second in self._kin_pairs(a, b)
         )
 
     def evidence(self, a: _Node, b: _Node) -> tuple[str, str, str]:
-        """(name, dates, kin): how the names match (exact, nested, key or
-        none), whether the dates agree, conflict or say nothing, and
-        whether kin agree."""
-        if a.kind in EVENT_KINDS:
-            best = "none"
-            for first_id in sorted(a.participants):
-                for second_id in sorted(b.participants):
-                    level = self.name_level(
-                        self._nodes[first_id], self._nodes[second_id]
-                    )
-                    if level == "exact" or (level == "key" and best == "none"):
-                        best = level
+        """(name, dates, kin): how the names match (name_level; for events
+        and unions, the best match of their people), whether the dates
+        agree, conflict or say nothing, and whether kin agree (for
+        organisations, whether their places agree or differ)."""
+        if _timed(a):
+            levels = {
+                self.name_level(self._nodes[first], self._nodes[second])
+                for first in _people(a, self._nodes)
+                for second in _people(b, self._nodes)
+            }
+            best = next(
+                (level for level in _LEVELS if level in levels), "none"
+            )
             return best, _dates(a.when, b.when, self._widest), "unknown"
+        if (
+            a.kind == ORGANIZATION
+            and a.record is not None
+            and b.record is not None
+        ):
+            name, places = self._organizations(a, b)
+            return name, self.life(a, b), places
         return (
             self.name_level(a, b),
             self.life(a, b),
@@ -1570,11 +1727,17 @@ class _Judge:
         return self._counted[node.id]
 
     def link(self, a: _Node, b: _Node) -> tuple[str, str]:
-        """(the link, the evidence as name/dates/kin) of a candidate pair
-        of any kind but an event's."""
+        """(the link, the evidence as name/dates/kin, and what blocks the
+        pair when something does) of a candidate pair of any kind but an
+        event's or a union's."""
         name, dates, kin = self.evidence(a, b)
         described = f"{name}/{dates}/{kin}"
+        blocked = self.blocked(a, b) if a.kind == HUMAN else None
+        if blocked:
+            return AMBIGUOUS, f"{described}/{blocked}"
         if dates == "conflict" or not a.kind:
+            return AMBIGUOUS, described
+        if a.recordless or b.recordless:
             return AMBIGUOUS, described
         if any(
             self._anchors_counted(node) > self._max_anchors for node in (a, b)
@@ -1583,91 +1746,91 @@ class _Judge:
         if a.kind == HUMAN:
             corroborated = kin == "agree" or dates == "agree"
             confident = (
-                name in ("exact", "key")
-                and corroborated
-                and not self.kin_conflict(a, b)
+                name == "key" and corroborated and not self.kin_conflict(a, b)
             )
         elif a.kind == PLACE_KIND:
             confident = name in ("exact", "nested")
-        elif a.kind in (ORGANIZATION, FAMILY):
-            confident = any(
-                self._names_one(a, b, _distinctive(shared))
-                for shared in sorted(a.named_keys & b.named_keys)
+        elif a.kind == ORGANIZATION:
+            # a one-word name (a kind with a surname, as in "Firma
+            # Löbig", may be any Löbig's), like a kind alone, links only
+            # on places that agree
+            confident = kin != "differ" and (
+                name == "exact" or (name in ("key", "kind") and kin == "agree")
             )
+        elif a.kind == FAMILY:
+            # a surname names many families: every pair is adjudicated
+            confident = False
         else:
             confident = name == "exact"
         return (CONFIDENT if confident else AMBIGUOUS), described
 
-    def _names_one(self, a: _Node, b: _Node, tokens: frozenset[str]) -> bool:
-        """Whether a name two organizations or families share, of these
-        distinctive tokens, makes them one: two tokens or more, and, when
-        every one is a word of an institution's kind, a place they share."""
-        if len(tokens) < 2:
-            return False
-        return not tokens <= ORG_INSTITUTIONAL or self._same_place(a, b)
-
-    def _places(self, node: _Node) -> set[str]:
-        """The places an organization is located in, and every place its
-        manifest puts one of them inside."""
-        found: set[str] = set()
-        stack = sorted(node.places)
-        while stack:
-            place_id = stack.pop()
-            if place_id in found or place_id not in self._nodes:
-                continue
-            found.add(place_id)
-            stack.extend(sorted(self._nodes[place_id].containers))
-        return found
-
-    def _same_place(self, a: _Node, b: _Node) -> bool:
-        """Whether two organizations are located in one place: a place of
-        each (or one it lies in) named alike, exactly or nested."""
-        return any(
-            self.name_level(self._nodes[first], self._nodes[second])
-            in ("exact", "nested")
-            for first in sorted(self._places(a))
-            for second in sorted(self._places(b))
-        )
-
     def event_link(
         self, a: _Node, b: _Node, merged: Callable[[str, str], bool]
     ) -> tuple[str, str]:
-        """(the link, the evidence) of a candidate pair of events, given
-        whether two people ended merged: confident when every participant
-        of the event with fewer is merged with one of the other's (so two
-        births that name one father stay apart), and their dates agree.
-        Two births or two deaths, each its one participant's own (_nodes),
-        need no date: a person has one of each, so their participants
-        decide them."""
+        """(the link, the evidence) of a candidate pair of events or of
+        unions, given whether two mentions ended merged (the module
+        docstring says when each is confident)."""
         name, dates, kin = self.evidence(a, b)
         described = f"{name}/{dates}/{kin}"
-        if dates == "conflict":
+        if dates == "conflict" or not _one_event(a.kind, b.kind):
             return AMBIGUOUS, described
-        if not (a.own and b.own) and dates != "agree":
-            return AMBIGUOUS, described
-        fewer, more = sorted(
-            (sorted(a.participants), sorted(b.participants)), key=len
-        )
-        if fewer and all(
-            any(merged(first, second) for second in more) for first in fewer
-        ):
-            return CONFIDENT, described
-        return AMBIGUOUS, described
+        if a.kind in UNION_KINDS:
+            first, second = a.couple, b.couple
+            confident = len(first) == len(second) == 2 and (
+                (merged(first[0], second[0]) and merged(first[1], second[1]))
+                or (
+                    merged(first[0], second[1]) and merged(first[1], second[0])
+                )
+            )
+        elif a.union is not None or b.union is not None:
+            confident = (
+                a.union is not None
+                and b.union is not None
+                and merged(a.union, b.union)
+                and dates == "agree"
+            )
+        elif a.kind in ONE_PER_PERSON or b.kind in ONE_PER_PERSON:
+            # a birth or death with no principal, or several, is nobody's
+            # own, and meets nothing through its other participants
+            confident = (
+                a.principal is not None
+                and b.principal is not None
+                and merged(a.principal, b.principal)
+            )
+        elif dates != "agree":
+            confident = False
+        else:
+            fewer, more = sorted(
+                (sorted(a.participants), sorted(b.participants)), key=len
+            )
+            confident = bool(fewer) and all(
+                any(merged(one, other) for other in more) for one in fewer
+            )
+        return (CONFIDENT if confident else AMBIGUOUS), described
 
     def contradicts(self, a: _Node, b: _Node) -> str | None:
         """The evidence of two members of one cluster, when it says they
-        differ (dates that conflict; for people, kin that conflict or no
-        name match; for places, names neither exact nor nested; for other
-        kinds but events, no name match); None when it does not."""
+        differ (dates that conflict; for events, kinds that cannot be one;
+        for people, what blocks a pair, kin that conflict or no name
+        match; for places, names neither exact nor nested; for
+        organisations, places that differ or no name match; for other
+        kinds but events and unions, no name match); None when it does
+        not."""
         name, dates, kin = self.evidence(a, b)
         described = f"{name}/{dates}/{kin}"
         if dates == "conflict":
             return described
-        if a.kind in EVENT_KINDS:
-            return None
+        if _timed(a):
+            return None if _one_event(a.kind, b.kind) else described
         if a.kind == PLACE_KIND:
             return None if name in ("exact", "nested") else described
-        if a.kind == HUMAN and self.kin_conflict(a, b):
+        if a.kind == HUMAN:
+            blocked = self.blocked(a, b)
+            if blocked:
+                return f"{described}/{blocked}"
+            if self.kin_conflict(a, b):
+                return described
+        if kin == "differ":
             return described
         return described if name == "none" else None
 
@@ -1675,41 +1838,49 @@ class _Judge:
         """Everything the evidence of a pair reads of one of its members:
         two members of one signature give every pair the same evidence."""
 
-        def keys(of: _Node) -> tuple:
-            return tuple(
-                sorted(
-                    (surname, tuple(sorted(g)))
-                    for surname, g in of.keys.items()
-                )
-            )
-
         def dates(intervals: list[Interval]) -> tuple:
             return tuple(sorted((i.start, i.end) for i in intervals))
 
+        def person(of: _Node) -> tuple:
+            return (
+                of.record is None,
+                of.exact,
+                of.keys,
+                of.strong,
+                of.lone,
+                of.givens,
+                of.given_parts,
+                of.given_names,
+                dates(of.births),
+                dates(of.deaths),
+            )
+
         return (
-            node.named_keys,
-            keys(node),
-            node.place_keys,
-            frozenset(node.place_parts),
-            frozenset(node.org_sets),
-            dates(node.births),
-            dates(node.deaths),
+            node.kind,
+            person(node),
+            frozenset(node.place_names),
+            frozenset(node.within),
+            frozenset(node.containing),
+            frozenset(node.org_names),
+            node.org_kinds,
+            node.org_primary,
+            node.org_all,
+            node.org_places,
+            node.org_closure,
+            node.org_set,
+            node.org_loose,
+            node.family,
+            frozenset(node.sexes),
+            tuple(sorted((s, i.start, i.end) for s, i in node.civil)),
             dates(node.when),
             frozenset(
-                (
-                    relation,
-                    kin.named_keys,
-                    keys(kin),
-                    dates(kin.births),
-                    dates(kin.deaths),
-                )
+                (relation, person(kin))
                 for relation, kin_id in node.kin
                 if (kin := self._nodes.get(kin_id)) is not None
             ),
             frozenset(
-                (person.named_keys, keys(person))
-                for person_id in node.participants
-                if (person := self._nodes.get(person_id)) is not None
+                person(self._nodes[person_id])
+                for person_id in _people(node, self._nodes)
             ),
         )
 
@@ -1971,7 +2142,7 @@ def _corpus(
         for manifest in ordered
         for node in _nodes(manifest, config.evidence.circa_years)
     ]
-    _derive(nodes, config)
+    _derive(nodes)
     index = {node.id: node for node in nodes}
     clustered = [node for node in nodes if node.mention.extract]
     hubs = _hubs(
@@ -2039,41 +2210,43 @@ def cluster_corpus(
         else:
             candidates.append(pair)
 
-    # everything but events first: an event's link reads the clusters its
-    # participants end in
-    links = {
-        pair: judge.link(index[pair[0]], index[pair[1]])
-        for pair in candidates
-        if index[pair[0]].kind not in EVENT_KINDS
-    }
-    settled = _settle(
-        (node.id for node in clustered if node.kind not in EVENT_KINDS),
-        links,
-        judge,
-        conflicts,
-    )
-    together = {
-        member: position
-        for position, entry in enumerate(settled)
-        if entry.status == CONFIDENT
-        for member in entry.members
-    }
+    # people, places and everything else first, then unions, then
+    # events: a union's link reads the clusters its couple end in, and an
+    # event's those of its people or its union
+    links: dict[Pair, tuple[str, str]] = {}
+    settled: list[_Settled] = []
+    together: dict[str, str] = {}
 
     def merged(first: str, second: str) -> bool:
         return first in together and together[first] == together.get(second)
 
-    event_links = {
-        pair: judge.event_link(index[pair[0]], index[pair[1]], merged)
-        for pair in candidates
-        if index[pair[0]].kind in EVENT_KINDS
-    }
-    settled += _settle(
-        (node.id for node in clustered if node.kind in EVENT_KINDS),
-        event_links,
-        judge,
-        conflicts,
-    )
-    links.update(event_links)
+    def stage(of: Callable[[_Node], bool], link: Callable) -> None:
+        found = {
+            pair: link(index[pair[0]], index[pair[1]])
+            for pair in candidates
+            if of(index[pair[0]])
+        }
+        entries = _settle(
+            (node.id for node in clustered if of(node)),
+            found,
+            judge,
+            conflicts,
+        )
+        links.update(found)
+        settled.extend(entries)
+        together.update(
+            (member, entry.members[0])
+            for entry in entries
+            if entry.status == CONFIDENT
+            for member in entry.members
+        )
+
+    def event_link(a: _Node, b: _Node) -> tuple[str, str]:
+        return judge.event_link(a, b, merged)
+
+    stage(lambda node: not _timed(node), judge.link)
+    stage(lambda node: node.kind in UNION_KINDS, event_link)
+    stage(lambda node: node.kind in EVENT_KINDS, event_link)
 
     clusters: dict[str, dict[str, Any]] = {}
     assigned: dict[str, str] = {}
@@ -2193,6 +2366,10 @@ def cluster_corpus(
         "unclustered_mentions": len(nodes) - len(clustered),
         "clustered_by_kind": dict(
             sorted(Counter(node.kind for node in clustered).items())
+        ),
+        "recordless_mentions": sum(node.recordless for node in nodes),
+        "recordless_by_kind": dict(
+            sorted(Counter(n.kind for n in nodes if n.recordless).items())
         ),
         "hub_keys": len(corpus.hubs),
         "hub_mentions": len(

@@ -5,13 +5,17 @@ ingest paths just before the writer. This proves what lands in the graph:
 
 * LLM path — the chunked extractor's entity manifest is hygiened on its way
   into the batch. A scripted, fictional engine stands in for the model (no
-  model call), so the test drives the real extractor wiring end to end:
-  derivable short-forms (a bare given name, an initialism, a case-variant of
-  the label) never reach the item; a nickname, a licensed alternative-surname
-  composition, and hyphenated / particle compound surnames land WHOLE; the
-  source-marked typed names are written as referenced statements. A second
-  document contributes to the same item through the writer's append path,
-  and only its genuinely new form is added.
+  model call), so the test drives the real extractor wiring end to end.
+  Each manifest gives the person the mention record extraction hands over
+  (ADR-0035 §2), and the cleanup reads her aliases through it (§8): a form
+  that gives no name part the label lacks (a bare given name, an
+  initialism, the label in another case) never reaches the item; a form
+  that adds a part (a nickname, a birth surname, a hyphenated or particle
+  surname, each whole) lands; the source-marked typed names are written
+  as referenced statements. A second document contributes to the same
+  item through the writer's append path, and only its form that adds a
+  part is added. The fixture is tests/fixtures/live_names.py, which an
+  offline unit test mirrors.
 * GEDCOM path — the adapter's aliases are hygiened the same way, while its
   structured NAME TYPE / NICK / _MARNM tags become typed name statements.
 
@@ -21,10 +25,23 @@ by SHA-1 (#102). Every name here is fictional.
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
+from tests.fixtures.live_names import (
+    EXPECTED_ALIASES,
+    FIRST_CLAIMS,
+    FIRST_DOCUMENT,
+    FIRST_DOCUMENT_ALIASES,
+    FIRST_RECORD,
+    LABEL,
+    SECOND_CLAIMS,
+    SECOND_DOCUMENT,
+    SECOND_DOCUMENT_ALIASES,
+    SECOND_RECORD,
+    ScriptedEngine,
+    chunk_response,
+    entity_manifest,
+)
 from yizkr.claims import ArtifactRef
 from yizkr.pipeline.chunking import ChunkedClaimExtractor
 from yizkr.pipeline.gedcom import adapt_gedcom
@@ -35,100 +52,6 @@ from yizkr.pipeline.writer import BatchWriter
 from .conftest import Registered, register_fictional
 
 pytestmark = pytest.mark.live
-
-LABEL = "Ida Livecheck"
-# the forms a model might list for one person, messy on purpose
-FIRST_DOCUMENT_ALIASES = [
-    "Ida",  # bare given name: derivable from the label -> dropped
-    "I. Livecheck",  # initialism: derivable -> dropped
-    "ida livecheck",  # the label again, other case -> dropped
-    "Peppi",  # nickname: adds a token -> kept
-    "PEPPI",  # case-duplicate of a kept form -> dropped
-    "Ida Probewald",  # licensed alternative-surname composition -> kept
-    "Livecheck-Probewald",  # hyphenated compound: kept whole
-    "van der Probewald",  # particle surname: kept whole, never split
-    "  ",  # blank -> dropped
-]
-SECOND_DOCUMENT_ALIASES = ["Ida", "Peppi", "I. Livecheck", "Ida Testerhof"]
-EXPECTED_ALIASES = {
-    "Peppi",
-    "Ida Probewald",
-    "Livecheck-Probewald",
-    "van der Probewald",
-    "Ida Testerhof",  # the second document's one genuinely new form
-}
-
-FIRST_DOCUMENT = """\
-Register of the Livecheck household, 1950.
-1. Ida Livecheck, nee Probewald, called Peppi; b. 1881 in Moshausen.
-"""
-SECOND_DOCUMENT = """\
-Letter from Stupfield, 1960.
-Mrs Ida Testerhof (her married name) wrote; the family called her Peppi.
-"""
-
-
-class ScriptedEngine:
-    """A fictional stand-in for the model: fixed responses, no model call.
-    It has no conversation support, so the extractor sends chunks inline."""
-
-    model_identifier = "integration-test-scripted"
-
-    def __init__(self, responses: list[str]) -> None:
-        self.responses = list(responses)
-
-    def complete(self, prompt, image_paths=()):
-        return self.responses.pop(0)
-
-
-def entity_manifest(aliases: list[str], mention_line: int) -> str:
-    return json.dumps(
-        {
-            "entities": [
-                {
-                    "id": "e1",
-                    "label": LABEL,
-                    "aliases": aliases,
-                    "kind": "human",
-                    "summary": "fictional live-test person",
-                    "mention_lines": [mention_line],
-                }
-            ]
-        }
-    )
-
-
-def chunk_response(artifact: ArtifactRef, claims: list[tuple]) -> str:
-    """A chunk's answer, each claim citing `artifact` as the prompt asks."""
-    lines = [
-        json.dumps(
-            {
-                "subject": {
-                    "kind": "local",
-                    "local_id": "e1",
-                    "label": LABEL,
-                    "instance_of": "human",
-                },
-                "property": prop,
-                "value": value,
-                "source": {
-                    "artifact": artifact.model_dump(mode="json"),
-                    "transcription_excerpt": {
-                        "text": excerpt,
-                        "language": "en",
-                    },
-                },
-                "confidence": 0.9,
-            }
-        )
-        for prop, value, excerpt in claims
-    ]
-    lines.append(json.dumps({"done": True, "claims_emitted": len(claims)}))
-    return "\n".join(lines)
-
-
-def name(text: str) -> dict:
-    return {"type": "monolingual", "value": {"text": text, "language": "en"}}
 
 
 def fixture_artifact(client, title: str) -> Registered:
@@ -199,18 +122,15 @@ def llm_path_person(client, tmp_path_factory):
         tmp_path_factory.mktemp("names-first"),
         first_doc,
         FIRST_DOCUMENT,
-        entity_manifest(FIRST_DOCUMENT_ALIASES, mention_line=2),
-        [
-            ("birth_name", name("Ida Probewald"), "nee Probewald"),
-            ("nickname", name("Peppi"), "called Peppi"),
-            ("date_of_birth", {"type": "time", "year": 1881}, "b. 1881"),
-        ],
+        entity_manifest(FIRST_DOCUMENT_ALIASES, 2, FIRST_RECORD),
+        FIRST_CLAIMS,
     )
     # the validator already ran: the batch's manifest holds the clean bag.
     # Checked BEFORE writing: aliases are append-only, so a validator
     # regression must fail here rather than leave the fixture item dirty.
     (entity,) = first.entities
     assert entity.label == LABEL
+    assert entity.structure is not None  # the record stood (ADR-0035 §5)
     assert set(entity.aliases) == EXPECTED_ALIASES - {"Ida Testerhof"}
     written = BatchWriter(client).write_batch(first)
     qid = written.created_items["e1"]
@@ -219,9 +139,12 @@ def llm_path_person(client, tmp_path_factory):
         tmp_path_factory.mktemp("names-second"),
         second_doc,
         SECOND_DOCUMENT,
-        entity_manifest(SECOND_DOCUMENT_ALIASES, mention_line=2),
-        [("married_name", name("Ida Testerhof"), "Mrs Ida Testerhof")],
+        entity_manifest(SECOND_DOCUMENT_ALIASES, 2, SECOND_RECORD),
+        SECOND_CLAIMS,
     )
+    (entity,) = second.entities
+    assert entity.structure is not None
+    assert set(entity.aliases) == {"Peppi", "Ida Testerhof"}
     again = BatchWriter(client).write_batch(second)
     assert again.created_items["e1"] == qid  # the same item, found by label
     return qid, first_doc, second_doc
@@ -231,8 +154,8 @@ def test_llm_path_alias_bag_is_hygiened_in_the_graph(client, llm_path_person):
     qid, _, _ = llm_path_person
     item = client.wbi.item.get(qid)
     assert str(item.labels.get("en")) == LABEL
-    # exactly the non-derivable forms, each whole; nothing derivable leaked
-    # in, and no compound was split into particle tokens
+    # exactly the forms that add a part to the label, each whole; nothing
+    # derivable leaked in, and no compound was split into particle tokens
     assert aliases_on(client, qid) == EXPECTED_ALIASES
 
 
@@ -257,12 +180,8 @@ def test_llm_path_rewrite_changes_nothing(client, llm_path_person, tmp_path):
         tmp_path,
         first_doc,
         FIRST_DOCUMENT,
-        entity_manifest(FIRST_DOCUMENT_ALIASES, mention_line=2),
-        [
-            ("birth_name", name("Ida Probewald"), "nee Probewald"),
-            ("nickname", name("Peppi"), "called Peppi"),
-            ("date_of_birth", {"type": "time", "year": 1881}, "b. 1881"),
-        ],
+        entity_manifest(FIRST_DOCUMENT_ALIASES, 2, FIRST_RECORD),
+        FIRST_CLAIMS,
     )
     result = BatchWriter(client).write_batch(batch)
     assert result.written == 0

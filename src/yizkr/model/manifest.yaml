@@ -86,6 +86,12 @@ properties:
     datatype: monolingualtext
     wikidata: P1683
 
+  printed_page_number:
+    label: printed page number
+    description: reference locator; the page number printed on the page the reference points into, exactly as printed, beside its physical page number
+    datatype: string
+    reference: true
+
   # --- names (typed and referenced; the item's aliases stay the flat,
   # unreferenced match index — see docs/MODELING.md "Names") ---
 

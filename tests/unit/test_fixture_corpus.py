@@ -21,10 +21,13 @@ corpus's stages, how each came about, the clean corpus's anomalies (none)
 and the clusters, and report.md must say none of it by a universe name, a
 file name or a document's SHA-1. The clustering stage's identity map
 (TestTheTrapsInTheIdentityMap) must meet each trap TRAPS sets for it,
-read in the universe's terms; the two the whole-cluster merge rule cannot
-meet (#361) are recorded as expected, each with its reason, by a strict
-xfail that asserts the merge the rule withholds, so it turns when the
-rule does.
+read in the universe's terms; the two merges clustering withholds are
+recorded as expected, each with its reason, by a strict xfail that asserts
+the merge, so it turns when clustering makes it. The corpus's recorded
+answers carry mention records (#407), and the export the records its
+adapter fills from its tags (#408), so clustering keys and links on the
+records (ADR-0035 §7; #409), and no person or place of the corpus is
+recordless.
 """
 
 from __future__ import annotations
@@ -989,13 +992,13 @@ class TestReuse:
 # -- clustering's trap outcomes -----------------------------------------------
 
 
-# the traps the whole-cluster merge rule (#361) cannot meet, and what it
-# would take to meet each: recorded as expected here (#380), not mended
+# the merges clustering withholds from the traps, and what it would take
+# to make each: recorded as expected here (#380), not mended
 HELD_APART = {
     "merge-carrying-death": "the certificate's mention of Gustav merges "
     "with the mentions that carry his death",
     "mirrored-kinship": "the talk's and the export's mentions of Klara, "
-    "which are a confident link, merge",
+    "whose kin agree, merge",
 }
 
 
@@ -1127,14 +1130,17 @@ class TestTheTrapsInTheIdentityMap:
             ("ursula-loebig", fc.NARRATIVE),
             ("ursula-loebig-angerring", fc.NARRATIVE),
         }
-        # and no pair of them is a confident link, kin that agree
-        # included: the export describes its two alike, so each mention
-        # outside it matches both anchors, more than max-anchors allows
+        # and no pair of them is a confident link: every mention keys on
+        # (Ursula, Löbig), and the export describes its two alike, so each
+        # mention outside it matches both anchors, more than max-anchors
+        # allows; the daughter's kin agree with the export's daughter
+        # (key/unknown/agree), which the anchors overrule
         assert {pair["link"] for pair in entry["pairs"]} == {
             clustering.AMBIGUOUS
         }
-        assert {"exact/unknown/agree"} < {
-            pair["evidence"] for pair in entry["pairs"]
+        assert {pair["evidence"] for pair in entry["pairs"]} == {
+            "key/unknown/unknown",
+            "key/unknown/agree",
         }
         assert identity.map["summary"]["multi_anchored_mentions"] == 3
         assert "never merges them" in trap("homonyms").expected
@@ -1142,14 +1148,19 @@ class TestTheTrapsInTheIdentityMap:
     def test_mirrored_kinship_is_read_as_one_relation(self, identity, batches):
         """The talk gives Klara no date and no parent: it says only that
         Sebastian and Hildegard have her as a child. The export gives her
-        a father and a mother, and no date. Clustering lifts kin from
-        both ends, so the two agree and the pair is a confident link on
-        kinship alone (the evidence reads name/dates/kin). The postcard
-        states it from Klara's end too (her father, its writer). The
-        postcard names its writer only by its own words for him, "Dein
-        Vater", which is his label, with the status kinship (ADR-0035
-        §2.1): no name, so his mention keys on nothing and never meets his
-        daughter's as a name would."""
+        a father and a mother, and her birth year, 1917. Clustering lifts
+        kin from both ends, so the two agree and the pair is a confident
+        link on kinship alone (the evidence reads name/dates/kin); the
+        family history's link to the export is corroborated by both her
+        dates and her kin. The postcard states it from Klara's end too
+        (her father, its writer), but names its writer only by its own
+        words for him, "Dein Vater", which is his label, with the status
+        kinship (ADR-0035 §2.1): no name, so his mention keys on nothing,
+        stays a singleton and lends her no kin. The postcard's own
+        mention of her links to the export on her name alone, so her
+        candidate cluster is ambiguous and none of her mentions merges.
+        Her parents, named by the export, the family history and the talk,
+        merge."""
         klara = identity.of("klara-loebig")
         deck, export = batches.said(fc.DECK), batches.said(fc.EXPORT)
         assert values(deck, "sebastian-loebig", "child") >= {"klara-loebig"}
@@ -1159,7 +1170,11 @@ class TestTheTrapsInTheIdentityMap:
         entry = identity.candidate(klara[fc.EXPORT])
         assert identity.pair(entry, klara[fc.DECK], klara[fc.EXPORT]) == (
             clustering.CONFIDENT,
-            "exact/unknown/agree",
+            "key/unknown/agree",
+        )
+        assert identity.pair(entry, klara[fc.NARRATIVE], klara[fc.EXPORT]) == (
+            clustering.CONFIDENT,
+            "key/agree/agree",
         )
         # the postcard names her father, its writer, from her end, by a
         # kinship term: his mention is no name, pairs with no one, and so
@@ -1178,9 +1193,11 @@ class TestTheTrapsInTheIdentityMap:
         # so no merge rule under discussion takes it in
         assert identity.pair(entry, klara[fc.LETTER], klara[fc.EXPORT]) == (
             clustering.AMBIGUOUS,
-            "exact/unknown/unknown",
+            "key/unknown/unknown",
         )
-        # and the parents, named from both ends, merge across the corpus
+        assert identity.methods_of("klara-loebig") == {clustering.AMBIGUOUS}
+        # and the parents, named from both ends, merge with the export's:
+        # their kin agree through their children
         for parent in ("sebastian-loebig", "hildegard-loebig"):
             mentions = identity.of(parent)
             named = {fc.NARRATIVE, fc.DECK, fc.EXPORT}
@@ -1189,22 +1206,22 @@ class TestTheTrapsInTheIdentityMap:
                 clustering.CONFIDENT
             }, parent
             assert len({identity.cluster(mentions[n]) for n in named}) == 1
+        assert identity.map["summary"]["recordless_by_kind"] == {}
 
-    def test_the_death_carrying_merge_is_the_one_the_rule_allows(
+    def test_the_death_carrying_merge_is_one_nothing_makes(
         self, identity, batches
     ):
         """The certificate's Gustave Lobig links confidently to the
         export's Gustav Löbig, which carries his death, and so do the
         family history's and the talk's mentions of him. The postcard's
-        'Gustl' links to the same anchor on its name alone: one token,
-        which meets the export's NICK and nothing else, with no date and
-        no kin. The merge rule takes the candidate
-        cluster whole, so that one ambiguous link leaves every mention of
-        him apart, and no merge carries his death to the certificate."""
+        lone 'Gustl', a given name with no surname, meets the export's
+        Gustav, whose record has the nickname Gustl, only as a lone name
+        (`given`, ADR-0035 §7, rule 1): it pairs, but never links
+        confidently. The merge rule takes the candidate cluster whole, so
+        that one ambiguous link leaves every mention of him apart, and no
+        merge carries his death to the certificate."""
         gustav = identity.of("gustav-loebig")
         assert set(gustav) == set(fc.DOCUMENTS)
-        assert identity.methods_of("gustav-loebig") == {clustering.AMBIGUOUS}
-        assert len(identity.clusters_of("gustav-loebig")) == len(gustav)
         entry = identity.candidate(gustav[fc.EXPORT])
         assert entry["status"] == clustering.AMBIGUOUS
         assert entry["conflict"] is None
@@ -1215,13 +1232,16 @@ class TestTheTrapsInTheIdentityMap:
             for document, fingerprint in gustav.items()
             if document != fc.EXPORT
         } == {
-            fc.CERTIFICATE: (clustering.CONFIDENT, "exact/agree/unknown"),
-            fc.NARRATIVE: (clustering.CONFIDENT, "exact/agree/agree"),
-            fc.DECK: (clustering.CONFIDENT, "exact/unknown/agree"),
-            fc.LETTER: (clustering.AMBIGUOUS, "exact/unknown/unknown"),
+            fc.CERTIFICATE: (clustering.CONFIDENT, "key/agree/unknown"),
+            fc.NARRATIVE: (clustering.CONFIDENT, "key/agree/agree"),
+            fc.DECK: (clustering.CONFIDENT, "key/unknown/agree"),
+            fc.LETTER: (clustering.AMBIGUOUS, "given/unknown/unknown"),
         }
+        assert set(entry["members"]) == set(gustav.values())
+        assert identity.methods_of("gustav-loebig") == {clustering.AMBIGUOUS}
+        assert len(identity.clusters_of("gustav-loebig")) == len(gustav)
         # the death the merge would carry is stated by the documents the
-        # certificate's mention links to confidently, and by no other
+        # certificate's mention meets, and by no other
         assert (
             values(
                 batches.said(fc.CERTIFICATE), "gustav-loebig", "date_of_death"
@@ -1232,11 +1252,15 @@ class TestTheTrapsInTheIdentityMap:
             assert values(
                 batches.said(name), "gustav-loebig", "date_of_death"
             ) == {u.Date(1996)}, name
-        # a rule that merged over the confident links alone would merge
-        # more of the corpus than this one does, and nothing conflicting
-        linked = identity.map["summary"]["confident_links_only"]
-        assert linked["mentions"] > identity.map["summary"]["merged_mentions"]
-        assert linked["conflicting"] == 0
+        # merging over the confident links alone would join 13 clusters,
+        # none conflicting; the whole-cluster rule merges 28 mentions
+        summary = identity.map["summary"]
+        assert summary["confident_links_only"] == {
+            "clusters": 13,
+            "mentions": 37,
+            "conflicting": 0,
+        }
+        assert summary["merged_mentions"] == 28
 
     def test_the_traps_the_merge_rule_cannot_meet_are_recorded(self):
         """Each trap the rule cannot meet says so where the corpus
@@ -1268,14 +1292,27 @@ class TestTheTrapsInTheIdentityMap:
         strict=True,
         raises=AssertionError,
         reason=HELD_APART["merge-carrying-death"]
-        + ": the whole-cluster merge rule (#361) takes the candidate "
-        "cluster as it stands, and the postcard's one-token 'Gustl', "
-        "which nothing corroborates, holds it ambiguous. A rule that "
+        + ": the postcard's lone 'Gustl' meets the export's Gustav only as "
+        "a lone name, an ambiguous link, so the candidate cluster of his "
+        "mentions is ambiguous, and the whole-cluster merge rule (#361) "
+        "leaves every member of an ambiguous cluster apart, the "
+        "certificate's confident link to the export included. A rule that "
         "merged over the confident links alone (#66) would merge the "
         "certificate's mention with them.",
     )
     def test_the_certificates_gustav_merges_with_his_death(self, identity):
         gustav = identity.of("gustav-loebig")
+        entry = identity.candidate(gustav[fc.EXPORT])
+        _premise(
+            identity.pair(entry, gustav[fc.CERTIFICATE], gustav[fc.EXPORT])[0]
+            == clustering.CONFIDENT,
+            "the certificate's mention links confidently to the export's",
+        )
+        _premise(
+            identity.pair(entry, gustav[fc.LETTER], gustav[fc.EXPORT])
+            == (clustering.AMBIGUOUS, "given/unknown/unknown"),
+            "the postcard's Gustl meets the export's only as a lone name",
+        )
         assert identity.cluster(gustav[fc.CERTIFICATE]) == identity.cluster(
             gustav[fc.NARRATIVE]
         )
@@ -1294,14 +1331,33 @@ class TestTheTrapsInTheIdentityMap:
         "apart either way, since its one link is ambiguous.",
     )
     def test_klaras_mentions_merge(self, identity):
-        """What the rule withholds is the merge of the two mentions its
-        own evidence calls a confident link, not a cluster of all four:
+        """What clustering withholds is the merge of the talk's and the
+        export's mentions, whose kin agree, not a cluster of all four:
         the postcard's mention links to the export on nothing but the
         name, so no rule under discussion merges it."""
         klara = identity.of("klara-loebig")
+        entry = identity.candidate(klara[fc.EXPORT])
+        _premise(
+            identity.pair(entry, klara[fc.DECK], klara[fc.EXPORT])[0]
+            == clustering.CONFIDENT,
+            "the talk's and the export's mentions link confidently",
+        )
+        _premise(
+            identity.pair(entry, klara[fc.LETTER], klara[fc.EXPORT])[0]
+            == clustering.AMBIGUOUS,
+            "the postcard's mention links to the export ambiguously",
+        )
         assert identity.cluster(klara[fc.DECK]) == identity.cluster(
             klara[fc.EXPORT]
         )
+
+
+def _premise(holds: bool, what: str) -> None:
+    """A strict xfail's premise, as its reason states it: when it no
+    longer holds, the test errors, rather than xfailing for a reason
+    other than its own."""
+    if not holds:
+        raise RuntimeError(f"the xfail's premise no longer holds: {what}")
 
 
 # -- the run report -----------------------------------------------------------
@@ -1547,6 +1603,7 @@ class TestTheRunReport:
             "mentions": summary["mentions"],
             "clustered mentions": summary["clustered_mentions"],
             "unclustered mentions": summary["unclustered_mentions"],
+            "recordless mentions": summary["recordless_mentions"],
             "identity clusters": summary["identity_clusters"],
             "confident merges": summary["clusters"]["confident"],
             "mentions merged": summary["cluster_mentions"]["confident"],

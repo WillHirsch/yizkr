@@ -426,6 +426,38 @@ class SourceReference(StrictModel):
     page_number: str | None = None
     region: RegionPercent | None = None
     transcription_excerpt: MonolingualText | None = None
+    # The page number printed on the page `page_number` names, exactly as
+    # the transcription record gives it (ADR-0037), beside the physical
+    # page. The extractor sets it from the record, never the model
+    # (extract.cite_artifact): the JSON Schema that extraction prompts
+    # carry leaves it out, and it is documented in this comment because
+    # the class docstring is that schema's description. A source without
+    # one serialises exactly as it would if the field did not exist, so
+    # its content hashes are those of any other source.
+    printed_page_number: SkipJsonSchema[str | None] = None
+
+    @model_validator(mode="after")
+    def _a_printed_page_beside_its_page(self) -> SourceReference:
+        """A printed page number names the page `page_number` names, so a
+        source that gives one gives that page too: a prepared claims
+        file's as much as an extractor's."""
+        if (
+            self.printed_page_number is not None
+            and not (self.page_number or "").strip()
+        ):
+            raise ValueError(
+                "a printed page number needs the page number it stands beside"
+            )
+        return self
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_printed_page_number(
+        self, handler: SerializerFunctionWrapHandler
+    ):
+        data = handler(self)
+        if isinstance(data, dict) and self.printed_page_number is None:
+            data.pop("printed_page_number", None)
+        return data
 
 
 # A claim's subject: an entity reference, or the claim's own source

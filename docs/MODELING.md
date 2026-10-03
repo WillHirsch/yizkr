@@ -173,6 +173,26 @@ Every statement carries at least one reference with:
 - locator qualifier(s): page number, and/or region given as a
   percentage bounding box "x%,y%,w%,h%" (W1/W3) or a IIIF
   canvas+xywh URI (W2)
+- the printed page number, where there is one: the page number printed
+  on the page the `page number` locator names, exactly as printed
+  (`printed page number`, a reference property). The page number stays
+  the physical page, the page's place in the media from 1, so a claim
+  read from page 6 of *Our Family from Germany*, whose sixth page is
+  printed as page 4, cites `page number` 6 with `printed page number` 4.
+  The extractor sets it from the transcription record (ADR-0037), never
+  from the model: only for a claim whose page number is one physical
+  page whose record gives a printed number. A range, a page given in
+  words, a page the record gives no printed number and a transcription
+  with no record (a text file's, a deck's slide text) get none; none is
+  ever guessed (#424). It describes the physical page: a page that
+  shows a spread with one half numbered keeps that one number for
+  every claim read from it, as both ways of reading a PDF give it the
+  same (ADR-0037 §2). A source that gives a printed page number gives
+  its page number too: validation refuses one without the other, in a
+  prepared claims file as in an extractor's batch. An excerpt's claims
+  read the excerpt's own transcription, so they never take the printed
+  number of the page that places it, and its `part of` the container
+  keeps the container's physical page (ADR-0008)
 - optional short transcription excerpt supporting human verification,
   tagged with the language it is written in (BCP-47). `yizkr ingest run`
   takes each document's language from its transcription by default
@@ -200,20 +220,22 @@ gives the rule). The kinds and type hints the writer records after the
 claims, from an entity manifest or a ref, follow ADR-0007 instead.
 
 Wikibase holds at most 400 characters in the text of a string,
-external-id or monolingual text value, a reference's page number and
-region among them, and no text value with a line break or a tab in it,
-or whitespace at either end; it refuses the whole edit that sends a text
-it does not hold. It also cleans a text up, making each C0 control
-character but the tab, the line feed and the carriage return, and each
+external-id or monolingual text value, a reference's page number,
+printed page number and region among them, and no text value with a
+line break or a tab in it, or whitespace at either end; it refuses the
+whole edit that sends a text it does not hold. It also cleans a text
+up, making each C0 control character but the tab, the line feed and
+the carriage return, and each
 of the noncharacters U+FFFE and U+FFFF, U+FFFD: in a string or
 external-id value before it checks and stores it (so it changes a
 vertical tab or a form feed there, and refuses one in monolingual text),
 and in every text its API gives back, monolingual text included. The
 writer checks each text in NFC, the form the instance keeps it in, and
 sends none that the instance would give back changed (#366, #384,
-#403). A page number, region or excerpt goes on one line: whitespace at
-either end is dropped, a line break inside becomes " | ", a tab a space
-and each other character the instance cleans up U+FFFD, as the instance
+#403). A page number, printed page number, region or excerpt goes on
+one line: whitespace at either end is dropped, a line break inside
+becomes " | ", a tab a space and each other character the instance
+cleans up U+FFFD, as the instance
 gives it back, so a re-run finds its reference block; one of whitespace
 alone is left out. One still over the limit is cut at
 a break between words and ends with " … sha1 " and the first 12 hex
@@ -707,11 +729,20 @@ recorded only where a source marks it, the marker possibly contextual). The
 LLM is the primary normalizer: its prompt carries these standards (compose
 no permutations, keep a clean label, strip embedded annotations, type only
 what is marked). A thin deterministic validator (`pipeline/names.py`) is the
-shared safety net over both the LLM and GEDCOM paths: it drops
-re-derivable short-forms (a bare given name, an initialism, a surname the
-label already carries) and keeps compound/particle surnames whole (never
-shattering `de la Cruz` / `van der Berg`), asserting no kind. Composition
-and short-form display are the frontend's to *derive*, never stored.
+shared safety net over both the LLM and GEDCOM paths: it reads an alias
+through the entity's mention record, never its token shapes (ADR-0035
+§8). A person's alias that gives no name part is dropped, as is one whose
+parts the label already gives ("Löbig, Ida" beside "Ida Löbig"); one that
+adds a part is kept ("Wastl"), as is one that spells a part otherwise
+than the label ("Gustav Lobig" beside "Gustav Löbig"), and so is the
+first that alone holds a title or suffix the record gives ("Frau Löbig" beside "Ida Löbig", her
+record titling her Frau). The GEDCOM adapter cleans by the record it
+fills, as extraction does. A place's or an organisation's alias that
+gives no part (a deictic or generic reference) is dropped, and a short form
+kept. An entity without a record keeps its aliases, blanks and duplicates
+aside. It never splits a name, so compound/particle surnames stay whole
+(`Faxridge-van 't Nijks`), and asserts no kind. Composition and short-form
+display are the frontend's to *derive*, never stored.
 
 **Mention records (ADR-0035 §2).** Extraction's entity manifest may give
 each person, place, organisation and family a `structure`, what its names
@@ -1009,6 +1040,26 @@ not a signal to grow the schema on.
   **aliases** (append-only); matching quality compounds per document.
   Where a source *types* a name (birth, married, nickname, official),
   it is additionally recorded as a referenced statement — see "Names".
+- A scratch run clusters every document's mentions across the corpus
+  before any write (the clustering stage, `pipeline/clustering.py`,
+  ADR-0025). It keys and judges on each mention's record, never on a
+  label's wording (ADR-0035 §7): a person's given names by their standard
+  forms and as written, with its surnames and its kin's; a place's names
+  and address as written, its containers (its record's, and those its
+  manifest's `part_of` and `location` claims give) compared as one set; an
+  organisation's proper names, else its kind with its places, which agree
+  only when they would link as places or one lies in the other; an umlaut
+  also written out (DIN 5007-2). A person, place, organisation or family
+  without a record (none given, or one extraction set aside under
+  ADR-0035 §5, before the alias cleanup) meets only its exact name, and
+  never merges; so a document's mention whose record was set aside never
+  meets the GEDCOM export, whose people and places all have records; the
+  kinds that take no record (occupations, vessels and the like) still
+  merge on an exact name. A union is keyed by its couple,
+  and its weddings and ends by union, kind and date (ADR-0036 §3). A
+  birth's or a death's date belongs to its principal alone, and one with
+  no principal, several, or one whose own date of that kind conflicts
+  with it, is nobody's and merges with none.
 - Machine-proposed equivalences (within or across documents) are
   reviewed by a human before they take effect — identity is never
   auto-confirmed. Approved matches resolve new claims to the existing

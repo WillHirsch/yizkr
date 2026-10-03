@@ -66,6 +66,74 @@ itself in its own `--help`.
     that calls `monkeypatch.undo()` loses them for the rest of its run. A
     test that needs a patch for part of its run scopes it with
     `with monkeypatch.context() as patch:` instead.
+- **No unit test depends on real elapsed time or the real wall clock**
+  (#437). Code that reads a clock or sleeps takes a seam (`clock=`,
+  `now=`, `sleep=`, `monotonic=`, `timer=`) defaulting to the real one,
+  and the test injects a fake it advances itself. A test of an OS
+  mechanism (a lock across processes, a signal, a child) synchronises
+  on an event: a pipe, a line the child prints, a joined thread, an
+  Event set just before a call blocks. A bounded wait stays only as a
+  hang guard, with a module-level `HANG_GUARD` as its timeout, and is
+  followed by an assertion that the event happened, so a hang fails. A
+  timeout of a literal 0 is a poll and waits no time.
+  `tests/unit/test_no_real_time.py` enforces this: it reads every module
+  in `tests/unit`, conftest.py and new modules included, with the finder
+  in `tests/fixtures/real_time.py` (pinned by
+  `tests/unit/test_real_time.py`), and fails, naming the file and line,
+  on any use its allow-list `ALLOWED` does not name. It also fails on any
+  `HANG_GUARD` that is not a module-level assignment of a number of 30
+  to 600 seconds, or that a class or function binds again, so a hang
+  guard is never a time a test waits out, nor so long that a missed
+  event holds CI for hours. Each entry names the module, the use as the
+  finder words it (or `*` for a whole module held until another pull
+  request merges), optionally the test it is limited to (by its
+  qualified name, `TestX.test_y`, or by its own name when that names
+  only one class or function), and its reason. An entry that no longer
+  matches a use, a held module in which the finder sees no use, an entry
+  limited to a name that names more than one class or function, and an
+  entry naming a module that does not exist all fail, so an entry can
+  only be removed, never kept past its use, and a new use always needs a
+  new entry with its reason. The finder reads only the module's own
+  code, and finds exactly the spellings its docstring lists: a clock
+  call, by its final name whatever it is called on (`time.sleep`,
+  `t.sleep` after `import time as t`, `time.monotonic`,
+  `time.clock_gettime` and the rest, `datetime.now`, `date.today`,
+  `threading.Timer`, `signal.alarm`, `setitimer`, `loop.call_later`,
+  `call_at`), or by a name it is imported as (`T` after `from threading
+  import Timer as T`); a clock function of the time module, a datetime
+  or a date taken uncalled; a `time.localtime()`-style read of the
+  current time; any `from time import`; a timed wait (`.wait`, `.join`,
+  `.wait_for`, `.acquire`, `.get`, `.put`, `threading.Barrier`,
+  `.settimeout`, `select.select`, a selector's `.select`) whose timeout
+  is not `HANG_GUARD`, None or 0; and a real timer started by anomalies'
+  timer starter with a wait other than 0. A `.join`'s or a selector's
+  `.select`'s lone positional argument is its timeout when it gives a
+  time: a number or `HANG_GUARD`, arithmetic on one with no sequence or
+  string beside it (`HANG_GUARD / 10`, but not `[name] * 4`), a
+  conditional giving one, or a call that makes a number (`float("0.5")`,
+  `min(HANG_GUARD, 5)`). Left to review are:
+  - a `.join` or a selector's `.select` given its timeout by another
+    name, or by any other expression (a str.join's iterable looks the
+    same);
+  - a timeout given positionally to `.wait_for`, `.acquire`, `.get` or
+    `.put`, and a timeout given to any other call (`subprocess.run`,
+    `communicate`, `urlopen`, ...);
+  - a clock reached through another name (`T = threading.Timer`, or
+    `dt.now` taken uncalled after `from datetime import datetime as dt`)
+    or through a default in `src/`;
+  - a wait reached through another name: `s.select` after `import select
+    as s`, `sl` after `from select import select as sl`, `B` after `from
+    threading import Barrier as B`;
+  - a `HANG_GUARD` bound by a `match` capture (`case HANG_GUARD:`), an
+    `except ... as`, a `def` or a `class`;
+  - a child's script held in a string.
+
+  One test is bounded only by the hang
+  guard where it once had a few seconds of CPU of its own:
+  `test_long_repetitive_text_checks_quickly` in
+  `test_transcription_check.py`. It exists to catch catastrophic
+  backtracking, and still does, since a backtracking pattern takes hours
+  on its text; a pattern merely a few times slower goes unnoticed.
 - **The offline end-to-end scratch run**
   (`tests/unit/test_fixture_corpus.py`, a unit test like the rest) takes
   the fixture corpus (`tests/fixtures/corpus/`, docs/EXAMPLES.md) through
