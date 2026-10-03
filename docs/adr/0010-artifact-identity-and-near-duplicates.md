@@ -130,13 +130,14 @@ side, in the writer and in resolve, as its item is an artifact's part;
 and only an artifact's own content tag makes a label one of its
 title's.
 With the rule of #431 (amended by #444, 2026-10-03): the plan is made
-without the claims refused for their text, so an entity whose label
+without the claims refused before it (for their text, or as a
+misplaced document subject, ADR-0035 §3.4), so an entity whose label
 holds a character Python's tables do not know is never placed nor its
-label looked up, and a media object named only by claims refused for
-their text is never placed either, so it is neither blocked nor
+label looked up, and a media object named only by claims refused
+before the plan is never placed either, so it is neither blocked nor
 flagged; a description is named in `refused_terms` only when a claim
-written mentions its entity, not a claim refused for its text nor one
-refused with an entity the plan blocks; a manifest record that only
+written mentions its entity, not a claim refused before the plan nor
+one refused with an entity the plan blocks; a manifest record that only
 such refused claims name by a local ref has nothing of it sent, so its
 aliases and type hint are not named in `refused_terms` either, nor is
 it matched to an item by its label; and the kind of a ref without a
@@ -570,7 +571,12 @@ Resolve's exact-label step never resolves a ref on the artifact side
 `subclass_of` it, or of artifact fragment, as in the writer's
 `is_artifact_kind`; amended by #444, 2026-10-03), and
 resolves no ref to an artifact or a part of one: it matches against the
-instance's labels without those items' (`resolvable_labels`). What
+instance's labels without those items' (`resolvable_labels`). The
+writer, finding the item a manifest record names after resolve replaced
+its refs (its `_found_entities`), pairs a record and an item by label on
+the same terms, a record that no claim names as much as any other: a
+person's record never names a media object's item, nor a media object's
+record a registered scan (amended by #444, 2026-10-03). What
 the two read stays bounded by the batch (amended by #444, 2026-10-03):
 resolve reads the instance's labels once a batch and the statements of
 only the items its refs' labels name (`WikiClient.fetch_claims`), and a

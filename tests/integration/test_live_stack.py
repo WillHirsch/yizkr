@@ -20,7 +20,7 @@ def test_bootstrap_is_idempotent(client):
 
     manifest = load_manifest()
     first = bootstrap_instance(client, manifest, log=lambda *_: None)
-    client._vocabulary = None  # drop cache; second run sees fresh state
+    client.forget_vocabulary()  # drop cache; second run sees fresh state
     second = bootstrap_instance(client, manifest, log=lambda *_: None)
     assert second["created"] == 0
     assert second["updated"] == 0

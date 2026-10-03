@@ -106,12 +106,13 @@ Per batch, the writer:
    person, place or other entity, or of a media object with no artifact
    registered under its label, is the warning and `refused` alone
    (ADR-0010). The plan is made of the claims the writer writes, without
-   those refused for their text: an entity, such as a media object, that
-   only such claims name is never placed, so it is neither blocked nor
-   flagged. Of a manifest record that only refused claims name, refused
-   for their text or with an entity the plan blocks, nothing is sent, so
-   none of its description, aliases or type hint is named in the
-   result's `refused_terms` (_unsent_records);
+   those refused before it (_refusals: for their text, or as a
+   misplaced document subject, ADR-0035 §3.4): an entity, such as a
+   media object, that only such claims name is never placed, so it is
+   neither blocked nor flagged. Of a manifest record that only refused
+   claims name, refused before the plan or with an entity the plan
+   blocks, nothing is sent, so none of its description, aliases or type
+   hint is named in the result's `refused_terms` (_unsent_records);
 3. writes each claim as a statement at NORMAL rank (the contract has
    no rank field — ADR-0002) with TWO references (ADR-0003):
    * stated in -> artifact, with page number / printed page number /
@@ -1975,8 +1976,14 @@ class BatchWriter:
         here, or, once the resolve step has replaced those refs with the
         item's QID, by the item's English label being the record's label
         in the form the instance keeps labels in (_term_text): the match
-        the resolve step made. Only in that last case have the
-        record's aliases not reached the item yet. A record whose label
+        the resolve step made. Only in that last case have the record's
+        aliases not reached the item yet. That match pairs only a record
+        not on the artifact side (is_artifact_kind) with an item that is
+        no artifact nor a part of one (_artifact_item), as resolve matches
+        (yizkr.pipeline.resolve; ADR-0010), a record that no claim names
+        as much as any other: a person's record never names a media
+        object's item by its label, nor a media object's record a
+        registered scan. A record whose label
         holds nothing the instance keeps names no item this way, as an
         item with no English label matches no record, and nor does one
         whose label holds a character Python's Unicode tables do not know
@@ -1994,13 +2001,17 @@ class BatchWriter:
             qid = record.qid or result.created_items.get(record.id)
             if qid is None:
                 stored_label = _term_text(record.label)
-                if stored_label and not unknown_characters(record.label):
+                if (
+                    stored_label
+                    and not unknown_characters(record.label)
+                    and not is_artifact_kind(record.kind)
+                ):
                     by_label.setdefault(stored_label, []).append(record)
             else:
                 found.append(_FoundEntity(qid, record.kind, record.type_hint))
         if by_label:
             for qid in self._mentions:
-                if qid in self._minted:
+                if qid in self._minted or self._artifact_item(qid):
                     continue
                 label = str(self._entity(qid).labels.get("en") or "")
                 found.extend(
@@ -2184,7 +2195,8 @@ class BatchWriter:
         mentions it, as the writer may send them to an item the resolve
         step matched the record to, but for a record of which nothing is
         sent (_unsent_records): the claims that name it by a local ref
-        are all refused, for their text or with an entity the plan blocks.
+        are all refused, before the plan (_refusals) or with an entity
+        the plan blocks.
         `refused` holds the places in the batch of the claims the writer
         refuses."""
         named: list[str] = []
@@ -2235,11 +2247,14 @@ class BatchWriter:
     ) -> set[str]:
         """The local ids of the manifest records without an approved
         equivalence that claims of `batch` name by a local ref, but only
-        claims at the places `refused`, which the writer refuses, for their
-        text or with an entity the plan blocks (step 2 of the module
+        claims at the places `refused`, which the writer refuses, before
+        the plan (_refusals: for their text, or as a misplaced document
+        subject) or with an entity the plan blocks (step 2 of the module
         docstring): no item is found or made for such a record, and none
         of its terms, kind or type hint is sent anywhere, nor matched to
-        an item by its label (_found_entities)."""
+        an item by its label (_found_entities). A record counts as written
+        only through a local ref to it in a claim the writer writes: one
+        that claim names by the QID resolve gave it does not count."""
         named: set[str] = set()
         written: set[str] = set()
         for index, claim in enumerate(batch.claims):
@@ -2387,14 +2402,18 @@ class BatchWriter:
     def _type_hints_over_limit(self) -> list[str]:
         """A warning for each manifest record whose type hint the instance
         cannot hold, as the writer sends it (_hint_text), which is left out
-        wherever the writer would record it (the module docstring)."""
+        wherever the writer would record it (the module docstring); none
+        for a record of which nothing is sent (_unsent_records), as with a
+        type hint that holds a character Python's Unicode tables do not
+        know (_unknown_terms)."""
         return [
             f"entity {record.id!r} has a type hint of {len(hint)} "
             f"characters in Unicode NFC, its whitespace as single spaces, "
             f"over the {TEXT_LIMIT} Wikibase holds in a text value: it is "
             f"not recorded, as a cut would narrow what the source says"
             for record in self._entity_records.values()
-            if len(hint := _hint_text(record.type_hint or "")) > TEXT_LIMIT
+            if record.id not in self._unsent
+            and len(hint := _hint_text(record.type_hint or "")) > TEXT_LIMIT
         ]
 
     # -- main entry ----------------------------------------------------------
@@ -2457,7 +2476,7 @@ class BatchWriter:
         # found before the first write too: the kinds the vocabulary lacks
         # (a manifest record's whatever its claims, and the kind of a ref
         # without a record only when a claim the writer writes mentions it:
-        # all but those refused for their text and those the plan
+        # all but those refused before the plan and those the plan
         # refuses), the type hints the instance cannot hold, and the terms
         # it may keep in another form, each skipped wherever the writer
         # would record it

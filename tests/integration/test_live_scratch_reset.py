@@ -142,7 +142,8 @@ def resets(request, config):
             raise
         finally:
             if client is not None:
-                client._wbi = client._login = client._vocabulary = None
+                client._wbi = client._login = None
+                client.forget_vocabulary()
 
     return reset
 

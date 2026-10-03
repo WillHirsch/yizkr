@@ -54,9 +54,9 @@
   instance keeps the first one's label in. A description is named in
   `refused_terms` only when a claim the writer writes mentions its
   entity, as only the item such a claim mints would take it: a claim
-  refused for its text, or with an entity that may join neither the
-  item under its label nor the one under its tagged label (ADR-0010),
-  mints nothing. A manifest record whose local refs only such refused
+  refused for its text, as a misplaced document subject (ADR-0035
+  §3.4), or with an entity that may join neither the item under its
+  label nor the one under its tagged label (ADR-0010), mints nothing. A manifest record whose local refs only such refused
   claims hold has nothing of it sent, so its aliases and type hint are
   not named in `refused_terms` either (amended by #444, 2026-10-03).
   A run item's label holding one, an extraction run's or the place-hierarchy

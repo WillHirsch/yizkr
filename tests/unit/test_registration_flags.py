@@ -2031,6 +2031,29 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         return ClaimBatch.model_validate(given)
 
     @needs_unknown_mark
+    def test_an_unsent_records_long_type_hint_is_not_warned_of(self):
+        """The media object's one claim is refused for its text, so nothing
+        of its record is sent: its type hint, over the limit, is not
+        warned of, as one holding an unknown character is not named."""
+        from yizkr.claims import ClaimBatch
+        from yizkr.pipeline.writer import TEXT_LIMIT, BatchWriter
+
+        wiki = WritingWiki()
+        given = family_gedcom(wiki).model_dump(mode="json")
+        for record in given["entities"]:
+            if record["id"] == "md1":
+                record["type_hint"] = "Kabinettkarte " * (TEXT_LIMIT // 14 + 1)
+        batch = self.with_marked_excerpt(
+            ClaimBatch.model_validate(given), "md1"
+        )
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        assert len(written.refused) == 1
+        assert not [w for w in written.warnings if "type hint of" in w]
+        assert "md1" not in written.created_items
+
+    @needs_unknown_mark
     def test_a_media_object_only_a_refused_claim_names_is_never_placed(
         self, monkeypatch
     ):
@@ -2169,7 +2192,7 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         for record in given["entities"]:
             if record["id"] == "i1":
                 record["qid"] = sebastian
-                record["aliases"] = ["Bastian", f"Bastian {UNKNOWN_MARK}"]
+                record["aliases"] = ["Wastl", f"Wastl {UNKNOWN_MARK}"]
         batch = self.with_marked_excerpt(
             ClaimBatch.model_validate(given), "md1"
         )
@@ -2178,7 +2201,9 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
 
         assert len(written.refused) == 1
         assert written.refused_terms == ["i1: alias"]
-        assert "Bastian" in str(wiki.entities[sebastian].get("aliases"))
+        assert wiki.entities[sebastian]["aliases"]["en"] == [
+            {"language": "en", "value": "Wastl"}
+        ]
 
     def test_a_blocked_records_terms_never_reach_the_item_under_its_label(
         self,
@@ -2565,6 +2590,99 @@ class TestOtherKindsStillMatchByLabel:
     the item under its label, it is an item of its own under its tagged
     label, its own label an alias, and no flag is raised unless an
     artifact is registered under a media object's label."""
+
+    def test_a_record_no_claim_names_never_names_a_media_objects_item(
+        self,
+    ):
+        """Sebastian Löbig, whom the export gives a name alone and no
+        claim names, and Hildegard's media object titled with his name:
+        a rewrite of the export finds the media object's item again and
+        names it with nothing of his record."""
+        from yizkr.pipeline.writer import BatchWriter
+
+        text = (
+            "0 HEAD\n1 CHAR UTF-8\n"
+            "0 @I1@ INDI\n1 NAME Sebastian /Löbig/\n"
+            "0 @I2@ INDI\n1 NAME Hildegard /Löbig/\n1 OBJE @O1@\n"
+            "0 @O1@ OBJE\n1 FILE sebastian.jpg\n2 TITL Sebastian Löbig\n"
+            "0 TRLR\n"
+        )
+        wiki = WritingWiki()
+        first = BatchWriter(wiki).write_batch(family_gedcom(wiki, text))
+        media = first.created_items["md1"]
+        kept = copy.deepcopy(wiki.entities[media])
+
+        again = BatchWriter(wiki).write_batch(family_gedcom(wiki, text))
+
+        assert again.created_items["md1"] == media
+        assert again.type_statements_written == 0
+        assert wiki.entities[media] == kept
+        assert WritingWiki.ITEMS["human"] not in strings(
+            wiki, media, "instance_of"
+        )
+
+    def test_a_media_object_record_never_names_a_registered_scan(
+        self, tmp_path
+    ):
+        """The studio portrait's scan is registered under its title; the
+        export's media object of that title, with an alias and a type
+        hint, is named by no claim, while a claim names the scan by its
+        QID: the scan gains nothing of the media object's record."""
+        from yizkr.claims import ClaimBatch
+        from yizkr.pipeline.writer import BatchWriter
+
+        wiki = WritingWiki()
+        artifact = Registrar(wiki).register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", TITLE
+        )
+        given = family_gedcom(wiki).model_dump(mode="json")
+        for record in given["entities"]:
+            if record["id"] == "md1":
+                record["aliases"] = ["the studio portrait"]
+                record["type_hint"] = "cabinet card"
+        (claim,) = given["claims"]
+        claim["value"] = {
+            "type": "item",
+            "value": {"kind": "qid", "qid": artifact.artifact_qid},
+        }
+        kept = copy.deepcopy(wiki.entities[artifact.artifact_qid])
+
+        written = BatchWriter(wiki).write_batch(
+            ClaimBatch.model_validate(given)
+        )
+
+        assert written.type_statements_written == 0
+        assert wiki.entities[artifact.artifact_qid] == kept
+
+    def test_a_media_object_record_never_names_a_persons_item(self):
+        """Gustav Löbig's item exists, and a claim names it by its QID as
+        the value of Sebastian's image; the export's media object titled
+        with Gustav's name, with an alias and a type hint, is named by no
+        claim: Gustav's item gains nothing of the media object's record."""
+        from yizkr.claims import ClaimBatch
+        from yizkr.pipeline.writer import BatchWriter
+
+        wiki = WritingWiki()
+        gustav = wiki.item(
+            "Gustav Löbig",
+            ("instance_of", WritingWiki.ITEMS["human"], None),
+        )
+        given = family_gedcom(wiki).model_dump(mode="json")
+        for record in given["entities"]:
+            if record["id"] == "md1":
+                record["label"] = "Gustav Löbig"
+                record["aliases"] = ["the studio portrait"]
+                record["type_hint"] = "cabinet card"
+        (claim,) = given["claims"]
+        claim["value"] = {
+            "type": "item",
+            "value": {"kind": "qid", "qid": gustav},
+        }
+        kept = copy.deepcopy(wiki.entities[gustav])
+
+        BatchWriter(wiki).write_batch(ClaimBatch.model_validate(given))
+
+        assert wiki.entities[gustav] == kept
 
     def test_a_person_joins_the_item_under_its_label(self, tmp_path):
         wiki = WritingWiki()
