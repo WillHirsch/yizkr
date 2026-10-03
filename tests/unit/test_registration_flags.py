@@ -2015,6 +2015,200 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         assert not [w for w in written.warnings if "is refused, with" in w]
         assert "md1" not in written.created_items
 
+    @staticmethod
+    def with_marked_excerpt(batch, local_id: str):
+        """`batch` with a character Python's Unicode tables do not know at
+        the end of the excerpt of each claim whose value is `local_id`, so
+        the writer refuses each such claim for its text."""
+        from yizkr.claims import ClaimBatch
+
+        given = batch.model_dump(mode="json")
+        for claim in given["claims"]:
+            if claim["value"]["value"].get("local_id") == local_id:
+                claim["source"]["transcription_excerpt"]["text"] += (
+                    UNKNOWN_MARK
+                )
+        return ClaimBatch.model_validate(given)
+
+    @needs_unknown_mark
+    def test_a_media_object_only_a_refused_claim_names_is_never_placed(
+        self, monkeypatch
+    ):
+        """Registered artifacts hold both labels of the media object, and
+        the excerpt of its one claim holds a character Python's Unicode
+        tables do not know: the claim is refused for its text, so the plan,
+        made without it, never places the media object, which is neither
+        blocked nor flagged."""
+        from yizkr.pipeline.review import claim_id
+        from yizkr.pipeline.writer import BatchWriter
+
+        placed: list[str] = []
+        place = BatchWriter._place
+
+        def spied(self, label, *args):
+            placed.append(label)
+            return place(self, label, *args)
+
+        monkeypatch.setattr(BatchWriter, "_place", spied)
+        wiki = WritingWiki()
+        self.both_labels_registered(wiki)
+        batch = self.with_marked_excerpt(
+            family_gedcom(wiki, TWO_PEOPLE_GEDCOM), "md1"
+        )
+        named = [
+            claim_id(claim)
+            for claim in batch.claims
+            if claim.value.value.local_id == "md1"
+        ]
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        assert written.refused == named
+        assert written.flags == []
+        assert not [w for w in written.warnings if "is refused, with" in w]
+        assert placed and TITLE not in placed
+        assert "md1" not in written.created_items
+        assert "md2" in written.created_items
+
+    @needs_unknown_mark
+    @pytest.mark.parametrize("refusal", ["blocked", "marked"])
+    def test_a_records_kind_is_warned_of_whatever_its_claims(self, refusal):
+        """Sebastian's record gives the kind 'pet', which the vocabulary
+        lacks, and his one claim is refused, with the media object the plan
+        blocks or for its marked excerpt: the record's kind is warned of
+        all the same. A second claim about him, refused for its marked
+        excerpt, has a place without a record of the kind 'lighthouse',
+        which the vocabulary lacks too: a ref's kind is warned of only when
+        a written claim mentions it, so it is not."""
+        from yizkr.claims import ClaimBatch
+        from yizkr.pipeline.writer import BatchWriter
+
+        wiki = WritingWiki()
+        if refusal == "blocked":
+            self.both_labels_registered(wiki)
+        given = family_gedcom(wiki).model_dump(mode="json")
+        for record in given["entities"]:
+            if record["id"] == "i1":
+                record["kind"] = "pet"
+                record.pop("structure", None)
+        (claim,) = given["claims"]
+        place = {
+            "kind": "local",
+            "local_id": "pl1",
+            "label": "Flörburg",
+            "instance_of": "lighthouse",
+        }
+        given["claims"].append(
+            dict(claim, value={"type": "item", "value": place})
+        )
+        batch = self.with_marked_excerpt(
+            ClaimBatch.model_validate(given), "pl1"
+        )
+        if refusal == "marked":
+            batch = self.with_marked_excerpt(batch, "md1")
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        assert len(written.refused) == 2
+        assert written.created_items == {}
+        kinds = [w for w in written.warnings if "vocabulary lacks" in w]
+        assert kinds == [
+            "entity 'i1' has the kind 'pet', which the vocabulary lacks: "
+            "no kind is recorded for it"
+        ]
+
+    @needs_unknown_mark
+    @pytest.mark.parametrize("refusal", ["written", "blocked", "marked"])
+    def test_an_unsent_records_alias_and_type_hint_are_not_counted(
+        self, refusal
+    ):
+        """The media object's record has an alias and a type hint that
+        hold a character Python's Unicode tables do not know. Written, its
+        item is made and both are named in refused_terms, as the writer
+        leaves them out. Blocked, or with its one claim refused for its
+        marked excerpt, nothing of the record is sent, so neither is
+        named nor warned of."""
+        from yizkr.pipeline.writer import BatchWriter
+
+        wiki = WritingWiki()
+        if refusal == "blocked":
+            self.both_labels_registered(wiki)
+        batch = self.with_media_object(
+            family_gedcom(wiki, TWO_PEOPLE_GEDCOM),
+            aliases=[f"the studio portrait {UNKNOWN_MARK}"],
+            type_hint=f"cabinet card {UNKNOWN_MARK}",
+        )
+        if refusal == "marked":
+            batch = self.with_marked_excerpt(batch, "md1")
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        sent = refusal == "written"
+        assert ("md1" in written.created_items) is sent
+        assert written.refused_terms == (
+            ["md1: alias", "md1: type hint"] if sent else []
+        )
+        left_out = [w for w in written.warnings if "'md1' has a" in w]
+        assert len(left_out) == (2 if sent else 0)
+
+    def test_a_blocked_records_terms_never_reach_the_item_under_its_label(
+        self,
+    ):
+        """Registered artifacts hold both labels of the media object, which
+        is blocked, and a written claim names the scan under its label by
+        QID: the media object's record names no item by its label, so the
+        scan gains neither its alias nor its kind."""
+        from yizkr.claims import ClaimBatch
+        from yizkr.pipeline.writer import BatchWriter
+
+        wiki = WritingWiki()
+        plain, _ = self.both_labels_registered(wiki)
+        given = self.with_media_object(
+            family_gedcom(wiki, TWO_PEOPLE_GEDCOM),
+            aliases=["the studio portrait"],
+        ).model_dump(mode="json")
+        for claim in given["claims"]:
+            if claim["value"]["value"]["local_id"] == "md2":
+                claim["value"]["value"] = {"kind": "qid", "qid": plain}
+        batch = ClaimBatch.model_validate(given)
+        before = copy.deepcopy(wiki.entities[plain])
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        assert len(written.refused) == 1
+        assert "i2" in written.created_items
+        assert images(wiki, written.created_items["i2"]) == [plain]
+        assert wiki.entities[plain] == before
+
+    def test_a_reused_writer_reads_its_items_afresh_each_write(self):
+        """The media object joins the portrait's item, registered before
+        content hashing, and a curator then hashes that item: the same
+        writer's next write judges it registered, as a new writer's
+        would, so the media object takes its tagged label and the
+        portrait is flagged against it."""
+        from yizkr.pipeline.writer import BatchWriter
+
+        wiki = WritingWiki()
+        old = unhashed(wiki, TITLE, "File:Studio portrait.png", PORTRAIT)
+        batch = family_gedcom(wiki)
+        writer = BatchWriter(wiki)
+        first = writer.write_batch(batch)
+        assert first.created_items["md1"] == old
+        assert first.flags == []
+        hash_item(wiki, old, PORTRAIT)
+
+        again = writer.write_batch(batch)
+
+        media_object = again.created_items["md1"]
+        assert media_object != old
+        assert label_of(wiki, media_object) == f"{TITLE} [media object]"
+        assert flag_tuples(again.flags) == [
+            (UNHASHED_TITLE, old, sha1(PORTRAIT), (media_object,))
+        ]
+        assert flag_tuples(BatchWriter(wiki).write_batch(batch).flags) == (
+            flag_tuples(again.flags)
+        )
+
     @pytest.mark.parametrize("order", ["artifact-first", "gedcom-first"])
     def test_a_scan_and_a_rescan_under_the_title_are_both_flagged(
         self, tmp_path, order
@@ -3554,6 +3748,153 @@ class TestWhatResolveAndAWriteRead:
         assert written.created_items["e0"] == gustav
         assert wiki.label_reads == ["label_index"]
 
+    def test_resolve_reads_the_labels_of_values_and_qualifiers(self, tmp_path):
+        """Sebastian's claim names Gustav as its value and Hildegard in a
+        qualifier, each under the label of a person the instance holds:
+        both labels are wanted, the statements of only their items are
+        read, and both refs resolve to those items."""
+        from yizkr.claims import ClaimBatch, LocalRef, QidRef
+        from yizkr.pipeline.resolve import resolvable_labels, resolve_batch
+
+        wiki, *_ = self.instance(tmp_path)
+        gustav, hildegard = (
+            wiki.item(name, ("instance_of", WritingWiki.ITEMS["human"], None))
+            for name in ("Gustav Löbig", "Hildegard Löbig")
+        )
+        given = naming("Sebastian Löbig").model_dump(mode="json")
+        (claim,) = given["claims"]
+        claim["property"] = "relative"
+        claim["value"] = {
+            "type": "item",
+            "value": {
+                "kind": "local",
+                "local_id": "g",
+                "label": "Gustav Löbig",
+            },
+        }
+        claim["qualifiers"] = [
+            {
+                "property": "participant",
+                "value": {
+                    "type": "item",
+                    "value": {
+                        "kind": "local",
+                        "local_id": "h",
+                        "label": "Hildegard Löbig",
+                    },
+                },
+            }
+        ]
+        batch = ClaimBatch.model_validate(given)
+        wiki.forget()
+
+        labels = resolvable_labels(wiki, batch)
+
+        assert labels == {"Gustav Löbig": gustav, "Hildegard Löbig": hildegard}
+        assert sorted(wiki.claims_of) == sorted([gustav, hildegard])
+        assert wiki.fetches == 1
+        assert wiki.label_reads == ["label_index"]
+        (resolved,) = resolve_batch(batch, labels).claims
+        assert isinstance(resolved.subject, LocalRef)
+        assert resolved.value.value == QidRef(qid=gustav)
+        (qualifier,) = resolved.qualifiers
+        assert qualifier.value.value == QidRef(qid=hildegard)
+
+    def test_a_write_scans_each_label_once_for_content_tags(
+        self, tmp_path, monkeypatch
+    ):
+        """Two media objects, each under the title of a registered scan,
+        are flagged from one index of the labels the write read: each
+        label is scanned for content tags once, and each lookup scans
+        only the labels it finds, however many the instance holds."""
+        from yizkr.pipeline import writer as writer_module
+        from yizkr.pipeline.writer import BatchWriter
+
+        class Counting:
+            def __init__(self, pattern):
+                self.pattern = pattern
+                self.scans = 0
+
+            def finditer(self, text):
+                self.scans += 1
+                return self.pattern.finditer(text)
+
+            def __getattr__(self, name):
+                return getattr(self.pattern, name)
+
+        wiki, _, artifact, _ = self.instance(tmp_path)
+        letter = (
+            Registrar(wiki)
+            .register_artifact(
+                scan(tmp_path, LETTER, name="letter.png"),
+                "photograph",
+                "Wedding portrait, 1905",
+            )
+            .artifact_qid
+        )
+        wiki.item(
+            "two-people-export.ged",
+            ("instance_of", ITEMS["genealogical_report"], None),
+            ("media_sha1", sha1(TWO_PEOPLE_GEDCOM.encode()), None),
+        )
+        batch = family_gedcom(wiki, TWO_PEOPLE_GEDCOM)
+        read = len(wiki.entities)
+        counting = Counting(writer_module._CONTENT_TAG)
+        monkeypatch.setattr(writer_module, "_CONTENT_TAG", counting)
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        assert sorted(flag.artifact for flag in written.flags) == sorted(
+            [artifact, letter]
+        )
+        assert counting.scans == read + 2
+
+    def test_the_label_index_finds_a_title_as_it_is_or_content_tagged(self):
+        """_FoundLabels.titled: each label that is the title as it is, or
+        with one content tag taken out of it wherever it is, in the order
+        of their items by number."""
+        from yizkr.pipeline.writer import _FoundLabels
+
+        held = {
+            "Studio portrait": "Q10",
+            "Studio portrait [0123abcd]": "Q9",
+            "Studio portrait [0123abcd], page 1": "Q11",
+            "Studio portrait [0123abcd] [89abcdef]": "Q2",
+            "Studio portrait, 1895": "Q3",
+            "Studio portrait [0123abcz]": "Q4",
+        }
+
+        class Client:
+            reads = 0
+
+            def label_index(self):
+                Client.reads += 1
+                return {}, dict(held)
+
+        labels = _FoundLabels(Client())
+
+        assert labels.titled("Studio portrait") == [
+            ("Studio portrait [0123abcd]", "Q9"),
+            ("Studio portrait", "Q10"),
+        ]
+        assert labels.titled("Studio portrait, page 1") == [
+            ("Studio portrait [0123abcd], page 1", "Q11")
+        ]
+        assert labels.titled("Studio portrait [0123abcd]") == [
+            ("Studio portrait [0123abcd] [89abcdef]", "Q2"),
+            ("Studio portrait [0123abcd]", "Q9"),
+        ]
+        assert labels.titled("Studio portrait [89abcdef]") == [
+            ("Studio portrait [0123abcd] [89abcdef]", "Q2")
+        ]
+        assert labels.titled("Studio portraits") == []
+        labels.made("Studio portrait [fedcba98]", "Q12")
+        assert labels.titled("Studio portrait") == [
+            ("Studio portrait [0123abcd]", "Q9"),
+            ("Studio portrait", "Q10"),
+        ]
+        assert Client.reads == 1
+
 
 class TestTheClientsBoundedReads:
     """WikiClient.fetch_claims asks for the entities named alone, 50 a
@@ -3658,6 +3999,65 @@ class TestTheClientsBoundedReads:
         client.snapshot = snapshot
 
         client.label_index()
+        client.vocabulary()
+
+        assert reads == ["snapshot", "snapshot"]
+
+    def test_fetch_claims_gives_an_id_the_instance_lacks_none(self):
+        client = self.client()
+
+        def api_get(params):
+            return {
+                "entities": {
+                    "Q1": {"id": "Q1", "claims": {"P1": ["Q1"]}},
+                    "Q99": {"id": "Q99", "missing": ""},
+                }
+            }
+
+        client.api_get = api_get
+
+        assert client.fetch_claims(["Q1", "Q99"]) == {
+            "Q1": {"P1": ["Q1"]},
+            "Q99": {},
+        }
+
+    def test_a_vocabulary_answered_from_the_labels_read_is_kept(self):
+        """Once answered from the labels just read, the vocabulary is
+        kept: labels read later that lack it do not make it read again."""
+        client = self.client()
+        whole = self.manifest_snapshot()
+        given = [whole, {"Q1": whole["Q1"]}]
+        reads: list[str] = []
+
+        def snapshot():
+            reads.append("snapshot")
+            return dict(given.pop(0))
+
+        client.snapshot = snapshot
+
+        client.label_index()
+        first = client.vocabulary()
+        client.label_index()
+
+        assert client.vocabulary() is first
+        assert reads == ["snapshot", "snapshot"]
+
+    def test_a_forgotten_vocabulary_is_read_afresh(self):
+        """forget_vocabulary forgets the vocabulary and the labels read,
+        so the next vocabulary reads the instance again."""
+        client = self.client()
+        whole = self.manifest_snapshot()
+        reads: list[str] = []
+
+        def snapshot():
+            reads.append("snapshot")
+            return dict(whole)
+
+        client.snapshot = snapshot
+
+        client.label_index()
+        client.vocabulary()
+        client.forget_vocabulary()
         client.vocabulary()
 
         assert reads == ["snapshot", "snapshot"]

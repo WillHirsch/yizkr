@@ -56,8 +56,10 @@
   entity, as only the item such a claim mints would take it: a claim
   refused for its text, or with an entity that may join neither the
   item under its label nor the one under its tagged label (ADR-0010),
-  mints nothing. A run
-  item's label holding one, an extraction run's or the place-hierarchy
+  mints nothing. A manifest record whose local refs only such refused
+  claims hold has nothing of it sent, so its aliases and type hint are
+  not named in `refused_terms` either (amended by #444, 2026-10-03).
+  A run item's label holding one, an extraction run's or the place-hierarchy
   pass's, or an extraction run's description, raises ValueError before
   the run item is looked up, and so before anything is written, as a
   re-run would not find the item by it.

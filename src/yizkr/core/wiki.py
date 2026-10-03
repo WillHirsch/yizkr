@@ -204,6 +204,12 @@ class WikiClient:
         self._vocabulary = (properties, items)
         return self._vocabulary
 
+    def forget_vocabulary(self) -> None:
+        """Forget the vocabulary and the labels this client has read, so
+        that the next `vocabulary` reads the instance afresh."""
+        self._vocabulary = None
+        self._labels_read = None
+
     def find_item_by_label(self, label: str) -> str | None:
         _, item_labels = self.label_index()
         return item_labels.get(label)

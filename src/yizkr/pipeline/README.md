@@ -459,7 +459,8 @@ registered artifact (one with a hash, or its page fragment), no other
 entity to an artifact or a part of one, and no artifact is adopted, by
 its title or label (ADR-0010). It reads the instance's labels once a
 batch, and the statements of only the items its refs' labels name; the
-write reads the labels once too. By default the
+write reads the labels once too, with the vocabulary known (a fresh
+client reads them for the vocabulary as well). By default the
 loop takes every document to the gates in one pass, before any is
 written, so siblings in one folder run are invisible to each other, and
 two artifacts naming one person land as two items. A scratch run leaves

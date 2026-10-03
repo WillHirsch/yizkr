@@ -132,10 +132,17 @@ title's.
 With the rule of #431 (amended by #444, 2026-10-03): the plan is made
 without the claims refused for their text, so an entity whose label
 holds a character Python's tables do not know is never placed nor its
-label looked up; and a description is named in `refused_terms`, and a
-kind the vocabulary lacks warned of, only when a claim written mentions
-its entity, not a claim refused for its text nor one refused with an
-entity the plan blocks.
+label looked up, and a media object named only by claims refused for
+their text is never placed either, so it is neither blocked nor
+flagged; a description is named in `refused_terms` only when a claim
+written mentions its entity, not a claim refused for its text nor one
+refused with an entity the plan blocks; a manifest record that only
+such refused claims name by a local ref has nothing of it sent, so its
+aliases and type hint are not named in `refused_terms` either, nor is
+it matched to an item by its label; and the kind of a ref without a
+manifest record is warned of, when the vocabulary lacks it, only when a
+written claim mentions it, while a record's kind is warned of whatever
+its claims.
 The kinds still matched by label, and why, are listed in §1 ("What is
 still matched by label").
 
@@ -567,10 +574,12 @@ instance's labels without those items' (`resolvable_labels`). What
 the two read stays bounded by the batch (amended by #444, 2026-10-03):
 resolve reads the instance's labels once a batch and the statements of
 only the items its refs' labels name (`WikiClient.fetch_claims`), and a
-write reads the labels once, for its plan, the artifacts registered
-under a label and every item it finds by label (the writer's
-`_FoundLabels`, with the items it makes), and the statements of only
-the items it finds. Neither label-matching read reads every item's
+write reads the labels once, with the vocabulary known (a fresh client
+reads them for the vocabulary too, when the writer is made), for its
+plan, the artifacts registered under a label, looked up in an index of
+the labels made once a write, and every item it finds by label (the
+writer's `_FoundLabels`, with the items it makes), and the statements
+of only the items it finds. Neither label-matching read reads every item's
 statements; the writer's lookup of a cited artifact by its SHA-1
 (`resolve_artifacts`), when the caller does not supply that artifact,
 still reads the media SHA-1 index, the statements of every item. A
