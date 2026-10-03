@@ -6,6 +6,9 @@ Amended by [ADR-0035](0035-mention-records.md) (owner decision
 statement may carry a judgement note, a category and one sentence on how
 the extraction read the source, never used to rank or filter a value
 (ADR-0035 §4).
+Amended by #424 (2026-10-02): a page's locator may carry, beside the
+physical page number, the page number printed on that page, exactly as
+the transcription record gives it (`printed page number`, ADR-0037 §2).
 
 ## Context
 
@@ -19,7 +22,10 @@ audited back to the pipeline run that produced it.
 1. Every statement carries a reference: stated in → artifact or
    artifact-fragment item, with locator qualifiers (page; region as a
    percentage bounding box, or a IIIF canvas+xywh URI from Phase W2),
-   and optionally a short supporting transcription excerpt.
+   and optionally a short supporting transcription excerpt. Amended by
+   #424 (2026-10-02): the page is the physical page, and the page number
+   printed on it goes beside it as a `printed page number`, where the
+   transcription record gives one.
 2. Machine-written statements carry a second reference: inferred from
    extraction run → an extraction-run item recording model
    name+version, date, prompt/pipeline version, and software commit.

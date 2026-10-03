@@ -908,6 +908,7 @@ def identity_map() -> dict:
             "mentions": 14,
             "clustered_mentions": 12,
             "unclustered_mentions": 2,
+            "recordless_mentions": 4,
             "clustered_by_kind": {"human": 8, "place": 3, "loebig_kin": 1},
             "candidate_pairs": 5,
             "confident_pairs": 3,
@@ -1627,6 +1628,8 @@ class TestCorpusStages:
         assert counts["singletons"] == 2
         assert counts["hub keys, not blocked on"] == 3
         assert counts["mentions holding them"] == 40
+        # the mentions without a record, which never link confidently
+        assert counts["recordless mentions"] == 4
         assert clusters["by_kind"] == {"human": 8, "place": 3, OTHER: 1}
 
     def test_a_run_without_the_stage_says_not_run(self, tmp_path):
@@ -3324,12 +3327,12 @@ class TestAScratchRun:
         assert content["claims"]["by_property"] == {"date_of_birth": 4}
         # the counts of mention records and notes the extraction writes
         # (#420): read from each, none absent; the fake manifest gives
-        # its person no record and no note
+        # its person a record of status `name`, and no note
         assert content["records"] == {
             "extractions": 4,
-            "given": 0,
-            "recordless": 4,
-            "by_status": {},
+            "given": 4,
+            "recordless": 0,
+            "by_status": {"name": 4},
             "unsplit_forms": 0,
             "set_aside_records": 0,
             "set_aside_reasons": 0,

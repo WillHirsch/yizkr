@@ -197,9 +197,10 @@ TRAPS = (
         "The certificate's batch holds no death evidence for him: it reaches "
         "his mention there only through a merge of mentions (#105), which "
         "is no confirmed evidence (#120). Under the whole-cluster merge "
-        "rule (#361) no such merge happens: the postcard's one-token "
-        "'Gustl', which nothing corroborates, holds Gustav's candidate "
-        "cluster ambiguous. That is expected under the rule; the link rule "
+        "rule (#361) no such merge happens: the postcard's lone 'Gustl', "
+        "which meets the export's Gustav only as a lone name (ADR-0035 §7) "
+        "and which nothing corroborates, holds Gustav's candidate cluster "
+        "ambiguous. That is expected under the rule; the link rule "
         "would merge the certificate's mention with those that carry his "
         "death (#380).",
     ),

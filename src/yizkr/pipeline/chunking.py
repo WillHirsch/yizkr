@@ -194,7 +194,9 @@ Rules — these mirror the archive's non-negotiable conventions:
   format — downgrade to the precision actually supported.
 - Every claim MUST include the source reference: the artifact
   {{"kind": "artifact", "sha1": "{artifact_sha1}"}}, plus page number and a
-  short verbatim transcription excerpt supporting it.
+  short verbatim transcription excerpt supporting it. The page number is
+  the N of the [Page N] (or [Slide N]) marker the text stands under,
+  never a printed page number shown beside that marker.
 - Use ONLY these property keys (property key: datatype — what it means),
   for claims and qualifiers alike — a claim naming any other key is
   discarded. The description is authoritative: it says what the VALUE
@@ -1126,7 +1128,7 @@ class ChunkedClaimExtractor:
             kind_descriptions=kind_descriptions,
             artifact_sha1=artifact.sha1,
             language=transcription.language,
-            numbered_text=number_lines(transcription.text),
+            numbered_text=number_lines(transcription.prompt_text()),
         )
         return self._first_turn(
             prompt,
@@ -1211,7 +1213,7 @@ class ChunkedClaimExtractor:
         prompt = SEGMENTATION_PROMPT.format(
             artifact_sha1=artifact.sha1,
             language=transcription.language,
-            numbered_text=number_lines(transcription.text),
+            numbered_text=number_lines(transcription.prompt_text()),
         )
         segmentation, handle, reasons, answered = self._first_turn(
             prompt,
@@ -1307,7 +1309,7 @@ class ChunkedClaimExtractor:
         return (
             f"\nFull transcription of artifact sha1:{artifact.sha1} for "
             f"context (extract ONLY for your assignment):\n\n"
-            f"{number_lines(transcription.text)}\n"
+            f"{number_lines(transcription.prompt_text())}\n"
         )
 
     def _render_chunk_prompt(
@@ -1451,10 +1453,15 @@ class ChunkedClaimExtractor:
         self, transcription: Transcription, artifact: ArtifactRef
     ) -> ClaimBatch:
         """The document's batch, every claim citing `artifact`, the
-        document's content key, by which the prompts name the document too
-        (cite_artifact). When its conversation has to be opened again and
-        answers differently (ConversationChanged), the pass is void and the
-        extraction starts over from the new answer, at most twice."""
+        document's content key, by which the prompts name the document too,
+        and the page number printed on the page it cites, where the
+        transcription's record gives one (cite_artifact). The prompts
+        carry the transcription's text with each printed page number
+        beside its page's marker, every line where it is in the text
+        (Transcription.prompt_text). When its conversation has to be
+        opened again and answers differently (ConversationChanged), the
+        pass is void and the extraction starts over from the new answer,
+        at most twice."""
         for _pass in range(2):
             try:
                 return self._extract(transcription, artifact)
@@ -1465,7 +1472,7 @@ class ChunkedClaimExtractor:
     def _extract(
         self, transcription: Transcription, artifact: ArtifactRef
     ) -> ClaimBatch:
-        text_lines = transcription.text.splitlines()
+        text_lines = transcription.prompt_text().splitlines()
         self.failed_chunks = []
         self.failure_reasons = {}
         self.gaps = []
@@ -1576,6 +1583,7 @@ class ChunkedClaimExtractor:
             segmentation,
             text_lines,
             artifact,
+            transcription.printed_pages(),
         )
         self._refuse_empty(batch, chunks=total)
         self.attention = self._attention(batch, chunks=total)
@@ -1718,10 +1726,12 @@ class ChunkedClaimExtractor:
         segmentation: DocumentSegmentation | None,
         text_lines: list[str],
         artifact: ArtifactRef,
+        printed_pages: dict[int, str],
     ) -> tuple[ClaimBatch, dict[str, str]]:
         """Merge chunk claims into one validated batch, each claim citing
-        `artifact` and each once (cite_artifact), with rejects, gaps and
-        the coverage report as side outputs."""
+        `artifact`, the page number printed on its page where
+        `printed_pages` gives one, and each once (cite_artifact), with
+        rejects, gaps and the coverage report as side outputs."""
         raw_claims: list[dict] = []
         transform_rejects: list[dict] = []
         gaps: list[dict] = []
@@ -1749,7 +1759,7 @@ class ChunkedClaimExtractor:
         self.gaps = gaps
         self._unread = unread
 
-        deduped = cite_artifact(raw_claims, artifact)
+        deduped = cite_artifact(raw_claims, artifact, printed_pages)
 
         if entities is not None:
             # ADR-0022 §4: hygiene the alias bag (drop derivable

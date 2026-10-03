@@ -319,6 +319,24 @@ class TestDeeplyNestedLines:
         assert run.control().scopes == {}
 
 
+# seconds a test waits for an event before it fails as hung (#437)
+HANG_GUARD = 60
+
+
+class _BlockingLockf:
+    """The fcntl module as rundir sees it, with `blocking` set just before
+    each lockf call goes to the real one."""
+
+    LOCK_EX = fcntl.LOCK_EX
+
+    def __init__(self):
+        self.blocking = threading.Event()
+
+    def lockf(self, descriptor, command):
+        self.blocking.set()
+        return fcntl.lockf(descriptor, command)
+
+
 # another process's writer: it takes the log's lock, says so, and on a line
 # from its stdin writes a fragment and dies
 HOLDER = """
@@ -377,16 +395,21 @@ class TestTheAppendLock:
                 # an append that reaches its write first lets the writer
                 # die before it writes
                 monkeypatch.setattr(rundir, "os", _OsWrites(before=die))
+                locking = _BlockingLockf()
+                monkeypatch.setattr(rundir, "fcntl", locking)
                 append = threading.Thread(
                     target=RunDir(tmp_path).emit,
                     args=("run-start",),
                     daemon=True,
                 )
                 append.start()
-                append.join(0.2)
-                assert append.is_alive()  # waiting for the lock
+                assert locking.blocking.wait(HANG_GUARD)
+                # the holder still has the lock, so the append cannot
+                # have got past lockf
+                assert append.is_alive()
+                assert names(tmp_path) == ["started"]
                 die()
-                append.join(10)
+                append.join(timeout=HANG_GUARD)
                 assert not append.is_alive()
             finally:
                 holder.kill()

@@ -12,21 +12,14 @@
 version: 1
 
 blocking:
-  # A person's name tokens shorter than this (initials, particles) key
-  # nothing.
-  min-name-token: 3
-  # A place keys on each token of at least this many characters in the
-  # part of its name before the first comma; shared region and country
-  # tokens after it never key.
-  min-place-token: 4
   # A mention that key-matches a mention of a GEDCOM export pairs with
   # those GEDCOM anchors only, never with other mentions, and a person
-  # named by one token only is blocked against GEDCOM people alone.
+  # named by given names alone is blocked against GEDCOM people alone.
   gedcom-anchored: true
   # A key more mentions of one kind share than this is blocked on by
   # none of them, and is counted and listed: the mentions only it would
   # join stay apart. A key that finds a mention of the GEDCOM export is
-  # never one, nor is a person's lone token.
+  # never one, nor is a person's lone given name.
   max-key-mentions: 200
 
 evidence:

@@ -46,6 +46,8 @@ DOC = "\n".join(
     ]
 )
 LINE_LENGTH = len(DOC.splitlines()[1])  # per-entity evidence size
+# bounds a wait that the other thread ends, never a time a test waits out
+HANG_GUARD = 60
 # the document's content key, which the prompts name and every claim
 # extracted from it cites (#102, #127); the scripted answers cite it, as
 # the prompts ask
@@ -1439,14 +1441,14 @@ class KeyedLlm:
 class TestParallelChunks:
     def test_concurrent_chunks_merge_identically(self, tmp_path):
         # both chunk calls must be in flight at once to pass the barrier:
-        # run one at a time, the first waits out the timeout and fails
+        # run one at a time, the first waits out the hang guard and fails
         llm = KeyedLlm(
             entity_manifest_json(),
             {
                 "e1": ndjson([claim("e1", "Hildegard Löbig", 1876)]),
                 "e2": ndjson([claim("e2", "Sebastian Löbig", 1862)]),
             },
-            barrier=threading.Barrier(2, timeout=30),
+            barrier=threading.Barrier(2, timeout=HANG_GUARD),
         )
         extractor = ChunkedClaimExtractor(
             llm,

@@ -154,6 +154,26 @@ def test_a_manifest_numbered_otherwise_keeps_every_fingerprint():
     assert mentions_of(BIRTH, reread) == first
 
 
+def test_a_record_leaves_every_fingerprint_as_it_is():
+    """A mention record read one way or another, or none, never changes
+    a fingerprint: the label stays verbatim (ADR-0035 §8, #409)."""
+    bare = the_extract()
+    readings = [
+        {"kind": "human", "given": [{"written": "Gustav"}]},
+        {
+            "kind": "human",
+            "status": "description",
+            "unsplit": ["Gustav Löbig"],
+        },
+    ]
+    for structure in readings:
+        entities = [entity.model_dump() for entity in bare.entities]
+        entities[0]["structure"] = structure
+        read = batch(entities, [c.model_dump() for c in bare.claims])
+        assert read.entities[0].structure is not None
+        assert mentions_of(BIRTH, read) == mentions_of(BIRTH, bare)
+
+
 def test_a_gedcom_person_is_spanned_by_its_record_and_a_place_by_nothing():
     sha1, adapted = gedcom()
     mentions = {m.local_id: m for m in mentions_of(sha1, adapted)}

@@ -11,6 +11,16 @@ interrupted load or query leaves nothing of its own running, stops no
 other command's task and leaves the engine writable, even when a second
 signal reaches the whole process group while it cleans up. The pid guard
 of the curl kill runs against real local processes.
+
+No test depends on real elapsed time (#437). The commands run on a fake
+clock that only their sleeps move, so their waits return at once and end
+by count. The fake engine ends its tasks after a number of status pages
+and the fake daemon lands a late container after a number of lookups,
+never at a time. A fake call that the test must catch in the act (busy,
+or slowly killing a curl) says so over a cue socket the test listens on,
+and blocks until the test lets it go or its caller kills it. A bounded
+wait is kept only as HANG_GUARD, after which the test asserts the event
+it waited for happened.
 """
 
 from __future__ import annotations
@@ -19,14 +29,19 @@ import fcntl
 import importlib.util
 import json
 import os
+import select
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
+from tests.fixtures.exits import child_exit_fd
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "wdqs_sandbox.py"
@@ -36,6 +51,10 @@ ws = importlib.util.module_from_spec(_spec)
 sys.modules["wdqs_sandbox"] = ws
 _spec.loader.exec_module(ws)
 
+# bounds a wait that an event ends, so that a hang fails instead of
+# blocking the run
+HANG_GUARD = 60
+
 FAKE_DOCKER = r'''
 """A fake docker CLI: containers and the engine live in a JSON world file,
 and every call is logged. It never talks to a daemon. Its engine behaves as
@@ -43,8 +62,10 @@ the real one does where the sandbox depends on it: a write task that is
 cancelled wedges the writer, so that every later write fails, while a write
 whose curl is killed is aborted by the engine itself a moment later. Like
 docker's CLI, it takes SIGINT and SIGTERM even when it starts with them
-ignored, and then exits 0 with nothing on stdout."""
-import html, io, json, os, signal, subprocess, sys, tarfile, time, uuid
+ignored, and then exits 0 with nothing on stdout. It reads no clock: the
+engine ends a task after a number of status pages, and the daemon lands a
+late container after a number of lookups."""
+import html, io, json, os, signal, socket, sys, tarfile, uuid
 
 WORLD = os.environ["FAKE_DOCKER_WORLD"]
 INSERT = "InsertWithBodyTask{namespace=wdq,timestamp=0, isGRSRequired=false}"
@@ -88,30 +109,35 @@ def no_such(ref):
     sys.exit(1)
 
 
+def cue(name):
+    """Tell the test that `name` is under way, over its cue socket, then
+    wait until the test lets go (or this call is killed)."""
+    with socket.socket(socket.AF_UNIX) as sock:
+        sock.connect(world["cues"])
+        sock.sendall(name.encode() + b"\n")
+        sock.recv(1)
+
+
 def busy():
     """Tell the test the fake is now busy, then run until killed."""
-    with open(world["marker"], "w") as handle:
-        handle.write("busy")
-    time.sleep(30)
+    cue("busy")
     sys.exit(0)
 
 
-def task(kind, text, pidfile, until=None, then=None):
+def task(kind, text, pidfile, then=None, pages_left=None):
     world["running"].append({
         "id": str(uuid.uuid4()), "kind": kind, "text": text,
-        "pidfile": pidfile, "until": until, "then": then,
+        "pidfile": pidfile, "then": then, "pages_left": pages_left,
     })
     save()
 
 
 def end_tasks():
     """Tasks past their end leave the engine, and a write that ends leaves
-    its effect (a drop empties the store). A task ends at its `until`; a
-    killed write ends once the status pages it had left have shown it."""
-    now = time.time()
+    its effect (a drop empties the store). A task with pages left ends once
+    that many status pages have shown it; any other runs on."""
     for t in list(world["running"]):
-        timed_out = t["until"] is not None and t["until"] <= now
-        if timed_out or t.get("pages_left") == 0:
+        if t.get("pages_left") == 0:
             world["running"].remove(t)
             world.update(t.get("then") or {})
 
@@ -172,7 +198,7 @@ def curl(argv, pidfile=None):
             busy()
         if world["hang"] == "load_timeout":
             # curl gives up; the engine goes on with the write a while
-            task("write", INSERT, pidfile, until=time.time() + 3)
+            task("write", INSERT, pidfile, pages_left=2)
             sys.stderr.write("curl: (28) Operation timed out\n")
             sys.exit(28)
         world["triples"] += 12
@@ -213,6 +239,14 @@ if command == "inspect":
     fmt = args[args.index("-f") + 1]
     c = resolve(args[-1])
     if c is None:
+        if world["late"]:
+            # the daemon makes the container once this many lookups of it
+            # have missed it
+            world["late"]["misses"] -= 1
+            if world["late"]["misses"] == 0:
+                world["containers"].append(world["late"]["container"])
+                world["late"] = None
+            save()
         no_such(args[-1])
     label = c["labels"].get("org.yizkr.sandbox", "<no value>")
     print(
@@ -230,22 +264,10 @@ elif command == "create":
         "status": "created", "labels": labels,
     }
     if world["hang"] == "create_late":
-        # the daemon makes the container a second after the client is gone
-        late = (
-            "import json, os, time\n"
-            "time.sleep(1)\n"
-            f"path = {WORLD!r}\n"
-            "world = json.load(open(path))\n"
-            f"world['containers'].append({container!r})\n"
-            "tmp = path + '.late'\n"
-            "json.dump(world, open(tmp, 'w'))\n"
-            "os.replace(tmp, path)\n"
-        )
-        subprocess.Popen(
-            [sys.executable, "-c", late], start_new_session=True,
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        # the daemon makes the container after the client is gone, once
+        # two lookups of it have missed it
+        world["late"] = {"container": container, "misses": 2}
+        save()
         busy()
     world["containers"].append(container)
     save()
@@ -299,10 +321,9 @@ elif command == "exec":
     program = rest[1:]
     if program[:2] == ["sh", "-c"] and "kill" in program[2]:
         if world["slow_kill"]:
-            # a kill that takes a while, so that a test can signal meanwhile
-            with open(world["kill_marker"], "w") as handle:
-                handle.write("killing")
-            time.sleep(world["slow_kill"])
+            # a kill that lasts until the test lets it go, so that the
+            # test can signal meanwhile
+            cue("killing")
         pidfile = program[3]
         world["killed"].append(pidfile)
         for t in world["running"]:
@@ -312,7 +333,6 @@ elif command == "exec":
                 # stays on the next `killed_write_pages` whole status
                 # pages, however long the calls in between take, so a
                 # test sees the command wait for it (#306)
-                t["until"] = None
                 t["pages_left"] = world["killed_write_pages"]
         save()
     elif program[:2] == ["sh", "-c"]:
@@ -329,6 +349,32 @@ elif command == "exec":
 else:
     sys.stderr.write(f"fake docker: unexpected command {args}\n")
     sys.exit(2)
+'''
+
+LAUNCHER = r'''
+"""Runs the sandbox's command line on a fake clock that only its sleeps
+move: each sleep returns at once, so that its waits end by count, never
+by time."""
+import importlib.util, sys
+
+
+class Clock:
+    now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+spec = importlib.util.spec_from_file_location("wdqs_sandbox", sys.argv[1])
+ws = importlib.util.module_from_spec(spec)
+sys.modules["wdqs_sandbox"] = ws
+spec.loader.exec_module(ws)
+clock = Clock()
+ws.monotonic, ws.sleep = clock.monotonic, clock.sleep
+sys.exit(ws.main(sys.argv[2:]))
 '''
 
 SANDBOX = {
@@ -368,14 +414,12 @@ OTHER_WRITE = {
     "kind": "write",
     "text": "InsertWithBodyTask{namespace=wdq}",
     "pidfile": None,
-    "until": None,
 }
 OTHER_QUERY = {
     "id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
     "kind": "query",
     "text": "#yizkr-sandbox:0badf00d\nSELECT * { ?s ?p ?o }",
     "pidfile": None,
-    "until": None,
 }
 # Names a state file might hold that are not a sandbox this tool made.
 REFUSED = {
@@ -386,6 +430,70 @@ REFUSED = {
     "a sandbox-like name without the label": IMPOSTOR["name"],
     "the label on another name": LABELLED_ELSEWHERE["name"],
 }
+
+
+class FakeClock:
+    """A clock that only its sleeps move; it records each sleep."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def line_from(stream, process: subprocess.Popen) -> str:
+    """The next line `process` writes to `stream`, once it has written it
+    (the empty string when it ended first)."""
+    ready, _, _ = select.select([stream], [], [], HANG_GUARD)
+    assert ready, f"no line from pid {process.pid} within {HANG_GUARD} s"
+    return stream.readline()
+
+
+class Cues:
+    """The socket a fake docker call connects to when it reaches a point
+    the test waits for. The call sends the point's name and then blocks
+    until the test lets it go or its caller kills it."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.listener = socket.socket(socket.AF_UNIX)
+        self.listener.bind(str(path))
+        self.listener.listen()
+        self.held: list[socket.socket] = []
+
+    def wait_for(self, name: str, process: subprocess.Popen) -> socket.socket:
+        """Wait until a fake call says it reached `name`, while `process`
+        runs; returns the call's connection, which holds it there."""
+        exited = child_exit_fd(process.pid)
+        try:
+            ready, _, _ = select.select(
+                [self.listener, exited], [], [], HANG_GUARD
+            )
+        finally:
+            os.close(exited)
+        if self.listener not in ready:
+            if exited not in ready:
+                pytest.fail(
+                    f"no fake call reached {name} within {HANG_GUARD} s"
+                )
+            pytest.fail(f"it ended before {name}: {process.communicate()}")
+        connection, _ = self.listener.accept()
+        self.held.append(connection)
+        connection.settimeout(HANG_GUARD)
+        with connection.makefile("rb") as said:
+            assert said.readline() == f"{name}\n".encode()
+        return connection
+
+    def close(self) -> None:
+        for connection in self.held:
+            connection.close()
+        self.listener.close()
 
 
 class FakeDocker:
@@ -404,7 +512,9 @@ class FakeDocker:
         self.log_path = root / "calls.jsonl"
         self.log_path.write_text("")
         self.state = root / "state.json"
-        self.marker = root / "started"
+        self.launcher = root / "launch_on_a_fake_clock.py"
+        self.launcher.write_text(LAUNCHER)
+        self.cues = Cues(root / "cues")
         self.graph = root / "g.ttl"
         self.graph.write_text("<urn:s> <urn:p> <urn:o> .\n")
         self.graph.chmod(0o600)
@@ -437,9 +547,9 @@ class FakeDocker:
             "status_seen": [],
             "blank_status": 0,
             "killed_write_pages": 1,
-            "slow_kill": 0,
-            "marker": str(self.marker),
-            "kill_marker": str(self.root / "killing"),
+            "slow_kill": False,
+            "late": None,
+            "cues": str(self.cues.path),
         }
         world.update(settings)
         self.world_path.write_text(json.dumps(world))
@@ -462,7 +572,15 @@ class FakeDocker:
         self.state.write_text(json.dumps({"container": container, **extra}))
 
     def command(self, *args: str) -> list[str]:
-        return [sys.executable, str(SCRIPT), "--state", str(self.state), *args]
+        """The command line, run on the launcher's fake clock."""
+        return [
+            sys.executable,
+            str(self.launcher),
+            str(SCRIPT),
+            "--state",
+            str(self.state),
+            *args,
+        ]
 
     def run(self, *args: str, cwd=ROOT) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -471,7 +589,7 @@ class FakeDocker:
             cwd=cwd,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=HANG_GUARD,
         )
 
     def main(self, monkeypatch, *args: str) -> int:
@@ -495,17 +613,17 @@ class FakeDocker:
             stderr=subprocess.PIPE,
             text=True,
         )
-        self.wait_for(self.marker, process)
+        self.cues.wait_for("busy", process)
         seen = during() if during else None
         process.send_signal(signum)
-        out, err = process.communicate(timeout=60)
+        out, err = process.communicate(timeout=HANG_GUARD)
         return process.returncode, out, err, seen
 
-    def interrupt_group(self, *args: str, signum, then: Path):
+    def interrupt_group(self, *args: str, signum):
         """As a terminal's Ctrl-C reaches a command: start it in a process
         group of its own, send `signum` to the whole group once the fake
-        is busy, and again once the file `then` appears; wait for it by
-        its pid."""
+        is busy, and again while the fake kills its curl, which goes on
+        only once the second signal is sent; wait for it by its pid."""
         process = subprocess.Popen(
             self.command(*args),
             env=self.env,
@@ -516,32 +634,36 @@ class FakeDocker:
             start_new_session=True,
         )
         try:
-            for marker in (self.marker, then):
-                self.wait_for(marker, process)
-                os.killpg(process.pid, signum)
-            out, err = process.communicate(timeout=60)
+            self.cues.wait_for("busy", process)
+            os.killpg(process.pid, signum)
+            killing = self.cues.wait_for("killing", process)
+            os.killpg(process.pid, signum)
+            killing.close()
+            out, err = process.communicate(timeout=HANG_GUARD)
         finally:
             if process.poll() is None:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
         return process.returncode, out, err
 
-    @staticmethod
-    def wait_for(path: Path, process: subprocess.Popen) -> None:
-        deadline = time.monotonic() + 30
-        while not path.exists():
-            assert process.poll() is None, process.communicate()
-            assert time.monotonic() < deadline, f"no {path.name} in time"
-            time.sleep(0.05)
+
+@pytest.fixture
+def clock(monkeypatch) -> FakeClock:
+    """The fake clock the commands run in this process wait on."""
+    clock = FakeClock()
+    monkeypatch.setattr(ws, "monotonic", clock.monotonic)
+    monkeypatch.setattr(ws, "sleep", clock.sleep)
+    return clock
 
 
 @pytest.fixture
-def fake(tmp_path) -> FakeDocker:
+def fake(tmp_path, clock) -> Iterator[FakeDocker]:
     fake = FakeDocker(tmp_path)
     assert shutil.which("docker", path=fake.env["PATH"]) == str(
         fake.bin / "docker"
     )
-    return fake
+    yield fake
+    fake.cues.close()
 
 
 def one_line_error(err: str) -> str:
@@ -626,16 +748,21 @@ class TestUpLeavesNoContainer:
 
     def test_a_create_that_lands_after_the_interrupt(self, fake):
         """The daemon may make the container after the client is killed:
-        up waits for it and removes it."""
+        up waits for it and removes it. The fake daemon lands it once two
+        lookups have missed it, so up looks a third time, finds it and
+        removes it before it exits."""
         fake.set_world(hang="create_late")
         code, _, err, _ = fake.interrupt("up")
         assert code == 130
         assert one_line_error(err).endswith("the sandbox was removed")
-        time.sleep(2)  # well past the fake daemon's late create
         (create,) = [c for c in fake.calls() if c[0] == "create"]
         name = create[create.index("--name") + 1]
+        lookups = [c for c in fake.calls() if c[0] == "inspect"]
+        assert [c[-1] for c in lookups] == [name] * 3
         assert ["rm", "-fv", name] in fake.calls()
-        assert fake.world()["containers"] == []
+        world = fake.world()
+        assert world["late"] is None
+        assert world["containers"] == []
         assert not fake.state.exists()
 
     def test_a_failure_that_is_not_a_sandbox_error(self, fake):
@@ -671,6 +798,24 @@ class TestUpLeavesNoContainer:
         assert state["container"] == container["name"]
 
 
+def test_a_cue_wait_ends_when_the_command_ends_first(tmp_path):
+    """The wait for a fake call's cue ends on the command's end, when it
+    ends with no call reaching the point, and says so."""
+    cues = Cues(tmp_path / "cues")
+    process = subprocess.Popen(
+        [sys.executable, "-c", "pass"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        with pytest.raises(pytest.fail.Exception, match="ended before busy"):
+            cues.wait_for("busy", process)
+    finally:
+        cues.close()
+        process.wait()
+
+
 class TestInterruptedWorkStops:
     @pytest.mark.parametrize(
         "signum", [signal.SIGINT, signal.SIGTERM], ids=["INT", "TERM"]
@@ -698,6 +843,21 @@ class TestInterruptedWorkStops:
         assert world["killed"] == world["pidfiles"][:1]
         assert not [path for path in world["files"] if path.endswith(".rq")]
 
+    def test_a_query_is_interrupted_where_python_has_no_pidfd_open(
+        self, fake, monkeypatch
+    ):
+        """A Python build may lack os.pidfd_open: the wait for the fake
+        call's cue still ends on the command's exit or on the cue, never
+        on a time (tests/fixtures/exits.py, #437)."""
+        monkeypatch.delattr(os, "pidfd_open", raising=False)
+        fake.set_world([SANDBOX], hang="query")
+        fake.record(SANDBOX["name"], loaded=[])
+        code, _, err, _ = fake.interrupt("query", "--raw", str(fake.query))
+        assert code == 128 + signal.SIGINT
+        assert "interrupted; cancelled the query in the engine (1 task)" in (
+            one_line_error(err)
+        )
+
     def test_load_replace(self, fake):
         """An interrupted load --replace records the emptied store before
         it loads, never cancels the write (which would wedge the engine's
@@ -705,7 +865,7 @@ class TestInterruptedWorkStops:
         and leaves the engine writable. The file is uploaded, not
         streamed. Another sandbox command's query, running beside it and
         ending on its own, is never cancelled."""
-        other = {**OTHER_QUERY, "until": time.time() + 3}
+        other = {**OTHER_QUERY, "pages_left": 3}
         fake.set_world([SANDBOX], hang="load", triples=99, running=[other])
         fake.record(SANDBOX["name"], loaded=["/elsewhere/old.ttl"])
         code, _, err, loaded_during = fake.interrupt(
@@ -807,17 +967,15 @@ class TestInterruptedWorkStops:
         write that happens to be running goes on, and its uploaded query
         is removed."""
         if command == "load":
-            fake.set_world([SANDBOX], hang="load", slow_kill=1.5)
+            fake.set_world([SANDBOX], hang="load", slow_kill=True)
             args = ("load", str(fake.graph))
         else:
             fake.set_world(
-                [SANDBOX], hang="query", slow_kill=1.5, running=[OTHER_WRITE]
+                [SANDBOX], hang="query", slow_kill=True, running=[OTHER_WRITE]
             )
             args = ("query", "--raw", str(fake.query))
         fake.record(SANDBOX["name"], loaded=[])
-        code, _, err = fake.interrupt_group(
-            *args, signum=signum, then=fake.root / "killing"
-        )
+        code, _, err = fake.interrupt_group(*args, signum=signum)
         assert code == 128 + signum
         message = one_line_error(err)
         assert fake.signalled() == []
@@ -868,11 +1026,13 @@ class TestWork:
                 stderr=subprocess.PIPE,
                 text=True,
             )
-            time.sleep(1)
+            # down says so just before it blocks on the lock, which it
+            # cannot take while this test holds it
+            said = line_from(process.stderr, process)
+            assert said.startswith(f"waiting for {lock_path}:"), said
             assert process.poll() is None
-        out, err = process.communicate(timeout=30)
-        assert process.returncode == 0
-        assert "waiting for" in err
+        out, err = process.communicate(timeout=HANG_GUARD)
+        assert process.returncode == 0, err
         assert out.strip() == "no sandbox recorded"
 
     def test_negative_max_rows_is_refused(self, fake):
@@ -880,6 +1040,114 @@ class TestWork:
         assert done.returncode == 2
         assert "--max-rows" in done.stderr
         assert fake.calls() == []
+
+
+class TestWaitsOnTheClock:
+    """The waits poll on the module's clock: on a fake one they end by
+    how far its sleeps have moved it, never by real time."""
+
+    BOX = ws.Sandbox("yizkr-wdqs-sandbox-feedface-abc123", "running")
+    TASK = ("0e1f2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b", "TASK")
+
+    @staticmethod
+    def calls(answers, limit=100, clock=None):
+        """A stand-in that returns `answers` in turn, then the last one.
+        It fails past `limit` calls, and, given the fake `clock`, when it
+        is polled again without a sleep on that clock in between, so that
+        a wait that ignores the clock fails at once instead of spinning
+        or sleeping for real."""
+        answers = list(answers)
+        made = []
+
+        def call(*args, **kwargs):
+            made.append(args)
+            assert len(made) <= limit, "the wait never ended"
+            if clock is not None:
+                assert len(clock.sleeps) == len(made) - 1, (
+                    "polled again without sleeping on the clock"
+                )
+            return answers.pop(0) if len(answers) > 1 else answers[0]
+
+        call.made = made
+        return call
+
+    @staticmethod
+    def done(stdout=b""):
+        return subprocess.CompletedProcess([], 0, stdout, b"")
+
+    def test_the_waits_default_to_the_real_clock(self):
+        assert ws.monotonic is time.monotonic
+        assert ws.sleep is time.sleep
+
+    def test_discard_waits_out_its_grace(self, clock, monkeypatch, tmp_path):
+        lookups = self.calls([None], clock=clock)
+        monkeypatch.setattr(ws, "sandbox", lookups)
+        monkeypatch.setattr(ws, "remove", self.calls([None], limit=0))
+        state = tmp_path / "state.json"
+        state.write_text("{}")
+        ws.discard(state, self.BOX.name, 5.0)
+        assert clock.sleeps == [0.25] * 20
+        assert len(lookups.made) == 21
+        assert not state.exists()
+
+    def test_discard_removes_a_container_that_lands_late(
+        self, clock, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr(
+            ws, "sandbox", self.calls([None, None, self.BOX], clock=clock)
+        )
+        removed = self.calls([None])
+        monkeypatch.setattr(ws, "remove", removed)
+        ws.discard(tmp_path / "state.json", self.BOX.name, 5.0)
+        assert clock.sleeps == [0.25, 0.25]
+        assert removed.made == [(self.BOX,)]
+
+    def test_a_stopped_write_waits_for_the_engine(
+        self, clock, monkeypatch, capsys
+    ):
+        """An unreadable page is no idle engine: the wait goes on until a
+        whole page shows no task."""
+        monkeypatch.setattr(ws, "docker", self.calls([self.done()]))
+        pages = self.calls([[self.TASK], None, [self.TASK], []], clock=clock)
+        monkeypatch.setattr(ws, "engine_tasks", pages)
+        assert ws.Work(self.BOX).stop_write() is True
+        assert clock.sleeps == [0.5] * 3
+        assert len(pages.made) == 4
+        assert capsys.readouterr().err.splitlines() == [
+            "waiting up to 20 s for the engine to finish or abort the write"
+        ]
+
+    def test_a_stopped_write_gives_up_after_settle(self, clock, monkeypatch):
+        monkeypatch.setattr(ws, "docker", self.calls([self.done()]))
+        pages = self.calls([[self.TASK]], clock=clock)
+        monkeypatch.setattr(ws, "engine_tasks", pages)
+        assert ws.Work(self.BOX).stop_write() is False
+        assert clock.sleeps == [0.5] * 40
+        assert clock.now == ws.SETTLE
+
+    def test_up_waits_for_the_engine_to_answer(self, clock, monkeypatch):
+        answers = [self.done(), self.done(), self.done(b"<boolean>true")]
+        probes = self.calls(answers, clock=clock)
+        monkeypatch.setattr(
+            ws,
+            "docker",
+            lambda *args, **kw: probes() if args[0] == "exec" else self.done(),
+        )
+        monkeypatch.setattr(ws, "sandbox", self.calls([self.BOX]))
+        assert ws.wait_ready(self.BOX, 110) == 2.0
+        assert clock.sleeps == [1, 1]
+
+    def test_up_gives_up_at_its_timeout(self, clock, monkeypatch):
+        probes = self.calls([self.done()], clock=clock)
+        monkeypatch.setattr(
+            ws,
+            "docker",
+            lambda *args, **kw: probes() if args[0] == "exec" else self.done(),
+        )
+        monkeypatch.setattr(ws, "sandbox", self.calls([self.BOX]))
+        with pytest.raises(ws.SandboxError, match="not ready after 3s"):
+            ws.wait_ready(self.BOX, 3)
+        assert clock.sleeps == [1, 1, 1]
 
 
 @pytest.mark.skipif(
@@ -897,7 +1165,7 @@ class TestKillCurl:
             ["sh", "-c", ws.KILL_CURL, str(pidfile), self.TOKEN],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=HANG_GUARD,
         )
 
     def test_kills_the_process_that_carries_the_token(self, tmp_path):
@@ -905,28 +1173,76 @@ class TestKillCurl:
             [
                 sys.executable,
                 "-c",
-                "import time; time.sleep(30)",
+                "import signal; signal.pause()",
                 f"X-Yizkr-Sandbox: {self.TOKEN}",
             ]
         )
-        pidfile = tmp_path / "curl.pid"
-        pidfile.write_text(f"{curl.pid}\n")
-        assert self.kill(pidfile).returncode == 0
-        assert curl.wait(timeout=10) == -signal.SIGTERM
+        try:
+            pidfile = tmp_path / "curl.pid"
+            pidfile.write_text(f"{curl.pid}\n")
+            assert self.kill(pidfile).returncode == 0
+            assert curl.wait(timeout=HANG_GUARD) == -signal.SIGTERM
+        finally:
+            curl.kill()
+            curl.wait()
+
+    @staticmethod
+    def blocking_sigterm(*argv: str) -> subprocess.Popen:
+        """A process that blocks SIGTERM, with `argv` on its command line,
+        once it has blocked it."""
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import signal\n"
+                "signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})\n"
+                "print('ready', flush=True)\n"
+                "signal.pause()\n",
+                *argv,
+            ],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        assert line_from(process.stdout, process) == "ready\n"
+        return process
+
+    @staticmethod
+    def pending(pid: int) -> set[int]:
+        """The signals pending for process `pid`, to it or to a thread."""
+        status = Path(f"/proc/{pid}/status").read_text()
+        fields = dict(line.split(":\t", 1) for line in status.splitlines())
+        mask = int(fields["SigPnd"], 16) | int(fields["ShdPnd"], 16)
+        return {n for n in range(1, 65) if mask >> (n - 1) & 1}
 
     def test_spares_a_process_that_took_the_pid(self, tmp_path):
-        stranger = subprocess.Popen(
-            [sys.executable, "-c", "import time; time.sleep(30)"]
-        )
+        """The stranger blocks SIGTERM, so a SIGTERM sent to it would stay
+        pending: once the snippet has exited, none is."""
+        stranger = self.blocking_sigterm()
         try:
+            assert signal.SIGTERM not in self.pending(stranger.pid)
             pidfile = tmp_path / "curl.pid"
             pidfile.write_text(f"{stranger.pid}\n")
             assert self.kill(pidfile).returncode == 0
-            time.sleep(0.3)
+            assert signal.SIGTERM not in self.pending(stranger.pid)
             assert stranger.poll() is None
         finally:
             stranger.kill()
             stranger.wait()
+            stranger.stdout.close()
+
+    def test_the_stranger_would_show_a_sigterm_sent_to_it(self, tmp_path):
+        """What the test above relies on: a SIGTERM that reaches the
+        stranger stays pending, where the test would see it."""
+        stranger = self.blocking_sigterm(f"X-Yizkr-Sandbox: {self.TOKEN}")
+        try:
+            pidfile = tmp_path / "curl.pid"
+            pidfile.write_text(f"{stranger.pid}\n")
+            assert self.kill(pidfile).returncode == 0
+            assert signal.SIGTERM in self.pending(stranger.pid)
+        finally:
+            stranger.kill()
+            stranger.wait()
+            stranger.stdout.close()
 
     def test_a_missing_pid_file_is_quiet(self, tmp_path):
         done = self.kill(tmp_path / "none.pid")

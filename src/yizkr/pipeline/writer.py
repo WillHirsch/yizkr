@@ -104,8 +104,10 @@ Per batch, the writer:
    (ADR-0010);
 3. writes each claim as a statement at NORMAL rank (the contract has
    no rank field — ADR-0002) with TWO references (ADR-0003):
-   * stated in -> artifact, with page number / region / excerpt
-     qualifiers inside the reference;
+   * stated in -> artifact, with page number / printed page number /
+     region / excerpt qualifiers inside the reference, the printed page
+     number only where the claim's source gives one (the extractor reads
+     it from the transcription's record, ADR-0037);
    * inferred from extraction run -> the run item;
 4. when a statement with the same property, value, AND qualifiers
    already exists, the claim is recorded on that statement rather than
@@ -115,12 +117,12 @@ Per batch, the writer:
    writer sends it, with every text in it in Unicode NFC, the form the
    instance keeps text in and gives it back in (`_stored_string`): its
    string, external-id and monolingual text values and qualifiers, and
-   its source block's page number, region and excerpt, which also go on
-   one line and cleaned up as the instance gives them back
-   (`_locator_text`). So a claim whose
-   text the batch gives in another form, such as the decomposed form
-   (NFD), finds the statement written for it. The claim's source block,
-   `stated in` with its page number, region and excerpt, is compared
+   its source block's page number, printed page number, region and
+   excerpt, which also go on one line and cleaned up as the instance
+   gives them back (`_locator_text`). So a claim whose text the batch
+   gives in another form, such as the decomposed form (NFD), finds the
+   statement written for it. The claim's source block, `stated in` with
+   its page number, printed page number, region and excerpt, is compared
    whole with the statement's reference blocks as the instance stores
    them:
    * the statement already carries that block: the claim is skipped
@@ -213,9 +215,10 @@ before it are written:
   cleans up made U+FFFD, as the instance would give it back
   (`_hint_text`), and one still over the limit is left out in the same
   way, with a warning, wherever the writer would record it;
-* a reference's page number and region only place the claim in its
-  source, as its excerpt only helps a reader check it there, so each is
-  put on one line, cleaned up and cut to the limit rather than refused
+* a reference's page number, printed page number and region only place
+  the claim in its source, as its excerpt only helps a reader check it
+  there, so each is put on one line, cleaned up and cut to the limit
+  rather than refused
   (`_locator_text`): whitespace at either end goes, a line break inside
   becomes " | ", visibly, a tab a space, and each other character the
   instance cleans up U+FFFD, as the instance would give it back. A text
@@ -492,9 +495,10 @@ def _stored_string(text: str) -> str:
 
     The writer sends the batch's text in this form: a claim's string,
     external-id and monolingual text values and qualifiers, an entity's
-    type hint (_hint_text), and a reference block's page number, region
-    and excerpt (_locator_text). A label, description or alias goes in the
-    form the instance keeps a term in, which is in NFC too (_term_text).
+    type hint (_hint_text), and a reference block's page number, printed
+    page number, region and excerpt (_locator_text). A label, description
+    or alias goes in the form the instance keeps a term in, which is in
+    NFC too (_term_text).
     So what it builds for a claim is what the instance gives back for it,
     and the labels and aliases it looks for are in the form the instance
     holds them in, whatever form the batch gives them in: a re-run finds
@@ -686,15 +690,15 @@ def _one_line(text: str) -> str:
 
 
 def _locator_text(text: str) -> str:
-    """A reference's page number, region or excerpt as the writer sends
-    it: in the form the instance keeps text in (_stored_string), on one
-    line (_one_line), cleaned up as the instance gives it back
-    (_cleaned_up; a vertical tab or a form feed is a line break by then)
-    and, when that is longer than TEXT_LIMIT, cut to it (_cut), with the
-    digest of the text as the instance would keep it. It depends on the
-    text alone, so a claim written again sends the text the instance
-    keeps, and its reference block is found (step 4 of the module
-    docstring). Empty when the text is whitespace alone."""
+    """A reference's page number, printed page number, region or excerpt
+    as the writer sends it: in the form the instance keeps text in
+    (_stored_string), on one line (_one_line), cleaned up as the instance
+    gives it back (_cleaned_up; a vertical tab or a form feed is a line
+    break by then) and, when that is longer than TEXT_LIMIT, cut to it
+    (_cut), with the digest of the text as the instance would keep it.
+    It depends on the text alone, so a claim written again sends the
+    text the instance keeps, and its reference block is found (step 4 of
+    the module docstring). Empty when the text is whitespace alone."""
     return _cut(_cleaned_up(_one_line(_stored_string(text))), TEXT_LIMIT)
 
 
@@ -1539,6 +1543,18 @@ class BatchWriter:
             source_ref.add(
                 String(prop_nr=self.properties["page_number"], value=page)
             )
+        # the page number printed on that page, beside the physical one,
+        # where the extractor read it from the transcription's record
+        printed = (
+            _locator_text(source.printed_page_number or "") if source else ""
+        )
+        if printed:
+            source_ref.add(
+                String(
+                    prop_nr=self.properties["printed_page_number"],
+                    value=printed,
+                )
+            )
         if source is not None and source.region:
             source_ref.add(
                 String(
@@ -1717,14 +1733,14 @@ class BatchWriter:
 
         `references` are the claim's blocks as `_references` builds them,
         its source block first. The source block is compared whole with
-        the statement's blocks: `stated in` with the page number, region
-        and excerpt. So the same artifact under another locator or
-        excerpt, another place where it asserts the value, adds a block
-        of its own. A curated statement is compared by artifact alone: a
-        block that cites the claim's artifact under any locator records
-        the claim. The blocks returned are those the statement does not
-        already carry, so a run's block is not repeated for a second
-        claim of the same run.
+        the statement's blocks: `stated in` with the page number, printed
+        page number, region and excerpt. So the same artifact under
+        another locator or excerpt, another place where it asserts the
+        value, adds a block of its own. A curated statement is compared
+        by artifact alone: a block that cites the claim's artifact under
+        any locator records the claim. The blocks returned are those the
+        statement does not already carry, so a run's block is not
+        repeated for a second claim of the same run.
         """
         present = {
             self._reference_key(block)

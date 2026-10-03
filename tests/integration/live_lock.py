@@ -141,6 +141,10 @@ def hold(
     path: Path | None = None,
     timeout: float | None = None,
     announce: Callable[[str], None] | None = None,
+    *,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    now: Callable[[], datetime] = datetime.now,
 ) -> Iterator[int]:
     """Hold the live-stack lock for the duration of the block, and give
     the block the descriptor that holds it.
@@ -151,7 +155,8 @@ def hold(
     POLL_INTERVAL seconds. After `timeout` seconds LiveStackBusy is
     raised, naming the holder. Once this process has the lock, it writes
     its record over the one in the file, and it empties the record again
-    as it releases the lock.
+    as it releases the lock. `monotonic` and `sleep` time the wait, and
+    `now` gives the time in the record: by default, the real clocks.
 
     A process that shares its parent's hold ($YIZKR_LIVE_LOCK_FD, in the
     module docstring) gets the shared descriptor at once. It writes no
@@ -168,9 +173,9 @@ def hold(
     # opened without truncating: the record in the file is the holder's
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        _take(fd, path, timeout, announce)
+        _take(fd, path, timeout, announce, monotonic, sleep)
         try:
-            _record(fd)
+            _record(fd, now)
             yield fd
         finally:
             with contextlib.suppress(OSError):
@@ -206,37 +211,45 @@ def hold_for_session(pytest_config: pytest.Config) -> Iterator[None]:
 
 
 def _take(
-    fd: int, path: Path, timeout: float, announce: Callable[[str], None]
+    fd: int,
+    path: Path,
+    timeout: float,
+    announce: Callable[[str], None],
+    monotonic: Callable[[], float],
+    sleep: Callable[[float], None],
 ) -> None:
-    """Lock `fd` exclusively, waiting up to `timeout` seconds."""
-    started = time.monotonic()
-    waiting = False
+    """Lock `fd` exclusively, waiting up to `timeout` seconds from the
+    first attempt that is refused: a free lock is taken with no look at
+    the clock."""
+    started: float | None = None
     while True:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             pass
         else:
-            if waiting:
-                waited = time.monotonic() - started
+            if started is not None:
+                waited = monotonic() - started
                 announce(f"Took the live-stack lock after {waited:.0f} s.")
             return
-        waited = time.monotonic() - started
+        first_refusal = started is None
+        if first_refusal:
+            started = monotonic()
+        waited = monotonic() - started
         if waited >= timeout:
             raise LiveStackBusy(
                 f"Gave up after {timeout:g} s waiting for the live-stack "
-                f"lock {path}, held by {_describe(_holder(fd))}\n"
+                f"lock {path}, held by {_describe(_holder(fd, sleep))}\n"
                 f"Wait for that session to end, or give {TIMEOUT_ENV} "
                 "more seconds."
             )
-        if not waiting:
+        if first_refusal:
             announce(
                 f"The live-stack lock {path} is held by "
-                f"{_describe(_holder(fd))}\n"
+                f"{_describe(_holder(fd, sleep))}\n"
                 f"Waiting up to {timeout:g} s for it ({TIMEOUT_ENV})."
             )
-            waiting = True
-        time.sleep(min(POLL_INTERVAL, timeout - waited))
+        sleep(min(POLL_INTERVAL, timeout - waited))
 
 
 def _shared(path: Path) -> int | None:
@@ -294,26 +307,28 @@ def _close_on_exec() -> None:
         os.set_inheritable(fd, False)
 
 
-def _record(fd: int) -> None:
-    """Write this process's record over the one in the lock file."""
+def _record(fd: int, now: Callable[[], datetime]) -> None:
+    """Write this process's record over the one in the lock file, with
+    the time from `now`."""
     record = {
         "pid": os.getpid(),
         "command": shlex.join(sys.orig_argv),
         "cwd": os.getcwd(),
-        "started": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "started": now().astimezone().isoformat(timespec="seconds"),
     }
     os.ftruncate(fd, 0)
     os.pwrite(fd, json.dumps(record).encode() + b"\n", 0)
 
 
-def _holder(fd: int) -> dict[str, Any] | None:
+def _holder(fd: int, sleep: Callable[[float], None]) -> dict[str, Any] | None:
     """The record in the lock file open as `fd`: the first one read that
     names a running process or, when no read finds one, the last record
-    read. None when no read finds a record."""
+    read, the reads `sleep`ing RECORD_INTERVAL apart. None when no read
+    finds a record."""
     found = None
     for attempt in range(RECORD_READS):
         if attempt:
-            time.sleep(RECORD_INTERVAL)
+            sleep(RECORD_INTERVAL)
         try:
             record = json.loads(os.pread(fd, 1 << 20, 0))
         except ValueError:
