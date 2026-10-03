@@ -211,7 +211,7 @@ in `docker-compose.https.yml` to avoid rate limits.
   `config/Extensions.php` / `LocalSettings.d` overrides, not upstream
   files.
 
-### Backups and the public export
+### Backups and the non-privileged export
 
 `yizkr backup` (run from the repo root, stack up) writes a timestamped
 directory under `var/backups/` containing:
@@ -221,14 +221,14 @@ directory under `var/backups/` containing:
 - `media.tar.gz` — uploaded artifact files.
 - `full.nt.gz` — complete RDF dump. Portable export; also what a full
   WDQS reload imports (WDQS state itself is derived and not backed up).
-- `public.nt.gz` + `public-exclusions.json` — the non-privileged
-  export, which leaves out every possibly-living person (R7, ADR-0020).
-  "Possibly living" is a runtime determination from the absence of death
-  evidence, not a stored flag. Conservative by construction: a person is
-  included only on positive evidence they are not living (any death
-  evidence — a date, place, or cause of death, a burial place, or a
-  death event — or births that all lie beyond the cutoff,
-  `--cutoff-years` (by default `DEFAULT_CUTOFF_YEARS` in
+- `nonprivileged.nt.gz` + `nonprivileged-exclusions.json` — the
+  non-privileged export, which leaves out every possibly-living person
+  (R7, ADR-0020). "Possibly living" is a runtime determination from the
+  absence of death evidence, not a stored flag. Conservative by
+  construction: a person is included only on positive evidence they are
+  not living (any death evidence — a date, place, or cause of death, a
+  burial place, or a death event — or births that all lie beyond the
+  cutoff, `--cutoff-years` (by default `DEFAULT_CUTOFF_YEARS` in
   `yizkr.core.privacy`), each read at the latest year it allows:
   docs/MODELING.md, "Living persons and privacy"); *unknown means
   excluded*. Every triple that mentions an excluded person is dropped —
@@ -266,10 +266,12 @@ directory under `var/backups/` containing:
   not a public copy (the owner, 2026-09-29). A dump that holds a
   sitelink or a property of a type the model does not use (a URL, a
   media file) makes the export refuse: `yizkr backup` keeps the other
-  dumps, records the refusal in `manifest.json` and exits non-zero.
-  Nothing here publishes anything. `public.nt.gz` is the only file of a
-  backup that may be shared, and only with those a non-privileged view
-  is for. `public-exclusions.json` is for curator review: it stays with
+  dumps, records the refusal in `manifest.json`, prints it on one line
+  and exits non-zero.
+  Nothing here publishes anything. `nonprivileged.nt.gz` is the only
+  file of a backup that may be shared, and only with those a
+  non-privileged view is for. `nonprivileged-exclusions.json` is for
+  curator review: it stays with
   the backup and is never shared, as it gives every item left out by
   QID, with why, a birth year and the events it took part in among the
   reasons.
@@ -285,8 +287,39 @@ directory under `var/backups/` containing:
   entity is edited again, and a query service that lacks entities for
   good (after a restore, or a reset of the query service alone, below)
   needs a full reload from `full.nt.gz`. Pruning counts a refused run
-  too: with `--keep N`, N refused nights in a row leave no public export
-  among the backups kept.
+  too: with `--keep N`, N refused nights in a row leave no
+  non-privileged export among the backups kept.
+
+  Every refusal, a lag, a graph that changed, a sitelink or a property of
+  an unreviewed type, is recorded in `manifest.json` under
+  `nonprivileged_export_refused`, printed after the dumps kept as one
+  stderr line, `non-privileged export refused: <reason>`, with no
+  traceback, and makes `yizkr backup` exit 1. Any other failure (a dump
+  command failing, a full disk) is no refusal: it ends `yizkr backup`
+  with its error. `--no-nonprivileged-export` skips the export.
+
+  The export writes each file under its name plus `.partial`
+  (`nonprivileged.nt.gz.partial`,
+  `nonprivileged-exclusions.json.partial`) and moves it onto its name
+  once whole, the exclusions first: a `nonprivileged.nt.gz` is always
+  complete and has its exclusions beside it. It first removes any
+  `.partial` file an earlier run left, before it reads or refuses
+  anything, so a stale one can never reach the dump. A failure part way
+  removes what it wrote; once the exclusions were moved onto their name
+  it removes them and any dump under its name, so a run that fails
+  leaves no export, cut short or whole.
+
+  Renamed (#412, 2026-10-02): the export was named "public" though it is
+  a non-privileged view, not a public copy. Backups made since write
+  `nonprivileged.nt.gz` and `nonprivileged-exclusions.json`, record the
+  export under `components.nonprivileged_export` and a refusal under
+  `nonprivileged_export_refused` in `manifest.json`; an off-machine
+  script that read `public.nt.gz` or the `public_export` keys must read
+  the new names (the manifest's component entry names its file). Backups
+  made earlier keep their `public.nt.gz` and `public-exclusions.json`,
+  and pruning removes them as before. `--no-public-export` still works,
+  as an alias of `--no-nonprivileged-export`, until the keeper run
+  (#159), and says so on one stderr line each time it is used.
 
 Schedule it with cron on the host, e.g. nightly at 03:15 keeping two
 weeks:
@@ -305,8 +338,8 @@ nightly after the backup, for example:
 `var/site` is built from the LIVE graph and therefore includes living
 people: serve it on the LAN only (any static server works, e.g.
 `python -m http.server -d var/site 8080`). An internet-facing variant
-needs a public copy, which `public.nt.gz` is not: its texts can name a
-possibly living relative of a released person (#163).
+needs a public copy, which `nonprivileged.nt.gz` is not: its texts can
+name a possibly living relative of a released person (#163).
 
 Copy `var/backups/` off-machine (rsync, restic, a NAS — anything);
 a backup that lives only on the server it backs up is not a backup.
@@ -332,7 +365,7 @@ docker compose up -d
 
 (the WDQS updater replays recent changes only, so the rebuilt query
 service can lack entities the recent changes no longer list, and the
-public export refuses to run until it holds them all: import
+non-privileged export refuses to run until it holds them all: import
 `full.nt.gz` via loadData.sh for a full reload — see the wdqs image
 docs.)
 

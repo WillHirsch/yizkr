@@ -320,7 +320,7 @@ class TestPlacesRunItem:
 
     def test_a_pass_cut_short_is_typed_by_the_next(self):
         """A pass cut short between the run item's two writes leaves it
-        labelled, with no kind, so the public export would leave it out
+        labelled, with no kind, so the non-privileged export would leave it out
         and the containment it backs would lose its only reference there.
         The next pass finds it by its label and types it: one run item,
         typed."""

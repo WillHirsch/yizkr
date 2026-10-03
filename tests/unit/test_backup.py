@@ -1,7 +1,7 @@
 """Offline tests for backup/export logic. No stack, no docker. The
 possibly-living determination itself is tested in test_privacy.py.
 
-The public export keeps only the people the check releases (#344): it
+The non-privileged export keeps only the people the check releases (#344): it
 reads person evidence from its own dump, at every rank, and drops every
 item with any that the check did not release, and every item that states
 no type; and it refuses to run while the query service, where the check
@@ -13,9 +13,12 @@ goes whole, and an item a participant statement's qualifier names takes
 part in the event (#364)."""
 
 import datetime
+import errno
 import gzip
 import hashlib
+import io
 import json
+import os
 import re
 import threading
 from pathlib import Path
@@ -23,6 +26,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.munger_blocks import blocks, misplaced, misplaced_in
 from tests.unit.test_privacy import (
     BIRTHS,
     CASES,
@@ -45,13 +49,15 @@ from yizkr.backup import (
     REVISIONS_QUERY,
     DumpReading,
     ExclusionReport,
+    NonprivilegedExportRefused,
     QueryServiceLag,
+    UnfilterableDump,
     await_query_service,
     exclusion_report,
-    export_public,
-    filter_public_export,
+    export_nonprivileged,
+    filter_nonprivileged_export,
+    nonprivileged_exclusions,
     prune_old_backups,
-    public_exclusions,
     read_dump,
     run_backup,
     stale_entities,
@@ -105,8 +111,8 @@ FACTS = [
 
 
 class TestExclusionReport:
-    """The public export's call (ADR-0020): every person the facts query
-    lists, with the births the privacy module's query reads (#334)."""
+    """The non-privileged export's call (ADR-0020): every person the facts
+    query lists, with the births the privacy module's query reads (#334)."""
 
     def report(self, vocabulary, facts=FACTS, births=BIRTHS, **options):
         calls = []
@@ -234,7 +240,7 @@ def nt(text: str) -> str:
     )
 
 
-class TestPublicFilter:
+class TestNonprivilegedFilter:
     LINES = [
         # the excluded person's own triples: entity, statement node, sitelink
         f'<http://w.lan/entity/Q76> {RDFS_LABEL} "Nicholas"@en .',
@@ -263,10 +269,10 @@ class TestPublicFilter:
         self, tmp_path: Path, excluded: set[str], dropped_pids=frozenset()
     ):
         full = tmp_path / "full.nt.gz"
-        public = tmp_path / "public.nt.gz"
+        public = tmp_path / "nonprivileged.nt.gz"
         with gzip.open(full, "wt") as handle:
             handle.write("\n".join(self.LINES) + "\n")
-        kept, dropped = filter_public_export(
+        kept, dropped = filter_nonprivileged_export(
             full, public, excluded, dropped_pids
         )
         with gzip.open(public, "rt") as handle:
@@ -528,10 +534,10 @@ class TestAStatementGoesWhole:
     @staticmethod
     def filter(tmp_path: Path, lines, excluded) -> tuple[int, int, list[str]]:
         full = tmp_path / "full.nt.gz"
-        public = tmp_path / "public.nt.gz"
+        public = tmp_path / "nonprivileged.nt.gz"
         with gzip.open(full, "wt") as handle:
             handle.write("\n".join(lines) + "\n")
-        kept, dropped = filter_public_export(full, public, excluded)
+        kept, dropped = filter_nonprivileged_export(full, public, excluded)
         with gzip.open(public, "rt") as handle:
             return kept, dropped, handle.read().splitlines()
 
@@ -932,18 +938,35 @@ class TestWhatTheFilterReads:
 
     def filter(self, tmp_path: Path, dropped_pids) -> tuple[int, int, list]:
         full = tmp_path / "full.nt.gz"
-        public = tmp_path / "public.nt.gz"
+        public = tmp_path / "nonprivileged.nt.gz"
         with gzip.open(full, "wt", encoding="utf-8") as handle:
             handle.write(
                 "\n".join(self.READABLE + self.NOTES + self.UNREADABLE) + "\n"
             )
-        kept, dropped = filter_public_export(full, public, set(), dropped_pids)
+        kept, dropped = filter_nonprivileged_export(
+            full, public, set(), dropped_pids
+        )
         with gzip.open(public, "rt", encoding="utf-8", newline="\n") as handle:
             return kept, dropped, handle.read().split("\n")[:-1]
 
+    @staticmethod
+    def in_blocks(lines: list[str]) -> list[str]:
+        """`lines` as the filter writes them, all of one block: each
+        reference node's lines together at the block's end, in the order
+        the nodes first come (#412)."""
+        nodes: dict[str, list[str]] = {}
+        rest = []
+        for line in lines:
+            subject = line.split(" ", 1)[0]
+            if subject.startswith(f"<{W}/reference/"):
+                nodes.setdefault(subject, []).append(line)
+            else:
+                rest.append(line)
+        return rest + [line for node in nodes.values() for line in node]
+
     def test_text_leaves_as_it_is_and_the_notes_go(self, tmp_path):
         kept, dropped, lines = self.filter(tmp_path, {"P21", "P22"})
-        assert lines == self.READABLE
+        assert lines == self.in_blocks(self.READABLE)
         assert (kept, dropped) == (
             len(self.READABLE),
             len(self.NOTES) + len(self.UNREADABLE),
@@ -955,7 +978,7 @@ class TestWhatTheFilterReads:
         # with no property dropped, the notes leave, and only the lines it
         # cannot read go: the one a carriage return runs through as one
         kept, dropped, lines = self.filter(tmp_path, frozenset())
-        assert lines == self.READABLE + self.NOTES
+        assert lines == self.in_blocks(self.READABLE + self.NOTES)
         assert dropped == len(self.UNREADABLE)
 
     def test_no_property_of_the_vocabulary_takes_a_link(self):
@@ -971,6 +994,570 @@ class TestWhatTheFilterReads:
             f"<{ONTOLOGY}{rdf_type(datatype)}>"
             for datatype in READABLE_DATATYPES
         } == backup._MODEL_TYPES
+
+
+# -- each kept node leaves in a block that names it (#412) --------------------
+
+CALENDAR = "<http://www.wikidata.org/entity/Q1985727>"
+REF_LETTER = "9" * 40  # the 1958 letter, which Nina's and Rudolf's cite
+VALUE_1958 = "a1" * 20  # the letter's date, a value node only it names
+VALUE_DEATH = "b2" * 20  # Rudolf's death, 6 March 1941
+REF_TALK = "c3" * 20  # the 2002 interview, which Gustav's and Leopold's cite
+VALUE_2002 = "d4" * 20  # the interview's date, a value node only it names
+
+
+def entity_block(qid: str, label: str) -> list[str]:
+    """An entity's first lines as dumpRdf.php writes them, under `W`:
+    its data node, which starts its block, its type and its label."""
+    data = f"<{W}/wiki/Special:EntityData/{qid}>"
+    return [
+        f"{data} {RDF_TYPE} <http://schema.org/Dataset> .",
+        f"{data} <http://schema.org/about> <{W}/entity/{qid}> .",
+        f'{data} <http://schema.org/version> "{qid[1:]}"^^<{XSD}integer> .',
+        f"<{W}/entity/{qid}> {RDF_TYPE} <{ONTOLOGY}Item> .",
+        f'<{W}/entity/{qid}> {RDFS_LABEL} "{nt(label)}"@en .',
+    ]
+
+
+OWL = "http://www.w3.org/2002/07/owl#"
+PREDICATES = {
+    "claim": "prop",
+    "statementProperty": "prop/statement",
+    "statementValue": "prop/statement/value",
+    "qualifier": "prop/qualifier",
+    "qualifierValue": "prop/qualifier/value",
+    "reference": "prop/reference",
+    "referenceValue": "prop/reference/value",
+    "directClaim": "prop/direct",
+}
+
+
+def property_declarations(base: str, pid: str) -> list[str]:
+    """A property's predicates as dumpRdf.php declares them in its block:
+    each named by the property and typed an owl:ObjectProperty, and its
+    "no value" class, under `base`."""
+    novalue = f"<{base}/prop/novalue/{pid}>"
+    return [
+        *(
+            f"<{base}/entity/{pid}> <{ONTOLOGY}{term}> <{base}/{path}/{pid}> ."
+            for term, path in PREDICATES.items()
+        ),
+        f"<{base}/entity/{pid}> <{ONTOLOGY}novalue> {novalue} .",
+        *(
+            f"<{base}/{path}/{pid}> {RDF_TYPE} <{OWL}ObjectProperty> ."
+            for path in PREDICATES.values()
+        ),
+        f"{novalue} {RDF_TYPE} <{OWL}Class> .",
+        f"{novalue} <{OWL}complementOf> _:novalue{pid} .",
+        f"_:novalue{pid} {RDF_TYPE} <{OWL}Restriction> .",
+        f"_:novalue{pid} <{OWL}onProperty> <{base}/prop/direct/{pid}> .",
+        f"_:novalue{pid} <{OWL}someValuesFrom> <{OWL}Thing> .",
+    ]
+
+
+def time_value(node: str, day: str) -> list[str]:
+    """A time value node as dumpRdf.php writes one, to the day."""
+    value = f"<{W}/value/{node}>"
+    return [
+        f"{value} {RDF_TYPE} <{ONTOLOGY}TimeValue> .",
+        f'{value} <{ONTOLOGY}timeValue> "{day}T00:00:00Z"{TIME} .',
+        f'{value} <{ONTOLOGY}timePrecision> "11"^^<{XSD}integer> .',
+        f'{value} <{ONTOLOGY}timeTimezone> "0"^^<{XSD}integer> .',
+        f"{value} <{ONTOLOGY}timeCalendarModel> {CALENDAR} .",
+    ]
+
+
+def source(node: str, excerpt: str, day: str, dated: str) -> list[str]:
+    """A reference node with an excerpt (P8) and its source's date
+    (P577), the date's value node `dated` beside it."""
+    reference = f"<{W}/reference/{node}>"
+    return [
+        f"{reference} {RDF_TYPE} <{ONTOLOGY}Reference> .",
+        f'{reference} <{W}/prop/reference/P8> "{nt(excerpt)}" .',
+        f'{reference} <{W}/prop/reference/P577> "{day}T00:00:00Z"{TIME} .',
+        f"{reference} <{W}/prop/reference/value/P577> <{W}/value/{dated}> .",
+        *time_value(dated, day),
+    ]
+
+
+def is_value_type(line: str) -> bool:
+    """Whether `line` is a value node's rdf:type line, which the munger
+    keeps wherever it sits."""
+    subject, predicate, _ = line.split(" ", 2)
+    return subject.startswith(f"<{W}/value/") and predicate == RDF_TYPE
+
+
+class TestEachNodeLeavesInABlockThatNamesIt:
+    """The query service's munger reads a dump entity by entity, and keeps
+    a value or reference node only in the block of an entity whose lines
+    name it; dumpRdf.php writes each such node once, in the block of the
+    first entity that uses it. When the export leaves that entity, or its
+    statement, out, the node moves to the first block kept that names it,
+    once (#412). `tests/munger_blocks.py` mirrors the munger.
+
+    Koshnovka (Q510), where Rudolf Löbig (Q501) lived, comes first. Nina
+    Sartina (Q502, of no known dates, left out) wrote to Leopold in 1958
+    (REF_LETTER) as the widow of his late brother Rudolf: her spouse
+    statement, ended by his death on 6 March 1941 (VALUE_DEATH), is the
+    first to cite the letter and to name that day, so dumpRdf.php writes
+    both in her block; Rudolf's death, from the same letter, follows in
+    his. Gustav Löbig (Q506) was "Dad" to Nicholas Lobig (Q507, left
+    out), as the interview Nicholas gave in 2002 (REF_TALK) says; it
+    names Leopold Löbig (Q505) "Dad's cousin Leopold" too, a relative
+    (P1038) of Gustav as a cousin (P1039). Gustav's appellation, whose
+    perspective is Nicholas, is the first to cite the interview, and goes
+    whole; Leopold's statement keeps it."""
+
+    EXCERPT_LETTER = "вдова Вашего покойного брата Рудольфа"
+    PLACE = entity_block("Q510", "Koshnovka")
+    NINA = [
+        *entity_block("Q502", "Nina Sartina"),
+        *statement(
+            "Q502",
+            "aaaa",
+            "P26",
+            f"<{W}/entity/Q501>",
+            qualifiers=[
+                ("P582", "", f'"1941-03-06T00:00:00Z"{TIME}'),
+                ("P582", "value/", f"<{W}/value/{VALUE_DEATH}>"),
+            ],
+            reference=REF_LETTER,
+        ),
+        *time_value(VALUE_DEATH, "1941-03-06"),
+        *source(REF_LETTER, EXCERPT_LETTER, "1958-12-25", VALUE_1958),
+    ]
+    RUDOLF = [
+        *entity_block("Q501", "Rudolf Löbig"),
+        *statement(
+            "Q501",
+            "aaaa",
+            "P570",
+            f'"1941-03-06T00:00:00Z"{TIME}',
+            reference=REF_LETTER,
+        ),
+        f"<{W}/entity/statement/Q501-aaaa> <{W}/prop/statement/value/P570> "
+        f"<{W}/value/{VALUE_DEATH}> .",
+    ]
+    GUSTAV = [
+        *entity_block("Q506", "Gustav Löbig"),
+        *statement(
+            "Q506",
+            "aaaa",
+            "P1810",
+            '"Dad"@en',
+            qualifiers=[("P1811", "", f"<{W}/entity/Q507>")],
+            reference=REF_TALK,
+        ),
+        *source(REF_TALK, "Dad's cousin Leopold", "2002-01-01", VALUE_2002),
+    ]
+    LEOPOLD = [
+        *entity_block("Q505", "Leopold Löbig"),
+        *statement(
+            "Q505",
+            "aaaa",
+            "P1038",
+            f"<{W}/entity/Q506>",
+            qualifiers=[("P1039", "", '"cousin"@en')],
+            reference=REF_TALK,
+        ),
+    ]
+    HEADER = [
+        f"<{ONTOLOGY}Dump> {RDF_TYPE} <http://schema.org/Dataset> .",
+        f'<{ONTOLOGY}Dump> <http://schema.org/softwareVersion> "1.0.0" .',
+    ]
+    LINES = [*HEADER, *PLACE, *NINA, *RUDOLF, *GUSTAV, *LEOPOLD]
+    EXCLUDED = {"Q502", "Q507"}
+
+    @staticmethod
+    def nodes(*hashes: str) -> list[str]:
+        """The lines of the provenance nodes `hashes` in the dump."""
+        return [
+            line
+            for line in TestEachNodeLeavesInABlockThatNamesIt.LINES
+            if any(
+                line.split(" ", 1)[0].endswith(f"/{node}>") for node in hashes
+            )
+        ]
+
+    def filter(self, tmp_path: Path) -> tuple[int, int, list[str]]:
+        full = tmp_path / "full.nt.gz"
+        public = tmp_path / "nonprivileged.nt.gz"
+        with gzip.open(full, "wt", encoding="utf-8") as handle:
+            handle.write("\n".join(self.LINES) + "\n")
+        kept, dropped = filter_nonprivileged_export(
+            full, public, self.EXCLUDED
+        )
+        with gzip.open(public, "rt", encoding="utf-8", newline="\n") as handle:
+            return kept, dropped, handle.read().split("\n")[:-1]
+
+    @staticmethod
+    def block_of(lines: list[str], qid: str) -> list[str]:
+        (block,) = (
+            block
+            for block in blocks(lines)
+            if f"<{W}/wiki/Special:EntityData/{qid}> " in block[0]
+        )
+        return block
+
+    def test_the_dump_is_as_the_munger_reads_it(self):
+        # the control: dumpRdf.php's layout, each node once, in the block
+        # of the first entity that names it
+        assert misplaced(self.LINES) == []
+        assert len(self.nodes(VALUE_DEATH, REF_LETTER, VALUE_1958)) == 14
+        assert len(self.nodes(REF_TALK, VALUE_2002)) == 9
+        assert set(self.nodes(VALUE_DEATH, REF_LETTER)) <= set(self.NINA)
+        assert set(self.nodes(REF_TALK, VALUE_2002)) <= set(self.GUSTAV)
+
+    def test_the_munger_would_keep_every_line_of_the_export(self, tmp_path):
+        _, _, lines = self.filter(tmp_path)
+        assert misplaced(lines) == []
+
+    def test_a_node_first_written_for_one_left_out_moves(self, tmp_path):
+        # the letter, its date and Rudolf's death leave in his block, as
+        # one line each, and nothing of Nina's leaves
+        _, _, lines = self.filter(tmp_path)
+        moved = self.nodes(VALUE_DEATH, REF_LETTER, VALUE_1958)
+        rudolf = self.block_of(lines, "Q501")
+        assert set(moved) <= set(rudolf)
+        assert all(lines.count(line) == 1 for line in moved)
+        assert not any("Q502" in line for line in lines)
+        assert not any(self.EXCERPT_LETTER in line for line in self.PLACE)
+        assert set(self.block_of(lines, "Q510")) == set(self.PLACE)
+
+    def test_a_node_whose_first_statement_goes_moves_to_the_next(
+        self, tmp_path
+    ):
+        # the interview and its date leave in Leopold's block, once, not in
+        # Gustav's, whose statement citing it went whole
+        _, _, lines = self.filter(tmp_path)
+        moved = self.nodes(REF_TALK, VALUE_2002)
+        assert set(moved) <= set(self.block_of(lines, "Q505"))
+        assert not set(moved) & set(self.block_of(lines, "Q506"))
+        assert all(lines.count(line) == 1 for line in moved)
+        assert not any("Q506-aaaa" in line for line in lines)
+
+    @classmethod
+    def gone(cls) -> list[str]:
+        """The lines the export leaves out: Nina's, and the appellation's,
+        with the truthy triple it gave."""
+        return [
+            line for line in cls.LINES if "Q502" in line or "Q506-aaaa" in line
+        ] + [f'<{W}/entity/Q506> <{W}/prop/direct/P1810> "Dad"@en .']
+
+    def test_the_lines_kept_are_those_left_in_place(self, tmp_path):
+        # only where the nodes' lines leave changes: the export keeps every
+        # line but Nina's, and the appellation's, with the truthy triple it
+        # gave, and counts each line once
+        kept, dropped, lines = self.filter(tmp_path)
+        gone = self.gone()
+        assert set(gone) <= set(self.LINES)
+        assert sorted(lines) == sorted(set(self.LINES) - set(gone))
+        assert (kept, dropped) == (len(lines), len(self.LINES) - len(lines))
+
+    def test_a_node_that_sits_in_a_block_that_names_it_stays_there(
+        self, tmp_path
+    ):
+        # with no one left out, each node stays in the block it sits in,
+        # at its end, and every line leaves
+        full = tmp_path / "full.nt.gz"
+        public = tmp_path / "nonprivileged.nt.gz"
+        with gzip.open(full, "wt", encoding="utf-8") as handle:
+            handle.write("\n".join(self.LINES) + "\n")
+        assert filter_nonprivileged_export(full, public, set()) == (
+            len(self.LINES),
+            0,
+        )
+        assert misplaced_in(public) == []
+        with gzip.open(public, "rt", encoding="utf-8") as handle:
+            lines = handle.read().split("\n")[:-1]
+        nina = self.block_of(lines, "Q502")
+        assert nina[
+            -len(self.nodes(VALUE_DEATH, REF_LETTER, VALUE_1958)) :
+        ] == (self.nodes(VALUE_DEATH, REF_LETTER, VALUE_1958))
+        assert sorted(lines) == sorted(self.LINES)
+
+    def test_a_node_repeated_in_the_dump_leaves_once(self, tmp_path):
+        # a node's lines that the dump repeats in a later block leave once,
+        # the repeats counted as dropped
+        full = tmp_path / "full.nt.gz"
+        public = tmp_path / "nonprivileged.nt.gz"
+        repeated = self.nodes(REF_TALK, VALUE_2002)
+        with gzip.open(full, "wt", encoding="utf-8") as handle:
+            handle.write("\n".join(self.LINES + repeated) + "\n")
+        kept, dropped = filter_nonprivileged_export(full, public, set())
+        with gzip.open(public, "rt", encoding="utf-8") as handle:
+            lines = handle.read().split("\n")[:-1]
+        assert (kept, dropped) == (len(self.LINES), len(repeated))
+        assert misplaced(lines) == []
+        assert set(repeated) <= set(self.block_of(lines, "Q506"))
+
+    def test_a_full_dump_of_the_fixture_is_as_the_munger_reads_it(
+        self, tmp_path, vocabulary
+    ):
+        # the control for TestExportNonprivileged, which checks each
+        # export it writes
+        dump = export_dump(vocabulary)
+        assert misplaced_in(dump.write(tmp_path / "full.nt.gz")) == []
+        # ...and the checker finds what a dump lays out wrong: a statement
+        # node, and a reference, in another entity's block
+        assert misplaced(dump.lines)
+
+    def test_the_checker_finds_each_node_left_where_it_sat(self):
+        # the kept lines in dump order, nothing moved: the letter, its date
+        # and Rudolf's death sit in Koshnovka's block, which names none of
+        # them, and the interview and its date in Gustav's, whose statement
+        # citing it went; the munger would drop each of their lines but a
+        # value node's type, which it always keeps
+        gone = set(self.gone())
+        unmoved = [line for line in self.LINES if line not in gone]
+        letter = [
+            line
+            for line in self.nodes(VALUE_DEATH, REF_LETTER, VALUE_1958)
+            if not is_value_type(line)
+        ]
+        talk = [
+            line
+            for line in self.nodes(REF_TALK, VALUE_2002)
+            if not is_value_type(line)
+        ]
+        assert sorted(misplaced(unmoved)) == sorted(
+            [f"<{W}/entity/Q510>: {line}" for line in letter]
+            + [f"<{W}/entity/Q506>: {line}" for line in talk]
+        )
+
+
+class TestARedirectStartsABlock:
+    """A redirect's bare ``owl:sameAs`` line starts a block of its own, as
+    the munger reads it: the export writes the nodes of the block before
+    it ahead of it (#412). Q520, a duplicate item for Rudolf Löbig (Q501)
+    merged into his, redirects to him between his block and Gustav's."""
+
+    REDIRECT = f"<{W}/entity/Q520> <{OWL}sameAs> <{W}/entity/Q501> ."
+    CASE = TestEachNodeLeavesInABlockThatNamesIt
+    LINES = [
+        *CASE.HEADER,
+        *CASE.PLACE,
+        *CASE.NINA,
+        *CASE.RUDOLF,
+        REDIRECT,
+        *CASE.GUSTAV,
+        *CASE.LEOPOLD,
+    ]
+
+    def test_the_nodes_of_the_block_before_leave_ahead_of_it(self, tmp_path):
+        full = tmp_path / "full.nt.gz"
+        public = tmp_path / "nonprivileged.nt.gz"
+        with gzip.open(full, "wt", encoding="utf-8") as handle:
+            handle.write("\n".join(self.LINES) + "\n")
+        filter_nonprivileged_export(full, public, self.CASE.EXCLUDED)
+        with gzip.open(public, "rt", encoding="utf-8", newline="\n") as handle:
+            lines = handle.read().split("\n")[:-1]
+        assert misplaced(lines) == []
+        letter = [
+            number for number, line in enumerate(lines) if REF_LETTER in line
+        ]
+        assert letter
+        assert max(letter) < lines.index(self.REDIRECT)
+
+
+class TestTheMungerBlockChecker:
+    """`tests/munger_blocks.py` flags, one rule at a time, what the munger
+    would drop, and keeps what it would keep (#412)."""
+
+    VALUE = f"<{W}/value/{VALUE_1958}>"
+    REFERENCE = f"<{W}/reference/{REF_LETTER}>"
+    NODE = f"<{W}/entity/statement/Q501-aaaa>"
+
+    def lines(self, first: list[str], second: list[str]) -> list[str]:
+        """Rudolf's block, then Leopold's, each with lines of its own."""
+        return [
+            *entity_block("Q501", "Rudolf Löbig"),
+            *first,
+            *entity_block("Q505", "Leopold Löbig"),
+            *second,
+        ]
+
+    def statement(self, *more: str) -> list[str]:
+        return [
+            f"<{W}/entity/Q501> <{W}/prop/P570> {self.NODE} .",
+            f'{self.NODE} <{W}/prop/statement/P570> "1941-03-06T00:00:00Z"'
+            f"{TIME} .",
+            *more,
+        ]
+
+    def test_a_property_block_declaring_its_predicates_is_kept(self):
+        lines = [
+            *entity_block("P577", "publication date"),
+            *property_declarations(W, "P577"),
+        ]
+        assert misplaced(lines) == []
+
+    def test_a_value_named_only_by_a_reference_elsewhere_is_flagged(self):
+        reference = self.statement(
+            f"{self.NODE} {DERIVED_FROM} {self.REFERENCE} .",
+            f"{self.REFERENCE} <{W}/prop/reference/value/P577> {self.VALUE} .",
+        )
+        value = time_value(VALUE_1958, "1958-12-25")
+        assert misplaced(self.lines(reference, value)) == [
+            f"<{W}/entity/Q505>: {line}" for line in value[1:]
+        ]
+        assert misplaced(self.lines(reference + value, [])) == []
+
+    def test_a_reference_named_only_by_a_statement_elsewhere_is_flagged(
+        self,
+    ):
+        cited = self.statement(
+            f"{self.NODE} {DERIVED_FROM} {self.REFERENCE} ."
+        )
+        reference = [
+            f"{self.REFERENCE} {RDF_TYPE} <{ONTOLOGY}Reference> .",
+            f'{self.REFERENCE} <{W}/prop/reference/P8> "вдова" .',
+        ]
+        assert misplaced(self.lines(cited, reference)) == [
+            f"<{W}/entity/Q505>: {line}" for line in reference
+        ]
+        assert misplaced(self.lines(cited + reference, [])) == []
+
+    def test_a_statement_no_entity_names_is_flagged(self):
+        statement = self.statement()
+        assert misplaced(self.lines(statement[1:], [])) == [
+            f"<{W}/entity/Q501>: {statement[1]}"
+        ]
+
+    def test_a_normalized_quantity_is_kept_beside_its_value(self):
+        normalized = f"<{W}/value/{VALUE_2002}>"
+        quantity = self.statement(
+            f"{self.NODE} <{W}/prop/statement/value/P1100> {self.VALUE} .",
+            f"{self.VALUE} {RDF_TYPE} <{ONTOLOGY}QuantityValue> .",
+            f"{self.VALUE} <{ONTOLOGY}quantityNormalized> {normalized} .",
+            f"{normalized} {RDF_TYPE} <{ONTOLOGY}QuantityValue> .",
+            f'{normalized} <{ONTOLOGY}quantityAmount> "+1"^^<{XSD}decimal> .',
+        )
+        assert misplaced(self.lines(quantity, [])) == []
+        assert misplaced(self.lines(quantity[:-1], quantity[-1:])) == [
+            f"<{W}/entity/Q505>: {quantity[-1]}"
+        ]
+
+    REFERENCE_LINE = (
+        f'<{W}/reference/{REF_LETTER}> <{W}/prop/reference/P8> "вдова" .'
+    )
+    REDIRECT = f"<{W}/entity/Q520> <{OWL}sameAs> <{W}/entity/Q501> ."
+
+    def test_a_node_after_a_redirect_is_of_the_redirect(self):
+        cited = self.statement(
+            f"{self.NODE} {DERIVED_FROM} {self.REFERENCE} ."
+        )
+        after = [*entity_block("Q501", "Rudolf Löbig"), *cited]
+        assert misplaced([*after, self.REDIRECT, self.REFERENCE_LINE]) == [
+            f"<{W}/entity/Q520>: {self.REFERENCE_LINE}"
+        ]
+        assert misplaced([*after, self.REFERENCE_LINE, self.REDIRECT]) == []
+
+    def test_a_reference_read_before_the_line_naming_it_registers_nothing(
+        self,
+    ):
+        # the munger reads a block once, in order: the reference's lines,
+        # parked until the statement derives from it, are restored but not
+        # read again, so its prv: line registers no value node
+        reference = [
+            f"{self.REFERENCE} {RDF_TYPE} <{ONTOLOGY}Reference> .",
+            f"{self.REFERENCE} <{W}/prop/reference/value/P577> {self.VALUE} .",
+        ]
+        value = time_value(VALUE_1958, "1958-12-25")
+        derived = f"{self.NODE} {DERIVED_FROM} {self.REFERENCE} ."
+        assert misplaced(
+            self.lines([*self.statement(), *reference, derived, *value], [])
+        ) == [f"<{W}/entity/Q501>: {line}" for line in value[1:]]
+        assert (
+            misplaced(
+                self.lines(
+                    [*self.statement(), derived, *reference, *value], []
+                )
+            )
+            == []
+        )
+
+    def test_a_statement_read_before_the_line_naming_it_registers_nothing(
+        self,
+    ):
+        statement = self.statement(
+            f"{self.NODE} <{W}/prop/statement/value/P570> {self.VALUE} ."
+        )
+        value = time_value(VALUE_1958, "1941-03-06")
+        assert misplaced(
+            self.lines([*statement[1:], statement[0], *value], [])
+        ) == [f"<{W}/entity/Q501>: {line}" for line in value[1:]]
+        assert misplaced(self.lines([*statement, *value], [])) == []
+
+    def test_lines_before_the_first_block_are_flagged(self):
+        before = time_value(VALUE_1958, "1958-12-25")
+        assert misplaced([*before, *self.lines([], [])]) == [
+            f"block 0, of no entity: {line}" for line in before
+        ]
+
+    def test_a_line_of_another_entity_is_flagged(self):
+        other = f'<{W}/entity/Q502> {RDFS_LABEL} "Nina Sartina"@en .'
+        assert misplaced(self.lines([other], [])) == [
+            f"<{W}/entity/Q501>: {other}"
+        ]
+
+    def test_a_statement_named_by_another_predicate_is_flagged(self):
+        statement = self.statement()
+        unlinked = [
+            f"<{W}/entity/Q501> "
+            f"<http://www.w3.org/2000/01/rdf-schema#seeAlso> {self.NODE} .",
+            *statement[1:],
+        ]
+        assert misplaced(self.lines(unlinked, [])) == [
+            f"<{W}/entity/Q501>: {statement[1]}"
+        ]
+
+    def test_a_value_nodes_type_is_kept_wherever_it_sits(self):
+        value = time_value(VALUE_1958, "1958-12-25")
+        flagged = misplaced(self.lines([], value))
+        assert flagged == [f"<{W}/entity/Q505>: {line}" for line in value[1:]]
+        assert not any(value[0] in line for line in flagged)
+
+    def test_only_the_last_entity_a_block_names_is_its_entity(self):
+        # two data nodes before any other line: one block, of the second
+        data = entity_block("Q502", "Nina Sartina")[:3]
+        lines = [*data, *entity_block("Q501", "Rudolf Löbig")]
+        assert blocks(lines) == [lines]
+        assert misplaced(lines) == []
+        label = f'<{W}/entity/Q502> {RDFS_LABEL} "Nina Sartina"@en .'
+        assert misplaced([*lines, label]) == [f"<{W}/entity/Q501>: {label}"]
+
+    def test_a_normalized_quantity_registers_only_from_a_value_node(self):
+        normalized = f"<{W}/value/{VALUE_2002}>"
+        amount = (
+            f'{normalized} <{ONTOLOGY}quantityAmount> "+1"^^<{XSD}decimal> .'
+        )
+        from_entity = [
+            f"<{W}/entity/Q501> <{ONTOLOGY}quantityNormalized> {normalized} .",
+            amount,
+        ]
+        assert misplaced(self.lines(from_entity, [])) == [
+            f"<{W}/entity/Q501>: {amount}"
+        ]
+        # from a value node no line registers, it registers the one it names
+        from_value = [
+            f"{self.VALUE} <{ONTOLOGY}quantityNormalized> {normalized} .",
+            amount,
+        ]
+        assert misplaced(self.lines(from_value, [])) == [
+            f"<{W}/entity/Q501>: {from_value[0]}"
+        ]
+
+    def test_a_reference_of_a_statement_no_entity_names_is_kept(self):
+        # the munger registers a reference a statement node derives from
+        # before it knows the statement; the statement alone it drops
+        statement = self.statement(
+            f"{self.NODE} {DERIVED_FROM} {self.REFERENCE} .",
+            f"{self.REFERENCE} {RDF_TYPE} <{ONTOLOGY}Reference> .",
+        )
+        assert misplaced(self.lines(statement[1:], [])) == [
+            f"<{W}/entity/Q501>: {line}" for line in statement[1:3]
+        ]
 
 
 class TestPruning:
@@ -994,7 +1581,7 @@ class TestPruning:
         assert (tmp_path / "20260101T000000Z").exists()
 
 
-# -- the public export keeps only released people (#344) --------------------
+# -- the non-privileged export keeps only released people (#344) -----------
 
 DATA = f"{CONCEPT}/wiki/Special:EntityData/"
 
@@ -1005,6 +1592,13 @@ def entity(qid: str) -> str:
 
 def dated(year: int) -> str:
     return f'"{year}-01-01T00:00:00Z"^^<{XSD}dateTime>'
+
+
+# the entity a line's subject is of: its data node, itself or its
+# statement's node
+OWNER = re.compile(
+    r"/(?:wiki/Special:EntityData/|entity/(?:statement/)?)([QP][1-9]\d*)\b"
+)
 
 
 class Dump:
@@ -1115,9 +1709,34 @@ class Dump:
             f"{entity(target)} ."
         )
 
+    def shaped(self) -> list[str]:
+        """The lines as dumpRdf.php lays them out: the header, then each
+        entity's block, in the order the entities first come: its data
+        node, its own lines and its statements' (#412). A reference's
+        snaks go with the statement that cites it first, as one line each
+        however many statements cite it."""
+        header: list[str] = []
+        blocks: dict[str | None, list[str]] = {}
+        seen: set[str] = set()
+        owner = None
+        for line in self.lines:
+            subject = line.split(" ", 1)[0]
+            if subject == f"<{ONTOLOGY}Dump>":
+                header.append(line)
+                continue
+            if found := OWNER.search(subject):
+                owner = found.group(1)
+            elif "/reference/" in subject:
+                if line in seen:
+                    continue
+                seen.add(line)
+            blocks.setdefault(owner, []).append(line)
+        return header + [line for block in blocks.values() for line in block]
+
     def write(self, path: Path, lines=None) -> Path:
+        """The dump, as `shaped` lays it out unless `lines` are given."""
         with gzip.open(path, "wt", encoding="utf-8") as sink:
-            sink.write("\n".join(lines or self.lines) + "\n")
+            sink.write("\n".join(lines or self.shaped()) + "\n")
         return path
 
 
@@ -1247,10 +1866,11 @@ def export_dump(vocabulary) -> Dump:
             aliases=spec.aliases,
             kind="Property",
         )
-        dump.lines.append(
+        dump.lines += [
             f"{entity(pid)} <{ONTOLOGY}propertyType> "
-            f"<{ONTOLOGY}{rdf_type(spec.datatype)}> ."
-        )
+            f"<{ONTOLOGY}{rdf_type(spec.datatype)}> .",
+            *property_declarations(CONCEPT, pid),
+        ]
     for key, qid in items.items():
         spec = manifest.items[key]
         dump.entity(
@@ -1883,7 +2503,7 @@ def report_of(included=(), excluded=()) -> ExclusionReport:
     )
 
 
-class TestPublicExclusions:
+class TestNonprivilegedExclusions:
     """Every item with person evidence that the check did not release is
     dropped: an item it never assessed is dropped, not kept, and so is an
     item that states no type, and every family (#344), and every event
@@ -1905,7 +2525,7 @@ class TestPublicExclusions:
     DROPPED = DROPPED | {"Q420"}
 
     def test_only_released_people_are_kept(self):
-        dropped = public_exclusions(
+        dropped = nonprivileged_exclusions(
             self.reading, report_of({"Q401"}, set(PEOPLE) - {"Q401"})
         )
         assert set(dropped) == self.DROPPED
@@ -1914,29 +2534,31 @@ class TestPublicExclusions:
     def test_a_person_the_check_never_assessed_is_dropped(self):
         # as the truthy human type selected them: none of Q402-Q406, Q415
         # or Q424-Q428
-        dropped = public_exclusions(self.reading, report_of({"Q401"}))
+        dropped = nonprivileged_exclusions(self.reading, report_of({"Q401"}))
         assert set(dropped) == self.DROPPED
         assert dropped["Q403"] == NOT_ASSESSED
         # person evidence explains more than a missing type
         assert dropped["Q428"] == NOT_ASSESSED
 
     def test_a_person_only_the_check_found_is_dropped(self):
-        dropped = public_exclusions(
+        dropped = nonprivileged_exclusions(
             DumpReading(), report_of({"Q401"}, {"Q499"})
         )
         assert dropped == {"Q499": "possibly living (Q499)"}
 
     def test_an_item_that_states_no_type_is_dropped(self):
-        dropped = public_exclusions(self.reading, report_of({"Q401"}))
+        dropped = nonprivileged_exclusions(self.reading, report_of({"Q401"}))
         assert dropped["Q429"] == dropped["Q434"] == backup.NO_TYPE
 
     def test_one_the_check_released_too(self):
         # an untyped person with a death, say: released, and still dropped
-        dropped = public_exclusions(self.reading, report_of({"Q401", "Q404"}))
+        dropped = nonprivileged_exclusions(
+            self.reading, report_of({"Q401", "Q404"})
+        )
         assert dropped["Q404"] == backup.NO_TYPE
 
     def test_a_redirect_goes_with_the_item_it_redirects_to(self):
-        dropped = public_exclusions(
+        dropped = nonprivileged_exclusions(
             self.reading, report_of({"Q401"}, {"Q402"})
         )
         # to a person not released, through a chain too, with no evidence
@@ -1951,13 +2573,13 @@ class TestPublicExclusions:
         assert not {"Q421", "Q422"} & set(dropped)
 
     def test_items_without_person_evidence_are_kept(self):
-        dropped = public_exclusions(self.reading, report_of({"Q401"}))
+        dropped = nonprivileged_exclusions(self.reading, report_of({"Q401"}))
         assert not set(OTHERS) & set(dropped)
 
     def test_a_family_is_dropped_whatever_it_holds(self):
         # released or not, with person evidence (Q437) or none (Q446), and
         # a redirect to one goes with it
-        dropped = public_exclusions(
+        dropped = nonprivileged_exclusions(
             self.reading, report_of({"Q401", "Q437"}, {"Q446"})
         )
         assert dropped["Q437"] == dropped["Q446"] == backup.FAMILY
@@ -1967,7 +2589,7 @@ class TestPublicExclusions:
     def test_an_event_goes_with_a_participant_left_out(self):
         # a part at deprecated rank counts; a family, left out, takes its
         # events with it; the reason names every participant left out
-        dropped = public_exclusions(
+        dropped = nonprivileged_exclusions(
             self.reading, report_of({"Q401"}, set(PEOPLE) - {"Q401"})
         )
         left_out = backup.PARTICIPANT_LEFT_OUT.format
@@ -1987,7 +2609,7 @@ class TestPublicExclusions:
             redirects={"Q494": "Q493"},
             participants={"Q495": {"Q493"}},
         )
-        assert public_exclusions(reading, report_of()) == {
+        assert nonprivileged_exclusions(reading, report_of()) == {
             "Q493": backup.UNATTENDED,
             "Q494": f"a redirect to Q493: {backup.UNATTENDED}",
             "Q495": backup.PARTICIPANT_LEFT_OUT.format("Q493"),
@@ -2008,7 +2630,7 @@ class TestPublicExclusions:
             bounds={"Q490": {"Q491", "Q496"}, "Q497": {"Q498"}},
             redirects={"Q496": "Q492"},
         )
-        dropped = public_exclusions(
+        dropped = nonprivileged_exclusions(
             reading, report_of({"Q401", "Q403"}, {"Q402"})
         )
         bound = backup.BOUND_LEFT_OUT.format("Q490")
@@ -2029,7 +2651,7 @@ class TestPublicExclusions:
             untyped={"Q429"},
             participants={"Q480": {"Q401", "Q446"}, "Q481": {"Q429"}},
         )
-        dropped = public_exclusions(reading, report_of({"Q401"}))
+        dropped = nonprivileged_exclusions(reading, report_of({"Q401"}))
         left_out = backup.PARTICIPANT_LEFT_OUT.format
         assert dropped["Q480"] == left_out("Q446")
         assert dropped["Q481"] == left_out("Q429")
@@ -2039,7 +2661,7 @@ class TestPublicExclusions:
         reading = DumpReading(
             people={"Q401"}, participants={"Q471": {"Q401", "Q472"}}
         )
-        assert public_exclusions(reading, report_of({"Q401"})) == {}
+        assert nonprivileged_exclusions(reading, report_of({"Q401"})) == {}
 
     def test_a_participant_named_through_a_redirect(self):
         # Q410 redirects to Q402, whom the check does not release, and
@@ -2049,7 +2671,9 @@ class TestPublicExclusions:
             redirects={"Q410": "Q402", "Q418": "Q401"},
             participants={"Q471": {"Q410"}, "Q472": {"Q418"}},
         )
-        dropped = public_exclusions(reading, report_of({"Q401"}, {"Q402"}))
+        dropped = nonprivileged_exclusions(
+            reading, report_of({"Q401"}, {"Q402"})
+        )
         assert dropped["Q471"] == backup.PARTICIPANT_LEFT_OUT.format("Q410")
         assert "Q472" not in dropped
 
@@ -2068,7 +2692,9 @@ class TestPublicExclusions:
                 "Q478": {"Q479"},
             },
         )
-        dropped = public_exclusions(reading, report_of(excluded={"Q402"}))
+        dropped = nonprivileged_exclusions(
+            reading, report_of(excluded={"Q402"})
+        )
         left_out = backup.PARTICIPANT_LEFT_OUT.format
         assert dropped == {
             "Q402": "possibly living (Q402)",
@@ -2202,8 +2828,8 @@ def facts_row(qid: str, died: bool = False) -> dict:
 
 
 class ExportRun:
-    """The query service for export_public: the check's facts and births,
-    and each answer to REVISIONS_QUERY in turn (the last one again once
+    """The query service for export_nonprivileged: the check's facts and
+    births, and each answer to REVISIONS_QUERY in turn (the last one again once
     they run out). `selected` are the people the facts query selects, and
     `released` those of them it gives a death."""
 
@@ -2229,8 +2855,8 @@ class ExportRun:
         raise AssertionError(f"unexpected query: {query}")
 
 
-class TestExportPublic:
-    """The public export end to end, offline: a fictional dump, and the
+class TestExportNonprivileged:
+    """The non-privileged export end to end, offline: a fictional dump, and the
     query service's answers."""
 
     def export(
@@ -2241,13 +2867,14 @@ class TestExportPublic:
         answering=None,
         **run,
     ):
-        """export_public over the fictional dump, answered by `answering`
-        (ExportRun unless given), on a clock that only its naps move on."""
+        """export_nonprivileged over the fictional dump, answered by
+        `answering` (ExportRun unless given), on a clock that only its naps
+        move on."""
         dump = export_dump(vocabulary)
         dump.write(tmp_path / "full.nt.gz")
         clock = Clock()
         runner = (answering or ExportRun)(dump.revisions, selected, **run)
-        counts = export_public(
+        counts = export_nonprivileged(
             config(),
             tmp_path,
             run=runner,
@@ -2260,8 +2887,11 @@ class TestExportPublic:
 
     @staticmethod
     def public(tmp_path) -> tuple[str, set[str]]:
-        with gzip.open(tmp_path / "public.nt.gz", "rt") as handle:
+        """The export's text and the QIDs it mentions; and the query
+        service's munger would keep every line of it (#412)."""
+        with gzip.open(tmp_path / "nonprivileged.nt.gz", "rt") as handle:
             text = handle.read()
+        assert misplaced(text.split("\n")[:-1]) == []
         return text, set(re.findall(r"Q[1-9]\d*\b", text))
 
     def test_only_released_people_leave(self, tmp_path, vocabulary):
@@ -2310,12 +2940,12 @@ class TestExportPublic:
 
     @staticmethod
     def export_of(tmp_path, dump, vocabulary, released=()) -> None:
-        """export_public over `dump`, with the check selecting the
+        """export_nonprivileged over `dump`, with the check selecting the
         fixture's people and releasing Q401, and selecting and releasing
         `released` too, on a clock that only its naps move on."""
         dump.write(tmp_path / "full.nt.gz")
         clock = Clock()
-        export_public(
+        export_nonprivileged(
             config(),
             tmp_path,
             run=ExportRun(
@@ -2344,7 +2974,7 @@ class TestExportPublic:
         assert "Q470" not in mentioned
         assert "Birth of Nicholas Lobig" not in text
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q470"] == backup.UNATTENDED
 
@@ -2430,7 +3060,7 @@ class TestExportPublic:
         assert dated(1938) not in text
         assert principal in mentioned
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q470"] == (
             backup.PARTICIPANT_LEFT_OUT.format("Q405")
@@ -2458,7 +3088,7 @@ class TestExportPublic:
         assert label not in text
         assert principal in mentioned
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q470"] == backup.UNATTENDED
         assert principal not in exclusions["excluded"]
@@ -2480,7 +3110,7 @@ class TestExportPublic:
         assert "Q470" not in mentioned
         assert dated(1938) not in text
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q470"] == backup.UNATTENDED
 
@@ -2517,7 +3147,7 @@ class TestExportPublic:
         assert dated(1957) not in text
         assert "Q472" in mentioned
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q470"] == (
             backup.LINKED_LEFT_OUT.format("Q426")
@@ -2581,7 +3211,7 @@ class TestExportPublic:
         text, mentioned = self.public(tmp_path)
         assert "Q401" in mentioned
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert "Q401" not in exclusions["excluded"]
         sibling = f"<{CONCEPT}/prop/{properties['sibling']}>"
@@ -2614,7 +3244,7 @@ class TestExportPublic:
         text, mentioned = self.public(tmp_path)
         assert {"Q480", "Q481"} <= mentioned
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert not {"Q480", "Q481"} & set(exclusions["excluded"])
         location = f"<{CONCEPT}/prop/{properties['location']}>"
@@ -2727,7 +3357,7 @@ class TestExportPublic:
         assert "Q490" not in mentioned
         assert dated(1961) not in text
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q490"] == (
             backup.LINKED_LEFT_OUT.format(part)
@@ -2842,7 +3472,7 @@ class TestExportPublic:
         assert "Q497" not in mentioned
         assert dated(1975) not in text
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q497"] == (
             backup.LINKED_LEFT_OUT.format("Q498")
@@ -2984,7 +3614,7 @@ class TestExportPublic:
         assert (dated(1975) in text) is not goes
         if goes:
             exclusions = json.loads(
-                (tmp_path / "public-exclusions.json").read_text()
+                (tmp_path / "nonprivileged-exclusions.json").read_text()
             )
             assert exclusions["excluded"]["Q497"] == (
                 backup.PARTICIPANT_LEFT_OUT.format(group)
@@ -3004,7 +3634,7 @@ class TestExportPublic:
         dump.says("Q497", "participant", entity("Q446"))
         self.export_of(tmp_path, dump, vocabulary)
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q497"] == (
             backup.PARTICIPANT_LEFT_OUT.format("Q405")
@@ -3219,7 +3849,7 @@ class TestExportPublic:
         assert "Q494" not in mentioned
         assert dated(1975) not in text
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )["excluded"]
         if case == "naming-no-one":
             assert exclusions["Q494"] == backup.UNATTENDED
@@ -3275,7 +3905,7 @@ class TestExportPublic:
         assert (dated(1975) in text) is not goes
         if goes:
             exclusions = json.loads(
-                (tmp_path / "public-exclusions.json").read_text()
+                (tmp_path / "nonprivileged-exclusions.json").read_text()
             )
             reason = (
                 backup.PARTICIPANT_LEFT_OUT
@@ -3386,7 +4016,7 @@ class TestExportPublic:
         )
         _, mentioned = self.public(tmp_path)
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert "Q492" in exclusions["excluded"]
         assert ("Q493" in mentioned) is released
@@ -3407,7 +4037,7 @@ class TestExportPublic:
         dump.says("Q494", "participant", "_:genid9")
         self.export_of(tmp_path, dump, vocabulary, released=("Q494",))
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q494"] == backup.UNATTENDED
 
@@ -3444,7 +4074,7 @@ class TestExportPublic:
         assert (dated(1975) in text) is not shields
         if shields:
             exclusions = json.loads(
-                (tmp_path / "public-exclusions.json").read_text()
+                (tmp_path / "nonprivileged-exclusions.json").read_text()
             )
             family = "Q446" if named == "family" else "Q464"
             assert exclusions["excluded"]["Q497"] == (
@@ -3511,7 +4141,7 @@ class TestExportPublic:
         assert not set(EVENTS) & mentioned
         assert "Q412" in mentioned
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q431"] == (
             backup.PARTICIPANT_LEFT_OUT.format("Q427")
@@ -3524,7 +4154,7 @@ class TestExportPublic:
         _, mentioned = self.public(tmp_path)
         assert not set(UNTYPED) & mentioned
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q429"] == backup.NO_TYPE
 
@@ -3537,14 +4167,14 @@ class TestExportPublic:
         _, mentioned = self.public(tmp_path)
         assert not (set(PEOPLE) - {"Q401"}) & mentioned
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q402"] == NOT_ASSESSED
 
     def test_the_exclusions_say_who_and_why(self, tmp_path, vocabulary):
         counts, _ = self.export(tmp_path, vocabulary)
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert set(exclusions["excluded"]) == DROPPED
         assert "born as late as 1990" in exclusions["excluded"]["Q404"]
@@ -3570,7 +4200,7 @@ class TestExportPublic:
 
         counts, _ = self.export(tmp_path, vocabulary, answering=Released)
         exclusions = json.loads(
-            (tmp_path / "public-exclusions.json").read_text()
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
         )
         assert exclusions["excluded"]["Q404"] == backup.NO_TYPE
         assert exclusions["included_persons"] == ["Q401"]
@@ -3600,8 +4230,8 @@ class TestExportPublic:
         behind = {**export_dump(vocabulary).revisions, "Q404": 1}
         with pytest.raises(QueryServiceLag, match="Q404"):
             self.export(tmp_path, vocabulary, revisions=[behind])
-        assert not (tmp_path / "public.nt.gz").exists()
-        assert not (tmp_path / "public-exclusions.json").exists()
+        assert not (tmp_path / "nonprivileged.nt.gz").exists()
+        assert not (tmp_path / "nonprivileged-exclusions.json").exists()
 
     @pytest.mark.parametrize(
         ("line", "named"),
@@ -3632,7 +4262,7 @@ class TestExportPublic:
         runner = ExportRun(dump.revisions, tuple(PEOPLE))
         clock = Clock()
         with pytest.raises(backup.UnfilterableDump, match=re.escape(named)):
-            export_public(
+            export_nonprivileged(
                 config(),
                 tmp_path,
                 run=runner,
@@ -3643,8 +4273,8 @@ class TestExportPublic:
             )
         # refused before the query service is asked, and nothing written
         assert runner.queries == []
-        assert not (tmp_path / "public.nt.gz").exists()
-        assert not (tmp_path / "public-exclusions.json").exists()
+        assert not (tmp_path / "nonprivileged.nt.gz").exists()
+        assert not (tmp_path / "nonprivileged-exclusions.json").exists()
 
     def test_the_export_refuses_when_the_graph_changes_meanwhile(
         self, tmp_path, vocabulary
@@ -3656,12 +4286,216 @@ class TestExportPublic:
                 vocabulary,
                 revisions=[dumped, {**dumped, "Q401": 999}],
             )
-        assert not (tmp_path / "public.nt.gz").exists()
+        assert not (tmp_path / "nonprivileged.nt.gz").exists()
+
+    EXPORT_FILES = {"nonprivileged.nt.gz", "nonprivileged-exclusions.json"}
+
+    @staticmethod
+    def written(tmp_path) -> set[str]:
+        return {path.name for path in tmp_path.iterdir()} - {"full.nt.gz"}
+
+    def test_a_whole_export_leaves_no_partial_file(self, tmp_path, vocabulary):
+        self.export(tmp_path, vocabulary)
+        assert self.written(tmp_path) == self.EXPORT_FILES
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            OSError(errno.ENOSPC, "No space left on device"),
+            KeyboardInterrupt(),
+        ],
+        ids=["disk-full", "interrupted"],
+    )
+    def test_a_failure_mid_dump_leaves_no_dump(
+        self, tmp_path, vocabulary, monkeypatch, failure
+    ):
+        # the disk fills, or the run is interrupted, after 50 lines of the
+        # dump (#412): neither a cut-short dump under its shareable name nor
+        # a partial one is left
+        opened, sinks = gzip.open, []
+
+        class Full:
+            def __init__(self, handle):
+                self.handle, self.lines = handle, 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self.handle.close()
+
+            def write(self, line):
+                self.lines += 1
+                if self.lines > 50:
+                    raise failure
+                return self.handle.write(line)
+
+        def open_(path, mode="rb", *args, **options):
+            handle = opened(path, mode, *args, **options)
+            if Path(path).name.startswith("nonprivileged"):
+                sinks.append(Full(handle))
+                return sinks[-1]
+            return handle
+
+        monkeypatch.setattr(backup.gzip, "open", open_)
+        with pytest.raises(type(failure)):
+            self.export(tmp_path, vocabulary)
+        # it failed in the export's own dump, after its first 50 lines
+        assert [sink.lines for sink in sinks] == [51]
+        assert self.written(tmp_path) == set()
+
+    def test_a_failure_writing_the_exclusions_leaves_no_dump(
+        self, tmp_path, vocabulary, monkeypatch
+    ):
+        written = Path.write_text
+
+        def full(path, text, *args, **options):
+            if path.name.startswith("nonprivileged-exclusions"):
+                written(path, text[:10], *args, **options)
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return written(path, text, *args, **options)
+
+        monkeypatch.setattr(Path, "write_text", full)
+        with pytest.raises(OSError, match="No space left"):
+            self.export(tmp_path, vocabulary)
+        assert self.written(tmp_path) == set()
+
+    def test_a_failure_moving_the_dump_leaves_no_exclusions_alone(
+        self, tmp_path, vocabulary, monkeypatch
+    ):
+        # the exclusions are moved onto their name first: if the dump then
+        # cannot follow, neither is left
+        replace = os.replace
+
+        def failing(source, target):
+            if Path(target).name == "nonprivileged.nt.gz":
+                raise OSError(errno.EIO, "Input/output error")
+            return replace(source, target)
+
+        monkeypatch.setattr(backup.os, "replace", failing)
+        with pytest.raises(OSError, match="Input/output"):
+            self.export(tmp_path, vocabulary)
+        assert self.written(tmp_path) == set()
+
+    def test_a_failure_moving_the_dump_removes_the_exclusions_moved(
+        self, tmp_path, vocabulary, monkeypatch
+    ):
+        # into a directory an earlier export wrote (#412): the exclusions
+        # this run moved onto their name go when its dump cannot follow,
+        # and so does the earlier run's dump, whose exclusions they replaced
+        earlier = {"cutoff_years": 77, "excluded": {}, "included_persons": []}
+        (tmp_path / "nonprivileged-exclusions.json").write_text(
+            json.dumps(earlier)
+        )
+        with gzip.open(tmp_path / "nonprivileged.nt.gz", "wt") as handle:
+            handle.write(f'{entity("Q401")} {RDFS_LABEL} "Gustav"@en .\n')
+        replace = os.replace
+
+        def failing(source, target):
+            if Path(target).name == "nonprivileged.nt.gz":
+                raise OSError(errno.EIO, "Input/output error")
+            return replace(source, target)
+
+        monkeypatch.setattr(backup.os, "replace", failing)
+        with pytest.raises(OSError, match="Input/output"):
+            self.export(tmp_path, vocabulary)
+        assert self.written(tmp_path) == set()
+        assert not any(
+            path.name.endswith(".partial") for path in tmp_path.iterdir()
+        )
+
+    STALE = f'{entity("Q502")} {RDFS_LABEL} "Nina Sartina"@en .\n'
+
+    def stale_partials(self, tmp_path) -> None:
+        """Partial files an earlier run left, the dump's naming Nina
+        Sartina (Q502), whom no export lets out."""
+        with gzip.open(
+            tmp_path / "nonprivileged.nt.gz.partial", "wt"
+        ) as handle:
+            handle.write(self.STALE)
+        (tmp_path / "nonprivileged-exclusions.json.partial").write_text(
+            json.dumps(
+                {
+                    "cutoff_years": 77,
+                    "excluded": {},
+                    "included_persons": ["Q502"],
+                }
+            )
+        )
+
+    def test_a_stale_partial_file_never_reaches_the_export(
+        self, tmp_path, vocabulary
+    ):
+        self.stale_partials(tmp_path)
+        self.export(tmp_path, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert "Q502" not in mentioned
+        assert self.STALE.strip() not in text
+        exclusions = json.loads(
+            (tmp_path / "nonprivileged-exclusions.json").read_text()
+        )
+        assert "Q502" not in exclusions["included_persons"]
+        assert self.written(tmp_path) == self.EXPORT_FILES
+
+    def test_a_refusal_leaves_no_stale_partial_file(
+        self, tmp_path, vocabulary
+    ):
+        # the partial files go before anything is read or refused
+        self.stale_partials(tmp_path)
+        dumped = export_dump(vocabulary).revisions
+        with pytest.raises(QueryServiceLag):
+            self.export(
+                tmp_path,
+                vocabulary,
+                revisions=[dumped, {**dumped, "Q401": 999}],
+            )
+        assert self.written(tmp_path) == set()
+
+    def test_an_unfilterable_dump_leaves_no_stale_partial_file(
+        self, tmp_path, vocabulary
+    ):
+        self.stale_partials(tmp_path)
+        dump = export_dump(vocabulary)
+        sitelink = (
+            "<https://el.example/wiki/Page> <http://schema.org/about> "
+            f"{entity('Q401')} ."
+        )
+        dump.write(tmp_path / "full.nt.gz", [*dump.lines, sitelink])
+        runner = ExportRun(dump.revisions, tuple(PEOPLE))
+        clock = Clock()
+        with pytest.raises(backup.UnfilterableDump):
+            export_nonprivileged(
+                config(),
+                tmp_path,
+                run=runner,
+                vocabulary=vocabulary,
+                lag_timeout=60,
+                sleep=clock.sleep,
+                clock=clock,
+            )
+        assert self.written(tmp_path) == set()
+
+    def test_a_failure_moving_the_exclusions_leaves_no_dump(
+        self, tmp_path, vocabulary, monkeypatch
+    ):
+        # the dump takes its name only after its exclusions have theirs
+        replace = os.replace
+
+        def failing(source, target):
+            if Path(target).name == "nonprivileged-exclusions.json":
+                raise OSError(errno.EIO, "Input/output error")
+            return replace(source, target)
+
+        monkeypatch.setattr(backup.os, "replace", failing)
+        with pytest.raises(OSError, match="Input/output"):
+            self.export(tmp_path, vocabulary)
+        assert self.written(tmp_path) == set()
 
 
-class TestTheBackupsPublicExport:
-    """`yizkr backup` writes its public export as export_public does, with
-    the dumps and the query service stood in for."""
+class TestTheBackupsNonprivilegedExport:
+    """`yizkr backup` writes its non-privileged export as
+    export_nonprivileged does, with the dumps and the query service stood
+    in for."""
 
     @pytest.fixture
     def backed_up(self, tmp_path, vocabulary, monkeypatch):
@@ -3671,7 +4505,7 @@ class TestTheBackupsPublicExport:
         def dumped(name):
             def write(deploy_dir, out_path, compose_files=None):
                 if name == "rdf":
-                    dump.write(out_path, dump.lines + extra)
+                    dump.write(out_path, dump.shaped() + extra)
                 else:
                     out_path.write_bytes(b"fictional")
 
@@ -3698,10 +4532,26 @@ class TestTheBackupsPublicExport:
             ),
         )
 
-        def backed_up(revisions=None, keep=0, lines=()):
+        def backed_up(revisions=None, keep=0, lines=(), command=False):
             extra[:] = lines
             runner = ExportRun(dump.revisions, ["Q401"], revisions)
             monkeypatch.setattr(backup.sparql, "runner", lambda config: runner)
+            if command:  # through `yizkr backup`, which returns its exit code
+                from yizkr import cli
+
+                monkeypatch.setattr(
+                    cli.Config, "load", lambda env_file=None: config()
+                )
+                args = cli.build_parser().parse_args(
+                    [
+                        "backup",
+                        "--out",
+                        str(tmp_path),
+                        "--deploy-dir",
+                        str(tmp_path),
+                    ]
+                )
+                return args.func(args)
             return run_backup(
                 config(), tmp_path, deploy_dir=tmp_path, keep=keep
             )
@@ -3713,10 +4563,10 @@ class TestTheBackupsPublicExport:
     ):
         manifest = backed_up()
         out_dir = tmp_path / manifest["timestamp"]
-        export = manifest["components"]["public_export"]
+        export = manifest["components"]["nonprivileged_export"]
         assert export["included_persons"] == 1
         assert export["excluded_persons"] == len(DROPPED)
-        _, mentioned = TestExportPublic.public(out_dir)
+        _, mentioned = TestExportNonprivileged.public(out_dir)
         assert not (set(PEOPLE) - {"Q401"}) & mentioned
 
     def test_a_refused_export_leaves_the_backup_recorded(
@@ -3729,9 +4579,9 @@ class TestTheBackupsPublicExport:
         (out_dir,) = tmp_path.iterdir()
         manifest = json.loads((out_dir / "manifest.json").read_text())
         assert set(manifest["components"]) == {"database", "media", "rdf"}
-        assert "Q404" in manifest["public_export_refused"]
+        assert "Q404" in manifest["nonprivileged_export_refused"]
         assert manifest["pruned"] == ["20260101T000000Z"]
-        assert not (out_dir / "public.nt.gz").exists()
+        assert not (out_dir / "nonprivileged.nt.gz").exists()
         # the refusal carries the manifest, for the command to report
         assert refused.value.manifest == manifest
 
@@ -3748,28 +4598,110 @@ class TestTheBackupsPublicExport:
         (out_dir,) = tmp_path.iterdir()
         manifest = json.loads((out_dir / "manifest.json").read_text())
         assert set(manifest["components"]) == {"database", "media", "rdf"}
-        assert "Q401 (a sitelink)" in manifest["public_export_refused"]
-        assert not (out_dir / "public.nt.gz").exists()
+        assert "Q401 (a sitelink)" in manifest["nonprivileged_export_refused"]
+        assert not (out_dir / "nonprivileged.nt.gz").exists()
         assert refused.value.manifest == manifest
+
+    @pytest.mark.parametrize("kind", ["unfilterable", "lag", "changed"])
+    def test_the_command_reports_an_unfilterable_dump_without_a_traceback(
+        self, tmp_path, vocabulary, backed_up, monkeypatch, kind
+    ):
+        # each refusal kind from run_backup itself, through `yizkr backup`:
+        # a sitelink (#363), the query service behind the dump, and the
+        # graph changing while the export assessed it (#412)
+        dumped = export_dump(vocabulary).revisions
+        backing, named = {
+            "unfilterable": (
+                {
+                    "lines": [
+                        "<https://el.example/wiki/Page> "
+                        "<http://schema.org/about> "
+                        f"{entity('Q401')} ."
+                    ]
+                },
+                "Q401 (a sitelink)",
+            ),
+            "lag": (
+                {"revisions": [{**dumped, "Q404": 1}]},
+                "still does not hold the dump's revision of 1 entity (Q404)",
+            ),
+            "changed": (
+                {"revisions": [dumped, {**dumped, "Q401": 999}]},
+                "the graph changed while the non-privileged export "
+                "assessed it: the query service now holds another revision "
+                "than the dump of 1 entity (Q401)",
+            ),
+        }[kind]
+
+        class Stream:
+            """One of stdout and stderr: what it is given, and the two
+            streams together, in the order they were written."""
+
+            def __init__(self, both):
+                self.both, self.own = both, io.StringIO()
+
+            def write(self, text):
+                self.both.write(text)
+                return self.own.write(text)
+
+            def flush(self):
+                pass
+
+        both = io.StringIO()
+        stdout, stderr = Stream(both), Stream(both)
+        monkeypatch.setattr("sys.stdout", stdout)
+        monkeypatch.setattr("sys.stderr", stderr)
+        assert backed_up(command=True, **backing) == 1
+        out, err = stdout.own.getvalue(), stderr.own.getvalue()
+        (out_dir,) = tmp_path.iterdir()
+        kept = [
+            f"{name}: {out_dir / file}, "
+            f"bytes={(out_dir / file).stat().st_size}"
+            for name, file in (
+                ("database", "database.sql.gz"),
+                ("media", "media.tar.gz"),
+                ("rdf", "full.nt.gz"),
+            )
+        ]
+        assert out.splitlines() == kept
+        assert err.startswith("non-privileged export refused: ")
+        assert named in err
+        assert err.count("\n") == 1
+        assert "Traceback" not in err
+        # the refusal is the last line, after the dumps it kept
+        assert both.getvalue().splitlines() == [*kept, err.rstrip("\n")]
+        # and nothing of the export is left, under any name
+        assert not list(out_dir.glob("nonprivileged*"))
 
 
 class TestTheBackupCommand:
-    """`yizkr backup` reports a refused public export on one line, after
-    the dumps it kept, and exits non-zero (#344)."""
+    """`yizkr backup` reports any refused non-privileged export on one line,
+    after the dumps it kept, and exits non-zero without a traceback (#344,
+    #412)."""
 
+    @pytest.mark.parametrize(
+        "refusal",
+        [
+            QueryServiceLag("the query service lags (Q404)"),
+            UnfilterableDump(
+                "the dump holds what the export is not made to filter: "
+                "Q401 (a sitelink)"
+            ),
+        ],
+        ids=["lag", "unfilterable"],
+    )
     def test_a_refusal_is_one_line_after_the_dumps_it_kept(
-        self, tmp_path, monkeypatch, capsys
+        self, tmp_path, monkeypatch, capsys, refusal
     ):
         from yizkr import cli
 
-        refusal = QueryServiceLag("the query service lags (Q404)")
         refusal.manifest = {
             "timestamp": "20260929T031500Z",
             "components": {
                 "database": {"file": "database.sql.gz", "bytes": 9},
                 "rdf": {"file": "full.nt.gz", "bytes": 7},
             },
-            "public_export_refused": str(refusal),
+            "nonprivileged_export_refused": str(refusal),
             "pruned": ["20260101T000000Z"],
         }
 
@@ -3789,4 +4721,146 @@ class TestTheBackupCommand:
             f"rdf: {run / 'full.nt.gz'}, bytes=7",
             "pruned old backups: 20260101T000000Z",
         ]
-        assert err == "public export refused: the query service lags (Q404)\n"
+        assert err == f"non-privileged export refused: {refusal}\n"
+        assert "Traceback" not in err
+
+    def test_a_refusal_before_any_manifest_is_still_one_line(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        from yizkr import cli
+
+        def refused(*args, **options):
+            raise UnfilterableDump("Q401 (a sitelink)")
+
+        monkeypatch.setattr(backup, "run_backup", refused)
+        monkeypatch.setattr(cli.Config, "load", lambda env_file=None: None)
+        args = cli.build_parser().parse_args(
+            ["backup", "--out", str(tmp_path)]
+        )
+        assert args.func(args) == 1
+        out, err = capsys.readouterr()
+        assert out == ""
+        assert err == "non-privileged export refused: Q401 (a sitelink)\n"
+
+    def test_an_infrastructure_failure_is_not_a_refusal(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # a failing pg_dump or docker, or a missing query service setting,
+        # propagates: it never reads as a privacy refusal in cron's log
+        from yizkr import cli
+
+        def failed(*args, **options):
+            raise RuntimeError("mariadb-dump exited 2")
+
+        monkeypatch.setattr(backup, "run_backup", failed)
+        monkeypatch.setattr(cli.Config, "load", lambda env_file=None: None)
+        args = cli.build_parser().parse_args(
+            ["backup", "--out", str(tmp_path)]
+        )
+        with pytest.raises(RuntimeError, match="mariadb-dump exited 2"):
+            args.func(args)
+        assert "refused" not in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        ("flag", "notice"),
+        [
+            ("--no-nonprivileged-export", ""),
+            (
+                "--no-public-export",
+                "yizkr backup: --no-public-export is renamed "
+                "--no-nonprivileged-export; the old spelling goes at the "
+                "keeper run\n",
+            ),
+        ],
+    )
+    def test_the_export_can_be_skipped(
+        self, tmp_path, monkeypatch, capsys, flag, notice
+    ):
+        # the old spelling still works, until the keeper run (#159), and
+        # says so on one stderr line; the new one says nothing
+        from yizkr import cli
+
+        asked = {}
+
+        def ran(config, **options):
+            asked.update(options)
+            return {
+                "timestamp": "20260929T031500Z",
+                "components": {},
+                "pruned": [],
+            }
+
+        monkeypatch.setattr(backup, "run_backup", ran)
+        monkeypatch.setattr(cli.Config, "load", lambda env_file=None: None)
+        args = cli.build_parser().parse_args(
+            ["backup", "--out", str(tmp_path), flag]
+        )
+        assert capsys.readouterr().err == notice
+        assert args.func(args) == 0
+        assert asked["nonprivileged_export"] is False
+        assert capsys.readouterr().err == ""
+
+    def test_the_export_runs_by_default(self, tmp_path, monkeypatch):
+        from yizkr import cli
+
+        asked = {}
+
+        def ran(config, **options):
+            asked.update(options)
+            return {
+                "timestamp": "20260929T031500Z",
+                "components": {},
+                "pruned": [],
+            }
+
+        monkeypatch.setattr(backup, "run_backup", ran)
+        monkeypatch.setattr(cli.Config, "load", lambda env_file=None: None)
+        args = cli.build_parser().parse_args(
+            ["backup", "--out", str(tmp_path)]
+        )
+        assert args.func(args) == 0
+        assert asked["nonprivileged_export"] is True
+
+
+class TestTheFormerNames:
+    """The export's former Python names resolve to the new objects, with a
+    DeprecationWarning naming both names, until the keeper run (#159,
+    #412)."""
+
+    @pytest.mark.parametrize(
+        ("old", "new"),
+        [
+            ("export_public", "export_nonprivileged"),
+            ("filter_public_export", "filter_nonprivileged_export"),
+            ("public_exclusions", "nonprivileged_exclusions"),
+            ("PublicExportRefused", "NonprivilegedExportRefused"),
+        ],
+    )
+    def test_an_old_name_warns_and_resolves(self, old, new):
+        with pytest.warns(
+            DeprecationWarning,
+            match=re.escape(
+                f"yizkr.backup.{old} is renamed yizkr.backup.{new}; the old "
+                "name is removed at the keeper run"
+            ),
+        ) as caught:
+            resolved = getattr(backup, old)
+        assert resolved is getattr(backup, new)
+        # the warning points at the caller's line, not at backup.py
+        assert caught[0].filename == __file__
+
+    def test_an_old_import_warns_and_resolves(self):
+        with pytest.warns(DeprecationWarning, match="export_nonprivileged"):
+            from yizkr.backup import export_public
+        assert export_public is export_nonprivileged
+
+    def test_the_old_refusal_still_catches_every_refusal(self):
+        with pytest.warns(DeprecationWarning):
+            old = backup.PublicExportRefused
+        assert old is NonprivilegedExportRefused
+        assert issubclass(QueryServiceLag, old)
+        assert issubclass(UnfilterableDump, old)
+
+    def test_an_unknown_name_is_still_an_attribute_error(self):
+        with pytest.raises(AttributeError, match="no_such_name"):
+            backup.no_such_name  # noqa: B018

@@ -103,10 +103,17 @@ Idempotent. A Registrar reads the instance once, lag-free
 writes. A statement that exists already is skipped when it cites the
 source that asserts it, and otherwise gains that source's reference, as
 an agreeing source's (ADR-0002); nothing existing is changed or removed
-(CLAUDE.md rule 3). The bytes are uploaded only when no file of
-the item holds them, and an upload never overwrites a wiki file or stores
-bytes the wiki already holds (`WikiClient.upload_file`), so every `media
-file` holds the bytes its item's `media SHA-1` names.
+(CLAUDE.md rule 3). A title, or a derived medium's name, that holds a
+character Python's Unicode tables do not know never becomes an alias
+(writer.unknown_characters): the instance may keep it in another form,
+and it would look missing on every registration. A new item's label
+made from such a title always takes the media's content tag, as a label
+another item has does (Registrar._free_label), so that two same-named
+copies never share a label and description the instance refuses. The
+bytes are uploaded only when no file of the item holds them, and an
+upload never overwrites a wiki file or stores bytes the wiki already
+holds (`WikiClient.upload_file`), so every `media file` holds the bytes
+its item's `media SHA-1` names.
 """
 
 from __future__ import annotations
@@ -127,12 +134,17 @@ from yizkr.pipeline.presentation import IMAGE_SUFFIXES, DerivedMediaRecord
 # rule (_stored_term), and TERM_LIMIT is the most characters it takes in
 # one: in any other form, a label another item holds would look free, and
 # an alias the item has would look missing; a cut keeps whole letters by
-# the writer's rule too (extends, half_flag)
+# the writer's rule too (extends, half_flag), and a name holding a
+# character Python's Unicode tables do not know, which the instance may
+# keep in another form, never looks missing (unknown_characters); a
+# title, and each fragment's label, is compared with a media object's
+# tagged label too (media_object_label)
 from yizkr.pipeline.writer import (
     TERM_LIMIT,
     extends,
     half_flag,
     media_object_label,
+    unknown_characters,
 )
 from yizkr.pipeline.writer import stored_term as _stored_term
 
@@ -512,7 +524,7 @@ def ensure_self_typed(
 
     The statement cites the item, so it is written once the item has an
     id, in a write after the one that makes it. A write cut short between
-    the two leaves an item with no kind, which the public export leaves
+    the two leaves an item with no kind, which the non-privileged export leaves
     out (yizkr.backup), and the statements that cite it lose that
     reference there. So whatever finds such an item again, as a re-run
     finds its run item by its label, calls this, and the item gets its
@@ -863,16 +875,27 @@ class Registrar:
         """The label `title + suffix`, or, when another item has that as
         its label, with the media's content tag at its end: labels stay
         unique per kind. `title` and `suffix` are in the form Wikibase
-        stores terms in (_stored_term). The title is cut, ending in "…",
-        so that the label fits the TERM_LIMIT characters Wikibase takes,
-        tagged or not (_fitted). A label that still does not fit, its
-        suffix taking all the room, is refused here, before anything is
-        written, so that a write Wikibase would refuse leaves no
-        half-made item behind."""
+        stores terms in (_stored_term). A label that holds a character
+        Python's Unicode tables do not know (unknown_characters) takes
+        the tag too, unless it bears it already, as a fragment label made
+        from its artifact's tagged label does: the instance may keep the
+        other items' labels in another form than this one, so whether it
+        is free cannot be told, and a label and description Wikibase
+        refused as another item's would leave an item without a label
+        behind. The title is cut, ending in "…", so that the label fits
+        the TERM_LIMIT characters Wikibase takes, tagged or not
+        (_fitted). A label that still does not fit, its suffix taking all
+        the room, or whose tagged form another item has too, is refused
+        here, before anything is written, so that a write Wikibase would
+        refuse leaves no half-made item behind. The tagged form is looked
+        for as written, so a marked one the instance keeps in another
+        form is not seen; another item holds it only by a clash of the
+        content tag's eight hex digits."""
         labels = self._read().labels
+        tag = f"[{content_sha1[:8]}]"
         label = _fitted(title, suffix)
-        if label in labels:
-            tagged = _fitted(title, f"{suffix} [{content_sha1[:8]}]")
+        if label in labels or (unknown_characters(label) and tag not in label):
+            tagged = _fitted(title, f"{suffix} {tag}")
             if tagged in labels:
                 raise RuntimeError(
                     f"the labels {label!r} and {tagged!r} both name other "
@@ -894,8 +917,12 @@ class Registrar:
         belongs to other content: another item's label, or the plain form
         of this item's content-tagged label (tagged because that name was
         taken). Aliasing it would cross-link two artifacts. Nor does a
-        name longer than Wikibase takes. `name` is in the stored form
-        (_stored_term), as the item's terms are.
+        name longer than Wikibase takes, nor one that holds a character
+        Python's Unicode tables do not know (unknown_characters): the
+        instance may keep it in another form than the item's label or
+        alias that came of it, so it would look missing on every
+        registration. `name` is in the stored form (_stored_term), as the
+        item's terms are.
         """
         current = str(item.labels.get("en") or "")
         aliases = {str(alias) for alias in item.aliases.get("en") or []}
@@ -903,6 +930,7 @@ class Registrar:
             name != current
             and name not in aliases
             and len(name) <= TERM_LIMIT
+            and not unknown_characters(name)
             and current != f"{name} [{content_sha1[:8]}]"
             and self._read().labels.get(name, set()) <= {item.id}
         )
@@ -932,9 +960,11 @@ class Registrar:
         in (_stored_term), and one blank in that form is refused. The
         bytes are uploaded under the file's name in the form MediaWiki
         takes as it is (_upload_name). A new item's label is the title,
-        content-tagged when another item has it, and cut to fit, ending in
-        "…", when longer than the TERM_LIMIT characters Wikibase takes
-        (_free_label), and its description is cut so too (_new_artifact).
+        content-tagged when another item has it or when it holds a
+        character Python's Unicode tables do not know, and cut to fit,
+        ending in "…", when longer than the TERM_LIMIT characters
+        Wikibase takes (_free_label), and its description is cut so too
+        (_new_artifact).
         The result's `flags` are what the item, made or found, is flagged
         for (Registrar._flags), as `self.flags` gathers them.
         """

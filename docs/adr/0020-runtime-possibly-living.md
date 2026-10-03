@@ -135,6 +135,46 @@ attributed to a released household head, Gustav, stays, even with
 Florence, who may be living, recorded under Gustav, as the export keeps
 everything on released people; only a group (a family, or an item
 someone names a `member of`) is judged by its members (AE) (§4).
+Amended by #412 (2026-10-02): the export's names say what it is, a
+non-privileged view. It writes `nonprivileged.nt.gz` and
+`nonprivileged-exclusions.json` (not `public.nt.gz` and
+`public-exclusions.json`); the code is `export_nonprivileged`,
+`filter_nonprivileged_export`, `nonprivileged_exclusions` and
+`NonprivilegedExportRefused`, the base of `QueryServiceLag` and
+`UnfilterableDump`, and the old Python names resolve with a
+DeprecationWarning until the keeper run (#159), then go. The backup's
+manifest records the export as `nonprivileged_export` and a refusal as
+`nonprivileged_export_refused`; `--no-nonprivileged-export` skips it,
+with `--no-public-export` an alias until the keeper run (#159), which
+says on one stderr line that it is renamed. Backups made earlier keep
+their files as named. The site's badge reads "possibly living — never
+in the non-privileged export". Every refusal, `UnfilterableDump` as
+well as `QueryServiceLag`, makes `yizkr backup` print the dumps it kept
+and the reason on one line and exit 1, with no traceback; any other
+failure (a dump command failing, say) propagates as before and is never
+reported as a refusal. The export writes each of its two files under
+its name plus `.partial` and moves it onto its name once whole, the
+exclusions first, so `nonprivileged.nt.gz` never exists cut short or
+without its exclusions; it removes any `.partial` file an earlier run
+left before anything else, refusals included, and a failure removes
+what it left, and once the exclusions were moved, them and any dump
+under its name. A live test
+(`tests/integration/test_live_nonprivileged_export.py`) runs the query
+service's own munger (wikibase/wdqs:2, no network) over the export and
+the full dump, and requires that it logs no error and drops no entity
+(§4). The body's earlier names stand as written.
+Amended by #412 (2026-10-02): the export keeps what the query service
+can load. Its munger reads the dump entity by entity and keeps a value
+or reference node only in the block of an entity whose lines name it;
+dumpRdf.php writes each such shared node once, in the first entity's
+block that uses it, so a node a kept statement shares with one left out
+could sit in a block that does not name it, and the munger would drop
+it from the kept statement. The filter leaves out exactly what it left
+out before, and moves each kept node, once, all its lines together, to
+the end of the first kept block that names it (a value node that only a
+reference names goes with the reference). Unit tests check every
+export they write against an offline mirror of the munger's blocks, and
+so does the live test, before the munger runs.
 
 ## Context
 

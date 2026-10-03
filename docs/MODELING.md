@@ -36,6 +36,30 @@
   label, which holds the model's identifier, keeps its batch's
   fingerprint in the digest. An entity whose description would be its
   label gets none, with a warning (#384).
+- Wikibase puts a term, and every text, in NFC by the tables of Unicode
+  15.0 (ICU 72.1 in the wikibase/wikibase:7 image), and the writer by
+  Python's (14.0.0 on Python 3.11). Unicode's normalization stability
+  policy makes the two agree on every text whose characters Python's
+  tables assign, so the writer sends no term that holds a character they
+  do not, noncharacters aside, read whole, past the cut too, so that no
+  cut of such a term is sent either: a combining mark assigned since,
+  such as U+1E08F, the combining Cyrillic Byelorussian-Ukrainian i, may
+  take another place in the instance's NFC. A description, an alias or
+  a type hint that holds one is left out, never changed, and the write's
+  result names it in `refused_terms`, with a warning. An entity whose label
+  holds one is neither found nor minted, and each claim that mentions
+  it is refused. The registrar makes no alias of a title that holds one,
+  and content-tags a new item's label made from one, as it does a taken
+  label, so two same-named copies stay two items whatever form the
+  instance keeps the first one's label in. A description is named in
+  `refused_terms` only when a claim the writer writes mentions its
+  entity, as only the item such a claim mints would take it. A run
+  item's label holding one, an extraction run's or the place-hierarchy
+  pass's, or an extraction run's description, raises ValueError before
+  the run item is looked up, and so before anything is written, as a
+  re-run would not find the item by it.
+  The interpreter's tables must be no newer than the instance's, which a
+  unit test checks (writer's INSTANCE_UNICODE; ADR-0010, #431).
 - Schema-level statements (e.g. the subclass hierarchy) carry
   references too (ADR-0003): a `stated in` reference to the *model
   manifest* item, which represents `model/manifest.yaml` — the document that
@@ -220,7 +244,10 @@ in its source, as an excerpt only helps a reader check it there, and the
 digest keeps two places whose locators or excerpts agree up to the cut
 two references. A claim whose own text, its value or a qualifier's, is
 over the limit, or holds a line break or a tab, or has whitespace at
-either end, or holds a character the instance cleans up, is refused,
+either end, or holds a character the instance cleans up, or holds a
+character Python's Unicode tables do not know (above; its page number,
+printed page number, region or excerpt holding one refuses it too,
+#431), is refused,
 never cut, trimmed or cleaned up, since that would alter what the source
 says: nothing of it is written, and the write's result
 names it by its claim id (its review-sheet id, unless the review
@@ -305,10 +332,11 @@ artifact a new QID, changes neither.
   any reference (a curator's deprecation stands), it gains that
   statement, stated in itself. This holds for the pipeline's extraction
   runs and for the place-hierarchy pass's runs alike. An untyped item is
-  missing from the public copy until it is typed ("Living persons and
-  privacy"), and every statement it backs loses its run reference there:
-  an extraction's claims would read as curated, and the place-hierarchy
-  pass's containment, which cites the run alone, as unreferenced.
+  missing from the non-privileged export until it is typed ("Living
+  persons and privacy"), and every statement it backs loses its run
+  reference there: an extraction's claims would read as curated, and the
+  place-hierarchy pass's containment, which cites the run alone, as
+  unreferenced.
 - **Registration is part of the write** (ADR-0025 §2; ADR-0010 as
   amended by #103). `ingest run` registers a document just before it
   writes the claims that cite it: its artifact item, its page fragments
@@ -351,11 +379,12 @@ artifact a new QID, changes neither.
   *n* is the item that is an `instance of artifact fragment` and `part
   of` the artifact with `page number` *n*, whatever its label. A new one
   is labelled `"<artifact label>, page <n>"` (content-tagged if that label
-  is taken, and the artifact's label cut to end in "…" if the whole would
-  pass 250 characters) and made in one write with both statements, each
-  stated in the artifact. So same-titled artifacts never share a
-  fragment, and a derived medium, `part of` its container with a page
-  qualifier too, is never taken for one.
+  is taken, or if it holds a character Python's Unicode tables do not
+  know and bears no tag yet; the artifact's label cut to end in "…" if
+  the whole would pass 250 characters) and made in one write with both
+  statements, each stated in the artifact. So same-titled artifacts
+  never share a fragment, and a derived medium, `part of` its container
+  with a page qualifier too, is never taken for one.
 - Machine-proposed entities (people, places) get their `instance of`
   statement referenced to the artifact that mentions them. A later
   source that names the entity adds its own references (the artifact and
@@ -1152,7 +1181,7 @@ not a signal to grow the schema on.
 - **No stored "living" flag.** Whether a person is *possibly living* is
   never recorded and never a review decision; it is a **runtime
   determination** made whenever a privacy-sensitive action runs (the
-  public export, an internet-facing publish), computed from the
+  non-privileged export, an internet-facing publish), computed from the
   **absence of death evidence** in the graph. The determination lives in
   `yizkr.core.privacy` and both the export and the private static-site
   badge call it, so they always agree.
@@ -1168,9 +1197,9 @@ not a signal to grow the schema on.
   and nothing the reviewer must decide. Privacy falls out of what
   sources already assert; a curator who knows a person is dead records
   that as an ordinary death assertion, not a flag.
-- The export (`yizkr backup`'s `public.nt.gz`, a non-privileged view,
-  not a public copy) is **conservative**: a person enters it only on
-  positive evidence they are not living — any death evidence above, or
+- The export (`yizkr backup`'s `nonprivileged.nt.gz`, a non-privileged
+  view, not a public copy) is **conservative**: a person enters it only
+  on positive evidence they are not living — any death evidence above, or
   births beyond the cutoff (`--cutoff-years`, by default
   `DEFAULT_CUTOFF_YEARS` in `yizkr.core.privacy`). **Unknown means
   excluded.** Exclusion removes every mention (other people's claims
@@ -1188,7 +1217,9 @@ not a signal to grow the schema on.
   unknown value of its item and property, as the export does not read
   which one it gave (it does not reproduce Wikibase's blank-node
   labels). A reference or value node that a kept statement uses too
-  stays, its excerpt included.
+  stays, its excerpt included, once, in the first kept entity's block
+  that uses it, where the query service's munger reads it (ADR-0020, as
+  amended by #412).
 - **Who is a person fails closed too** (ADR-0020, as amended by #344).
   An item is a person when it has any person evidence, read at every
   rank, deprecated included: a `human` type; a statement of a property
@@ -1214,24 +1245,24 @@ not a signal to grow the schema on.
   dump and **keeps a person only once the check has released them**: an
   item the check never assessed is dropped, and a redirect goes with the
   item it redirects to.
-- **What states no type is left out of the public export**, whatever
+- **What states no type is left out of the non-privileged export**, whatever
   else it holds, so no type at all hides no one either: an item none of
   whose `instance of` statements at normal or preferred rank names an
   item (an unknown or no value, or a type a curator deprecated, names
   none). The vocabulary is kept: the manifest's items, and every item
   that is the value of an `instance of` or `subclass of` statement. An
   item left untyped (a write cut short between its label and its type, a
-  reference that gives no kind) is missing from the public copy until it
-  is typed. A run item left so is typed by the next run that finds it
-  ("Artifacts and registration").
-- **A family is never public** (ADR-0020, as amended by #344). A family
-  stands for its people, the people recorded as `member of` it, and is
-  private while any of them may be living. The model cannot state that a
-  family's membership is complete (there is no household statement
-  enumerating occupants, above), so the export leaves out every item
-  typed `family` at normal or preferred rank, whatever it holds, released
-  or not, and the site badges it. #374 holds the full rule, with a way
-  to mark a family's membership complete.
+  reference that gives no kind) is missing from the non-privileged
+  export until it is typed. A run item left so is typed by the next run
+  that finds it ("Artifacts and registration").
+- **A family never enters the non-privileged export** (ADR-0020, as
+  amended by #344). A family stands for its people, the people recorded
+  as `member of` it, and is private while any of them may be living. The
+  model cannot state that a family's membership is complete (there is no
+  household statement enumerating occupants, above), so the export
+  leaves out every item typed `family` at normal or preferred rank,
+  whatever it holds, released or not, and the site badges it. #374 holds
+  the full rule, with a way to mark a family's membership complete.
 - **An event goes with its participants** (ADR-0020, as amended by
   #363). An event's date and place are its participants' too, and its
   label is written after them, so the export leaves out every event,
@@ -1332,11 +1363,11 @@ not a signal to grow the schema on.
   earliest date. A readable latest date bounds even a birth whose value
   is unknown, unreadable or coarser than a millennium.
 - The private static site (`yizkr publish-site`) includes everyone but
-  badges each subject the export would drop ("possibly living — never in
-  public exports"), using the same runtime call, except a person with no
-  type, whom the export leaves out even when released; the site shows no
-  badge. A family it lists is always badged. Its people are the items
-  with person evidence, selected as the check selects them; the export
-  also drops what the site lists as no person, an untyped item without
-  person evidence, a family without person evidence, a redirect and an
-  event that one it drops took part in.
+  badges each subject the export would drop ("possibly living — never
+  in the non-privileged export"), using the same runtime call, except a
+  person with no type, whom the export leaves out even when released;
+  the site shows no badge. A family it lists is always badged. Its
+  people are the items with person evidence, selected as the check
+  selects them; the export also drops what the site lists as no person,
+  an untyped item without person evidence, a family without person
+  evidence, a redirect and an event that one it drops took part in.

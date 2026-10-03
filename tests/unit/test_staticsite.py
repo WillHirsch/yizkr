@@ -446,7 +446,7 @@ class TestPersonPage:
         # the private site marks it; Q7 (deceased) is not marked.
         site, _ = build(tmp_path, vocabulary, RESPONSES)
         assert (
-            "possibly living — never in public exports"
+            "possibly living — never in the non-privileged export"
             in (site / "people/Q8.html").read_text()
         )
         assert "possibly living" not in (site / "people/Q7.html").read_text()
@@ -475,15 +475,15 @@ PRIVACY_RESPONSES = {
 
 
 class TestTheBadgeReadsEveryBirth:
-    """The badge marks whom the public export drops, with the export's own
-    reading of births: every birth statement a curator has not
+    """The badge marks whom the non-privileged export drops, with the
+    export's own reading of births: every birth statement a curator has not
     deprecated, each at the latest year it allows (#334)."""
 
     def badged(self, site) -> set[str]:
         return {
             qid
             for qid in CASES
-            if "possibly living — never in public exports"
+            if "possibly living — never in the non-privileged export"
             in (site / f"people/{qid}.html").read_text()
         }
 
@@ -536,7 +536,7 @@ class TestTheBadgeReadsEveryBirth:
 
 
 class TestThePeopleAreTheExports:
-    """The site lists, and badges, the people the public export's check
+    """The site lists, and badges, the people the non-privileged export's check
     assesses: every item with person evidence, at every rank, so that a
     person whose `human` type a curator deprecated or outranked, or who
     has none, is listed and badged too (#344)."""

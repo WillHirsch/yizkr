@@ -1,7 +1,7 @@
 """Live check that an interrupted mint leaves no untyped page fragment or
 run item behind (#368).
 
-The public export leaves out every item that states no type, and with a
+The non-privileged export leaves out every item that states no type, and with a
 run item the statements it backs lose their run reference there. Each
 test loses the connection to the wiki just after the first write of a
 mint reaches it, then runs again:
