@@ -54,6 +54,48 @@ item first: a GEDCOM written after such an artifact joins the media
 object to it by resolve's label matching (#109), makes no item for it
 and raises no flag (Z4). An artifact's label longer than Wikibase takes
 is cut to fit, as a derived medium's is.
+Amended by #431 (2026-10-02): the rule puts a term in NFC by Python's
+Unicode tables, 14.0.0 on the Python 3.11 the repository pins, while the
+instance does so by ICU's: Wikibase's StringNormalizer::trimToNFC and
+cleanupToNFC reach UtfNormal 4.0.0's Validator::cleanUp, which MediaWiki
+1.45.4 pins and which calls PHP intl's normalizer_normalize, not its own
+tables, and the PHP 8.3 of wikibase/wikibase:7 (7.1.0, on Debian 12)
+builds intl against libicu72, ICU 72.1, whose tables are Unicode 15.0.
+Unicode's normalization stability policy (strong normalization
+stability, since 4.1) makes two versions put a text in the same form
+when every character in it is assigned in both, so the two differ only
+on text holding a character assigned after 14.0.0; ten such have a
+combining class of their own, U+1E08F among them, which the instance
+puts in another order in NFC. The writer refuses such text rather than
+normalise it by tables of its own: a text that holds a character
+Python's tables leave unassigned (category Cn), noncharacters aside, is
+not sent. The rule is broader than it need be, deliberately: of the
+characters Unicode 15.0 adds, only ten can change a text's NFC, but it
+refuses every character Python's tables leave unassigned, which stays
+sound for any newer instance, and what it refuses beyond need shows in
+`refused` and `refused_terms`. A claim whose text, or whose source
+block's locator, holds one is refused whole; a description, an alias or
+a type hint holding one is left out and counted (`refused_terms`, a
+description only when a claim the writer writes mentions its entity);
+an entity whose label holds one is neither found nor minted, and the
+claims that mention it are refused. Each text is read whole, past the
+cut to TERM_LIMIT or TEXT_LIMIT too, so no cut of such a text is sent:
+the cuts read characters by Python's tables too, which take such a mark
+for no mark. The registrar makes no alias of a title holding one, but
+still sets a new artifact's label from it. It cannot tell whether such
+a label is free, as the instance keeps labels in its own NFC, so a
+marked title always takes the media's content tag, as a taken one does:
+two same-named copies with different bytes stay two items with labels
+apart, and Wikibase never refuses the second for sharing the first's
+label and description, which would leave an unlabelled item behind on
+every registration. A re-registration finds each by its SHA-1, as ever.
+Such a title may still miss an unhashed-title flag (§1). Refusal needs
+no second set of tables kept in step with a floating `:7` tag, whose
+next build may bring another ICU; it holds while the interpreter's
+tables are no newer than the instance's, which the writer records as
+INSTANCE_UNICODE ("15.0.0") and a unit test checks, so an interpreter
+with newer tables (Python 3.13's 15.1.0, 3.14's 16.0.0) fails the suite
+rather than send text the instance keeps in another form (§1).
 
 ## Context
 
@@ -160,10 +202,15 @@ never by name (amended by #103, 2026-09-29):
   the Mongolian vowel separator trimmed at either end, then U+FFFE and
   U+FFFF made U+FFFD, then NFC. So a title in another form never passes
   for a free label, and a title and a label the instance keeps alike are
-  alike to the registrar and the writer. An artifact's description goes
-  in that form too. A label longer than the 250 characters Wikibase
-  takes, as it is or once tagged, is cut to fit, ending in "…", before
-  its tag (amended by #371), as a derived medium's is;
+  alike to the registrar and the writer, save a title that holds a
+  character Python's Unicode tables do not know, which the instance may
+  keep in another form (amended by #431): such a title never becomes an
+  alias, and is still a new artifact's label, always content-tagged, as
+  whether another item holds it cannot be told, but it may miss an
+  unhashed-title flag. An artifact's description goes in that form
+  too. A label longer than the 250 characters Wikibase takes, as it is
+  or once tagged, is cut to fit, ending in "…", before its tag (amended
+  by #371), as a derived medium's is;
 - **no media to hash →** refused: there is nothing to find an artifact
   by.
 
@@ -197,7 +244,9 @@ register every document on the instance its reset emptied (#200).
   <n>"`, so an artifact whose title another artifact shared took the
   other's fragments, which are `part of` the other only. A new fragment
   is labelled `"<artifact label>, page <n>"`, content-tagged if that
-  label is taken, and is made in one write with its statements. Its
+  label is taken, or if it holds a character Python's Unicode tables do
+  not know and bears no tag yet (#431), and is made in one write with
+  its statements. Its
   label and description only display the artifact's label, so that is
   cut, ending in "…", where the whole would pass 250 characters. A
   container's derived medium, `part of` it with a page qualifier too, is

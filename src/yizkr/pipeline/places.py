@@ -454,10 +454,21 @@ def ensure_places_run_item(
     -> extraction run`` cites the item itself, so it is written in a
     second write, and a run item that a pass cut short between the two
     writes left without it gets it when the next pass finds it
-    (registrar.ensure_self_typed)."""
+    (registrar.ensure_self_typed). Raises ValueError, naming the
+    characters, before anything is read when the label holds a character
+    Python's Unicode tables do not know (writer.unknown_characters): the
+    instance may keep it in another form, and the next pass would not
+    find the item by it and would make another."""
     from yizkr.pipeline.registrar import ensure_self_typed
+    from yizkr.pipeline.writer import _unknown_fault, unknown_characters
 
     label = f"place-hierarchy run {model} {fingerprint}"
+    unknown = unknown_characters(label)
+    if unknown:
+        raise ValueError(
+            f"the place-hierarchy run's label {_unknown_fault(unknown)}: "
+            f"give the model identifier without it. Nothing was written"
+        )
     qid = client.find_item_by_label(label)
     if qid is None:
         item = client.wbi.item.new()

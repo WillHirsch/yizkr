@@ -6,12 +6,14 @@ These tests run the real step against the unit tests' in-memory instance,
 with no LLM and no stack: a depicts claim goes through it only as its own
 row of the sheet decides (ADR-0005, #258), its summary and log line
 count the type statements of items the batch found (#240), and its
-summary names the claims the writer refuses (#366).
+summary names the claims the writer refuses (#366) and the terms it
+leaves out (#431).
 """
 
 from __future__ import annotations
 
 import csv
+import unicodedata
 
 import pytest
 
@@ -210,5 +212,29 @@ class TestWriteStepSummary:
         assert (summary["written"], summary["refused"]) == (1, [refused])
         assert any(
             line.startswith(f"  directory.txt: claim {refused} ")
+            for line in step.lines
+        )
+
+    @pytest.mark.skipif(
+        unicodedata.category("\U0001e08f") != "Cn",
+        reason="this interpreter's Unicode tables assign U+1E08F",
+    )
+    def test_the_terms_the_writer_leaves_out_are_named(self, tmp_path):
+        # (here) the directory's heading for the firm's trade, which a
+        # transcriber gave with the combining Cyrillic i (U+1E08F) and a dot
+        # below on its a: Python's tables do not know the i, so the writer
+        # leaves the hint out, and the summary names it (#431)
+        directory = _directory_batch(
+            "unclassified_entity", type_hint="шляпа\U0001e08f\u0323"
+        )
+        step = WriteStep(tmp_path, _two_sources(), "directory.txt")
+        step.review(directory, decide=lambda row: "approve")
+
+        summary = step.write(directory)
+
+        assert (summary["written"], summary["refused"]) == (1, [])
+        assert summary["refused_terms"] == ["firm: type hint"]
+        assert any(
+            line.startswith("  directory.txt: entity 'firm' has a type hint")
             for line in step.lines
         )
