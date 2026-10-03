@@ -23,7 +23,7 @@ QID_TOKEN = re.compile(r"Q[1-9]\d*\b")
 REFERENCE_NODE = re.compile(r"<[^<>]*/reference/[0-9a-f]{40}>")
 
 
-def test_backup_and_public_export_privacy(config, tmp_path):
+def test_backup_and_nonprivileged_export_privacy(config, tmp_path):
     if not Path("deploy/docker-compose.yml").is_file():
         pytest.skip("run from the repo root")
     manifest = run_backup(
@@ -33,15 +33,19 @@ def test_backup_and_public_export_privacy(config, tmp_path):
         keep=0,
     )
     out_dir = tmp_path / manifest["timestamp"]
-    for component in ("database", "media", "rdf", "public_export"):
+    for component in ("database", "media", "rdf", "nonprivileged_export"):
         assert manifest["components"][component]["bytes"] > 0
 
-    exclusions = json.loads((out_dir / "public-exclusions.json").read_text())
+    exclusions = json.loads(
+        (out_dir / "nonprivileged-exclusions.json").read_text()
+    )
     excluded = set(exclusions["excluded"])
-    with gzip.open(out_dir / "public.nt.gz", "rt", encoding="utf-8") as handle:
+    with gzip.open(
+        out_dir / "nonprivileged.nt.gz", "rt", encoding="utf-8"
+    ) as handle:
         public = handle.read()
 
-    # the invariant: nothing in the public export mentions an excluded
+    # the invariant: nothing in the non-privileged export mentions an excluded
     # person — not their QID, not a claim about them, not a provenance
     # node quoting a source line that names them
     mentioned = {

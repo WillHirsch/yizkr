@@ -116,8 +116,31 @@ def cmd_smoke_test(args) -> int:
     return 0
 
 
+class _SkipNonprivilegedExport(argparse.Action):
+    """``--no-nonprivileged-export``, and its former spelling
+    ``--no-public-export``, which works until the keeper run and says so
+    on stderr in one line."""
+
+    OLD = "--no-public-export"
+
+    def __init__(self, option_strings, dest, **kwargs):
+        super().__init__(
+            option_strings, dest, nargs=0, default=False, **kwargs
+        )
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        if option_string == self.OLD:
+            print(
+                f"yizkr backup: {self.OLD} is renamed "
+                "--no-nonprivileged-export; the old spelling goes at the "
+                "keeper run",
+                file=sys.stderr,
+            )
+        setattr(namespace, self.dest, True)
+
+
 def cmd_backup(args) -> int:
-    from yizkr.backup import QueryServiceLag, run_backup
+    from yizkr.backup import NonprivilegedExportRefused, run_backup
 
     try:
         manifest = run_backup(
@@ -126,15 +149,17 @@ def cmd_backup(args) -> int:
             deploy_dir=args.deploy_dir,
             compose_files=args.compose_file or None,
             skip_media=args.skip_media,
-            public_export=not args.no_public_export,
+            nonprivileged_export=not args.no_nonprivileged_export,
             cutoff_years=args.cutoff_years,
             keep=args.keep,
         )
-    except QueryServiceLag as refusal:
-        # the dumps it kept, then the refusal on one line, for cron's log
+    except NonprivilegedExportRefused as refusal:
+        # any refusal (the query service lags, the graph changed, the dump
+        # holds what the export is not made to filter): the dumps it kept,
+        # then the refusal on one line for cron's log, and a non-zero exit
         if refusal.manifest is not None:
             _print_backup(args, refusal.manifest)
-        print(f"public export refused: {refusal}", file=sys.stderr)
+        print(f"non-privileged export refused: {refusal}", file=sys.stderr)
         return 1
     _print_backup(args, manifest)
     return 0
@@ -1139,7 +1164,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser(
         "backup",
         help="database + media + RDF dump, and a possibly-living-excluded "
-        "public export (ADR-0020)",
+        "non-privileged export (ADR-0020)",
     )
     p.add_argument("--out", type=Path, default=Path("var/backups"))
     p.add_argument("--deploy-dir", type=Path, default=Path("deploy"))
@@ -1152,9 +1177,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--skip-media", action="store_true")
     p.add_argument(
+        "--no-nonprivileged-export",
         "--no-public-export",
-        action="store_true",
-        help="skip the possibly-living-excluded export",
+        dest="no_nonprivileged_export",
+        action=_SkipNonprivilegedExport,
+        help="skip the possibly-living-excluded export (--no-public-export: "
+        "alias until the keeper run)",
     )
     p.add_argument(
         "--cutoff-years",
@@ -1162,7 +1190,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_CUTOFF_YEARS,
         metavar="N",
         help="without any death evidence, only people born more than N "
-        f"years ago enter the public export (default {DEFAULT_CUTOFF_YEARS})",
+        "years ago enter the non-privileged export "
+        f"(default {DEFAULT_CUTOFF_YEARS})",
     )
     p.add_argument(
         "--keep",

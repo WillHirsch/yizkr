@@ -22,8 +22,8 @@ on the first row, marked unchecked (`critique.sheet_notes`).
 
 There is no `living` column. Whether a person is possibly living is
 never a review decision: it is a runtime determination from the absence
-of death evidence, made when a privacy-sensitive action runs (public
-export, an internet-facing publish) — see ADR-0020 and
+of death evidence, made when a privacy-sensitive action runs (the
+non-privileged export, an internet-facing publish) — see ADR-0020 and
 `yizkr.core.privacy`. To record a person as deceased with no
 particulars, a source asserting death (a burial place, a cause of
 death, or an undated death event) is enough; nothing is asked of the

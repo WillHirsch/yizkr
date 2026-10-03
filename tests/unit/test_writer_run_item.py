@@ -3,7 +3,7 @@
 The run item's kind, `instance of -> extraction run`, cites the run item
 itself, so the writer writes it after the write that makes the item under
 its label. A write cut short between the two leaves the item labelled and
-untyped, and the public export leaves out an untyped item, so the
+untyped, and the non-privileged export leaves out an untyped item, so the
 statements it backs would lose their run reference there. A re-run finds
 the item by its label and gives it its kind (`ensure_self_typed` in
 yizkr.pipeline.registrar); a run item that states its kind already, in

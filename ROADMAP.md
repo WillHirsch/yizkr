@@ -29,7 +29,7 @@ item was finished before the plan moved to GitHub.
 | 4 | Ingestion pipeline skeleton | Done; the HTR platform adapter it stubbed is dropped (#171) |
 | 5 | Face proposals, minimal | Done (ADR-0005), never run on a real photograph: #160; confirmer attribution and region export: #161 |
 | 6 | SPARQL query library | Done |
-| 7 | Backup and public export | Done (`yizkr backup`, ADR-0020); scheduled backups: #172; run-record retention: #100; the shared possibly-living module: #134 |
+| 7 | Backup and non-privileged export | Done (`yizkr backup`, ADR-0020); scheduled backups: #172; run-record retention: #100; the shared possibly-living module: #134 |
 | 8 | Chunked extraction | Done (ADR-0006); a slimmed per-chunk schema: #90 |
 | 9 | Cross-document entity reconciliation | Done (ADR-0007); corpus-level identity: epic #58 |
 | 10 | Possibly-living policy at ingestion, and a vocabulary session | Done, reworked by ADR-0020; privacy under ratified runs: epic #60 |
@@ -52,7 +52,7 @@ The sections without item numbers map the same way:
 | Phase W3, the immich tier (ADR-0004) | #167 |
 | Model extensions: georeferenced map artifacts, temporal and subject coverage | #171, with #164 and #166 |
 | Frontend ladder rung 1, the query service's result views (ADR-0004) | Done |
-| Frontend ladder rung 2, the static site (`yizkr publish-site`) | Done; provenance labels on values: #135; an internet-facing build from the public export: #163; map tiles: #164 |
+| Frontend ladder rung 2, the static site (`yizkr publish-site`) | Done; provenance labels on values: #135; an internet-facing build from the non-privileged export: #163; map tiles: #164 |
 | Frontend ladder rung 3, a plural-display app | #165 |
 | Deferred by ADR: MCP or agentic graph access (ADR-0007) | #171 |
 | Deferred by ADR: a slimmed per-chunk schema (ADR-0006) | #90 |

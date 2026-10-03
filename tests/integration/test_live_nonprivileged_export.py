@@ -1,4 +1,4 @@
-"""Live validation that the non-privileged export (public.nt.gz) keeps
+"""Live validation that the non-privileged export (nonprivileged.nt.gz) keeps
 only the people the check releases, and leaves out what states no type
 (#344), the events of those it leaves out (#363) and the statements that
 name them (#364), while every text about what it keeps stays (#363;
@@ -52,10 +52,10 @@ no statement at all.
 None of the people but the released one is released by the check: the
 truthy `human` type selected no one of the first four, and the export
 dropped only the people the check had assessed, so each went into the
-public export in full. A vessel's part in a migration does not make it a
-person, but a `human` type at any rank does. An item that states no type
-is left out, whatever else it holds, and a redirect goes with the item it
-redirects to. An event that one of those left out takes part in is left
+non-privileged export in full. A vessel's part in a migration does not
+make it a person, but a `human` type at any rank does. An item that states
+no type is left out, whatever else it holds, and a redirect goes with the item
+it redirects to. An event that one of those left out takes part in is left
 out too: the migration, for its vessel typed human, and the birth; so is
 a person event that names no participant, the unrecorded birth; an
 event whose one participant left out is named only in a qualifier, the
@@ -73,7 +73,7 @@ Every text about what the export keeps stays, one naming a possibly
 living person included (owner, 2026-09-29).
 
 The test dumps the graph as `yizkr backup` does (dumpRdf.php), writes
-the export from it, and reads public.nt.gz: it mentions the released
+the export from it, and reads nonprivileged.nt.gz: it mentions the released
 person, the plain vessel, the letter and its page by QID, and none of
 the others, the label-only item, the family, the redirect, the
 migration, both births, the talk and the hearing included. Of the
@@ -92,6 +92,19 @@ on a stack at rest, a merge included, the export must run, not refuse.
 The site lists the eight that have person evidence, and badges the seven
 the export drops.
 
+The query service's own munger (munge.sh from wikibase/wdqs:2, the image
+the stack runs, in a container with no network) reads the export as it
+reads the full dump: it exits 0, logs no error, warning or dropped
+statement, and munges every entity the export has entity data for,
+naming none of those the export leaves out; and every item the export
+states anything of has its entity data there (#412). The same run over the full
+dump is the control: a failure there is the stack's, not the filter's.
+The munger tests skip when docker, its daemon or the image is missing;
+an offline mirror of the munger's blocks (tests/munger_blocks.py) reads
+both dumps without docker, and names each line the munger would drop:
+each value and reference node must sit in the block of an entity whose
+lines name it (#412).
+
 Like every live test it writes fictional data to the one instance, so
 the session that runs it ends by clearing the recorded instance-contents
 key (docs/AGENT_PROTOCOL.md §5).
@@ -99,14 +112,20 @@ key (docs/AGENT_PROTOCOL.md §5).
 
 from __future__ import annotations
 
+import contextlib
 import gzip
 import json
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 from wikibaseintegrator.wbi_enums import WikibaseRank
 
+from tests.munger_blocks import misplaced_in
 from yizkr.backup import (
     FAMILY,
     LINKED_LEFT_OUT,
@@ -114,7 +133,7 @@ from yizkr.backup import (
     PARTICIPANT_LEFT_OUT,
     UNATTENDED,
     dump_rdf,
-    export_public,
+    export_nonprivileged,
 )
 from yizkr.staticsite import PEOPLE_QUERY, SiteBuilder
 
@@ -201,8 +220,8 @@ ENTITIES = {
 WEDDING = "the export fixture's father wed in 1938"
 APPELLATION = "Export Fixture Papa"
 CALLED = "the export fixture's father, as his child called him"
-# the roles public.nt.gz mentions; every other one (the item with a label
-# only, and the redirect a merge leaves, too) it leaves out
+# the roles nonprivileged.nt.gz mentions; every other one (the item with a
+# label only, and the redirect a merge leaves, too) it leaves out
 PRESENT = {"released", "vessel", "letter", "letter page"}
 # the roles with person evidence, which the site lists
 PEOPLE = {
@@ -567,17 +586,17 @@ def fixture_graph(client, config):
 
 @pytest.fixture(scope="module")
 def exported(config, fixture_graph, tmp_path_factory):
-    """The dump and its public export, in a directory of their own."""
+    """The dump and its non-privileged export, in a directory of their own."""
     if not (DEPLOY / "docker-compose.yml").is_file():
         pytest.skip("run from the repo root")
-    out_dir = tmp_path_factory.mktemp("public-export")
+    out_dir = tmp_path_factory.mktemp("nonprivileged-export")
     dump_rdf(DEPLOY, out_dir / "full.nt.gz")
-    export_public(config, out_dir)
+    export_nonprivileged(config, out_dir)
     return out_dir
 
 
 def exclusions_of(exported: Path) -> dict:
-    return json.loads((exported / "public-exclusions.json").read_text())
+    return json.loads((exported / "nonprivileged-exclusions.json").read_text())
 
 
 def test_the_fixture_takes_the_shapes_the_truthy_type_missed(
@@ -645,16 +664,16 @@ def dump_lines(exported: Path, name: str) -> list[str]:
         return dump.read().splitlines()
 
 
-def public_lines(exported: Path) -> list[str]:
-    return dump_lines(exported, "public.nt.gz")
+def nonprivileged_lines(exported: Path) -> list[str]:
+    return dump_lines(exported, "nonprivileged.nt.gz")
 
 
-def test_only_released_people_are_in_the_public_export(
+def test_only_released_people_are_in_the_nonprivileged_export(
     fixture_graph, exported
 ):
     mentioned = {
         token
-        for line in public_lines(exported)
+        for line in nonprivileged_lines(exported)
         for token in QID_TOKEN.findall(line)
     }
     assert {
@@ -698,7 +717,7 @@ def test_the_exclusions_name_whom_the_export_drops(fixture_graph, exported):
 def test_what_is_kept_leaves_with_its_text(
     config, client, fixture_graph, exported
 ):
-    lines = public_lines(exported)
+    lines = nonprivileged_lines(exported)
     text = "\n".join(lines)
 
     def term(role: str, terms: str) -> str:
@@ -746,7 +765,7 @@ def test_a_statement_naming_one_left_out_goes_whole(
     # linked from what is kept alone (#364)
     properties, _ = client.vocabulary()
     full = dump_lines(exported, "full.nt.gz")
-    lines = public_lines(exported)
+    lines = nonprivileged_lines(exported)
     text = "\n".join(lines)
     concept = config.concept_uri
     released = client.wbi.item.get(fixture_graph["released"])
@@ -813,7 +832,7 @@ def test_a_truthy_triple_of_unknown_value_goes_with_every_one(
     # while its statement stays (#364)
     properties, _ = client.vocabulary()
     full = dump_lines(exported, "full.nt.gz")
-    lines = public_lines(exported)
+    lines = nonprivileged_lines(exported)
     concept = config.concept_uri
     child = properties["child"]
     said = properties["said_to_be_the_same_as"]
@@ -856,7 +875,237 @@ def test_the_site_badges_whom_the_export_drops(
     for role in PEOPLE:
         qid = fixture_graph[role]
         badged = (
-            "possibly living — never in public exports"
+            "possibly living — never in the non-privileged export"
             in builder.person_page(people[qid], [])
         )
         assert badged == (qid in exclusions["excluded"])
+
+
+# -- the query service's munger reads the export (#412) ----------------------
+
+# the image the deployment's query service runs; the test never pulls it
+WDQS_IMAGE = "wikibase/wdqs:2"
+# where the image keeps the query service's dist, munge.sh among it
+WDQS_DIST = "/wdqs"
+MUNGE_TIMEOUT = 600
+# what the munger logs when it drops an entity or a statement, or fails:
+# a per-entity error is logged and the entity dropped with exit status 0,
+# so the exit status alone does not show it
+MUNGE_TROUBLE = re.compile(
+    r"\b(?:ERROR|WARN)\b|Exception|Error munging|Unrecognized|Fatal"
+)
+ABOUT = "<http://schema.org/about>"
+ENTITY_DATA = "/wiki/Special:EntityData/"
+PREFIX = re.compile(r"@prefix\s+([\w-]*):\s*<([^<>]*)>\s*\.", re.IGNORECASE)
+VERSIONS = ("schema:version", "<http://schema.org/version>")
+
+
+@pytest.fixture(scope="module")
+def munger():
+    """The docker CLI, when it reaches a daemon that holds the query
+    service's image; the test skips otherwise, and never pulls."""
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("the docker CLI is not installed")
+
+    def quiet(*args: str) -> int:
+        try:
+            return subprocess.run(
+                [docker, *args], capture_output=True, timeout=60
+            ).returncode
+        except subprocess.TimeoutExpired:
+            return 1
+
+    if quiet("info") != 0:
+        pytest.skip("the docker daemon is not reachable")
+    if quiet("image", "inspect", WDQS_IMAGE) != 0:
+        pytest.skip(
+            f"{WDQS_IMAGE} is not present locally (make up pulls it; this "
+            "test does not)"
+        )
+    return docker
+
+
+def munge(
+    docker: str, config, dump: Path, work: Path
+) -> tuple[subprocess.CompletedProcess, list[Path]]:
+    """Run the query service's own munger (munge.sh, as a reload from a
+    full dump runs it) over `dump`, in a container with no network that
+    touches no volume of the stack. Returns the run and the munged
+    chunks."""
+    inbox, outbox = work / "in", work / "out"
+    inbox.mkdir()
+    outbox.mkdir()
+    shutil.copyfile(dump, inbox / dump.name)
+    # the container's user need not be this one: it reads the dump and
+    # writes the chunks whatever its uid
+    inbox.chmod(0o755)
+    (inbox / dump.name).chmod(0o644)
+    outbox.chmod(0o777)
+    host = urlparse(config.concept_uri).netloc
+    # a name of its own, so a run that times out can be killed: the
+    # timeout stops the docker client, not the container
+    name = f"yizkr-munge-{os.getpid()}-{work.name}"
+    try:
+        done = munge_in(docker, name, inbox, outbox, dump.name, config, host)
+    finally:
+        # gone already once it has run (--rm): any error is ignored
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            subprocess.run(
+                [docker, "kill", name], capture_output=True, timeout=60
+            )
+    return done, sorted(outbox.glob("wikidump-*.ttl.gz"))
+
+
+def munge_in(
+    docker: str, name: str, inbox: Path, outbox: Path, dump: str, config, host
+) -> subprocess.CompletedProcess:
+    """munge.sh over `inbox/dump`, in a container named `name`."""
+    return subprocess.run(
+        [
+            docker,
+            "run",
+            "--rm",
+            "--name",
+            name,
+            "--network",
+            "none",
+            "--workdir",
+            WDQS_DIST,
+            "--entrypoint",
+            f"{WDQS_DIST}/munge.sh",
+            "-v",
+            f"{inbox}:/in:ro",
+            "-v",
+            f"{outbox}:/out",
+            WDQS_IMAGE,
+            "-f",
+            f"/in/{dump}",
+            "-d",
+            "/out",
+            "--",
+            "--conceptUri",
+            config.concept_uri,
+            "--wikibaseHost",
+            host,
+        ],  # fmt: skip
+        capture_output=True,
+        text=True,
+        timeout=MUNGE_TIMEOUT,
+    )
+
+
+def entities_about(dump: Path) -> set[str]:
+    """The entities the dump has entity data for, as its `schema:about`
+    triples name them."""
+    with gzip.open(dump, "rt", encoding="utf-8") as handle:
+        return {
+            line.split(" ", 3)[2].strip("<>")
+            for line in handle
+            if ENTITY_DATA in line.split(" ", 1)[0]
+            and line.split(" ", 2)[1] == ABOUT
+        }
+
+
+def entity_subjects(dump: Path, concept_uri: str) -> set[str]:
+    """Every item the dump says anything of, as a subject: each must have
+    its entity data too, or the munger has nothing to munge it by."""
+    subject = re.compile(rf"<({re.escape(concept_uri)}/entity/Q[1-9]\d*)> ")
+    with gzip.open(dump, "rt", encoding="utf-8") as handle:
+        return {
+            match.group(1)
+            for line in handle
+            if (match := subject.match(line)) is not None
+        }
+
+
+def predicate_of(line: str) -> str | None:
+    """The predicate a line of the munger's Turtle states: the token after
+    the subject on a subject's own line, the first one on an indented line
+    that follows it. A literal that holds a predicate's name is no
+    predicate."""
+    tokens = line.split()
+    at = 1 if not line[0].isspace() else 0
+    return tokens[at] if len(tokens) > at else None
+
+
+def munged_entities(chunks: list[Path]) -> tuple[set[str], str]:
+    """The subjects the munged chunks give a `schema:version`, which the
+    munger moves from each entity's data onto the entity, as full IRIs,
+    and the chunks' text. A subject starts a line of the Turtle the munger
+    writes; its predicates follow, indented, up to the next one."""
+    versioned: set[str] = set()
+    texts = []
+    for chunk in chunks:
+        with gzip.open(chunk, "rt", encoding="utf-8") as handle:
+            text = handle.read()
+        texts.append(text)
+        prefixes = dict(PREFIX.findall(text))
+        subject = None
+        for line in text.splitlines():
+            if not line.strip() or line.lstrip().startswith(("@", "#")):
+                continue
+            if not line[0].isspace():
+                token = line.split()[0]
+                if token.startswith("<"):
+                    subject = token.strip("<>")
+                elif ":" in token:
+                    prefix, local = token.split(":", 1)
+                    subject = prefixes.get(prefix, f"{prefix}:") + local
+            if subject and predicate_of(line) in VERSIONS:
+                versioned.add(subject)
+    return versioned, "\n".join(texts)
+
+
+def assert_munges(docker, config, dump: Path, work: Path, what: str) -> str:
+    done, chunks = munge(docker, config, dump, work)
+    log = done.stdout + done.stderr
+    assert done.returncode == 0, f"the munger fails on {what}:\n{log}"
+    trouble = [line for line in log.splitlines() if MUNGE_TROUBLE.search(line)]
+    assert not trouble, f"the munger reports trouble with {what}:\n{log}"
+    assert chunks, f"the munger writes nothing for {what}:\n{log}"
+    versioned, text = munged_entities(chunks)
+    about = entities_about(dump)
+    assert about, f"{what} holds no entity data"
+    # every item the dump states anything of keeps its entity data
+    unabout = entity_subjects(dump, config.concept_uri) - about
+    assert not unabout, f"{what} has no entity data for {sorted(unabout)}"
+    # an entity the munger cannot munge is dropped with exit status 0
+    assert about <= versioned, (
+        f"the munger drops entities of {what}: {sorted(about - versioned)}"
+    )
+    return text
+
+
+@pytest.mark.parametrize("name", ["full.nt.gz", "nonprivileged.nt.gz"])
+def test_each_node_sits_in_a_block_that_names_it(exported, name):
+    """The munger's blocks, read offline (tests/munger_blocks.py), with no
+    docker: a failure names each line the munger would drop, and the
+    entity whose block it falls in."""
+    assert misplaced_in(exported / name) == []
+
+
+def test_the_query_service_munges_the_full_dump(
+    munger, config, exported, tmp_path
+):
+    """The control: a failure here is the stack's or dumpRdf.php's, not
+    the export's filter."""
+    assert_munges(
+        munger, config, exported / "full.nt.gz", tmp_path, "the full dump"
+    )
+
+
+def test_the_query_service_munges_the_nonprivileged_export(
+    munger, config, exported, tmp_path
+):
+    text = assert_munges(
+        munger,
+        config,
+        exported / "nonprivileged.nt.gz",
+        tmp_path,
+        "the non-privileged export",
+    )
+    excluded = set(exclusions_of(exported)["excluded"])
+    assert excluded
+    mentioned = set(re.findall(r"(?<![A-Za-z0-9])Q[1-9]\d*\b", text))
+    assert not excluded & mentioned
