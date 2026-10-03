@@ -9,7 +9,11 @@ says about it, and never the id its manifest gives it:
   the document gives), in Unicode NFC, with every run of the characters
   `str.isspace` counts as whitespace made one space and the ends trimmed.
   Case, accents and compatibility characters (a ligature, a superscript)
-  are kept: they are the document's own spelling;
+  are kept: they are the document's own spelling. The label stays
+  verbatim whatever the entity's mention record says of it: no record
+  (`EntityRecord.structure`, ADR-0035 §8) enters a fingerprint, so a new
+  reading of a label moves a mention between clusters but never renames
+  it;
 - its **kind**: the manifest key the record is typed with;
 - its **excerpt span**: the lines of the numbered transcription that the
   manifest says mention it (`EntityRecord.mention_lines`), sorted, each

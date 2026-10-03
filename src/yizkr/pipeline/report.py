@@ -1590,6 +1590,7 @@ def _clusters(path: Path, fold: _Fold) -> dict[str, Any]:
         "mentions": number("mentions"),
         "clustered mentions": number("clustered_mentions"),
         "unclustered mentions": number("unclustered_mentions"),
+        "recordless mentions": number("recordless_mentions"),
         "identity clusters": number("identity_clusters"),
         "confident merges": number("clusters", "confident"),
         "mentions merged": number("cluster_mentions", "confident"),

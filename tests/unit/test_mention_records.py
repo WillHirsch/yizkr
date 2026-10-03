@@ -1246,6 +1246,37 @@ class TestSettingAside:
         assert "structure" not in kept
         assert reasons[0].startswith("schema: structure.human.given")
 
+    def test_an_organisations_or_familys_record_that_adds_is_set_aside(
+        self,
+    ):
+        """A kind no form of the shop holds, or a surname no form of the
+        family holds, is an addition: the record is set aside."""
+        shop = entity(
+            "e1",
+            "zum Blauen Hut",
+            "organization",
+            structure={
+                "kind": "organization",
+                "names": ["zum Blauen Hut"],
+                "kinds": ["Hutmacherei"],
+            },
+        )
+        family = entity(
+            "e2",
+            "Familie Löbig",
+            "family",
+            structure={"kind": "family", "surnames": ["Laudler"]},
+        )
+        for record in (shop, family):
+            kept, reasons = set_aside_structure(record)
+            assert "structure" not in kept
+            assert reasons[0].startswith("addition:")
+        # with the kind and the surname in a form, both stand
+        shop["aliases"] = ["Hutmacherei zum Blauen Hut"]
+        family["aliases"] = ["Familie Laudler"]
+        for record in (shop, family):
+            assert set_aside_structure(record) == (record, [])
+
     def test_an_entity_invalid_without_its_record_is_left_alone(self):
         broken = {"id": "e1", "kind": "human", "structure": {"kind": "human"}}
         assert set_aside_structure(broken) == (broken, [])

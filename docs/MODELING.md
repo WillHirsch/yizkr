@@ -680,11 +680,20 @@ recorded only where a source marks it, the marker possibly contextual). The
 LLM is the primary normalizer: its prompt carries these standards (compose
 no permutations, keep a clean label, strip embedded annotations, type only
 what is marked). A thin deterministic validator (`pipeline/names.py`) is the
-shared safety net over both the LLM and GEDCOM paths: it drops
-re-derivable short-forms (a bare given name, an initialism, a surname the
-label already carries) and keeps compound/particle surnames whole (never
-shattering `de la Cruz` / `van der Berg`), asserting no kind. Composition
-and short-form display are the frontend's to *derive*, never stored.
+shared safety net over both the LLM and GEDCOM paths: it reads an alias
+through the entity's mention record, never its token shapes (ADR-0035
+§8). A person's alias that gives no name part is dropped, as is one whose
+parts the label already gives ("Löbig, Ida" beside "Ida Löbig"); one that
+adds a part is kept ("Wastl"), as is one that spells a part otherwise
+than the label ("Gustav Lobig" beside "Gustav Löbig"), and so is the
+first that alone holds a title or suffix the record gives ("Frau Löbig" beside "Ida Löbig", her
+record titling her Frau). The GEDCOM adapter cleans by the record it
+fills, as extraction does. A place's or an organisation's alias that
+gives no part (a deictic or generic reference) is dropped, and a short form
+kept. An entity without a record keeps its aliases, blanks and duplicates
+aside. It never splits a name, so compound/particle surnames stay whole
+(`Faxridge-van 't Nijks`), and asserts no kind. Composition and short-form
+display are the frontend's to *derive*, never stored.
 
 **Mention records (ADR-0035 §2).** Extraction's entity manifest may give
 each person, place, organisation and family a `structure`, what its names
@@ -982,6 +991,26 @@ not a signal to grow the schema on.
   **aliases** (append-only); matching quality compounds per document.
   Where a source *types* a name (birth, married, nickname, official),
   it is additionally recorded as a referenced statement — see "Names".
+- A scratch run clusters every document's mentions across the corpus
+  before any write (the clustering stage, `pipeline/clustering.py`,
+  ADR-0025). It keys and judges on each mention's record, never on a
+  label's wording (ADR-0035 §7): a person's given names by their standard
+  forms and as written, with its surnames and its kin's; a place's names
+  and address as written, its containers (its record's, and those its
+  manifest's `part_of` and `location` claims give) compared as one set; an
+  organisation's proper names, else its kind with its places, which agree
+  only when they would link as places or one lies in the other; an umlaut
+  also written out (DIN 5007-2). A person, place, organisation or family
+  without a record (none given, or one extraction set aside under
+  ADR-0035 §5, before the alias cleanup) meets only its exact name, and
+  never merges; so a document's mention whose record was set aside never
+  meets the GEDCOM export, whose people and places all have records; the
+  kinds that take no record (occupations, vessels and the like) still
+  merge on an exact name. A union is keyed by its couple,
+  and its weddings and ends by union, kind and date (ADR-0036 §3). A
+  birth's or a death's date belongs to its principal alone, and one with
+  no principal, several, or one whose own date of that kind conflicts
+  with it, is nobody's and merges with none.
 - Machine-proposed equivalences (within or across documents) are
   reviewed by a human before they take effect — identity is never
   auto-confirmed. Approved matches resolve new claims to the existing

@@ -186,6 +186,7 @@ from dataclasses import dataclass, field
 from yizkr.claims import (
     ArtifactRef,
     ClaimBatch,
+    PersonStructure,
     _occurs,
     _words,
     structure_problems,
@@ -2169,8 +2170,11 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         give; its aliases, every other name form of its NAMEs and
         `_MARNM`s (their display forms, the names their parts give where
         a value does not restate them, their bracketed parts and NICKs),
-        hygiened as the LLM path's are (ADR-0022 §4) save a form that
-        alone carries a part of its record; and its mention record
+        hygiened by its record as the LLM path's are (ADR-0035 §8), which
+        keeps a form that adds a name part to the label or spells one
+        otherwise (a spelling variant is never derivable: "Gustav Lobig"
+        beside "Gustav Löbig"), or that alone holds a title or suffix of
+        the record; and its mention record
         (ADR-0035 §6), whose counts join the outcomes. A part that holds
         no letter or digit ('?' in 'Eugen /?/') names nothing, so it is
         dropped and counted; a record left with no given name, surname,
@@ -2225,31 +2229,20 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         for reading in readings:
             for key in reading.counts:
                 outcome(key)
-        parts = [
-            *(given["written"] for given in structure["given"]),
-            *(surname["written"] for surname in structure["surnames"]),
-            *structure["nicknames"],
-            *structure["titles"],
-            *structure["suffixes"],
-            *structure["unsplit"],
-        ]
         if not any(
             structure[key]
             for key in ("given", "surnames", "nicknames", "unsplit")
         ):
             structure = None
-        # the alias hygiene drops a form that adds no match token to the
-        # label; one that alone carries a part of the record stays, so
-        # that the record divides the names and adds none (ADR-0035 §5)
-        kept = normalize_aliases(label, aliases)
-        for alias in aliases:
-            carried = [label, *kept]
-            if alias not in kept and any(
-                _restated(part, alias)
-                and not any(_restated(part, form) for form in carried)
-                for part in parts
-            ):
-                kept.append(alias)
+        # the alias hygiene reads the record (ADR-0035 §8): a form that
+        # adds no part to the label goes, and one that alone carries a
+        # title or suffix of the record stays, so that the record divides
+        # the names and adds none (§5)
+        kept = normalize_aliases(
+            label,
+            aliases,
+            PersonStructure.model_validate(structure) if structure else None,
+        )
         return {
             "id": person_id(xref),
             "label": label,

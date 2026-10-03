@@ -220,9 +220,10 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   records, and all its mentions are recordless), and one whose coverage
   predates these counts (or holds its records without its notes, or its
   notes without its records, which the extraction never writes). So the
-  recordless mentions the clustering stage counts, once #409 adds that
-  figure, also include the line-range fallback's mentions, and that
-  figure need not equal the records' recordless count. An
+  recordless mentions the clustering stage counts (the identity map's
+  `summary.recordless_mentions`, below) also include the line-range
+  fallback's mentions, and that figure need not equal the records'
+  recordless count. An
   extraction whose `coverage.json` is missing, cannot be read or holds no
   object is in none of these figures, as in none of the rejects'. Nor
   are the judgement notes counted that a line-range fallback's claims
@@ -252,10 +253,17 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   findings that failed their checks, counted apart as invalid;
 - clusters, from the clustering stage's identity map: confident merges,
   ambiguous clusters left split, conflicting clusters (and how many of
-  them hard), singletons, the mentions clustered by kind, the candidate
+  them hard), singletons, the recordless mentions (those of a kind that
+  takes a mention record and have none, which never link confidently,
+  ADR-0035 §7), the mentions clustered by kind, the candidate
   pairs, the adjudication estimate, and the hub keys not blocked on and
   the mentions holding them; `not run` when the run has no clustering
   stage, and the map's state when it is missing or of another format.
+  The map's summary also holds `confident_links_only`, what merging over
+  the confident links alone would give; the report leaves it out, since
+  a component of it may hold an ambiguous pair (two brothers who share a
+  nickname, and a plain "Gustl" linked to one of them), so it overstates
+  what merges.
 
 **Calls and the cache.** The calls that reached the engine and those the
 cache answered, in all and per role; hits and misses by reason; resumes,
