@@ -458,9 +458,17 @@ def ensure_places_run_item(
     characters, before anything is read when the label holds a character
     Python's Unicode tables do not know (writer.unknown_characters): the
     instance may keep it in another form, and the next pass would not
-    find the item by it and would make another."""
+    find the item by it and would make another. The label is looked for
+    and sent in the form the instance keeps a label in, as the writer
+    sends one (writer._term_text: trimmed, one line, in Unicode NFC, cut
+    to the characters the instance holds), so a model identifier given
+    in another form, such as NFD, finds the item made for it."""
     from yizkr.pipeline.registrar import ensure_self_typed
-    from yizkr.pipeline.writer import _unknown_fault, unknown_characters
+    from yizkr.pipeline.writer import (
+        _term_text,
+        _unknown_fault,
+        unknown_characters,
+    )
 
     label = f"place-hierarchy run {model} {fingerprint}"
     unknown = unknown_characters(label)
@@ -469,6 +477,7 @@ def ensure_places_run_item(
             f"the place-hierarchy run's label {_unknown_fault(unknown)}: "
             f"give the model identifier without it. Nothing was written"
         )
+    label = _term_text(label)
     qid = client.find_item_by_label(label)
     if qid is None:
         item = client.wbi.item.new()

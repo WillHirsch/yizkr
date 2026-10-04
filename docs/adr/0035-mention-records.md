@@ -55,6 +55,14 @@ record, so its English signatures only flag one; the answer is the text
 after the last tool result; and detection reads a text outside its
 editorial marks.
 
+Amended by #370 (2026-10-04): alias hygiene (§8) compares an alias with
+the label and with the aliases before it in the form the instance keeps
+a term in (trimmed, NFC), so an alias that differs from the label only
+in Unicode form, such as NFD against NFC, is dropped as the label is,
+and two forms of one alias are kept once, the first as given. An alias
+the instance would keep nothing of, such as control characters alone,
+is blank and dropped.
+
 Amended by #434 (2026-10-02): a record nickname is a name the source
 gives as what the person is called, by anyone, and so also an alias; a
 name the source gives as what one person calls another, or that names

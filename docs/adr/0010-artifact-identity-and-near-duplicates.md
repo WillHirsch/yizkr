@@ -30,6 +30,14 @@ UtfNormal 4.0.0, which MediaWiki pins: a Wikibase Suite upgrade that
 brings a newer UtfNormal must check the rule again, as UtfNormal's later
 code also puts U+25CC before a combining mark with no base character
 before it (prependIsolatedCombining).
+Amended by #370 (2026-10-04): the resolve step matches a ref's label in
+the form the writer looks a label up in (trimmed, one line, NFC, cut to
+250 characters with its digest), so the review sheet shows the item the
+writer will reuse for a label given in NFD, with whitespace around it or
+longer than the instance holds, not NEW; a label holding a character
+Python's Unicode tables do not know resolves to nothing, as the writer
+finds no item by it. The place-hierarchy pass finds and labels its run
+item in that form too.
 Amended by #373 (2026-10-02): a file is uploaded under a name in the form
 MediaWiki takes as it is, every letter kept, within MediaWiki's 240-byte
 limit with room for the content tag, and the description registration
