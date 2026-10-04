@@ -637,6 +637,10 @@ def test_values_of_every_type_are_canonical():
         {"type": "external-id", "value": "12  34"},
         {
             "type": "monolingual",
+            "value": {"text": "Hutmacher Löbig", "language": "de"},
+        },
+        {
+            "type": "monolingual",
             "value": {"text": "Hutmacher  Löbig", "language": "de"},
         },
         {"type": "external-id", "value": "Hutmacher"},
