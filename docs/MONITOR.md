@@ -47,6 +47,21 @@ prints one view and exits. `--no-page` leaves the status page unwritten.
 changes, without colour, and no keys are read. Lines stop one column
 short of the terminal's width, which some terminals would wrap.
 
+On a terminal the view stays on screen and each refresh writes only the
+lines that changed: the cursor moves to each one's row and clears it to
+its end, and whatever the last view drew below the new one's end is
+cleared. A refresh in which nothing changed writes nothing. Lines
+compare with their colours, so a line that only changes colour is
+written again. The footer (the status page's note, the served address,
+a command's answer and the key hint) keeps the terminal's last rows, so
+a longer or shorter view above it does not move it. The whole view is
+drawn again on the first refresh, when the terminal's size changes, and
+after the command line, a confirmation or the help has written over it.
+So the served address reaches the terminal once at the start and again
+only on a whole redraw: editors that forward ports they find in a
+terminal's output (VS Code's port auto-forwarding, set to read output)
+are not told of a new server every refresh.
+
 **Commands.** Press `:` or Enter in the view to type one:
 
 ```

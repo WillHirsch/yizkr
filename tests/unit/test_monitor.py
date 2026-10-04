@@ -2530,6 +2530,23 @@ class TestTerminalView:
         tiny = render_lines(summary, width=100, height=5, footer=["q: quit"])
         assert len(tiny) == 5 and tiny[-1] == "q: quit"
 
+    def test_filled_the_footer_keeps_the_last_rows(self, summary):
+        footer = ["serving the status page at http://127.0.0.1:8000/", "q"]
+        plain = render_lines(summary, width=100, height=50, footer=footer)
+        filled = render_lines(
+            summary, width=100, height=50, footer=footer, fill=True
+        )
+        assert len(plain) < 50 and len(filled) == 50
+        assert filled[-2:] == plain[-2:] == footer
+        # the body as it was, blank lines between it and the footer
+        body = len(plain) - 3
+        assert filled[:body] == plain[:body]
+        assert set(filled[body:-2]) == {""}
+        # a view cut to fit is as long either way
+        assert render_lines(
+            summary, width=100, height=5, footer=footer, fill=True
+        ) == render_lines(summary, width=100, height=5, footer=footer)
+
     def test_it_shows_what_the_run_is_doing(self, summary):
         view = render_terminal(summary, width=200)
         assert "yizkr run 20260927T100000Z-4f2a9c" in view
@@ -3120,12 +3137,14 @@ class TestWatch:
         assert "waiting for" in out.getvalue()
         assert list(tmp_path.iterdir()) == []
 
-    def test_on_a_terminal_it_redraws_in_place_until_q(self, run):
+    def test_on_a_terminal_it_draws_in_place_until_q(self, run):
         keys = ScriptedKeys([None, None, "q"])
         code, output = _watch(run, keys)
         assert code == 0 and keys.entered and keys.exited
-        assert output.count(HOME) == 3
-        assert output.count(CLEAR_BELOW) == 3
+        # one whole view: the refreshes in which nothing changed write
+        # nothing
+        assert output.count(HOME) == 1
+        assert output.count(CLEAR_BELOW) == 1
         assert output.endswith(SHOW_CURSOR + "\n")
 
     def test_lines_stop_short_of_the_last_column(self, run):
@@ -3241,6 +3260,227 @@ class TestWatch:
         out = io.StringIO()
         assert watch(run, once=True, out=out) == 0
         assert "status page not written" in out.getvalue()
+
+
+class Writes(io.StringIO):
+    """An output that keeps each write apart: one per frame drawn."""
+
+    def __init__(self):
+        super().__init__()
+        self.writes = []
+
+    def write(self, text):
+        self.writes.append(text)
+        return super().write(text)
+
+
+_SEQUENCE = re.compile(r"\x1b\[([0-9;?]*)([A-Za-z])")
+
+
+class FakeTerminal:
+    """The screen a terminal shows for what is written to it: the cursor
+    moves, line and screen clears, and text the view writes; styles (and
+    showing or hiding the cursor) change nothing on it. A newline moves to
+    the start of the next row, as a terminal's output processing makes it
+    do."""
+
+    def __init__(self, rows):
+        self.grid = [[] for _ in range(rows)]
+        self.row = self.column = 0
+
+    def feed(self, text):
+        position = 0
+        while position < len(text):
+            found = _SEQUENCE.match(text, position)
+            if found:
+                self._control(*found.groups())
+                position = found.end()
+                continue
+            char = text[position]
+            position += 1
+            if char == "\n":
+                self.row, self.column = self.row + 1, 0
+            elif char == "\r":
+                self.column = 0
+            else:
+                line = self.grid[self.row]
+                line.extend(" " * (self.column - len(line)))
+                line[self.column : self.column + 1] = [char]
+                self.column += 1
+
+    def _control(self, arguments, final):
+        if final == "H":
+            row, _, column = arguments.partition(";")
+            self.row = int(row or 1) - 1
+            self.column = int(column or 1) - 1
+        elif final == "K":
+            del self.grid[self.row][self.column :]
+        elif final == "J" and arguments == "2":
+            self.grid = [[] for _ in self.grid]
+        elif final == "J":
+            del self.grid[self.row][self.column :]
+            for line in self.grid[self.row + 1 :]:
+                line.clear()
+
+    def text(self):
+        lines = ["".join(line).rstrip() for line in self.grid]
+        while lines and not lines[-1]:
+            lines.pop()
+        return lines
+
+
+def _plain(lines):
+    return [re.sub(r"\x1b\[[0-9;]*m", "", line).rstrip() for line in lines]
+
+
+class TestDifferentialRedraw:
+    """On a terminal, a refresh writes only the lines that changed."""
+
+    SIZE = (40, 20)
+
+    def test_the_first_frame_is_drawn_whole(self):
+        screen = monitor._Screen()
+        lines = ["Rudolf Brenner", "", "Margarethe Voss"]
+        assert screen.frame(lines, self.SIZE) == monitor._frame(lines, True)
+
+    def test_an_unchanged_frame_writes_nothing(self):
+        screen = monitor._Screen()
+        screen.frame(["Rudolf Brenner", "Margarethe Voss"], self.SIZE)
+        assert (
+            screen.frame(["Rudolf Brenner", "Margarethe Voss"], self.SIZE)
+            == ""
+        )
+
+    def test_a_changed_line_is_written_at_its_row(self):
+        screen = monitor._Screen()
+        screen.frame(["calls: 3", "Hamburg", "done: 1"], self.SIZE)
+        drawn = screen.frame(["calls: 4", "Hamburg", "done: 2"], self.SIZE)
+        assert drawn == (
+            "\x1b[1;1Hcalls: 4\x1b[K"
+            "\x1b[3;1Hdone: 2\x1b[K"
+            # the cursor waits below the view, where a prompt opens
+            "\x1b[4;1H"
+        )
+
+    def test_a_style_change_is_a_change(self):
+        screen = monitor._Screen()
+        screen.frame(["\x1b[33mBremen\x1b[0m"], self.SIZE)
+        drawn = screen.frame(["\x1b[31mBremen\x1b[0m"], self.SIZE)
+        assert drawn == "\x1b[1;1H\x1b[31mBremen\x1b[0m\x1b[K\x1b[2;1H"
+
+    def test_a_shrinking_frame_clears_its_old_tail(self):
+        screen = monitor._Screen()
+        screen.frame(["Westerland", "Keitum", "Tinnum", "Morsum"], self.SIZE)
+        drawn = screen.frame(["Westerland", "Wenningstedt"], self.SIZE)
+        assert drawn == "\x1b[2;1HWenningstedt\x1b[K\x1b[3;1H" + CLEAR_BELOW
+        # only the tail changed: it is cleared all the same
+        assert screen.frame(["Westerland"], self.SIZE) == (
+            "\x1b[2;1H" + CLEAR_BELOW
+        )
+
+    def test_a_growing_frame_writes_its_new_lines(self):
+        screen = monitor._Screen()
+        screen.frame(["Westerland"], self.SIZE)
+        drawn = screen.frame(["Westerland", "Keitum"], self.SIZE)
+        assert drawn == "\x1b[2;1HKeitum\x1b[K\x1b[3;1H"
+
+    def test_a_resize_draws_the_whole_frame(self):
+        screen = monitor._Screen()
+        lines = ["Rudolf Brenner", "Margarethe Voss"]
+        screen.frame(lines, self.SIZE)
+        assert screen.frame(lines, (60, 20)) == monitor._frame(lines, False)
+        assert screen.frame(lines, (60, 20)) == ""
+        assert screen.frame(lines, (60, 30)) == monitor._frame(lines, False)
+
+    def test_forgetting_the_screen_draws_the_whole_frame(self):
+        screen = monitor._Screen()
+        lines = ["Rudolf Brenner", "Margarethe Voss"]
+        screen.frame(lines, self.SIZE)
+        screen.forget()
+        assert screen.frame(lines, self.SIZE) == monitor._frame(lines, False)
+        assert screen.frame(lines, self.SIZE) == ""
+
+    def test_the_screen_always_shows_the_latest_frame(self):
+        """Whatever frames follow each other, the terminal ends up showing
+        the latest, with the cursor below it."""
+        words = ["Hamburg", "Bremen", "Sylt", "Riga", "", "Keitum ä"]
+        chooser = random.Random(1863)
+        screen = monitor._Screen()
+        terminal = FakeTerminal(rows=20)
+        for _ in range(300):
+            lines = [
+                chooser.choice(words) for _ in range(chooser.randint(1, 12))
+            ]
+            terminal.feed(screen.frame(lines, self.SIZE))
+            shown = _plain(lines)
+            while shown and not shown[-1]:
+                shown.pop()
+            assert terminal.text() == shown
+            assert (terminal.row, terminal.column) == (len(lines), 0)
+
+    def _watched(self, run, keys, size=lambda: (120, 60), **options):
+        out = Writes()
+        watch(
+            run,
+            interval=0,
+            out=out,
+            keys=keys,
+            clock=lambda: NOW,
+            size=size,
+            terminal=True,
+            **options,
+        )
+        return out
+
+    def test_the_served_address_is_written_once(self, tmp_path):
+        run = record(tmp_path / "run")
+        documents = [CERT, POSTCARD, DIRECTORY, CARD]
+        refreshes = []
+
+        def between():
+            refreshes.append(None)
+            if len(refreshes) <= len(documents):
+                subject = documents[len(refreshes) - 1]
+                append(run, [stage("done", 590, subject, "critique")])
+
+        keys = ScriptedKeys([None] * len(documents) + ["q"], between=between)
+        out = self._watched(run, keys, serve="127.0.0.1:0")
+        frames = out.writes[:-1]  # the last write leaves the view
+        assert len(frames) == len(documents) + 1
+        assert HOME in frames[0]
+        # each refresh after the first writes only what changed: no
+        # whole view, and never the address
+        for frame in frames[1:]:
+            assert HOME not in frame and "yizkr run" not in frame
+        assert (
+            len(re.findall(r"http://127\.0\.0\.1:\d+/", out.getvalue())) == 1
+        )
+
+    def test_a_prompt_brings_a_whole_redraw(self, run):
+        keys = ScriptedKeys([":", None, "q"], lines=[None])
+        out = self._watched(run, keys)
+        assert keys.prompts == ["command> "]
+        # the first view, the view after the prompt, and nothing after
+        assert [frame.count(HOME) for frame in out.writes[:-1]] == [1, 1]
+
+    def test_a_confirmed_command_brings_a_whole_redraw(self, run):
+        keys = ScriptedKeys([":", None, "q"], lines=["abort", "n"])
+        out = self._watched(run, keys)
+        assert len(keys.prompts) == 2
+        assert [frame.count(HOME) for frame in out.writes[:-1]] == [1, 1]
+
+    def test_the_help_line_brings_a_whole_redraw(self, run):
+        keys = ScriptedKeys(["?", None, "q"])
+        out = self._watched(run, keys)
+        frames = out.writes[:-1]
+        assert [frame.count(HOME) for frame in frames] == [1, 1]
+        assert "help" in frames[1]
+
+    def test_a_resize_brings_a_whole_redraw(self, run):
+        sizes = iter([(120, 60), (120, 60), (90, 60), (90, 60)])
+        keys = ScriptedKeys([None, None, None, "q"])
+        out = self._watched(run, keys, size=lambda: next(sizes))
+        assert [frame.count(HOME) for frame in out.writes[:-1]] == [1, 1]
 
 
 class TestTerminalKeys:

@@ -1973,12 +1973,16 @@ def render_lines(
     height: int | None = None,
     color: bool = False,
     footer: Sequence[str] = (),
+    fill: bool = False,
 ) -> list[str]:
     """The terminal view as lines, each at most `width` characters wide
     (ANSI styles aside, with `color`), and at most `height` of them, the
     `footer` lines last. To fit, the view drops its details and shortens
-    its lists (_body), and then is cut short above the footer. No line
-    holds a control character but the view's own styles."""
+    its lists (_body), and then is cut short above the footer. With
+    `fill` and a `height`, blank lines above the footer make the view
+    `height` lines long, so the footer keeps its rows however long the
+    body grows. No line holds a control character but the view's own
+    styles."""
     tail = [("", ""), *((line, "dim") for line in footer)] if footer else []
     room = None if height is None else max(1, height - len(tail))
     if not summary.found:
@@ -1995,6 +1999,8 @@ def render_lines(
             body = _body(summary, full=False)
     if room is not None:
         body = body[:room]
+        if fill:
+            body = body + [("", "")] * (room - len(body))
     plain = body + tail
     if height is not None:
         plain = plain[: max(1, height)]
@@ -2791,11 +2797,54 @@ class _StatusPage:
 
 
 def _frame(lines: list[str], first: bool) -> str:
-    """A view drawn over the last one: from the top left, each line
+    """A view drawn over the whole screen: from the top left, each line
     cleared to its end, and the screen cleared below the last."""
     start = (HIDE_CURSOR + CLEAR_SCREEN if first else "") + HOME
     body = "".join(line + CLEAR_LINE + "\n" for line in lines)
     return start + body + CLEAR_BELOW
+
+
+def _row(row: int) -> str:
+    """The cursor moved to the start of `row`, counted from 1."""
+    return f"\x1b[{row};1H"
+
+
+class _Screen:
+    """What the view has drawn on a terminal, so that a refresh writes
+    only the lines that changed. Lines compare as render_lines gives them,
+    styles included, so a line whose colour changes is drawn again; each
+    is cut to the terminal's width, so it fills one row. A frame leaves
+    the cursor at the start of the row below its last line, where a
+    prompt opens. The whole view is drawn again on the first frame, when
+    the terminal's size changes, and after `forget` (something else has
+    written over the screen)."""
+
+    def __init__(self) -> None:
+        self._lines: list[str] | None = None
+        self._size: tuple[int, int] | None = None
+
+    def forget(self) -> None:
+        self._lines = None
+
+    def frame(self, lines: list[str], size: tuple[int, int]) -> str:
+        """What to write to show `lines` on a terminal of `size`
+        (columns, rows): nothing when the screen already shows them."""
+        old, first = self._lines, self._size is None
+        if size != self._size:
+            old = None
+        self._lines, self._size = list(lines), size
+        if old is None:
+            return _frame(lines, first)
+        changed = [
+            _row(row) + line + CLEAR_LINE
+            for row, line in enumerate(lines, 1)
+            if row > len(old) or old[row - 1] != line
+        ]
+        end = _row(len(lines) + 1)
+        if len(old) > len(lines):
+            # the old frame's tail, below the new frame's last line
+            return "".join(changed) + end + CLEAR_BELOW
+        return "".join(changed) + end if changed else ""
 
 
 def _typed_command(
@@ -2869,7 +2918,7 @@ def watch(
     )
     message = ""
     shown = None
-    first = True
+    screen = _Screen()
     try:
         with keys:
             while True:
@@ -2899,9 +2948,11 @@ def watch(
                         height=max(1, rows - 1),
                         color=color,
                         footer=[*footer, hint],
+                        fill=True,
                     )
-                    _write(out, _frame(lines, first))
-                    first = False
+                    drawn = screen.frame(lines, (columns, rows))
+                    if drawn:
+                        _write(out, drawn)
                 elif monitor.version != shown:
                     view = render_terminal(summary, width=width, footer=footer)
                     _write(out, view + "\n\n")
@@ -2910,6 +2961,8 @@ def watch(
                 if key in ("q", "Q"):
                     return 0
                 if key in (":", "\r", "\n"):
+                    # the prompt and its echo write over the view
+                    screen.forget()
                     result = _typed_command(keys, path, summary)
                     if result is None:
                         continue
@@ -2920,6 +2973,7 @@ def watch(
                 elif key in ("?", "h"):
                     message = " | ".join(line.strip() for line in HELP)
                     shown = None
+                    screen.forget()
     except KeyboardInterrupt:
         return 0
     finally:
