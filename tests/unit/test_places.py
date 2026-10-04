@@ -185,8 +185,44 @@ class TestRecordContainers:
             [_place("e1", "Fläckfeld", ["Kreis Peiltal"])],
             {"e1": "Q20"},
         )
-        (directory / "batch.json").write_text("not json")
+        # the extraction's own view and reconcile's, which a review
+        # changed before the write
+        _written(
+            tmp_path / "other",
+            [_place("e1", "Fläckfeld", ["Kreis Mockburg"])],
+            {},
+            view="batch.json",
+        )
+        for view in ("batch.json", "batch.resolved.json"):
+            (directory / view).write_text(
+                (tmp_path / "other" / "batch.json").read_text()
+            )
+        (tmp_path / "other" / "write.json").unlink()
         assert record_containers(tmp_path) == {"Q20": ["Kreis Peiltal"]}
+        (directory / "batch.approved.json").write_text("not json")
+        (directory / "batch.resolved.json").write_text("not json")
+        assert record_containers(tmp_path) == {"Q20": ["Kreis Mockburg"]}
+
+    def test_a_document_no_write_reached_states_nothing(self, tmp_path):
+        # reconcile resolved its place, but the document was never written
+        directory = tmp_path / "card"
+        directory.mkdir()
+        (directory / "batch.resolved.json").write_text(
+            json.dumps(
+                {
+                    "extraction_run": {
+                        "model_identifier": "fake-model",
+                        "pipeline_version": "0.1.0",
+                        "started_at": "2026-07-13T09:00:00Z",
+                    },
+                    "claims": [],
+                    "entities": [
+                        _place("e1", "Fläckfeld", ["Hesse"], qid="Q20")
+                    ],
+                }
+            )
+        )
+        assert record_containers(tmp_path) == {}
 
     def test_a_missing_run_directory_holds_nothing(self, tmp_path):
         assert record_containers(tmp_path / "absent") == {}

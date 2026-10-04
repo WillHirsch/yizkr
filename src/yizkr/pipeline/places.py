@@ -283,9 +283,7 @@ def stated_parent_candidates(places: list[PlaceRecord]) -> list[Question]:
     for place in places:
         for name in (place.label, *place.aliases):
             for key in part_keys(name):
-                named = by_key.setdefault(key, [])
-                if place.qid not in named:
-                    named.append(place.qid)
+                by_key.setdefault(key, []).append(place.qid)
     ancestors = _ancestors(places)
     questions = []
     asked: set[tuple[str, str]] = set()

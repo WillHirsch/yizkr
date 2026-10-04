@@ -510,8 +510,6 @@ def block_candidates(
     candidates: dict[str, list[RosterEntity]] = {}
     for entity in entities:
         keys = entity_name_keys(entity)
-        if not keys:
-            continue
         entity_pair_facts = _batch_pair_facts(entity, batch)
         matches = [
             roster_entity
