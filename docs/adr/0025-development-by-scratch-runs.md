@@ -94,6 +94,17 @@ utilization reported past a warning threshold, and the #101 amendment's
 limits on it stand; pacing from `unifiedWindows` is not part of this
 change.
 
+Amended by #197 (2026-10-04): §2's claim fingerprints are defined in
+`pipeline/fingerprints.py`, beside the mention fingerprints and cluster
+ids. A claim's fingerprint hashes its subject (for a local ref, the
+fingerprint of its mention, never a cluster id), its property, its
+canonical value (a date's year, month, day, precision and calendar as
+stated), its qualifiers sorted (the earliest and latest bounds among
+them), its artifact's SHA-1 and its locator (page, printed page,
+region). The excerpt, confidence, judgement note, curated flag and row
+approval are left out. Cluster membership is not part of it, so the
+diff compares it apart, as merges and splits.
+
 ## Context
 
 ADR-0024 §7 set up a *development stage*: until the owner declares a

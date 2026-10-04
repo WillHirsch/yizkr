@@ -52,6 +52,34 @@ members: the same members always give the same id, whatever order they
 are found in, and a clustering computed again with the same output keeps
 every id. A cluster of one has an id of its own, apart from its member's
 fingerprint.
+
+A *claim fingerprint* hashes what a claim asserts and where, keyed on
+mentions, never on clusters:
+
+- its **subject**: the fingerprint of the mention a local ref names
+  (never the id of the cluster the mention ends in), or a QID, a
+  vocabulary key or the artifact itself, each tagged with its kind;
+- its **property**: the manifest key;
+- its **value**, canonical: an item named the way a subject is; a
+  string, an external id or a monolingual text by its canonical label
+  (with the language as given); a date by its year, month, day,
+  precision and calendar, every one kept as stated, so a narrowed or
+  widened date has another fingerprint; a coordinate and a quantity by
+  their numbers, an integral float read as its integer;
+- its **qualifiers**, each a property and a canonical value, sorted,
+  each kept as often as it is given: the earliest and latest bounds of a
+  date are qualifiers, and are never dropped or rounded;
+- its **artifact**: the SHA-1 its source names;
+- its **locator**: the page number, the printed page number beside it
+  (each canonical, empty for none) and the region.
+
+The excerpt, the confidence, the judgement note, the curated flag and a
+row approval are not part of it: they say how the claim was read or
+reviewed, not what the source asserts where. Cluster membership is not
+part of it either, so a clustering computed again with other members
+leaves every claim fingerprint as it is; a run diff compares membership
+apart, as merges and splits. Two claims of one batch equal in every
+component share a fingerprint: they are one assertion, made twice.
 """
 
 from __future__ import annotations
@@ -61,13 +89,28 @@ from collections import Counter
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
-from yizkr.claims import ClaimBatch, ItemValue, LocalRef
+from yizkr.claims import (
+    ArtifactRef,
+    Claim,
+    ClaimBatch,
+    CoordinateValue,
+    ExternalIdValue,
+    ItemValue,
+    LocalRef,
+    MonolingualValue,
+    QidRef,
+    QuantityValue,
+    StringValue,
+    TimeValue,
+    VocabRef,
+)
 from yizkr.pipeline.stages import canonical_json, sha256_text
 
 # the leading element of the hashed list, so that a mention's fingerprint
 # and a cluster's id never hash the same list
 _MENTION = "mention"
 _CLUSTER = "cluster"
+_CLAIM = "claim"
 
 
 def canonical_label(label: str | None) -> str:
@@ -202,3 +245,157 @@ def mentions_of(artifact: str, batch: ClaimBatch) -> list[Mention]:
             )
         )
     return mentions
+
+
+# -- claims -------------------------------------------------------------------
+
+
+def _number(value: float) -> int | float:
+    """A number as a fingerprint takes it: an integral float as its
+    integer, so 2 and 2.0 hash alike."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def _entity(ref: object, mentions: dict[str, str]) -> list:
+    """An entity reference as a claim fingerprint takes it: a local ref
+    by the fingerprint of its mention, anything else by its own key."""
+    if isinstance(ref, LocalRef):
+        try:
+            return ["mention", mentions[ref.local_id]]
+        except KeyError:
+            raise ValueError(
+                f"local id {ref.local_id!r} names no mention of its batch"
+            ) from None
+    if isinstance(ref, QidRef):
+        return ["qid", ref.qid]
+    if isinstance(ref, VocabRef):
+        return ["vocab", ref.key]
+    if isinstance(ref, ArtifactRef):
+        return ["artifact", ref.sha1]
+    raise TypeError(f"no fingerprint for an entity reference {ref!r}")
+
+
+def canonical_value(value: object, mentions: dict[str, str]) -> list:
+    """A claim's or a qualifier's value as a claim fingerprint takes it,
+    tagged with its type (the module docstring says how each is read)."""
+    if isinstance(value, ItemValue):
+        return ["item", _entity(value.value, mentions)]
+    if isinstance(value, StringValue | ExternalIdValue):
+        return [value.type, canonical_label(value.value)]
+    if isinstance(value, MonolingualValue):
+        return [
+            "monolingual",
+            canonical_label(value.value.text),
+            value.value.language,
+        ]
+    if isinstance(value, TimeValue):
+        return [
+            "time",
+            value.year,
+            value.month,
+            value.day,
+            value.precision,
+            value.calendar,
+        ]
+    if isinstance(value, CoordinateValue):
+        return [
+            "coordinate",
+            _number(value.latitude),
+            _number(value.longitude),
+            None if value.precision is None else _number(value.precision),
+        ]
+    if isinstance(value, QuantityValue):
+        return ["quantity", _number(value.amount)]
+    raise TypeError(f"no fingerprint for a value {value!r}")
+
+
+@dataclass(frozen=True)
+class ClaimPrint:
+    """One claim's fingerprint and the canonical components it hashes,
+    so that a diff can match claims on fewer of them (a subject and a
+    property whose value changed). `subject` is the subject's canonical
+    form: for a local ref, ``["mention", <its mention's fingerprint>]``."""
+
+    artifact: str
+    subject: tuple
+    property: str
+    value: tuple
+    qualifiers: tuple
+    locator: tuple
+    fingerprint: str
+
+
+def _frozen(value: object) -> object:
+    if isinstance(value, list):
+        return tuple(_frozen(item) for item in value)
+    return value
+
+
+def claim_print(claim: Claim, mentions: dict[str, str]) -> ClaimPrint:
+    """The fingerprint of a claim, with its components. `mentions` maps
+    each local id of the claim's batch to its mention's fingerprint
+    (`mention_map`); a local ref it lacks raises ValueError."""
+    source = claim.source
+    region = source.region
+    locator = [
+        canonical_label(source.page_number),
+        canonical_label(source.printed_page_number),
+        None
+        if region is None
+        else [
+            _number(region.x),
+            _number(region.y),
+            _number(region.width),
+            _number(region.height),
+        ],
+    ]
+    subject = _entity(claim.subject, mentions)
+    value = canonical_value(claim.value, mentions)
+    qualifiers = sorted(
+        (
+            [qualifier.property, canonical_value(qualifier.value, mentions)]
+            for qualifier in claim.qualifiers
+        ),
+        key=canonical_json,
+    )
+    artifact = source.artifact.sha1
+    parts = [
+        _CLAIM,
+        artifact,
+        subject,
+        claim.property,
+        value,
+        qualifiers,
+        locator,
+    ]
+    return ClaimPrint(
+        artifact=artifact,
+        subject=_frozen(subject),
+        property=claim.property,
+        value=_frozen(value),
+        qualifiers=_frozen(qualifiers),
+        locator=_frozen(locator),
+        fingerprint=sha256_text(canonical_json(parts)),
+    )
+
+
+def claim_fingerprint(claim: Claim, mentions: dict[str, str]) -> str:
+    """The fingerprint of a claim (`claim_print` says what it takes)."""
+    return claim_print(claim, mentions).fingerprint
+
+
+def mention_map(artifact: str, batch: ClaimBatch) -> dict[str, str]:
+    """Each local id of the batch, by the fingerprint of its mention."""
+    return {
+        mention.local_id: mention.fingerprint
+        for mention in mentions_of(artifact, batch)
+    }
+
+
+def claim_prints(artifact: str, batch: ClaimBatch) -> list[ClaimPrint]:
+    """The fingerprint of every claim of the batch whose mentions
+    `artifact` (its media SHA-1) asserts, in claim order."""
+    mentions = mention_map(artifact, batch)
+    return [claim_print(claim, mentions) for claim in batch.claims]

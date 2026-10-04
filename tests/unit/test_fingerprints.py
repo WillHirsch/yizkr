@@ -1,4 +1,4 @@
-"""Mention fingerprints and cluster ids (#197, items 1 and 3; #105).
+"""Mention fingerprints, claim fingerprints and cluster ids (#197; #105).
 
 Every mention comes from the fictional universe (docs/EXAMPLES.md): the
 GEDCOM fixture, adapted by the pipeline's own adapter, and batches built
@@ -10,13 +10,19 @@ from __future__ import annotations
 import hashlib
 import random
 
+import pytest
+
 from tests.fixtures import example_universe as u
 from yizkr.claims import ArtifactRef, ClaimBatch
+from yizkr.pipeline.clustering import Manifest, cluster_corpus, load_config
 from yizkr.pipeline.fingerprints import (
     canonical_label,
+    claim_fingerprint,
+    claim_prints,
     cluster_id,
     excerpt_span,
     mention_fingerprint,
+    mention_map,
     mentions_of,
 )
 from yizkr.pipeline.gedcom import adapt_gedcom
@@ -287,3 +293,332 @@ def test_a_cluster_id_is_stable_when_found_in_another_order():
     for _ in range(5):
         generator.shuffle(fingerprints)
         assert cluster_id(fingerprints) == expected
+
+
+# -- the claim fingerprint ----------------------------------------------------
+
+
+def birth_claim(
+    sha1=BIRTH, subject="e1", value=None, qualifiers=(), **source
+) -> dict:
+    """Gustav's date of birth as the birth register extract gives it."""
+    found = claim(
+        sha1,
+        ref(subject),
+        "date_of_birth",
+        value or {"type": "time", "year": 1919, "month": 1, "day": 7},
+    )
+    found["qualifiers"] = list(qualifiers)
+    found["source"].update(source)
+    return found
+
+
+def gustav(claims, first_id="e1", sha1=BIRTH) -> ClaimBatch:
+    """The extract's Gustav, with a record, and these claims of him."""
+    return batch(
+        [
+            {
+                "id": first_id,
+                "label": "Gustav Löbig",
+                "kind": "human",
+                "mention_lines": [1],
+                "structure": {
+                    "kind": "human",
+                    "given": [{"written": "Gustav"}],
+                    "surnames": [{"written": "Löbig"}],
+                },
+            }
+        ],
+        claims,
+    )
+
+
+def print_of(claim_dict, first_id="e1") -> str:
+    (found,) = claim_prints(BIRTH, gustav([claim_dict], first_id))
+    return found.fingerprint
+
+
+def bound(prop: str, year: int) -> dict:
+    return {"property": prop, "value": {"type": "time", "year": year}}
+
+
+def test_an_identical_claim_from_a_recomputed_stage_keeps_its_fingerprint():
+    """A stage computed again may number its entities otherwise, order a
+    claim's qualifiers otherwise, quote another excerpt, give another
+    confidence or note, and write its batch out again: the claim keeps
+    its fingerprint."""
+    bounds = [bound("earliest_date", 1918), bound("latest_date", 1920)]
+    first = birth_claim(
+        value={"type": "time", "year": 1919},
+        qualifiers=bounds,
+        page_number="1",
+        transcription_excerpt={"text": "geb. 7. Jan. 1919", "language": "de"},
+    )
+    again = birth_claim(
+        subject="e07",
+        value={"type": "time", "year": 1919, "precision": "year"},
+        qualifiers=list(reversed(bounds)),
+        page_number=" 1 ",
+        transcription_excerpt={"text": "geboren 1919", "language": "de"},
+    )
+    again["confidence"] = 0.4
+    again["note"] = {"category": "date_reading", "text": "the year read"}
+    assert print_of(first) == print_of(again, "e07")
+    reread = ClaimBatch.model_validate_json(
+        gustav([first]).model_dump_json(indent=2)
+    )
+    assert claim_prints(BIRTH, reread) == claim_prints(BIRTH, gustav([first]))
+
+
+def test_a_narrowed_or_widened_date_does_not_keep_its_fingerprint():
+    day = print_of(birth_claim())
+    stated = {
+        "day": {"type": "time", "year": 1919, "month": 1, "day": 7},
+        "another day": {"type": "time", "year": 1919, "month": 7, "day": 1},
+        "month": {"type": "time", "year": 1919, "month": 1},
+        "year": {"type": "time", "year": 1919},
+        "decade": {"type": "time", "year": 1910, "precision": "decade"},
+        "julian": {
+            "type": "time",
+            "year": 1919,
+            "month": 1,
+            "day": 7,
+            "calendar": "julian",
+        },
+    }
+    prints = {
+        name: print_of(birth_claim(value=value))
+        for name, value in stated.items()
+    }
+    assert prints["day"] == day
+    assert len(set(prints.values())) == len(prints)
+    # the bounds of a range are kept as given: dropped, narrowed or
+    # widened, each is another assertion
+    year = {"type": "time", "year": 1919}
+    ranged = [
+        [],
+        [bound("earliest_date", 1918)],
+        [bound("earliest_date", 1918), bound("latest_date", 1920)],
+        [bound("earliest_date", 1919), bound("latest_date", 1920)],
+        [bound("earliest_date", 1917), bound("latest_date", 1920)],
+        # a bound given twice is kept twice
+        [bound("earliest_date", 1918)] * 2,
+    ]
+    bounded = {
+        print_of(birth_claim(value=year, qualifiers=found)) for found in ranged
+    }
+    assert len(bounded) == len(ranged)
+
+
+def test_each_component_is_part_of_the_claim_fingerprint():
+    base = print_of(birth_claim(page_number="1"))
+    others = [
+        # another artifact asserts it
+        birth_claim(DIRECTORY, page_number="1"),
+        # on another page, a printed page beside it, or a region of it
+        birth_claim(page_number="2"),
+        birth_claim(page_number="1", printed_page_number="17"),
+        birth_claim(
+            page_number="1",
+            region={"x": 10, "y": 20, "width": 30, "height": 5},
+        ),
+        # of another property
+        {**birth_claim(page_number="1"), "property": "date_of_baptism"},
+        # of another subject: a QID, or the document itself
+        {
+            **birth_claim(page_number="1"),
+            "subject": {"kind": "qid", "qid": "Q42"},
+        },
+        {
+            **birth_claim(page_number="1"),
+            "subject": {"kind": "artifact", "sha1": BIRTH},
+        },
+    ]
+    prints = {print_of(found) for found in others}
+    assert base not in prints and len(prints) == len(others)
+
+
+def test_the_subject_is_its_mention_never_its_local_id():
+    extract = the_extract()
+    (father,) = claim_prints(BIRTH, extract)
+    mentions = {m.local_id: m.fingerprint for m in mentions_of(BIRTH, extract)}
+    assert mention_map(BIRTH, extract) == mentions
+    assert claim_fingerprint(extract.claims[0], mentions) == father.fingerprint
+    assert father.subject == ("mention", mentions["e1"])
+    assert father.value == ("item", ("mention", mentions["e2"]))
+    # renumbered, and with the ids swapped: the same claim
+    assert claim_prints(BIRTH, the_extract("e2", "e1")) == [father]
+    # the father and the son swapped is another claim
+    swapped = batch(
+        [entity.model_dump() for entity in extract.entities],
+        [
+            claim(
+                BIRTH,
+                ref("e2"),
+                "father",
+                {"type": "item", "value": ref("e1")},
+            )
+        ],
+    )
+    assert claim_prints(BIRTH, swapped)[0].fingerprint != father.fingerprint
+
+
+def test_values_of_every_type_are_canonical():
+    pairs = [
+        # a string's whitespace and decomposed accents, and an integral
+        # float, read alike
+        (
+            {"type": "string", "value": "Hutmacher  "},
+            {"type": "string", "value": "Hutmacher"},
+        ),
+        (
+            {
+                "type": "monolingual",
+                "value": {"text": "Lo\u0308big", "language": "de"},
+            },
+            {
+                "type": "monolingual",
+                "value": {"text": "Löbig", "language": "de"},
+            },
+        ),
+        (
+            {"type": "quantity", "amount": 2.0},
+            {"type": "quantity", "amount": 2},
+        ),
+        (
+            {"type": "coordinate", "latitude": 51.0, "longitude": 7.5},
+            {"type": "coordinate", "latitude": 51, "longitude": 7.5},
+        ),
+    ]
+    for first, second in pairs:
+        assert print_of(birth_claim(value=first)) == print_of(
+            birth_claim(value=second)
+        )
+    distinct = [
+        {"type": "string", "value": "Hutmacher"},
+        {"type": "string", "value": "hutmacher"},
+        {"type": "external-id", "value": "Hutmacher"},
+        {
+            "type": "monolingual",
+            "value": {"text": "Hutmacher", "language": "de"},
+        },
+        {
+            "type": "monolingual",
+            "value": {"text": "Hutmacher", "language": "fy"},
+        },
+        {"type": "quantity", "amount": 2},
+        {"type": "quantity", "amount": 2.5},
+        {"type": "coordinate", "latitude": 51, "longitude": 7.5},
+        {
+            "type": "coordinate",
+            "latitude": 51,
+            "longitude": 7.5,
+            "precision": 0.1,
+        },
+        {"type": "item", "value": {"kind": "vocab", "key": "human"}},
+        {"type": "item", "value": {"kind": "qid", "qid": "Q42"}},
+    ]
+    prints = {print_of(birth_claim(value=value)) for value in distinct}
+    assert len(prints) == len(distinct)
+
+
+def test_a_local_ref_without_a_mention_is_refused():
+    extract = the_extract()
+    with pytest.raises(ValueError, match="'e9' names no mention"):
+        claim_fingerprint(
+            extract.claims[0].model_copy(
+                update={
+                    "subject": extract.claims[0].subject.model_copy(
+                        update={"local_id": "e9"}
+                    )
+                }
+            ),
+            mention_map(BIRTH, extract),
+        )
+
+
+def test_a_batch_without_a_manifest_keys_its_claims_on_its_refs():
+    chunked = batch(
+        claims=[
+            claim(
+                BIRTH,
+                ref("c1:e1", "Gustav Löbig", "human"),
+                "date_of_birth",
+                {"type": "time", "year": 1919, "month": 1, "day": 7},
+            )
+        ]
+    )
+    renumbered = batch(
+        claims=[
+            claim(
+                BIRTH,
+                ref("c4:e2", "Gustav Löbig", "human"),
+                "date_of_birth",
+                {"type": "time", "year": 1919, "month": 1, "day": 7},
+            )
+        ]
+    )
+    assert claim_prints(BIRTH, chunked) == claim_prints(BIRTH, renumbered)
+
+
+# -- claims and clusters ------------------------------------------------------
+
+THREE = ("birth-extract-1938", "directory-1912", "naturalisation-1952")
+
+
+def gustavs() -> list[Manifest]:
+    """Three documents, each giving Gustav born 7 January 1919."""
+    return [
+        Manifest(
+            sha1_of(key),
+            gustav([birth_claim(sha1_of(key))], sha1=sha1_of(key)),
+        )
+        for key in THREE
+    ]
+
+
+def every_claim_print(manifests) -> list[str]:
+    return [
+        found.fingerprint
+        for manifest in manifests
+        for found in claim_prints(manifest.sha1, manifest.batch)
+    ]
+
+
+def memberships(identity) -> set[frozenset[str]]:
+    return {
+        frozenset(entry["members"]) for entry in identity["clusters"].values()
+    }
+
+
+def test_claim_fingerprints_ignore_a_clustering_with_other_members():
+    """The three Gustavs merge by default, and stay apart when their one
+    key is a hub: the claims' fingerprints are the same either way, and
+    none is a cluster id."""
+    manifests = gustavs()
+    before = every_claim_print(manifests)
+    merged = cluster_corpus(manifests)
+    apart = cluster_corpus(
+        manifests, load_config(overrides={"blocking": {"max-key-mentions": 2}})
+    )
+    assert len(memberships(merged)) == 1
+    assert len(memberships(apart)) == 3
+    assert every_claim_print(manifests) == before
+    assert len(set(before)) == 3
+    ids = set(merged["clusters"]) | set(apart["clusters"])
+    assert not ids & set(before)
+    # each claim's subject is a mention the map holds, whatever cluster
+    # it ends in
+    for manifest in manifests:
+        (found,) = claim_prints(manifest.sha1, manifest.batch)
+        assert found.subject[1] in merged["mentions"]
+        assert found.subject[1] in apart["mentions"]
+
+
+def test_a_cluster_id_is_stable_when_clustering_is_recomputed_alike():
+    manifests = gustavs()
+    first = cluster_corpus(manifests)
+    again = cluster_corpus(list(reversed(manifests)))
+    assert set(first["clusters"]) == set(again["clusters"])
+    for cluster, entry in first["clusters"].items():
+        assert cluster_id(entry["members"]) == cluster

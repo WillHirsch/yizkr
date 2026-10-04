@@ -533,8 +533,11 @@ refuses). The module docstring is the full account; in short:
   occupations and media, a record without lines, the refs of a batch
   without a manifest), and an occurrence number tells apart two mentions
   of one batch that are otherwise equal. A cluster id is the hash of its
-  members' sorted fingerprints (#197 builds claim fingerprints and the
-  run diff on the same module).
+  members' sorted fingerprints. A claim's fingerprint (`claim_prints`)
+  hashes its subject's mention fingerprint (never a cluster id), its
+  property, its canonical value and qualifiers (dates and their bounds as
+  stated), its artifact and its locator, so it outlives a re-clustering;
+  the run diff (#198) matches claims on it.
 - **Records, not wording** (ADR-0035 §7). Every key comes from a
   mention's record (`EntityRecord.structure`): a person's given names by
   their standard forms and as written (never by prefix: "Gustl" meets
