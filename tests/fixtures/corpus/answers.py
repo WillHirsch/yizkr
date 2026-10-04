@@ -25,7 +25,13 @@ from dataclasses import dataclass
 from functools import cache
 
 from tests.fixtures import example_universe as u
-from tests.fixtures.corpus import CERTIFICATE, DECK, LETTER, NARRATIVE
+from tests.fixtures.corpus import (
+    CERTIFICATE,
+    DEATH_CERTIFICATE,
+    DECK,
+    LETTER,
+    NARRATIVE,
+)
 
 from yizkr.model.schema import load_manifest
 
@@ -278,6 +284,48 @@ RECORDED = {
                 "migration",
                 "emigration-1938",
                 mentions=("abgereist",),
+            ),
+        ),
+        read=True,
+    ),
+    DEATH_CERTIFICATE: Recorded(
+        DEATH_CERTIFICATE,
+        "death-certificate-1963",
+        "en",
+        (
+            Entity(
+                "e1",
+                "Florence Lobig",
+                "human",
+                "florence-lobig",
+                aliases=("Florence Faxridge",),
+                summary="died 3 July 1963 at Stupfield",
+                mentions=("Name:",),
+                structure=person(
+                    given("Florence", "Florence"),
+                    surnames=("Lobig", "Faxridge"),
+                ),
+            ),
+            # her mother, whom the certificate names by Florence's own
+            # birth name (the informant's slip): a name like hers, and
+            # her kin
+            Entity(
+                "e2",
+                "Florence Faxridge",
+                "human",
+                "sipkje-faxridge",
+                summary="the deceased's mother",
+                mentions=("Mother:",),
+                structure=person(
+                    given("Florence", "Florence"), surnames=("Faxridge",)
+                ),
+            ),
+            Entity(
+                "e3",
+                "Stupfield",
+                "place",
+                "stupfield",
+                structure=place("Stupfield"),
             ),
         ),
         read=True,

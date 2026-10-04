@@ -8,8 +8,8 @@ what it wrote last: the committed files are its output, and
 tests/unit/test_fixture_corpus.py fails when they differ from what it
 makes now. Each document's content comes from the example universe
 (tests/fixtures/example_universe.py): the family history's text is its
-source's; the deck's slides give its source's text; the two images are
-stand-ins for the certificate and the postcard, whose texts the recorded
+source's; the deck's slides give its source's text; the three images are
+stand-ins for the certificates and the postcard, whose texts the recorded
 engine reads off them (tests/fixtures/corpus/answers.py); and the export is
 a slice of the universe's GEDCOM rendering (tests/fixtures/example-family.ged)
 with two traps of its own.
@@ -30,6 +30,7 @@ from pathlib import Path
 from tests.fixtures import example_universe as u
 from tests.fixtures.corpus import (
     CERTIFICATE,
+    DEATH_CERTIFICATE,
     DECK,
     EXPORT,
     FOLDER,
@@ -398,6 +399,10 @@ def documents() -> dict[str, bytes]:
         ),
         LETTER: stand_in(
             SOURCES["postcard-1938"].text, SOURCES["postcard-1938"].title
+        ),
+        DEATH_CERTIFICATE: stand_in(
+            SOURCES["death-certificate-1963"].text,
+            SOURCES["death-certificate-1963"].title,
         ),
     }
 

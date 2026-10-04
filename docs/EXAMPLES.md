@@ -104,7 +104,7 @@ a neighbour in Stupfield whom Nicholas calls *Nana Maisie*.
 
 ## Sources
 
-Twenty-one invented documents carry transcribed text (`Source.text`), and
+Twenty-two invented documents carry transcribed text (`Source.text`), and
 every assertion quotes the passage that makes it (`Assertion.excerpt`).
 The module glosses each Russian and West Frisian text in English, in a
 comment above it.
@@ -132,6 +132,7 @@ comment above it.
 | `family-history-2008` | *A few pages of family history*, Nicholas's two typed pages: the hatters of Flörburg, Sebastian and Hildegard's children, the other Ursula Löbig, the emigrations, "I was born in '50" and his father's grave | English |
 | `family-booklet-2011` | *Our Family from Germany*, Nicholas's compilation: the letter's excerpt beside his translation, made with translation software, and his commentary; its physical page 6 is printed as page 4 | English |
 | `library-talk-2018` | *Where the Lobigs came from*, Nicholas's three slides for a library talk, with a photograph from the family album: its text is the deck's slide text | English |
+| `death-certificate-1963` | Florence's death certificate, whose informant gave her own birth name, *Florence Faxridge*, as her mother's | English |
 
 ## Pattern index
 
@@ -151,6 +152,7 @@ comment above it.
 | Kinship terms with a side and a degree | *дядя по отцу*, "uncle on the father's side" (Sebastian), and *двоюродная сестра*, "first cousin" (Klara), with Rudolf as the ego (the 1958 letter); *oerbeppe*, "great-grandmother" (Sipkje's mother), with Nicholas as the ego (the 1952 letter). Each is `relative` + `kinship_type`, worded as the source words it, and each follows from the parent edges |
 | An institution named by its kind and its place | *Калдовское районное бюро ЗАГС*, the civil registry of Kaldovsky District, whose name it takes as an adjective (the certificate); *it tichelwurk fan Snylsjum*, "the Snylsjum brickworks" (the 1952 letter) |
 | A place named with its containers | *д. Кошновка Калдовского района Чадской области*, "Koshnovka village, Kaldovsky district, Chadsk oblast", its district and oblast in the genitive (the 1958 letter), and the certificate's form, a field each; *Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân*, the 1952 letter's sender. Each container is a `part_of` claim |
+| A kin under another's name (ADR-0017) | Florence's 1963 death certificate names her mother *Florence Faxridge*, Florence's own birth name, as its informant gave it, where the 1952 letter names her Sipkje: two sources, two mothers by name. The certificate's two mentions both answer to Florence Faxridge, and one is the other's mother, so the impossibility filter keeps them apart (the fixture corpus's hard conflict) |
 | Homonyms (ADR-0017) | two Ursula Löbigs: Sebastian's daughter, born 1911, and a widow in the 1912 directory; a one-year-old cannot be that widow. The 2008 family history names both, one line apart |
 | Mirrored kinship | Sebastian and Hildegard's children, stated from both ends: the parents' `child` claims in the 2008 family history and the 2018 talk; the children's `father` and `mother` elsewhere (the tree, the GEDCOM rendering), and the postcard's *Dein Vater* |
 | Two-digit years | *I was born in '50* (the interview, the 2008 family history) and *Dad died in '96*: the century is the reader's to supply, which the fixture corpus's recorded model gets wrong once (below) |
@@ -167,7 +169,7 @@ comment above it.
 | A place with no known location | Klurnau |
 | Persecution events (ADR-0014) | Leopold's arrest (3 Sep 1939), imprisonment in the Peiltal court prison and release (1 Oct 1939); Ida's deportation to Lager Klurnau (21 Aug 1942) and liberation at Klurnau (28 Jan 1945). Emigrations are `migration` events too |
 | Contradictory dates (ADR-0002) | Gustav born 7 Jan 1919 (civil register) and 1 July 1919 (naturalisation): day and month transposed. Also Fläckfeld's district, and Rahel's address in July 1939 (the booklet, below) |
-| Refinement, not contradiction | Eugen died 1909 (gravestone) and 16 Mar 1909 (burial register); Klara left in '38 or '39 (interview) and on 22 June 1938 (postcard); Leopold born 1914 (tree) and 29 May 1914 (judgment), Agnes likewise; Leopold held "in Peiltal" and in its court prison; Ida deported to Klurnau (card) and to Lager Klurnau (compensation file); Rudolf died 1941 (tree), 6 March 1941 (certificate) and before 25 December 1958 (the 1958 letter) |
+| Refinement, not contradiction | Eugen died 1909 (gravestone) and 16 Mar 1909 (burial register); Klara left in '38 or '39 (interview) and on 22 June 1938 (postcard); Leopold born 1914 (tree) and 29 May 1914 (judgment), Agnes likewise; Florence died 1963 (tree) and 3 July 1963 (death certificate); Leopold held "in Peiltal" and in its court prison; Ida deported to Klurnau (card) and to Lager Klurnau (compensation file); Rudolf died 1941 (tree), 6 March 1941 (certificate) and before 25 December 1958 (the 1958 letter) |
 | Uncertain dates | circa: Cäcilie *c. 1833* (`ABT 1833`); before: the firm gone *before 1926* (`BEF 1926`); after: Rahel died *after 1945* (`AFT 1945`); between: Klara left *between 1938 and 1939* (`BET 1938 AND 1939`); decade: the studio portrait, *1890s* (`BET 1890 AND 1899`) |
 | An embedded original and its translation, as two witnesses (ADR-0008, amended) | *Our Family from Germany* (2011), Nicholas's compilation, sets an image of the top of Sebastian's 1939 letter to Klara (`letter-excerpt-1939`, an artifact of its own, `part of` the booklet on page 6) beside his translation. Where the letter says Rahel now lives at *Angerring 11*, the translation reads *Angerring 71*: each witness gives Rahel's address its own value. The booklet says its translations were done with translation software, so each claim read from the translation carries `sourcing_circumstances` → `machine_assisted` and no claim of the excerpt does. The caption and the commentary are not translations and carry no marker; the commentary says what the letter does not, that Gustav was Ursula's younger brother (`sibling`) |
 | A printed page number apart from the physical page (ADR-0037) | *Our Family from Germany* numbers its pages from its third, after the title page and the note on its translations: its physical page 6, which sets the letter's excerpt, carries the printed page number *4*. A claim read from that page cites `page number` 6 with `printed page number` 4; the excerpt is `part of` the booklet on page 6, its physical page |
@@ -204,8 +206,8 @@ nothing the sources do not.
 
 ## The fixture corpus
 
-`tests/fixtures/corpus/` (#76) holds five documents of the universe for
-offline end-to-end tests, one of each kind the scratch driver plans, in
+`tests/fixtures/corpus/` (#76) holds six documents of the universe for
+offline end-to-end tests, of each kind the scratch driver plans, in
 `documents/`:
 
 | Document | What | Kind |
@@ -215,10 +217,11 @@ offline end-to-end tests, one of each kind the scratch driver plans, in
 | `lobig-family.ged` | a small GEDCOM export of the Lobig line | GEDCOM |
 | `naturalisation-1952.png` | the naturalisation certificate, a page | image |
 | `postcard-1938.png` | the postcard, a short German letter | image |
+| `death-certificate-1963.png` | Florence's death certificate, which names her mother by Florence's own birth name (#425) | image |
 
 `build.py` makes them (`uv run python -m tests.fixtures.corpus.build`),
 and a test fails when the committed files differ from what it makes. The
-two images are small stand-ins that show no text; the export is
+three images are small stand-ins that show no text; the export is
 `example-family.ged`'s Lobig line, record for record, with two traps of
 its own. `engine.RecordedEngine` answers every call the stages before
 write make of them, as a faithful model would, from the universe's own
@@ -241,8 +244,9 @@ universe name, file name or SHA-1 in report.md, and each trap's
 clustering outcome, the two the whole-cluster merge rule cannot meet
 (#361) included, each recorded as expected with its reason.
 
-`TRAPS`, in `tests/fixtures/corpus/__init__.py`, names the six traps the
-corpus sets, in #76's words: the documents and people each involves, how
+`TRAPS`, in `tests/fixtures/corpus/__init__.py`, names the seven traps the
+corpus sets, in #76's words and, for the hard (kin-edge) conflict the
+death certificate sets, #425's: the documents and people each involves, how
 the corpus sets it, and what must come of it, clustering's outcomes
 included. `PRIVACY_TRAPS` gives the evidence of the four that bear on
 privacy, in the universe's terms, for the possibly-living predicate's

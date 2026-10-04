@@ -1,4 +1,4 @@
-"""The fixture corpus (#76): five documents of the fictional universe, for
+"""The fixture corpus (#76): six documents of the fictional universe, for
 offline end-to-end tests, and the traps they carry (docs/EXAMPLES.md, "The
 fixture corpus").
 
@@ -11,10 +11,13 @@ The documents are in `documents/` (FOLDER), made by `build.py`:
 * CERTIFICATE, the naturalisation certificate (an image,
   naturalisation-1952);
 * LETTER, the 1938 postcard, a short German letter (an image,
-  postcard-1938).
+  postcard-1938);
+* DEATH_CERTIFICATE, Florence's death certificate (an image,
+  death-certificate-1963), whose informant gave her own birth name as
+  her mother's (#425).
 
 Each is one kind of document the scratch driver plans: a text file, a
-deck, a GEDCOM file and two images. `engine.RecordedEngine` answers their
+deck, a GEDCOM file and three images. `engine.RecordedEngine` answers their
 calls from their recorded answers (`answers.py`), which carry one model
 mistake, and `tests/unit/test_fixture_corpus.py` runs a whole scratch run
 over them.
@@ -41,9 +44,11 @@ DECK = "library-talk-2018.pptx"
 EXPORT = "lobig-family.ged"
 CERTIFICATE = "naturalisation-1952.png"
 LETTER = "postcard-1938.png"
+DEATH_CERTIFICATE = "death-certificate-1963.png"
 
 __all__ = [
     "CERTIFICATE",
+    "DEATH_CERTIFICATE",
     "DECK",
     "DOCUMENTS",
     "EXPORT",
@@ -80,6 +85,7 @@ DOCUMENTS = {
         Document(EXPORT, "gedcom", None),
         Document(CERTIFICATE, "media", "naturalisation-1952"),
         Document(LETTER, "media", "postcard-1938"),
+        Document(DEATH_CERTIFICATE, "media", "death-certificate-1963"),
     )
 }
 
@@ -156,9 +162,8 @@ TRAPS = (
         "mentions stay unmerged, in an ambiguous cluster: the postcard's "
         "own mention of her links to the export on the name alone. That is "
         "expected under the rule, not a split to mend here (#380). The "
-        "corpus thus shows no hard (kin-edge) conflict end to end: that "
-        "loss is accepted, and the clustering unit tests cover it until "
-        "the universe gains another (#407).",
+        "corpus's hard (kin-edge) conflict is Florence's death "
+        "certificate's instead (the kin-edge trap).",
     ),
     Trap(
         "death-date",
@@ -203,6 +208,27 @@ TRAPS = (
         "ambiguous. That is expected under the rule; the link rule "
         "would merge the certificate's mention with those that carry his "
         "death (#380).",
+    ),
+    Trap(
+        "kin-edge",
+        "a hard (kin-edge) conflict",
+        (DEATH_CERTIFICATE, EXPORT, NARRATIVE, DECK),
+        ("florence-lobig", "sipkje-faxridge"),
+        "Florence's death certificate names her mother by Florence's own "
+        "birth name, Florence Faxridge, as its informant gave it; the 1952 "
+        "letter, outside the corpus, names her Sipkje. So two sources give "
+        "Florence different mothers by name. Each of the certificate's two "
+        "mentions, Florence and the mother it names, meets the export's "
+        "Florence, who is Florence Faxridge by birth, by name; and the "
+        "certificate makes one the other's mother.",
+        "The closure joins the certificate's two mentions through the "
+        "export's Florence, though no pair of them was ever proposed, and "
+        "the impossibility filter refuses the candidate cluster: a kin "
+        "edge joins two of its members, so it conflicts hard (#425). The "
+        "mother never shares a cluster with any mention of Florence. Under "
+        "the whole-cluster merge rule (#361) Florence's own mentions, whose "
+        "links to the export are confident, stay apart with the rest of "
+        "the conflicting cluster.",
     ),
 )
 

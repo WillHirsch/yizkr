@@ -57,8 +57,12 @@ printed page number apart from the physical page (ADR-0037, #424).
 Nicholas also typed two pages of family history in 2008, which name both
 Ursula Löbigs and give his birth and his father's death in two-digit years
 ('50, '96), and gave a library talk from three slides in 2018. With the
-naturalisation certificate, the 1938 postcard and a GEDCOM export of the
-Lobig line they make the fixture corpus (tests/fixtures/corpus, #76).
+naturalisation certificate, the 1938 postcard, Florence's 1963 death
+certificate and a GEDCOM export of the Lobig line they make the fixture
+corpus (tests/fixtures/corpus, #76).  The death certificate's informant
+gave Florence's own birth name as her mother's, so it names her mother
+"Florence Faxridge" where the 1952 letter names Sipkje: a mother whose
+name is her daughter's, which only kinship tells apart (#425).
 
 The Russian and West Frisian sources (#387) carry the naming patterns that
 extraction's mention records must handle (#385), and ``NAMING_PATTERNS``
@@ -1345,6 +1349,27 @@ SOURCES = (
         note=(
             "Kept with Florence's mother's papers. It names her parents only "
             "as Mem and heit, and gives no date for Nicholas."
+        ),
+    ),
+    Source(
+        "death-certificate-1963",
+        "Certificate of death for Florence Lobig",
+        "en",
+        1963,
+        "certificate",
+        text=(
+            "State of Victoria. Certificate of death.\n"
+            "Name: Florence LOBIG, née FAXRIDGE.\n"
+            "Date of death: 3rd July 1963.\n"
+            "Place of death: Stupfield.\n"
+            "Father: not stated.\n"
+            "Mother: Florence FAXRIDGE.\n"
+            "Informant: husband."
+        ),
+        note=(
+            "Its informant gave Florence's own birth name as her mother's: "
+            "the mother it names is Sipkje, named wrongly. The fixture "
+            "corpus's hard (kin-edge) conflict (tests/fixtures/corpus)."
         ),
     ),
 )
@@ -3058,6 +3083,35 @@ ASSERTIONS = tuple(
             "Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân",
         ),
     )
+    + _said(
+        "death-certificate-1963",
+        (
+            "florence-lobig",
+            "birth_name",
+            "Florence Faxridge",
+            "Florence LOBIG, née FAXRIDGE",
+        ),
+        (
+            "florence-lobig",
+            "date_of_death",
+            Date(1963, 7, 3),
+            "Date of death: 3rd July 1963",
+        ),
+        (
+            "florence-lobig",
+            "place_of_death",
+            "stupfield",
+            "Place of death: Stupfield",
+        ),
+        # the informant's slip: her mother, Sipkje, under Florence's own
+        # birth name
+        (
+            "florence-lobig",
+            "mother",
+            "sipkje-faxridge",
+            "Mother: Florence FAXRIDGE",
+        ),
+    )
 )
 
 # (subject, property) pairs where two sources disagree and nothing in
@@ -3096,6 +3150,8 @@ REFINEMENTS = (
     # 1941 (tree) narrowed to 6 March 1941 (certificate), and bounded by
     # the 1958 letter's "the late".
     ("rudolf-loebig", "date_of_death"),
+    # 1963 (tree) narrowed to 3 July 1963 (death certificate).
+    ("florence-lobig", "date_of_death"),
 )
 
 # The naming patterns that extraction's mention records must handle
