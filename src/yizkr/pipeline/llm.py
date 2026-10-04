@@ -585,9 +585,9 @@ _PASSED_VARIABLES = frozenset(
 # reports and telemetry go to third parties and can describe the calls,
 # such as the paths of the files read (CLAUDE.md rule 7).
 # CLAUDE_CODE_HARBOR_KITE is the CLI's internal name for its cross-session
-# messaging socket, and 0 turns it off in 2.1.237 and 2.1.288: without it a
-# telemetry-off -p call listens on a socket that the user's other Claude
-# Code sessions can reach.
+# messaging socket, and 0 turns it off (as the pinned 2.1.288 reads it):
+# without it a telemetry-off -p call listens on a socket that the user's
+# other Claude Code sessions can reach.
 _PINNED_ENVIRONMENT = {
     "CLAUDE_CODE_HARBOR_KITE": "0",
     "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
@@ -843,7 +843,8 @@ def _as_text(output: str | bytes | None) -> str:
 #   error as a success with is_error), why the model stopped generating on
 #   its final turn (stop_reason: end_turn; max_tokens when that turn hit
 #   the output token limit; refusal, ...), how many turns it took
-#   (num_turns) and the tokens it used (usage: input_tokens, output_tokens,
+#   (num_turns; 2.1.288 counts its own retries at the output limit among
+#   them) and the tokens it used (usage: input_tokens, output_tokens,
 #   cache_creation_input_tokens and cache_read_input_tokens, beside details
 #   this engine does not keep);
 # * an assistant event that stands for an API error names its class (its
@@ -1423,7 +1424,6 @@ _WINDOW_NAMES = {
     "seven_day_opus": "weekly Opus window",
     "seven_day_sonnet": "weekly Sonnet window",
     "seven_day_oauth_apps": "weekly window for apps signed in with OAuth",
-    "seven_day_omelette": "weekly omelette window",
     "seven_day_cowork": "weekly Cowork window",
 }
 

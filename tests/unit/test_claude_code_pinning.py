@@ -377,6 +377,18 @@ class TestIsolation:
         # the account (2.1.288 starts -p in auto mode with telemetry off)
         assert command[command.index("--permission-mode") + 1] == "default"
 
+    def test_forks_carry_the_permission_mode_and_the_socket_setting(self, cli):
+        """An opening turn and its fork run as complete() does: in the
+        default permission mode, off the messaging socket (#452 review)."""
+        client = ClaudeCodeClient()
+        _, handle = client.open_conversation("List the entities.")
+        client.fork(handle, "Extract chunk 1.")
+        assert len(cli.calls) == 2
+        assert "--fork-session" in cli.calls[-1][0]
+        for command, kwargs in cli.calls:
+            assert command[command.index("--permission-mode") + 1] == "default"
+            assert kwargs["env"]["CLAUDE_CODE_HARBOR_KITE"] == "0"
+
     def test_compaction_is_pinned_on(self, cli):
         """Command-line settings outrank the global config, which the CLI
         otherwise consults for autoCompactEnabled (#206 review)."""

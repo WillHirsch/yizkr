@@ -519,10 +519,11 @@ ruling before the keeper run.
   confirmed.
 - Every prompt, schema or model change costs a whole-corpus run of the
   stages it affects. Stage reuse and batched verification keep that
-  affordable, and pacing (#101) paces dispatch, from what the claude CLI
-  reports, to keep headroom on the subscription for development sessions
-  where the CLI reports enough to pace against; below its first warning
-  the reserve is no guarantee.
+  affordable, and pacing (#101) paces dispatch, from the utilization the
+  claude CLI reports past its warning thresholds, to keep headroom on the
+  subscription for development sessions; below its first warning the
+  reserve is no guarantee, since the engine does not read the use the CLI
+  reports below it (`unifiedWindows`, #452).
 - Stage keys make reuse sound, but only while every input is named in a
   key. The registry test, the stage labels and the convergence report's
   unlabelled-change check are the guards.

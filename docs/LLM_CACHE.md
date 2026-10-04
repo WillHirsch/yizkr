@@ -1005,7 +1005,8 @@ fields are those its final attempt's stream reported: from its init
 event, the `model` it ran on (the model id the configured name resolved
 to, which the `model-mismatch` anomaly check compares with the run
 manifest's, docs/ANOMALIES.md) and the `cli_version`; from its result
-event, its `num_turns`, its `subtype` (`success`, `error_max_turns`,
+event, its `num_turns` (2.1.288 counts its own retries at the output
+limit among them), its `subtype` (`success`, `error_max_turns`,
 `error_during_execution`; the CLI reports an API error as a `success`
 whose call fails) and its `stop_reason`, why its model stopped on its
 final turn (`end_turn`; `max_tokens` when that turn hit the output limit,
@@ -1238,8 +1239,9 @@ window's many calls keeps what is left above the line spread out to the
 reset rather than spent all at once. Keeping headroom below the first
 warning needs either a local budget counting a window's own use or
 pacing from `unifiedWindows`; the owner decided (2026-09-28) not to add
-the first, and the engine does not do the second, so this reserve is best-effort pacing from
-the CLI's own reports, not a guarantee of headroom. Two more limits:
+the first, and the engine does not do the second, so this reserve is
+best-effort pacing from the CLI's own reports, not a guarantee of
+headroom. Two more limits:
 
 - the use per call includes what other sessions used meanwhile, which
   makes the pacing stricter, never looser;

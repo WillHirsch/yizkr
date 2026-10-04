@@ -751,10 +751,11 @@ Two Anthropic-backed providers, differing in how usage is billed:
   `rate_limit_event`'s `unifiedWindows`, whatever the thresholds; the
   engine does not read it.)
 
-  A pass runs on one **pinned** CLI version (#133): 2.1.288, which
-  `claude-opus-5-5` needs (2.1.280 or newer; docs/runbooks/scratch-run.md
-  says how to install it). The first client
-  pins the installed version; every later client is checked when it
+  A pass runs on one **pinned** CLI version (#133): the one installed
+  when its first client starts. Install 2.1.288, which `claude-opus-5-5`
+  needs (2.1.280 or newer; docs/runbooks/scratch-run.md); the engine
+  itself does not refuse an older one. The first client pins the
+  installed version; every later client is checked when it
   starts, and every call against the version its stream reports. A
   mismatch (an update landed mid-pass, say from another Claude Code
   session's auto-update) raises `CliVersionMismatch`, which pauses the
@@ -802,9 +803,10 @@ Two Anthropic-backed providers, differing in how usage is billed:
   (see below), `CLAUDE_CODE_DISABLE_AUTO_MEMORY`,
   `DISABLE_ERROR_REPORTING`, `DISABLE_TELEMETRY` and
   `CLAUDE_CODE_HARBOR_KITE=0` (the CLI's internal name for its
-  cross-session messaging socket: 0 keeps a telemetry-off `-p` call
-  from listening on a socket your other Claude Code sessions can reach,
-  in 2.1.237 and 2.1.288). Calls run in
+  cross-session messaging socket: on 2.1.288, 0 keeps a telemetry-off
+  `-p` call from listening on a socket your other Claude Code sessions
+  can reach; it has no effect on 2.1.237, which has no socket). Calls
+  run in
   `<tmp>/yizkr-claude-code`.
 
   The config directory still reaches a call. Its **global config**
