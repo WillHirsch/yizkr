@@ -81,7 +81,8 @@ DEATH_EVIDENCE_PROPERTIES = (
 PERSON_CLASS = "human"
 # Properties that only a person is the subject of: a birth, a death and a
 # burial; kinship; the names only a person has (a birth or married name, a
-# nickname, what they are referred to as: ADR-0011, ADR-0018); a sex or
+# nickname, a name form of no stated type, what they are referred to as:
+# ADR-0011, ADR-0018); a sex or
 # gender and a number of children; and an occupation, an employer, a
 # school, a citizenship and a residence. An official name, which a place
 # or an organization can have too, and the ties an organization shares
@@ -102,6 +103,7 @@ PERSON_SUBJECT_PROPERTIES = (
     "birth_name",
     "married_name",
     "nickname",
+    "name",
     "referred_to_as",
     "sex_or_gender",
     "number_of_children",

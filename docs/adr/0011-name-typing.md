@@ -11,6 +11,10 @@ quoted part stays a nickname (ADR-0035 §6).
 Amended by #408 (2026-09-29): implemented as ADR-0035 §6 says; the label
 leaves the bracketed part out, and the language tag of a GEDCOM name is
 the export's HEAD.LANG, or `und`, no longer a fixed "en".
+Amended by #435 (2026-10-02, the owner's decision on the bracket
+question): a name form a source gives without stating its type becomes a
+referenced statement of a generic **name** property (P2561), in addition
+to its alias; see "Name forms of no stated type" below.
 
 ## Context
 
@@ -69,6 +73,42 @@ Monolingual text keeps the source's exact wording; the language tag is a
 datatype requirement, defaulted pragmatically (the ingest language / the
 GEDCOM adapter's "en"), not a content assertion.
 
+### Name forms of no stated type
+
+Amended by #435 (2026-10-02). Where a source gives a name form without
+stating its type, the type is unknown, and the alias alone would lose
+both that uncertainty (rule 5) and the fact that *this* source used the
+name (rule 1). Such a form becomes a statement of a generic **name**
+property (P2561, monolingual text, verbatim), referenced like every
+claim: `stated in` the artifact and its locator, plus the run reference
+for a machine write. It is in addition to the alias, not instead of it:
+aliases stay the match index.
+
+- **Where it comes from.** In a GEDCOM export: a bracketed part of a
+  NAME ("Ida (Peppi) Sörne"; ADR-0035 §6's bracket rule says a bracket
+  may hold a nickname, a maiden name, a later name or a note), a further
+  NAME with no TYPE ("Hilde Löbig"), and a NAME whose TYPE the adapter
+  does not recognise, each cited to its NAME and in the language of the
+  adapter's other texts. In a document: a name form beside the label's
+  whose type the source does not mark, such as a bracketed name in a
+  register the model cannot place.
+- **Where it never goes.** Never for a form the source types (birth,
+  married, nickname, official), anywhere in the person's record; never
+  for the label's own form; and, in a GEDCOM export, never from a NAME
+  that held a placeholder ("Eugen /?/"), whose form would read as the
+  whole of a name the source is unsure of (counted, `untyped name form
+  with a placeholder`). A NAME whose TYPE the adapter recognises but
+  makes no typed claim of (a NAME without slashes, a typed NAME with a
+  placeholder) is typed by its source, so it gives none either.
+  "Primary name as a referenced statement" (#171) stays deferred.
+- **Curation.** A curator who identifies the type later adds the typed
+  statement (e.g. `nickname`) citing the same source, beside the untyped
+  one, which stays (rule 3). A curator may lower its rank.
+- **What reads it.** The writer writes it as any monolingual-text claim;
+  the privacy check counts it as person evidence, as it does `nickname`,
+  and so does the non-privileged export; the run report counts the
+  statements by source kind.
+
 ### GEDCOM adapter emits what the export marks
 
 Deterministically, never guessing:
@@ -76,7 +116,9 @@ Deterministically, never guessing:
 - **NAME TYPE** subtag → the matching property (`birth`/`maiden` →
   birth name; `married` → married name; `aka`/`nick` → nickname;
   `official`/`legal`/`change`/`immigrant`/`adopted` → official name); an
-  absent or unrecognised TYPE leaves the name a plain label/alias.
+  absent or unrecognised TYPE leaves the name a plain label/alias
+  (amended by #435 (2026-10-02): and, beyond the label's own form, a
+  `name` statement of no type).
 - **NICK** subtag and the non-standard **_MARNM** tag → nickname /
   married name.
 - **Inline convention** — a quoted or single-word parenthetical token in
@@ -88,7 +130,8 @@ Deterministically, never guessing:
 
 Each name claim is referenced to the exact GEDCOM record that states it.
 A plainly-named person (untyped, unquoted) gets no name claim — only
-their label and aliases, as before.
+their label and aliases, as before (amended by #435 (2026-10-02): a
+further untyped NAME, or a bracketed part, gives a `name` statement).
 
 ### Reconciler consumes typed names as evidence
 
@@ -123,8 +166,10 @@ as a claim).
   overlap, on both the new-document and graph-cleanup passes.
 - Frontends can display plural, source-labelled name forms like any
   other property (the static site renders monolingual values already).
-- **Deliberately still flat:** an *ordinary* untyped name is not
-  promoted to a referenced `name` (P2561) statement — the label/alias
+- **Deliberately still flat:** an *ordinary* untyped name (the label's
+  own form) is not promoted to a referenced `name` (P2561) statement
+  (amended by #435 (2026-10-02): a further form of no stated type is,
+  above) — the label/alias
   index remains its home, to avoid doubling every person's claim count
   for no new information. Recording the principal name as a referenced
   statement is a later option if the unreferenced label ever needs

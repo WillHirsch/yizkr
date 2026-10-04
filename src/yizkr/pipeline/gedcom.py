@@ -81,8 +81,11 @@ typed referenced name claims: NAME TYPE birth/maiden/married/aka/
 official, the NICK subtag, the non-standard _MARNM tag, and the inline
 convention where a quoted part is a nickname — "Cäcilie 'Cilli' Tarle";
 a bracketed part, "Ida (Peppi) Sörne", is an alias and an unsplit form
-and no nickname; docs/MODELING.md "Names"; a nickname that several NAMEs
-give is a claim of each, citing its own NAME), birth/death dates and
+and no nickname; a name form of no stated type, a bracketed part or a
+NAME with no TYPE the adapter recognises, is a `name` claim (ADR-0011)
+unless it is the label's form; docs/MODELING.md "Names"; a nickname that
+several NAMEs give is a claim of each, citing its own NAME), birth/death
+dates and
 places, a death the export states with no date, place or cause (by a Y
 alone, or by a DATE the grammar cannot parse), which is a `death` event
 with the person as its principal (ADR-0020, ADR-0035 §3.2),
@@ -828,7 +831,8 @@ class NameReading:
     (ADR-0035 §6): the fields it fills, the name forms that carry them
     (its display form, the name its parts give where the value does not
     restate them, each bracketed part), whether its TYPEs give typed-name
-    claims, and what it counts."""
+    claims, what it gives a name claim of no stated type (ADR-0011), and
+    what it counts."""
 
     display: str = ""
     forms: list[str] = field(default_factory=list)
@@ -841,7 +845,16 @@ class NameReading:
     titles: list[str] = field(default_factory=list)
     suffixes: list[str] = field(default_factory=list)
     unsplit: list[str] = field(default_factory=list)
+    # the bracketed parts of the value and of its GIVNs, each a name form
+    # whose type the source does not state
+    bracketed: list[str] = field(default_factory=list)
     typed: bool = True
+    # whether a TYPE of the NAME is one the adapter recognises
+    # (_NAME_TYPE_PROPERTY): the source types the NAME
+    stated_type: bool = False
+    # whether a placeholder was left out of the value, its brackets and
+    # quotes or its parts: the source is unsure of the name it gives
+    placeholder: bool = False
     counts: list[str] = field(default_factory=list)
 
 
@@ -903,7 +916,7 @@ def read_name(name: Record) -> NameReading:
       `married`, and aka, nick or nickname makes the given names
       nicknames.
     * Each bracketed part that holds a word is an alias and an `unsplit`
-      form, counted.
+      form, counted, and a name form whose type the source does not state.
     * A part the value does not restate still reaches its field, and the
       name it completes (the name the parts give, or an NPFX or NSFX
       beside the name the value or its brackets give) becomes a name form
@@ -941,6 +954,7 @@ def read_name(name: Record) -> NameReading:
         )
     ) or ["other"]
     nickname_type = "nickname" in props
+    reading.stated_type = any(props)
 
     # the placeholders of the value's brackets and the GIVN's quotes and
     # brackets, which count against a typed claim as the value's do
@@ -950,6 +964,7 @@ def read_name(name: Record) -> NameReading:
         text, count = _worded_count(held)
         if text:
             brackets.append(text)
+            reading.bracketed.append(text)
             reading.forms.append(text)
             reading.unsplit.append(text)
             reading.counts.append("NAME bracketed part")
@@ -964,6 +979,7 @@ def read_name(name: Record) -> NameReading:
     reading.givn_quoted += givn_quoted
     reading.forms += givn_quoted + givn_bracketed
     reading.unsplit += givn_bracketed
+    reading.bracketed += givn_bracketed
     reading.counts += ["NAME bracketed part"] * len(givn_bracketed)
     bare = _sub_brackets(value, lambda held: f" {_EDGE} ")
     display, count = _worded_count(bare)
@@ -1109,7 +1125,8 @@ def read_name(name: Record) -> NameReading:
         if text:
             reading.nicknames.append(text)
             reading.forms.append(text)
-    if (placeholders or unnamed) and any(props):
+    reading.placeholder = bool(placeholders or unnamed)
+    if reading.placeholder and any(props):
         # a placeholder anywhere in what the source types, its value, its
         # brackets and quotes or its parts ('Eugen (?) /Löbig/'), says the
         # source is unsure of the name: no typed claim narrows it
@@ -2105,7 +2122,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         }
 
     def name_claims(xref: str, record: Record) -> None:
-        """Typed, referenced name claims (docs/MODELING.md "Names").
+        """Referenced name claims (docs/MODELING.md "Names").
 
         The item's label/aliases remain the flat match index; this adds
         the source's OWN name typing (NAME TYPE, NICK, _MARNM) plus the
@@ -2114,16 +2131,31 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         thus a claim of each, with its own citation, while one NAME that
         gives it twice (a NICK and its quoted form) gives the one claim. A
         NAME without slashes, whose parts no GIVN or SURN gives, is an
-        unsplit form, and its TYPE gives no claim; a bracketed part gives
-        none either (read_name), and a `_MARNM` gives a married-name claim
-        only where its slashes hold a surname (read_married_name).
+        unsplit form, and its TYPE gives no typed claim; a bracketed part
+        gives none either (read_name), and a `_MARNM` gives a married-name
+        claim only where its slashes hold a surname (read_married_name).
+
+        A name form whose type the export does not state is a `name`
+        claim of no type, cited to its NAME (ADR-0011): each bracketed
+        part, and the display form of a NAME with no TYPE the adapter
+        recognises. None is made for the person's label, for a form the
+        export types anywhere in the person's record (a nickname, a typed
+        NAME, a `_MARNM`), or from a NAME that held a placeholder, whose
+        form would read as the whole of a name the source is unsure of
+        (counted).
         """
+        # the texts the person's record types, and the forms of no stated
+        # type, each with its NAME, in the record's order
+        typed_texts: set[str] = set()
+        untyped: list[tuple[str, Record]] = []
+
+        def typed_claim(prop: str, text: str, source: Record) -> None:
+            if text:
+                typed_texts.add(text)
+                claim(person_id(xref), prop, monolingual(text), source)
 
         def add_nickname(text: str, name_record: Record) -> None:
-            if text:
-                claim(
-                    person_id(xref), "nickname", monolingual(text), name_record
-                )
+            typed_claim("nickname", text, name_record)
 
         for name_record in record.all("NAME"):
             reading = read_name(name_record)
@@ -2140,30 +2172,33 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                         cleaned, name_record
                     )  # the whole aka IS the nickname
                 elif prop:
-                    claim(
-                        person_id(xref),
-                        prop,
-                        monolingual(cleaned),
-                        name_record,
-                    )
+                    typed_claim(prop, cleaned, name_record)
             for nick in name_record.all("NICK"):
                 add_nickname(_nick_text(nick.value), name_record)
             for quoted in reading.quoted:
                 add_nickname(quoted, name_record)
             # a GIVN's quoted part is a nickname as a NICK is; its
-            # bracketed part, an unsplit form, gives no claim
+            # bracketed part, an unsplit form, gives no typed claim
             for quoted in reading.givn_quoted:
                 add_nickname(quoted, name_record)
+            forms = [
+                *([] if reading.stated_type else [cleaned]),
+                *reading.bracketed,
+            ]
+            if reading.placeholder:
+                if any(forms):
+                    outcome("untyped name form with a placeholder")
+                continue
+            untyped += [(form, name_record) for form in forms if form]
         # non-standard married-name tag some tools emit at the INDI level
         for marnm in record.all("_MARNM"):
             married = read_married_name(marnm)
             if married.display and married.typed:
-                claim(
-                    person_id(xref),
-                    "married_name",
-                    monolingual(married.display),
-                    marnm,
-                )
+                typed_claim("married_name", married.display, marnm)
+        label = names_of[xref][0]
+        for text, name_record in untyped:
+            if text != label and text not in typed_texts:
+                claim(person_id(xref), "name", monolingual(text), name_record)
 
     def person_entity(xref: str, record: Record, summary: str) -> dict:
         """A person's entity: its label, the first name form its NAMEs

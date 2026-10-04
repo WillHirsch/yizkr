@@ -174,7 +174,8 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
 **Content**, from the views of the stages that completed:
 
 - entities by kind, and those not extracted;
-- claims by property;
+- claims by property, and the `name` claims, name forms of no stated
+  type (ADR-0011), by source kind;
 - rejects: the claims validation rejected and the objects the parser
   could not read, from each extraction's coverage, with their rate among
   the claims given; and how many extractions failed with every claim

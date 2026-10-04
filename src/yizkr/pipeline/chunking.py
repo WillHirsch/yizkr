@@ -216,15 +216,20 @@ Rules — these mirror the archive's non-negotiable conventions:
   site and a relation of agency the institution.
 - A person's ordinary name lives in their entity-manifest label and
   aliases, and which part of it is which lives in the manifest's record;
-  do NOT restate either as a claim. Use the typed name properties only
-  when the source marks a name's TYPE: birth_name (a name/maiden name
-  given at birth), married_name (taken on marriage), nickname (a name
-  marked as what the person is called, such as an "aka"), official_name
-  (a formal or legal change).
+  do NOT restate either as a claim, beyond `name` (below). Use the typed
+  name properties only when the source marks a name's TYPE: birth_name
+  (a name/maiden name given at birth), married_name (taken on marriage),
+  nickname (a name marked as what the person is called, such as an
+  "aka"), official_name (a formal or legal change).
   The marker may be CONTEXTUAL (a maiden-name cue such as "geb." or
   "née", a married-name cue such as "по мужу", a stated legal or
   immigration change), not only an explicit tag. Type only what a source
   marks (ADR-0022).
+  A name form the source gives a person beside the label's, without
+  marking its type, so that you cannot tell which kind of name it is
+  (a bracketed name in a register: "Ida (Peppi) Sörne"), may be given as
+  `name`, verbatim (ADR-0011). Never give the label's own form as
+  `name`, and never a form you type.
 - A word that states a fact rather than naming someone is a claim, never
   part of a name (ADR-0035 §3.1):
   * a widow's or widower's marker ("Wwe.", "вдова", "widdo"): the

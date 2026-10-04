@@ -2160,6 +2160,9 @@ def _aggregate_content(
     entities: Counter = Counter()
     claims: Counter = Counter()
     zero_claims: Counter = Counter()
+    # the `name` claims, name forms of no stated type (ADR-0011), by the
+    # kind of the document that gives them
+    untyped_names: Counter = Counter()
     fallbacks: Counter = Counter()
     by_axis: Counter = Counter()
     by_category: Counter = Counter()
@@ -2183,6 +2186,8 @@ def _aggregate_content(
             not_extracted += batch["not_extracted"]
             if not batch["claims"].total():
                 zero_claims[_kind(document.kind)] += 1
+            if batch["claims"].get("name"):
+                untyped_names[_kind(document.kind)] += batch["claims"]["name"]
             zero_entities += not batch["entities"].total()
         coverage = document.views.get("coverage")
         if coverage is not None and batch is not None:
@@ -2241,6 +2246,7 @@ def _aggregate_content(
             "by_property": _folded(
                 claims, lambda value: _known(value, vocabulary.properties)
             ),
+            "untyped_names_by_kind": _by_count(untyped_names),
         },
         "rejects": {
             "extractions": extractions,
@@ -2907,7 +2913,8 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
             "Claims by property",
             [
                 f"{_n(claims['total'])} claims, {_n(claims['per_batch'])} a "
-                "batch.",
+                "batch. Name forms of no stated type (`name`) by source "
+                f"kind: {_listed(claims['untyped_names_by_kind'])}.",
                 _table(
                     ("Property", "Claims"),
                     claims["by_property"].items(),
