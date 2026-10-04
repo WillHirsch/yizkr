@@ -85,6 +85,15 @@ label; it makes the media object an item of its own and raises the flag
 itself (ADR-0010). §3 is
 amended in place.
 
+Amended by #452 (2026-10-04): the pass runs on claude CLI 2.1.288. That
+version reports a window's use below its warning thresholds too: every
+`rate_limit_event` carries `unifiedWindows` (`utilization` and
+`resetsAt` of the five-hour and weekly windows) and `limitScope`. The
+engine reads neither, so the reserve still paces only from the
+utilization reported past a warning threshold, and the #101 amendment's
+limits on it stand; pacing from `unifiedWindows` is not part of this
+change.
+
 ## Context
 
 ADR-0024 §7 set up a *development stage*: until the owner declares a
@@ -510,10 +519,11 @@ ruling before the keeper run.
   confirmed.
 - Every prompt, schema or model change costs a whole-corpus run of the
   stages it affects. Stage reuse and batched verification keep that
-  affordable, and pacing (#101) paces dispatch, from what the claude CLI
-  reports, to keep headroom on the subscription for development sessions
-  where the CLI reports enough to pace against; below its first warning
-  the reserve is no guarantee.
+  affordable, and pacing (#101) paces dispatch, from the utilization the
+  claude CLI reports past its warning thresholds, to keep headroom on the
+  subscription for development sessions; below its first warning the
+  reserve is no guarantee, since the engine does not read the use the CLI
+  reports below it (`unifiedWindows`, #452).
 - Stage keys make reuse sound, but only while every input is named in a
   key. The registry test, the stage labels and the convergence report's
   unlabelled-change check are the guards.

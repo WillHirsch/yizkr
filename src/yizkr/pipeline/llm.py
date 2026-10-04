@@ -23,8 +23,8 @@ Two Anthropic-backed engines, differing in how usage is billed:
   never fails: the engine waits for the limit to lift, or pauses the
   pass (``UsageLimitReached``), and it paces its calls, from what the
   CLI reports of each usage window, to leave a reserve of it to
-  development sessions — best-effort, since the CLI itself reports
-  nothing to pace against below its own first warning (see
+  development sessions — best-effort, since the engine paces only from
+  the utilization the CLI reports past its own warning thresholds (see
   "Subscription limits" below).
 
 Pick the model for either engine with $YIZKR_LLM_MODEL.
@@ -584,7 +584,12 @@ _PASSED_VARIABLES = frozenset(
 # Auto-memory would carry content from one call into the next. Error
 # reports and telemetry go to third parties and can describe the calls,
 # such as the paths of the files read (CLAUDE.md rule 7).
+# CLAUDE_CODE_HARBOR_KITE is the CLI's internal name for its cross-session
+# messaging socket, and 0 turns it off (as the pinned 2.1.288 reads it):
+# without it a telemetry-off -p call listens on a socket that the user's
+# other Claude Code sessions can reach.
 _PINNED_ENVIRONMENT = {
+    "CLAUDE_CODE_HARBOR_KITE": "0",
     "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000",
     "DISABLE_AUTOUPDATER": "1",
@@ -826,7 +831,7 @@ def _as_text(output: str | bytes | None) -> str:
 
 
 # -- what a call's stream reports ---------------------------------------------
-# A claude-code call's stream-json output (as the pinned 2.1.237 prints it)
+# A claude-code call's stream-json output (as the pinned 2.1.288 prints it)
 # opens with a system event of subtype init and ends with a result event:
 #
 # * the init event names the model the CLI runs the call on (model: the id
@@ -838,7 +843,8 @@ def _as_text(output: str | bytes | None) -> str:
 #   error as a success with is_error), why the model stopped generating on
 #   its final turn (stop_reason: end_turn; max_tokens when that turn hit
 #   the output token limit; refusal, ...), how many turns it took
-#   (num_turns) and the tokens it used (usage: input_tokens, output_tokens,
+#   (num_turns; 2.1.288 counts its own retries at the output limit among
+#   them) and the tokens it used (usage: input_tokens, output_tokens,
 #   cache_creation_input_tokens and cache_read_input_tokens, beside details
 #   this engine does not keep);
 # * an assistant event that stands for an API error names its class (its
@@ -886,7 +892,7 @@ STREAM_FIELDS = (
 )
 
 # a model id (claude-sonnet-5-20260901, claude-opus-5-5[1m]), a CLI version
-# (2.1.237), a result subtype (error_max_turns), a stop reason (max_tokens)
+# (2.1.288), a result subtype (error_max_turns), a stop reason (max_tokens)
 # and an API error's class (max_output_tokens), as plain tokens
 _MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,127}")
 _VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,63}")
@@ -1095,7 +1101,7 @@ FILE_ERROR = "file"
 UNCLASSIFIED = "unclassified"
 
 # The Read tool's errors, recognised by the words of the claude CLI's own
-# messages (as CLI 2.1.237 words them), each with the class a failure is
+# messages (as CLI 2.1.288 words them), each with the class a failure is
 # named by and its kind. The first pattern that matches gives the class,
 # so the request errors come first: the message refusing to read a whole
 # PDF also names the PDF renderer. A request error the CLI words
@@ -1295,7 +1301,7 @@ def tool_failures(
 # -- subscription limits ----------------------------------------------------
 # A claude-code call draws on the subscription's usage windows: a session
 # window of five hours and weekly ones, each reopening at a set time. The
-# CLI (as the pinned 2.1.237 prints it) reports them in its stream-json
+# CLI (as the pinned 2.1.288 prints it) reports them in its stream-json
 # output:
 #
 # * a rate_limit_event whenever its view of the limits changes, which in a new
@@ -1308,7 +1314,10 @@ def tool_failures(
 #   CLI's own warning thresholds: for the five-hour window, 90%, and only while
 #   at most 72% of it has elapsed; for the weekly window, 75%, 50% or 25%,
 #   early in the week. Short of that threshold, or past its elapsed-time gate,
-#   no utilization is reported at all;
+#   rate_limit_info carries no utilization. Every rate_limit_event also
+#   carries unifiedWindows, the use of the five_hour and seven_day windows
+#   ({utilization, resetsAt} each) whatever the thresholds, and limitScope;
+#   the engine reads neither;
 # * a call the API refuses for a limit ends its turn on an API error: an
 #   assistant event whose error is rate_limit (overloaded, for an
 #   overload) and whose text is the CLI's notice ("You've hit your
@@ -1319,11 +1328,8 @@ def tool_failures(
 #   limiting requests, which the CLI has already retried with a backoff
 #   of its own) reports no reset time.
 #
-# Not reported: the use of a window below the CLI's warning thresholds
-# (the CLI reads it from every response's headers, but prints it only in
-# its interactive status line), the size of a window in calls or tokens,
-# and how much of it other sessions use (the reported utilization
-# includes their use).
+# Not reported: the size of a window in calls or tokens, and how much of
+# it other sessions use (the reported utilization includes their use).
 #
 # So the engine, through the process's _Pacer:
 #
@@ -1342,15 +1348,13 @@ def tool_failures(
 #   between the first report in the window and the latest. Dispatch
 #   stops at the reserve line until the window reopens, and short of it
 #   is spaced so that what is left above the line lasts until the reset.
-#   This only ever paces from a report the CLI has actually sent, so it
-#   is best-effort, not a guarantee: below the CLI's first warning there
-#   is nothing to pace against, so the reserve gives no protection
-#   there, and a first warning that arrives late (close to 100% already
-#   used, or past its elapsed-time gate) can give little or none either.
-#   A local budget needing no CLI report is the only way to keep
-#   headroom below the first warning; the pass keeps none. The use per
-#   call includes what other sessions used in the same time, which makes
-#   the pacing stricter, never looser;
+#   This paces only from rate_limit_info's utilization, never from
+#   unifiedWindows, so it is best-effort, not a guarantee: below the CLI's
+#   first warning it has nothing to pace against, so the reserve gives no
+#   protection there, and a first warning that arrives late (close to 100%
+#   already used, or past its elapsed-time gate) can give little or none
+#   either. The use per call includes what other sessions used in the
+#   same time, which makes the pacing stricter, never looser;
 # * pauses dispatch process-wide the moment a report says a call ran on usage
 #   credits, whatever the reserve, whatever window it names or fails to, and
 #   whatever else it says or leaves out. This only stops dispatch once that
@@ -1419,6 +1423,8 @@ _WINDOW_NAMES = {
     "seven_day": "weekly window",
     "seven_day_opus": "weekly Opus window",
     "seven_day_sonnet": "weekly Sonnet window",
+    "seven_day_oauth_apps": "weekly window for apps signed in with OAuth",
+    "seven_day_cowork": "weekly Cowork window",
 }
 
 
@@ -1447,7 +1453,7 @@ def _fraction(value: Any) -> float | None:
     return number if number is not None and number >= 0 else None
 
 
-# every rateLimitType CLI 2.1.237 reports (five_hour, seven_day, ...) is
+# every rateLimitType CLI 2.1.288 reports (five_hour, seven_day, ...) is
 # a lowercase, underscore-separated token; anything else is unknown,
 # since a window name flows unescaped into log lines and call events
 _WINDOW_NAME = re.compile(r"[a-z0-9_]+")
@@ -2261,6 +2267,11 @@ class ClaudeCodeClient:
             self.ALLOWED_TOOLS,
             "--max-turns",
             str(self.max_turns),
+            # the permission mode -p starts in otherwise depends on the
+            # CLI version and the account: with telemetry off, 2.1.288
+            # starts in auto mode
+            "--permission-mode",
+            "default",
             # isolation from the owner's configuration: no settings files
             # (user, project or local, and with them no hooks, permission
             # rules, plugins or CLAUDE.md), no MCP servers beyond the empty

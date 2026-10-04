@@ -744,12 +744,18 @@ Two Anthropic-backed providers, differing in how usage is billed:
   paces its calls, from what the CLI itself reports of each window, to
   leave a reserve of it to development sessions
   (`$YIZKR_CLAUDE_RESERVE`, `$YIZKR_CLAUDE_MAX_WAIT`; docs/LLM_CACHE.md,
-  Subscription limits) — best-effort, since the CLI reports a window's
-  use only once one of its own warning thresholds is passed, so the
-  reserve gives no protection below the first of those.
+  Subscription limits) — best-effort, since the engine paces only from
+  the utilization the CLI reports once one of its own warning thresholds
+  is passed, so the reserve gives no protection below the first of
+  those. (CLI 2.1.288 also reports each window's use in its
+  `rate_limit_event`'s `unifiedWindows`, whatever the thresholds; the
+  engine does not read it.)
 
-  A pass runs on one **pinned** CLI version (#133). The first client
-  pins the installed version; every later client is checked when it
+  A pass runs on one **pinned** CLI version (#133): the one installed
+  when its first client starts. Install 2.1.288, which `claude-opus-5-5`
+  needs (2.1.280 or newer; docs/runbooks/scratch-run.md); the engine
+  itself does not refuse an older one. The first client pins the
+  installed version; every later client is checked when it
   starts, and every call against the version its stream reports. A
   mismatch (an update landed mid-pass, say from another Claude Code
   session's auto-update) raises `CliVersionMismatch`, which pauses the
@@ -763,7 +769,10 @@ Two Anthropic-backed providers, differing in how usage is billed:
   `--setting-sources ""` (no user, project or local settings, so no
   hooks, permission rules, plugins or CLAUDE.md), `--strict-mcp-config`
   (no MCP servers, claude.ai connectors included),
-  `--disable-slash-commands` (no skills), `--settings
+  `--disable-slash-commands` (no skills), `--permission-mode default`
+  (the mode 2.1.237 started `-p` in; 2.1.288 starts it in auto mode
+  when telemetry is off, whose availability depends on the account),
+  `--settings
   '{"autoCompactEnabled":true}'` (see below), and a child environment
   built from an **allowlist**. A call inherits only `PATH`; `HOME`,
   `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_OAUTH_TOKEN` (the config
@@ -792,7 +801,12 @@ Two Anthropic-backed providers, differing in how usage is billed:
   On top, the engine sets `DISABLE_AUTOUPDATER`, `DISABLE_GROWTHBOOK`
   (no server-side feature flags), `CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000`
   (see below), `CLAUDE_CODE_DISABLE_AUTO_MEMORY`,
-  `DISABLE_ERROR_REPORTING` and `DISABLE_TELEMETRY`. Calls run in
+  `DISABLE_ERROR_REPORTING`, `DISABLE_TELEMETRY` and
+  `CLAUDE_CODE_HARBOR_KITE=0` (the CLI's internal name for its
+  cross-session messaging socket: on 2.1.288, 0 keeps a telemetry-off
+  `-p` call from listening on a socket your other Claude Code sessions
+  can reach; it has no effect on 2.1.237, which has no socket). Calls
+  run in
   `<tmp>/yizkr-claude-code`.
 
   The config directory still reaches a call. Its **global config**

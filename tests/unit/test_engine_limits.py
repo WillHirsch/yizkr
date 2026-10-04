@@ -563,6 +563,30 @@ class TestAskingAgain:
         assert paused.value.resumes_at == datetime.fromtimestamp(resets, UTC)
         assert "weekly window" in str(paused.value)
 
+    @pytest.mark.parametrize(
+        ("window", "described"),
+        [
+            ("seven_day_opus", "weekly Opus window"),
+            ("seven_day_sonnet", "weekly Sonnet window"),
+            (
+                "seven_day_oauth_apps",
+                "weekly window for apps signed in with OAuth",
+            ),
+            # a codename: the CLI's own name says as much as any wording
+            ("seven_day_omelette", "seven_day_omelette window"),
+            ("seven_day_cowork", "weekly Cowork window"),
+            ("seven_day_invented", "seven_day_invented window"),
+        ],
+    )
+    def test_a_pause_describes_the_window(self, cli, clock, window, described):
+        """Each window name CLI 2.1.288 reports is described in words; a
+        name it does not know is given as the CLI names it (#452)."""
+        cli.script = [usage_window(START + 3 * 24 * HOUR, window)]
+        with pytest.raises(UsageLimitReached) as paused:
+            ClaudeCodeClient().complete("Read the letter.")
+        assert paused.value.window == window
+        assert described in str(paused.value)
+
     def test_a_rate_limit_that_outlasts_the_wait_pauses_the_pass(
         self, cli, clock
     ):
@@ -744,6 +768,65 @@ class TestReserve:
 
     def test_nothing_is_paced_below_the_clis_first_warning(self, pacer, clock):
         calls(pacer, *[report(resets_at=START + HOUR)] * 20)
+        assert admit(pacer) == {"waited": 0.0, "refused": 0, "held": None}
+        assert clock.slept == []
+
+    def test_unified_windows_are_not_paced_from(self, pacer, clock):
+        """CLI 2.1.288 reports every window's use in unifiedWindows, past
+        the warning thresholds or not (#452). The engine paces from
+        rate_limit_info's utilization alone, so a report whose
+        unifiedWindows say a window is nearly used up, and whose
+        utilization is absent, paces nothing."""
+        resets = START + HOUR
+        info = report(resets_at=resets) | {
+            "unifiedWindows": {
+                "five_hour": {"utilization": 0.95, "resetsAt": int(resets)},
+                "seven_day": {
+                    "utilization": 0.9,
+                    "resetsAt": int(resets + 24 * HOUR),
+                },
+            },
+            "limitScope": "account",
+        }
+        calls(pacer, *[info] * 20)
+        assert admit(pacer) == {"waited": 0.0, "refused": 0, "held": None}
+        assert clock.slept == []
+
+    def test_unified_windows_never_move_the_reported_utilization(
+        self, pacer, clock
+    ):
+        """With utilization reported too, the spacing is the one that
+        utilization alone gives (as in the test below), whatever
+        unifiedWindows say of the windows (#452 review)."""
+        resets = START + HOUR
+        unified = {
+            "unifiedWindows": {
+                "five_hour": {"utilization": 0.95, "resetsAt": int(resets)},
+                "seven_day": {
+                    "utilization": 0.9,
+                    "resetsAt": int(resets + 24 * HOUR),
+                },
+            },
+            "limitScope": "account",
+        }
+        calls(
+            pacer,
+            report(0.50, resets_at=resets) | unified,
+            *[None] * 9,
+            report(0.60, resets_at=resets) | unified,
+        )
+        assert clock.slept == []
+        record = admit(pacer)
+        assert clock.slept == [pytest.approx(240.0)]
+        assert record["waited"] == pytest.approx(240.0)
+        assert record["held"] == THROTTLE
+
+    def test_limit_scope_names_no_window(self, pacer, clock):
+        """A report with limitScope and no rateLimitType names no window,
+        so its utilization paces nothing (#452 review)."""
+        info = report(0.80, resets_at=START + 2 * HOUR)
+        del info["rateLimitType"]
+        calls(pacer, info | {"limitScope": "five_hour"})
         assert admit(pacer) == {"waited": 0.0, "refused": 0, "held": None}
         assert clock.slept == []
 
@@ -1081,6 +1164,105 @@ class TestUtilizationDocs:
     def test_llm_cache_doc_does_not_mention_surpassed_threshold(self):
         text = (ROOT / "docs" / "LLM_CACHE.md").read_text()
         assert "surpassedThreshold" not in text
+
+
+class TestUnifiedWindowsDocs:
+    """CLI 2.1.288 reports a window's use below its warning thresholds in
+    unifiedWindows (#452), so nothing here says it reports none, and
+    every description of what it reports says the engine reads neither
+    unifiedWindows nor limitScope."""
+
+    # the wordings of the claim that the CLI reports no use below its
+    # warning thresholds, or that the reserve paces from whatever it sends
+    OVERCLAIMS = (
+        "no utilization is reported at all",
+        "no `utilization` is reported at all",
+        "the use of a window below the CLI's warning",
+        "the CLI itself reports nothing to pace against",
+        "only ever paces from a report the CLI has actually sent",
+        "there is no `utilization` to pace against",
+        "the CLI reports a window's use only once",
+    )
+
+    @staticmethod
+    def normalised(text: str) -> str:
+        return " ".join(text.split())
+
+    def texts(self) -> dict[str, str]:
+        return {
+            "llm.py": self.normalised(inspect.getsource(llm)),
+            "LLM_CACHE.md": self.normalised(
+                (ROOT / "docs" / "LLM_CACHE.md").read_text()
+            ),
+            "README.md": self.normalised(
+                (ROOT / "src" / "yizkr" / "pipeline" / "README.md").read_text()
+            ),
+        }
+
+    def test_no_text_makes_the_old_claim(self):
+        for name, text in self.texts().items():
+            for overclaim in self.OVERCLAIMS:
+                assert overclaim not in text, (name, overclaim)
+
+    def test_llm_py_says_the_engine_reads_neither(self):
+        source = inspect.getsource(llm)
+        section = source.split("# -- subscription limits", 1)[1]
+        section = self.normalised(section.split("RATE_LIMIT_EVENT =", 1)[0])
+        assert "unifiedWindows" in section and "limitScope" in section
+        assert "# the engine reads neither" in section
+        assert "never from # unifiedWindows" in section
+
+    def test_llm_cache_doc_says_the_engine_reads_neither(self):
+        text = self.texts()["LLM_CACHE.md"]
+        assert "`unifiedWindows`" in text and "`limitScope`" in text
+        assert "the engine reads neither" in text
+
+    def test_adr_0025_is_amended(self):
+        text = (
+            ROOT / "docs" / "adr" / "0025-development-by-scratch-runs.md"
+        ).read_text()
+        amendment = text.split("Amended by #452 (2026-10-04):", 1)[1]
+        amendment = self.normalised(amendment.split("\n\n", 1)[0])
+        assert "`unifiedWindows`" in amendment
+        assert "reads neither" in amendment
+
+
+class TestPinDocs:
+    """The docs name 2.1.288 as the pin and say how to install it, and the
+    pipeline README names both settings that keep a call as it ran on
+    2.1.237 (#452 review)."""
+
+    RUNBOOK = ROOT / "docs" / "runbooks" / "scratch-run.md"
+    README = ROOT / "src" / "yizkr" / "pipeline" / "README.md"
+
+    def test_the_runbook_installs_exactly_the_pin(self):
+        text = self.RUNBOOK.read_text()
+        assert "npm install -g @anthropic-ai/claude-code@2.1.288" in text
+        assert "export DISABLE_AUTOUPDATER=1" in text
+        flat = " ".join(text.split())
+        assert "the binary an editor bundles" in flat
+        assert "is no pin" in flat
+
+    def test_no_text_names_the_old_pin(self):
+        texts = {
+            "llm.py": inspect.getsource(llm),
+            "LLM_CACHE.md": (ROOT / "docs" / "LLM_CACHE.md").read_text(),
+            "scratch-run.md": self.RUNBOOK.read_text(),
+            "README.md": self.README.read_text(),
+        }
+        for name, text in texts.items():
+            flat = " ".join(text.split())
+            for old in ("pinned 2.1.237", "claude-code@2.1.237"):
+                assert old not in flat, (name, old)
+            assert "2.1.288" in flat, name
+
+    def test_the_readme_names_the_pin_and_both_settings(self):
+        text = self.README.read_text()
+        assert "Install 2.1.288, which `claude-opus-5-5`" in " ".join(
+            text.split()
+        )
+        assert "`--permission-mode default`" in text
+        assert "`CLAUDE_CODE_HARBOR_KITE=0`" in text
 
 
 # -- engine calls as events ---------------------------------------------------
