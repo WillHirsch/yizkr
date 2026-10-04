@@ -1256,8 +1256,11 @@ class TestPinDocs:
                 assert old not in flat, (name, old)
             assert "2.1.288" in flat, name
 
-    def test_the_readme_names_both_settings(self):
+    def test_the_readme_names_the_pin_and_both_settings(self):
         text = self.README.read_text()
+        assert "Install 2.1.288, which `claude-opus-5-5`" in " ".join(
+            text.split()
+        )
         assert "`--permission-mode default`" in text
         assert "`CLAUDE_CODE_HARBOR_KITE=0`" in text
 
