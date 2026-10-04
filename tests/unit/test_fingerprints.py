@@ -21,11 +21,13 @@ from yizkr.pipeline.fingerprints import (
     claim_prints,
     cluster_id,
     excerpt_span,
+    locator_text,
     mention_fingerprint,
     mention_map,
     mentions_of,
 )
 from yizkr.pipeline.gedcom import adapt_gedcom
+from yizkr.pipeline.stages import canonical_json, sha256_text
 
 SOURCES = {source.key: source for source in u.SOURCES}
 RUN = {
@@ -411,6 +413,48 @@ def test_a_narrowed_or_widened_date_does_not_keep_its_fingerprint():
         print_of(birth_claim(value=year, qualifiers=found)) for found in ranged
     }
     assert len(bounded) == len(ranged)
+    # an earliest bound is not a latest bound of the same year
+    assert print_of(
+        birth_claim(value=year, qualifiers=[bound("earliest_date", 1918)])
+    ) != print_of(
+        birth_claim(value=year, qualifiers=[bound("latest_date", 1918)])
+    )
+    # qualifiers of one property in either order are the same claim
+    both = [bound("earliest_date", 1917), bound("earliest_date", 1918)]
+    assert print_of(birth_claim(value=year, qualifiers=both)) == print_of(
+        birth_claim(value=year, qualifiers=list(reversed(both)))
+    )
+
+
+def place_born(first_id: str, place_id: str) -> ClaimBatch:
+    """Gustav's birth, with a qualifier naming the place he was born in
+    by its local id."""
+    born = birth_claim(
+        subject=first_id,
+        qualifiers=[
+            {
+                "property": "place_of_birth",
+                "value": {"type": "item", "value": ref(place_id)},
+            }
+        ],
+    )
+    extract = gustav([born], first_id)
+    entities = [entity.model_dump() for entity in extract.entities]
+    entities.append(
+        {
+            "id": place_id,
+            "label": "Flörburg",
+            "kind": "place",
+            "mention_lines": [2],
+        }
+    )
+    return batch(entities, [born])
+
+
+def test_a_qualifier_names_its_local_ref_by_its_mention():
+    assert claim_prints(BIRTH, place_born("e1", "e2")) == claim_prints(
+        BIRTH, place_born("e7", "e3")
+    )
 
 
 def test_each_component_is_part_of_the_claim_fingerprint():
@@ -421,10 +465,6 @@ def test_each_component_is_part_of_the_claim_fingerprint():
         # on another page, a printed page beside it, or a region of it
         birth_claim(page_number="2"),
         birth_claim(page_number="1", printed_page_number="17"),
-        birth_claim(
-            page_number="1",
-            region={"x": 10, "y": 20, "width": 30, "height": 5},
-        ),
         # of another property
         {**birth_claim(page_number="1"), "property": "date_of_baptism"},
         # of another subject: a QID, or the document itself
@@ -447,6 +487,88 @@ def test_each_component_is_part_of_the_claim_fingerprint():
     ]
     prints = {print_of(found) for found in others}
     assert base not in prints and len(prints) == len(others)
+
+
+def test_every_number_of_a_region_is_kept_unrounded():
+    region = {"x": 10, "y": 20, "width": 30, "height": 5}
+    regions = [
+        region,
+        {**region, "x": 11},
+        {**region, "y": 21},
+        {**region, "width": 31},
+        {**region, "height": 6},
+        {**region, "x": 10.4},
+    ]
+    prints = {
+        print_of(birth_claim(page_number="1", region=found))
+        for found in regions
+    }
+    assert len(prints) == len(regions)
+    assert print_of(birth_claim(page_number="1")) not in prints
+
+
+def test_the_locator_is_on_one_line_as_the_writer_stores_it():
+    assert locator_text(None) == ""
+    assert locator_text(" 17 ") == "17"
+    assert locator_text("3\n4") == "3 | 4"
+    assert locator_text("3\r\n4\t5") == "3 | 4 5"
+    # inner spaces are kept, as the writer keeps them
+    assert locator_text("3  4") == "3  4"
+    assert print_of(
+        birth_claim(page_number="1", printed_page_number=" 17 ")
+    ) == print_of(birth_claim(page_number="1", printed_page_number="17"))
+    assert print_of(birth_claim(page_number="3\n4")) == print_of(
+        birth_claim(page_number="3 | 4")
+    )
+    assert print_of(birth_claim(page_number="3\n4")) != print_of(
+        birth_claim(page_number="3 4")
+    )
+
+
+def test_a_claim_print_holds_the_components_it_hashes():
+    """#198 matches claims on fewer components than the whole print; the
+    print is the SHA-256 of them, in this order, behind the tag "claim"
+    that keeps it from ever equalling a mention's print or a cluster's
+    id."""
+    found = birth_claim(
+        value={"type": "time", "year": 1919},
+        qualifiers=[bound("earliest_date", 1918)],
+        page_number="1",
+        printed_page_number="17",
+    )
+    extract = gustav([found])
+    (printed,) = claim_prints(BIRTH, extract)
+    (gustav_mention,) = mentions_of(BIRTH, extract)
+    assert printed.artifact == BIRTH
+    assert printed.subject == ("mention", gustav_mention.fingerprint)
+    assert printed.property == "date_of_birth"
+    assert printed.value == ("time", 1919, None, None, "year", "gregorian")
+    assert printed.qualifiers == (
+        (
+            "earliest_date",
+            ("time", 1918, None, None, "year", "gregorian"),
+        ),
+    )
+    assert printed.locator == ("1", "17", None)
+
+    def thawed(value):
+        if isinstance(value, tuple):
+            return [thawed(item) for item in value]
+        return value
+
+    assert printed.fingerprint == sha256_text(
+        canonical_json(
+            [
+                "claim",
+                printed.artifact,
+                thawed(printed.subject),
+                printed.property,
+                thawed(printed.value),
+                thawed(printed.qualifiers),
+                thawed(printed.locator),
+            ]
+        )
+    )
 
 
 def test_the_subject_is_its_mention_never_its_local_id():
@@ -476,11 +598,10 @@ def test_the_subject_is_its_mention_never_its_local_id():
 
 def test_values_of_every_type_are_canonical():
     pairs = [
-        # a string's whitespace and decomposed accents, and an integral
-        # float, read alike
+        # decomposed accents and an integral float read alike
         (
-            {"type": "string", "value": "Hutmacher  "},
-            {"type": "string", "value": "Hutmacher"},
+            {"type": "string", "value": "Hutmacher Lo\u0308big"},
+            {"type": "string", "value": "Hutmacher Löbig"},
         ),
         (
             {
@@ -508,6 +629,16 @@ def test_values_of_every_type_are_canonical():
     distinct = [
         {"type": "string", "value": "Hutmacher"},
         {"type": "string", "value": "hutmacher"},
+        # whitespace in a value is kept, as the instance keeps it
+        {"type": "string", "value": "Hutmacher Löbig"},
+        {"type": "string", "value": "Hutmacher  Löbig"},
+        {"type": "string", "value": "Hutmacher "},
+        {"type": "external-id", "value": "12 34"},
+        {"type": "external-id", "value": "12  34"},
+        {
+            "type": "monolingual",
+            "value": {"text": "Hutmacher  Löbig", "language": "de"},
+        },
         {"type": "external-id", "value": "Hutmacher"},
         {
             "type": "monolingual",
@@ -550,6 +681,56 @@ def test_a_local_ref_without_a_mention_is_refused():
             ),
             mention_map(BIRTH, extract),
         )
+
+
+def test_a_local_id_two_mentions_give_is_refused():
+    extract = the_extract("e1", "e1")
+    with pytest.raises(ValueError, match="'e1' names two mentions"):
+        mention_map(BIRTH, extract)
+
+
+def test_a_qualifiers_ref_is_a_mention_without_a_manifest():
+    """In a batch without a manifest, a ref only a qualifier names is a
+    mention too, and keys the claim by its mention."""
+    chunked = batch(
+        claims=[
+            {
+                **claim(
+                    BIRTH,
+                    ref("c1:e1", "Gustav Löbig", "human"),
+                    "date_of_birth",
+                    {"type": "time", "year": 1919},
+                ),
+                "qualifiers": [
+                    {
+                        "property": "place_of_birth",
+                        "value": {
+                            "type": "item",
+                            "value": ref("c1:e2", "Flörburg", "place"),
+                        },
+                    }
+                ],
+            }
+        ]
+    )
+    (printed,) = claim_prints(BIRTH, chunked)
+    mentions = mention_map(BIRTH, chunked)
+    assert printed.qualifiers == (
+        ("place_of_birth", ("item", ("mention", mentions["c1:e2"]))),
+    )
+
+
+def test_mentions_are_the_batchs_artifacts_and_the_source_the_claims():
+    """The batch's artifact keys its mentions; a claim citing another
+    artifact keeps that artifact as its own component."""
+    cited = gustav([birth_claim(DIRECTORY)])
+    (printed,) = claim_prints(BIRTH, cited)
+    (mention,) = mentions_of(BIRTH, cited)
+    assert printed.artifact == DIRECTORY
+    assert printed.subject == ("mention", mention.fingerprint)
+    (elsewhere,) = claim_prints(DIRECTORY, cited)
+    assert elsewhere.subject != printed.subject
+    assert elsewhere.fingerprint != printed.fingerprint
 
 
 def test_a_batch_without_a_manifest_keys_its_claims_on_its_refs():

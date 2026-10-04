@@ -61,8 +61,10 @@ mentions, never on clusters:
   vocabulary key or the artifact itself, each tagged with its kind;
 - its **property**: the manifest key;
 - its **value**, canonical: an item named the way a subject is; a
-  string, an external id or a monolingual text by its canonical label
-  (with the language as given); a date by its year, month, day,
+  string, an external id or a monolingual text by its text in NFC, as
+  the instance keeps it, with every space kept (with the language as
+  given), so values that differ only in whitespace are different
+  claims; a date by its year, month, day,
   precision and calendar, every one kept as stated, so a narrowed or
   widened date has another fingerprint; a coordinate and a quantity by
   their numbers, an integral float read as its integer;
@@ -70,8 +72,10 @@ mentions, never on clusters:
   each kept as often as it is given: the earliest and latest bounds of a
   date are qualifiers, and are never dropped or rounded;
 - its **artifact**: the SHA-1 its source names;
-- its **locator**: the page number, the printed page number beside it
-  (each canonical, empty for none) and the region.
+- its **locator**: the page number and the printed page number beside
+  it, each on one line as the writer stores it (NFC, whitespace at
+  either end dropped, a line break inside made " | " and a tab a space;
+  empty for none), and the region.
 
 The excerpt, the confidence, the judgement note, the curated flag and a
 row approval are not part of it: they say how the claim was read or
@@ -80,10 +84,19 @@ part of it either, so a clustering computed again with other members
 leaves every claim fingerprint as it is; a run diff compares membership
 apart, as merges and splits. Two claims of one batch equal in every
 component share a fingerprint: they are one assertion, made twice.
+
+A claim fingerprint is stable for as long as its mentions' fingerprints
+are, and inherits their limits: in a batch without an entity manifest a
+mention's stand-in label is the first a ref gives, so listing the claims
+in another order, or labelling the ref otherwise in an earlier claim,
+can change it; and two mentions equal in every other component swap
+occurrences, and so their claims swap fingerprints, when a manifest
+lists them in the other order.
 """
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections import Counter
 from collections.abc import Iterable, Iterator
@@ -111,6 +124,20 @@ from yizkr.pipeline.stages import canonical_json, sha256_text
 _MENTION = "mention"
 _CLUSTER = "cluster"
 _CLAIM = "claim"
+
+# the writer's line breaks (a CR LF pair being one) and whitespace, which
+# a locator is put on one line by, as the writer stores it
+_LINE_BREAKS = "".join(
+    map(chr, (0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x2028, 0x2029))
+)
+_WHITESPACE = _LINE_BREAKS + "".join(
+    map(
+        chr,
+        (0x09, 0x20, 0xA0, 0x1680, 0x180E, *range(0x2000, 0x200B))
+        + (0x202F, 0x205F, 0x3000),
+    )
+)
+_LINE_BREAK = re.compile("\r\n|[" + _LINE_BREAKS + "]")
 
 
 def canonical_label(label: str | None) -> str:
@@ -283,11 +310,11 @@ def canonical_value(value: object, mentions: dict[str, str]) -> list:
     if isinstance(value, ItemValue):
         return ["item", _entity(value.value, mentions)]
     if isinstance(value, StringValue | ExternalIdValue):
-        return [value.type, canonical_label(value.value)]
+        return [value.type, unicodedata.normalize("NFC", value.value)]
     if isinstance(value, MonolingualValue):
         return [
             "monolingual",
-            canonical_label(value.value.text),
+            unicodedata.normalize("NFC", value.value.text),
             value.value.language,
         ]
     if isinstance(value, TimeValue):
@@ -309,6 +336,17 @@ def canonical_value(value: object, mentions: dict[str, str]) -> list:
     if isinstance(value, QuantityValue):
         return ["quantity", _number(value.amount)]
     raise TypeError(f"no fingerprint for a value {value!r}")
+
+
+def locator_text(text: str | None) -> str:
+    """A page number or a printed page number as a claim fingerprint
+    takes it: on one line as the writer stores it, in NFC, whitespace at
+    either end dropped, each line break inside made " | " and each tab a
+    space; empty for none."""
+    if not text:
+        return ""
+    text = unicodedata.normalize("NFC", text).strip(_WHITESPACE)
+    return _LINE_BREAK.sub(" | ", text).replace("\t", " ")
 
 
 @dataclass(frozen=True)
@@ -340,8 +378,8 @@ def claim_print(claim: Claim, mentions: dict[str, str]) -> ClaimPrint:
     source = claim.source
     region = source.region
     locator = [
-        canonical_label(source.page_number),
-        canonical_label(source.printed_page_number),
+        locator_text(source.page_number),
+        locator_text(source.printed_page_number),
         None
         if region is None
         else [
@@ -387,11 +425,17 @@ def claim_fingerprint(claim: Claim, mentions: dict[str, str]) -> str:
 
 
 def mention_map(artifact: str, batch: ClaimBatch) -> dict[str, str]:
-    """Each local id of the batch, by the fingerprint of its mention."""
-    return {
-        mention.local_id: mention.fingerprint
-        for mention in mentions_of(artifact, batch)
-    }
+    """Each local id of the batch, by the fingerprint of its mention.
+    Raises ValueError for a local id two mentions give."""
+    found: dict[str, str] = {}
+    for mention in mentions_of(artifact, batch):
+        if mention.local_id in found:
+            raise ValueError(
+                f"local id {mention.local_id!r} names two mentions of its "
+                f"batch"
+            )
+        found[mention.local_id] = mention.fingerprint
+    return found
 
 
 def claim_prints(artifact: str, batch: ClaimBatch) -> list[ClaimPrint]:
