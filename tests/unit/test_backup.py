@@ -21,6 +21,7 @@ import json
 import os
 import re
 import threading
+import types
 from pathlib import Path
 
 import pytest
@@ -110,12 +111,19 @@ FACTS = [
 ]
 
 
+# the time the exclusion report's clock reads, unless a test sets another
+NOW = datetime.datetime(2026, 9, 28, 9, 0, tzinfo=datetime.UTC)
+
+
 class TestExclusionReport:
     """The non-privileged export's call (ADR-0020): every person the facts
-    query lists, with the births the privacy module's query reads (#334)."""
+    query lists, with the births the privacy module's query reads (#334).
+    The cutoff year is read from a clock the test sets, never the real one
+    (#437)."""
 
     def report(self, vocabulary, facts=FACTS, births=BIRTHS, **options):
         calls = []
+        options.setdefault("now", lambda: NOW)
 
         def run(query: str) -> list[dict]:
             calls.append(query)
@@ -147,9 +155,62 @@ class TestExclusionReport:
 
     def test_the_cutoff_moves_with_cutoff_years(self, vocabulary):
         # a cutoff in 1990 releases the births of 1990 and before
-        years = datetime.datetime.now(datetime.UTC).year - 1990
-        found, _ = self.report(vocabulary, cutoff_years=years)
+        found, _ = self.report(vocabulary, cutoff_years=NOW.year - 1990)
         assert {"Q303", "Q304", "Q308"} & found.excluded == {"Q303"}
+
+    def test_the_cutoff_moves_with_the_clock(self, vocabulary):
+        # a cutoff in 1989 keeps a birth of 1990; the same cutoff_years a
+        # year later releases it
+        years = NOW.year - 1989
+        later = NOW.replace(year=NOW.year + 1)
+        found, _ = self.report(vocabulary, cutoff_years=years)
+        moved, _ = self.report(
+            vocabulary, cutoff_years=years, now=lambda: later
+        )
+        assert "Q304" in found.excluded - moved.excluded
+
+    def test_the_cutoff_is_read_in_utc(self, vocabulary):
+        # New Year's Day at Kredfeld (UTC+1) is still the old year in UTC,
+        # whose cutoff in 1989 keeps a birth of 1990
+        years = NOW.year - 1989
+        new_year = datetime.datetime(
+            NOW.year + 1,
+            1,
+            1,
+            0,
+            30,
+            tzinfo=datetime.timezone(datetime.timedelta(hours=1)),
+        )
+        found, _ = self.report(
+            vocabulary, cutoff_years=years, now=lambda: new_year
+        )
+        assert "Q304" in found.excluded
+
+    def test_the_cutoff_reads_the_real_utc_clock_by_default(
+        self, vocabulary, monkeypatch
+    ):
+        """With no clock given, the cutoff is read from the system's clock
+        in UTC: here a stand-in for datetime that reads a fixed time, so
+        the test reads no real clock."""
+        asked = []
+
+        class Fixed(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                asked.append(tz)
+                return cls(NOW.year + 1, 3, 14, tzinfo=datetime.UTC)
+
+        monkeypatch.setattr(
+            backup,
+            "datetime",
+            types.SimpleNamespace(datetime=Fixed, UTC=datetime.UTC),
+        )
+        # a cutoff in 1989 by NOW, in 1990 by the year after
+        found, _ = self.report(
+            vocabulary, cutoff_years=NOW.year - 1989, now=None
+        )
+        assert asked == [datetime.UTC]
+        assert "Q304" in found.included
 
     def test_births_are_read_with_the_privacy_modules_query(self, vocabulary):
         properties, _ = vocabulary
@@ -4523,11 +4584,11 @@ class TestTheBackupsNonprivilegedExport:
 
         monkeypatch.setattr("yizkr.core.wiki.WikiClient", Wiki)
         # the backup waits on a clock that only its naps move on
-        clock, wait = Clock(), backup.await_query_service
+        clock, await_query_service = Clock(), backup.await_query_service
         monkeypatch.setattr(
             backup,
             "await_query_service",
-            lambda run, revisions, **options: wait(
+            lambda run, revisions, **options: await_query_service(
                 run, revisions, timeout=60, sleep=clock.sleep, clock=clock
             ),
         )

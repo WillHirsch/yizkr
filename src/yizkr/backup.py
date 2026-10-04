@@ -278,11 +278,14 @@ def exclusion_report(
     cutoff_years: int = DEFAULT_CUTOFF_YEARS,
     run: sparql.Runner | None = None,
     vocabulary: tuple[dict[str, str], dict[str, str]] | None = None,
+    *,
+    now: Callable[[], datetime.datetime] | None = None,
 ) -> ExclusionReport:
     """Which people the non-privileged export must not mention, and why: every
     item the privacy module's selection finds. The queries go to the
     instance's query service, with its vocabulary, unless `run` and
-    `vocabulary` are given."""
+    `vocabulary` are given. The cutoff year is `cutoff_years` before the
+    year `now` reads (the system's UTC clock by default)."""
     if vocabulary is None:
         from yizkr.core.wiki import WikiClient
 
@@ -305,7 +308,8 @@ def exclusion_report(
     )
     births = latest_births(run(prefixes + BIRTHS_QUERY.format(**properties)))
 
-    cutoff_year = datetime.datetime.now(datetime.UTC).year - cutoff_years
+    read_now = now or (lambda: datetime.datetime.now(datetime.UTC))
+    cutoff_year = read_now().astimezone(datetime.UTC).year - cutoff_years
     report = ExclusionReport()
     for binding in bindings:
         qid = binding["person"]["value"].rsplit("/", 1)[-1]

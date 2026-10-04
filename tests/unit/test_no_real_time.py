@@ -104,7 +104,6 @@ ALLOWED = (
         inside="TestTerminalKeys.test_the_interval_is_slept_on_the_real_clock"
         "_by_default",
     ),
-    Allowed("test_backup.py", HELD, "phase 2 of #437"),
 )
 
 
