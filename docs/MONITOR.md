@@ -45,7 +45,30 @@ prints one view and exits. `--no-page` leaves the status page unwritten.
 `--serve` serves the page (Serving the page, below). Off a terminal
 (output piped or redirected) the view is printed afresh each time the run
 changes, without colour, and no keys are read. Lines stop one column
-short of the terminal's width, which some terminals would wrap.
+short of the terminal's width, which some terminals would wrap, counted
+in the columns a terminal gives them: an East Asian wide or fullwidth
+character takes two, a combining mark none, so every line fits one row.
+
+On a terminal the view stays on screen and each refresh writes only the
+lines that changed: the cursor moves to each one's row and clears it to
+its end, and whatever the last view drew below the new one's end is
+cleared. A refresh in which nothing changed writes nothing. Lines
+compare with their colours, so a line that only changes colour is
+written again. The footer (the status page's note, the served address,
+a command's answer, the help and the key hint) keeps the terminal's last
+rows when the window has room for it, so a longer or shorter view above
+it does not move it; the row below it is left free for the cursor and
+the command line. The whole view is drawn again on the first refresh,
+when the terminal's size changes, and after the command line or a
+confirmation has written over it. Press Ctrl-L to draw the whole view
+again, as in other terminal programs, if something else has written
+over it; resuming the monitor after Ctrl-Z (`fg`) does the same at the
+next refresh. The served page writes nothing to the terminal, neither
+its requests nor the errors of a client that drops the connection. So
+the served address reaches the terminal once at the start and again
+only on a whole redraw: editors that forward ports they find in a
+terminal's output (VS Code's port auto-forwarding, set to read output)
+are not told of a new server every refresh.
 
 **Commands.** Press `:` or Enter in the view to type one:
 
