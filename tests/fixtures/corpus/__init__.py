@@ -219,8 +219,8 @@ TRAPS = (
         "letter, outside the corpus, names her Sipkje. So two sources give "
         "Florence different mothers by name. Each of the certificate's two "
         "mentions, Florence and the mother it names, meets the export's "
-        "Florence, who is Florence Faxridge by birth, by name; and the "
-        "certificate makes one the other's mother.",
+        "Florence by name, since she is Florence Faxridge by birth; and "
+        "the certificate makes one the other's mother.",
         "The closure joins the certificate's two mentions through the "
         "export's Florence, though no pair of them was ever proposed, and "
         "the impossibility filter refuses the candidate cluster: a kin "
