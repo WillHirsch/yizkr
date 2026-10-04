@@ -271,8 +271,9 @@ def stated_parent_candidates(places: list[PlaceRecord]) -> list[Question]:
     """Parent candidates from the containers a place's records state.
 
     Each stated container proposes every other existing place whose label
-    or an alias is that container's name, folding only case and accents
-    (ADR-0035 §7); namesakes are each asked, never one guessed. A
+    or an alias is that container's name, folded for case and accents and
+    with umlauts written out (ADR-0035 §7); namesakes are each asked,
+    never one guessed. A
     candidate already among the place's containers, or one the graph puts
     inside the place, is not asked. Structure never rides the generative
     path: these arrive pre-evidenced."""

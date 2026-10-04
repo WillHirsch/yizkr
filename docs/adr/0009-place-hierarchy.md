@@ -13,7 +13,8 @@ ADR-0035 §2.2), read from the run directories that wrote the graph
 (`reconcile-places --run DIR`): each written place reaches its QID
 through its batch (its resolved QID, else the item `write.json` says the
 writer minted), and each stated container proposes every other place
-whose label or alias is that name, folding case and accents; namesakes
+whose label or alias is that name, folded as ADR-0035 §7 folds a
+part; namesakes
 are each asked, and a place the graph already puts the place in, or
 puts inside it, is not. Questions are ordered spine-first by the
 graph's own containment: a question whose places hold more places comes
