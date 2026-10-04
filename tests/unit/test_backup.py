@@ -121,6 +121,21 @@ class TestExclusionReport:
     The cutoff year is read from a clock the test sets, never the real one
     (#437)."""
 
+    @pytest.fixture(autouse=True)
+    def no_real_clock(self, monkeypatch):
+        """A read of the real clock in the backup module fails the test."""
+
+        class Unread(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                raise AssertionError("the real clock was read")
+
+        monkeypatch.setattr(
+            backup,
+            "datetime",
+            types.SimpleNamespace(datetime=Unread, UTC=datetime.UTC),
+        )
+
     def report(self, vocabulary, facts=FACTS, births=BIRTHS, **options):
         calls = []
         options.setdefault("now", lambda: NOW)
