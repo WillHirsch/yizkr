@@ -23,8 +23,11 @@ import os
 import random
 import re
 import shutil
+import socket
+import struct
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime, timedelta
@@ -39,8 +42,11 @@ from yizkr.pipeline.monitor import (
     ABORTED,
     ACTIVE,
     CLEAR_BELOW,
+    CLEAR_LINE,
+    CLEAR_SCREEN,
     GRAMMAR,
     HELP,
+    HIDE_CURSOR,
     HOME,
     LATEST_ALERTS,
     OTHER,
@@ -2538,6 +2544,17 @@ class TestTerminalView:
         )
         assert len(plain) < 50 and len(filled) == 50
         assert filled[-2:] == plain[-2:] == footer
+        # while waiting for a run as well
+        waiting = summarise_run(summary.path.parent / "missing", NOW)
+        assert not waiting.found
+        filled = render_lines(
+            waiting, width=100, height=50, footer=footer, fill=True
+        )
+        assert len(filled) == 50 and filled[-2:] == footer
+        assert filled[0].startswith("waiting for")
+        filled = render_lines(
+            summary, width=100, height=50, footer=footer, fill=True
+        )
         # the body as it was, blank lines between it and the footer
         body = len(plain) - 3
         assert filled[:body] == plain[:body]
@@ -2546,6 +2563,54 @@ class TestTerminalView:
         assert render_lines(
             summary, width=100, height=5, footer=footer, fill=True
         ) == render_lines(summary, width=100, height=5, footer=footer)
+
+    @pytest.mark.parametrize(
+        "text, width, clipped",
+        [
+            ("Peiltal", 7, "Peiltal"),
+            ("Peiltal", 6, "Pei..."),
+            ("Peiltal", 4, "P..."),
+            # no room for the dots: the text is only cut
+            ("Peiltal", 3, "Pei"),
+            ("Peiltal", 1, "P"),
+            ("Калдовское", 10, "Калдовское"),
+            ("Калдовское", 6, "Кал..."),
+            # fullwidth characters take two columns each
+            ("Ｐｅｉｌｔａｌ", 14, "Ｐｅｉｌｔａｌ"),
+            ("Ｐｅｉｌｔａｌ", 13, "Ｐｅｉｌｔ..."),
+            ("Ｐｅｉｌｔａｌ", 8, "Ｐｅ..."),
+            ("Ｐｅｉｌｔａｌ", 3, "Ｐ"),
+            ("Ｐｅｉｌｔａｌ", 1, ""),
+            # a combining mark takes none, and stays with its letter
+            ("Lo\u0308big", 5, "Lo\u0308big"),
+            ("Lo\u0308bigsen", 6, "Lo\u0308b..."),
+            ("Lo\u0308bigsen", 2, "Lo\u0308"),
+        ],
+    )
+    def test_lines_are_cut_to_terminal_columns(self, text, width, clipped):
+        assert monitor._clip(text, width) == clipped
+        assert sum(_cells(char) for char in clipped) <= width
+
+    def test_a_fullwidth_reason_fits_one_row(self, run):
+        append(
+            run,
+            [
+                control(
+                    600,
+                    "pause",
+                    reason="Ｐｅｉｌｔａｌ ｃｅｒｔｉｆｉｃａｔｅｓ and "
+                    "Ｋｒｅｄｆｅｌｄ ｌｅｔｔｅｒｓ",
+                )
+            ],
+        )
+        # the reason is cut inside its fullwidth words
+        lines = render_lines(summarise_run(run, NOW), width=79)
+        assert any("Ｐｅｉｌｔａｌ" in line for line in lines)
+        assert any(
+            "Ｐｅｉｌｔａｌ" in line and line.endswith("...") for line in lines
+        )
+        for line in lines:
+            assert sum(_cells(char) for char in line) <= 79
 
     def test_it_shows_what_the_run_is_doing(self, summary):
         view = render_terminal(summary, width=200)
@@ -2748,6 +2813,36 @@ class TestServing:
                 return response.status, response.read(), dict(response.headers)
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read(), dict(exc.headers)
+
+    def test_a_reset_connection_writes_nothing(self, run, summary, capfd):
+        """A client that resets the connection mid-request (a browser
+        cancelling a reload, a port-forwarding proxy) is no error the
+        terminal hears of: under watch, the terminal is the view's."""
+        write_status_page(run, summary)
+        server = monitor.serve_status(run, "127.0.0.1", 0)
+        handled = threading.Event()
+        shutdown_request = server.shutdown_request
+
+        def finished(request_):
+            # after the request's error, if any, is handled
+            shutdown_request(request_)
+            handled.set()
+
+        server.shutdown_request = finished
+        try:
+            client = socket.create_connection(server.server_address[:2])
+            # a request line, and no end to the headers: the server waits
+            # for them, and reads the reset instead
+            client.sendall(b"GET / HTTP/1.1\r\nHost: Kredfeld\r\n")
+            client.setsockopt(
+                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+            )
+            client.close()
+            assert handled.wait(HANG_GUARD)
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert capfd.readouterr() == ("", "")
 
     # what every response of the server carries, an error's included
     HEADERS = {
@@ -3277,16 +3372,41 @@ class Writes(io.StringIO):
 _SEQUENCE = re.compile(r"\x1b\[([0-9;?]*)([A-Za-z])")
 
 
-class FakeTerminal:
-    """The screen a terminal shows for what is written to it: the cursor
-    moves, line and screen clears, and text the view writes; styles (and
-    showing or hiding the cursor) change nothing on it. A newline moves to
-    the start of the next row, as a terminal's output processing makes it
-    do."""
+def _cells(char):
+    """The cells a terminal gives `char`: 2 for an East Asian wide or
+    fullwidth character, 0 for a combining mark, 1 for any other."""
+    if unicodedata.category(char) in ("Mn", "Me"):
+        return 0
+    return 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
 
-    def __init__(self, rows):
-        self.grid = [[] for _ in range(rows)]
+
+class FakeTerminal:
+    """The screen a terminal of `columns` by `rows` shows for what is
+    written to it: the cursor moves (clamped to the screen), line and
+    screen clears, and text the view writes; styles (and showing or
+    hiding the cursor) change nothing on it. Text wraps as a terminal's
+    does: a character written in the last column leaves the cursor there,
+    and the next character starts the next row. A wide character takes
+    two cells, and moves to the next row when only one is left; a
+    combining mark joins the character before it. A newline moves to the
+    start of the next row, as a terminal's output processing makes it do,
+    and on the bottom row scrolls the screen up a row."""
+
+    def __init__(self, rows, columns=40):
+        self.rows, self.columns = rows, columns
+        self.grid = [self._blank() for _ in range(rows)]
         self.row = self.column = 0
+        self.scrolled = 0
+
+    def _blank(self):
+        return [" "] * self.columns
+
+    def _down(self):
+        if self.row == self.rows - 1:
+            self.grid = [*self.grid[1:], self._blank()]
+            self.scrolled += 1
+        else:
+            self.row += 1
 
     def feed(self, text):
         position = 0
@@ -3299,28 +3419,48 @@ class FakeTerminal:
             char = text[position]
             position += 1
             if char == "\n":
-                self.row, self.column = self.row + 1, 0
+                self._down()
+                self.column = 0
             elif char == "\r":
                 self.column = 0
             else:
-                line = self.grid[self.row]
-                line.extend(" " * (self.column - len(line)))
-                line[self.column : self.column + 1] = [char]
-                self.column += 1
+                self._put(char)
+
+    def _put(self, char):
+        cells = _cells(char)
+        if cells == 0:
+            # on the cell before the cursor's
+            row, column = self.row, max(0, self.column - 1)
+            while column > 0 and self.grid[row][column] == "":
+                column -= 1
+            self.grid[row][column] += char
+            return
+        if self.column + cells > self.columns:
+            self._down()
+            self.column = 0
+        line = self.grid[self.row]
+        line[self.column] = char
+        if cells == 2:
+            line[self.column + 1] = ""
+        self.column += cells
 
     def _control(self, arguments, final):
+        # a cursor waiting past the last column clears from that column
+        column = min(self.column, self.columns - 1)
         if final == "H":
-            row, _, column = arguments.partition(";")
-            self.row = int(row or 1) - 1
-            self.column = int(column or 1) - 1
+            row, _, at = arguments.partition(";")
+            self.row = min(max(int(row or 1), 1), self.rows) - 1
+            self.column = min(max(int(at or 1), 1), self.columns) - 1
         elif final == "K":
-            del self.grid[self.row][self.column :]
+            line = self.grid[self.row]
+            line[column:] = [" "] * (self.columns - column)
         elif final == "J" and arguments == "2":
-            self.grid = [[] for _ in self.grid]
+            self.grid = [self._blank() for _ in self.grid]
         elif final == "J":
-            del self.grid[self.row][self.column :]
-            for line in self.grid[self.row + 1 :]:
-                line.clear()
+            line = self.grid[self.row]
+            line[column:] = [" "] * (self.columns - column)
+            for below in range(self.row + 1, self.rows):
+                self.grid[below] = self._blank()
 
     def text(self):
         lines = ["".join(line).rstrip() for line in self.grid]
@@ -3402,9 +3542,14 @@ class TestDifferentialRedraw:
         assert screen.frame(lines, self.SIZE) == monitor._frame(lines, False)
         assert screen.frame(lines, self.SIZE) == ""
 
-    def test_the_screen_always_shows_the_latest_frame(self):
+    @pytest.mark.parametrize("size", [(40, 20), (12, 6)])
+    def test_the_screen_always_shows_the_latest_frame(self, size):
         """Whatever frames follow each other, the terminal ends up showing
-        the latest, with the cursor below it."""
+        the latest, as a whole redraw of it would, with the cursor below
+        it: with frames as tall as the view gets (a row short of the
+        window) and lines as wide (a column short of it), wide and
+        combining characters among them."""
+        columns, rows = size
         words = [
             "Peiltal",
             "Kredfeld",
@@ -3413,20 +3558,38 @@ class TestDifferentialRedraw:
             "",
             "Калдовское",
             "Snylsjum",
+            # fullwidth forms, two columns each
+            "Ｐｅｉｌｔａｌ",
+            "Ｋｒｅｄｆｅｌｄ",
+            # a combining diaeresis
+            "Lo\u0308big",
         ]
         chooser = random.Random(1863)
         screen = monitor._Screen()
-        terminal = FakeTerminal(rows=20)
+        terminal = FakeTerminal(rows=rows, columns=columns)
+
+        def line():
+            # a word, or as long as the view's widest line; each cut to
+            # the view's width, as render_lines cuts it
+            many = 1 if chooser.random() < 0.5 else columns
+            text = " ".join(chooser.choice(words) for _ in range(many))
+            return monitor._clip(text, columns - 1)
+
         for _ in range(300):
-            lines = [
-                chooser.choice(words) for _ in range(chooser.randint(1, 12))
-            ]
-            terminal.feed(screen.frame(lines, self.SIZE))
+            count = (
+                rows - 1 if chooser.random() < 0.3 else chooser.randint(1, 12)
+            )
+            lines = [line() for _ in range(min(count, rows - 1))]
+            terminal.feed(screen.frame(lines, size))
+            whole = FakeTerminal(rows=rows, columns=columns)
+            whole.feed(monitor._frame(lines, True))
             shown = _plain(lines)
             while shown and not shown[-1]:
                 shown.pop()
-            assert terminal.text() == shown
+            assert terminal.text() == whole.text() == shown
+            assert terminal.grid == whole.grid
             assert (terminal.row, terminal.column) == (len(lines), 0)
+            assert terminal.scrolled == 0
 
     def _watched(self, run, keys, size=lambda: (120, 60), **options):
         out = Writes()
@@ -3479,12 +3642,74 @@ class TestDifferentialRedraw:
         assert len(keys.prompts) == 2
         assert [frame.count(HOME) for frame in out.writes[:-1]] == [1, 1]
 
-    def test_the_help_line_brings_a_whole_redraw(self, run):
+    def test_the_help_line_is_written_in_the_footer(self, run):
+        """The help is the footer's message line: it writes over nothing,
+        so it brings no whole redraw."""
         keys = ScriptedKeys(["?", None, "q"])
         out = self._watched(run, keys)
         frames = out.writes[:-1]
-        assert [frame.count(HOME) for frame in frames] == [1, 1]
-        assert "help" in frames[1]
+        assert [frame.count(HOME) for frame in frames] == [1, 0]
+        assert "commands: pause|resume|abort" in frames[1]
+
+    def test_ctrl_l_brings_a_whole_redraw(self, run):
+        keys = ScriptedKeys([monitor.REPAINT, None, "q"])
+        out = self._watched(run, keys)
+        assert monitor.REPAINT == "\x0c"
+        assert [frame.count(HOME) for frame in out.writes[:-1]] == [1, 1]
+
+    def test_continuing_after_a_stop_brings_a_whole_redraw(self, run):
+        """After Ctrl-Z the shell writes over the view; `fg` sends SIGCONT,
+        and the next refresh draws the whole view."""
+        signal = pytest.importorskip("signal")
+        if not hasattr(signal, "SIGCONT"):
+            pytest.skip("no SIGCONT here")
+        before = signal.getsignal(signal.SIGCONT)
+        waits = []
+
+        def between():
+            waits.append(None)
+            if len(waits) == 2:
+                os.kill(os.getpid(), signal.SIGCONT)
+
+        keys = ScriptedKeys([None, None, "q"], between=between)
+        out = self._watched(run, keys)
+        # the first view; nothing at the unchanged refresh; the whole view
+        # after the signal
+        assert [frame.count(HOME) for frame in out.writes[:-1]] == [1, 1]
+        # the handler before the monitor's is back
+        assert signal.getsignal(signal.SIGCONT) == before
+
+    def test_the_view_is_a_row_short_of_the_window(self, tmp_path):
+        """The view takes every row but the last, which the cursor waits
+        on: the screen never scrolls, and the key hint keeps the row above
+        the last however the run changes."""
+        run = record(tmp_path / "run")
+        documents = [CERT, POSTCARD, DIRECTORY, CARD]
+        refreshes = []
+
+        def between():
+            refreshes.append(None)
+            if len(refreshes) <= len(documents):
+                subject = documents[len(refreshes) - 1]
+                append(run, [stage("done", 590, subject, "critique")])
+
+        columns, rows = 30, 6
+        keys = ScriptedKeys([None] * len(documents) + ["q"], between=between)
+        out = self._watched(
+            run, keys, size=lambda: (columns, rows), serve="127.0.0.1:0"
+        )
+        frames = out.writes[:-1]
+        assert frames[0].startswith(HIDE_CURSOR + CLEAR_SCREEN + HOME)
+        assert frames[0].count("\n") == rows - 1
+        terminal = FakeTerminal(rows=rows, columns=columns)
+        for frame in frames:
+            terminal.feed(frame)
+            assert terminal.scrolled == 0
+            assert (terminal.row, terminal.column) == (rows - 1, 0)
+            shown = ["".join(line).rstrip() for line in terminal.grid]
+            assert shown[rows - 2].startswith("':' or Enter")
+            assert shown[rows - 3].startswith("serving the status")
+            assert shown[rows - 1] == ""
 
     def test_a_resize_brings_a_whole_redraw(self, run):
         sizes = iter([(120, 60), (120, 60), (90, 60), (90, 60)])
@@ -3513,7 +3738,15 @@ class TestTerminalKeys:
                     # a prompt takes a whole line, and returns to single keys
                     os.write(leader, b"pause stage critique\n")
                     assert keys.prompt("command> ") == "pause stage critique"
-                    assert "command> " in out.getvalue()
+                    # on the row the cursor waits on, below the view: no
+                    # newline scrolls the view's top line away
+                    assert out.getvalue() == (
+                        SHOW_CURSOR
+                        + "\r"
+                        + CLEAR_LINE
+                        + "command> "
+                        + HIDE_CURSOR
+                    )
                     os.write(leader, b":")
                     assert keys.wait(HANG_GUARD) == ":"
                 assert termios.tcgetattr(follower) == before

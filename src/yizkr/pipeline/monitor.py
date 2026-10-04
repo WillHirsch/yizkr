@@ -82,6 +82,7 @@ import os
 import re
 import select
 import shutil
+import signal
 import socket
 import socketserver
 import stat
@@ -240,10 +241,29 @@ def _clean(text: str) -> str:
     return " ".join(_safe(text).split())
 
 
+def _columns(char: str) -> int:
+    """The terminal columns `char` takes: 2 for an East Asian wide or
+    fullwidth character, 0 for a combining mark, 1 for any other."""
+    if unicodedata.category(char) in ("Mn", "Me"):
+        return 0
+    return 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+
+
 def _clip(text: str, width: int) -> str:
-    if len(text) <= width:
+    """`text` cut to `width` terminal columns (_columns), "..." ending
+    what is cut when there is room for it, so a line never wraps."""
+    if text.isascii():
+        if len(text) <= width:
+            return text
+        return text[:width] if width < 4 else text[: width - 3] + "..."
+    if sum(map(_columns, text)) <= width:
         return text
-    return text[: max(0, width - 3)] + "..."
+    room = width if width < 4 else width - 3
+    end = used = 0
+    while end < len(text) and used + _columns(text[end]) <= room:
+        used += _columns(text[end])
+        end += 1
+    return text[:end] if width < 4 else text[:end] + "..."
 
 
 def _token(value: Any, width: int = 40) -> str:
@@ -1605,6 +1625,8 @@ CLEAR_SCREEN = "\x1b[2J"
 CLEAR_LINE = "\x1b[K"
 CLEAR_BELOW = "\x1b[J"
 HIDE_CURSOR = "\x1b[?25l"
+# Ctrl-L, the key that asks a terminal program to repaint its screen
+REPAINT = "\x0c"
 SHOW_CURSOR = "\x1b[?25h"
 
 _COLUMNS = (
@@ -1623,8 +1645,8 @@ HELP = (
     "  e.g. 'pause stage extraction checking the prompt', 'abort kind media'",
     "  a pause holds until a resume; an abort holds for the rest of the "
     "invocation, and invoking the run again resumes it",
-    "keys: ':' or Enter types a command; 'q' quits the monitor (the run "
-    "goes on)",
+    "keys: ':' or Enter types a command; Ctrl-L repaints the view; 'q' "
+    "quits the monitor (the run goes on)",
 )
 
 
@@ -2379,6 +2401,11 @@ class _PageHandler(http.server.BaseHTTPRequestHandler):
 class _Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        """Quiet: a traceback on the terminal would break the view (a
+        client that resets or closes mid-request, as a browser cancelling
+        a reload does, is no fault of the page's)."""
+
     def server_bind(self) -> None:
         """Bind, without the reverse name lookup HTTPServer makes of its
         address, which can take seconds and serves nothing here."""
@@ -2721,7 +2748,9 @@ class TerminalKeys:
         import tty
 
         self._restore()
-        self.out.write(f"{SHOW_CURSOR}\r\n{text}")
+        # the cursor rests on the free row below the view: the prompt
+        # opens there, so opening it scrolls nothing away
+        self.out.write(f"{SHOW_CURSOR}\r{CLEAR_LINE}{text}")
         self.out.flush()
         try:
             data = os.read(self.fd, 4096)
@@ -2813,11 +2842,13 @@ class _Screen:
     """What the view has drawn on a terminal, so that a refresh writes
     only the lines that changed. Lines compare as render_lines gives them,
     styles included, so a line whose colour changes is drawn again; each
-    is cut to the terminal's width, so it fills one row. A frame leaves
-    the cursor at the start of the row below its last line, where a
-    prompt opens. The whole view is drawn again on the first frame, when
-    the terminal's size changes, and after `forget` (something else has
-    written over the screen)."""
+    is cut to the terminal's width in columns (_clip counts a wide
+    character as 2 and a combining mark as 0), so it fills one row. A
+    frame leaves the cursor at the start of the row below its last line,
+    where a prompt opens. The whole view is drawn again on the first
+    frame, when the terminal's size changes, and after `forget`
+    (something else has written over the screen, or the operator asks
+    for a repaint)."""
 
     def __init__(self) -> None:
         self._lines: list[str] | None = None
@@ -2845,6 +2876,24 @@ class _Screen:
             # the old frame's tail, below the new frame's last line
             return "".join(changed) + end + CLEAR_BELOW
         return "".join(changed) + end if changed else ""
+
+
+def _on_continue(action: Callable[[], None]) -> Callable[[], None]:
+    """Call `action` each time the process is continued after a stop
+    (SIGCONT, as the shell's `fg` sends after Ctrl-Z), until the function
+    returned is called, which puts the earlier handler back. Nothing is
+    done where there is no SIGCONT or off the main thread, where no
+    handler can be set."""
+    number = getattr(signal, "SIGCONT", None)
+    if (
+        number is None
+        or threading.current_thread() is not threading.main_thread()
+    ):
+        return lambda: None
+    previous = signal.signal(number, lambda *_: action())
+    if previous is None:
+        previous = signal.SIG_DFL
+    return lambda: signal.signal(number, previous)
 
 
 def _typed_command(
@@ -2884,7 +2933,9 @@ def watch(
     `serve` ('ADDRESS:PORT') serves the page, and nothing else, for as
     long as the monitor runs (serve_status); it needs `page`, and is off
     by default. ':' or Enter opens a command line (handle_command): pause,
-    resume or abort the run or a slice. On an output that is not a
+    resume or abort the run or a slice. Ctrl-L draws the whole view
+    again, and so does the next refresh after the process is continued
+    from a stop (_on_continue). On an output that is not a
     terminal the view is printed afresh whenever the run changes, without
     styles, and commands are not read. `once` prints one view, writes the
     page and returns. `keys`, `clock`, `size` (columns, rows) and
@@ -2919,6 +2970,12 @@ def watch(
     message = ""
     shown = None
     screen = _Screen()
+    # the shell may draw over the view while the monitor is stopped
+    restore = (
+        _on_continue(screen.forget)
+        if terminal and not once
+        else (lambda: None)
+    )
     try:
         with keys:
             while True:
@@ -2973,10 +3030,12 @@ def watch(
                 elif key in ("?", "h"):
                     message = " | ".join(line.strip() for line in HELP)
                     shown = None
+                elif key == REPAINT:
                     screen.forget()
     except KeyboardInterrupt:
         return 0
     finally:
+        restore()
         if server is not None:
             server.shutdown()
             server.server_close()
