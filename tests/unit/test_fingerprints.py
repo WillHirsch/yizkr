@@ -375,8 +375,11 @@ def test_a_narrowed_or_widened_date_does_not_keep_its_fingerprint():
     stated = {
         "day": {"type": "time", "year": 1919, "month": 1, "day": 7},
         "another day": {"type": "time", "year": 1919, "month": 7, "day": 1},
+        "the next day": {"type": "time", "year": 1919, "month": 1, "day": 8},
         "month": {"type": "time", "year": 1919, "month": 1},
+        "another month": {"type": "time", "year": 1919, "month": 2},
         "year": {"type": "time", "year": 1919},
+        "the decade's year": {"type": "time", "year": 1910},
         "decade": {"type": "time", "year": 1910, "precision": "decade"},
         "julian": {
             "type": "time",
@@ -431,7 +434,15 @@ def test_each_component_is_part_of_the_claim_fingerprint():
         },
         {
             **birth_claim(page_number="1"),
+            "subject": {"kind": "qid", "qid": "Q43"},
+        },
+        {
+            **birth_claim(page_number="1"),
             "subject": {"kind": "artifact", "sha1": BIRTH},
+        },
+        {
+            **birth_claim(page_number="1"),
+            "subject": {"kind": "artifact", "sha1": DIRECTORY},
         },
     ]
     prints = {print_of(found) for found in others}
@@ -509,6 +520,8 @@ def test_values_of_every_type_are_canonical():
         {"type": "quantity", "amount": 2},
         {"type": "quantity", "amount": 2.5},
         {"type": "coordinate", "latitude": 51, "longitude": 7.5},
+        {"type": "coordinate", "latitude": 52, "longitude": 7.5},
+        {"type": "coordinate", "latitude": 51, "longitude": 7},
         {
             "type": "coordinate",
             "latitude": 51,
@@ -516,7 +529,9 @@ def test_values_of_every_type_are_canonical():
             "precision": 0.1,
         },
         {"type": "item", "value": {"kind": "vocab", "key": "human"}},
+        {"type": "item", "value": {"kind": "vocab", "key": "place"}},
         {"type": "item", "value": {"kind": "qid", "qid": "Q42"}},
+        {"type": "item", "value": {"kind": "qid", "qid": "Q43"}},
     ]
     prints = {print_of(birth_claim(value=value)) for value in distinct}
     assert len(prints) == len(distinct)
