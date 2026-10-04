@@ -563,6 +563,26 @@ class TestAskingAgain:
         assert paused.value.resumes_at == datetime.fromtimestamp(resets, UTC)
         assert "weekly window" in str(paused.value)
 
+    @pytest.mark.parametrize(
+        ("window", "described"),
+        [
+            ("seven_day_opus", "weekly Opus window"),
+            ("seven_day_sonnet", "weekly Sonnet window"),
+            ("seven_day_oauth_apps", "weekly window for apps signed in"),
+            ("seven_day_omelette", "weekly omelette window"),
+            ("seven_day_cowork", "weekly Cowork window"),
+            ("seven_day_invented", "seven_day_invented window"),
+        ],
+    )
+    def test_a_pause_describes_the_window(self, cli, clock, window, described):
+        """Each window name CLI 2.1.288 reports is described in words; a
+        name it does not know is given as the CLI names it (#452)."""
+        cli.script = [usage_window(START + 3 * 24 * HOUR, window)]
+        with pytest.raises(UsageLimitReached) as paused:
+            ClaudeCodeClient().complete("Read the letter.")
+        assert paused.value.window == window
+        assert described in str(paused.value)
+
     def test_a_rate_limit_that_outlasts_the_wait_pauses_the_pass(
         self, cli, clock
     ):
@@ -744,6 +764,27 @@ class TestReserve:
 
     def test_nothing_is_paced_below_the_clis_first_warning(self, pacer, clock):
         calls(pacer, *[report(resets_at=START + HOUR)] * 20)
+        assert admit(pacer) == {"waited": 0.0, "refused": 0, "held": None}
+        assert clock.slept == []
+
+    def test_unified_windows_are_not_paced_from(self, pacer, clock):
+        """CLI 2.1.288 reports every window's use in unifiedWindows, past
+        the warning thresholds or not (#452). The engine paces from
+        rate_limit_info's utilization alone, so a report whose
+        unifiedWindows say a window is nearly used up, and whose
+        utilization is absent, paces nothing."""
+        resets = START + HOUR
+        info = report(resets_at=resets) | {
+            "unifiedWindows": {
+                "five_hour": {"utilization": 0.95, "resetsAt": int(resets)},
+                "seven_day": {
+                    "utilization": 0.9,
+                    "resetsAt": int(resets + 24 * HOUR),
+                },
+            },
+            "limitScope": "account",
+        }
+        calls(pacer, *[info] * 20)
         assert admit(pacer) == {"waited": 0.0, "refused": 0, "held": None}
         assert clock.slept == []
 
@@ -1081,6 +1122,40 @@ class TestUtilizationDocs:
     def test_llm_cache_doc_does_not_mention_surpassed_threshold(self):
         text = (ROOT / "docs" / "LLM_CACHE.md").read_text()
         assert "surpassedThreshold" not in text
+
+
+class TestUnifiedWindowsDocs:
+    """CLI 2.1.288 reports a window's use below its warning thresholds in
+    unifiedWindows (#452), so nothing here says it reports none, and
+    every description of what it reports says the engine reads neither
+    unifiedWindows nor limitScope."""
+
+    OVERCLAIM = "no utilization is reported at all"
+
+    def test_llm_py_says_the_engine_reads_neither(self):
+        source = inspect.getsource(llm)
+        section = source.split("# -- subscription limits", 1)[1]
+        section = section.split("RATE_LIMIT_EVENT =", 1)[0]
+        assert "unifiedWindows" in section and "limitScope" in section
+        assert "the engine reads neither" in section
+        assert self.OVERCLAIM not in source
+        assert "the use of a window below the CLI's warning" not in source
+
+    def test_llm_cache_doc_says_the_engine_reads_neither(self):
+        text = (ROOT / "docs" / "LLM_CACHE.md").read_text()
+        assert "`unifiedWindows`" in text and "`limitScope`" in text
+        assert "the engine reads\n  neither" in text
+        assert "no `utilization` is reported at all" not in text
+        assert "the use of a window below the CLI's warning" not in text
+
+    def test_adr_0025_is_amended(self):
+        text = (
+            ROOT / "docs" / "adr" / "0025-development-by-scratch-runs.md"
+        ).read_text()
+        amendment = text.split("Amended by #452 (2026-10-04):", 1)[1]
+        amendment = amendment.split("\n\n", 1)[0]
+        assert "`unifiedWindows`" in amendment
+        assert "reads neither" in amendment
 
 
 # -- engine calls as events ---------------------------------------------------

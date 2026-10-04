@@ -999,7 +999,7 @@ in, and the kind of call:
 
 **What a call's stream reported.** A claude-code call's `call` event
 carries what its stream-json output reported of it (`llm.stream_report`,
-as CLI 2.1.237 prints it), each field only when the stream gave it in
+as CLI 2.1.288 prints it), each field only when the stream gave it in
 the form expected of it, whether the call was answered or not. The
 fields are those its final attempt's stream reported: from its init
 event, the `model` it ran on (the model id the configured name resolved
@@ -1024,7 +1024,7 @@ off before its init event names no model.
 A call the CLI gave up on at the output limit (Rejection, above) has the
 outcome `error`, its `error` is `OutputLimitReached`, its `api_error` is
 `max_output_tokens`, and its `stop_reason` is the notice's
-(`stop_sequence`), as CLI 2.1.237 prints them. The anomaly checks count
+(`stop_sequence`), as CLI 2.1.288 prints them. The anomaly checks count
 such a chunk call as a truncation, never as a failed call
 (docs/ANOMALIES.md), and the run report counts it, per stage, among the
 calls stopped at the output limit (docs/RUN_REPORT.md). A give-up an
@@ -1151,7 +1151,7 @@ time. A call a limit refuses never fails a document, and the engine
 paces its calls to leave a reserve of each window to development
 sessions (#101; `yizkr.pipeline.llm`, "Subscription limits").
 
-**What the CLI reports**, as the pinned 2.1.237 prints it in its
+**What the CLI reports**, as the pinned 2.1.288 prints it in its
 stream-json output:
 
 - a `rate_limit_event` whenever its view of the limits changes, which in
@@ -1164,8 +1164,12 @@ stream-json output:
   passes one of the CLI's own warning thresholds: for the five-hour
   window, 90%, and only while at most 72% of the window has elapsed;
   for the weekly window, 75%, 50% or 25%, early in the week (as CLI
-  2.1.237's `-p` mode reports them). Short of that threshold, or past
-  its elapsed-time gate, no `utilization` is reported at all;
+  2.1.288's `-p` mode reports them). Short of that threshold, or past
+  its elapsed-time gate, `rate_limit_info` has no `utilization`. Every
+  `rate_limit_event` also carries `unifiedWindows`, the use of the
+  `five_hour` and `seven_day` windows (`utilization` and `resetsAt`
+  each) whatever the thresholds, and `limitScope`; the engine reads
+  neither;
 - a call the API refuses ends on an API error: an assistant event whose
   `error` is `rate_limit` (`overloaded` for an overload), with the CLI's
   notice as its text ("You've hit your session limit · resets 3pm"), and
@@ -1175,11 +1179,9 @@ stream-json output:
   limiting requests, which the CLI has already retried with a backoff of
   its own) gives no reset time.
 
-**What it does not report**: the use of a window below the CLI's warning
-thresholds (the CLI reads it from every response's headers, but shows it
-only in its interactive status line), the size of a window in calls or
-tokens, and how much of it other sessions use: the reported utilization
-includes their use.
+**What it does not report**: the size of a window in calls or tokens,
+and how much of it other sessions use: the reported utilization includes
+their use.
 
 **A refused call** is never answered with its notice, so the cache never
 keeps one. The engine asks again after the reported reset of a used-up
@@ -1223,20 +1225,20 @@ above the line lasts until the reset: with a share *left* above the line,
 a use *per call* and *T* seconds to the reset, one call every
 *T* × *per call* / *left* seconds.
 
-**What the reserve achieves and what it cannot.** It only ever paces
-from a report the CLI has actually sent, so it inherits exactly the gaps
-above: below the first warning threshold there is no `utilization` to
-pace against, so the reserve gives no protection there at all, whatever
+**What the reserve achieves and what it cannot.** It paces only from
+`rate_limit_info`'s `utilization`, never from `unifiedWindows`: below
+the first warning threshold it has nothing to pace against, so the
+reserve gives no protection there at all, whatever
 `$YIZKR_CLAUDE_RESERVE` is set to; and a first warning that arrives late
 — close to 100% already used, or past its elapsed-time gate — can give
 little or none either, since there may be no room left to pace before
 the CLI refuses outright at 100%. What it does achieve is pacing dispatch
 from whichever warning it does get, so that ordinary use across a
 window's many calls keeps what is left above the line spread out to the
-reset rather than spent all at once. The only way to keep headroom below
-the first warning is a local budget that needs no CLI report at all,
-counting a window's own use independently; the owner decided
-(2026-09-28) not to add one, so this reserve is best-effort pacing from
+reset rather than spent all at once. Keeping headroom below the first
+warning needs either a local budget counting a window's own use or
+pacing from `unifiedWindows`; the owner decided (2026-09-28) not to add
+the first, and the engine does not do the second, so this reserve is best-effort pacing from
 the CLI's own reports, not a guarantee of headroom. Two more limits:
 
 - the use per call includes what other sessions used meanwhile, which

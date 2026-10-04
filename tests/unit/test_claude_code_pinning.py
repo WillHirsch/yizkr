@@ -373,6 +373,9 @@ class TestIsolation:
         # Read is the one tool approved and the one tool offered
         assert command[command.index("--allowedTools") + 1] == "Read"
         assert command[command.index("--tools") + 1] == "Read"
+        # the permission mode is named, never left to the CLI version and
+        # the account (2.1.288 starts -p in auto mode with telemetry off)
+        assert command[command.index("--permission-mode") + 1] == "default"
 
     def test_compaction_is_pinned_on(self, cli):
         """Command-line settings outrank the global config, which the CLI
@@ -415,6 +418,8 @@ class TestIsolation:
             "DISABLE_AUTO_COMPACT": "1",
             "DISABLE_COMPACT": "1",
             "DISABLE_GROWTHBOOK": "",
+            # the cross-session messaging socket (#452)
+            "CLAUDE_CODE_HARBOR_KITE": "1",
             # the shell is named in the model's context, and the locale
             # formats numbers there
             "SHELL": "/usr/bin/zsh",
@@ -459,6 +464,7 @@ class TestIsolation:
         monkeypatch.setenv("DISABLE_AUTOUPDATER", "0")
         monkeypatch.setenv("DISABLE_GROWTHBOOK", "")
         monkeypatch.setenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "4321")
+        monkeypatch.setenv("CLAUDE_CODE_HARBOR_KITE", "1")
         ClaudeCodeClient().complete("transcribe")
         for env in (cli.probes[0]["env"], cli.calls[0][1]["env"]):
             assert env["DISABLE_AUTOUPDATER"] == "1"
@@ -467,6 +473,8 @@ class TestIsolation:
             assert env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "64000"
             assert env["DISABLE_ERROR_REPORTING"] == "1"
             assert env["DISABLE_TELEMETRY"] == "1"
+            # no call listens on the cross-session messaging socket (#452)
+            assert env["CLAUDE_CODE_HARBOR_KITE"] == "0"
 
     def test_empty_variables_are_left_out(self, cli, monkeypatch, tmp_path):
         """An empty value is unset for the CLI and for the helpers here
@@ -687,11 +695,13 @@ class TestEffectiveConfig:
         assert arguments[0] == "-p"  # the executable's path is left out
         assert arguments[arguments.index("--model") + 1] == "claude-sonnet-5"
         assert arguments[arguments.index("--effort") + 1] == "low"
+        assert arguments[arguments.index("--permission-mode") + 1] == "default"
         assert "--session-id" not in arguments
         assert config["working_directory"] == str(client.workdir)
         environment = config["environment"]
         assert environment["set"] == {
             "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+            "CLAUDE_CODE_HARBOR_KITE": "0",
             "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000",
             "DISABLE_AUTOUPDATER": "1",
             "DISABLE_ERROR_REPORTING": "1",
@@ -742,6 +752,30 @@ class TestEffectiveConfig:
         assert environment_changed != before
         monkeypatch.setitem(llm._PINNED_SETTINGS, "autoCompactEnabled", False)
         assert ClaudeCodeClient().config_hash != environment_changed
+
+    def test_hash_follows_the_permission_mode_and_the_socket(
+        self, cli, monkeypatch
+    ):
+        """Both settings that keep a call as 2.1.237 ran it on 2.1.288
+        are in the hashed config (#452)."""
+        before = ClaudeCodeClient().config_hash
+        monkeypatch.setitem(
+            llm._PINNED_ENVIRONMENT, "CLAUDE_CODE_HARBOR_KITE", "1"
+        )
+        assert ClaudeCodeClient().config_hash != before
+        monkeypatch.setitem(
+            llm._PINNED_ENVIRONMENT, "CLAUDE_CODE_HARBOR_KITE", "0"
+        )
+        assert ClaudeCodeClient().config_hash == before
+        command = ClaudeCodeClient._command
+        monkeypatch.setattr(
+            ClaudeCodeClient,
+            "_command",
+            lambda self: [
+                "auto" if part == "default" else part for part in command(self)
+            ],
+        )
+        assert ClaudeCodeClient().config_hash != before
 
     def test_hash_is_stable_and_follows_the_config(self, cli):
         low = ClaudeCodeClient(effort="low")

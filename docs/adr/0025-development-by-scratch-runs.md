@@ -85,6 +85,15 @@ label; it makes the media object an item of its own and raises the flag
 itself (ADR-0010). §3 is
 amended in place.
 
+Amended by #452 (2026-10-04): the pass runs on claude CLI 2.1.288. That
+version reports a window's use below its warning thresholds too: every
+`rate_limit_event` carries `unifiedWindows` (`utilization` and
+`resetsAt` of the five-hour and weekly windows) and `limitScope`. The
+engine reads neither, so the reserve still paces only from the
+utilization reported past a warning threshold, and the #101 amendment's
+limits on it stand; pacing from `unifiedWindows` is not part of this
+change.
+
 ## Context
 
 ADR-0024 §7 set up a *development stage*: until the owner declares a

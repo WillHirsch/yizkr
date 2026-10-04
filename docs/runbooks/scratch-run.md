@@ -36,8 +36,20 @@ and `yizkr.reset` for the reset.
   - `$YIZKR_CLAUDE_RESERVE` and `$YIZKR_CLAUDE_MAX_WAIT`, the engine's
     pacing (docs/LLM_CACHE.md, Subscription limits).
 - **Keep the claude CLI still.** A run keeps the claude CLI version it
-  started on. Set `DISABLE_AUTOUPDATER=1` in every shell and Claude Code
-  session on the machine for the length of the run.
+  started on. The pinned version is 2.1.288 (`claude-opus-5-5` needs
+  2.1.280 or newer); install exactly that one, with the updater off:
+
+  ```sh
+  export DISABLE_AUTOUPDATER=1
+  npm install -g @anthropic-ai/claude-code@2.1.288
+  claude --version   # 2.1.288 (Claude Code)
+  ```
+
+  Keep `DISABLE_AUTOUPDATER=1` set in every shell and Claude Code
+  session on the machine for the length of the run. The `claude` on the
+  run's `PATH` must be that install: the binary an editor bundles with
+  its Claude Code extension is no pin, since it moves with the editor's
+  own updates.
 - **Archived transcriptions** (optional). `uv run yizkr scratch
   import-transcriptions <archive> [--leave-out SHA1]...` adopts the
   vision transcriptions of an earlier `ingest run`'s state directory in

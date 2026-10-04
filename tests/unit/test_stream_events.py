@@ -666,10 +666,13 @@ class TestCallEvents:
 
 # the key the LLM cache gives GOLDEN_PROMPT, a one-shot call of a claude-code
 # client for claude-sonnet-5 at effort low on CLI 2.1.237 running in
-# GOLDEN_TMP, as the cache keyed it before calls' stream reports were kept
+# GOLDEN_TMP, as the cache keyed it before calls' stream reports were kept,
+# and with the client's configuration of today: --permission-mode default
+# and CLAUDE_CODE_HARBOR_KITE=0 are in its config hash (#452), so they gave
+# the key a new value; the stream reports never did
 GOLDEN_TMP = "/yizkr-fixed-tmp"
 GOLDEN_PROMPT = "Critique the batch of Sebastian Löbig's marriage certificate."
-GOLDEN_KEY = "b8464120f73b455ba9cacf5b93e5c54fba755e044833501e28bcc70844402ff3"
+GOLDEN_KEY = "80ae1e74aea58fb6e0cc9d4859b890ca65fa110dccc661784d999248653cec8b"
 
 
 def caching(engine, cache, run=None, role="extract", **kwargs):
