@@ -310,13 +310,13 @@ class TestBlocking:
                     },
                     {"written": "Klurnau"},
                 ],
-                "address": {"written": "Lagerstraße 1"},
+                "address": {"written": "8 Hawthorn Road"},
             },
         )
         graph = [
             RosterEntity(qid="Q70", label="Klurnau", kind="place"),
             RosterEntity(qid="Q71", label="LAGER KLURNAU", kind="place"),
-            RosterEntity(qid="Q72", label="Lagerstrasse 1", kind="place"),
+            RosterEntity(qid="Q72", label="8 hawthorn road", kind="place"),
         ]
         assert [c.qid for c in block_candidates([camp], graph)["e1"]] == [
             "Q71",
@@ -1119,8 +1119,8 @@ class TestRosterKinds:
         rows = [
             binding("Q100", "Gustav Löbig", "Q5"),
             binding("Q101", "Hutmachermeister", "Q30"),
-            binding("Q102", "Kaiserzeit", "Q31"),
-            binding("Q103", "Unmodelled", "Q999"),
+            binding("Q102", "Xxx", "Q31"),
+            binding("Q103", "Yyy", "Q999"),
         ]
         queries = []
 
