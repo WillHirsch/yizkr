@@ -18,17 +18,23 @@ reports `written`.
 
 ```mermaid
 flowchart TD
-    run(["yizkr ingest run &lt;folder&gt;"]) --> register
+    run(["yizkr ingest run &lt;folder&gt;"]) --> transcribe
 
     subgraph auto ["per document, automatically"]
-        register[register] --> transcribe[transcribe] --> extract[extract] --> reconcile[reconcile]
+        transcribe[transcribe] --> extract[extract] --> reconcile[reconcile]
         extract -. advise .-> critique["critique + gaps<br/>(flag likely errors)"]
     end
 
     reconcile --> gate1{{"🚦 GATE 1 · identity<br/>fill equivalences.csv<br/>→ equivalences.reviewed.csv"}}
     gate1 --> resolve[resolve] --> export[export-review]
     export --> gate2{{"🚦 GATE 2 · claims<br/>fill review.csv<br/>→ review.reviewed.csv"}}
-    gate2 --> write[write] --> outcome[("statements in the graph<br/>dual-referenced, normal rank")]
+    gate2 --> register
+
+    subgraph write ["write"]
+        register[register] --> claims[write claims]
+    end
+
+    claims --> outcome[("statements in the graph<br/>dual-referenced, normal rank")]
 
     classDef gate fill:#fde68a,stroke:#b45309,color:#1f2937;
     classDef store fill:#dbeafe,stroke:#1e40af,color:#1f2937;
@@ -37,7 +43,10 @@ flowchart TD
 ```
 
 The two amber hexagons are the human gates — the run pauses there until you
-save the reviewed CSV, then continues on the next `ingest run`.
+save the reviewed CSV, then continues on the next `ingest run`. Nothing
+before the write reads or writes the wiki but resolve: registration is the
+write's first step, just before the claims that cite the document
+(ADR-0025 §2; **register** below).
 
 **The two gates**
 
@@ -219,9 +228,12 @@ The corpus lives outside the repository, in the private folder named by
   and by name and hash through `--media`, the media file, which must be
   the one the transcription names. A transcription keeps no file name,
   so with a list that names files by pattern, `extract` refuses to run
-  without `--media`. New entry points must
-  call it too: write-time registration (#103), transcription import
-  (#104), the run driver (#118) and faces (#160).
+  without `--media`. The registrar asks `is_excluded()` too, as the
+  write begins: a listed file is refused before anything of the wiki
+  is asked, so it is never registered or uploaded, and an embedded
+  medium the list names is left out. New entry points must call it
+  too: transcription import (#104), the run driver (#118) and faces
+  (#160).
 
 ## The stages, individually
 
@@ -230,26 +242,6 @@ standalone `yizkr ingest <step>` command (see `--help`) for debugging or
 re-running one step in isolation — but for a normal ingest you only ever run
 `ingest run` and fill the two gates above.
 
-- **register** — uploads media (idempotent by content; a wiki file is
-  never overwritten or stored twice, ADR-0010) under a name in the form
-  MediaWiki takes as it is (every letter kept, `-` for each character it
-  refuses, cut to fit its 240-byte limit with room for a content tag;
-  ADR-0010 as amended by #373), ensures the artifact item
-  (`instance of`, `media file`, `media SHA-1`; its description cut to
-  the 250 characters Wikibase takes) and optional page fragments
-  (`part of` + page qualifier). Statement provenance:
-  `stated in → the artifact itself` (see docs/MODELING.md, "Artifacts
-  and registration"). Claims cite an artifact by the SHA-1 of its media,
-  never by QID, and the write resolves that key through the `media
-  SHA-1` statement registration writes, so a batch written to another
-  instance, or after a reset, finds its artifacts there once they are
-  registered. Registration and resolve (below) are the steps before the
-  write that use the wiki: registration until write-time registration
-  (#103) takes its place, and resolve's label match until the
-  identity-map writer (#109). An item whose bytes a file another item
-  names holds, or whose title is the label of an item with no hash, is
-  flagged, never adopted: each write raises it as a `shared-file` or
-  `unhashed-title` alert while that holds (#371; docs/ANOMALIES.md).
 - **derived media** (decks) — records the images a deck embeds in the
   deck's state directory, not on the wiki: `derived-media.json` keys each
   distinct image by the SHA-1 of its bytes (ADR-0010), with its names in
@@ -259,13 +251,13 @@ re-running one step in isolation — but for a normal ingest you only ever run
   they are now, and each image's file is a regular file (not a symlink)
   named for the image's SHA-1 and holding those bytes; otherwise it is
   made again, and only the files that are not what they should be are
-  written. Registering and uploading the images (ADR-0008) is left to
-  write-time registration (#103). Media other than images are counted
-  and reported, not recorded. A PDF read page by page (below) records
-  the images placed within its pages in the same record, by its
-  transcription stage, each named for its places ("page 6, image 1")
-  with the pages it is on; the write registers them after the PDF, each
-  `part of` it once per page (ADR-0008).
+  written. The write registers the images and uploads their bytes
+  (ADR-0008), as its first step (**register**, below). Media other than
+  images are counted and reported, not recorded. A PDF read page by
+  page (below) records the images placed within its pages in the same
+  record, by its transcription stage, each named for its places ("page
+  6, image 1") with the pages it is on; the write registers them after
+  the PDF, each `part of` it once per page (ADR-0008).
 - **excerpts** — each image a PDF places within a text-layer page, with
   a reading of its own that passes the check, is a document of its own
   (kind `excerpt`, `ExcerptRun`), in `excerpts/<sha1>/` of the state
@@ -424,9 +416,31 @@ re-running one step in isolation — but for a normal ingest you only ever run
   explicitly, per row, and the machine never runs it on its own — not
   auto-confirmation. Refuses to overwrite an existing reviewed file
   without `--force`.
-- **write** — resolves each cited artifact's media SHA-1 to its artifact
-  item (refusing the whole batch, before any write, if some media has
-  no item), mints the extraction-run item, creates items for
+- **register** — the write's first step (ADR-0025 §2): `ingest run`
+  registers a document just before it writes the claims that cite it, and
+  a re-run of the write registers again, finding by SHA-1 what the earlier
+  write registered. Registration uploads media (idempotent by content; a
+  wiki file is never overwritten or stored twice, ADR-0010) under a name
+  in the form MediaWiki takes as it is (every letter kept, `-` for each
+  character it refuses, cut to fit its 240-byte limit with room for a
+  content tag; ADR-0010 as amended by #373), ensures the artifact item
+  (`instance of`, `media file`, `media SHA-1`; its description cut to the
+  250 characters Wikibase takes) and optional page fragments (`part of` +
+  page qualifier). Statement provenance: `stated in → the artifact itself`
+  (see docs/MODELING.md, "Artifacts and registration"). Claims cite an
+  artifact by the SHA-1 of its media, never by QID, and the write resolves
+  that key through the `media SHA-1` statement registration writes, so a
+  batch written to another instance, or after a reset, finds its artifacts
+  there once they are registered. Resolve's label match (above) is the one
+  step before the write that uses the wiki, until the identity-map writer
+  (#109). An item whose bytes a file another item names holds, or whose
+  title is the label of an item with no hash, is flagged, never adopted:
+  each write raises it as a `shared-file` or `unhashed-title` alert while
+  that holds (#371; docs/ANOMALIES.md).
+- **write** — once registration (above) has found or made the
+  document's items, resolves each cited artifact's media SHA-1 to its
+  artifact item (refusing the whole batch, before any write, if some
+  media has no item), mints the extraction-run item, creates items for
   unresolved subjects (reusing exact-label matches on the entity's own
   side only: an artifact-kind entity such as a GEDCOM media object
   reuses an artifact or a part of one, never an item registration made,
@@ -510,8 +524,9 @@ identity to corpus clustering (#105; **Corpus clustering** below), and
   `--chunk-concurrency` (N × chunks concurrent LLM calls), so keep the
   product within your engine's limits — modest on the subscription
   `claude-code` engine (rolling usage windows), higher on `anthropic`
-  (API rate limits). Wiki writes stay serialised, so only the LLM-heavy
-  extraction overlaps. Default 1.
+  (API rate limits). The phase reads nothing from the wiki and writes
+  nothing to it: registration and the write come after it, one artifact
+  at a time, so only the LLM-heavy extraction overlaps. Default 1.
 
 ## Corpus clustering (`clustering.py`, the scratch run's identity map)
 
