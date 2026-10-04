@@ -316,7 +316,7 @@ class ClaimPrint:
     """One claim's fingerprint and the canonical components it hashes,
     so that a diff can match claims on fewer of them (a subject and a
     property whose value changed). `subject` is the subject's canonical
-    form: for a local ref, ``["mention", <its mention's fingerprint>]``."""
+    form: for a local ref, ``("mention", <its mention's fingerprint>)``."""
 
     artifact: str
     subject: tuple
