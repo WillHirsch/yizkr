@@ -3340,21 +3340,21 @@ class TestDifferentialRedraw:
 
     def test_the_first_frame_is_drawn_whole(self):
         screen = monitor._Screen()
-        lines = ["Rudolf Brenner", "", "Margarethe Voss"]
+        lines = ["Sebastian Löbig", "", "Hildegard Laudler"]
         assert screen.frame(lines, self.SIZE) == monitor._frame(lines, True)
 
     def test_an_unchanged_frame_writes_nothing(self):
         screen = monitor._Screen()
-        screen.frame(["Rudolf Brenner", "Margarethe Voss"], self.SIZE)
+        screen.frame(["Sebastian Löbig", "Hildegard Laudler"], self.SIZE)
         assert (
-            screen.frame(["Rudolf Brenner", "Margarethe Voss"], self.SIZE)
+            screen.frame(["Sebastian Löbig", "Hildegard Laudler"], self.SIZE)
             == ""
         )
 
     def test_a_changed_line_is_written_at_its_row(self):
         screen = monitor._Screen()
-        screen.frame(["calls: 3", "Hamburg", "done: 1"], self.SIZE)
-        drawn = screen.frame(["calls: 4", "Hamburg", "done: 2"], self.SIZE)
+        screen.frame(["calls: 3", "Peiltal", "done: 1"], self.SIZE)
+        drawn = screen.frame(["calls: 4", "Peiltal", "done: 2"], self.SIZE)
         assert drawn == (
             "\x1b[1;1Hcalls: 4\x1b[K"
             "\x1b[3;1Hdone: 2\x1b[K"
@@ -3364,29 +3364,31 @@ class TestDifferentialRedraw:
 
     def test_a_style_change_is_a_change(self):
         screen = monitor._Screen()
-        screen.frame(["\x1b[33mBremen\x1b[0m"], self.SIZE)
-        drawn = screen.frame(["\x1b[31mBremen\x1b[0m"], self.SIZE)
-        assert drawn == "\x1b[1;1H\x1b[31mBremen\x1b[0m\x1b[K\x1b[2;1H"
+        screen.frame(["\x1b[33mKredfeld\x1b[0m"], self.SIZE)
+        drawn = screen.frame(["\x1b[31mKredfeld\x1b[0m"], self.SIZE)
+        assert drawn == "\x1b[1;1H\x1b[31mKredfeld\x1b[0m\x1b[K\x1b[2;1H"
 
     def test_a_shrinking_frame_clears_its_old_tail(self):
         screen = monitor._Screen()
-        screen.frame(["Westerland", "Keitum", "Tinnum", "Morsum"], self.SIZE)
-        drawn = screen.frame(["Westerland", "Wenningstedt"], self.SIZE)
-        assert drawn == "\x1b[2;1HWenningstedt\x1b[K\x1b[3;1H" + CLEAR_BELOW
+        screen.frame(
+            ["Flörburg", "Brunnenring", "Wasserallee", "Angerring"], self.SIZE
+        )
+        drawn = screen.frame(["Flörburg", "Stupfield"], self.SIZE)
+        assert drawn == "\x1b[2;1HStupfield\x1b[K\x1b[3;1H" + CLEAR_BELOW
         # only the tail changed: it is cleared all the same
-        assert screen.frame(["Westerland"], self.SIZE) == (
+        assert screen.frame(["Flörburg"], self.SIZE) == (
             "\x1b[2;1H" + CLEAR_BELOW
         )
 
     def test_a_growing_frame_writes_its_new_lines(self):
         screen = monitor._Screen()
-        screen.frame(["Westerland"], self.SIZE)
-        drawn = screen.frame(["Westerland", "Keitum"], self.SIZE)
-        assert drawn == "\x1b[2;1HKeitum\x1b[K\x1b[3;1H"
+        screen.frame(["Flörburg"], self.SIZE)
+        drawn = screen.frame(["Flörburg", "Brunnenring"], self.SIZE)
+        assert drawn == "\x1b[2;1HBrunnenring\x1b[K\x1b[3;1H"
 
     def test_a_resize_draws_the_whole_frame(self):
         screen = monitor._Screen()
-        lines = ["Rudolf Brenner", "Margarethe Voss"]
+        lines = ["Sebastian Löbig", "Hildegard Laudler"]
         screen.frame(lines, self.SIZE)
         assert screen.frame(lines, (60, 20)) == monitor._frame(lines, False)
         assert screen.frame(lines, (60, 20)) == ""
@@ -3394,7 +3396,7 @@ class TestDifferentialRedraw:
 
     def test_forgetting_the_screen_draws_the_whole_frame(self):
         screen = monitor._Screen()
-        lines = ["Rudolf Brenner", "Margarethe Voss"]
+        lines = ["Sebastian Löbig", "Hildegard Laudler"]
         screen.frame(lines, self.SIZE)
         screen.forget()
         assert screen.frame(lines, self.SIZE) == monitor._frame(lines, False)
@@ -3403,7 +3405,15 @@ class TestDifferentialRedraw:
     def test_the_screen_always_shows_the_latest_frame(self):
         """Whatever frames follow each other, the terminal ends up showing
         the latest, with the cursor below it."""
-        words = ["Hamburg", "Bremen", "Sylt", "Riga", "", "Keitum ä"]
+        words = [
+            "Peiltal",
+            "Kredfeld",
+            "Rekau",
+            "Koshnovka",
+            "",
+            "Калдовское",
+            "Snylsjum",
+        ]
         chooser = random.Random(1863)
         screen = monitor._Screen()
         terminal = FakeTerminal(rows=20)
