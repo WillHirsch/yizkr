@@ -57,8 +57,11 @@ editorial marks.
 
 Amended by #370 (2026-10-04): alias hygiene (§8) compares an alias with
 the label and with the aliases before it in the form the instance keeps
-a term in (trimmed, NFC), so an alias that differs from the label only
-in Unicode form, such as NFD against NFC, is dropped as the label is,
+a term in (the writer's `stored_term`: each run of control characters
+and line or paragraph separators made one space, trimmed, cleaned up as
+Wikibase cleans a term up, then NFC), so an alias that differs from the
+label only in that form, such as NFD against NFC or a line break
+against a space, is dropped as the label is,
 and two forms of one alias are kept once, the first as given. An alias
 the instance would keep nothing of, such as control characters alone,
 is blank and dropped.

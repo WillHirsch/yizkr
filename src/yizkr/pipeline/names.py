@@ -9,9 +9,12 @@ add something, in their order and verbatim spelling:
 
 * every entity: blanks, the label itself and case-insensitive duplicates
   are dropped, each compared in the form the instance keeps a term in
-  (`stored_term` in yizkr.pipeline.writer: trimmed, in Unicode NFC), so
-  an alias that differs from the label or another alias only in that
-  form, such as NFD against NFC, is the same alias;
+  (`stored_term` in yizkr.pipeline.writer: each run of control
+  characters and line or paragraph separators made one space, trimmed,
+  cleaned up as Wikibase cleans a term up, then in Unicode NFC), so an
+  alias that differs from the label or another alias only in that form,
+  such as NFD against NFC or a line break against a space, is the same
+  alias;
 * an entity whose record stands (`claims.structure_problems` finds
   nothing): an alias's parts are the record's name parts that occur in
   it, folded, as whole words (the no-addition test of ADR-0035 §5):

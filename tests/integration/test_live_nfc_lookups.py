@@ -10,7 +10,7 @@ ADR-0010):
   shows the item, not NEW.
 
 Fictional synthetic data only (docs/EXAMPLES.md): the model identifier
-names Flörburg. The fingerprint carries random bytes drawn once a
+names the Löbigs. The fingerprint carries random bytes drawn once a
 session, so each session meets the run item as a first pass does.
 """
 
@@ -29,7 +29,7 @@ from yizkr.pipeline.resolve import resolvable_labels, resolve_batch
 pytestmark = pytest.mark.live
 
 FINGERPRINT = secrets.token_hex(5)
-MODEL = unicodedata.normalize("NFC", "modèle-Flörburg")
+MODEL = unicodedata.normalize("NFC", "Löbig-model")
 LABEL = f"place-hierarchy run {MODEL} {FINGERPRINT}"
 MEDIA_SHA1 = hashlib.sha1(b"fictional scan: the 1912 directory").hexdigest()
 

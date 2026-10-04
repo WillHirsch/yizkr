@@ -6,13 +6,14 @@ exact label match only; anything fuzzier needs the human reviewer, who
 sees the resolution outcome in the review CSV (resolved QID or
 "NEW:<local_id>") and can reject claims that would create duplicates.
 
-A ref's label is matched in the form the instance keeps a label in, as
-the writer sends and looks for it (`_term_text` in
-yizkr.pipeline.writer: trimmed, one line, in Unicode NFC, cut to the
-characters the instance holds), against the labels the instance serves,
-which are in that form. So a label given in NFD, or with whitespace
-around it, or longer than the instance holds, resolves to the item the
-writer would reuse for it, and the review CSV shows that item, not NEW.
+A ref's own label is matched in the form the instance keeps a label
+in, as the writer sends and looks for a label (`_term_text` in
+yizkr.pipeline.writer: trimmed, one line, cleaned up, in Unicode NFC,
+cut to the characters the instance holds), against the labels the
+instance serves, which are in that form. So a ref's own label given in
+NFD, or with whitespace around it, or longer than the instance holds,
+resolves to the item under that label in the instance's form, and the
+review CSV shows that item, not NEW.
 A label holding a character Python's Unicode tables do not know
 (`unknown_characters`) resolves to nothing: the instance may keep it in
 another form, and the writer matches no item by it either.
