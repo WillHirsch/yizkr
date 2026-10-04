@@ -4,21 +4,17 @@
 Centuries are counted as Wikibase counts them: the 19th century runs from
 1801 to 1900, and a claim gives it by its first year. A fictional fixture
 writes one person's birth as three sources date it, in the 19th century,
-in 1900 and in 1800, and an event as two sources date it, in the 18th
-century before the common era and in 1701 BCE, its last year, and reads
-them back through the stack:
+in 1900 and in 1800, and reads them back through the stack:
 
 * the writer stores the 19th century as 1801 at century precision, and
-  Wikibase shows it as "19. century"; it stores the 18th century BCE as
-  -1800, which Wikibase shows as "18. century BCE";
-* the query service serves each century's year as stored, and the static
+  Wikibase shows it as "19. century";
+* the query service serves the century's year as stored, and the static
   site's format_time names the century Wikibase shows;
-* it serves 1701 BCE, at year precision, one year on, as -1700 in XSD
-  1.1's count;
 * the disagreement report gives the 19th century the span Wikibase
-  counts: 1900, its last year, lies inside it, and 1800 does not. It
-  gives the 18th century BCE its span in the count its years are served
-  in, so 1701 BCE lies inside it.
+  counts: 1900, its last year, lies inside it, and 1800 does not.
+
+A date before the common era is unsupported (ADR-0034, #338):
+test_live_unsupported_dates.py checks that the writer refuses one.
 
 Each source is registered with a fictional PNG of its own
 (register_fictional), which its claims cite by SHA-1 (#102). Like every
@@ -56,7 +52,6 @@ def local(local_id: str, label: str, kind: str) -> dict:
 
 
 PERSON = local("century-person", "Century Fixture Person", "human")
-EVENT = local("century-event", "Century Fixture Event", "event")
 
 
 def date(year: int, precision: str | None = None) -> dict:
@@ -166,16 +161,9 @@ def fixture_graph(client, config):
             claim(PERSON, "date_of_birth", date(1900), source["B"]),
             # per C: in 1800, the 18th century's last year
             claim(PERSON, "date_of_birth", date(1800), source["C"]),
-            # per A: the event in the 18th century BCE, 1800 to 1701 BCE
-            claim(EVENT, "point_in_time", date(-1800, "century"), source["A"]),
-            # per B: in 1701 BCE, the 18th century BCE's last year
-            claim(EVENT, "point_in_time", date(-1701), source["B"]),
         ],
     )
-    qids = {
-        role: written.created_items[ref["local_id"]]
-        for role, ref in (("person", PERSON), ("event", EVENT))
-    }
+    qids = {"person": written.created_items[PERSON["local_id"]]}
     wait_for_query_service(config, client, list(qids.values()))
     return qids, {letter: registered[letter].qid for letter in "ABC"}
 
@@ -190,13 +178,6 @@ CENTURIES = {
         "19. century",
         "1801-01-01T00:00:00Z",
         "19th century",
-    ),
-    "event": (
-        "point_in_time",
-        "-1800-00-00T00:00:00Z",
-        "18. century BCE",
-        "-1800-01-01T00:00:00Z",
-        "−18th century",
     ),
 }
 
@@ -286,32 +267,4 @@ def test_the_report_spans_the_century_wikibase_shows(
     assert rows == {
         frozenset({"1801-01-01/7 per A", "1800-01-01/9 per C"}),
         frozenset({"1900-01-01/9 per B", "1800-01-01/9 per C"}),
-    }
-    # 1701 BCE, served as -1700, lies inside the 18th century BCE
-    assert not [row for row in found if row.entity_qid == qids["event"]]
-
-
-def test_a_year_bce_is_served_one_year_on(client, config, fixture_graph):
-    # the one-year shift the report's span of a century BCE allows for: a
-    # year before the common era is served in XSD 1.1's count, a century's
-    # year as stored
-    qids, _ = fixture_graph
-    properties, _ = client.vocabulary()
-    query = prefix_block(config.concept_uri) + (
-        "SELECT ?value ?precision WHERE {\n"
-        f"  wd:{properties['point_in_time']} wikibase:claim ?p ;\n"
-        "    wikibase:statementValue ?psv .\n"
-        f"  wd:{qids['event']} ?p ?statement .\n"
-        "  ?statement ?psv ?node .\n"
-        "  ?node wikibase:timeValue ?value ;\n"
-        "    wikibase:timePrecision ?precision .\n"
-        "}"
-    )
-    served = {
-        (row["value"]["value"], row["precision"]["value"])
-        for row in run_sparql(config, query)
-    }
-    assert served == {
-        ("-1800-01-01T00:00:00Z", "7"),
-        ("-1700-01-01T00:00:00Z", "9"),
     }

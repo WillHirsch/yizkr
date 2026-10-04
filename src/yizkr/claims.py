@@ -18,7 +18,8 @@ The schema makes the archive's core conventions structural:
   field. Machine writes are always normal rank; preferring/deprecating
   is a curator action on the wiki, never part of the pipeline contract.
 * Uncertainty is structural (docs/MODELING.md): time values carry explicit
-  precision (day/month/year/decade/century) and a calendar; ranges and
+  precision (day/month/year/decade/century) and the Gregorian calendar,
+  the only one supported, with a year of 1 CE or later (ADR-0034); ranges and
   approximation are expressed with `earliest_date`/`latest_date`/
   `sourcing_circumstances` qualifiers, and a range for the start or end
   time qualifier of a period (a residence, an occupation) with that end's
@@ -86,6 +87,13 @@ from pydantic import (
 )
 from pydantic.json_schema import SkipJsonSchema
 
+from yizkr.core.dates import (
+    GREGORIAN,
+    GREGORIAN_NAME,
+    UnsupportedDate,
+    calendar_problem,
+    year_problem,
+)
 from yizkr.model.schema import (
     DEFAULT_MANIFEST,
     Acceptance,
@@ -183,29 +191,7 @@ WIKIBASE_PRECISION = {
     "month": 10,
     "day": 11,
 }
-CALENDAR_URI = {
-    "gregorian": "http://www.wikidata.org/entity/Q1985727",
-    "julian": "http://www.wikidata.org/entity/Q1985786",
-}
-
-
-def century_of(year: int) -> int:
-    """The century a year falls in, counted as Wikibase and Wikidata count
-    centuries (docs/MODELING.md, "Uncertainty and time"): the nth century
-    runs from year 100(n - 1) + 1 to year 100n, so 1801 to 1900 is the 19th
-    century and 1800 is the last year of the 18th. There is no year zero: a
-    negative year counts back from 1 BCE, and its century is negative, so
-    -1800 to -1701 is the 18th century BCE, -18."""
-    count = (abs(year) + 99) // 100
-    return count if year > 0 else -count
-
-
-def century_years(century: int) -> tuple[int, int]:
-    """The first and last year of a century as `century_of` counts it: 1801
-    and 1900 for the 19th, and -1800 and -1701 for the 18th BCE (-18)."""
-    if century > 0:
-        return 100 * century - 99, 100 * century
-    return 100 * century, 100 * century + 99
+CALENDAR_URI = {GREGORIAN_NAME: GREGORIAN}
 
 
 class TimeValue(StrictModel):
@@ -220,6 +206,9 @@ class TimeValue(StrictModel):
     the 19th century is 1801-1900, so use its first year (19th century
     -> year=1801, precision=century); 1800 is in the 18th. The 1800s,
     meaning 1800-1899, are no such century: give them as a range.
+    Only dates of 1 CE or later in the Gregorian calendar are supported:
+    a date before the common era or in the Julian or any other calendar
+    is refused, never converted to another calendar or year.
     Ranges ("between 1938 and 1939") are NOT a precision problem: use
     earliest_date/latest_date qualifiers on the claim. A start_time or
     end_time qualifier dating a period (a residence, an occupation) takes
@@ -236,14 +225,31 @@ class TimeValue(StrictModel):
     precision: Literal["century", "decade", "year", "month", "day"] | None = (
         None
     )
-    calendar: Literal["gregorian", "julian"] = "gregorian"
+    calendar: Literal["gregorian"] = "gregorian"
 
     @field_validator("year")
     @classmethod
     def check_year(cls, value: int) -> int:
-        if value == 0:
-            raise ValueError("there is no year zero")
+        problem = year_problem(value)
+        if problem is not None:
+            raise UnsupportedDate(problem)
         return value
+
+    @field_validator("calendar", mode="before")
+    @classmethod
+    def check_calendar(cls, value):
+        # before the literal's own check, so the refusal names its reason
+        problem = calendar_problem(value) if isinstance(value, str) else None
+        if problem is not None:
+            raise UnsupportedDate(problem)
+        return value
+
+    def problem(self) -> str | None:
+        """Why this date is unsupported (ADR-0034), or None. Validation
+        refuses such a date, so only a value built without it (a
+        ``model_construct``) can have one; the writer asks before it
+        writes anything."""
+        return year_problem(self.year) or calendar_problem(self.calendar)
 
     @model_validator(mode="after")
     def check_component_consistency(self) -> TimeValue:
@@ -265,15 +271,11 @@ class TimeValue(StrictModel):
             # counts centuries: every source that names it states one
             # value, and a round hundred, which starts "the 1800s" but ends
             # the 18th century in that count, never stands for the 19th.
-            if (
-                self.precision == "century"
-                and century_years(century_of(self.year))[0] != self.year
-            ):
+            if self.precision == "century" and self.year % 100 != 1:
                 raise ValueError(
                     f"precision 'century' takes the first year of the "
                     f"century, as Wikibase counts centuries: the 19th "
-                    f"century is 1801-1900, so year=1801 (the 18th century "
-                    f"BCE is -1800 to -1701, so year=-1800); year "
+                    f"century is 1801-1900, so year=1801; year "
                     f"{self.year} is not a century's first year"
                 )
         elif PRECISIONS.index(finest) > PRECISIONS.index(self.precision):
@@ -293,10 +295,13 @@ class TimeValue(StrictModel):
         """Wikibase time datavalue (unspecified parts zeroed, as on
         Wikidata). The year is written as given, so a century's first
         year is stored, which Wikibase shows as that century: 1801 at
-        century precision is "19. century"."""
-        sign = "-" if self.year < 0 else "+"
+        century precision is "19. century". An unsupported date
+        (``problem``) raises UnsupportedDate: it is never stored."""
+        problem = self.problem()
+        if problem is not None:
+            raise UnsupportedDate(problem)
         return {
-            "time": f"{sign}{abs(self.year):04d}-{self.month or 0:02d}-"
+            "time": f"+{self.year:04d}-{self.month or 0:02d}-"
             f"{self.day or 0:02d}T00:00:00Z",
             "precision": WIKIBASE_PRECISION[self.precision],
             "calendarmodel": CALENDAR_URI[self.calendar],

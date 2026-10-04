@@ -1166,11 +1166,6 @@ class TestTimeFormatting:
             # 1800 is the 18th century's last year, 1901 the 20th's first
             ("1800-01-01T00:00:00Z", "18th century"),
             ("1901-01-01T00:00:00Z", "20th century"),
-            # before the common era the query service gives a century's
-            # year as stored: 1800 to 1701 BCE is the 18th century BCE
-            ("-1800-01-01T00:00:00Z", "−18th century"),
-            ("-1701-01-01T00:00:00Z", "−18th century"),
-            ("-1700-01-01T00:00:00Z", "−17th century"),
         ],
     )
     def test_a_century_is_the_one_wikibase_counts(self, stored, shown):

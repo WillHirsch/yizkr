@@ -45,7 +45,7 @@ from datetime import UTC, datetime
 import pytest
 from wikibaseintegrator.wbi_enums import WikibaseRank
 
-from yizkr.claims import ArtifactRef, ClaimBatch, century_of
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.disagreement import Disagreement, disagreements
 from yizkr.pipeline.writer import BatchWriter
 
@@ -545,7 +545,7 @@ def time_shown(value: str, precision: int) -> str:
     day = value.lstrip("+")[:10]
     year = int(day[:4])
     if precision <= 7:
-        return f"{century_of(year)}th century"
+        return f"{(year + 99) // 100}th century"
     if precision == 8:
         return f"{year // 10 * 10}s"
     return day[: {9: 4, 10: 7}.get(precision, 10)]

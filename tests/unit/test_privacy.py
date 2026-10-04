@@ -198,11 +198,6 @@ class TestYearOf:
     def test_a_year_past_9999_is_read_whole(self):
         assert year_of("12026-01-01T00:00:00Z") == 12026
 
-    def test_a_year_before_the_common_era_is_not_read(self):
-        assert year_of("-0044-03-15T00:00:00Z") is None
-        # xsd:dateTime's year 0 is 1 BCE
-        assert year_of("0000-01-01T00:00:00Z") is None
-
     def test_missing_or_malformed_is_none(self):
         assert year_of("") is None
         assert year_of("not-a-date") is None
@@ -249,7 +244,6 @@ class TestYearsAllowed:
 
     def test_an_unreadable_time_names_nothing(self):
         assert years_allowed("not-a-date", YEAR) is None
-        assert years_allowed("-1850-01-01T00:00:00Z", YEAR) is None
 
 
 class TestLatestBirthYear:

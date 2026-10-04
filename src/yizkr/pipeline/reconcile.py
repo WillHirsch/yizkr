@@ -25,7 +25,11 @@ as inputs. Only `fetch_roster` and `fetch_place_containment` read them
 from the graph, for the commands a curator runs on it (`ingest
 reconcile`, `reconcile-graph`): a stage before the write reads nothing
 from the wiki (ADR-0025 §2), so `ingest run`'s reconcile step has no
-roster to match against.
+roster to match against. `fetch_roster` first asks the graph for any
+date before the common era or in a calendar other than the proleptic
+Gregorian, and stops with UnsupportedDate naming each item and statement
+that holds one (ADR-0034): the roster's dates are adjudication facts, and
+such a date is never put to the adjudicator.
 """
 
 from __future__ import annotations
@@ -41,7 +45,9 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from yizkr.claims import ClaimBatch, EntityRecord, ItemValue, LocalRef, QidRef
+from yizkr.core import sparql
 from yizkr.core.config import Config
+from yizkr.core.dates import unsupported_in_graph
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.llm import CUT_OFF_AT_LIMIT, LlmClient, at_output_limit
@@ -183,7 +189,12 @@ GROUP BY ?item ?itemLabel ?kindLabel
 
 
 def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
-    """Every instance-of-bearing item with identity-relevant facts."""
+    """Every instance-of-bearing item with identity-relevant facts. A
+    graph holding an unsupported date raises UnsupportedDate, before the
+    roster is read (ADR-0034)."""
+    unsupported_in_graph(
+        sparql.runner(config), prefix_block(config.concept_uri)
+    )
     properties, items = client.vocabulary()
     # map kind item labels back to manifest keys where possible
     kind_label_to_key = {key.replace("_", " "): key for key in items}

@@ -31,7 +31,11 @@ last year of a decade, a century or a millennium) and the range its
 source states. A person is released by birth only when every one of those
 years is at or before the cutoff year; a statement that allows no latest
 year keeps them possibly living. The non-privileged export and the site read
-births with this one query and this one reading.
+births with this one query and this one reading. A birth before the common
+era or in a calendar other than the proleptic Gregorian, as the value or a
+bound, raises ``UnsupportedDate`` naming the person and the statement
+(ADR-0034): the check, and so the export, stops rather than read it, which
+fails closed.
 
 Who counts as a person fails closed too. The check assesses every item
 with person evidence (``PEOPLE_SELECTION``): a `human` type, a property
@@ -54,6 +58,8 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping, Sequence
+
+from yizkr.core.dates import check_time
 
 # Birth-recency cutoff: a birth at least this many years ago is taken as
 # proof the person is not living, absent any death evidence. Shared by
@@ -270,10 +276,11 @@ Time = tuple[str, int | None]
 # for the statement's own value, with its time and precision when it has
 # one (an unknown value has neither), and one row for each earliest or
 # latest date it carries, with that date's time and, when the date is
-# known, its precision. Each part of the union binds the statement itself,
-# so each is evaluated whole on its own.
+# known, its precision, with the calendar model its value node states. Each
+# part of the union binds the statement itself, so each is evaluated whole
+# on its own.
 BIRTHS_QUERY = """\
-SELECT ?person ?statement ?bound ?time ?precision
+SELECT ?person ?statement ?bound ?time ?precision ?calendar
 WHERE {{
   {{
     ?person p:{date_of_birth} ?statement .
@@ -283,6 +290,7 @@ WHERE {{
       ?statement ?valueLink ?node .
       ?node wikibase:timeValue ?time ;
             wikibase:timePrecision ?precision .
+      OPTIONAL {{ ?node wikibase:timeCalendarModel ?calendar . }}
     }}
   }} UNION {{
     ?person p:{date_of_birth} ?statement .
@@ -293,6 +301,7 @@ WHERE {{
       ?statement ?earliestLink ?node .
       ?node wikibase:timeValue ?time ;
             wikibase:timePrecision ?precision .
+      OPTIONAL {{ ?node wikibase:timeCalendarModel ?calendar . }}
     }}
   }} UNION {{
     ?person p:{date_of_birth} ?statement .
@@ -303,6 +312,7 @@ WHERE {{
       ?statement ?latestLink ?node .
       ?node wikibase:timeValue ?time ;
             wikibase:timePrecision ?precision .
+      OPTIONAL {{ ?node wikibase:timeCalendarModel ?calendar . }}
     }}
   }}
   FILTER NOT EXISTS {{ ?statement wikibase:rank wikibase:DeprecatedRank . }}
@@ -315,17 +325,14 @@ _DATE_TIME = re.compile(r"\+?(\d{4,})-\d{2}-\d{2}T")
 def year_of(literal: str) -> int | None:
     """The year of a time as the query service or the API gives it
     (``1919-01-07T00:00:00Z``, ``+1919-00-00T00:00:00Z``), else None.
-
     A year before the common era (a leading ``-``, or the year 0, which
-    xsd:dateTime uses for 1 BCE) gives None too: family records date no
-    birth that early, so such a value is taken for a mistake, and a birth
-    that cannot be read keeps its person possibly living.
+    xsd:dateTime uses for 1 BCE) raises UnsupportedDate (ADR-0034).
     """
+    check_time(literal, None, "a birth date")
     match = _DATE_TIME.match(literal)
     if match is None:
         return None
-    year = int(match.group(1))
-    return year if year > 0 else None
+    return int(match.group(1))
 
 
 def years_allowed(
@@ -420,9 +427,18 @@ def _cell(row: Mapping[str, Mapping[str, str]], name: str) -> str:
 
 
 def _time(row: Mapping[str, Mapping[str, str]]) -> Time | None:
+    """A row's time and precision, or None for an unknown value. One
+    before the common era or in a calendar other than the proleptic
+    Gregorian raises UnsupportedDate naming the person and the statement
+    (ADR-0034)."""
     literal = _cell(row, "time")
     if not literal:
         return None
+    where = (
+        f"{_cell(row, 'person').rsplit('/', 1)[-1]} birth statement "
+        f"{_cell(row, 'statement').rsplit('/', 1)[-1]}"
+    )
+    check_time(literal, _cell(row, "calendar") or None, where)
     precision = _cell(row, "precision")
     return literal, int(precision) if precision.isdigit() else None
 
@@ -433,7 +449,8 @@ def latest_births(
     """The latest year each birth statement allows
     (``latest_birth_year``), by the QID of the person it is about, from
     the rows of ``BIRTHS_QUERY``: one row for each statement's value,
-    known or not, and one for each earliest or latest date it carries."""
+    known or not, and one for each earliest or latest date it carries. An
+    unsupported date in any of them raises UnsupportedDate (``_time``)."""
     statements: dict[tuple[str, str], dict[str, list[Time | None]]] = {}
     for row in rows:
         person = _cell(row, "person").rsplit("/", 1)[-1]
