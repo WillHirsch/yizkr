@@ -4,6 +4,15 @@ Status: accepted — implemented. Candidate blocking now subtracts pairs
 the graph's own referenced facts prove cannot be the same entity, before
 any LLM adjudication. A rejected equivalence that is really a containment
 becomes a `part_of` proposal for reconcile-places.
+Amended by #388 (2026-10-04): rule 2 reads containment by QID alone (in
+clustering's mention space, by the id that stands in for one). The label
+form, which matched a batch place without a QID against the labels of a
+candidate's containers, is gone: places share names, so a new
+"Klurnau" may be another Klurnau than the one containing the candidate,
+and pruning it would drop a live pair. A place without a QID is never
+pruned by containment. Clustering's conflict check reads a member's
+containers among the cluster's members the same way. Blocking keys on
+whole name forms (ADR-0007, as amended by #388), not name tokens.
 
 ## Context
 
@@ -46,7 +55,8 @@ statements contradict, never on pairs that are merely dissimilar:
    (no QID) is matched by label against the candidate's container labels —
    but never when the two share a label, since eponymous nesting is real
    ("Rekau" the town inside "Rekau" the urban district) and an equal
-   label may be the *same* place, not its container.
+   label may be the *same* place, not its container. (The label match is
+   gone: amended by #388 above.)
 
 Unknowns are never impossible: a missing kind or relation leaves the pair a
 live candidate for the human (rules 5 & 6 forbid silently narrowing). The

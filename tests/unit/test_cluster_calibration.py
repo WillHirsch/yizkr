@@ -343,6 +343,9 @@ def test_gedcom_places_are_not_cannot_link(tmp_path):
 
 
 def test_lifted_containment_prunes_a_place_against_its_container():
+    """The camp against the town its manifest puts it in prunes by id; the
+    other document's "Klurnau", which only shares the town's name, never
+    does (#388): places share names."""
     doc = manifest(
         "a" * 40,
         [
@@ -356,7 +359,8 @@ def test_lifted_containment_prunes_a_place_against_its_container():
     )
     found, index = mentions(doc, other)
     camp = by_label(found, "Lager Klurnau")
-    town = by_label(found, "Klurnau", "b" * 40)
+    town = by_label(found, "Klurnau", "a" * 40)
+    namesake = by_label(found, "Klurnau", "b" * 40)
     containment = cc.lifted_containment(found)
     assert (
         impossible_pair(
@@ -365,6 +369,14 @@ def test_lifted_containment_prunes_a_place_against_its_container():
             containment=containment,
         )
         == "place-containment"
+    )
+    assert (
+        impossible_pair(
+            cc.lifted_facts(namesake),
+            cc.lifted_facts(camp),
+            containment=containment,
+        )
+        is None
     )
 
 

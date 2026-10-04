@@ -6,6 +6,18 @@ Amended by [ADR-0031](0031-the-relation-decides-the-kind.md) (#202,
 something happened is a place, inside its town or region, so it joins
 this hierarchy; an organisation stays outside it, linked to a place by
 `location` (ADR-0012, Fork F).
+Amended by #388 (2026-10-04): the comma-parent candidates are gone. A label's
+commas never say what contains what (ADR-0035 §1). A place's parent
+candidates are the containers its mention records state (`within`,
+ADR-0035 §2.2), read from the run directories that wrote the graph
+(`reconcile-places --run DIR`): each written place reaches its QID
+through its batch (its resolved QID, else the item `write.json` says the
+writer minted), and each stated container proposes every other place
+whose label or alias is that name, folding case and accents; namesakes
+are each asked, and a place the graph already puts the place in, or
+puts inside it, is not. Questions are ordered spine-first by the
+graph's own containment: a question whose places hold more places comes
+first, then one whose places sit less deep.
 
 ## Context
 
@@ -45,7 +57,8 @@ One SPARQL round-trip yields, in order of preference:
    entity+property that the inconsistency report still shows (its own
    containment filters applied) — answering these directly sharpens
    the report;
-2. **comma-parent candidates**: place labels are usually hierarchy
+2. **comma-parent candidates** (replaced by stated-container
+   candidates, amended by #388 above): place labels are usually hierarchy
    chains ("Fläckfeld, Kreis Mockburg, Hesse, Germany"); a place whose
    comma-suffix matches another place's label or alias gets that
    place as a deterministic parent candidate. Structure never rides

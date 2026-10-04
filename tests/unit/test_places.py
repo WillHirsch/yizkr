@@ -15,57 +15,181 @@ from yizkr.pipeline.places import (
     Question,
     adjudicate_places,
     build_worklist,
-    comma_parent_candidates,
     ensure_places_run_item,
     export_places_csv,
     plan_containment,
+    record_containers,
+    stated_parent_candidates,
 )
 
 
 def places() -> list[PlaceRecord]:
     return [
         PlaceRecord(qid="Q1", label="Germany"),
-        PlaceRecord(qid="Q2", label="Flörburg, Germany"),
-        PlaceRecord(qid="Q3", label="Brunnenring 35, Flörburg, Germany"),
-        PlaceRecord(qid="Q4", label="Klurnau"),
+        PlaceRecord(qid="Q2", label="Flörburg", within=["Hesse", "Germany"]),
         PlaceRecord(
-            qid="Q5", label="Bad Flörburg", aliases=["Flörburg, Germany"]
+            qid="Q3", label="Brunnenring 35, Flörburg", within=["Flörburg"]
         ),
-        PlaceRecord(qid="Q6", label="Rekau, Germany", parents=["Q1"]),
+        PlaceRecord(qid="Q4", label="Klurnau"),
+        PlaceRecord(qid="Q5", label="Bad Flörburg", aliases=["Flörburg"]),
+        PlaceRecord(
+            qid="Q6", label="Rekau", parents=["Q1"], within=["Germany"]
+        ),
+        PlaceRecord(qid="Q7", label="Hesse", parents=["Q1"]),
     ]
 
 
-class TestCommaCandidates:
-    def test_nearest_existing_suffix_wins(self):
-        questions = comma_parent_candidates(places())
-        pairs = {(q.qid_a, q.qid_b) for q in questions}
-        # Brunnenring 35 attaches to Flörburg (nearest), not Germany
-        assert ("Q3", "Q2") in pairs or ("Q3", "Q5") in pairs
-        assert ("Q3", "Q1") not in pairs
-        # Flörburg attaches to Germany
-        assert ("Q2", "Q1") in pairs
+def pairs(questions) -> list[tuple[str, str]]:
+    return [(q.qid_a, q.qid_b) for q in questions]
 
-    def test_alias_matches_count_as_names(self):
-        # Q5's ALIAS equals Q2's label form; suffix matching must see it
-        questions = comma_parent_candidates(
+
+class TestStatedParentCandidates:
+    def test_each_stated_container_proposes_the_places_of_its_name(self):
+        questions = stated_parent_candidates(places())
+        # Flörburg is stated within Hesse and within Germany, each asked;
+        # Brunnenring 35 within Flörburg, which two places are named
+        # (namesakes are each asked, never one guessed), but never itself
+        assert pairs(questions) == [
+            ("Q2", "Q7"),
+            ("Q2", "Q1"),
+            ("Q3", "Q2"),
+            ("Q3", "Q5"),
+        ]
+        assert questions[0].kind == "parent"
+        assert "'Hesse'" in questions[0].context
+
+    def test_a_label_s_commas_propose_nothing(self):
+        # "Brunnenring 35, Flörburg" states no container: only a record
+        # does
+        found = [
+            PlaceRecord(qid="Q3", label="Brunnenring 35, Flörburg"),
+            PlaceRecord(qid="Q2", label="Flörburg"),
+        ]
+        assert stated_parent_candidates(found) == []
+
+    def test_names_fold_case_and_accents(self):
+        found = [
+            PlaceRecord(qid="Q3", label="Brunnenring 35", within=["FLORBURG"]),
+            PlaceRecord(qid="Q2", label="Flörburg"),
+            PlaceRecord(qid="Q8", label="Floerburg"),
+        ]
+        assert pairs(stated_parent_candidates(found)) == [("Q3", "Q2")]
+
+    def test_umlauts_written_out_meet(self):
+        found = [
+            PlaceRecord(qid="Q3", label="Brunnenring 35", within=["Flörburg"]),
+            PlaceRecord(qid="Q8", label="Floerburg"),
+        ]
+        assert pairs(stated_parent_candidates(found)) == [("Q3", "Q8")]
+
+    def test_a_known_container_is_not_re_asked(self):
+        # Rekau is in Germany already; Klurnau states nothing
+        questions = stated_parent_candidates(places())
+        assert not any(q.qid_a in ("Q6", "Q4") for q in questions)
+
+    def test_a_container_reached_through_the_graph_is_not_re_asked(self):
+        found = [
+            PlaceRecord(qid="Q1", label="Germany"),
+            PlaceRecord(qid="Q7", label="Hesse", parents=["Q1"]),
+            PlaceRecord(
+                qid="Q2", label="Flörburg", parents=["Q7"], within=["Germany"]
+            ),
+        ]
+        assert stated_parent_candidates(found) == []
+
+    def test_a_place_the_graph_puts_inside_is_never_its_container(self):
+        # the town Rekau inside the urban district Rekau: the district's
+        # record naming "Rekau" never proposes the town as its container
+        found = [
+            PlaceRecord(qid="Q70", label="Rekau", parents=["Q71"]),
+            PlaceRecord(qid="Q71", label="Rekau", within=["Rekau"]),
+        ]
+        assert stated_parent_candidates(found) == []
+
+    def test_each_pair_is_asked_once(self):
+        found = [
+            PlaceRecord(qid="Q2", label="Flörburg", within=["Hesse", "HESSE"]),
+            PlaceRecord(qid="Q7", label="Hesse", aliases=["Hessen"]),
+        ]
+        assert pairs(stated_parent_candidates(found)) == [("Q2", "Q7")]
+
+
+def _written(directory, entities, created, view="batch.approved.json"):
+    directory.mkdir(parents=True)
+    (directory / view).write_text(
+        json.dumps(
+            {
+                "extraction_run": {
+                    "model_identifier": "fake-model",
+                    "pipeline_version": "0.1.0",
+                    "started_at": "2026-07-13T09:00:00Z",
+                },
+                "claims": [],
+                "entities": entities,
+            }
+        )
+    )
+    (directory / "write.json").write_text(
+        json.dumps({"created_items": created})
+    )
+
+
+def _place(local_id, label, within=(), qid=None):
+    entity = {
+        "id": local_id,
+        "label": label,
+        "kind": "place",
+        "structure": {"kind": "place", "within": list(within)},
+    }
+    if qid:
+        entity["qid"] = qid
+    return entity
+
+
+class TestRecordContainers:
+    def test_a_written_place_reaches_its_stated_containers(self, tmp_path):
+        _written(
+            tmp_path / "marriage",
             [
-                PlaceRecord(qid="Q7", label="Brunnenring, Bad Flörburg"),
-                PlaceRecord(
-                    qid="Q5", label="Some Other Name", aliases=["Bad Flörburg"]
-                ),
-            ]
+                _place("e1", "Fläckfeld", ["Kreis Mockburg"]),
+                _place("e2", "Rekau", ["Hesse"], qid="Q6"),
+                _place("e3", "Klurnau"),
+                {"id": "e4", "label": "Ida Löbig", "kind": "human"},
+                _place("e5", "Peiltal", ["Hesse"]),
+            ],
+            {"e1": "Q20", "e3": "Q4", "e4": "Q30"},
         )
-        assert [(q.qid_a, q.qid_b) for q in questions] == [("Q7", "Q5")]
-
-    def test_existing_parents_are_not_re_asked(self):
-        questions = comma_parent_candidates(places())
-        assert not any(q.qid_a == "Q6" for q in questions)
-
-    def test_no_commas_no_candidates(self):
-        assert (
-            comma_parent_candidates([PlaceRecord(qid="Q4", label="Klurnau")])
-            == []
+        _written(
+            tmp_path / "excerpts" / "card",
+            [_place("e1", "Fläckfeld", ["Kreis Mockburg", "Germany"])],
+            {"e1": "Q20"},
+            view="batch.json",
         )
+        # set aside, and a directory no write reached
+        _written(
+            tmp_path / ".marriage.superseded-1",
+            [_place("e1", "Fläckfeld", ["Elsewhere"])],
+            {"e1": "Q20"},
+        )
+        (tmp_path / "letter").mkdir()
+        (tmp_path / "letter" / "batch.json").write_text("{}")
+        assert record_containers(tmp_path) == {
+            "Q20": ["Kreis Mockburg", "Germany"],
+            "Q6": ["Hesse"],
+        }
+
+    def test_the_written_batch_wins_over_earlier_views(self, tmp_path):
+        directory = tmp_path / "card"
+        _written(
+            directory,
+            [_place("e1", "Fläckfeld", ["Kreis Peiltal"])],
+            {"e1": "Q20"},
+        )
+        (directory / "batch.json").write_text("not json")
+        assert record_containers(tmp_path) == {"Q20": ["Kreis Peiltal"]}
+
+    def test_a_missing_run_directory_holds_nothing(self, tmp_path):
+        assert record_containers(tmp_path / "absent") == {}
 
 
 class TestWorklist:
@@ -78,16 +202,32 @@ class TestWorklist:
                 kind="competing", qid_a="Q2", qid_b="Q1", context="pod of Y"
             ),
         ]
-        comma = comma_parent_candidates(places())
-        worklist = build_worklist(places(), competing, comma)
+        stated = stated_parent_candidates(places())
+        worklist = build_worklist(places(), competing, stated)
         keys = [frozenset((q.qid_a, q.qid_b)) for q in worklist]
         assert len(keys) == len(set(keys))  # deduplicated across sources
-        # the Q2/Q1 question (country-scale) precedes the Q3 ones
-        position = {key: index for index, key in enumerate(keys)}
-        assert (
-            position[frozenset(("Q2", "Q1"))]
-            < position[frozenset(("Q3", "Q4"))]
-        )
+        # the questions with Germany (the graph puts two places in it)
+        # precede those with Hesse (one), and the unplaced places last
+        assert keys == [
+            frozenset(("Q2", "Q1")),
+            frozenset(("Q2", "Q7")),
+            frozenset(("Q3", "Q2")),
+            frozenset(("Q3", "Q5")),
+            frozenset(("Q3", "Q4")),
+        ]
+
+    def test_among_equals_a_place_placed_less_deep_comes_first(self):
+        found = [
+            PlaceRecord(qid="Q1", label="Germany"),
+            PlaceRecord(qid="Q7", label="Hesse", parents=["Q1"]),
+            PlaceRecord(qid="Q2", label="Flörburg", parents=["Q7"]),
+            PlaceRecord(qid="Q8", label="Bad Flörburg", parents=["Q7"]),
+            PlaceRecord(qid="Q4", label="Klurnau"),
+            PlaceRecord(qid="Q9", label="Lager Klurnau"),
+        ]
+        deep = Question(kind="competing", qid_a="Q2", qid_b="Q8")
+        shallow = Question(kind="competing", qid_a="Q4", qid_b="Q9")
+        assert build_worklist(found, [deep, shallow], []) == [shallow, deep]
 
 
 class ScriptedLlm:
@@ -146,7 +286,7 @@ class TestAdjudication:
             ("Q3", "Q2", "a_within_b")
         ]
         # the prompt shows full labels — the evidence the model weighs
-        assert "Brunnenring 35, Flörburg, Germany" in llm.prompts[0]
+        assert "Brunnenring 35, Flörburg" in llm.prompts[0]
 
     def test_the_prompt_asks_for_a_done_line_and_no_count(self):
         """The answer ends with `{"done": true}`, whose presence is the
@@ -256,7 +396,7 @@ class TestCsv:
         export_places_csv(proposals, questions, places(), path)
         with open(path, newline="") as handle:
             (line,) = list(csv.DictReader(handle))
-        assert line["label_a"] == "Brunnenring 35, Flörburg, Germany"
+        assert line["label_a"] == "Brunnenring 35, Flörburg"
         assert line["question"] == "pob of X"
         assert line["decision"] == ""
 
@@ -363,3 +503,76 @@ class TestPlacesRunItem:
         assert kinds(wiki, qid) == [
             (ITEMS["extraction_run"], "deprecated", [qid])
         ]
+
+
+class TestCommand:
+    """`yizkr reconcile-places --run DIR` gives each graph place the
+    containers its records state there, and asks about them."""
+
+    def test_run_directories_propose_parents(self, tmp_path, monkeypatch):
+        import argparse
+
+        from yizkr import cli
+        from yizkr.pipeline import llm, places
+
+        _written(
+            tmp_path / "run1" / "card",
+            [_place("e1", "Fläckfeld", ["Kreis Mockburg"])],
+            {"e1": "Q20"},
+        )
+        _written(
+            tmp_path / "run2" / "card",
+            [_place("e1", "Fläckfeld", ["Kreis Mockburg", "Hesse"])],
+            {"e1": "Q20"},
+        )
+        graph = [
+            PlaceRecord(qid="Q20", label="Fläckfeld"),
+            PlaceRecord(qid="Q21", label="Kreis Mockburg"),
+            PlaceRecord(qid="Q7", label="Hesse"),
+        ]
+        asked = []
+
+        def adjudicate(client, worklist, found):
+            asked.extend((q.qid_a, q.qid_b) for q in worklist)
+            assert found[0].within == ["Kreis Mockburg", "Hesse"]
+            return []
+
+        monkeypatch.setattr(cli.Config, "load", lambda env_file: None)
+        monkeypatch.setattr(cli, "WikiClient", lambda config: None)
+        monkeypatch.setattr(places, "fetch_places", lambda c, cf: graph)
+        monkeypatch.setattr(places, "fetch_competing_pairs", lambda c, cf: [])
+        monkeypatch.setattr(places, "adjudicate_places", adjudicate)
+        monkeypatch.setattr(llm, "make_client", lambda name: None)
+        args = argparse.Namespace(
+            env_file=None,
+            apply=None,
+            llm="anthropic",
+            out=tmp_path / "places.csv",
+            run=[tmp_path / "run1", tmp_path / "run2"],
+        )
+        assert cli.cmd_reconcile_places(args) == 0
+        assert asked == [("Q20", "Q21"), ("Q20", "Q7")]
+
+    def test_without_a_run_nothing_is_stated(self, tmp_path, monkeypatch):
+        import argparse
+
+        from yizkr import cli
+        from yizkr.pipeline import places
+
+        monkeypatch.setattr(cli.Config, "load", lambda env_file: None)
+        monkeypatch.setattr(cli, "WikiClient", lambda config: None)
+        monkeypatch.setattr(
+            places,
+            "fetch_places",
+            lambda c, cf: [PlaceRecord(qid="Q20", label="Fläckfeld")],
+        )
+        monkeypatch.setattr(places, "fetch_competing_pairs", lambda c, cf: [])
+        args = argparse.Namespace(
+            env_file=None,
+            apply=None,
+            llm="anthropic",
+            out=tmp_path / "places.csv",
+            run=None,
+        )
+        assert cli.cmd_reconcile_places(args) == 0
+        assert not (tmp_path / "places.csv").exists()

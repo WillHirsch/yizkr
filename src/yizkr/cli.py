@@ -204,10 +204,11 @@ def cmd_reconcile_places(args) -> int:
         adjudicate_places,
         apply_containment,
         build_worklist,
-        comma_parent_candidates,
         export_places_csv,
         fetch_competing_pairs,
         fetch_places,
+        record_containers,
+        stated_parent_candidates,
     )
 
     config = Config.load(args.env_file)
@@ -237,12 +238,18 @@ def cmd_reconcile_places(args) -> int:
     from yizkr.pipeline.llm import make_client
 
     places = fetch_places(client, config)
+    for run_dir in args.run or ():
+        stated = record_containers(run_dir)
+        for place in places:
+            place.within.extend(
+                c for c in stated.get(place.qid, ()) if c not in place.within
+            )
     competing = fetch_competing_pairs(client, config)
-    comma = comma_parent_candidates(places)
-    worklist = build_worklist(places, competing, comma)
+    parents = stated_parent_candidates(places)
+    worklist = build_worklist(places, competing, parents)
     print(
         f"places: {len(places)}; unresolved competing pairs: "
-        f"{len(competing)}; comma-parent candidates: {len(comma)}; "
+        f"{len(competing)}; stated-parent candidates: {len(parents)}; "
         f"questions after transitive elimination + dedupe: {len(worklist)}"
     )
     if not worklist:
@@ -1221,6 +1228,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--llm", default="anthropic", choices=["anthropic", "claude-code"]
     )
     p.add_argument("--out", type=Path, default=Path("place-hierarchy.csv"))
+    p.add_argument(
+        "--run",
+        type=Path,
+        action="append",
+        help="a run directory that wrote the graph: the containers its "
+        "places' mention records state propose parents (repeatable)",
+    )
     p.add_argument(
         "--apply",
         type=Path,

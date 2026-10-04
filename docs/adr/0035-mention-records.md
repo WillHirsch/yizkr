@@ -213,6 +213,40 @@ never narrow or guess.
   "Eugen /Löbig/") is that form whole, the name not written twice.
 - **Language.** A HEAD.LANG of `und` is taken as it is, uncounted.
 
+Amended by #388 (2026-10-04): the readers after write that §10 lists
+first four of settle where each finds structure.
+
+- **Reconcile's blocking and the ADR-0019 sequencer** key on whole name
+  forms, folded as §7 folds a part (`part_keys`), never on name tokens or
+  prefixes. A manifest entity keys through its record: a person only
+  with the status `name`, by its label, aliases, unsplit forms and
+  nicknames; a place only as a `toponym`, by its record's own names and
+  address, less a short form that is another name's toponym, so the
+  camp never meets its town; any other entity, or one without a record,
+  by its label and aliases. A graph item has no record, so it keys by
+  its label, aliases and the values of its typed name statements
+  (`birth_name`, `nickname`, `official_name`), each whole; a
+  `married_name` is a family name alone and keys nothing. The roster
+  maps an item's kind to its manifest key by the kind item's QID.
+- **The place hierarchy's parents** come from the containers a place's
+  records state (`within`, §2.2), read from the batch views of the run
+  that wrote the graph and joined to the written item by the QID
+  reconcile resolved or the one the writer minted (`write.json`). A
+  stated container proposes every place of that name, folded as above,
+  and a human adjudicates each (ADR-0009, as amended).
+- **The impossibility filter** reads containment by QID only, and in
+  clustering by the mention id that stands in for one; a name shared
+  with a container never prunes a pair (ADR-0017, as amended).
+- **The disagreement report** reads no record: a birth name is the
+  graph's own typed name statement, kept in the source's wording, and
+  one whose every word the other also writes differs only in resolution
+  (ADR-0033, as amended).
+- The static site skips `instance of` by its property id, not its
+  English label.
+
+`kinship.rq`'s term table and the possibly-living readers stay with
+their own issues.
+
 Amended by #409 (2026-09-29): clustering keys on the records as §7 says,
 and settles what §7 leaves open. A person's kin agree only on a key a
 record gives (never on a recordless kin's name), and the couple of a
@@ -1321,7 +1355,7 @@ into "fix first, and measure in run 1": under the pre-baseline exception
   label (`staticsite.py:541`).
 
 **Readers after write, moved in a follow-up issue.** Scratch run 1 writes
-nothing, so these wait:
+nothing, so these wait (the first four settled by #388, amended above):
 
 - reconcile's name tokens and prefix overlap
   (`pipeline/reconcile.py:256-273`), in the per-document reconcile

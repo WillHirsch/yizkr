@@ -1,12 +1,15 @@
 """Place hierarchy pass (ADR-0009).
 
 Demand-driven containment: the worklist is derived from the
-inconsistency report's own unresolved place pairs plus deterministic
-comma-parent candidates ("Flörburg, Hesse, Germany" comma-suffixes
-onto "Hesse, Germany" / "Germany" when those places exist).
-Questions are ordered spine-first (fewer commas ≈ larger scale) and
-each `--apply` round re-derives the worklist through the graph's
-`(location|part_of)+` closure — transitive elimination between rounds.
+inconsistency report's own unresolved place pairs plus stated-parent
+candidates: the containers a place's mention records state (ADR-0035
+§2.2: "Fläckfeld, Kreis Mockburg" is Fläckfeld within Kreis Mockburg),
+each against every existing place of that name. A label's punctuation
+never says what contains what. Questions are ordered spine-first by the
+graph's own containment (a place the graph puts more places inside is
+of larger scale) and each `--apply` round re-derives the worklist
+through the graph's `(location|part_of)+` closure — transitive
+elimination between rounds.
 
 Verdicts extend ADR-0007: same | a_within_b | b_within_a | distinct |
 uncertain. Only human-approved containment rows are ever written
@@ -17,6 +20,7 @@ existing curator-executed identity flow and are never applied here.
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import hashlib
 import json
@@ -26,6 +30,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from yizkr.claims import ClaimBatch, PlaceStructure
 from yizkr.core.config import Config
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.extract import scan_json_objects
@@ -54,15 +59,14 @@ class PlaceRecord:
     label: str
     aliases: list[str] = field(default_factory=list)
     parents: list[str] = field(default_factory=list)  # existing containment
-
-    @property
-    def comma_depth(self) -> int:
-        return self.label.count(",")
+    # the containers its mention records state, as written, in the order
+    # the records give them (ADR-0035 §2.2); never written to the graph
+    within: list[str] = field(default_factory=list)
 
 
 @dataclass
 class Question:
-    kind: str  # "competing" (report pair) | "parent" (comma candidate)
+    kind: str  # "competing" (report pair) | "parent" (stated container)
     qid_a: str
     qid_b: str
     context: str = ""  # human-readable why-this-is-asked
@@ -181,56 +185,164 @@ def fetch_competing_pairs(
     return questions
 
 
-def comma_parent_candidates(places: list[PlaceRecord]) -> list[Question]:
-    """Deterministic parent candidates from hierarchical labels.
+# a run directory's document views, newest first: the batch the writer
+# wrote, the one reconcile resolved, and the extraction's own
+_BATCH_VIEWS = ("batch.approved.json", "batch.resolved.json", "batch.json")
 
-    'A, B, C' proposes the nearest existing place whose label or alias
-    equals a comma-suffix ('B, C' preferred over 'C'). Structure never
-    rides the generative path: these arrive pre-evidenced.
-    """
-    by_name: dict[str, str] = {}
+
+def _document_dirs(run_dir: Path) -> list[Path]:
+    """Each document's directory in a run directory, an excerpt's too;
+    the corpus stages' directory holds no document."""
+    from yizkr.pipeline.orchestrate import EXCERPTS_DIR
+    from yizkr.pipeline.scratch import CORPUS_DIR
+
+    try:
+        entries = sorted(run_dir.iterdir())
+    except OSError:
+        return []
+    with contextlib.suppress(OSError):
+        entries += sorted((run_dir / EXCERPTS_DIR).iterdir())
+    return [
+        entry
+        for entry in entries
+        if entry.is_dir()
+        and not entry.name.startswith(".")
+        and entry.name not in (CORPUS_DIR, EXCERPTS_DIR)
+    ]
+
+
+def record_containers(run_dir: Path) -> dict[str, list[str]]:
+    """QID -> the containers the mention records of a written place
+    state, from the run directory that wrote the graph.
+
+    A document's place reaches its QID through the batch it was written
+    from: the QID reconcile resolved it to, else the item the writer
+    minted for its local id (`write.json`'s `created_items`). A place no
+    write reached, or whose record states no container, is left out; a
+    directory set aside (a dot name) is passed over."""
+    found: dict[str, list[str]] = {}
+    for directory in _document_dirs(run_dir):
+        try:
+            written = json.loads((directory / "write.json").read_text())
+        except (OSError, ValueError):
+            continue
+        created = written.get("created_items") or {}
+        batch = None
+        for name in _BATCH_VIEWS:
+            try:
+                batch = ClaimBatch.model_validate_json(
+                    (directory / name).read_text()
+                )
+            except (OSError, ValueError):
+                continue
+            break
+        if batch is None:
+            continue
+        for entity in batch.entities:
+            record = entity.structure
+            if not isinstance(record, PlaceStructure) or not record.within:
+                continue
+            qid = entity.qid or created.get(entity.id)
+            if not qid:
+                continue
+            stated = found.setdefault(qid, [])
+            stated.extend(c for c in record.within if c not in stated)
+    return found
+
+
+def _ancestors(places: list[PlaceRecord]) -> dict[str, set[str]]:
+    """QID -> every place the graph transitively puts it in."""
+    parents = {place.qid: set(place.parents) for place in places}
+    closure: dict[str, set[str]] = {}
+    for qid in parents:
+        seen: set[str] = set()
+        stack = sorted(parents[qid])
+        while stack:
+            parent = stack.pop()
+            if parent in seen or parent == qid:
+                continue
+            seen.add(parent)
+            stack.extend(sorted(parents.get(parent, ())))
+        closure[qid] = seen
+    return closure
+
+
+def stated_parent_candidates(places: list[PlaceRecord]) -> list[Question]:
+    """Parent candidates from the containers a place's records state.
+
+    Each stated container proposes every other existing place whose label
+    or an alias is that container's name, folding only case and accents
+    (ADR-0035 §7); namesakes are each asked, never one guessed. A
+    candidate already among the place's containers, or one the graph puts
+    inside the place, is not asked. Structure never rides the generative
+    path: these arrive pre-evidenced."""
+    from yizkr.pipeline.clustering import part_keys
+
+    by_key: dict[str, list[str]] = {}
     for place in places:
         for name in (place.label, *place.aliases):
-            by_name.setdefault(name.strip().casefold(), place.qid)
+            for key in part_keys(name):
+                named = by_key.setdefault(key, [])
+                if place.qid not in named:
+                    named.append(place.qid)
+    ancestors = _ancestors(places)
     questions = []
+    asked: set[tuple[str, str]] = set()
     for place in places:
-        parts = [part.strip() for part in place.label.split(",")]
-        for start in range(1, len(parts)):
-            suffix = ", ".join(parts[start:]).casefold()
-            parent = by_name.get(suffix)
-            if parent and parent != place.qid:
-                if parent not in place.parents:
+        for container in place.within:
+            for key in sorted(part_keys(container)):
+                for parent in by_key.get(key, ()):
+                    if (
+                        parent == place.qid
+                        or (place.qid, parent) in asked
+                        or parent in ancestors.get(place.qid, ())
+                        or place.qid in ancestors.get(parent, ())
+                    ):
+                        continue
+                    asked.add((place.qid, parent))
                     questions.append(
                         Question(
                             kind="parent",
                             qid_a=place.qid,
                             qid_b=parent,
                             context=(
-                                f"label comma-suffix "
-                                f"{', '.join(parts[start:])!r} "
-                                f"names an existing place"
+                                f"a record states it within {container!r}, "
+                                f"which names an existing place"
                             ),
                         )
                     )
-                break  # nearest suffix only
     return questions
 
 
 def build_worklist(
-    places: list[PlaceRecord], competing: list[Question], comma: list[Question]
+    places: list[PlaceRecord],
+    competing: list[Question],
+    stated: list[Question],
 ) -> list[Question]:
-    """Deduplicated, spine-first (larger scale ≈ fewer commas first)."""
-    depth = {place.qid: place.comma_depth for place in places}
+    """Deduplicated, spine-first: a question whose places the graph puts
+    more places inside comes first (larger scale), then one whose places
+    it puts in fewer."""
+    ancestors = _ancestors(places)
+    inside: dict[str, int] = dict.fromkeys(ancestors, 0)
+    for found in ancestors.values():
+        for qid in found:
+            inside[qid] = inside.get(qid, 0) + 1
     seen: set[frozenset] = set()
     worklist: list[Question] = []
-    for question in [*comma, *competing]:
+    for question in [*stated, *competing]:
         key = frozenset((question.qid_a, question.qid_b))
         if key in seen:
             continue
         seen.add(key)
         worklist.append(question)
     worklist.sort(
-        key=lambda q: min(depth.get(q.qid_a, 9), depth.get(q.qid_b, 9))
+        key=lambda q: (
+            -max(inside.get(q.qid_a, 0), inside.get(q.qid_b, 0)),
+            min(
+                len(ancestors.get(q.qid_a, ())),
+                len(ancestors.get(q.qid_b, ())),
+            ),
+        )
     )
     return worklist
 

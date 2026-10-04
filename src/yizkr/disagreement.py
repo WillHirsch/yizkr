@@ -34,6 +34,8 @@ Each rule of MODELING.md "Contradictions" is one function here:
   ranges their statements state;
 * ``place_within``: a place the graph records inside the other differs
   only in resolution;
+* ``name_within``: so does a name whose every word the other also
+  writes, in any order ("Sörne" beside "Ida Sörne");
 * ``from_different_artifacts``: two readings of one artifact are not two
   sources, and a page fragment counts as its artifact; ``one_claim``: nor
   are two readings of one statement's value, however many artifacts
@@ -87,6 +89,10 @@ SINGLE_VALUED = frozenset(
 )
 # the place-valued ones, which the recorded containment refines
 PLACES = frozenset({"place_of_birth", "place_of_death"})
+# the name-valued one, whose fuller form refines a shorter one
+NAMES = frozenset({"birth_name"})
+# what a name's words are read without at their edges
+NAME_EDGES = ".,;:()\"'[]"
 # Properties whose values accumulate over a life (two spouses from one
 # source are remarriages), compared only through the dates of one place
 # or one spouse.
@@ -589,6 +595,24 @@ def place_within(containment: Containment, inner: str, outer: str) -> bool:
     return outer in containment.reachable(inner)
 
 
+def _name_words(text: str) -> frozenset[str]:
+    """A name's words, letter case and edge punctuation aside."""
+    return frozenset(
+        word
+        for raw in text.split()
+        if (word := raw.strip(NAME_EDGES).casefold())
+    )
+
+
+def name_within(inner: str, outer: str) -> bool:
+    """Whether the name ``inner`` names no more than ``outer`` does: every
+    word of it is a word of the other, in any order. A source that gives
+    only a birth surname, or writes the surname first, states less of the
+    name, not another one; a word the other lacks is a different name."""
+    words = _name_words(inner)
+    return bool(words) and words <= _name_words(outer)
+
+
 def from_different_artifacts(a: Iterable[Source], b: Iterable[Source]) -> bool:
     """Two readings of one artifact are not two sources (ADR-0023 §4): a
     curator's correction beside the machine reading it corrects is not a
@@ -642,13 +666,17 @@ def in_order(
 def differ_in_resolution(
     x: Reading, y: Reading, containment: Containment
 ) -> bool:
-    """A place recorded inside the other, or a date whose span lies inside
-    the other's, differs only in resolution, not in substance."""
+    """A place recorded inside the other, a name the other names in full,
+    or a date whose span lies inside the other's, differs only in
+    resolution, not in substance."""
     if x.aspect.property in PLACES:
         a, b = x.value.term.value, y.value.term.value
         return place_within(containment, a, b) or place_within(
             containment, b, a
         )
+    if x.aspect.property in NAMES:
+        a, b = x.value.term.value, y.value.term.value
+        return name_within(a, b) or name_within(b, a)
     a, b = span(x), span(y)
     if a is None or b is None:
         return False
