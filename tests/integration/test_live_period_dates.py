@@ -34,12 +34,25 @@ import pytest
 
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.disagreement import disagreements
+from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.queries.publish import load_templates, render_for_instance
 
-from .conftest import register_fictional, run_sparql, wait_for_query_service
+from .conftest import (
+    fixture_mark,
+    register_fictional,
+    run_sparql,
+    wait_for_query_service,
+)
 
 pytestmark = pytest.mark.live
+
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "#231: one marriage as three sources date it, and a residence "
+    "observed at a date between two years"
+)
+MARK = fixture_mark(FIXTURE, writer)
 
 
 def local(local_id: str, label: str, kind: str) -> dict:
@@ -98,17 +111,20 @@ def married(artifact: ArtifactRef, *qualifiers) -> dict:
 
 
 def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
-    """Write the fixture's claims under item labels that carry a marker:
-    six hex digits of a hash over the claims, each cited SHA-1 replaced by
-    its artifact's letter in `artifacts`, as test_live_disagreement.py's
-    write_fixture marks its own. The writer finds a local item by its
-    label, so a version of the fixture with other claims would otherwise
-    write onto an earlier version's items and see their statements beside
-    its own. With the marker each version writes items of its own, and a
-    re-run of one version finds its own items again. The hash keeps each
-    reference's kind, so the marker is not the one the fixture had when
-    its claims cited their sources by QID. Returns the write's result and
-    the marker."""
+    """Write the fixture's claims under item labels that carry a marker: six
+    hex digits of a hash over the claims, each cited SHA-1 replaced by its
+    artifact's letter in `artifacts`, as test_live_disagreement.py's
+    write_fixture marks its own. The writer finds a local item by its label, so
+    a version of the fixture with other claims would otherwise write onto an
+    earlier version's items and see their statements beside its own. With the
+    marker each version writes items of its own, and a re-run of one version
+    finds its own items again. The hash keeps each reference's kind, so the
+    marker is not the one the fixture had when its claims cited their sources
+    by QID. The hash also covers the module's marker (conftest.fixture_mark:
+    the writer's source and the session's random bytes), so each session writes
+    items of its own: what an earlier session wrote, a live mutant's run
+    included, never meets it, and a re-run within the session finds its own
+    items again. Returns the write's result and the marker."""
     content = [
         {
             **claim,
@@ -123,7 +139,7 @@ def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
         for claim in claims
     ]
     marker = hashlib.sha256(
-        json.dumps(content, sort_keys=True).encode()
+        json.dumps(content, sort_keys=True).encode() + MARK.encode()
     ).hexdigest()[:6]
 
     def marked(value):
@@ -154,12 +170,13 @@ def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
 @pytest.fixture(scope="module")
 def fixture_graph(client, config):
     """Write the fixture under its marked labels (write_fixture;
-    idempotent: re-runs reuse and skip everything) and wait until the
-    query service holds the person's latest revision. Returns (QIDs by
-    role, source QIDs by letter, the marked labels by role)."""
+    idempotent: a re-run within the session reuses and skips everything)
+    and wait until the query service holds the person's latest revision.
+    Returns (QIDs by role, source QIDs by letter, the marked labels by
+    role)."""
     registered = {
         letter: register_fictional(
-            client, f"Period fixture source {letter}", "certificate"
+            client, f"Period fixture source {letter} {MARK}", "certificate"
         )
         for letter in "ABC"
     }

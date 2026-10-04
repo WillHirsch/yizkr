@@ -31,14 +31,16 @@ fixture writes one batch of five claims about Eugen Löbig, as (here) the
   found, and the same two claims are refused again.
 
 Every entity's label carries a marker: six hex digits of a hash over the
-fixture in NFC, its cited SHA-1 replaced by "A", and over the writer's
-source, as test_live_text_forms.py's labels do, so each version of the
-fixture and of the writer meets the fixture as a first write does. Each
-entity has a description, so a writer that failed to find one by its
-label could not mint a second item under it. The source is registered
-with a fictional PNG of its own (register_fictional), which the claims
-cite by SHA-1 (#102). Like every live test it writes fictional data to
-the one instance, so the session that runs it ends by clearing the
+fixture in NFC, its cited SHA-1 replaced by "A", and over the module's
+marker (conftest.fixture_mark: the writer's source and the session's random
+bytes), as test_live_text_forms.py's labels do, so each session, and each
+version of the fixture and of the writer, meets the fixture as a first
+write does: what an earlier session wrote, a live mutant's run included,
+never meets it. Each entity has a description, so a writer that failed to
+find one by its label could not mint a second item under it. The source is
+registered with a fictional PNG of its own (register_fictional), which the
+claims cite by SHA-1 (#102). Like every live test it writes fictional data
+to the one instance, so the session that runs it ends by clearing the
 recorded instance-contents key (docs/AGENT_PROTOCOL.md §5).
 """
 
@@ -47,7 +49,6 @@ from __future__ import annotations
 import hashlib
 import json
 import unicodedata
-from pathlib import Path
 
 import pytest
 from wikibaseintegrator.entities.baseentity import BaseEntity
@@ -57,9 +58,16 @@ from yizkr.pipeline import writer
 from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import CUT_MARK, TEXT_LIMIT, BatchWriter
 
-from .conftest import register_fictional
+from .conftest import fixture_mark, register_fictional
 
 pytestmark = pytest.mark.live
+
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "#366: Eugen Löbig and his daughter-in-law Hildegard, in texts at "
+    "and over the limit Wikibase keeps"
+)
+MARK = fixture_mark(FIXTURE, writer)
 
 
 def said_over(phrase: str, length: int) -> str:
@@ -212,7 +220,7 @@ def fixture_batch(artifact: ArtifactRef) -> ClaimBatch:
     plain = {entity["id"]: entity["label"] for entity in ENTITIES}
     marker = hashlib.sha256(
         json.dumps(batch_content("A", plain), sort_keys=True).encode()
-        + Path(writer.__file__).read_bytes()
+        + MARK.encode()
     ).hexdigest()[:6]
     labels = {key: f"{label} ({marker})" for key, label in plain.items()}
     content = batch_content(artifact.sha1, labels)
@@ -225,11 +233,11 @@ def fixture_batch(artifact: ArtifactRef) -> ClaimBatch:
 
 @pytest.fixture(scope="module")
 def fixture_graph(client):
-    """Write the fixture's batch (idempotent: a re-run of this version
+    """Write the fixture's batch (idempotent: a re-run within the session
     finds and skips everything it writes, and refuses the same claims).
     Returns the source's item, the batch and the write's result."""
     registered = register_fictional(
-        client, "Text limit fixture source", "artifact"
+        client, f"Text limit fixture source {MARK}", "artifact"
     )
     batch = fixture_batch(registered.ref)
     written = BatchWriter(client).write_batch(batch)
@@ -261,13 +269,9 @@ def cited(client, statement: dict, key: str) -> list[str]:
 
 def test_the_batch_is_written_around_the_refused_claims(client, fixture_graph):
     source, batch, written = fixture_graph
-    # the first write of this version writes the two claims the instance
-    # holds, and records the fifth on the second's statement; a later
-    # session's write finds all three there
-    assert (written.written, written.referenced, written.skipped) in (
-        (2, 1, 0),
-        (0, 0, 3),
-    )
+    # the session's first write writes the two claims the instance holds,
+    # and records the fifth on the second's statement
+    assert (written.written, written.referenced, written.skipped) == (2, 1, 0)
     refused = [claim_id(batch.claims[0]), claim_id(batch.claims[2])]
     assert written.refused == refused
     over_cause, over_kinship = written.warnings

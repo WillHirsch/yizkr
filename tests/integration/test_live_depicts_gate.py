@@ -8,8 +8,12 @@ batch is refused whole, through the writer and through `yizkr ingest
 write`, before anything is written. The same batch decided row by row on
 a review sheet is written as depicts statements carrying the face's
 region and both references, the photograph cited by the SHA-1 of its
-bytes (#102). Labels are deterministic, so re-runs reuse the items, and
-the reviewed write then adds nothing.
+bytes (#102). The photograph's bytes, its title and the sitters' labels
+carry the session's marker (conftest.fixture_mark), so each session
+meets the fixture as a first write: depicts statements, sitters or a run
+item that an earlier session wrote, a live mutant's run included, never
+meet it. Within the session the labels are fixed, so a re-run reuses the
+items, and the reviewed write then adds nothing.
 """
 
 from __future__ import annotations
@@ -19,9 +23,10 @@ import csv
 import pytest
 
 from tests.fixtures import example_universe as u
-from tests.integration.test_live_pipeline import png_bytes
+from tests.integration.conftest import fictional_png, fixture_mark
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.cli import build_parser
+from yizkr.pipeline import faces, writer
 from yizkr.pipeline.faces import (
     DetectedFace,
     DetectionResult,
@@ -39,12 +44,17 @@ from yizkr.pipeline.writer import (
 
 pytestmark = pytest.mark.live
 
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "ADR-0005: the Löbig family's 1890s studio portrait, two faces on it "
+    "matched to Eugen and Sebastian, refused raw and written reviewed"
+)
+MARK = fixture_mark(FIXTURE, faces, writer)
 PORTRAIT = u.by_key()["studio-photo-1890s"]
-PORTRAIT_TITLE = f"Integration Test {PORTRAIT.title}"
-# a fill no other live test uses, so these bytes are this module's alone
-PORTRAIT_FILL = b"\x8c\x6e\x46"
+PORTRAIT_TITLE = f"Integration Test {PORTRAIT.title} {MARK}"
+PORTRAIT_BYTES = fictional_png(f"yizkr live test #226: the portrait {MARK}")
 SITTERS = [
-    f"Integration Test {u.by_key()[key].label}"
+    f"Integration Test {u.by_key()[key].label} {MARK}"
     for key in ("eugen-loebig", "sebastian-loebig")
 ]
 # each face on the 1000x500 scan, as a region string
@@ -60,8 +70,8 @@ EMBEDDINGS = [
 
 @pytest.fixture(scope="module")
 def portrait(client, tmp_path_factory):
-    media = tmp_path_factory.mktemp("media") / "integration-test-portrait.png"
-    media.write_bytes(png_bytes(fill=PORTRAIT_FILL))
+    media = tmp_path_factory.mktemp("media") / f"portrait-{MARK}.png"
+    media.write_bytes(PORTRAIT_BYTES)
     return register_artifact(
         client,
         media_path=media,
@@ -78,8 +88,8 @@ def raw_faces(portrait) -> ClaimBatch:
     for label, embedding in zip(SITTERS, EMBEDDINGS, strict=True):
         gallery.enroll(label=label, embedding=embedding)
     detection = DetectionResult(
-        photo_file="integration-test-portrait.png",
-        photo_sha1=ArtifactRef.from_bytes(png_bytes(fill=PORTRAIT_FILL)).sha1,
+        photo_file=f"portrait-{MARK}.png",
+        photo_sha1=ArtifactRef.from_bytes(PORTRAIT_BYTES).sha1,
         artifact_qid=portrait.artifact_qid,
         image_width=1000,
         image_height=500,
@@ -188,16 +198,16 @@ def test_batch_decided_row_by_row_is_written(
         fieldnames = reader.fieldnames
         rows = [{**row, "decision": "approve"} for row in reader]
     with open(review_csv, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
+        sheet = csv.DictWriter(f, fieldnames=fieldnames)
+        sheet.writeheader()
+        sheet.writerows(rows)
     approved, warnings = apply_review(raw_faces, review_csv)
     assert warnings == []
 
     result = BatchWriter(client).write_batch(approved)
 
-    # the first suite run writes both; later runs find them there
-    assert (result.written, result.skipped) in ((2, 0), (0, 2))
+    # the session's first reviewed write writes both
+    assert (result.written, result.skipped) == (2, 0)
     properties, _ = client.vocabulary()
     statements = depicts_statements(client, portrait.artifact_qid)
     for index, region in enumerate(REGIONS):

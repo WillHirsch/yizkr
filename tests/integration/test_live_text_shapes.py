@@ -44,16 +44,19 @@ back through the API:
   claims.
 
 Every entity's label carries a marker: six hex digits of a hash over the
-fixture, its cited SHA-1 replaced by "A", and over the writer's source, as
-test_live_text_limits.py's labels do, so each version of the fixture and
-of the writer meets the fixture as a first write does. Eugen and Hildegard
-have descriptions, so a writer that failed to find one of them by its
-label could not mint a second item under it; one that failed to find
-Sebastian would send an edit on the rewrite, which counts them. The source
-is registered with a fictional PNG of its own (register_fictional), which
-the claims cite by SHA-1 (#102). Like every live test it writes fictional
-data to the one instance, so the session that runs it ends by clearing the
-recorded instance-contents key (docs/AGENT_PROTOCOL.md §5).
+fixture, its cited SHA-1 replaced by "A", and over the module's marker
+(conftest.fixture_mark: the writer's source and the session's random
+bytes), as test_live_text_limits.py's labels do, so each session, and each
+version of the fixture and of the writer, meets the fixture as a first
+write does: what an earlier session wrote, a live mutant's run included,
+never meets it. Eugen and Hildegard have descriptions, so a writer that
+failed to find one of them by its label could not mint a second item under
+it; one that failed to find Sebastian would send an edit on the rewrite,
+which counts them. The source is registered with a fictional PNG of its own
+(register_fictional), which the claims cite by SHA-1 (#102). Like every
+live test it writes fictional data to the one instance, so the session that
+runs it ends by clearing the recorded instance-contents key
+(docs/AGENT_PROTOCOL.md §5).
 """
 
 from __future__ import annotations
@@ -61,7 +64,6 @@ from __future__ import annotations
 import hashlib
 import json
 import unicodedata
-from pathlib import Path
 
 import pytest
 from wikibaseintegrator.entities.baseentity import BaseEntity
@@ -71,9 +73,16 @@ from yizkr.pipeline import writer
 from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import CUT_MARK, BatchWriter, batch_fingerprint
 
-from .conftest import register_fictional
+from .conftest import fixture_mark, register_fictional
 
 pytestmark = pytest.mark.live
+
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "#384: Eugen Löbig, his daughter-in-law Hildegard and Sebastian, in "
+    "texts of every shape the writer refuses or cuts"
+)
+MARK = fixture_mark(FIXTURE, writer)
 
 # the most characters Wikibase holds in a text value, and in a term
 TEXT_LIMIT, TERM_LIMIT = 400, 250
@@ -293,7 +302,7 @@ def fixture_marker() -> str:
     plain = {entity["id"]: entity["label"] for entity in ENTITIES}
     return hashlib.sha256(
         json.dumps(batch_content("A", plain), sort_keys=True).encode()
-        + Path(writer.__file__).read_bytes()
+        + MARK.encode()
     ).hexdigest()[:6]
 
 
@@ -305,11 +314,11 @@ def fixture_batch(artifact: ArtifactRef) -> ClaimBatch:
 
 @pytest.fixture(scope="module")
 def fixture_graph(client):
-    """Write the fixture's batch (idempotent: a re-run of this version
+    """Write the fixture's batch (idempotent: a re-run within the session
     finds and skips everything it writes, and refuses the same claims).
     Returns the source's item, the batch and the write's result."""
     registered = register_fictional(
-        client, "Text shape fixture source", "artifact"
+        client, f"Text shape fixture source {MARK}", "artifact"
     )
     batch = fixture_batch(registered.ref)
     written = BatchWriter(client).write_batch(batch)
@@ -370,11 +379,10 @@ def terms(client, qids: list[str]) -> dict[str, dict]:
 
 def test_no_text_of_the_batch_stops_it(client, fixture_graph):
     source, batch, written = fixture_graph
-    # the first write of this version writes the date of death, the
-    # kinship and Sebastian's father, and records the long excerpts on the
-    # date's statement; a later session's write finds all five there
-    first = (written.written, written.referenced, written.skipped)
-    assert first in ((3, 2, 0), (0, 0, 5))
+    # the session's first write writes the date of death, the kinship and
+    # Sebastian's father, and records the long excerpts on the date's
+    # statement
+    assert (written.written, written.referenced, written.skipped) == (3, 2, 0)
     refused = [claim_id(batch.claims[index]) for index in (0, 2, 6, 7)]
     assert written.refused == refused
     faults = [
@@ -391,17 +399,13 @@ def test_no_text_of_the_batch_stops_it(client, fixture_graph):
     refusals = [w for w in written.warnings if w.startswith("claim ")]
     for warning, cid, fault in zip(refusals, refused, faults, strict=True):
         assert warning.startswith(f"claim {cid} {fault}")
-    # the first write of this version mints Sebastian, without the
-    # description that would be his label, and says so
-    assert [w for w in written.warnings if w not in refusals] == (
-        [
-            "entity 'sebastian' has a description that is its label: its "
-            "item is made without one, as Wikibase refuses an item whose "
-            "label and description are the same"
-        ]
-        if first == (3, 2, 0)
-        else []
-    )
+    # the session's first write mints Sebastian, without the description
+    # that would be his label, and says so
+    assert [w for w in written.warnings if w not in refusals] == [
+        "entity 'sebastian' has a description that is its label: its "
+        "item is made without one, as Wikibase refuses an item whose "
+        "label and description are the same"
+    ]
     eugen = written.created_items["eugen"]
     hildegard = written.created_items["hildegard"]
     sebastian = written.created_items["sebastian"]

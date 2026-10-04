@@ -3,11 +3,12 @@
 never stored twice, so every item's `media file` holds the bytes its
 `media SHA-1` names.
 
-Fictional synthetic images only. Every file name and title the tests
-choose carries the SHA-1 prefix of the bytes it is chosen for, so new
-fixture bytes get new names: files and items that runs with other bytes
-left on the instance never meet this run's. Re-runnable against a
-non-empty graph: the images are byte-identical on every run, so a re-run
+Fictional synthetic images only. The images carry a marker of the
+session's own (conftest.fixture_mark), and every file name and title the
+tests choose the SHA-1 prefix of the bytes it is chosen for, so each
+session's images get new names: files and items that earlier sessions,
+a live mutant's run included, left on the instance never meet this
+session's. Within the session the images are byte-identical, so a re-run
 finds every file and item in place, and must store and write nothing."""
 
 from __future__ import annotations
@@ -16,21 +17,26 @@ import hashlib
 
 import pytest
 
-from tests.integration.test_live_pipeline import png_bytes
+from tests.integration.conftest import fictional_png, fixture_mark
 from tests.integration.test_live_presentation import files_with_bytes
+from yizkr.core import wiki
+from yizkr.pipeline import registrar
 from yizkr.pipeline.registrar import register_artifact
 
 pytestmark = pytest.mark.live
 
-# One seed for all four images: a new seed gives every image new bytes
-# and every name below a new SHA-1 prefix. Changing one image alone
-# would leave the others' bytes stored under names this run does not
-# expect.
-SEED = b"\x4a\x9e"
-FIRST = png_bytes(fill=SEED + b"\x01")
-SECOND = png_bytes(fill=SEED + b"\x02")
-ORIGINAL = png_bytes(fill=SEED + b"\x03")
-CHANGED = png_bytes(fill=SEED + b"\x04")
+# what the fixture is; a change to it gives the fixture new bytes
+FIXTURE = (
+    "#186: two images uploaded under one name, and an original and a "
+    "changed image registered under one name and title"
+)
+# one marker for all four images: a new marker gives every image new
+# bytes and every name below a new SHA-1 prefix
+MARK = fixture_mark(FIXTURE, registrar, wiki)
+FIRST = fictional_png(f"yizkr live test #186: first {MARK}")
+SECOND = fictional_png(f"yizkr live test #186: second {MARK}")
+ORIGINAL = fictional_png(f"yizkr live test #186: original {MARK}")
+CHANGED = fictional_png(f"yizkr live test #186: changed {MARK}")
 DESCRIPTION = "written by tests/integration; safe to delete"
 
 

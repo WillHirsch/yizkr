@@ -32,15 +32,16 @@ by a registrar that reads the instance afresh, each item is found by its
 SHA-1, nothing is written, and it is flagged again, as a flag repeats on
 every run while its condition holds.
 
-Fictional synthetic media only (docs/EXAMPLES.md): the Löbig family's
-studio portrait of the 1890s. Every title, file name and label carries a
-marker, eight hex digits of a hash over the fixture and over the
-registrar's and the wiki client's source, so each version of the fixture
-and of that code meets the fixture as a first registration does: a
-mutant of the registrar cannot pass by finding what an earlier version
-made. Like every live test it writes fictional data to the one instance,
-so the session that runs it ends by clearing the recorded
-instance-contents key (docs/AGENT_PROTOCOL.md §5).
+Fictional synthetic media only (docs/EXAMPLES.md): the Löbig family's studio
+portrait of the 1890s. Every title, file name and label carries a marker, eight
+hex digits of a hash over the fixture, over the registrar's and the wiki
+client's source and over eight random bytes drawn once a session
+(conftest.fixture_mark), so each session, and each version of the fixture and
+of that code, meets the fixture as a first registration does: a mutant of the
+registrar cannot pass by finding what an earlier session made, and what a live
+mutant's run wrote never meets a later session. Like every live test it writes
+fictional data to the one instance, so the session that runs it ends by
+clearing the recorded instance-contents key (docs/AGENT_PROTOCOL.md §5).
 """
 
 from __future__ import annotations
@@ -62,7 +63,7 @@ from yizkr.pipeline.registrar import (
     _string_claim,
 )
 
-from .conftest import fictional_png
+from .conftest import fictional_png, fixture_mark
 
 pytestmark = pytest.mark.live
 
@@ -74,11 +75,7 @@ FIXTURE = (
     "media object; then a re-scan under its title, its own bytes under "
     "another, and a scan under the media object's title, each twice"
 )
-MARK = hashlib.sha256(
-    FIXTURE.encode()
-    + Path(registrar.__file__).read_bytes()
-    + Path(wiki.__file__).read_bytes()
-).hexdigest()[:8]
+MARK = fixture_mark(FIXTURE, registrar, wiki)
 
 PORTRAIT = fictional_png(f"yizkr live test #371: the portrait {MARK}")
 RESCAN = fictional_png(f"yizkr live test #371: the re-scan {MARK}")

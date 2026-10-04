@@ -21,7 +21,11 @@ exact statements the API holds:
 * the documented name-case scope (a ``VALUES ?prop`` filter) works.
 
 The whole graph is queried, and rows are filtered to the fixture subject, so
-unrelated data on the instance cannot make the assertions flaky.
+unrelated data on the instance cannot make the assertions flaky. The
+subject's and the town's labels and the sources' titles carry the
+session's marker (conftest.fixture_mark), so each session meets the
+fixture as a first write: statements an earlier session wrote, a live
+mutant's run included, never stand on its subject.
 """
 
 from __future__ import annotations
@@ -31,25 +35,35 @@ from datetime import UTC, datetime
 import pytest
 
 from yizkr.claims import ArtifactRef, ClaimBatch
+from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.queries.publish import load_templates, render_for_instance
 
-from .conftest import register_fictional, run_sparql, wait_for_query_service
+from .conftest import (
+    fixture_mark,
+    register_fictional,
+    run_sparql,
+    wait_for_query_service,
+)
 
 pytestmark = pytest.mark.live
 
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "ADR-0023 §5: one subject's machine statements from sources A and B, "
+    "with a curator's sibling, and a town of residence"
+)
+MARK = fixture_mark(FIXTURE, writer)
 SUBJECT = {
     "kind": "local",
     "local_id": "queue-person",
-    # Not the label of earlier runs: a subject minted before #88 has a
-    # type statement with no run reference, which the queue never lists.
-    "label": "Queue Fixture Subject",
+    "label": f"Queue Fixture Subject {MARK}",
     "instance_of": "human",
 }
 TOWN = {
     "kind": "local",
     "local_id": "queue-town",
-    "label": "Queue Fixture Town",
+    "label": f"Queue Fixture Town {MARK}",
     "instance_of": "place",
 }
 YEAR_PRECISION = "9"  # Wikibase time precision for a bare year
@@ -102,12 +116,15 @@ def batch(claims: list[dict]) -> ClaimBatch:
 
 @pytest.fixture(scope="module")
 def fixture_graph(client, config):
-    """Write the fixture (idempotent: re-runs reuse and skip everything)
-    and wait until the query service holds the subject's latest revision.
-    Returns (subject QID, source A QID, source B QID)."""
+    """Write the fixture (idempotent: a re-run within the session reuses
+    and skips everything) and wait until the query service holds the
+    subject's latest revision. Returns (subject QID, source A QID, source B
+    QID)."""
     registered_a, registered_b = (
         register_fictional(
-            client, f"Under-witnessed fixture source {letter}", "certificate"
+            client,
+            f"Under-witnessed fixture source {letter} {MARK}",
+            "certificate",
         )
         for letter in ("A", "B")
     )

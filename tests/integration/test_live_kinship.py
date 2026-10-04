@@ -31,13 +31,16 @@ Hildegard, whose nephew he is), the in-laws, the asserted aunt and
 great-grandmother, and their inverse rows, with Nicholas as Klara's
 nephew and Cäcilie's great-grandson.
 
-The fixture writes the people under labels of its own, so a re-run
-reuses its entities, and the query is scoped to them with a VALUES line
-in its main WHERE, as its header describes for one subject; its named
-sets are still computed over the whole graph, so this also runs the
-query at the instance's size. Like every live test it writes fictional
-data to the one instance, so the session that runs it ends by clearing
-the recorded instance-contents key (docs/AGENT_PROTOCOL.md §5).
+The fixture writes the people under labels of its own, each carrying the
+session's marker (conftest.fixture_mark), so each session meets the fixture
+as a first write, a re-run within the session reuses its entities, and what
+an earlier session wrote, a live mutant's run included, never reaches the
+rows. The query is scoped to them with a VALUES line in its main WHERE, as
+its header describes for one subject; its named sets are still computed
+over the whole graph, so this also runs the query at the instance's size.
+Like every live test it writes fictional data to the one instance, so the
+session that runs it ends by clearing the recorded instance-contents key
+(docs/AGENT_PROTOCOL.md §5).
 """
 
 from __future__ import annotations
@@ -49,12 +52,25 @@ from wikibaseintegrator.wbi_enums import WikibaseRank
 
 from tests.fixtures import example_universe as u
 from yizkr.claims import ArtifactRef, ClaimBatch
+from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.queries.publish import load_templates, render_for_instance
 
-from .conftest import register_fictional, run_sparql, wait_for_query_service
+from .conftest import (
+    fixture_mark,
+    register_fictional,
+    run_sparql,
+    wait_for_query_service,
+)
 
 pytestmark = pytest.mark.live
+
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "ADR-0014, ADR-0018: a slice of the Löbig family, each relation stated "
+    "on one side only, some with a curator's rank"
+)
+MARK = fixture_mark(FIXTURE, writer)
 
 EUGEN = "eugen-loebig"
 SEBASTIAN = "sebastian-loebig"
@@ -160,11 +176,12 @@ RELATIVES = {
 
 def person(key: str) -> dict:
     """A local ref to one of the universe's people, under this fixture's
-    own label, so that no other test's item is reused."""
+    own label, marked with the session's marker, so that no other test's
+    item, and no earlier session's, is reused."""
     return {
         "kind": "local",
         "local_id": f"kinship-{key}",
-        "label": f"{u.by_key()[key].label} (kinship fixture)",
+        "label": f"{u.by_key()[key].label} (kinship fixture {MARK})",
         "instance_of": "human",
     }
 
@@ -218,11 +235,12 @@ def set_rank(client, subject: str, prop_key: str, value: str, rank) -> None:
 
 @pytest.fixture(scope="module")
 def fixture_graph(client, config) -> dict[str, str]:
-    """Write the fixture (idempotent: re-runs reuse and skip everything),
-    apply the curator's ranks, and wait until the query service holds
-    every person's latest revision. Returns their QIDs by universe key."""
+    """Write the fixture (idempotent: a re-run within the session reuses
+    and skips everything), apply the curator's ranks, and wait until the
+    query service holds every person's latest revision. Returns their QIDs
+    by universe key."""
     source = register_fictional(
-        client, "Kinship fixture source", "artifact"
+        client, f"Kinship fixture source {MARK}", "artifact"
     ).ref
     claims = [
         claim(

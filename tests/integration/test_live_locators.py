@@ -16,10 +16,11 @@ own, and reads the statement back through the API:
   that finds the same two places: not even that run's block.
 
 The source is registered with a fictional PNG of its own
-(register_fictional), which the claims cite by SHA-1 (#102). Like every
-live test it writes fictional data to the one instance, so the session
-that runs it ends by clearing the recorded instance-contents key
-(docs/AGENT_PROTOCOL.md §5).
+(register_fictional), which the claims cite by SHA-1 (#102). Its title and
+the person's label carry the session's marker (conftest.fixture_mark), so
+each session meets the fixture as a first write. Like every live test it
+writes fictional data to the one instance, so the session that runs it ends
+by clearing the recorded instance-contents key (docs/AGENT_PROTOCOL.md §5).
 """
 
 from __future__ import annotations
@@ -27,7 +28,6 @@ from __future__ import annotations
 import hashlib
 import json
 import unicodedata
-from pathlib import Path
 
 import pytest
 
@@ -35,9 +35,16 @@ from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
 
-from .conftest import register_fictional
+from .conftest import fixture_mark, register_fictional
 
 pytestmark = pytest.mark.live
+
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "#335: one person's birth as the 1905 marriage certificate gives it "
+    "twice, on its first page and on its back, written by two runs"
+)
+MARK = fixture_mark(FIXTURE, writer)
 
 PERSON = {
     "kind": "local",
@@ -80,14 +87,17 @@ def fixture_batch(artifact: ArtifactRef, started_at: str) -> ClaimBatch:
     under a person label that carries a marker: six hex digits of a hash
     over the claims, the cited SHA-1 replaced by "A", as
     test_live_period_dates.py's write_fixture marks its labels, and over
-    the writer's source. The writer finds a local item by its label, so a
-    version of the fixture with other claims would otherwise write onto an
-    earlier version's person and see its statements beside its own. The
-    writer's source is hashed too, so that each version of the writer
-    meets the fixture as a first write does: one that drops the back's
-    block (a mutant of the harness, say) cannot pass by finding the block
-    an earlier version wrote. A re-run of one version finds its own
-    person again, and a run started at the same time its own run item."""
+    the module's marker (conftest.fixture_mark: the writer's source and the
+    session's random bytes). The writer finds a local item by its label,
+    so a version of the fixture with other claims would otherwise write
+    onto an earlier version's person and see its statements beside its
+    own. The writer's source and the session are hashed too, so that each
+    session, and each version of the writer, meets the fixture as a first
+    write does: one that drops the back's block (a mutant of the harness,
+    say) cannot pass by finding the block an earlier session wrote, and
+    what a live mutant's run wrote never meets a later session. A re-run
+    within the session finds its own person again, and a run started at
+    the same time its own run item."""
     claims = [claim(artifact, page) for page in EXCERPTS]
     content = [
         {
@@ -100,8 +110,7 @@ def fixture_batch(artifact: ArtifactRef, started_at: str) -> ClaimBatch:
         for each in claims
     ]
     marker = hashlib.sha256(
-        json.dumps(content, sort_keys=True).encode()
-        + Path(writer.__file__).read_bytes()
+        json.dumps(content, sort_keys=True).encode() + MARK.encode()
     ).hexdigest()[:6]
     person = dict(PERSON, label=f"{PERSON['label']} ({marker})")
     return ClaimBatch.model_validate(
@@ -118,11 +127,11 @@ def fixture_batch(artifact: ArtifactRef, started_at: str) -> ClaimBatch:
 
 @pytest.fixture(scope="module")
 def fixture_graph(client):
-    """Write the fixture's batch (idempotent: a re-run of this version
-    reuses and skips everything). Returns the source's registration and
-    the write's result."""
+    """Write the fixture's batch (idempotent: a re-run within the
+    session reuses and skips everything). Returns the source's
+    registration and the write's result."""
     registered = register_fictional(
-        client, "Locator fixture source", "certificate"
+        client, f"Locator fixture source {MARK}", "certificate"
     )
     written = BatchWriter(client).write_batch(
         fixture_batch(registered.ref, RUNS[0])
@@ -169,13 +178,9 @@ def blocks(client, statement: dict) -> list[dict]:
 
 def test_each_page_is_a_reference_block_of_its_own(client, fixture_graph):
     registered, written = fixture_graph
-    # the first write of this version adds the back's block to the
-    # statement the first page's claim wrote; a later session's write
-    # finds both there
-    assert (written.written, written.referenced, written.skipped) in (
-        (1, 1, 0),
-        (0, 0, 2),
-    )
+    # the session's first write adds the back's block to the statement
+    # the first page's claim wrote
+    assert (written.written, written.referenced, written.skipped) == (1, 1, 0)
     (born,) = births(client, written.created_items["locator-person"])
     assert born["mainsnak"]["datavalue"]["value"]["time"] == (
         "+1862-02-15T00:00:00Z"

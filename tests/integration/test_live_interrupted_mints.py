@@ -17,16 +17,18 @@ mint reaches it, then runs again:
   itself, and writes the batch's claim citing it. A further re-run writes
   nothing to it.
 
-Fictional synthetic media and claims only (docs/EXAMPLES.md): Gustav's
-birth register extract of 1938, and his birth as it gives it. Every title,
-file name and label carries a marker, eight hex digits of a hash over the
-fixture and over the registrar's and the writer's source, so each version
-of the fixture and of that code meets the fixture as a first mint does: a
-mutant of the harness cannot pass by finding what an earlier version made.
-A re-run of one version finds its own items typed, and passes without
-cutting anything. Like every live test it writes fictional data to the one
-instance, so the session that runs it ends by clearing the recorded
-instance-contents key (docs/AGENT_PROTOCOL.md §5).
+Fictional synthetic media and claims only (docs/EXAMPLES.md): Gustav's birth
+register extract of 1938, and his birth as it gives it. Every title, file name
+and label carries a marker, eight hex digits of a hash over the fixture, over
+the registrar's and the writer's source and over eight random bytes drawn once
+a session (conftest.fixture_mark), so each session, and each version of the
+fixture and of that code, meets the fixture as a first mint does: a mutant of
+the harness cannot pass by finding what an earlier session made, and what a
+live mutant's run wrote never meets a later session. A re-run within the
+session finds its own items typed, and passes without cutting anything. Like
+every live test it writes fictional data to the one instance, so the session
+that runs it ends by clearing the recorded instance-contents key
+(docs/AGENT_PROTOCOL.md §5).
 """
 
 from __future__ import annotations
@@ -42,7 +44,7 @@ from yizkr.pipeline import registrar, writer
 from yizkr.pipeline.registrar import Registrar
 from yizkr.pipeline.writer import BatchWriter, batch_fingerprint
 
-from .conftest import fictional_png, register_fictional
+from .conftest import fictional_png, fixture_mark, register_fictional
 
 pytestmark = pytest.mark.live
 
@@ -52,11 +54,7 @@ FIXTURE = (
     "#368: Gustav's birth register extract of 1938, two pages; his birth, "
     "7 January 1919, as its first page gives it"
 )
-MARK = hashlib.sha256(
-    FIXTURE.encode()
-    + Path(registrar.__file__).read_bytes()
-    + Path(writer.__file__).read_bytes()
-).hexdigest()[:8]
+MARK = fixture_mark(FIXTURE, registrar, writer)
 
 # the extract, registered with a page fragment for each of its two pages
 EXTRACT = fictional_png(f"yizkr live test #368: the birth extract {MARK}")
