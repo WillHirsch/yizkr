@@ -2025,7 +2025,7 @@ class TestInstanceForm:
 
     def test_an_alias_the_instance_keeps_as_the_label_is_the_label(self):
         """A control character the instance keeps as a space, and a
-        space at either end it drops."""
+        space at either end it drops, in the alias or in the label."""
         doc = register(
             "a register of Gustav",
             [
@@ -2034,11 +2034,18 @@ class TestInstanceForm:
                     "Gustav Löbig",
                     aliases=["Gustav\x08Löbig", " Gustav Löbig\u3000"],
                 ),
+                human(
+                    "e2",
+                    "Gustav\x08Löbig",
+                    aliases=["Gustav Löbig", "Gustl"],
+                    givens=["Gustav"],
+                    surnames=["Löbig"],
+                ),
             ],
             [],
-            {"e1": "gustav"},
+            {"e1": "gustav", "e2": "gustav"},
         )
-        assert self.aliases(doc) == [[]]
+        assert self.aliases(doc) == [[], ["Gustl"]]
 
     def test_a_batch_without_entities_gives_a_label_once(self):
         """Without a manifest, a local id's aliases are the labels its
