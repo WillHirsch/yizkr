@@ -674,6 +674,21 @@ class EngineCache:
         path = self.path(key)
         return sorted(path.parent.glob(f"{key}.rejected-*.json"))
 
+    def asides(self, key: str) -> list[dict]:
+        """The entries moved aside under this key, rejected or replaced,
+        by name, each as it was kept: an entry it cannot read, or one
+        another key's, is left out. Nothing is written."""
+        path = self.path(key)
+        found = []
+        for aside in sorted(path.parent.glob(f"{key}.*.json")):
+            try:
+                entry = json.loads(aside.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(entry, dict) and entry.get("key") == key:
+                found.append(entry)
+        return found
+
     def put(self, key: str, entry: Mapping[str, Any]) -> None:
         """Store `entry` under `key`. An entry the key already has, live or
         damaged, is moved aside as replaced, never overwritten."""
