@@ -117,7 +117,12 @@ the prompt renders that set from the manifest rather than restating it.
 Artifact types, controlled-vocabulary values (`circa`, `male`), and
 infrastructure classes (`artifact_fragment`, `extraction_run`) are real
 classes but not entity kinds. A new item is not offered to the
-extractor until it says so.
+extractor until it says so. The classes of entities that are no entity
+kind, the artifact types, `time_period_class` and the infrastructure
+classes, are marked **`entity_class: true`**; with the entity kinds they
+are the manifest's **kind keys**, and the manifest does not load when an
+item in the subclass hierarchy is neither (amended by #462, 2026-10-05).
+A controlled-vocabulary value is neither.
 
 **Controlled vocabulary values** (items, never entity kinds): `circa`;
 `male` and `female`; the participant roles `principal`, `parent`,
@@ -144,9 +149,20 @@ names `unclassified_entity` (ADR-0013). The manifest does not load when
 an item-valued property declares none. Validation refuses a claim whose
 value is of a kind its property does not accept, and extraction counts it
 among its rejects. An existing item named by its QID has no kind in a
-batch and is not checked. A vocabulary ref to an entity kind (`human`,
-`place`) names the class, not an entity of it, so only `instance_of` and
-`subclass_of` take one. `part_of`'s list is flat for now: it takes a place
+batch and is not checked. A vocabulary ref to a kind key (`human`,
+`place`, `time_period_class`, `photograph`) names the class, not an
+entity of it, so only `instance_of` and `subclass_of` take one, and they
+take no controlled-vocabulary value (`circa`): an item value is an entity
+of the batch, an existing item named by its QID, or a vocabulary item its
+property names. Nor is an item value, a claim's or a qualifier's, ever
+the claim's own subject (the same local id, the same QID, or a local ref
+resolved to the subject's QID): no property of the manifest takes its
+subject as its value, so Flörburg `location` Flörburg and Sebastian his
+own `father` are refused and counted among extraction's rejects (amended
+by #461 and #462, 2026-10-05). `country_of_citizenship` accepts a place,
+since the place model has no country class; its description, which the
+prompt carries, says the value is a country, never a town, city or region
+within one, and validation does not tell them apart. `part_of`'s list is flat for now: it takes a place
 or an artifact whatever its subject, so a place `part_of` an artifact
 passes the check, which reads the value alone.
 

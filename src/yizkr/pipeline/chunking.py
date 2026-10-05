@@ -213,7 +213,10 @@ Rules — these mirror the archive's non-negotiable conventions:
   at the manifest entity of that kind: a claim whose value is of a kind
   its property does not accept is refused. Where the manifest holds a
   site and an institution of one name, a relation of place takes the
-  site and a relation of agency the institution.
+  site and a relation of agency the institution. A claim's value, and a
+  qualifier's, is never its own subject. An item value is an entity or
+  a vocabulary item its property names: a kind key ("place",
+  "time_period_class") is a value of instance_of alone.
 - A person's ordinary name lives in their entity-manifest label and
   aliases, and which part of it is which lives in the manifest's record;
   do NOT restate either as a claim, beyond `name` (below). Use the typed

@@ -938,6 +938,17 @@ ADR-0031 §1 leaves both to this revision.
 
 #### 3.5 The kinds each property accepts
 
+Amended by #461 and #462 (2026-10-05): a kind key named as a value is the
+class, not an entity of it, whether an entity kind or another class of
+entities the manifest marks `entity_class` (`time_period_class`, the
+artifact types), so only `instance_of` and `subclass_of` take one, and
+they take no controlled-vocabulary value; and an item value, a claim's or
+a qualifier's, that names the claim's own subject is refused on every
+property, none of which takes its subject as its value. Each is a counted
+reject. `country_of_citizenship` keeps accepting a place, since the place
+model has no country class: the prompt, through its description, asks for
+a country.
+
 ADR-0031 rules that the relation decides the kind of what it points to;
 its §5 leaves the mechanism to this revision. Every item-valued property
 and qualifier declares `accepts`, the kinds its value may be, and the

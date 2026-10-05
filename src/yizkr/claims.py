@@ -29,7 +29,8 @@ Vocabulary: `property` fields and vocabulary references hold *manifest
 keys* (e.g. ``residence``, ``circa``) from model/manifest.yaml — stable,
 instance-independent names. `validate_against_manifest()` checks that
 keys exist, that each value's type matches the property's datatype, and
-that an item value is of a kind its property accepts (ADR-0035 §3.5).
+that an item value is of a kind its property accepts (ADR-0035 §3.5)
+and is not the claim's own subject.
 Local P/Q ids never appear in pipeline JSON (they differ per instance);
 only the writer resolves keys to ids, at write time.
 
@@ -796,8 +797,16 @@ def validate_against_manifest(
     * a claim of a retired property is refused (ADR-0036);
     * a reference property (`stated_in`, the judgement note's) is refused
       as a claim's or a qualifier's property;
-    * a vocabulary ref to an entity kind (`human`, `place`) is a class,
-      so a property that accepts entities of that kind refuses it;
+    * a vocabulary ref to a kind key, an entity kind (`human`, `place`)
+      or another entity class (`time_period_class`, `photograph`), is a
+      class, so only a property that accepts a class takes it, and such a
+      property takes no vocabulary value (`circa`) either. An item value
+      is thus an entity of the batch, an existing item named by its QID,
+      or a vocabulary item its property accepts;
+    * an item value, a claim's or a qualifier's, never names the claim's
+      own subject: the same local id, the same QID, the same vocabulary
+      item, or a local ref resolved to the subject's QID. No property of
+      the manifest takes its subject as its own value;
     * a death's principal is never also its informant (ADR-0035 §3.2);
     * a claim whose subject is a document (an artifact reference) names
       its own source, by a property the manifest marks
@@ -827,6 +836,9 @@ def validate_against_manifest(
     }
     entity_labels: dict[str, str] = {
         entity.id: entity.label for entity in batch.entities
+    }
+    entity_qids: dict[str, str] = {
+        entity.id: entity.qid for entity in batch.entities if entity.qid
     }
     seen_entity_ids: set[str] = set()
     for e_index, entity in enumerate(batch.entities):
@@ -912,6 +924,21 @@ def validate_against_manifest(
             return str(ref)
         return f"vocab:{ref.key}"
 
+    def entity_key(ref) -> str:
+        # a local ref resolved to an existing item is that item
+        if isinstance(ref, LocalRef) and ref.local_id in entity_qids:
+            return f"qid:{entity_qids[ref.local_id]}"
+        return ref_key(ref)
+
+    def check_not_subject(value, subject_key: str, where: str) -> None:
+        if isinstance(value, ItemValue) and (
+            entity_key(value.value) == subject_key
+        ):
+            errors.append(
+                f"{where}.value: names the claim's own subject, "
+                f"{subject_key}; a value is never its own subject"
+            )
+
     # roles each person holds in each death, across the batch's claims
     death_roles: dict[tuple[str, str], set[str]] = {}
     for index, claim in enumerate(batch.claims):
@@ -938,6 +965,8 @@ def validate_against_manifest(
                 f"as its subject (ADR-0035 §3.4)"
             )
         check_property_value(claim.property, claim.value, where, subject_kind)
+        subject_key = entity_key(claim.subject)
+        check_not_subject(claim.value, subject_key, where)
         if claim.property == "name" and isinstance(
             claim.value, MonolingualValue
         ):
@@ -972,6 +1001,11 @@ def validate_against_manifest(
                 qualifier.value,
                 f"{where}.qualifiers[{q_index}]",
                 subject_kind,
+            )
+            check_not_subject(
+                qualifier.value,
+                subject_key,
+                f"{where}.qualifiers[{q_index}]",
             )
         if (
             claim.property == "participant"

@@ -8,7 +8,12 @@ import yaml
 from pydantic import ValidationError
 
 from yizkr.model.bootstrap import build_mapping_wikitext
-from yizkr.model.schema import Manifest, load_manifest, read_manifest_data
+from yizkr.model.schema import (
+    Manifest,
+    load_acceptance,
+    load_manifest,
+    read_manifest_data,
+)
 
 
 @pytest.fixture(scope="module")
@@ -37,11 +42,16 @@ def minimal_raw() -> dict:
             },
         },
         "items": {
-            "artifact": {"label": "artifact", "description": "d"},
+            "artifact": {
+                "label": "artifact",
+                "description": "d",
+                "entity_class": True,
+            },
             "photograph": {
                 "label": "photograph",
                 "description": "d",
                 "subclass_of": "artifact",
+                "entity_class": True,
             },
             "model_manifest": {"label": "model manifest", "description": "d"},
         },
@@ -248,6 +258,48 @@ class TestValidators:
         prompt offers the flagged set, so the safe default is out."""
         manifest = Manifest.model_validate(minimal_raw())
         assert not any(spec.entity_kind for spec in manifest.items.values())
+
+    def test_a_class_in_the_hierarchy_is_marked_one(self):
+        """A subclass or a superclass is a class, so the loader fails
+        closed on one that is neither an entity kind nor marked
+        entity_class: named by its key, it would pass as a value."""
+        for key in ("artifact", "photograph"):
+            raw = minimal_raw()
+            del raw["items"][key]["entity_class"]
+            with pytest.raises(ValidationError, match=f"items.{key} is in"):
+                Manifest.model_validate(raw)
+        raw = minimal_raw()
+        del raw["items"]["photograph"]["entity_class"]
+        raw["items"]["photograph"]["entity_kind"] = True
+        Manifest.model_validate(raw)
+
+    def test_an_entity_kind_is_not_also_marked_a_class(self):
+        raw = minimal_raw()
+        raw["items"]["artifact"]["entity_kind"] = True
+        with pytest.raises(ValidationError, match="not also marked"):
+            Manifest.model_validate(raw)
+
+    def test_the_kind_keys(self, manifest):
+        """The classes of entities that are no entity kind: the artifact
+        types, the time period and the infrastructure classes. A
+        controlled-vocabulary value is none."""
+        classes = {
+            k for k, spec in manifest.items.items() if spec.entity_class
+        }
+        assert {
+            "time_period_class",
+            "artifact",
+            "artifact_fragment",
+            "extraction_run",
+            "photograph",
+            "certificate",
+        } <= classes
+        for key in ("circa", "male", "principal", "kin_cousin", "widowed"):
+            assert not manifest.items[key].entity_class, key
+            assert not manifest.items[key].entity_kind, key
+        acceptance = load_acceptance()
+        assert acceptance.entity_classes == classes
+        assert acceptance.kind_keys == classes | acceptance.entity_kinds
 
     def test_overlong_description_rejected(self):
         # Wikibase caps descriptions at 250 chars; catch it at load time
