@@ -32,7 +32,9 @@ The checks, which docs/ANOMALIES.md describes one by one:
 * extraction: no entities or no claims from a non-trivial transcription,
   a fallback manifest or segmentation, and per document the shares of
   its chunk calls that failed, of its chunk answers cut off and of the
-  claims it was given that were rejected or unread;
+  claims it was given that were rejected or unread, and claims dated
+  before the birth the batch gives their subject or implausibly long
+  after it;
 * distributions: entities and claims per page, and critic findings per
   item reviewed, far from the median of the run's documents of the class
   (`document_class`);
@@ -210,6 +212,10 @@ class Expected(Check):
     expected: list[str]
 
 
+class Lifespan(Check):
+    max_years_after_birth: int = Field(ge=0)
+
+
 class Confidence(Check):
     min_confidence: float = Field(ge=0, le=1)
 
@@ -272,6 +278,7 @@ class Checks(_Settings):
     chunk_failures: Share
     truncations: Share
     schema_rejects: Share
+    implausible_date: Lifespan
     entity_yield: Outlier
     claim_yield: Outlier
     critic_rate: Outlier
@@ -765,6 +772,189 @@ def batch_findings(
                 )
             )
     return found
+
+
+# the property that dates a person's birth; the qualifiers that date the
+# claim they qualify, each with the qualifiers that bound it
+# (docs/MODELING.md, "Uncertainty and time"): a claim's time value and its
+# point in time run from its earliest date to its latest date, a start
+# from its earliest date to its latest start date, and an end from its
+# earliest end date to its latest date
+BIRTH = "date_of_birth"
+BOUNDS = {
+    "value": ("earliest_date", "latest_date"),
+    "point_in_time": ("earliest_date", "latest_date"),
+    "start_time": ("earliest_date", "latest_start_date"),
+    "end_time": ("earliest_end_date", "latest_date"),
+}
+DATING_QUALIFIERS = ("point_in_time", "start_time", "end_time")
+# the sourcing circumstance that makes a claim's dates approximate
+CIRCA = "circa"
+_OPEN = float("inf")
+
+
+def _years(value: Any) -> tuple[int, int] | None:
+    """The first and last year a time value names at its precision, as
+    Wikibase counts them (ADR-0034): a decade's ten years from a year
+    ending in 0, a century's hundred from a year ending in 01, and
+    otherwise its one year; None for a value that is no time value, or
+    whose precision is unknown."""
+    if _get(value, "type") != "time":
+        return None
+    year = _get(value, "year")
+    if isinstance(year, bool) or not isinstance(year, int) or not year:
+        return None
+    precision = _get(value, "precision")
+    if precision is None:
+        precision = "year"
+    if precision == "century":
+        first = (year - 1) // 100 * 100 + 1
+        return first, first + 99
+    if precision == "decade":
+        first = year // 10 * 10
+        return first, first + 9
+    if precision in ("year", "month", "day"):
+        return year, year
+    return None
+
+
+def _circa(claim: Any) -> bool:
+    return any(
+        _get(qualifier, "property") == "sourcing_circumstances"
+        and _get(_get(_get(qualifier, "value"), "value"), "key") == CIRCA
+        for qualifier in _get(claim, "qualifiers") or ()
+    )
+
+
+def _bounds(
+    qualifiers: Sequence[Any], name: str
+) -> list[tuple[int, int]] | None:
+    """The years of each `name` qualifier's time value; None when one of
+    them cannot be read, so that the side it bounds is never closed by
+    leaving it out."""
+    found = []
+    for qualifier in qualifiers:
+        if _get(qualifier, "property") == name:
+            years = _years(_get(qualifier, "value"))
+            if years is None:
+                return None
+            found.append(years)
+    return found
+
+
+def _stated_spans(
+    claim: Any, *, dating: bool = True
+) -> list[tuple[float, float]]:
+    """The years each date of a claim may lie in, as its source states
+    them: its time value and its dating qualifiers (DATING_QUALIFIERS),
+    each at the years its precision names, its first year lowered by its
+    earliest bound and its last raised by its latest one (BOUNDS), and
+    open on the side a lone bound leaves open ("after 1890" runs on from
+    1890). A claim its source gives as circa says nothing certain of
+    either side, and each of its dates is open on both, as is a date with
+    a bound that cannot be read. Never narrower than the source. Without
+    `dating`, the time value alone is read, with its own bounds: a
+    birth's, whose dating qualifiers date its source, not the birth."""
+    qualifiers = list(_get(claim, "qualifiers") or ())
+    circa = _circa(claim)
+    dates = [("value", _get(claim, "value"))]
+    if dating:
+        dates += [
+            (_get(qualifier, "property"), _get(qualifier, "value"))
+            for qualifier in qualifiers
+            if _get(qualifier, "property") in DATING_QUALIFIERS
+        ]
+    spans: list[tuple[float, float]] = []
+    for name, value in dates:
+        years = _years(value)
+        if years is None:
+            continue
+        if circa:
+            spans.append((-_OPEN, _OPEN))
+            continue
+        lower, upper = BOUNDS[name]
+        lowers, uppers = _bounds(qualifiers, lower), _bounds(qualifiers, upper)
+        if lowers is None or uppers is None:
+            spans.append((-_OPEN, _OPEN))
+            continue
+        earliest = [bound[0] for bound in lowers]
+        latest = [bound[1] for bound in uppers]
+        first: float = min([years[0], *earliest])
+        last: float = max([years[1], *latest])
+        if earliest and not latest:
+            last = _OPEN
+        if latest and not earliest:
+            first = -_OPEN
+        spans.append((first, last))
+    return spans
+
+
+def _subject_key(subject: Any) -> tuple | None:
+    """Who a claim is about, as the batch names it: a local id, a QID or
+    a vocabulary key."""
+    kind = _get(subject, "kind")
+    name = {"local": "local_id", "qid": "qid", "vocab": "key"}.get(kind)
+    if name is None:
+        return None
+    identity = _get(subject, name)
+    return (kind, identity) if isinstance(identity, str) else None
+
+
+def date_findings(
+    config: AnomalyConfig, claims: Sequence[Any]
+) -> list[Finding]:
+    """The implausible-date finding on one batch: its claims about someone
+    it gives a date of birth for that are dated wholly before the earliest
+    year any of those births may lie in, or wholly more than
+    `max-years-after-birth` years after the latest. Every date, a birth's
+    included, is judged through the span its source states (_stated_spans;
+    a birth by its time value and its own bounds), so a year, a decade, a
+    century or a range is never narrowed, and years alone are compared, so
+    a date in a birth year is never before it. Every birth a batch gives
+    someone counts, and none is preferred (ADR-0002): only a date outside
+    all of them is counted, so a birth, which lies within them, never is.
+    A claim is counted once, before the birth if any of its dates is, else
+    after it."""
+    settings = config.checks.implausible_date
+    if not settings.enabled:
+        return []
+    births: dict[tuple, list[tuple[float, float]]] = {}
+    for claim in claims:
+        key = _subject_key(_get(claim, "subject"))
+        if key is not None and _get(claim, "property") == BIRTH:
+            births.setdefault(key, []).extend(
+                _stated_spans(claim, dating=False)
+            )
+    before = after = 0
+    for claim in claims:
+        key = _subject_key(_get(claim, "subject"))
+        known = births.get(key) if key is not None else None
+        if not known:
+            continue
+        earliest = min(first for first, _last in known)
+        latest = max(last for _first, last in known)
+        dates = _stated_spans(claim)
+        if any(last < earliest for _first, last in dates):
+            before += 1
+        elif any(
+            first - latest > settings.max_years_after_birth
+            for first, _last in dates
+        ):
+            after += 1
+    if not before and not after:
+        return []
+    return [
+        Finding(
+            "implausible-date",
+            before + after,
+            None,
+            {
+                "before_birth": before,
+                "after_birth": after,
+                "max_years_after_birth": settings.max_years_after_birth,
+            },
+        )
+    ]
 
 
 def outlier(
@@ -1448,7 +1638,7 @@ class AnomalyChecks:
             language=facts.language,
             letters=facts.letters,
             coverage=_read_json(Path(doc.extraction) / "coverage.json"),
-        )
+        ) + date_findings(self.config, claims)
 
     def _critique(
         self, doc: Any, facts: _Facts, findings: Any
@@ -2055,29 +2245,50 @@ class _Recorded:
     extraction: Path
 
 
+def _document_dirs(state_dir: Path) -> Iterator[tuple[Path, str | None]]:
+    """Each directory of a state directory that may hold a document, with
+    the kind its place gives it: the top-level directories, whose kind
+    their source gives (None), then the excerpts' directories, in
+    EXCERPTS_DIR, each of kind EXCERPT. A directory set aside (a
+    dot-prefixed name) is skipped."""
+    from yizkr.pipeline.orchestrate import EXCERPT, EXCERPTS_DIR
+
+    for parent, kind in (
+        (state_dir, None),
+        (state_dir / EXCERPTS_DIR, EXCERPT),
+    ):
+        try:
+            directories = sorted(parent.iterdir())
+        except OSError:
+            continue
+        for directory in directories:
+            if not directory.name.startswith(".") and directory.is_dir():
+                yield directory, kind
+
+
 def _recorded(state_dir: Path) -> Iterator[_Recorded]:
-    """The document directories of a state directory whose state.json
-    names a source and the SHA-1 it was last processed at; a directory
-    set aside, and anything else, is skipped."""
+    """The document directories of a state directory, the excerpts'
+    included (_document_dirs), whose state.json names a source and the
+    SHA-1 it was last processed at; anything else is skipped."""
     from yizkr.pipeline.orchestrate import DocumentRun
 
-    for directory in sorted(state_dir.iterdir()):
-        if directory.name.startswith(".") or not directory.is_dir():
-            continue
+    for directory, placed in _document_dirs(state_dir):
         state = _read_json(directory / "state.json")
         if not isinstance(state, dict) or not isinstance(
             state.get("file"), str
         ):
             continue
         doc = DocumentRun(
-            Path(state["file"]), state_dir, dirname=directory.name
+            Path(state["file"]),
+            state_dir,
+            dirname=directory.relative_to(state_dir).as_posix(),
         )
         sha1 = doc.state.content_sha1
         if doc.unreadable is not None or not sha1:
             continue
         yield _Recorded(
             sha1=sha1,
-            kind=doc.kind,
+            kind=placed or doc.kind,
             source=doc.source,
             state=doc.state,
             transcription=doc.transcription,
@@ -2153,11 +2364,12 @@ def recheck(
     *,
     page_count: Callable[[Path], int | None] | None = None,
 ) -> list[dict]:
-    """Check the outputs stored in a run directory's document directories
-    again, with `config` (load_config's thresholds by default), without
-    dispatching anything or recomputing any stage, and append the alerts
-    to the run's alerts, all `carried`, under an invocation of their own
-    that an `anomaly-recheck` event opens. Returns them.
+    """Check the outputs stored in a run directory's document directories,
+    the excerpts' included, again, with `config` (load_config's
+    thresholds by default), without dispatching anything or recomputing
+    any stage, and append the alerts to the run's alerts, all `carried`,
+    under an invocation of their own that an `anomaly-recheck` event
+    opens, with the number of documents read. Returns them.
 
     Each stored transcription meets the transcription check as it is now,
     as a run's reuse of it would (only on the routes the check judges),

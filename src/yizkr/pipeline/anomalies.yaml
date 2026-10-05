@@ -111,6 +111,16 @@ checks:
     max-share: 0.25
     min-count: 4
 
+  # A batch's claims about someone it gives a date of birth for that are
+  # dated wholly before the earliest year a birth it gives them may lie
+  # in, or wholly more than `max-years-after-birth` years after the
+  # latest. Every date is read through the span its source states: its
+  # precision, its earliest and latest bounds, and circa, which leaves it
+  # open. Alert only: no claim is changed.
+  implausible-date:
+    enabled: true
+    max-years-after-birth: 120
+
   # A document's entities per page, claims per page, or critic findings
   # per item reviewed, more than `factor` times the median of the run's
   # documents of its kind, or less than the median divided by it, once

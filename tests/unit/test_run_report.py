@@ -313,7 +313,8 @@ STREAM = [
                 "cache_read_input_tokens": 800}),
     stage("done", 31, CERT, "transcription", FIRST),
     *alert(31, FIRST, "transcription", "language-unexpected", CERT[:12],
-           "yi", "new", confidence=0.51, detail="Hildegard Laudler"),
+           "yi", "new", confidence=0.51, detail="Hildegard Laudler",
+           limit=["de", "en", "frr"]),
     stage("started", 32, CERT, "extraction", FIRST),
     cache("cache-hit", 33, CERT, "extract", FIRST, call="open",
           reason="key match"),
@@ -1426,6 +1427,68 @@ class TestAggregateOnly:
         assert control["by_action"][OTHER] == 1
         assert control["by_requester"][OTHER] == 1
         assert control["pauses"][OTHER] == 1
+
+    def test_report_md_names_no_language(self, run):
+        """The documents per language would list the corpus's languages,
+        which the operator keeps private (#458): report.md says where the
+        counts are and names no language code, neither a transcription's
+        nor an alert's value; report.html and report.json keep them."""
+        for sha1, language in ((DIRECTORY, "ru"), (POSTCARD, "fy")):
+            path = run / slugify(Path(FILES[sha1][0]).stem)
+            view = json.loads((path / "transcription.json").read_text())
+            view["language"] = language
+            (path / "transcription.json").write_text(json.dumps(view))
+        written = write_report(run, now=NOW)
+        made = json.loads(written["report.json"].read_text())
+        codes = set(made["aggregate"]["documents"]["languages"]) - {OTHER}
+        assert codes == {"de", "en", "ru", "fy"}
+        # the alert on the certificate gives a language as its value, and
+        # the expected languages, one of them no transcription's, as its
+        # limit
+        (alert,) = [
+            line
+            for line in map(json.loads, (run / "alerts.jsonl").open())
+            if line["check"] == "language-unexpected"
+        ]
+        assert (alert["value"], alert["limit"]) == ("yi", ["de", "en", "frr"])
+        text = written["report.md"].read_text()
+        # whole words, in any case: the fixture's codes are no English
+        # words, as some ISO 639-1 codes are (no, it, be, an, so, to)
+        named = [
+            code
+            for code in sorted(codes | {"yi", "frr"})
+            if re.search(rf"(?<![\w-]){code}(?![\w-])", text, re.IGNORECASE)
+        ]
+        assert named == []
+        assert "| Language |" not in text
+        assert (
+            "Documents per language: in the local report alone "
+            "(report.html, report.json)."
+        ) in text
+        page = written["report.html"].read_text()
+        for code in codes:
+            assert f"<td>{code}</td>" in page
+        # a whole row: the code, its documents and its documents by kind
+        assert (
+            '<tr><td>de</td><td class="num">2</td>'
+            "<td>media 1, presentation 1</td></tr>"
+        ) in page
+        # and each document's own drill-down names its language
+        assert "Transcription: language ru, detected; route text-file" in (
+            drilled(made, DIRECTORY)
+        )
+
+    def test_no_transcription_read_says_so_in_report_html(self, made):
+        """With no transcription read, report.html says so in place of the
+        table of documents per language; report.md names no language
+        either way."""
+        made["aggregate"]["documents"]["languages"] = {}
+        page = report.render_html(made)
+        assert "No transcription read." in page
+        assert "<th>Language</th>" not in page
+        assert "No transcription read." not in render_markdown(
+            made["aggregate"]
+        )
 
     def test_report_md_is_the_same_whatever_the_documents_say(self, tmp_path):
         """Every document's name and SHA-1, in every file of the run

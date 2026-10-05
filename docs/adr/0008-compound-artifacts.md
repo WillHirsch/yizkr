@@ -31,6 +31,10 @@ Amended by #371 (2026-10-02): a derived medium is flagged as an
 artifact is, on each registration, made or found, while a file another
 item names holds its bytes or its label, before any content tag, is the
 label of an item with no hash: see Amendments (#103's).
+Amended by #457 (2026-10-05): the anomaly checks' recheck reads the
+excerpts' directories too, and checks each excerpt's stored outputs as
+a document of its own, of the kind `excerpt` (docs/ANOMALIES.md,
+Recheck); #397's "Left for later" no longer lists it.
 
 ## Context
 
@@ -658,14 +662,12 @@ the compilation's.
   an image the never-ingest list names since stays on disk, as an
   excluded document's directory does, runtime state that is never
   extracted or written again.
-- **Left for later:** the call estimate (`yizkr scratch estimate`) does
-  not yet count an excerpt's extraction and critique; an excerpt's
+- **Left for later:** an excerpt's
   transcription view does not name the PDF's kept reading among its
   inputs, so a reading made again with other text that still passes the
   check leaves the excerpt's view as it was; an excerpt's write fails
   when one of the PDFs that place it no longer has the bytes it was read
-  with, even when another places the image; and the anomaly checks'
-  recheck does not read the excerpts' directories.
+  with, even when another places the image.
 
 Amended by #373 (2026-10-02): **a derived medium's file name keeps its
 container's title.** The names of the #103 amendment, `"<deck title>
@@ -688,3 +690,24 @@ alias. A medium with no such name is labelled
 and uploaded as `image N`, N its place among the record's media in the
 order of their SHA-1s, excluded media counted, so its label ends in a
 name the instance keeps as sent, and a re-run sends no edit.
+
+Amended by #466 (2026-10-05): **the call estimate counts the excerpts a
+PDF's images may become.** `yizkr scratch estimate` takes a PDF's
+transcription stage through the pipeline's own code, which reads the PDF
+page by page from the file (pypdfium2, no model call), so it knows each
+image placed within a text-layer page: by the SHA-1 of its bytes, once
+however many PDFs place it, and none the never-ingest list names or
+whose bytes a document of the corpus has, as the driver takes excerpts.
+An image whose kept reading (one that passed the check, which the LLM
+cache answers) calls every page blank or not a document page is left
+out; one whose earlier reading failed the check is read again, and
+counted. In a run invoked again, the excerpts a PDF whose transcription
+stands holds already are counted from its directory, each for the stages
+whose views do not stand and every stage after the first of them; an
+image of a PDF whose transcription is made again counts every excerpt
+stage, though an excerpt the run holds for it may have views that stand.
+Each excerpt stage's calls are counted by the mean for excerpts over
+every run that measured the stage for one, pooled, else as typical,
+rounded up, and reported as up to so many more, since an image the
+engine reads blank or as no document page makes no excerpt
+(docs/runbooks/scratch-run.md, Before a run).
