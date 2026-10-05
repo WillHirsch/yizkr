@@ -514,7 +514,9 @@ def period(time: Time) -> Span:
     19th century, 1801 to 1900, whichever year a writer chose for it. A
     precision coarser than a century is given its century too, which only
     orders two dates stored alike, since it names no span (``named``). A
-    time before the common era raises UnsupportedDate (ADR-0034)."""
+    time before the common era raises UnsupportedDate (ADR-0034); this is
+    a backstop, as ``read_statements`` has already refused one, naming its
+    entity and statement."""
     match = _DATE.match(time.value)
     if match is None:
         raise ValueError(f"not an xsd:dateTime: {time.value!r}")

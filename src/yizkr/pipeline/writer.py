@@ -505,16 +505,21 @@ class UnapprovedDepictsError(ValueError):
 
 
 def unsupported_dates(batch: ClaimBatch) -> list[str]:
-    """Each claim of `batch` holding a date the project does not support
-    (ADR-0034), as its value or a qualifier's: its claim id, property and
-    the reason (``TimeValue.problem``)."""
+    """Each date of `batch` the project does not support (ADR-0034), a
+    claim's value or a qualifier's: the claim's id and property, which
+    part holds it (its value, or the qualifier by its property) and the
+    reason (``TimeValue.problem``)."""
     found = []
     for claim in batch.claims:
-        values = [claim.value, *(q.value for q in claim.qualifiers)]
-        for value in values:
+        parts = [("its value", claim.value)]
+        parts.extend(
+            (f"its {q.property} qualifier", q.value) for q in claim.qualifiers
+        )
+        for part, value in parts:
             if isinstance(value, TimeValue) and (problem := value.problem()):
                 found.append(
-                    f"claim {claim_id(claim)} ({claim.property}): {problem}"
+                    f"claim {claim_id(claim)} ({claim.property}), {part}: "
+                    f"{problem}"
                 )
     return found
 

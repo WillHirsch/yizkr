@@ -326,7 +326,9 @@ def year_of(literal: str) -> int | None:
     """The year of a time as the query service or the API gives it
     (``1919-01-07T00:00:00Z``, ``+1919-00-00T00:00:00Z``), else None.
     A year before the common era (a leading ``-``, or the year 0, which
-    xsd:dateTime uses for 1 BCE) raises UnsupportedDate (ADR-0034).
+    xsd:dateTime uses for 1 BCE) raises UnsupportedDate (ADR-0034). This
+    is a backstop: ``latest_births`` has already refused such a birth,
+    naming its person and statement.
     """
     check_time(literal, None, "a birth date")
     match = _DATE_TIME.match(literal)

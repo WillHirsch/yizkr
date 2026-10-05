@@ -299,13 +299,16 @@ def page(title: str, body: str, root: str = "") -> str:
     )
 
 
-def format_time(value: str, precision: str) -> str:
+def format_time(
+    value: str, precision: str, where: str = "a date the site shows"
+) -> str:
     """Wikibase dateTime + precision -> what the source actually said. A
     century is the one Wikibase counts for the stored year, from year 1:
     at century precision, 1801 to 1900 are each the 19th century. A date
-    before the common era raises UnsupportedDate (ADR-0034): it is never
-    shown."""
-    check_time(value, None, "a date the site shows")
+    before the common era raises UnsupportedDate naming `where`
+    (ADR-0034): it is never shown. This is a backstop: the build has
+    already refused a graph holding one, naming its item and statement."""
+    check_time(value, None, where)
     date = value[1:] if value.startswith("+") else value
     date = date.split("T")[0]
     year, _, rest = date.partition("-")
@@ -705,6 +708,7 @@ class SiteBuilder:
                 current_year = year
                 body.append(f'<div class="year">{esc(year)}</div>')
             person = qid_of(row, "person")
+            where = f"{person} timeline date"
             source_qid = qid_of(row, "source")
             source_label = cell(row, "sourceLabel")
             source = (
@@ -716,7 +720,7 @@ class SiteBuilder:
             )
             body.append(
                 '<div class="entry">'
-                f"{esc(format_time(date, cell(row, 'precision')))}"
+                f"{esc(format_time(date, cell(row, 'precision'), where))}"
                 f"{qualifier_span(self.timeline_range(row))} — "
                 f'<a href="people/{esc(person)}.html">'
                 f"{esc(cell(row, 'personLabel'))}</a>, "
@@ -732,12 +736,14 @@ class SiteBuilder:
         a range for carries a display_date, the date with its range as the
         timeline page shows them; TimelineJS shows any other date from its
         year, and from its month and day when its precision reaches
-        them."""
+        them. A date before the common era raises UnsupportedDate, naming
+        its person (ADR-0034), as on the timeline page."""
         events = []
         for row in rows:
             date = cell(row, "date")
             if not date:
                 continue
+            check_time(date, None, f"{qid_of(row, 'person')} timeline date")
             clean = date.lstrip("+").split("T")[0]
             parts = clean.split("-")
             precision = int(cell(row, "precision") or 11)

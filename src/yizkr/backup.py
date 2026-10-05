@@ -102,6 +102,7 @@ from pathlib import Path
 
 from yizkr.core import sparql
 from yizkr.core.config import Config, read_env_file
+from yizkr.core.dates import unsupported_in_graph
 from yizkr.core.privacy import (
     BIRTHS_QUERY,
     DEFAULT_CUTOFF_YEARS,
@@ -282,7 +283,10 @@ def exclusion_report(
     """Which people the non-privileged export must not mention, and why: every
     item the privacy module's selection finds. The queries go to the
     instance's query service, with its vocabulary, unless `run` and
-    `vocabulary` are given."""
+    `vocabulary` are given. A graph holding a date before the common era
+    or in a calendar other than the proleptic Gregorian anywhere, at any
+    rank, raises UnsupportedDate naming its items and statements, before
+    anyone is assessed: the export stops (ADR-0034)."""
     if vocabulary is None:
         from yizkr.core.wiki import WikiClient
 
@@ -290,6 +294,7 @@ def exclusion_report(
     properties, items = vocabulary
     run = run or sparql.runner(config)
     prefixes = prefix_block(config.concept_uri)
+    unsupported_in_graph(run, prefixes)
     bindings = run(
         prefixes
         + PERSON_FACTS_QUERY.format(

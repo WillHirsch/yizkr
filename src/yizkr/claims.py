@@ -208,7 +208,9 @@ class TimeValue(StrictModel):
     meaning 1800-1899, are no such century: give them as a range.
     Only dates of 1 CE or later in the Gregorian calendar are supported:
     a date before the common era or in the Julian or any other calendar
-    is refused, never converted to another calendar or year.
+    is refused, never converted to another calendar or year. Give a
+    Julian (old style) source date as written, with calendar "julian":
+    it is a reported reject, never converted.
     Ranges ("between 1938 and 1939") are NOT a precision problem: use
     earliest_date/latest_date qualifiers on the claim. A start_time or
     end_time qualifier dating a period (a residence, an occupation) takes
@@ -225,7 +227,7 @@ class TimeValue(StrictModel):
     precision: Literal["century", "decade", "year", "month", "day"] | None = (
         None
     )
-    calendar: Literal["gregorian"] = "gregorian"
+    calendar: Literal["gregorian", "julian"] = "gregorian"
 
     @field_validator("year")
     @classmethod
@@ -235,11 +237,13 @@ class TimeValue(StrictModel):
             raise UnsupportedDate(problem)
         return value
 
-    @field_validator("calendar", mode="before")
+    @field_validator("calendar")
     @classmethod
-    def check_calendar(cls, value):
-        # before the literal's own check, so the refusal names its reason
-        problem = calendar_problem(value) if isinstance(value, str) else None
+    def check_calendar(cls, value: str) -> str:
+        # the schema names "julian" so that a source's Julian date is
+        # stated as one, and refused here; a name the schema does not
+        # have fails the literal's own check
+        problem = calendar_problem(value)
         if problem is not None:
             raise UnsupportedDate(problem)
         return value

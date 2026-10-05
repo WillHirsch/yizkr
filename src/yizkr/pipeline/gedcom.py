@@ -46,12 +46,16 @@ Source-first conventions carry over unchanged:
   the TO.
   A date the grammar cannot parse yields NO date claim and a warning —
   never a guess.
-* A date before the common era (a `B.C.`, `BC` or `BCE` epoch, a year
-  below 1) or in the Julian calendar (the `@#DJULIAN@` escape, or GEDCOM
-  7's `JULIAN`), on any DATE line of the file, fails the whole file with
-  UnsupportedDate naming each such line by its number (ADR-0034): such
-  a date is unsupported, and is never converted to the Gregorian
-  calendar or another year, nor read as an unparsed date.
+* A date before the common era (a `B.C.`, `BC` or `BCE` epoch, spaced
+  or not, or a year below 1) or in any calendar but the Gregorian (a
+  calendar escape other than `@#DGREGORIAN@`, such as `@#DJULIAN@`,
+  `@#DHEBREW@`, `@#DFRENCH R@`, `@#DROMAN@` or `@#DUNKNOWN@`, or GEDCOM
+  7's `JULIAN`, `HEBREW`, `FRENCH_R` or an extension calendar), on any
+  DATE line of the file, fails the whole file with UnsupportedDate
+  naming each such line by its number (ADR-0034): such a date is
+  unsupported, and is never converted to the Gregorian calendar or
+  another year, nor read as an unparsed date. A date phrase in
+  parentheses is free text, and is not read for these markers.
 
 Every occurrence of an event, of a DATE, PLAC or CAUS beneath one where
 the adapter reads that tag (a CAUS beneath any event but a death is
@@ -399,16 +403,20 @@ def parse_gedcom_date(text: str) -> tuple[dict | None, list[dict]]:
 
 
 # a date's markers of an unsupported date (ADR-0034), read case-blind: an
-# epoch before the common era (GEDCOM 5.5.1's B.C., and BC or BCE), the
-# Julian calendar's escape or GEDCOM 7's keyword for it, and a year
-# written with a minus
+# epoch before the common era (GEDCOM 5.5.1's B.C., and BC or BCE, spaced
+# or not), a GEDCOM 5.5.1 calendar escape other than the Gregorian's, and
+# a GEDCOM 7 calendar other than the Gregorian (its named ones, and an
+# extension calendar, which starts with an underscore). A year written
+# with a minus, or as 0, is read by the grammar (_parsed_years).
 _UNSUPPORTED_DATE = re.compile(
-    r"(?<![A-Z])B\.?C\.?(?:E\.?)?(?![A-Z])"
-    r"|@#\s*DJULIAN\s*@"
-    r"|(?<![A-Z])JULIAN(?![A-Z])"
-    r"|(?<![\w-])-\d",
+    r"(?<![A-Z])B\.?\s*C\.?(?:\s*E\.?)?(?![A-Z])"
+    r"|@#\s*D(?!\s*GREGORIAN\s*@)"
+    r"|(?<![A-Z_])(?:JULIAN|HEBREW|FRENCH_R)(?![A-Z_])"
+    r"|(?<![A-Z0-9_])_[A-Z][A-Z0-9_]*",
     re.IGNORECASE,
 )
+# a date phrase: free text, never read for those markers
+_DATE_PHRASE = re.compile(r"\([^)]*\)?")
 
 
 def _parsed_years(text: str) -> list[int]:
@@ -421,9 +429,11 @@ def _parsed_years(text: str) -> list[int]:
 
 def refuse_unsupported_dates(roots: Sequence[Record]) -> None:
     """Raise UnsupportedDate naming every DATE line, anywhere in the file,
-    that states a date before the common era or in the Julian calendar
-    (``_UNSUPPORTED_DATE``, or a year below 1 as the grammar reads it).
-    The file is refused whole, before any claim is made (ADR-0034)."""
+    that states a date before the common era or in a calendar other than
+    the Gregorian (``_UNSUPPORTED_DATE`` outside any date phrase, or a
+    year below 1 as the grammar reads it, the second of a range's
+    included). The file is refused whole, before any claim is made
+    (ADR-0034)."""
     found = []
     stack = list(roots)
     while stack:
@@ -431,7 +441,8 @@ def refuse_unsupported_dates(roots: Sequence[Record]) -> None:
         stack.extend(record.children)
         if record.tag != "DATE":
             continue
-        if _UNSUPPORTED_DATE.search(record.value) or any(
+        unphrased = _DATE_PHRASE.sub(" ", record.value)
+        if _UNSUPPORTED_DATE.search(unphrased) or any(
             year < 1 for year in _parsed_years(record.value)
         ):
             found.append(record)
@@ -443,9 +454,9 @@ def refuse_unsupported_dates(roots: Sequence[Record]) -> None:
             for record in sorted(found, key=lambda r: r.line_number)
         )
         raise UnsupportedDate(
-            f"the GEDCOM file states a date before the common era or in the "
-            f"Julian calendar on DATE line(s) {lines}, so none of it is "
-            f"read; {WHY}"
+            f"the GEDCOM file states a date before the common era or in a "
+            f"calendar other than the Gregorian on DATE line(s) {lines}, so "
+            f"none of it is read; {WHY}"
         )
 
 

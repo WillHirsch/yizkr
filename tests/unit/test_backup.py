@@ -63,9 +63,13 @@ from yizkr.backup import (
     stale_entities,
 )
 from yizkr.core.config import Config
+from yizkr.core.dates import UNSUPPORTED_QUERY
 from yizkr.core.privacy import BIRTHS_QUERY, people_selection
 from yizkr.model.schema import load_manifest, read_manifest_data
 from yizkr.queries.publish import prefix_block
+
+# the first line of the graph-wide unsupported-date check (ADR-0034)
+UNSUPPORTED_SELECT = UNSUPPORTED_QUERY.split("\n")[0]
 
 # how long a run that should end at once may take before it counts as hung
 HANG_GUARD = 30
@@ -123,6 +127,8 @@ class TestExclusionReport:
                 return facts
             if 'BIND("value" AS ?bound)' in query:
                 return births
+            if UNSUPPORTED_SELECT in query:
+                return []  # a graph with no unsupported date (#338)
             raise AssertionError(f"unexpected query: {query}")
 
         found = exclusion_report(
@@ -154,7 +160,7 @@ class TestExclusionReport:
     def test_births_are_read_with_the_privacy_modules_query(self, vocabulary):
         properties, _ = vocabulary
         _, calls = self.report(vocabulary)
-        assert len(calls) == 2
+        assert len(calls) == 3
         assert prefix_block(CONCEPT) + BIRTHS_QUERY.format(**properties) in (
             calls
         )
@@ -2852,6 +2858,8 @@ class ExportRun:
             ]
         if 'BIND("value" AS ?bound)' in query:
             return birth_rows("Q404", [(("1990-01-01T00:00:00Z", 9), [], [])])
+        if UNSUPPORTED_SELECT in query:
+            return []  # a graph with no unsupported date (#338)
         raise AssertionError(f"unexpected query: {query}")
 
 
@@ -4214,11 +4222,13 @@ class TestExportNonprivileged:
         _, runner = self.export(
             tmp_path, vocabulary, revisions=[behind, behind, dumped]
         )
-        # two waits, then the check, then one more look
+        # two waits, then the check (unsupported dates, facts, births),
+        # then one more look
         assert [query == REVISIONS_QUERY for query in runner.queries] == [
             True,
             True,
             True,
+            False,
             False,
             False,
             True,

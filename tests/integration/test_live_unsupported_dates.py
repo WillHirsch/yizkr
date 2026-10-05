@@ -134,7 +134,12 @@ def test_the_writer_refuses_an_unsupported_date(client, source, case):
         BatchWriter(client).write_batch(batch)
 
     (claim,) = batch.claims
-    assert f"claim {claim_id(claim)} (date_of_birth)" in str(refusal.value)
+    where, _ = CASES[case]
+    part = "its value" if where == "value" else f"its {where} qualifier"
+    assert (
+        f"claim {claim_id(claim)} (date_of_birth), {part}: unsupported: "
+        in str(refusal.value)
+    )
     assert "nothing was written" in str(refusal.value)
     # nothing was written: the source unedited, no person, no run item
     assert last_revision(client, source.qid) == revision

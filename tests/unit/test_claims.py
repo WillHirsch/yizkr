@@ -259,7 +259,7 @@ class TestTimeValues:
         with pytest.raises(ValidationError):
             TimeValue(year=1920, month=5, precision="decade")
 
-    @pytest.mark.parametrize("year", [0, -1, -44, -1800])
+    @pytest.mark.parametrize("year", [0, -1, -1836, -1800])
     def test_a_year_before_the_common_era_is_unsupported(self, year):
         # ADR-0034 (#338): refused with its reason, never converted
         with pytest.raises(
@@ -267,16 +267,32 @@ class TestTimeValues:
         ):
             TimeValue(year=year)
 
-    @pytest.mark.parametrize("calendar", ["julian", "Julian", "hebrew"])
-    def test_a_calendar_other_than_the_gregorian_is_unsupported(
-        self, calendar
-    ):
+    def test_the_julian_calendar_is_unsupported(self):
         # Eugen Löbig's birth given (here) as a Julian date: refused with
         # its reason, never converted to the Gregorian (ADR-0034, #338)
         with pytest.raises(
-            ValidationError, match="unsupported: calendar .* not the Gregorian"
+            ValidationError, match="unsupported: calendar 'julian'"
         ):
+            TimeValue(year=1836, calendar="julian")
+
+    @pytest.mark.parametrize("calendar", ["Gregorian", " gregorian", "hebrew"])
+    def test_a_calendar_the_schema_does_not_name_is_a_schema_error(
+        self, calendar
+    ):
+        # an unknown name is no ADR-0034 refusal: the literal refuses it
+        with pytest.raises(ValidationError) as refused:
             TimeValue(year=1836, calendar=calendar)
+        assert "unsupported:" not in str(refused.value)
+
+    def test_the_schema_the_model_sees_names_the_julian_calendar(self):
+        # so that a Julian source date is stated as one, and refused
+        schema = TimeValue.model_json_schema()
+        assert schema["properties"]["calendar"]["enum"] == [
+            "gregorian",
+            "julian",
+        ]
+        description = " ".join(schema["description"].split())
+        assert 'with calendar "julian": it is a reported reject' in description
 
     def test_wikibase_serialization(self):
         assert TimeValue(year=1876).to_wikibase() == {
@@ -293,7 +309,7 @@ class TestTimeValues:
     @pytest.mark.parametrize(
         "fields",
         [
-            {"year": -44, "precision": "year", "calendar": "gregorian"},
+            {"year": -1836, "precision": "year", "calendar": "gregorian"},
             {"year": 0, "precision": "year", "calendar": "gregorian"},
             {"year": 1836, "precision": "year", "calendar": "julian"},
         ],

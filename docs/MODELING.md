@@ -473,13 +473,17 @@ artifact a new QID, changes neither.
   (Wikibase's `Q1985727`) are supported (ADR-0034). A date before the
   common era or in the Julian or any other calendar is never converted,
   guessed at or shown: the claim schema refuses one (an extraction reject
-  whose reason begins "unsupported:"), the GEDCOM adapter fails a file
-  that states one, naming its DATE lines, the review sheet refuses a
-  correction to one, the writer refuses a batch holding one and writes
-  nothing, and every reader of the graph (the disagreement report, the
-  site, the possibly-living check and so the non-privileged export, and
-  reconcile's roster) stops with `UnsupportedDate`, naming the item and
-  the statement, if a curator has entered one.
+  whose reason begins "unsupported:"; a Julian source date is given as
+  written, with calendar `julian`, so that it is refused rather than
+  read as Gregorian), the GEDCOM adapter fails a file that states one in
+  any calendar but the Gregorian or with an epoch before the common era,
+  naming its DATE lines, the review sheet refuses a correction to one,
+  the writer refuses a batch holding one and writes nothing, and every
+  reader of the graph (the disagreement report, the site, the
+  possibly-living check, the non-privileged export, which checks the
+  whole graph at any rank first, and reconcile's roster) stops with
+  `UnsupportedDate`, naming the item and the statement, if a curator has
+  entered one.
 - Centuries and millennia are counted as Wikibase and Wikidata count
   them, from year 1: the nth century runs from year 100(n−1)+1 to year
   100n, so a date at century precision stored as any year from 1801 to

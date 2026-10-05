@@ -22,6 +22,7 @@ import urllib.request
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from tests.unit.test_pipeline import (
     ARTIFACT,
@@ -31,6 +32,7 @@ from tests.unit.test_pipeline import (
     FakeWiki,
 )
 from yizkr import disagreement
+from yizkr.backup import exclusion_report
 from yizkr.claims import Claim, ClaimBatch, TimeValue
 from yizkr.core import dates, privacy
 from yizkr.core.dates import (
@@ -40,14 +42,18 @@ from yizkr.core.dates import (
     time_problem,
     unsupported_in_graph,
 )
+from yizkr.model.schema import read_manifest_data
 from yizkr.pipeline import reconcile
 from yizkr.pipeline.extract import salvage_valid_claims
 from yizkr.pipeline.gedcom import adapt_gedcom
-from yizkr.pipeline.review import _parse_correction
+from yizkr.pipeline.review import _parse_correction, claim_id
 from yizkr.pipeline.writer import BatchWriter
+from yizkr.queries.publish import load_templates
 from yizkr.staticsite import SiteBuilder, format_time
 
 JULIAN = "http://www.wikidata.org/entity/Q1985786"
+# the manifest's property keys, for a vocabulary of made-up ids
+PROPERTY_KEYS = yaml.safe_load(read_manifest_data())["properties"]
 CONCEPT = "http://wikibase.example"
 XSD = "http://www.w3.org/2001/XMLSchema#dateTime"
 NORMAL = "http://wikiba.se/ontology#NormalRank"
@@ -90,7 +96,7 @@ class TestTheCheck:
         ("value", "calendar"),
         [
             # a year with a minus, as the API and the query service give it
-            ("-0044-03-15T00:00:00Z", None),
+            ("-1836-01-07T00:00:00Z", None),
             ("-1836-00-00T00:00:00Z", GREGORIAN),
             # xsd:dateTime's year 0 is 1 BCE
             ("0000-01-01T00:00:00Z", None),
@@ -199,24 +205,49 @@ GEDCOM = """\
 
 
 class TestTheGedcomAdapter:
-    """A BC date or a Julian escape fails the whole file, naming its line."""
+    """A date before the common era or in any calendar but the Gregorian
+    fails the whole file, naming its lines."""
 
     @pytest.mark.parametrize(
         "date",
         [
+            # the Julian calendar, as GEDCOM 5.5.1 and GEDCOM 7 write it
             "@#DJULIAN@ 7 JAN 1836",
             "JULIAN 7 JAN 1836",
+            # every other calendar but the Gregorian
+            "@#DHEBREW@ 5596",
+            "@#DFRENCH R@ 1 VEND 45",
+            "@#DROMAN@ 1836",
+            "@#DUNKNOWN@ 1836",
+            "HEBREW 5596",
+            "FRENCH_R 1 VEND 45",
+            "_LOEBIG 1836",
+            # an epoch before the common era, spaced or not, any case
             "1836 B.C.",
+            "1836 B. C.",
+            "1836 B C",
+            "1836 b.c.",
             "1836 BC",
             "ABT 1836 BCE",
+            # a year the grammar reads below 1, either end of a range
             "-1836",
             "0",
             "BET 0 AND 1836",
+            "BET 1836 AND 0",
+            "FROM 1836 TO 0",
         ],
     )
     def test_a_file_stating_one_fails_naming_the_line(self, date):
         with pytest.raises(UnsupportedDate, match=r"DATE line\(s\) 6,"):
             adapt_gedcom(GEDCOM.format(date=date), MEDIA_REF)
+
+    def test_every_line_stating_one_is_named(self):
+        # a BC birth on line 6 and a Julian death on line 8
+        text = GEDCOM.format(date="1836 BC").replace(
+            "0 TRLR", "1 DEAT\n2 DATE @#DJULIAN@ 16 MAR 1909\n0 TRLR"
+        )
+        with pytest.raises(UnsupportedDate, match=r"DATE line\(s\) 6, 8,"):
+            adapt_gedcom(text, MEDIA_REF)
 
     def test_the_error_names_lines_never_dates(self):
         with pytest.raises(UnsupportedDate) as refusal:
@@ -227,7 +258,18 @@ class TestTheGedcomAdapter:
 
     @pytest.mark.parametrize(
         "date",
-        ["7 JAN 1836", "@#DGREGORIAN@ 7 JAN 1836", "ABT 1836", "DEC 1836"],
+        [
+            "7 JAN 1836",
+            "@#DGREGORIAN@ 7 JAN 1836",
+            "ABT 1836",
+            "DEC 1836",
+            "BET 1836 AND 1840",
+            # a date phrase is free text, never read for the markers
+            "INT 1836 (Julian the clerk's note)",
+            "INT 1836 (BC register of Peiltal)",
+            "INT 1836 (per the Brüsrich ledger, page -2)",
+            "INT 1836 (Abc)",
+        ],
     )
     def test_the_same_file_with_a_supported_date_is_read(self, date):
         result = adapt_gedcom(GEDCOM.format(date=date), MEDIA_REF)
@@ -239,7 +281,7 @@ class TestTheReviewCorrection:
 
     CLAIM = Claim.model_validate(birth({"type": "time", "year": 1836}))
 
-    @pytest.mark.parametrize("text", ["0", "0000", "-1836", "-0044-03-15"])
+    @pytest.mark.parametrize("text", ["0", "0000", "-1836", "-1836-01-07"])
     def test_a_correction_before_the_common_era_is_refused(self, text):
         with pytest.raises(UnsupportedDate, match="unsupported: year"):
             _parse_correction(self.CLAIM, text)
@@ -297,15 +339,40 @@ class TestTheWriter:
         ],
         ids=["value BCE", "value year 0", "value Julian", "qualifier BCE"],
     )
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["write", "dry"])
     @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_a_batch_with_one_is_refused_before_anything(
-        self, value, qualifier
+        self, value, qualifier, dry_run
     ):
         wiki = FakeWiki({MEDIA_SHA1: "Q23"})
-        with pytest.raises(UnsupportedDate, match="nothing was written"):
-            BatchWriter(wiki).write_batch(self.batch(value, qualifier))
+        writer = BatchWriter(wiki, dry_run=dry_run)
+        batch = self.batch(value, qualifier)
+        with pytest.raises(UnsupportedDate, match="nothing was written") as e:
+            writer.write_batch(batch)
         assert wiki.wbi.item.store == {}
         assert wiki.index_reads == 0
+        # the claim, by its id and property, and which part holds the date
+        (claim,) = batch.claims
+        part = (
+            "its value" if value is not None else "its point_in_time qualifier"
+        )
+        assert (
+            f"claim {claim_id(claim)} (date_of_birth), {part}: unsupported: "
+            in str(e.value)
+        )
+
+    @pytest.mark.filterwarnings("ignore::UserWarning")
+    def test_each_unsupported_part_of_a_claim_is_named(self):
+        message = str(
+            pytest.raises(
+                UnsupportedDate,
+                BatchWriter(FakeWiki({MEDIA_SHA1: "Q23"})).write_batch,
+                self.batch(bce(), bce()),
+            ).value
+        )
+        assert message.count("unsupported: year -1836") == 2
+        assert "its value: " in message
+        assert "its point_in_time qualifier: " in message
 
     def test_the_same_batch_with_a_supported_date_is_written(self):
         wiki = FakeWiki({MEDIA_SHA1: "Q23"})
@@ -495,7 +562,7 @@ class TestThePrivacyCheck:
 
     def test_a_year_before_the_common_era_is_never_read(self):
         with pytest.raises(UnsupportedDate):
-            privacy.year_of("-0044-03-15T00:00:00Z")
+            privacy.year_of("-1836-01-07T00:00:00Z")
         with pytest.raises(UnsupportedDate):
             privacy.years_allowed("0000-01-01T00:00:00Z", 9)
 
@@ -534,3 +601,126 @@ class TestTheRoster:
             reconcile.fetch_roster(client, config)
         (query,) = sent
         assert dates.UNSUPPORTED_QUERY.split("\n")[0] in query
+
+
+def flat(text: str) -> str:
+    """`text` with its whitespace as single spaces."""
+    return " ".join(text.split())
+
+
+class TestTheReaderQueries:
+    """What each reader's query fetches: an unprojected calendar reads as
+    no calendar, which the check passes, so each is pinned here."""
+
+    def test_the_births_query_projects_each_calendar(self):
+        select = privacy.BIRTHS_QUERY.split("\n")[0]
+        assert "?calendar" in select.split()
+        body = flat(privacy.BIRTHS_QUERY)
+        assert body.count("?node wikibase:timeCalendarModel ?calendar") == 3
+
+    def test_the_report_fetches_each_times_calendar(self):
+        template = load_templates()[disagreement.FETCH]
+        select = flat(
+            template[template.index("SELECT") : template.index("WHERE")]
+        )
+        body = flat(template[template.index("WHERE") :])
+        assert "?calendar" in select.split()
+        assert "?valueNode wikibase:timeCalendarModel ?calendar" in body
+        for column in disagreement.TIME_COLUMNS.values():
+            assert f"?{column}Calendar" in select.split()
+            assert (
+                f"?{column}Node wikibase:timeCalendarModel ?{column}Calendar"
+                in body
+            )
+
+    def test_the_graph_check_searches_values_qualifiers_and_references(self):
+        query = flat(
+            dates.UNSUPPORTED_QUERY.format(gregorian=GREGORIAN, limit=1)
+        )
+        assert (
+            "?node wikibase:timeValue ?time ; "
+            "wikibase:timeCalendarModel ?calendar ."
+        ) in query
+        # a statement's value and its qualifiers link it to the node by
+        # any predicate, and a reference by any of its own
+        assert "{ ?statement ?link ?node . }" in query
+        assert (
+            "{ ?reference ?link ?node . "
+            "?statement prov:wasDerivedFrom ?reference . }"
+        ) in query
+        assert "?entity ?claim ?statement ." in query
+
+    def test_the_graph_check_says_when_it_lists_its_limit(self):
+        row = {
+            "entity": {"value": EUGEN},
+            "statement": {"value": STATEMENT},
+            "time": {"value": "-1836-01-07T00:00:00Z"},
+            "calendar": {"value": GREGORIAN},
+        }
+        with pytest.raises(UnsupportedDate) as one:
+            unsupported_in_graph(lambda query: [row], "")
+        assert "possibly more" not in str(one.value)
+        with pytest.raises(UnsupportedDate) as full:
+            unsupported_in_graph(lambda query: [row] * dates.LISTED, "")
+        assert "(and possibly more)" in str(full.value)
+
+
+class TestTheTimeline:
+    """The timeline page and its feed refuse a date before the common era,
+    naming the person, as a backstop to the build's graph check."""
+
+    ROW = {
+        "person": {"value": EUGEN},
+        "personLabel": {"value": "Eugen Löbig"},
+        "date": {"value": "-1836-01-07T00:00:00Z"},
+        "precision": {"value": "11"},
+        "what": {"value": "born"},
+    }
+
+    @pytest.mark.parametrize("render", ["timeline_page", "timeline_feed"])
+    def test_a_row_with_one_is_refused(self, tmp_path, render):
+        builder = SiteBuilder(
+            SimpleNamespace(concept_uri=CONCEPT),
+            tmp_path / "site",
+            run=lambda query: [],
+            vocabulary=({}, {}),
+        )
+        with pytest.raises(UnsupportedDate, match="^Q1001 timeline date: "):
+            getattr(builder, render)([self.ROW])
+        supported = {**self.ROW, "date": {"value": "1836-01-07T00:00:00Z"}}
+        assert "1836" in getattr(builder, render)([supported])
+
+
+class TestTheExport:
+    """The non-privileged export stops on an unsupported date anywhere in
+    the graph, at any rank, before it assesses anyone."""
+
+    def test_the_export_stops_before_assessing_anyone(self):
+        sent = []
+
+        def run(query: str) -> list[dict]:
+            sent.append(query)
+            if dates.UNSUPPORTED_QUERY.split("\n")[0] in query:
+                # Eugen's Julian birth, which a curator deprecated: the
+                # births query never reads it, the graph check does
+                return [
+                    {
+                        "entity": {"value": EUGEN},
+                        "statement": {"value": STATEMENT},
+                        "time": {"value": "1836-01-07T00:00:00Z"},
+                        "calendar": {"value": JULIAN},
+                    }
+                ]
+            raise AssertionError("a person was assessed")
+
+        vocabulary = {key: f"P{n}" for n, key in enumerate(PROPERTY_KEYS)}
+        with pytest.raises(
+            UnsupportedDate, match="Q1001 statement Q1001-born"
+        ):
+            exclusion_report(
+                SimpleNamespace(concept_uri=CONCEPT),
+                run=run,
+                vocabulary=(vocabulary, {}),
+            )
+        (query,) = sent
+        assert query.startswith(f"PREFIX wd: <{CONCEPT}/entity/>")

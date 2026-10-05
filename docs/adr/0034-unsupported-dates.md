@@ -42,32 +42,46 @@ wherever the project meets one, it fails explicitly, naming where.
 
 ### 2. Producers refuse one
 
-- **The claim schema.** `TimeValue` refuses a year below 1 and any
-  calendar but `gregorian`, each with a reason that begins
-  `unsupported:`. An extraction claim carrying one is a reported reject
-  like any claim that fails validation; the schema's description, which
-  the extraction prompts carry, says so.
+- **The claim schema.** `TimeValue` refuses a year below 1 and the
+  calendar `julian`, each with a reason that begins `unsupported:`. The
+  schema the extraction prompts carry still names `julian`, and its
+  description tells the model to give a Julian (old style) source date
+  as written, with that calendar: so such a date is stated as one and
+  becomes a reported reject, like any claim that fails validation,
+  rather than passing as Gregorian or being left out. A calendar name the
+  schema does not have fails the schema's own check, not as an
+  unsupported date.
 - **The GEDCOM adapter** fails the whole file, before any claim is
   made, when any DATE line states a date before the common era (a
-  `B.C.`, `BC` or `BCE` epoch, a year written with a minus, or a year
-  the grammar reads as 0) or in the Julian calendar (the `@#DJULIAN@`
-  escape, or GEDCOM 7's `JULIAN`). The error names each such line by its
+  `B.C.`, `BC` or `BCE` epoch, spaced or not, or a year the grammar
+  reads below 1, at either end of a range) or in any calendar but the
+  Gregorian: a GEDCOM 5.5.1 escape other than `@#DGREGORIAN@`
+  (`@#DJULIAN@`, `@#DHEBREW@`, `@#DFRENCH R@`, `@#DROMAN@`,
+  `@#DUNKNOWN@`), or GEDCOM 7's `JULIAN`, `HEBREW`, `FRENCH_R` or an
+  extension calendar. A date phrase in parentheses is free text and is
+  not read for these markers. The error names each such line by its
   number, never what it says. Of the two outcomes #338 offered, failing
   the file is the hard failure the owner asked for, and needs no census
   entry: a file that states one is not read at all, so nothing downstream
   meets it. A curator who wants the rest of the file read edits the
   export.
 - **The review sheet's correction path** refuses a correction to a year
-  before the common era (`0`, `-44`), naming it as unsupported; it never
-  takes a calendar, so a correction is always Gregorian.
+  before the common era (`0`, `-1836`), naming it as unsupported; it never
+  takes a calendar, so a correction is always Gregorian. As with any
+  correction it cannot read, the claim is then left out, with a warning
+  naming it, and the rest of the sheet is applied.
 
 ### 3. The writer refuses to write one
 
 `BatchWriter.write_batch` refuses a batch holding an unsupported date,
 as any claim's value or any qualifier's, before it reads from or writes
 to the instance, in a dry run too, as it refuses an unapproved depicts
-claim: `UnsupportedDate` names every such claim by its review-sheet id
-and property, and nothing is written. The schema refuses such a date, so
+claim: `UnsupportedDate` names every such date by its claim's
+review-sheet id and property and the part that holds it (the value, or
+a qualifier by its property), and nothing is written. The whole batch is
+refused, unlike a claim whose text the instance cannot hold, which is
+refused alone: an unsupported date in a batch means the batch was built
+around validation, so none of it is trusted. The schema refuses such a date, so
 only a batch built around validation can hold one. `TimeValue.to_wikibase`
 refuses one too, so no path stores it.
 
@@ -81,18 +95,22 @@ is in question:
 - **The disagreement report** fetches each time with the calendar model
   its value node states (the value's and each qualifier's), and
   `read_statements` stops at one it does not support. `period` refuses a
-  time before the common era too.
+  time before the common era too, as a backstop.
 - **The site** first asks the graph for any unsupported time, as a
   statement's value, a qualifier or in a reference
   (`unsupported_in_graph`), and stops before writing anything. Its
-  `format_time` refuses a time before the common era, so neither the
-  person and artifact pages, the timeline nor the inconsistencies page
-  can show one.
+  `format_time` and the timeline's feed refuse a time before the common
+  era, as a backstop, so neither the person and artifact pages, the
+  timeline nor the inconsistencies page can show one.
 - **The possibly-living check** reads each birth's calendar model with
-  its time, and stops at one it does not support. The non-privileged
-  export and the site's badge read births through it, so the export
-  stops: the failure closes it, rather than releasing or withholding a
-  person on a date nobody can read.
+  its time, and stops at one it does not support. The site's badge reads
+  births through it.
+- **The non-privileged export** first runs the same graph-wide check,
+  before it assesses anyone, so it stops on an unsupported date anywhere
+  in the graph, at any rank (a deprecated birth, a date of death, a
+  qualifier or a reference included), and not only on a birth the check
+  reads: the failure closes it, rather than releasing or withholding a
+  person, or copying out a date, nobody can read.
 - **Reconcile's roster**, whose birth and death dates are the
   adjudication facts for items already in the graph, is read only after
   the same graph-wide check. The facts of a batch's own entities come
@@ -123,8 +141,19 @@ time").
   overlay, and the date is still in the graph.
 - A GEDCOM export with one Julian or BCE date anywhere is not ingested
   at all until it is edited.
-- The extraction prompts' schema text changes (`calendar` takes only
-  `gregorian`, and the description says so), a change to a stage before
-  write, checked by the next scratch run's diff (ADR-0025).
+- The extraction prompts' schema text changes (the description says
+  that dates before 1 CE and other calendars are refused, and asks for a
+  Julian date as written with calendar `julian`), a change to a stage
+  before write, checked by the next scratch run's diff (ADR-0025).
+- The query pages published on the wiki (ADR-0004's exploration tier)
+  run in the query service, not here, and show a curator-entered
+  unsupported date as stored; only the project's own readers refuse it.
+- The shared development instance held a date before the common era
+  that an earlier live test wrote while such dates were supported, and
+  every whole-graph reader refuses it once this decision lands: a
+  scratch reset follows the merge (docs/TESTING.md).
+- Decided with the build (BW, which the owner may veto at merge): every
+  calendar but the Gregorian fails explicitly, as §1 says, so the GEDCOM
+  adapter refuses all of them, not only the Julian.
 - Supporting either kind of date later takes a new ADR, which would
   decide each reader's reading of it.

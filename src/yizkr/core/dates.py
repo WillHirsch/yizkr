@@ -55,7 +55,7 @@ def calendar_problem(calendar: str | None) -> str | None:
 
 
 # a time as the API writes it (+1919-01-07T00:00:00Z) or the query
-# service serves it (1919-01-07T00:00:00Z, -0044-03-15T00:00:00Z)
+# service serves it (1919-01-07T00:00:00Z, -1836-01-07T00:00:00Z)
 _YEAR = re.compile(r"^\s*([+-]?)(\d+)-")
 
 
