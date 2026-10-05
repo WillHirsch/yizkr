@@ -44,6 +44,7 @@ from tests.fixtures.corpus.answers import (
 from tests.fixtures.records import record_answer
 
 from yizkr.pipeline.llm import ClaudeCodeClient
+from yizkr.pipeline.scratch import PREFLIGHT_PROMPT
 from yizkr.pipeline.transcription_record import document_classes
 
 CLI = "9.9.9"
@@ -207,6 +208,9 @@ class RecordedEngine:
     def complete(
         self, prompt: str, image_paths: Sequence[str | os.PathLike] = ()
     ) -> str:
+        if prompt == PREFLIGHT_PROMPT and not image_paths:
+            # the scratch run's preflight, which answers for no document
+            return "ready"
         if image_paths:
             (path,) = image_paths
             sha1 = hashlib.sha1(Path(path).read_bytes()).hexdigest()

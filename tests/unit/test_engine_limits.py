@@ -19,6 +19,7 @@ from __future__ import annotations
 import inspect
 import json
 import math
+import re
 import shutil
 import subprocess
 import threading
@@ -67,6 +68,7 @@ from yizkr.pipeline.llm import (
     CliVersionMismatch,
     ConversationalLlmClient,
     ConversationChanged,
+    ModelUnsupported,
     PassPaused,
     Refusal,
     RejectingLlmClient,
@@ -80,6 +82,7 @@ from yizkr.pipeline.llm import (
     open_cache,
     refusal,
     run_calls,
+    unsupported_model,
 )
 from yizkr.pipeline.orchestrate import AWAITING_CLAIMS, BATCHED, Orchestrator
 from yizkr.pipeline.review import export_review_csv
@@ -163,6 +166,26 @@ API_ERROR = {
     "status": 500,
     "error": None,
     "text": "API Error: Internal server error",
+}
+
+# a call the API refuses because the CLI does not support the model it
+# names: an API 400 that names the CLI version the model needs (#455)
+UNSUPPORTED = {
+    "info": None,
+    "status": 400,
+    "error": "invalid_request",
+    "text": 'API Error: 400 {"type":"error","error":{"type":'
+    '"invalid_request_error","message":"claude-opus-5-5 cannot be used '
+    "with this version of Claude Code: version 2.1.280 or newer is "
+    'required."}}',
+}
+# another 400: an error of the call like any other, never a pause
+BAD_REQUEST = {
+    "info": None,
+    "status": 400,
+    "error": "invalid_request",
+    "text": 'API Error: 400 {"type":"error","error":{"type":'
+    '"invalid_request_error","message":"prompt is too long"}}',
 }
 
 
@@ -429,6 +452,249 @@ class TestRefusal:
         assert refusal(events, 0) == Refusal(
             USAGE_LIMIT, "five_hour", START + HOUR
         )
+
+
+class TestUnsupportedModel:
+    """What the engine reads from a call's stream as a refusal of a model
+    the CLI does not support (llm.unsupported_model): an API 400 whose
+    text names the CLI version the model needs."""
+
+    def test_a_400_naming_a_newer_cli_is_one(self):
+        events = [INIT, *refused_events(UNSUPPORTED, "s1")]
+        reason = unsupported_model(events, 1)
+        assert reason is not None
+        assert "version 2.1.280 or newer is required" in reason
+
+    def test_its_reason_is_one_short_line(self):
+        long = {**UNSUPPORTED, "text": UNSUPPORTED["text"] + "\n" + "x" * 400}
+        reason = unsupported_model([INIT, *refused_events(long, "s1")], 1)
+        assert "version 2.1.280 or newer is required" in reason
+        assert "\n" not in reason and len(reason) == 300
+
+    @pytest.mark.parametrize(
+        "marks",
+        [{"is_api_error_message": True}, {"error": "invalid_request"}],
+        ids=["marked an API error", "with an error class"],
+    )
+    def test_the_words_alone_on_the_api_error_event_count(self, marks):
+        events = [
+            INIT,
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": UNSUPPORTED["text"]}]
+                },
+                **marks,
+            },
+            {"type": "result", "is_error": True, "api_error_status": 400},
+        ]
+        assert "or newer is required" in unsupported_model(events, 1)
+
+    def test_the_words_in_the_result_alone_count(self):
+        events = [
+            INIT,
+            {
+                "type": "result",
+                "is_error": True,
+                "api_error_status": 400,
+                "result": UNSUPPORTED["text"],
+            },
+        ]
+        assert "or newer is required" in unsupported_model(events, 1)
+
+    @pytest.mark.parametrize(
+        "event",
+        [
+            {"type": "assistant", "is_api_error_message": False},
+            {"type": "assistant", "is_api_error_message": "true"},
+            {"type": "assistant", "error": 400},
+            {"type": "user", "is_api_error_message": True},
+        ],
+        ids=["flag false", "flag a string", "error not a string", "not "
+             "an assistant event"],
+    )  # fmt: skip
+    def test_the_words_elsewhere_do_not_count(self, event):
+        """The words on an event that does not stand for the API error,
+        before an unrelated 400, are no refusal of the model."""
+        words = {
+            **event,
+            "message": {
+                "content": [{"type": "text", "text": UNSUPPORTED["text"]}]
+            },
+        }
+        events = [
+            INIT,
+            words,
+            {
+                "type": "result",
+                "is_error": True,
+                "api_error_status": 400,
+                "result": "API Error: 400 prompt is too long",
+            },
+        ]
+        assert unsupported_model(events, 1) is None
+
+    def test_the_models_own_text_is_never_read(self):
+        """The model's own text may quote anything, a notice saying what
+        version is required among them: a later, unrelated 400 is still
+        not a refusal of the model."""
+        events = [
+            INIT,
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "The Flörburg register notes: version "
+                            "1.9.21 or later is required. Claude Code does "
+                            "not support it.",
+                        }
+                    ]
+                },
+            },
+            *refused_events(BAD_REQUEST, "s1"),
+        ]
+        assert unsupported_model(events, 1) is None
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "claude-opus-5-5: version 2.1.280 or newer is required.",
+            "Claude Code 2.1.237 does not support claude-opus-5-5.",
+            "The installed CLI requires a newer release for this model.",
+            "This model REQUIRES A NEWER VERSION OF CLAUDE CODE.",
+            "Claude Code v2.1.237 requires a newer release for this model.",
+            "CLI version 2.1.280 or later is required",
+            "Claude Code doesn't support claude-opus-5-5",
+            "The CLI requires newer releases",
+            "This model requires a newer CLI",
+            "Claude Code 2.1.237 require a newer release",
+            "This model requires newer Claude Code",
+            "This model requires Claude Code version 2.1.280 or newer.",
+            "claude-opus-5-5 requires CLI 2.1.280 or later",
+        ],
+        ids=["the version required", "the CLI does not support", "the CLI "
+             "requires a newer", "a newer CLI required, in mixed case",
+             "the CLI and its version", "or later", "doesn't",
+             "requires newer", "a newer CLI", "require",
+             "newer Claude Code, with no article",
+             "the CLI required at a version", "the CLI required, no word "
+             "version"],
+    )  # fmt: skip
+    def test_each_wording_tied_to_the_cli_is_one(self, text):
+        step = {**UNSUPPORTED, "text": f"API Error: 400 {text}"}
+        assert unsupported_model([INIT, *refused_events(step, "s1")], 1)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "The web_search tool does not support the model claude-sonnet-5",
+            "PDF support requires a newer version",
+            "anthropic-version 2023-06-01 or later is required for this "
+            "feature",
+            "Model is not supported by this version of the API",
+            "an image is required",
+            "Claude Code: the web_search tool does not support the model "
+            "claude-sonnet-5",
+            "Claude Code: PDF support requires a newer version of the API",
+            "messages.0: cli-generated content; image source type does not "
+            "support url",
+            "Client does not support streaming",
+            "the tool requires a newer client",
+            "Claude Code requires authentication",
+            "API version 2 or newer is required",
+            "subversion 2.1 or newer is required",
+            "Python SDK version 0.40.0 or later is required",
+            "API version 2.0.0 or later is required",
+            "Mycli does not support this request",
+            "version 2 or newer is required",
+            "Claude Code does not have access to the file",
+            "version 1.2.3 or lower is required",
+            "anthropic-version 2023.06.01 or later is required",
+            "Claude Code sandbox does not support url sources",
+            "version 3.0.1 or newer gives faster uploads",
+            "This tool requires Python version 3.11 or newer",
+            "requires Claude Code version 2.1.280 or so",
+        ],
+        ids=["a tool", "a feature", "the API's version", "the API", "other",
+             "a tool after the CLI's name", "a feature after the CLI's name",
+             "cli- in another word", "Client", "a newer client",
+             "authentication", "an undotted version", "subversion",
+             "an SDK's version", "the API's dotted version",
+             "a word ending in cli", "a version with no dot",
+             "does not have", "or lower", "a dotted API version",
+             "a word between the CLI and its verb",
+             "a version or newer, not required",
+             "another program required at a version",
+             "the CLI at a version, not or newer"],
+    )  # fmt: skip
+    def test_a_400_about_anything_but_the_cli_is_not_one(self, text):
+        step = {**UNSUPPORTED, "text": f"API Error: 400 {text}"}
+        assert (
+            unsupported_model([INIT, *refused_events(step, "s1")], 1) is None
+        )
+
+    @pytest.mark.parametrize(
+        "step",
+        [BAD_REQUEST, {**UNSUPPORTED, "status": 500}, RATE_LIMITED],
+        ids=["another 400", "the words on a 500", "a rate limit"],
+    )
+    def test_anything_else_is_not_one(self, step):
+        events = [INIT, *refused_events(step, "s1")]
+        assert unsupported_model(events, 1) is None
+
+    def test_the_wordings_have_no_unbounded_gap(self):
+        """A search takes time linear in the text: no wording has a gap
+        of any length, which made a long text that never matches take
+        quadratic time."""
+        pattern = llm._UNSUPPORTED_MODEL.pattern
+        assert not re.search(r"\.[*+]|\{\d*,\}", pattern)
+        assert llm._UNSUPPORTED_MODEL.search("cli " * 16000) is None
+
+    def test_an_answered_call_is_not_one(self):
+        events = [
+            INIT,
+            {
+                "type": "result",
+                "is_error": False,
+                "api_error_status": 400,
+                "result": UNSUPPORTED["text"],
+            },
+        ]
+        assert unsupported_model(events, 0) is None
+
+    def test_it_pauses_the_pass_with_no_time_to_go_on(self, cli, clock):
+        client = ClaudeCodeClient(model="claude-opus-5-5")
+        cli.script = [UNSUPPORTED]
+        with pytest.raises(ModelUnsupported) as paused:
+            try:
+                client.complete("Read the letter.")
+            except Exception:  # what isolation handlers catch
+                pytest.fail("the refusal was caught as a document failure")
+        assert isinstance(paused.value, PassPaused)
+        assert paused.value.resumes_at is None
+        assert paused.value.model == "claude-opus-5-5"
+        assert "2.1.280 or newer" in paused.value.reason
+        assert "claude-opus-5-5" in str(paused.value)
+        assert "2.1.280 or newer" in str(paused.value)
+        # either remedy changes a scratch run's recorded settings
+        assert "`yizkr scratch run --new`" in str(paused.value)
+        # never asked again, and never waited for
+        assert len(cli.calls) == 1
+        assert clock.slept == []
+        # the pause is the process's: another role's client pauses at once,
+        # without a call
+        with pytest.raises(ModelUnsupported):
+            ClaudeCodeClient(effort="high").complete("Critique the batch.")
+        assert len(cli.calls) == 1
+
+    def test_another_400_fails_the_call_alone(self, cli, clock):
+        cli.script = [BAD_REQUEST]
+        client = ClaudeCodeClient()
+        with pytest.raises(RuntimeError, match="prompt is too long"):
+            client.complete("Read the letter.")
+        assert client.complete("Read the letter.") == "answer"
 
 
 # -- asking again ------------------------------------------------------------
@@ -1696,6 +1962,44 @@ class TestNoDocumentFails:
         first, last = again.documents()
         assert last.state.status == AWAITING_CLAIMS
         # only the last letter's critique is asked again
+        assert len(cli.calls) == 3
+
+    def test_a_model_the_cli_does_not_support_stops_the_run_once(
+        self, cli, clock, tmp_path, monkeypatch
+    ):
+        """A model change in the middle of a run: the API refuses the last
+        letter's critique for a model the CLI does not support. The run
+        pauses with no time to go on, no document fails, and the next run,
+        on a CLI that runs the model, goes on from where it stopped."""
+        cli.answer = CRITIQUE_ANSWER
+        cli.script = [None, UNSUPPORTED]
+        run = Run(a_folder(tmp_path), tmp_path / "state")
+        with pytest.raises(ModelUnsupported):
+            run.run()
+        first, last = run.documents()
+        assert first.state.status == AWAITING_CLAIMS
+        assert last.state.status == BATCHED
+        assert last.state.error is None
+        events = run.rundir.events()
+        assert not [
+            event
+            for event in events
+            if event["event"] in ("failed", DOCUMENT_FAILED)
+        ]
+        (invocation,) = run.rundir.manifest()["invocations"]
+        assert (invocation["outcome"], invocation["reason"]) == (
+            "paused",
+            "ModelUnsupported",
+        )
+        made = [event for event in events if event["event"] == ENGINE_CALL]
+        assert [e["outcome"] for e in made] == ["ok", "paused"]
+        assert len(cli.calls) == 2
+
+        # a new process, on a CLI that runs the model
+        monkeypatch.setattr(llm, "_PIN", llm._CliPin())
+        again = Run(a_folder(tmp_path), tmp_path / "state")
+        assert again.run() == 2
+        assert again.documents()[1].state.status == AWAITING_CLAIMS
         assert len(cli.calls) == 3
 
     def test_calls_the_cache_answers_are_no_engine_calls(
