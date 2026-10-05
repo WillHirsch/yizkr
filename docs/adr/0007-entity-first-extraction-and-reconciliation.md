@@ -23,7 +23,8 @@ Amended by [ADR-0035](0035-mention-records.md) (owner decision
 family gains a `structure`, what its names are made of, which is input to
 identity and never written, and any record may carry a judgement note
 (ADR-0035 §2, §4).
-Amended by #388 (2026-10-04; decision BX of 2026-10-05): candidate blocking
+Amended by #388 (2026-10-04; the record's typed parts decided by the
+orchestrator 2026-10-05, the owner may override): candidate blocking
 (step 2) keys on whole name forms, folded for case and accents with
 umlauts also written out (ADR-0035 §7), never on name tokens or
 prefixes. A manifest entity keys through its mention record: a person

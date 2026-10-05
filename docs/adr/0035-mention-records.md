@@ -213,8 +213,9 @@ never narrow or guess.
   "Eugen /Löbig/") is that form whole, the name not written twice.
 - **Language.** A HEAD.LANG of `und` is taken as it is, uncounted.
 
-Amended by #388 (2026-10-04; decisions BX, BY, BZ and CB of
-2026-10-05, the owner may override): this settles where the first four
+Amended by #388 (2026-10-04; the typed parts, whole birth names, chain
+links and known limits below decided by the orchestrator 2026-10-05,
+the owner may override): this settles where the first four
 readers after write that §10 lists find structure.
 
 - **Reconcile's blocking and the ADR-0019 sequencer** key on whole name
@@ -222,7 +223,7 @@ readers after write that §10 lists find structure.
   prefixes. A manifest entity keys through its record:
   - a person only with the status `name`, by its label, aliases,
     unsplit forms and nicknames, and by the whole forms its typed parts
-    make (BX): each given name, as written and as its standard form, and
+    make: each given name, as written and as its standard form, and
     each nickname, before each surname and patronymic, a pair whose two
     parts fold alike making none. The postcard's "Gustl", read as
     Gustav, keys "Gustav Löbig"; "Agnes Löbig geb. Nertler" keys "Agnes
@@ -242,14 +243,14 @@ readers after write that §10 lists find structure.
   the run that wrote the graph and joined to the written item by the QID
   reconcile resolved, else the item the writer used for its local id,
   found under its label or minted (`write.json`'s `created_items`). A
-  chain is asked link by link (BZ): the place within the nearest
+  chain is asked link by link: the place within the nearest
   container that names an existing place, and each such container
   within the next, every place of that name each a question for a human
   (ADR-0009, as amended).
 - **The impossibility filter** reads containment by QID only, and in
   clustering by the mention id that stands in for one; a name shared
   with a container never prunes a pair (ADR-0017, as amended).
-- **The disagreement report** keeps comparing whole names (BY), as §10
+- **The disagreement report** keeps comparing whole names, as §10
   allows: a birth name is the graph's own typed name statement, kept in
   the source's wording, and "Sörne" beside "Ida Sörne" are two values,
   listed with their sources (ADR-0002).
@@ -257,7 +258,7 @@ readers after write that §10 lists find structure.
   English label, and no longer skips a "living person" label, a
   property the manifest does not hold (§10's operator-side list).
 
-Known limits (CB), to revisit with the readers' next round: a place
+Known limits, to revisit with the readers' next round: a place
 whose record gives only an address ("8 Hawthorn Road, Stupfield,
 Victoria") keys only on the address, so its town never links it; and an
 event, which has no record (§2.5), keys on its label as a whole string,

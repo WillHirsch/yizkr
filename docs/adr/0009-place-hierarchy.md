@@ -6,7 +6,8 @@ Amended by [ADR-0031](0031-the-relation-decides-the-kind.md) (#202,
 something happened is a place, inside its town or region, so it joins
 this hierarchy; an organisation stays outside it, linked to a place by
 `location` (ADR-0012, Fork F).
-Amended by #388 (2026-10-04; decision BZ of 2026-10-05): the comma-parent
+Amended by #388 (2026-10-04; the link-by-link chain decided by the
+orchestrator 2026-10-05, the owner may override): the comma-parent
 candidates are gone. A label's commas never say what contains what
 (ADR-0035 §1). A place's parent candidates come from the chain of
 containers each of its mention records states (`within`, nearest first,
