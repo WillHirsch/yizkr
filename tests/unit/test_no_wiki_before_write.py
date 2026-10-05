@@ -170,6 +170,8 @@ DECK = "Hutmacherei zum Blauen Hut.pptx"
 SHOP_FRONT = b"\x89PNG synthetic: the shop front at Brunnenring 35"
 PORTRAIT = b"\x89PNG synthetic: " + "Photograph Brüsrich, Peiltal".encode()
 FILM = b"synthetic film"
+# every member of a built deck carries this one timestamp
+DECK_TIME = (2020, 1, 1, 0, 0, 0)
 
 
 def sha1(data: bytes) -> str:
@@ -186,7 +188,13 @@ def build_deck(
     """A fictional mini deck (ADR-0008) of three slides. With `media`, the
     shop front is on slides 1 and 2; the studio portrait is on slide 2 as
     image2.png and on slide 3 as image4.png, the same bytes under two
-    names; and slide 3 also holds a film, which is not an image."""
+    names; and slide 3 also holds a film, which is not an image.
+
+    Every member carries one fixed timestamp, so the same arguments make
+    the same bytes, and the same SHA-1, whenever the deck is built:
+    `ZipFile.writestr` given a bare name stamps the current time, which
+    gives two builds either side of a 2-second boundary different bytes
+    (issue #479)."""
     slides = {
         1: (["Hutmacherei zum Blauen Hut"], [firm]),
         2: (["Eugen Löbig, Hutmachermeister"], ["1836-1909"]),
@@ -206,10 +214,15 @@ def build_deck(
         + "".join(f'<p:sldId id="{255 + n}" r:id="rId{n}"/>' for n in slides)
         + "</p:sldIdLst></p:presentation>"
     )
+
+    def put(archive, name, data):
+        archive.writestr(zipfile.ZipInfo(name, date_time=DECK_TIME), data)
+
     with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr("[Content_Types].xml", "<Types/>")
-        archive.writestr("ppt/presentation.xml", presentation)
-        archive.writestr(
+        put(archive, "[Content_Types].xml", "<Types/>")
+        put(archive, "ppt/presentation.xml", presentation)
+        put(
+            archive,
             "ppt/_rels/presentation.xml.rels",
             rels_xml(
                 [
@@ -219,9 +232,7 @@ def build_deck(
             ),
         )
         for n, paragraphs in slides.items():
-            archive.writestr(
-                f"ppt/slides/slide{n}.xml", slide_xml(*paragraphs)
-            )
+            put(archive, f"ppt/slides/slide{n}.xml", slide_xml(*paragraphs))
             links = (
                 [
                     (f"rId{10 + i}", IMAGE_REL, f"../media/{name}")
@@ -234,18 +245,19 @@ def build_deck(
                 links.append(
                     ("rId20", NOTES_REL, "../notesSlides/notesSlide1.xml")
                 )
-            archive.writestr(
-                f"ppt/slides/_rels/slide{n}.xml.rels", rels_xml(links)
+            put(
+                archive, f"ppt/slides/_rels/slide{n}.xml.rels", rels_xml(links)
             )
-        archive.writestr(
+        put(
+            archive,
             "ppt/notesSlides/notesSlide1.xml",
             slide_xml(["Adressbuch der Stadt Flörburg 1912"]),
         )
         if media:
-            archive.writestr("ppt/media/image1.png", shop_front)
-            archive.writestr("ppt/media/image2.png", PORTRAIT)
-            archive.writestr("ppt/media/image4.png", PORTRAIT)
-            archive.writestr("ppt/media/clip1.mp4", FILM)
+            put(archive, "ppt/media/image1.png", shop_front)
+            put(archive, "ppt/media/image2.png", PORTRAIT)
+            put(archive, "ppt/media/image4.png", PORTRAIT)
+            put(archive, "ppt/media/clip1.mp4", FILM)
     return path
 
 

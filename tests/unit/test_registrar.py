@@ -26,6 +26,7 @@ import copy
 import hashlib
 import itertools
 import json
+import time
 import unicodedata
 from pathlib import Path
 from types import SimpleNamespace
@@ -2959,6 +2960,30 @@ class TestStepRegister:
         (doc,) = again.documents()
         assert again._step_register(doc) == deck
         assert (wiki.writes, len(wiki.media.requests)) == (writes, requests)
+
+    def test_a_deck_built_again_seconds_later_is_found_by_its_bytes(
+        self, tmp_path, monkeypatch
+    ):
+        """The same deck built twice is the same bytes, however far apart
+        the builds: with the clock a ZIP member stamps moved on two
+        seconds at each read, the second registration still finds the
+        first deck by its SHA-1 and mints nothing (#479: a CI worker
+        building the two decks either side of a 2-second boundary minted
+        a second deck)."""
+        clock = itertools.count(1_700_000_000, 2)
+        monkeypatch.setattr(time, "time", lambda: next(clock))
+        wiki = FakeWiki()
+        orchestrator, _ = self.orchestrator(tmp_path, wiki)
+        first = build_deck(orchestrator.folder / DECK).read_bytes()
+        (doc,) = orchestrator.documents()
+        deck = orchestrator._step_register(doc)
+
+        writes, entities = wiki.writes, set(wiki.entities)
+        again, _ = self.orchestrator(tmp_path / "again", wiki)
+        assert build_deck(again.folder / DECK).read_bytes() == first
+        (doc,) = again.documents()
+        assert again._step_register(doc) == deck
+        assert (wiki.writes, set(wiki.entities)) == (writes, entities)
 
     def test_a_listed_image_is_left_out(self, tmp_path):
         wiki = FakeWiki()
