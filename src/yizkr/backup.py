@@ -82,7 +82,9 @@ closed:
 
 Scheduling is the host's job (this is a home-server deployment): see
 deploy/README.md for the cron line. Retention: ``--keep N`` prunes the
-oldest runs.
+oldest runs. A run's directory is named by the UTC second it starts, and
+always sorts after every run already there (``next_backup_name``), so the
+names order the runs as they were made, whatever the clock does.
 """
 
 from __future__ import annotations
@@ -120,6 +122,8 @@ from yizkr.model.schema import load_manifest
 from yizkr.queries.publish import prefix_block
 
 TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
+# a backup run's directory name, as TIMESTAMP_FORMAT writes it
+TIMESTAMP_NAME = re.compile(r"\d{8}T\d{6}Z")
 _QID_TOKEN = re.compile(r"Q[1-9]\d*\b")
 
 
@@ -273,6 +277,21 @@ class ExclusionReport:
     reasons: dict[str, str] = field(default_factory=dict)
 
 
+def utc_now(
+    now: Callable[[], datetime.datetime] | None = None,
+) -> datetime.datetime:
+    """The time `now` reads (the system's UTC clock by default), in UTC.
+    A clock that gives a datetime with no time zone is refused
+    (ValueError): its zone would be guessed."""
+    reading = (now or (lambda: datetime.datetime.now(datetime.UTC)))()
+    if reading.utcoffset() is None:
+        raise ValueError(
+            f"the clock read {reading.isoformat()}, a time with no time "
+            "zone; give it one"
+        )
+    return reading.astimezone(datetime.UTC)
+
+
 def exclusion_report(
     config: Config,
     cutoff_years: int = DEFAULT_CUTOFF_YEARS,
@@ -308,8 +327,7 @@ def exclusion_report(
     )
     births = latest_births(run(prefixes + BIRTHS_QUERY.format(**properties)))
 
-    read_now = now or (lambda: datetime.datetime.now(datetime.UTC))
-    cutoff_year = read_now().astimezone(datetime.UTC).year - cutoff_years
+    cutoff_year = utc_now(now).year - cutoff_years
     report = ExclusionReport()
     for binding in bindings:
         qid = binding["person"]["value"].rsplit("/", 1)[-1]
@@ -1568,12 +1586,54 @@ def filter_nonprivileged_export(
 # ---------------------------------------------------------------------------
 
 
+def _stamp(moment: datetime.datetime) -> str:
+    """`moment` as TIMESTAMP_FORMAT writes it, its year in four digits
+    whatever the platform's strftime does with a year before 1000."""
+    return f"{moment.year:04d}" + moment.strftime("%m%dT%H%M%SZ")
+
+
+def next_backup_name(
+    backup_root: Path, *, now: Callable[[], datetime.datetime] | None = None
+) -> str:
+    """The directory name of a new backup run in `backup_root`: the UTC
+    second `now` reads (``utc_now``), or, when that does not sort after
+    every entry already named like a run (a second run in one second, or a
+    clock set back), the second after the latest of them. A new run's name
+    so always sorts last, and pruning, which keeps the names that sort
+    last, never removes it. An entry named like a run that no second
+    sorts after, or that names no time, and sorts last, refuses the run
+    (ValueError), naming it."""
+    stamp = _stamp(utc_now(now))
+    names = (
+        sorted(
+            entry.name
+            for entry in backup_root.iterdir()
+            if TIMESTAMP_NAME.fullmatch(entry.name)
+        )
+        if backup_root.is_dir()
+        else []
+    )
+    if not names or stamp > names[-1]:
+        return stamp
+    latest = names[-1]
+    try:
+        after = datetime.datetime.strptime(latest, TIMESTAMP_FORMAT)
+        return _stamp(after + datetime.timedelta(seconds=1))
+    except (ValueError, OverflowError):
+        raise ValueError(
+            f"{backup_root / latest} is named like a backup run that no "
+            "new run's name can sort after, so pruning could remove the "
+            "new run; move or rename it"
+        ) from None
+
+
 def prune_old_backups(backup_root: Path, keep: int) -> list[str]:
-    """Delete the oldest timestamped backup dirs beyond `keep`."""
+    """Delete the oldest timestamped backup dirs beyond `keep`: those
+    whose names sort first."""
     runs = sorted(
         entry.name
         for entry in backup_root.iterdir()
-        if entry.is_dir() and re.fullmatch(r"\d{8}T\d{6}Z", entry.name)
+        if entry.is_dir() and TIMESTAMP_NAME.fullmatch(entry.name)
     )
     doomed = runs[:-keep] if keep > 0 else []
     for name in doomed:
@@ -1590,6 +1650,8 @@ def export_nonprivileged(
     lag_timeout: float = LAG_TIMEOUT,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
+    *,
+    now: Callable[[], datetime.datetime] | None = None,
 ) -> dict:
     """Write the non-privileged export of the dump ``out_dir/full.nt.gz``:
     ``nonprivileged.nt.gz`` (NONPRIVILEGED_DUMP), and
@@ -1611,7 +1673,8 @@ def export_nonprivileged(
     qualifier's value is an item dropped, whole
     (``filter_nonprivileged_export``, ``statements_left_out``). The queries
     go to the instance's query service, with its vocabulary,
-    unless `run` and `vocabulary` are given.
+    unless `run` and `vocabulary` are given. `now` is the check's clock
+    (``exclusion_report``).
 
     Both files are written under their names plus PARTIAL_SUFFIX and moved
     onto their names once whole, the exclusions first. Partial files an
@@ -1647,7 +1710,11 @@ def export_nonprivileged(
         run, reading.revisions, timeout=lag_timeout, sleep=sleep, clock=clock
     )
     report = exclusion_report(
-        config, cutoff_years=cutoff_years, run=run, vocabulary=vocabulary
+        config,
+        cutoff_years=cutoff_years,
+        run=run,
+        vocabulary=vocabulary,
+        now=now,
     )
     changed = stale_entities(run, reading.revisions)
     if changed:
@@ -1712,17 +1779,25 @@ def run_backup(
     nonprivileged_export: bool = True,
     cutoff_years: int = DEFAULT_CUTOFF_YEARS,
     keep: int = 0,
+    *,
+    now: Callable[[], datetime.datetime] | None = None,
 ) -> dict:
     """Full backup run; returns the manifest that is also written to disk.
+
+    The run's directory is named by `now` (the system's UTC clock by
+    default; ``next_backup_name``), which also sets the export's cutoff
+    year (``exclusion_report``). A directory of that name made meanwhile
+    by another run stops this one (FileExistsError) rather than being
+    shared.
 
     A non-privileged export that refuses to run
     (NonprivilegedExportRefused: the query service lags, or the dump holds
     what the export is not made to filter) leaves the other dumps in place:
     the manifest records them and the refusal, old runs are pruned, and the
     refusal is raised."""
-    stamp = datetime.datetime.now(datetime.UTC).strftime(TIMESTAMP_FORMAT)
+    stamp = next_backup_name(backup_root, now=now)
     out_dir = backup_root / stamp
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True)
     manifest: dict = {"timestamp": stamp, "components": {}}
 
     def record(name: str, path: Path, **extra) -> None:
@@ -1754,7 +1829,7 @@ def run_backup(
                 "nonprivileged_export",
                 out_dir / NONPRIVILEGED_DUMP,
                 **export_nonprivileged(
-                    config, out_dir, cutoff_years=cutoff_years
+                    config, out_dir, cutoff_years=cutoff_years, now=now
                 ),
             )
         except NonprivilegedExportRefused as refusal:

@@ -111,6 +111,26 @@ def uses(source: str, **options) -> list[str]:
         "START_TIMER(0.05, print)\n",
         "START_TIMER(seconds, print)\n",
         "START_TIMER(False, print)\n",
+        'import time\ngetattr(time, "sleep")(1)\n',
+        'import time as t\nclock = getattr(t, "monotonic")\n',
+        'from datetime import datetime\ngetattr(datetime, "now")()\n',
+        'import datetime\ngetattr(datetime.date, "today")()\n',
+        'import time\ntime.__dict__["sleep"](1)\n',
+        'import time\nvars(time)["time"]()\n',
+        "import asyncio\nasyncio.timeout(1)\n",
+        "import asyncio\nasyncio.timeout(delay=0.5)\n",
+        "import asyncio\nasyncio.timeout_at(when)\n",
+        "import asyncio\nasyncio.timeout_at(0)\n",
+        "def f(future):\n    future.result(timeout=1)\n",
+        "def f(future):\n    future.exception(timeout=0.5)\n",
+        "def f(conn):\n    conn.poll(1)\n",
+        "def f(conn):\n    conn.poll(timeout=0.5)\n",
+        "import select\nselect.poll().poll(500)\n",
+        "import os\nos.utime(path)\n",
+        "import os\nos.utime(path, None)\n",
+        "def f(path):\n    path.touch()\n    return path.stat().st_mtime_ns\n",
+        "import os\n\ndef f(p):\n    p.touch()\n    os.path.getmtime(p)\n",
+        "path.touch()\nstamp = path.stat().st_ctime\n",
     ],
 )
 def test_each_spelling_of_a_real_clock_is_found(source):
@@ -232,11 +252,54 @@ def test_what_a_test_may_do_is_not_found():
         clock.now
         clock.sleep
         start.today
+        getattr(time, "struct_time")
+        getattr(clock, "sleep")
+        getattr(time, name)
+        time.__dict__["struct_time"]
+        vars(clock)["sleep"]
+        asyncio.timeout(HANG_GUARD)
+        asyncio.timeout(None)
+        asyncio.timeout_at(None)
+        helper.timeout(5)
+        future.result()
+        future.result(timeout=HANG_GUARD)
+        future.exception(timeout=None)
+        process.poll()
+        conn.poll(0)
+        conn.poll(HANG_GUARD)
+        conn.poll(seconds)
+        os.utime(path, ns=(1, 1))
+        os.utime(path, (1, 1))
+        os.utime(path, times=(1, 1))
+        before = path.stat().st_mtime_ns
+
+        def touched(path):
+            path.touch()
+
+        def stamped(path):
+            return path.stat().st_mtime_ns
     """
     assert (
         uses(source, hang_guards={"HANG_GUARD"}, real_timers={"START_TIMER"})
         == []
     )
+
+
+def test_a_file_time_is_found_only_where_a_file_is_touched():
+    """A touch in one function marks the file time read there, not one
+    read in another function, nor one read beside the function in the
+    module."""
+    source = """
+        def touched(path):
+            path.touch()
+            return path.stat().st_mtime
+
+        def read(path):
+            return path.stat().st_mtime
+
+        stamp = path.stat().st_mtime
+    """
+    assert uses(source) == ["line 4: st_mtime of a file touched"]
 
 
 def test_the_exempt_classes_and_functions_are_left_out():
