@@ -80,7 +80,6 @@ import contextlib
 import json
 import os
 import re
-import subprocess
 import unicodedata
 from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping
@@ -96,7 +95,14 @@ from yizkr.pipeline.clustering import STAGE as CLUSTERING
 from yizkr.pipeline.fingerprints import ClaimPrint, claim_prints, mentions_of
 from yizkr.pipeline.llm import ROLE_STAGES, PassPaused, read_cache
 from yizkr.pipeline.orchestrate import BATCH_VOLATILE, TRANSCRIPTION_VOLATILE
-from yizkr.pipeline.rundir import ALERTS, EVENTS, MANIFEST, RUN_START
+from yizkr.pipeline.rundir import (
+    ALERTS,
+    EVENTS,
+    MANIFEST,
+    PACKAGE_DIR,
+    RUN_START,
+    _git,
+)
 from yizkr.pipeline.scratch import CORPUS_DIR, is_complete, runs_in
 from yizkr.pipeline.stages import canonical_json, content_hash, sha256_text
 
@@ -171,7 +177,6 @@ _COUNTER = re.compile(
     r"routes|language_resolved|pdf_pages|per_pdf|set_aside|pauses|aborts|"
     r"give_ups_replayed|holds|errors|models|outcomes|output_limit_stops)$"
 )
-_SETTING = re.compile(r"[a-z][a-z0-9_]{0,39}")
 _SHA1 = re.compile(r"[0-9a-f]{40}")
 _KEY = re.compile(r"[0-9a-f]{64}")
 # the run manifest's sections a setting is read from
@@ -326,12 +331,8 @@ class Components:
         if self.cache is None or not _KEY.fullmatch(key):
             return None
         entries = [self.cache.get(key)]
-        path = self.cache.path(key)
         with contextlib.suppress(OSError):
-            entries += [
-                report._json(aside)
-                for aside in sorted(path.parent.glob(f"{key}.*.json"))
-            ]
+            entries += self.cache.asides(key)
         for entry in entries:
             if not isinstance(entry, dict) or entry.get("key") != key:
                 continue
@@ -348,63 +349,72 @@ class Components:
 # -- the baseline -------------------------------------------------------------
 
 
-def _on_main(commit: str, refs: Iterable[str]) -> bool:
-    """Whether git holds `commit` in the history of the first of `refs`
-    it knows."""
+def main_ref(refs: Iterable[str] = MAIN_REFS) -> str:
+    """The first of `refs` that git knows, in the checkout the package
+    runs from (as rundir.code_version asks it). DiffError when git knows
+    none of them, or cannot be asked."""
+    refs = tuple(refs)
     for ref in refs:
-        try:
-            known = subprocess.run(
-                [
-                    "git",
-                    "rev-parse",
-                    "--verify",
-                    "--quiet",
-                    f"{ref}^{{commit}}",
-                ],
-                capture_output=True,
-                check=False,
-            )
-        except OSError:
-            return False
-        if known.returncode != 0:
-            continue
-        found = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", commit, ref],
-            capture_output=True,
-            check=False,
+        known = _git(
+            PACKAGE_DIR,
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            f"{ref}^{{commit}}",
         )
-        return found.returncode == 0
-    return False
+        if known:
+            return ref
+    raise DiffError(
+        f"git knows none of {', '.join(refs)} in {PACKAGE_DIR}, so no run "
+        "can be told to be on main: name the baseline run, or the ref that "
+        "is main (--main)"
+    )
 
 
-def on_main(run: Path, refs: Iterable[str] = MAIN_REFS) -> bool:
-    """Whether the run ran clean code (no difference from its commit) of
-    a commit on main."""
-    code = _manifest(run).get("code")
+def _clean_on(code: Any, ref: str) -> bool:
+    """Whether `code` (a run manifest's `code`) is clean code of a commit
+    in the history of `ref`. A commit that is no SHA-1 is never given to
+    git."""
     if not isinstance(code, dict) or code.get("dirty") is not False:
         return False
     commit = code.get("commit")
-    if not isinstance(commit, str) or not re.fullmatch("[0-9a-f]{40}", commit):
+    if not isinstance(commit, str) or not _SHA1.fullmatch(commit):
         return False
-    return _on_main(commit, refs)
+    return (
+        _git(PACKAGE_DIR, "merge-base", "--is-ancestor", commit, ref)
+        is not None
+    )
+
+
+def on_main(run: Path, ref: str) -> bool:
+    """Whether the run ran clean code (no difference from its commit) of
+    a commit on main (`ref`), and so did an invocation that took it past
+    its barrier on other code (its `scratch.code`), if one did."""
+    manifest = _manifest(run)
+    scratch = manifest.get("scratch")
+    later = scratch.get("code") if isinstance(scratch, dict) else None
+    return _clean_on(manifest.get("code"), ref) and (
+        later is None or _clean_on(later, ref)
+    )
 
 
 def baseline_run(
     runs: Path, run: Path, refs: Iterable[str] = MAIN_REFS
 ) -> Path:
-    """The latest completed run on main in `runs`, `run` aside: the latest
-    whose last invocation went through every stage (scratch.is_complete),
-    run on clean code of a commit on main (on_main). DiffError when there
-    is none."""
-    refs = tuple(refs)
+    """The latest completed run on main in `runs` that is older than
+    `run` (by run id, the order runs start in): the latest whose last
+    invocation went through every stage (scratch.is_complete), run on
+    clean code of a commit on main (on_main). DiffError when there is
+    none, or when git knows none of `refs`."""
+    ref = main_ref(refs)
     for candidate in reversed(runs_in(runs)):
-        if os.path.realpath(candidate) == os.path.realpath(run):
+        if candidate.name >= Path(run).name:
             continue
-        if is_complete(candidate) and on_main(candidate, refs):
+        if is_complete(candidate) and on_main(candidate, ref):
             return candidate
     raise DiffError(
-        f"no completed run on main in {runs} to diff with: name the "
-        "baseline run"
+        f"no completed run on {ref} older than {Path(run).name} in {runs} "
+        "to diff with: name the baseline run"
     )
 
 
@@ -450,66 +460,96 @@ def _leaves(value: Any, prefix: str) -> Iterator[tuple[str, Any]]:
         yield prefix, value
 
 
-def _setting_name(name: str) -> str | None:
-    parts = name.split(".")
-    if all(_SETTING.fullmatch(part) for part in parts):
-        return name
-    return None
-
-
-def _shown_setting(name: str, value: Any) -> Any:
-    """A setting's value as the aggregates may show it, else OTHER: a
-    model id, an effort, an engine, a version, a commit, a role, a
-    number, a boolean or none. A language is never shown, and nor is a
-    hash (the code's difference from its commit), which could confirm a
-    guess at a small difference."""
-    if value is None or isinstance(value, bool):
-        return value
-    if _number(value) is not None:
-        return value
-    if isinstance(value, list):
-        shown = [_shown_setting(name, item) for item in value]
-        return shown if OTHER not in shown else OTHER
-    if not isinstance(value, str):
-        return OTHER
-    if (
-        report._MODEL.fullmatch(value)
-        or value in report.EFFORTS
-        or value in report.ENGINES
-        or value in report.ROLES
-        or value in report.MODES
-        or value in report.PROJECT_STAGES
-    ):
-        return value
-    if name.endswith(".commit") and report._hexed(value):
-        return value
-    if name.endswith(("version", "cli_version")) and report._version(value):
+def _model(value: Any) -> Any:
+    if isinstance(value, str) and report._MODEL.fullmatch(value):
         return value
     return OTHER
 
 
-def settings(baseline: Mapping[str, Any], run: Mapping[str, Any]) -> list:
-    """The settings the two run manifests record differently, each with
-    its two values as the aggregates may show them."""
+def _effort(value: Any) -> Any:
+    return value if value in report.EFFORTS else OTHER
+
+
+def _epoch(value: Any) -> Any:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return OTHER
+
+
+def _engine(value: Any) -> Any:
+    return value if value in report.ENGINES else OTHER
+
+
+def _code_version(value: Any) -> Any:
+    return report._version(value) or OTHER
+
+
+def _prefix(value: Any) -> Any:
+    """A commit or a configuration hash as report.md shows it: its first
+    12 hex digits."""
+    return report._hexed(value) or OTHER
+
+
+def _flag(value: Any) -> Any:
+    return value if isinstance(value, bool) else OTHER
+
+
+# the settings diff.md may name, by path ("{role}" standing for each of
+# the roles), with how each shows its value; any other setting that
+# differs is only counted, its name and values never shown, so no hash,
+# no language and no free text of a run's configuration reaches diff.md
+SHOWN_SETTINGS = {
+    "engine.name": _engine,
+    "engine.cli_version": _code_version,
+    "code.commit": _prefix,
+    "code.dirty": _flag,
+    "roles.{role}.model": _model,
+    "roles.{role}.effort": _effort,
+    "roles.{role}.epoch": _epoch,
+    "roles.{role}.client.model": _model,
+    "roles.{role}.client.effort": _effort,
+    "roles.{role}.client.config_hash": _prefix,
+    "config.extract_model": _model,
+    "config.extract_effort": _effort,
+    "config.review_effort": _effort,
+    "config.epochs.{role}": _epoch,
+}
+_SHOWN = {
+    path.format(role=role): shown
+    for path, shown in SHOWN_SETTINGS.items()
+    for role in sorted(report.ROLES)
+}
+
+
+def settings(baseline: Mapping[str, Any], run: Mapping[str, Any]) -> dict:
+    """The settings the two run manifests record differently: those
+    SHOWN_SETTINGS names, each with its two values as diff.md may show
+    them (None for a value a manifest does not record), and how many
+    others differ."""
     found: dict[str, list] = {}
     for side, manifest in enumerate((baseline, run)):
         for section in SETTING_SECTIONS:
             for name, value in _leaves(manifest.get(section), section):
                 found.setdefault(name, [None, None])[side] = value
     rows = []
+    others = 0
     for name, (before, after) in sorted(found.items()):
         if json.dumps(before, sort_keys=True, default=str) == json.dumps(
             after, sort_keys=True, default=str
         ):
             continue
+        shown = _SHOWN.get(name)
+        if shown is None:
+            others += 1
+            continue
         rows.append(
             {
-                "setting": _setting_name(name) or OTHER,
-                "baseline": _shown_setting(name, before),
-                "run": _shown_setting(name, after),
+                "setting": name,
+                "baseline": None if before is None else shown(before),
+                "run": None if after is None else shown(after),
             }
         )
-    return rows
+    return {"shown": rows, "other": others}
 
 
 # -- figures ------------------------------------------------------------------
@@ -626,8 +666,9 @@ def _documents(path: Path, built: Mapping[str, Any]) -> dict[str, _Document]:
         if not isinstance(sha1, str) or not _SHA1.fullmatch(sha1):
             continue
         stages = record.get("stages")
+        stages = stages if isinstance(stages, dict) else {}
         reason = None
-        for attempt in (stages or {}).values():
+        for attempt in stages.values():
             if isinstance(attempt, dict) and attempt.get("status") == "failed":
                 reason = attempt.get("reason")
         failures = record.get("failures")
@@ -640,7 +681,7 @@ def _documents(path: Path, built: Mapping[str, Any]) -> dict[str, _Document]:
             if isinstance(record.get("kind"), str)
             else None,
             files=[f for f in record.get("files") or [] if isinstance(f, str)],
-            stages=stages if isinstance(stages, dict) else {},
+            stages=stages,
             failed=record.get("failed") is True,
             reason=reason if isinstance(reason, str) else None,
             directory=directories[sha1][0] if sha1 in directories else None,
@@ -665,19 +706,22 @@ def _view_hash(document: _Document, stage: str) -> str | None:
 
 def _batch(document: _Document) -> ClaimBatch | None:
     """The document's batch, when its extraction or GEDCOM stage
-    completed and its view can be read."""
+    completed; None when none did. ValueError when its view is missing
+    or cannot be read."""
     stage = next(
         (s for s in ("extraction", "gedcom") if document.completed(s)), None
     )
-    if stage is None or document.directory is None:
+    if stage is None:
         return None
+    if document.directory is None:
+        raise ValueError("no directory holds the document's views")
     try:
         text = (document.directory / VIEWS[stage][0]).read_text(
             encoding="utf-8"
         )
-        return ClaimBatch.model_validate_json(text)
-    except (OSError, ValueError):
-        return None
+    except OSError as exc:
+        raise ValueError(f"its batch cannot be read: {exc}") from None
+    return ClaimBatch.model_validate_json(text)
 
 
 # -- claims and mentions ------------------------------------------------------
@@ -694,7 +738,9 @@ def _excerpt(batch: ClaimBatch, index: int) -> str | None:
 class _Read:
     """What one document's batch gives: its claims' prints with their
     excerpts, its mentions by fingerprint with their kinds and labels;
-    `unreadable` when the batch could not be read into prints."""
+    `unreadable` when its stage completed but its view is missing, or
+    cannot be read into prints. An unreadable batch counts on neither
+    side, so its claims never read as added or removed."""
 
     prints: list[tuple[ClaimPrint, str | None]] = field(default_factory=list)
     mentions: dict[str, tuple[str, str]] = field(default_factory=dict)
@@ -702,11 +748,11 @@ class _Read:
 
 
 def _read_batch(document: _Document) -> _Read | None:
-    batch = _batch(document)
-    if batch is None:
-        return None
     read = _Read()
     try:
+        batch = _batch(document)
+        if batch is None:
+            return None
         prints = claim_prints(document.sha1, batch)
         mentions = mentions_of(document.sha1, batch)
     except (TypeError, ValueError):
@@ -773,8 +819,10 @@ def compare_claims(
     """Two readings of a document's claims, compared as multisets of
     fingerprints. Of the claims left unmatched, a removed and an added
     one that share subject, property and artifact are paired as changed,
-    each with the one of its group it differs from in the fewest parts,
-    in the order the batches give them."""
+    each with the one of its group it differs from in the fewest parts
+    (the first by fingerprint of those that tie), taking the removed
+    ones by fingerprint, so the pairs are the same whatever order the
+    batches list their claims in."""
     changes = ClaimChanges()
     before: dict[str, list[tuple[ClaimPrint, str | None]]] = {}
     after: dict[str, list[tuple[ClaimPrint, str | None]]] = {}
@@ -794,8 +842,11 @@ def compare_claims(
             changes.excerpts += max(0, matched - same.total())
         removed.extend(found for found, _ in old[matched:])
         added.extend(found for found, _ in new[matched:])
+    # sorted by fingerprint, so the pairs do not depend on the order the
+    # batches list their claims in
+    removed.sort(key=lambda found: found.fingerprint)
     groups: dict[tuple, list[ClaimPrint]] = {}
-    for found in added:
+    for found in sorted(added, key=lambda found: found.fingerprint):
         groups.setdefault(
             (found.artifact, found.subject, found.property), []
         ).append(found)
@@ -805,7 +856,11 @@ def compare_claims(
             changes.removed.append(found)
             continue
         partner = min(
-            group, key=lambda other: len(_changed_parts(found, other))
+            group,
+            key=lambda other: (
+                len(_changed_parts(found, other)),
+                other.fingerprint,
+            ),
         )
         group.remove(partner)
         changes.changed.append(
@@ -1224,10 +1279,15 @@ def compare_stages(
 
 def _run_record(path: Path, manifest: Mapping[str, Any], source: str) -> dict:
     """A run as the aggregates name it: its id, its commit and whether
-    the code differed from it, whether it went to the end, and whether
-    its report was stored or built."""
+    the code differed from it, the same of the code an invocation took it
+    past its barrier on (`scratch.code`, none when no invocation did),
+    whether it went to the end, and whether its report was stored or
+    built."""
     code = manifest.get("code")
     code = code if isinstance(code, dict) else {}
+    scratch = manifest.get("scratch")
+    later = scratch.get("code") if isinstance(scratch, dict) else None
+    later = later if isinstance(later, dict) else {}
     run_id = manifest.get("run_id")
     return {
         "run_id": run_id
@@ -1236,6 +1296,10 @@ def _run_record(path: Path, manifest: Mapping[str, Any], source: str) -> dict:
         "commit": report._hexed(code.get("commit")),
         "dirty": code.get("dirty")
         if isinstance(code.get("dirty"), bool)
+        else None,
+        "past_barrier_commit": report._hexed(later.get("commit")),
+        "past_barrier_dirty": later.get("dirty")
+        if isinstance(later.get("dirty"), bool)
         else None,
         "complete": is_complete(path),
         "report": source,
@@ -1599,15 +1663,34 @@ def _table(head: tuple[str, ...], rows: Iterable[tuple]) -> list[str]:
 def render_markdown(aggregate: Mapping[str, Any]) -> str:
     """diff.md: the aggregates alone, for an issue or a PR."""
     runs = aggregate["runs"]
-    lines = ["# Run diff", ""]
+    lines = [
+        "# Run diff",
+        "",
+        "Aggregates only: counts, rates and the pipeline's own names, with "
+        "no document, file, name, label, value, excerpt, quote or language. "
+        f"Made by `yizkr scratch diff` at {aggregate['generated_at']}; the "
+        "per-document diff (diff.json) stays local.",
+        "",
+    ]
     lines += _table(
-        ("", "run id", "commit", "differs from commit", "complete", "report"),
+        (
+            "",
+            "run id",
+            "commit",
+            "differs from commit",
+            "past the barrier on",
+            "which differs from its commit",
+            "complete",
+            "report",
+        ),
         [
             (
                 side,
                 runs[side]["run_id"],
                 runs[side]["commit"],
                 runs[side]["dirty"],
+                runs[side]["past_barrier_commit"],
+                runs[side]["past_barrier_dirty"],
                 runs[side]["complete"],
                 runs[side]["report"],
             )
@@ -1625,9 +1708,15 @@ def render_markdown(aggregate: Mapping[str, Any]) -> str:
         ("setting", "baseline", "run"),
         [
             (r["setting"], r["baseline"], r["run"])
-            for r in aggregate["settings"]
+            for r in aggregate["settings"]["shown"]
         ],
     )
+    if aggregate["settings"]["other"]:
+        lines += [
+            f"Other settings that differ, not shown: "
+            f"{aggregate['settings']['other']}.",
+            "",
+        ]
     lines += ["## Stages", ""]
     lines += _table(
         ("stage", "documents", "baseline", "run", "recomputed by", "views"),
@@ -1685,13 +1774,14 @@ def render_markdown(aggregate: Mapping[str, Any]) -> str:
         f"Changed claims by what changed: {_counts(claims['changed_parts'])}.",
         "",
     ]
-    lines += _table(
-        ("property", "added", "removed", "changed"),
-        [
-            (name, row["added"], row["removed"], row["changed"])
-            for name, row in claims["by_property"].items()
-        ],
-    )
+    if claims["by_property"]:
+        lines += _table(
+            ("property", "added", "removed", "changed"),
+            [
+                (name, row["added"], row["removed"], row["changed"])
+                for name, row in claims["by_property"].items()
+            ],
+        )
     mentions = aggregate["mentions"]
     lines += [
         "## Mentions",
@@ -1736,6 +1826,9 @@ def render_markdown(aggregate: Mapping[str, Any]) -> str:
             f"New by check: {_counts(anomalies['new_by_check'])}. Resolved "
             f"by check: {_counts(anomalies['resolved_by_check'])}.",
             "",
+            f"New by stage: {_counts(anomalies['new_by_stage'])}. Resolved "
+            f"by stage: {_counts(anomalies['resolved_by_stage'])}.",
+            "",
         ]
     failures = aggregate["failures"]
     lines += [
@@ -1746,6 +1839,9 @@ def render_markdown(aggregate: Mapping[str, Any]) -> str:
         f"({_counts(failures['new_by_label'])}), no longer failing "
         f"{failures['resolved']} ({_counts(failures['resolved_by_label'])}), "
         f"in both {failures['in_both']}.",
+        "",
+        f"Newly failing by kind: {_counts(failures['new_by_kind'])}. No "
+        f"longer failing by kind: {_counts(failures['resolved_by_kind'])}.",
         "",
     ]
     for title, key in (

@@ -25,15 +25,22 @@ uv run yizkr scratch diff [<baseline>] [<run>] [--runs DIR] [--main REF]
   (`--runs`, default `var/scratch`); with one, that run; with two, the
   second against the first. A run is a run id in the runs directory or
   a run directory's path.
-- **The baseline**, unless named, is the latest completed run on main:
-  the latest run of the runs directory, the diffed run aside, whose
-  latest invocation went through every stage (`scratch.complete`), run on
-  clean code (`code.dirty` false) of a commit git holds in the history of
-  `origin/main`, else `main` (`--main REF`, repeatable, picks others). A
-  run made on a PR's branch is not on main until the PR merges, and a
+- **The baseline**, unless named, is the latest completed run on main
+  older than the diffed run: the latest run of the runs directory whose
+  id sorts before the run's (run ids sort in the order runs start in),
+  whose latest invocation went through every stage (`scratch.complete`),
+  run on clean code (`code.dirty` false) of a commit git holds in the
+  history of `origin/main`, else `main` (`--main REF`, repeatable, picks
+  others). A run that an invocation took past its barrier on other code
+  (its `scratch.code`, docs/RUN_MANIFEST.md) is a baseline only if that
+  code is clean and on main too, since its corpus stages were made by
+  it. Git is asked in the checkout the package runs from, whatever the
+  working directory, and a commit that is no SHA-1 is never given to it.
+  A run made on a PR's branch is not on main until the PR merges, and a
   squash merge makes a new commit, so a PR's run is never the baseline
   of another PR, and the first run on main after a merge is the next
-  baseline. With no such run, the command says so: name the baseline.
+  baseline. With no such run, or when git knows none of the refs, the
+  command says so: name the baseline.
 - `--rebuild` makes both runs' reports afresh rather than read the
   `report.json` each holds (below).
 - `--cache DIR` names the LLM cache the recomputes are attributed from;
@@ -83,7 +90,8 @@ fails if asked. From each run it reads:
 From the LLM cache it reads, through the client factory's view of the
 cache as it is (`llm.read_cache`: no lock taken, nothing written, so it
 runs beside a running pass), for each key the events name the entry
-served under it, else one moved aside under it (rejected or replaced),
+served under it, else one moved aside under it (rejected or replaced,
+the view's `asides`),
 and uses of that entry only its `components`, and only when they hash
 to its key: never a response. A cache that is not there, or one the
 cache would refuse (a folder a git work tree would track, or one open
@@ -92,11 +100,23 @@ and the rest of the diff as it is.
 
 ## What it compares
 
-**Settings.** Each field of the two `run.json`s' `engine`, `roles`,
-`code` and `config` that differs. A value is shown only when it is a
-model id, an effort, an engine, a version, a commit, a role, a number, a
-boolean or none; anything else, a language among it, is `other`, and the
-hash of the code's difference from its commit is never shown.
+**Runs.** Each run's id, its code's commit (its first 12 hex digits)
+and whether the code differed from it, the same of the code an
+invocation took it past its barrier on, whether it went to the end, and
+whether its report was `stored` or `built`.
+
+**Settings.** The fields of the two `run.json`s' `engine`, `roles`,
+`code` and `config` that differ, of which `diff.md` names only an
+allow-list (`rundiff.SHOWN_SETTINGS`): each role's model, effort and
+epoch (as the role records them, as its client applies them, and as the
+configuration names them), the client's configuration hash, the engine's
+name and CLI version, and the code's commit and whether it differed from
+it. Each shows its value only when it is of its kind (a model id, an
+effort, an epoch, an engine, a version, a flag), else `other`; a commit
+and a configuration hash show their first 12 hex digits, as `report.md`
+does. Every other setting that differs (a language, the hash of the
+code's difference from its commit, any free text) is only counted, its
+name and values never shown.
 
 **Stages.** Per stage, how each document's stage came about in each run
 (`computed`, `reused: <reasons>`, `needs attention`, `failed`, ...), as
@@ -165,7 +185,10 @@ fingerprints as multisets (ADR-0025 §4, as amended by #197): a claim only
 the baseline holds is *removed*, one only the run holds *added*. Of
 those, a removed and an added claim that share their subject, property
 and artifact are paired as *changed* (each with the one of its group it
-differs from in the fewest parts), and counted by what changed: the
+differs from in the fewest parts, ties going to the first by
+fingerprint, and the removed ones taken by fingerprint, so the pairs
+and their tally do not depend on the order a batch lists its claims
+in), and counted by what changed: the
 `value`, the `qualifiers`, the `locator`. Values compare in NFC with
 whitespace kept, so values that differ only in whitespace differ. The
 excerpt is no part of a fingerprint: a matched claim whose excerpt
@@ -174,7 +197,9 @@ one batch are one fingerprint counted twice. A claim's subject is its
 mention's fingerprint, so a claim whose mention changed (another
 label, kind or line span) is removed and added, never changed. The
 aggregates count documents with a batch in both runs, in one only, and
-with claim changes; `diff.json` lists each claim with its values, and
+with claim changes, and those whose batch, where its stage completed, is
+missing or cannot be read (`unreadable`), whose claims count on neither
+side; `diff.json` lists each claim with its values, and
 its subject's label.
 
 **Mentions**, by their fingerprints: added and removed, by kind.

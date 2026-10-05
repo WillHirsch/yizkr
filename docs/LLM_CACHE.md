@@ -472,7 +472,9 @@ cache would refuse to open it refuses too (`CacheRefused`; The cache
 folder, above). A kept session comes back as the names of its files
 only, with no bytes, and comes back whole however the holder keeps that
 session meanwhile: a session kept for an answer is never read empty, and
-a read never fails and never waits.
+a read never fails and never waits. `asides(key)` gives the entries moved
+aside under a key, rejected or replaced, each as it was kept; the run
+diff reads their key components (docs/RUN_DIFF.md).
 
 Two things hold it, against a keep that publishes a session by moving the
 folder it finds at the answer's path aside and renaming its own in. The

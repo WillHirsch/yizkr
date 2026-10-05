@@ -13,9 +13,11 @@ own.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import stat
 import subprocess
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -140,7 +142,7 @@ class TestTwoRuns:
             "setting": "roles.extract.epoch",
             "baseline": 0,
             "run": 1,
-        } in aggregate["settings"]
+        } in aggregate["settings"]["shown"]
         claims = aggregate["claims"]
         assert (claims["matched"], claims["changed"]) == (3, 1)
         assert (claims["added"], claims["removed"]) == (0, 0)
@@ -201,10 +203,22 @@ class TestTwoRuns:
         assert clusters["splits_by_kind"] == {"human": 1}
         assert clusters["merges"] == 0
         assert clusters["methods_changed"] == {"confident → singleton": 4}
+        assert clusters["clusters"] == {
+            "baseline": 1,
+            "run": 4,
+            "unchanged": 0,
+        }
         # the other way round, the same change is a merge
         back = rundiff.build(second, first)["aggregate"]["clusters"]
         assert (back["merges"], back["mentions_merged"]) == (1, 4)
         assert back["splits"] == 0
+        # with no claim changed, the claims say none once
+        summary = rundiff.render_markdown(aggregate)
+        assert (
+            "Changed claims by what changed: none.\n\n## Mentions" in summary
+        )
+        section = summary.split("## Claims")[1].split("## Mentions")[0]
+        assert section.count("none") == 1
 
     def test_the_summary_names_no_document(
         self, tmp_path, engine, monkeypatch
@@ -243,9 +257,14 @@ class TestTwoRuns:
             assert stat.S_IMODE(path.stat().st_mode) == 0o700
         for path in written.values():
             assert stat.S_IMODE(path.stat().st_mode) == 0o600
-        # written again, each file is replaced whole
+        # written again, each file is replaced whole, and folders open to
+        # others made private again
+        for path in (second / rundiff.DIFF_DIR, folder):
+            path.chmod(0o755)
         assert rundiff.write_diff(first, second) == written
         assert sorted(p.name for p in folder.iterdir()) == sorted(written)
+        for path in (second / rundiff.DIFF_DIR, folder):
+            assert stat.S_IMODE(path.stat().st_mode) == 0o700
 
     def test_it_asks_nothing_of_the_wiki_or_the_engine(
         self, tmp_path, engine, monkeypatch, request
@@ -259,6 +278,21 @@ class TestTwoRuns:
         monkeypatch.setattr(llm, "make_client", no_engine)
         rundiff.write_diff(first, second)
         assert asked.asked == []
+
+    def test_it_says_whether_the_runs_shared_their_cache(
+        self, tmp_path, engine, monkeypatch
+    ):
+        first, second = two_runs(tmp_path, engine, monkeypatch)
+        assert rundiff.build(first, second)["aggregate"]["runs"]["same_cache"]
+        manifest = json.loads((second / "run.json").read_text())
+        for other, same in (
+            (str(tmp_path / "Peiltal cache"), False),
+            (None, None),
+        ):
+            manifest["cache"] = other
+            (second / "run.json").write_text(json.dumps(manifest))
+            runs = rundiff.build(first, second)["aggregate"]["runs"]
+            assert runs["same_cache"] is same
 
     def test_without_the_cache_a_recompute_is_not_attributed(
         self, tmp_path, engine, monkeypatch
@@ -310,6 +344,10 @@ class TestReports:
         assert rows["content.records.given"]["run"] == 4
         summary = rundiff.render_markdown(aggregate)
         assert "| content.records.given | absent | 4 | n/a |" in summary
+        # a figure equal in both is not listed, and times are no figures
+        assert rows["content.claims.total"]["delta"] == 0
+        assert "content.claims.total" not in summary
+        assert not [f for f in rows if "seconds" in f]
 
     def test_a_name_a_tally_leaves_out_counts_0(self):
         baseline = {
@@ -321,11 +359,22 @@ class TestReports:
             "content": {"claims": {"by_property": {"father": 1}}},
             "stages": [{"name": "critique", "computed": 3}],
         }
+        baseline["stages"] = [
+            {"name": "critique", "computed": 1, "reused_by": {"key match": 2}}
+        ]
+        baseline["documents"] = {"routes": {"vision": 2}}
+        run["documents"] = {"routes": {}}
+        run["stages"][0]["reused_by"] = {}
         rows = {r["figure"]: r for r in rundiff.figures(baseline, run)}
         assert rows["calls.misses_by_reason.absent"]["run"] == 0
+        # tallies named `..._by` and the report's own tallies
+        assert rows["stages.critique.reused_by.key match"]["run"] == 0
+        assert rows["documents.routes.vision"]["run"] == 0
         assert rows["calls.misses_by_reason.refresh"]["baseline"] == 0
         assert rows["content.claims.by_property.father"]["delta"] == 1
-        # a stage, or a section, one report lacks is absent
+        # a section one report lacks is absent
+        del baseline["stages"]
+        rows = {r["figure"]: r for r in rundiff.figures(baseline, run)}
         assert rows["stages.critique.computed"]["baseline"] == ABSENT
         assert rows["calls.engine"]["delta"] == -1
 
@@ -363,8 +412,18 @@ def git(repo: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def a_manifest(run: Path, commit: str, *, dirty=False, complete=True):
+def a_manifest(
+    run: Path, commit: str, *, dirty=False, complete=True, past=None
+):
+    """A run's manifest; `past` the code an invocation took it past its
+    barrier on, (commit, dirty)."""
     run.mkdir(parents=True)
+    scratch = {"complete": complete}
+    if past is not None:
+        scratch |= {
+            "past_barrier_only": True,
+            "code": {"version": "0.1.0", "commit": past[0], "dirty": past[1]},
+        }
     (run / "run.json").write_text(
         json.dumps(
             {
@@ -372,14 +431,14 @@ def a_manifest(run: Path, commit: str, *, dirty=False, complete=True):
                 "run_id": run.name,
                 "mode": "scratch run",
                 "code": {"version": "0.1.0", "commit": commit, "dirty": dirty},
-                "scratch": {"complete": complete},
+                "scratch": scratch,
             }
         )
     )
 
 
 class TestBaseline:
-    def test_it_is_the_latest_completed_run_on_main(
+    def test_it_is_the_latest_completed_run_on_main_before_the_run(
         self, tmp_path, monkeypatch
     ):
         repo = tmp_path / "repo"
@@ -394,36 +453,60 @@ class TestBaseline:
         git(repo, "checkout", "-q", "-b", "198-klurnau")
         git(repo, "commit", "-q", "--allow-empty", "-m", "Klurnau")
         branch = git(repo, "rev-parse", "HEAD")
-        monkeypatch.chdir(repo)
+        # git is asked in the checkout the package runs from, whatever
+        # the working directory
+        monkeypatch.setattr(rundiff, "PACKAGE_DIR", repo)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+        asked = []
+        real_git = rundiff._git
+
+        def recorded(where, *arguments):
+            asked.append(arguments)
+            return real_git(where, *arguments)
+
+        monkeypatch.setattr(rundiff, "_git", recorded)
         runs = tmp_path / "runs"
-        a_manifest(runs / "20261001T090000Z-000001", older)
-        a_manifest(runs / "20261002T090000Z-000002", newer)
-        # not complete, not clean, not on main: none is the baseline
-        a_manifest(runs / "20261003T090000Z-000003", newer, complete=False)
-        a_manifest(runs / "20261004T090000Z-000004", newer, dirty=True)
-        a_manifest(runs / "20261005T090000Z-000005", branch)
-        run = runs / "20261005T090000Z-000005"
-        assert rundiff.baseline_run(runs, run) == (
-            runs / "20261002T090000Z-000002"
-        )
-        # the run itself is never its baseline, even on main
-        assert rundiff.baseline_run(
-            runs, runs / "20261002T090000Z-000002"
-        ) == (runs / "20261001T090000Z-000001")
-        # a run on a branch is no baseline, however late
-        assert rundiff.baseline_run(
-            runs, runs / "20261004T090000Z-000004"
-        ) == (runs / "20261002T090000Z-000002")
+
+        def run(n: int) -> Path:
+            return runs / f"2026100{n}T090000Z-00000{n}"
+
+        a_manifest(run(1), older)
+        a_manifest(run(2), newer)
+        # not complete, not clean, not on main, taken past its barrier on
+        # code off main or not clean, or no commit at all: none of these
+        # is a baseline
+        a_manifest(run(3), newer, complete=False)
+        a_manifest(run(4), newer, dirty=True)
+        a_manifest(run(5), branch)
+        a_manifest(run(6), newer, past=(branch, False))
+        a_manifest(run(7), newer, past=(newer, True))
+        a_manifest(run(8), "--help")
+        # the latest on main, and the run diffed, on the branch
+        a_manifest(run(9), newer)
+        a_manifest(runs / "20261010T090000Z-000010", branch)
+        latest = runs / "20261010T090000Z-000010"
+        assert rundiff.baseline_run(runs, latest) == run(9)
+        assert rundiff.baseline_run(runs, run(9)) == run(2)
+        # a run named is diffed with the latest baseline older than it,
+        # never with itself or a newer one
+        assert rundiff.baseline_run(runs, run(2)) == run(1)
+        with pytest.raises(rundiff.DiffError, match="no completed run"):
+            rundiff.baseline_run(runs, run(1))
         # a ref git does not know is passed over for the next
         assert rundiff.baseline_run(
-            runs, run, refs=("origin/nowhere", "main")
-        ) == (runs / "20261002T090000Z-000002")
-        # the branch as main: its run is the latest on it
+            runs, latest, refs=("origin/nowhere", "main")
+        ) == run(9)
+        # the branch as main: a run taken past its barrier on clean code
+        # of it is a baseline on it
         assert rundiff.baseline_run(
-            runs, runs / "20261004T090000Z-000004", refs=("198-klurnau",)
-        ) == (runs / "20261005T090000Z-000005")
-        with pytest.raises(rundiff.DiffError, match="no completed run"):
-            rundiff.baseline_run(runs, run, refs=("origin/nowhere",))
+            runs, run(7), refs=("198-klurnau",)
+        ) == run(6)
+        with pytest.raises(rundiff.DiffError, match="git knows none"):
+            rundiff.baseline_run(runs, latest, refs=("origin/nowhere",))
+        # a commit that is no SHA-1 is never given to git
+        assert asked and not [a for a in asked if "--help" in a]
 
 
 # -- attributing a recompute --------------------------------------------------
@@ -632,14 +715,11 @@ def the_extract(year=1919, excerpt=None, label="Gustav Löbig", twice=False):
 
 
 def read(found):
+    """A batch's claims as the diff reads them: each print with its
+    excerpt (rundiff._excerpt)."""
     return [
-        (
-            p,
-            None
-            if c.source.transcription_excerpt is None
-            else c.source.transcription_excerpt.text,
-        )
-        for p, c in zip(claim_prints(BIRTH, found), found.claims, strict=True)
+        (found_print, rundiff._excerpt(found, index))
+        for index, found_print in enumerate(claim_prints(BIRTH, found))
     ]
 
 
@@ -660,6 +740,72 @@ class TestClaims:
         (removed,) = changes.removed
         assert removed.property == "father"
         assert changes.added == [] and changes.changed == []
+
+    def test_copies_on_both_sides_all_match(self):
+        twice = read(the_extract(twice=True))
+        changes = compare_claims(twice, twice)
+        assert changes.matched == 3
+        assert not (changes.added or changes.removed or changes.changed)
+
+    def test_a_claim_on_another_page_changed_its_locator(self):
+        one, other = the_extract(), the_extract()
+        other.claims[0].source.page_number = "2"
+        changes = compare_claims(read(one), read(other))
+        ((_, _, parts),) = changes.changed
+        assert parts == ("locator",)
+
+    def test_an_excerpt_compares_in_nfc_with_its_whitespace(self):
+        composed = unicodedata.normalize("NFC", "Gustav Löbig, geboren")
+        decomposed = unicodedata.normalize("NFD", composed)
+        assert composed != decomposed
+        changes = compare_claims(
+            read(the_extract(excerpt=composed)),
+            read(the_extract(excerpt=decomposed)),
+        )
+        assert changes.matched == 2 and changes.excerpts == 0
+        spaced = compare_claims(
+            read(the_extract(excerpt=composed)),
+            read(the_extract(excerpt=composed.replace(" ", "  "))),
+        )
+        assert spaced.excerpts == 1
+
+    def test_the_pairs_do_not_depend_on_the_claims_order(self):
+        """Gustav's date of birth: the baseline gives 1919 and 1920, each
+        no earlier than 1900; the run 1920 no earlier than 1901, and
+        1921 no earlier than 1900. Read in either order, the changed
+        claims are tallied alike."""
+
+        def dates(*given):
+            base = the_extract()
+            born = base.claims[0].model_dump(mode="json", exclude_none=True)
+            return batch(
+                [e.model_dump(mode="json") for e in base.entities],
+                [
+                    born
+                    | {
+                        "value": {"type": "time", "year": year},
+                        "qualifiers": [
+                            {
+                                "property": "earliest_date",
+                                "value": {"type": "time", "year": earliest},
+                            }
+                        ],
+                    }
+                    for year, earliest in given
+                ],
+            )
+
+        baseline = [(1919, 1900), (1920, 1900)]
+        run = [(1920, 1901), (1921, 1900)]
+        tallies = set()
+        for order in (1, -1):
+            changes = compare_claims(
+                read(dates(*baseline[::order])), read(dates(*run[::order]))
+            )
+            tallies.add(
+                tuple(sorted(parts for _, _, parts in changes.changed))
+            )
+        assert len(tallies) == 1
 
     def test_an_excerpt_is_a_detail_of_a_matched_claim(self):
         changes = compare_claims(
@@ -716,17 +862,6 @@ def test_names_the_manifest_lacks_are_other(tmp_path):
     """A property or an entity kind the model manifest does not hold is
     counted as other, so the aggregates never carry it."""
 
-    def a_document(name, found):
-        folder = tmp_path / name
-        folder.mkdir()
-        (folder / "batch.json").write_text(found.model_dump_json())
-        return _Document(
-            BIRTH,
-            "text",
-            stages={"extraction": {"status": "done"}},
-            directory=folder,
-        )
-
     later = the_extract()
     later.entities[1].kind = "klurnau_inmate"
     number = claim(
@@ -747,8 +882,8 @@ def test_names_the_manifest_lacks_are_other(tmp_path):
     )
     claims, mentions, detail = rundiff._compare_documents(
         (
-            {BIRTH: a_document("a", the_extract())},
-            {BIRTH: a_document("b", later)},
+            {BIRTH: a_document(tmp_path / "a", the_extract())},
+            {BIRTH: a_document(tmp_path / "b", later)},
         ),
         rundiff._Names.of({}, {}),
     )
@@ -762,6 +897,210 @@ def test_names_the_manifest_lacks_are_other(tmp_path):
     assert not [s for s in strings([claims, mentions]) if "lurnau" in s]
     # the detail keeps them
     assert "klurnau_number" in json.dumps(detail)
+
+
+def a_document(folder: Path, found, stage="extraction", status="done"):
+    """A document of a run, its batch view in `folder`."""
+    folder.mkdir()
+    (folder / "batch.json").write_text(found.model_dump_json())
+    return _Document(
+        BIRTH, "text", stages={stage: {"status": status}}, directory=folder
+    )
+
+
+class TestDocuments:
+    def test_a_batch_on_one_side_alone_counts_there(self, tmp_path):
+        names = rundiff._Names.of({}, {})
+        found = a_document(tmp_path / "a", the_extract())
+        claims, mentions, _ = rundiff._compare_documents(
+            ({}, {BIRTH: found}), names
+        )
+        assert claims["documents"]["run only"] == 1
+        assert (claims["added"], claims["run"]) == (2, 2)
+        assert mentions["added"] == 2
+        claims, _, _ = rundiff._compare_documents(({BIRTH: found}, {}), names)
+        assert claims["documents"]["baseline only"] == 1
+        assert claims["removed"] == 2
+
+    def test_a_gedcom_batch_is_read_and_an_unreadable_one_counted(
+        self, tmp_path
+    ):
+        names = rundiff._Names.of({}, {})
+        tree = a_document(tmp_path / "a", the_extract(), stage="gedcom")
+        claims, _, _ = rundiff._compare_documents(
+            ({BIRTH: tree}, {BIRTH: tree}), names
+        )
+        assert (claims["matched"], claims["documents"]["both"]) == (2, 1)
+        broken = a_document(tmp_path / "b", the_extract())
+        (broken.directory / "batch.json").write_text('{"claims": "Peiltal"}')
+        claims, _, _ = rundiff._compare_documents(
+            ({BIRTH: tree}, {BIRTH: broken}), names
+        )
+        assert claims["documents"]["unreadable"] == 1
+        assert claims["matched"] == claims["removed"] == 0
+
+    def test_a_view_counts_only_where_its_stage_completed(self, tmp_path):
+        done = a_document(tmp_path / "a", the_extract())
+        failed = a_document(tmp_path / "b", the_extract(), status="failed")
+        assert rundiff._view_hash(done, "extraction") is not None
+        assert rundiff._view_hash(failed, "extraction") is None
+        assert rundiff._batch(failed) is None
+        with pytest.raises(ValueError):
+            rundiff._batch(_Document(BIRTH, stages=done.stages))
+
+    def test_a_report_whose_stages_are_no_mapping_is_read(self, tmp_path):
+        found = rundiff._documents(
+            tmp_path,
+            {"documents": [{"sha1": BIRTH, "stages": ["extraction"]}]},
+        )
+        assert found[BIRTH].stages == {}
+
+
+def test_names_the_vocabulary_lacks_are_other_everywhere(tmp_path):
+    """Out-of-vocabulary names in every input the aggregates fold (a
+    stage, its status and reuse reason, a key component, a finding's
+    stage, a cluster's method and kind, a failing document's kind, a run
+    id) come out as other, and diff.md names none of them."""
+    names = rundiff._Names.of({}, {})
+    odd = "klurnau_inmate"
+    one, other = "a" * 40, "b" * 40
+    key_a, key_b = "1" * 64, "2" * 64
+    fake = {
+        key_a: {"prompt": "p", odd: "Klurnau"},
+        key_b: {"prompt": "p", odd: "Lager Klurnau"},
+    }
+    stages, _ = rundiff.compare_stages(
+        (
+            {one: _Document(one, odd, stages={odd: {"status": "Klurnau"}})},
+            {
+                one: _Document(
+                    one,
+                    odd,
+                    stages={
+                        odd: {"status": "done", "how": "Klurnau"},
+                        "critique": {"status": "done", "how": "computed"},
+                    },
+                )
+            },
+        ),
+        (
+            {(one, "critique"): [_Call("cache-hit", key_a, "key match")]},
+            {(one, "critique"): [_Call("cache-miss", key_b, "absent")]},
+        ),
+        fake.get,
+        names,
+    )
+    assert set(stages) == {"other", "critique"}
+    assert stages["other"]["baseline"] == {"other": 1}
+    assert stages["other"]["run"] == {"reused: other": 1}
+    assert stages["critique"]["calls_by"] == {"other": 1}
+    findings_of, _ = compare_findings(
+        set(), {(one, "Klurnau", "zero-claims")}, names
+    )
+    assert findings_of["new_by_stage"] == {"other": 1}
+    a_map = {
+        "hash": "x",
+        "mentions": {"m1": {"cluster": "c1", "method": "Klurnau"}},
+        "clusters": {"c1": {"kind": odd, "members": ["m1"]}},
+    }
+    split = {
+        "hash": "y",
+        "mentions": {
+            "m1": {"cluster": "c2", "method": "confident"},
+            "m2": {"cluster": "c3", "method": "confident"},
+        },
+        "clusters": {"c2": {"kind": odd, "members": ["m1"]}},
+    }
+    a_map["mentions"]["m2"] = {"cluster": "c1", "method": "Klurnau"}
+    a_map["clusters"]["c1"]["members"].append("m2")
+    clusters, _ = rundiff.compare_clusters(a_map, split, names)
+    assert clusters["splits_by_kind"] == {"other": 1}
+    assert clusters["methods_changed"] == {"other → confident": 2}
+    failures, _ = rundiff._compare_failures(
+        ({}, {other: _Document(other, odd, failed=True, reason="Klurnau")}),
+        ({}, {}),
+        names,
+    )
+    assert failures["new_by_kind"] == {"other": 1}
+    assert failures["new_by_label"] == {"other": 1}
+    assert failures["baseline"] == ABSENT
+    run = rundiff._run_record(tmp_path, {"run_id": "Klurnau-1836"}, "built")
+    assert run["run_id"] == "other"
+    aggregate = {
+        "generated_at": "2026-10-05T09:00:00+00:00",
+        "runs": {
+            "baseline": run,
+            "run": run,
+            "same_cache": None,
+            "components": "read",
+        },
+        "settings": {"shown": [], "other": 0},
+        "stages": stages,
+        "claims": {
+            "baseline": 0,
+            "run": 0,
+            "matched": 0,
+            "added": 0,
+            "removed": 0,
+            "changed": 0,
+            "excerpt_changed": 0,
+            "documents": {},
+            "changed_parts": {},
+            "by_property": {},
+        },
+        "mentions": {
+            "baseline": 0,
+            "run": 0,
+            "added": 0,
+            "removed": 0,
+            "added_by_kind": {},
+            "removed_by_kind": {},
+        },
+        "clusters": clusters,
+        "anomalies": findings_of,
+        "failures": failures,
+        "flags": {"status": NOT_AVAILABLE, "why": "none"},
+        "contradictions": {"status": NOT_AVAILABLE, "why": "none"},
+        "figures": [],
+    }
+    shown = strings(aggregate) + [rundiff.render_markdown(aggregate)]
+    assert not [text for text in shown if "lurnau" in text]
+
+
+def test_a_mention_without_a_cluster_is_left_out_of_merges_and_splits():
+    names = rundiff._Names.of({}, {})
+    baseline = {
+        "mentions": {
+            "m1": {"cluster": "c1"},
+            "m2": {"cluster": "c1"},
+            "m3": {"cluster": None, "method": "unclustered"},
+        },
+        "clusters": {"c1": {"kind": "human", "members": ["m1", "m2"]}},
+    }
+    run = {
+        "mentions": {
+            "m1": {"cluster": "c1"},
+            "m2": {"cluster": "c1"},
+            "m3": {"cluster": "c9"},
+        },
+        "clusters": {
+            "c1": {"kind": "human", "members": ["m1", "m2"]},
+            "c9": {"kind": "human", "members": ["m3"]},
+        },
+    }
+    found, _ = rundiff.compare_clusters(baseline, run, names)
+    assert (found["merges"], found["splits"]) == (0, 0)
+    assert found["clusters"]["unchanged"] == 1
+    assert found["mentions"]["both"] == 3
+
+
+def test_the_cache_view_gives_entries_moved_aside(tmp_path):
+    cache = tmp_path / "cache"
+    key = an_entry(cache, components(), aside=True)
+    (cache / key[:2] / f"{key}.replaced-x.json").write_text("Peiltal")
+    (asided,) = llm.read_cache(cache).asides(key)
+    assert asided["components"] == components()
+    assert llm.read_cache(cache).asides("f" * 64) == []
 
 
 # -- anomalies, failures, flags -----------------------------------------------
@@ -887,37 +1226,79 @@ class TestAnomalies:
 
 
 def test_settings_show_only_what_may_be_posted():
+    """Only the settings SHOWN_SETTINGS names are shown, each value as
+    its kind may be: hashes that look like model ids, a region-tagged
+    language and free text with a digit never are."""
+    diff_hash = hashlib.sha256(b"2").hexdigest()
+    config_hash = "c0ffee12" + "ab34" * 14
+    for looks_like_a_model in (diff_hash, config_hash, "es-419"):
+        assert report._MODEL.fullmatch(looks_like_a_model)
     baseline = {
         "engine": {"name": "claude-code", "cli_version": "2.1.288"},
-        "roles": {"extract": {"model": "claude-opus-5-5", "effort": "low"}},
-        "code": {"commit": "a" * 40, "diff_sha256": None},
-        "config": {"language": "de", "chunk_concurrency": 2},
+        "roles": {
+            "extract": {
+                "model": "claude-opus-5-5",
+                "effort": "low",
+                "epoch": 0,
+                "client": {"config_hash": None},
+            }
+        },
+        "code": {"commit": "a" * 40, "diff_sha256": None, "dirty": False},
+        "config": {
+            "language": "de",
+            "chunk_concurrency": 2,
+            "epochs": {"extract": 0},
+        },
         "corpus": {"folder": "/archive/Flörburg"},
     }
     run = {
-        "engine": {"name": "claude-code", "cli_version": "2.1.290"},
-        "roles": {"extract": {"model": "claude-sonnet-5-5", "effort": "low"}},
-        "code": {"commit": "b" * 40, "diff_sha256": "d" * 64},
-        "config": {"language": "ru", "chunk_concurrency": 2},
+        "engine": {"name": "claude-code", "cli_version": "brief-1836"},
+        "roles": {
+            "extract": {
+                "model": "claude-sonnet-5-5",
+                "effort": "Löbig",
+                "epoch": True,
+                "client": {"config_hash": config_hash},
+            }
+        },
+        "code": {"commit": "b" * 40, "diff_sha256": diff_hash, "dirty": True},
+        "config": {
+            "language": "es-419",
+            "note": "brief-1836-loebig",
+            "chunk_concurrency": 2,
+            "epochs": {"extract": 1},
+            "refresh": ["extract", "brief-1836-loebig"],
+        },
         "corpus": {"folder": "/archive/Peiltal"},
+        "klurnau_1836": {"a1b2": "brief-1836-loebig"},
     }
-    rows = {r["setting"]: r for r in rundiff.settings(baseline, run)}
-    assert set(rows) == {
-        "engine.cli_version",
-        "roles.extract.model",
-        "code.commit",
-        "code.diff_sha256",
-        "config.language",
+    found = rundiff.settings(baseline, run)
+    rows = {r["setting"]: (r["baseline"], r["run"]) for r in found["shown"]}
+    assert rows == {
+        "code.commit": ("a" * 12, "b" * 12),
+        "code.dirty": (False, True),
+        "config.epochs.extract": (0, 1),
+        # the 12 hex digits report.md shows
+        "roles.extract.client.config_hash": (None, "c0ffee12ab34"),
+        "roles.extract.model": ("claude-opus-5-5", "claude-sonnet-5-5"),
+        "engine.cli_version": ("2.1.288", "other"),
+        "roles.extract.effort": ("low", "other"),
+        "roles.extract.epoch": (0, "other"),
     }
-    assert rows["roles.extract.model"]["run"] == "claude-sonnet-5-5"
-    assert rows["engine.cli_version"]["run"] == "2.1.290"
-    # a language, and the hash of the code's difference, are never shown
-    assert rows["config.language"] == {
-        "setting": "config.language",
-        "baseline": "other",
-        "run": "other",
-    }
-    assert rows["code.diff_sha256"]["run"] == "other"
+    # the code's difference, the language, the note and the refresh are
+    # counted, never shown; the corpus and an unknown section are not
+    # settings
+    assert found["other"] == 4
+    shown = json.dumps(found)
+    for hidden in (
+        diff_hash,
+        config_hash,
+        "es-419",
+        "1836",
+        "Löbig",
+        "lurnau",
+    ):
+        assert hidden not in shown
 
 
 # -- the command --------------------------------------------------------------
@@ -945,11 +1326,12 @@ class TestCommand:
     ):
         first, second = two_runs(tmp_path, engine, monkeypatch)
         runs = str(runs_dir(tmp_path))
-        monkeypatch.setattr(rundiff, "on_main", lambda run, refs: run == first)
+        monkeypatch.setattr(rundiff, "main_ref", lambda refs: "main")
+        monkeypatch.setattr(rundiff, "on_main", lambda run, ref: run == first)
         assert cli_run("scratch", "diff", "--runs", runs) == 0
         assert (second / rundiff.DIFF_DIR / first.name / "diff.md").is_file()
         assert cli_run("scratch", "diff", second.name, "--runs", runs) == 0
-        monkeypatch.setattr(rundiff, "on_main", lambda run, refs: False)
+        monkeypatch.setattr(rundiff, "on_main", lambda run, ref: False)
         with pytest.raises(SystemExit, match="no completed run on main"):
             cli_run("scratch", "diff", "--runs", runs)
 
