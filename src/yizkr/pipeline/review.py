@@ -13,6 +13,15 @@ and fill:
   the artifact reference but no extraction-run reference (ADR-0003 —
   process provenance is for machine writes).
 
+The locators are the cited page (`page`, the physical page), the number
+printed on that page where the transcription record gives one
+(`printed_page`, empty otherwise; ADR-0037), the image region and the
+excerpt. They are shown for checking and never read back: `apply_review`
+matches rows by `claim_id`, reads only their `decision` and `correction`,
+and takes each claim's source from the batch. An edited `page` or
+`printed_page` cell is ignored, and the approved claim keeps the page and
+printed page number its batch gives.
+
 The `critique_notes` column carries the extraction critic's concerns
 (ADR-0013) — flagged mistypes, misapplied properties, role-aliases — so
 the curator sees them at this gate. Each finding is on exactly one row:
@@ -97,6 +106,7 @@ from yizkr.claims import (
     TimeValue,
     VocabRef,
 )
+from yizkr.core.dates import UnsupportedDate, year_problem
 
 # `bulk-accept` is an approval that also records HOW it was accepted (a
 # whole-sheet accept-all, ADR-0023), so the write path can mark those edits
@@ -121,6 +131,7 @@ CSV_COLUMNS = [
     "qualifiers",
     "source_artifact",
     "page",
+    "printed_page",
     "region",
     "excerpt",
     "confidence",
@@ -130,7 +141,9 @@ CSV_COLUMNS = [
     "notes",
 ]
 
-_CORRECTION_DATE = re.compile(r"^(\d{1,4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?$")
+# a leading minus is read, so that a year before the common era is refused
+# as unsupported rather than as a malformed date
+_CORRECTION_DATE = re.compile(r"^(-?\d{1,4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?$")
 
 
 def claim_id(claim: Claim) -> str:
@@ -257,8 +270,9 @@ def _describe_ref(ref) -> str:
 
 def describe_value(value) -> str:
     """A value as a review row shows it: an item by its reference, a date
-    as `YYYY[-MM[-DD]]` with its precision and calendar when they are not
-    the plain ones, a text by its text and language."""
+    as `YYYY[-MM[-DD]]` with its precision when it is not the plain one, a
+    text by its text and language. Every date is Gregorian and of 1 CE or
+    later (ADR-0034)."""
     if isinstance(value, ItemValue):
         return _describe_ref(value.value)
     if isinstance(value, TimeValue):
@@ -273,8 +287,7 @@ def describe_value(value) -> str:
             if value.precision in ("year", "month", "day")
             else f" ({value.precision})"
         )
-        calendar = "" if value.calendar == "gregorian" else " [julian]"
-        return f"{text}{suffix}{calendar}"
+        return f"{text}{suffix}"
     if isinstance(value, MonolingualValue):
         return f"{value.value.text} [{value.value.language}]"
     if isinstance(value, QuantityValue):
@@ -315,6 +328,7 @@ def export_review_csv(
                     ),
                     "source_artifact": _describe_ref(claim.source.artifact),
                     "page": claim.source.page_number or "",
+                    "printed_page": claim.source.printed_page_number or "",
                     "region": claim.source.region.as_wikibase_string()
                     if claim.source.region
                     else "",
@@ -340,11 +354,14 @@ def _parse_correction(claim: Claim, text: str) -> Claim:
     """A curator's replacement value -> corrected, curator-attributed claim.
 
     Supported: time values in unambiguous ISO forms (`1919`, `1919-01`,
-    `1919-01-07`), plain text for string / external-id / monolingual
-    values, and plain numbers for quantity values. Item corrections are
-    not expressible as text — reject the
-    claim and fix identity through the equivalence flow instead.
-    Raises ValueError with a reviewer-readable message otherwise.
+    `1919-01-07`), Gregorian and of 1 CE or later, plain text for
+    string / external-id / monolingual values, and plain numbers for
+    quantity values. Item corrections are not expressible as text —
+    reject the claim and fix identity through the equivalence flow
+    instead.
+    Raises ValueError with a reviewer-readable message otherwise, and
+    UnsupportedDate (a ValueError) for a year before the common era
+    (ADR-0034).
     """
     value = claim.value
     if isinstance(value, TimeValue):
@@ -357,6 +374,9 @@ def _parse_correction(claim: Claim, text: str) -> Claim:
         year, month, day = (
             int(part) if part is not None else None for part in match.groups()
         )
+        problem = year_problem(year)
+        if problem is not None:
+            raise UnsupportedDate(f"correction {text!r}: {problem}")
         corrected = TimeValue(year=year, month=month, day=day)
     elif isinstance(value, StringValue):
         corrected = value.model_copy(update={"value": text})

@@ -34,6 +34,12 @@ PR. Rules:
   new property instead.
 - Map to a Wikidata equivalent (`wikidata:` field) only when the
   semantics genuinely match; verify the id against wikidata.org.
+- A class is marked: an item in the subclass hierarchy (one with
+  `subclass_of`, or another's superclass) is `entity_kind: true` or
+  `entity_class: true`, or the manifest does not load. Mark any other
+  class of entities `entity_class` too (a time period, an infrastructure
+  class): validation reads the mark to refuse the class named as a value
+  (docs/MODELING.md, "The relation decides the kind").
 
 ## Tests
 

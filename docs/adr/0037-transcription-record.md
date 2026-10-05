@@ -14,6 +14,12 @@ a claim keeps the physical page as its `page number` and gains the
 printed one, from the record and never guessed, as a `printed page
 number` in its source block (§2, "Page numbers for extraction").
 
+Amended by #449 (2026-10-05): the claims review sheet shows a claim's
+printed page number in a `printed_page` column beside `page`, empty
+where its source has none. The sheet's locators are never read back, so
+a curator's edit to the column is ignored and the value stays the
+record's.
+
 ## Context
 
 The vision transcriber answered one block of text per document, and code

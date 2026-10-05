@@ -8,13 +8,14 @@ to the value Wikibase stores and the one the query service serves, and on
 to what the site shows and the span the report compares. It also pins the
 rule the extraction prompts carry, and the refusal of a century given in
 another count. tests/integration/test_live_century_dates.py checks the
-same on the running stack, Wikibase's own display included.
+same on the running stack, Wikibase's own display included. A date before
+the common era is unsupported (ADR-0034, #338), and
+test_unsupported_dates.py pins its refusal.
 
 Two helpers stand in for Wikibase here, each after its source:
-MwTimeIsoFormatter names the century of a stored year ceil(|year| / 100),
+MwTimeIsoFormatter names the century of a stored year ceil(year / 100),
 and DateTimeValueCleaner serves a date of year precision or coarser as 1
-January of its year, moving a year before the common era one on, into
-XSD 1.1's count where 1 BCE is year 0, only at year precision or finer.
+January of its year.
 """
 
 from __future__ import annotations
@@ -40,7 +41,7 @@ from yizkr.pipeline.extract import (
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.staticsite import format_time
 
-CENTURY, YEAR = 7, 9
+CENTURY = 7
 
 
 def birth(value: dict) -> dict:
@@ -72,26 +73,20 @@ def written(value: dict) -> dict:
 
 
 def stored_year(stored: dict) -> int:
-    sign, digits = stored["time"][0], stored["time"][1:].split("-")[0]
-    return -int(digits) if sign == "-" else int(digits)
+    return int(stored["time"].lstrip("+").split("-")[0])
 
 
 def wikibase_shows(stored: dict) -> str:
     """What Wikibase's English formatter shows for a stored
-    century-precision time: the century ceil(|year| / 100)."""
+    century-precision time: the century ceil(year / 100)."""
     assert stored["precision"] == CENTURY
-    year = stored_year(stored)
-    shown = f"{math.ceil(abs(year) / 100)}. century"
-    return f"{shown} BCE" if year < 0 else shown
+    return f"{math.ceil(stored_year(stored) / 100)}. century"
 
 
 def served(stored: dict) -> str:
     """The xsd:dateTime the query service gives for a stored time of year
     precision or coarser."""
-    year = stored_year(stored)
-    if stored["precision"] >= YEAR and year < 0:
-        year += 1
-    return f"{'-' if year < 0 else ''}{abs(year):04d}-01-01T00:00:00Z"
+    return f"{stored_year(stored):04d}-01-01T00:00:00Z"
 
 
 class TestTheRoundTrip:
@@ -107,18 +102,8 @@ class TestTheRoundTrip:
                 "19th century",
                 (1801, 1900),
             ),
-            # a negative year counts back from 1 BCE: the 18th century BCE
-            # is 1800 to 1701 BCE, and the report's span is in XSD 1.1's
-            # count, in which a year before the common era is served
-            (
-                -1800,
-                "-1800-00-00T00:00:00Z",
-                "18. century BCE",
-                "−18th century",
-                (-1799, -1700),
-            ),
         ],
-        ids=["19th century", "18th century BCE"],
+        ids=["19th century"],
     )
     def test_a_century_reads_alike_everywhere(
         self, year, stored, wiki, site, years
