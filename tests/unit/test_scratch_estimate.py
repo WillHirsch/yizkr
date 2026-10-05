@@ -1826,8 +1826,8 @@ class TestReport:
         ) in text
         assert "- Not counted:" in text
         assert (
-            "the preflight's one trivial call per model the roles name, "
-            "which every invocation makes"
+            "the preflight's one trivial call per (model, effort) pair the "
+            "invocation's roles run, which every invocation makes"
         ) in text
 
     def test_holders_failures_and_what_the_preflight_would_refuse(

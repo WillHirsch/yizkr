@@ -205,6 +205,7 @@ _EXCEPTION_ENDINGS = (
     "Rejected",
     "Conflict",
     "Mismatch",
+    "Unsupported",
     "Paused",
     "Stopped",
     "Reached",
@@ -605,12 +606,19 @@ class SliceState:
 
 @dataclass
 class CallPause:
-    """The latest invocation's pause for the subscription, as the engine's
-    call event gives it."""
+    """The latest invocation's pause of the pass, as the engine's call
+    event gives it: for the subscription when the event says what held it
+    (`held`) or names a usage window, else the pause's name (`error`), as
+    for a model the CLI does not support, with no time to go on."""
 
     held: str
     window: str | None
     resumes_at: datetime | None
+    error: str | None = None
+
+    @property
+    def subscription(self) -> bool:
+        return self.held != "?" or self.window is not None
 
 
 @dataclass
@@ -1168,6 +1176,9 @@ class RunMonitor:
                 if event.get("window")
                 else None,
                 resumes_at=_time(event.get("resumes_at")),
+                error=failure_label(error)
+                if isinstance(error, str) and error
+                else None,
             )
             self._pause_invocation = invocation
         attempt, _stage = self._in_flight(event)
@@ -1872,10 +1883,15 @@ def _call_rows(summary: Summary, detail: bool) -> list[tuple[str, str]]:
             rows.append(("  limits   " + " | ".join(waits), ""))
     if calls.pause is not None:
         pause = calls.pause
-        line = f"  paused   for the subscription ({pause.held}"
-        line += f", {pause.window} window)" if pause.window else ")"
+        if pause.subscription:
+            line = f"  paused   for the subscription ({pause.held}"
+            line += f", {pause.window} window)" if pause.window else ")"
+        else:
+            line = f"  paused   {pause.error or '?'}"
         if pause.resumes_at is not None:
             line += f"; it can go on from {_stamp(pause.resumes_at)}"
+        elif not pause.subscription:
+            line += "; no time to go on"
         rows.append((line, "warn"))
     return rows
 

@@ -470,7 +470,12 @@ class TestUnsupportedModel:
         assert "version 2.1.280 or newer is required" in reason
         assert "\n" not in reason and len(reason) == 300
 
-    def test_the_words_alone_on_an_assistant_event_count(self):
+    @pytest.mark.parametrize(
+        "marks",
+        [{"is_api_error_message": True}, {"error": "invalid_request"}],
+        ids=["marked an API error", "with an error class"],
+    )
+    def test_the_words_alone_on_the_api_error_event_count(self, marks):
         events = [
             INIT,
             {
@@ -478,10 +483,67 @@ class TestUnsupportedModel:
                 "message": {
                     "content": [{"type": "text", "text": UNSUPPORTED["text"]}]
                 },
+                **marks,
             },
             {"type": "result", "is_error": True, "api_error_status": 400},
         ]
         assert "or newer is required" in unsupported_model(events, 1)
+
+    def test_the_models_own_text_is_never_read(self):
+        """The model's own text may quote anything, a notice saying what
+        version is required among them: a later, unrelated 400 is still
+        not a refusal of the model."""
+        events = [
+            INIT,
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "The Flörburg register notes: version "
+                            "1.9.21 or later is required. Claude Code does "
+                            "not support it.",
+                        }
+                    ]
+                },
+            },
+            *refused_events(BAD_REQUEST, "s1"),
+        ]
+        assert unsupported_model(events, 1) is None
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "claude-opus-5-5: version 2.1.280 or newer is required.",
+            "Claude Code 2.1.237 does not support claude-opus-5-5.",
+            "The installed CLI requires a newer release for this model.",
+            "This model REQUIRES A NEWER VERSION OF CLAUDE CODE.",
+        ],
+        ids=["the version required", "the CLI does not support", "the CLI "
+             "requires a newer", "a newer CLI required, in mixed case"],
+    )  # fmt: skip
+    def test_each_wording_tied_to_the_cli_is_one(self, text):
+        step = {**UNSUPPORTED, "text": f"API Error: 400 {text}"}
+        assert unsupported_model([INIT, *refused_events(step, "s1")], 1)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "The web_search tool does not support the model claude-sonnet-5",
+            "PDF support requires a newer version",
+            "anthropic-version 2023-06-01 or later is required for this "
+            "feature",
+            "Model is not supported by this version of the API",
+            "an image is required",
+        ],
+        ids=["a tool", "a feature", "the API's version", "the API", "other"],
+    )
+    def test_a_400_about_anything_but_the_cli_is_not_one(self, text):
+        step = {**UNSUPPORTED, "text": f"API Error: 400 {text}"}
+        assert (
+            unsupported_model([INIT, *refused_events(step, "s1")], 1) is None
+        )
 
     @pytest.mark.parametrize(
         "step",

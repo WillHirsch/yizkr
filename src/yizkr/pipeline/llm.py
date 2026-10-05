@@ -389,7 +389,8 @@ class ModelUnsupported(PassPaused):
     that model can succeed on this CLI, so no document fails for it. The
     pass is paused instead, with no time to go on (`resumes_at` is None):
     the operator installs a CLI that runs the model, or configures one the
-    CLI runs, and runs the pass again. `model` names the model and
+    CLI runs, and runs the pass again (for a scratch run, a new one, since
+    either changes the settings it recorded). `model` names the model and
     `reason` gives the CLI's own words; a pause latched by an earlier
     call (_CliPin) gives its message alone."""
 
@@ -1584,15 +1585,16 @@ def refusal(
 
 # The API status of a request the API refuses as invalid, and the words
 # with which it says, in such a refusal, that the claude CLI does not
-# support the model the request names (a model newer than the CLI, which
-# names the CLI version it requires). Another 400 is an error of the call
-# like any other.
+# support the model the request names: each alternative names the CLI
+# version the model requires, or the CLI itself, so that a 400 about a
+# feature, a tool or the API's own version is never read as one. Another
+# 400 is an error of the call like any other.
 BAD_REQUEST = 400
 _UNSUPPORTED_MODEL = re.compile(
-    r"or (?:newer|later) is required"
-    r"|requires? (?:a )?newer (?:version|claude code|cli)"
-    r"|(?:does not|doesn't) support (?:the |this )?model"
-    r"|model is not supported (?:by|on|in) this (?:version|cli)",
+    r"\bversion \d+(?:\.\d+)+ or (?:newer|later) is required"
+    r"|\b(?:claude code|cli)\b.*\b(?:requires? (?:a )?newer"
+    r"|(?:does not|doesn't) support)"
+    r"|\brequires? (?:a )?newer (?:version of )?(?:claude code|cli)\b",
     re.IGNORECASE,
 )
 
@@ -1606,8 +1608,10 @@ def unsupported_model(
     call that ended with an explicit non-error result was not refused
     (as for `refusal`); one that was carries api_error_status 400 on its
     result event, and the words _UNSUPPORTED_MODEL matches in its result
-    or in an assistant event's text. The account is one line, of at most
-    300 characters."""
+    or in the text of an assistant event that stands for the API error
+    (one with an `error` or marked is_api_error_message), never in the
+    model's own text, which may quote anything. The account is one line,
+    of at most 300 characters."""
     result = _last_event(events, "result")
     if returncode == 0 and result.get("is_error") is False:
         return None
@@ -1616,7 +1620,14 @@ def unsupported_model(
     texts = [result.get("result")]
     for event in events:
         message = event.get("message")
-        if event.get("type") == "assistant" and isinstance(message, dict):
+        if (
+            event.get("type") == "assistant"
+            and isinstance(message, dict)
+            and (
+                isinstance(event.get("error"), str)
+                or event.get("is_api_error_message") is True
+            )
+        ):
             content = message.get("content")
             texts += [
                 block.get("text")
@@ -2671,7 +2682,9 @@ class ClaudeCodeClient:
                         "further calls; its completed outputs are kept. "
                         "Install a claude CLI that runs the model, or "
                         "configure a model this one runs, then run the pass "
-                        "again.",
+                        "again: for a scratch run, a new run (`yizkr "
+                        "scratch run --new`), since either changes the "
+                        "settings the run recorded.",
                         model=self.model,
                         reason=unsupported,
                     )

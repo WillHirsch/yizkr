@@ -1054,7 +1054,10 @@ class TestCallEvents:
         assert calls.holds == {"rate limit": 1, "usage limit": 1}
         assert calls.errors == {"UsageLimitReached": 1}
         assert calls.pause == monitor.CallPause(
-            "usage limit", "five_hour", datetime(2026, 9, 27, 14, tzinfo=UTC)
+            "usage limit",
+            "five_hour",
+            datetime(2026, 9, 27, 14, tzinfo=UTC),
+            "UsageLimitReached",
         )
         # the cache's events still say what reached the engine
         assert calls.to_engine == 7
@@ -1071,6 +1074,34 @@ class TestCallEvents:
             "paused   for the subscription (usage limit, five_hour window); "
             "it can go on from 2026-09-27 14:00 UTC" in view
         )
+
+    @staticmethod
+    def paused(**fields) -> list:
+        """The call events of CALLS, the pause's fields replaced."""
+        pause = {
+            k: v
+            for k, v in TestCallEvents.CALLS[1][1].items()
+            if k not in ("held", "error", "window", "resumes_at")
+        }
+        return [TestCallEvents.CALLS[0], ("events.jsonl", pause | fields)]
+
+    def test_a_pause_of_a_model_the_cli_does_not_support(self, run):
+        """A pause that names no hold or window is not the subscription's
+        (#455): it is shown by its name, with no time to go on."""
+        append(run, self.paused(error="ModelUnsupported"))
+        view = render_terminal(summarise_run(run, NOW), width=200)
+        assert "paused   ModelUnsupported; no time to go on" in view
+        assert "paused   for the subscription" not in view
+
+    def test_a_subscription_pause_with_no_time_says_none(self, run):
+        """Usage credits: the subscription's pause, with no time to go
+        on (#455)."""
+        append(
+            run, self.paused(held="usage credits", error="UsageLimitReached")
+        )
+        view = render_terminal(summarise_run(run, NOW), width=200)
+        assert "paused   for the subscription (usage credits)" in view
+        assert "it can go on" not in view and "no time to go on" not in view
 
     def test_a_pause_of_an_earlier_invocation_is_not_shown(self, run):
         append(run, self.CALLS)

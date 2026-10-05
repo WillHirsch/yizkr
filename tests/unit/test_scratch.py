@@ -19,6 +19,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -161,8 +162,9 @@ def small(tmp_path: Path) -> Corpus:
 class Fakes:
     """The fake engine's corpus, its log of calls, as (what, file), and a
     hook that sees each call before it is answered; and apart from them,
-    the preflight's calls, as (model, effort), and a hook that sees each
-    of those, with the model, before it is answered."""
+    the preflight's calls, as (model, effort), a hook that sees each of
+    those, with the model, before it is answered, and how many of the
+    preflight's clients were closed."""
 
     def __init__(self) -> None:
         self.corpus: Corpus | None = None
@@ -170,6 +172,8 @@ class Fakes:
         self.hook = None
         self.preflights: list[tuple[str | None, str | None]] = []
         self.preflight = None
+        # how many of the preflight's clients were closed
+        self.preflight_closes = 0
 
 
 class Engine:
@@ -189,9 +193,15 @@ class Engine:
         self.cli_version = CLI
         self.config_hash = f"fake-{self.model}-{effort}"
         self.model_identifier = f"claude-code/{CLI}:{self.model}"
+        self.preflighted = False
+
+    def close(self) -> None:
+        if self.preflighted:
+            self.fakes.preflight_closes += 1
 
     def complete(self, prompt, image_paths=()):
         if prompt == scratch.PREFLIGHT_PROMPT and not image_paths:
+            self.preflighted = True
             self.fakes.preflights.append((self.model, self.effort))
             if self.fakes.preflight is not None:
                 self.fakes.preflight(self.model)
@@ -1911,13 +1921,12 @@ class TestPreflight:
 
 
 class TestPreflightCalls:
-    """The preflight's one trivial call per distinct model the roles name
-    (#455), made through the engine as the run calls it, after every other
-    check and before any document is dispatched or anything written."""
+    """The preflight's one trivial call per distinct (model, effort) pair
+    the roles this invocation calls run (#455), made through the engine as
+    the run calls it, after every other check and the settings check, and
+    before any document is dispatched or anything written."""
 
-    def test_one_call_per_distinct_model_before_any_document(
-        self, tmp_path, fakes
-    ):
+    def test_one_call_per_pair_before_any_document(self, tmp_path, fakes):
         seen: list[int] = []
         fakes.hook = lambda what, name: seen.append(len(fakes.preflights))
         driver = a_run(
@@ -1925,36 +1934,133 @@ class TestPreflightCalls:
             small(tmp_path),
             fakes,
             extract_model="claude-sonnet-5",
-            review_effort="max",
             until="critique",
         )
         assert driver.run() == EXIT_OK
-        # transcribe and critique share the model: one call for both, as
-        # the first role naming it (transcribe) calls it
+        # transcribe and critique share the model, at other efforts
         assert fakes.preflights == [
-            (MODEL, driver.extract_effort),
-            ("claude-sonnet-5", driver.extract_effort),
+            (MODEL, "low"),
+            ("claude-sonnet-5", "low"),
+            (MODEL, "high"),
         ]
-        assert seen and set(seen) == {2}
+        assert seen and set(seen) == {3}
+        # each client closed once its call is made
+        assert fakes.preflight_closes == 3
         # no event of the run's: each call event is a document's call
         calls = events(driver.state_dir, llm.ENGINE_CALL)
         assert len(calls) == len(fakes.calls)
         assert all(event.get("subject") for event in calls)
 
-    def test_every_invocation_makes_them(self, tmp_path, fakes):
+    def test_roles_that_share_a_pair_share_a_call(self, tmp_path, fakes):
+        driver = a_run(tmp_path, small(tmp_path), fakes, review_effort="low")
+        assert driver.run() == EXIT_OK
+        assert fakes.preflights == [(MODEL, "low")]
+
+    def test_only_the_roles_within_until(self, tmp_path, fakes):
+        """A model only a stage past --until runs is not called, so a CLI
+        that cannot run it does not refuse the run."""
+
+        def preflight(model):
+            if model == "claude-sonnet-5":
+                raise llm.ModelUnsupported("paused", model=model, reason="x")
+
+        fakes.preflight = preflight
+        corpus = small(tmp_path)
+        options = {
+            "until": "transcription",
+            "extract_model": "claude-sonnet-5",
+        }
+        assert command(tmp_path, corpus, fakes, **options) == 0
+        assert command(tmp_path, corpus, fakes, **options) == 0
+        # every invocation makes them
+        assert fakes.preflights == [(MODEL, "low")] * 2
+
+    @pytest.mark.parametrize("calls_engine", [False, True])
+    def test_past_the_barrier_only_the_corpus_stages_count(
+        self, tmp_path, fakes, monkeypatch, calls_engine
+    ):
+        corpus = small(tmp_path)
+        assert command(tmp_path, corpus, fakes) == EXIT_OK
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        other = dict(RunDir(run).manifest()["code"], commit="f" * 40)
+        monkeypatch.setattr(scratch, "code_version", lambda: dict(other))
+        stages = [
+            CorpusStage("clustering", Recorder(), calls_engine=calls_engine)
+        ]
+        fakes.preflights.clear()
+        resumed = command(
+            tmp_path, corpus, fakes, resume=run.name, corpus_stages=stages
+        )
+        assert resumed == EXIT_OK
+        assert RunDir(run).manifest()["scratch"]["past_barrier_only"] is True
+        # a corpus stage that may call the engine names no role: every
+        # role's pair is tried
+        expected = [(MODEL, "low"), (MODEL, "high")] if calls_engine else []
+        assert fakes.preflights == expected
+
+    def test_other_settings_are_refused_before_any_call(self, tmp_path, fakes):
         corpus = small(tmp_path)
         assert command(tmp_path, corpus, fakes, until="transcription") == 0
-        assert command(tmp_path, corpus, fakes, until="transcription") == 0
-        assert len(fakes.preflights) == 2
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        before = (run / "run.json").read_bytes()
+        fakes.preflights.clear()
+        with pytest.raises(RunSettingsConflict, match="review_effort"):
+            command(tmp_path, corpus, fakes, review_effort="max")
+        assert fakes.preflights == []
+        assert (run / "run.json").read_bytes() == before
 
-    def test_no_call_while_another_check_fails(
+    def test_another_cli_is_refused_before_its_call(
         self, tmp_path, fakes, monkeypatch
     ):
-        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "nowhere"))
-        driver = a_run(tmp_path, small(tmp_path), fakes)
-        with pytest.raises(PreflightFailed, match="no login"):
+        corpus = small(tmp_path)
+        assert command(tmp_path, corpus, fakes, until="transcription") == 0
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        before = (run / "run.json").read_bytes()
+        fakes.preflights.clear()
+        monkeypatch.setattr(sys.modules[__name__], "CLI", "9.9.10")
+        with pytest.raises(RunSettingsConflict, match="cli_version"):
+            command(tmp_path, corpus, fakes, until="transcription")
+        assert fakes.preflights == []
+        assert (run / "run.json").read_bytes() == before
+
+    @pytest.mark.parametrize("refusal", ["login", "renderer", "stack", "disk"])
+    def test_no_call_while_another_check_fails(
+        self, tmp_path, fakes, monkeypatch, refusal
+    ):
+        from yizkr.pipeline import transcribe
+
+        corpus = small(tmp_path)
+        options: dict = {}
+        if refusal == "login":
+            config = tmp_path / "nowhere"
+            monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+            match = "no login"
+        elif refusal == "renderer":
+            (corpus.folder / "e-card-1945.pdf").write_bytes(b"%PDF-1.4")
+            monkeypatch.setattr(transcribe.shutil, "which", lambda tool: None)
+            match = "poppler"
+        elif refusal == "stack":
+            monkeypatch.setattr(
+                scratch, "stack_unreachable", lambda env: "refused"
+            )
+            options["corpus_stages"] = [
+                CorpusStage("write", Recorder(), touches_wiki=True)
+            ]
+            options["kept_state"] = lambda env: False
+            match = "cannot be reached"
+        else:
+
+            def disk_usage(path):
+                return shutil._ntuple_diskusage(100, 99, 1)
+
+            monkeypatch.setattr(scratch.shutil, "disk_usage", disk_usage)
+            options["min_free"] = 1024**3
+            match = "GiB free"
+        driver = a_run(tmp_path, corpus, fakes, **options)
+        with pytest.raises(PreflightFailed, match=match):
             driver.run()
         assert fakes.preflights == []
+        assert not driver.state_dir.exists()
 
     def test_a_model_the_cli_does_not_support_refuses_the_run(
         self, tmp_path, fakes
@@ -1974,12 +2080,16 @@ class TestPreflightCalls:
         with pytest.raises(PreflightFailed) as refused:
             driver.run()
         problems = refused.value.problems
-        assert problems[0] == (
-            f"the engine cannot run {MODEL} (transcribe): {reason}"
-        )
-        # the pause holds every later call of the process
-        assert "not tried" in problems[1] and "claude-sonnet-5" in problems[1]
+        assert problems == [
+            f"the engine cannot run {MODEL} (transcribe, effort low): "
+            f"{reason}",
+            # the pause holds every later call of the process
+            "not tried, since that pause holds every later call: "
+            f"claude-sonnet-5 (extract), {MODEL} (critique)",
+        ]
         assert len(fakes.preflights) == 1
+        # the client that met it is closed all the same
+        assert fakes.preflight_closes == 1
         assert fakes.calls == []
         assert not driver.state_dir.exists()
 
@@ -1994,17 +2104,21 @@ class TestPreflightCalls:
         driver = a_run(tmp_path, small(tmp_path), fakes)
         with pytest.raises(PreflightFailed) as refused:
             driver.run()
-        (problem,) = refused.value.problems
-        assert problem.startswith(
-            f"a trivial call to {MODEL} (transcribe) failed: RuntimeError: "
+        first, second = refused.value.problems
+        assert first.startswith(
+            f"a trivial call to {MODEL} (transcribe, effort low) failed: "
+            "RuntimeError: "
         )
-        assert "API Error: 500" in problem
+        assert "API Error: 500" in first
+        assert second.startswith(f"a trivial call to {MODEL} (critique, ")
+        assert fakes.preflight_closes == 2
         assert fakes.calls == []
         assert not driver.state_dir.exists()
 
     def test_a_limit_is_the_engines_and_waited_out(self, tmp_path, fakes):
         waits = Waits(None, None)
         limited: list[int] = []
+        lines: list[str] = []
 
         def preflight(model):
             if not limited:
@@ -2012,26 +2126,65 @@ class TestPreflightCalls:
                 raise usage_limit(waits, minutes=1)
 
         fakes.preflight = preflight
-        driver = a_run(tmp_path, small(tmp_path), fakes, waits=waits, poll=60)
+        driver = a_run(
+            tmp_path,
+            small(tmp_path),
+            fakes,
+            waits=waits,
+            poll=60,
+            log=lambda line, *a, **k: lines.append(str(line)),
+        )
         assert driver.run() == EXIT_OK
-        assert len(fakes.preflights) == 2
+        assert len(fakes.preflights) == 3
+        assert waits.waited
         # nothing was written before the wait: one invocation in all
         assert len(RunDir(driver.state_dir).manifest()["invocations"]) == 1
+        # with no run started, only Ctrl-C reaches the wait
+        (waiting,) = [line for line in lines if line.startswith("waiting")]
+        assert "Ctrl-C stops the wait: the run has not started" in waiting
+        assert "abort` or Ctrl-C" not in waiting
 
-    def test_an_api_limit_status_is_the_engines(self, tmp_path, fakes):
-        """The anthropic engine's own limit errors carry the API status:
-        a rate limit or an overload is never a refusal of the run."""
-
-        class Overloaded(Exception):
-            status_code = 529
+    def test_a_limit_with_no_time_to_go_on_stops_the_driver(
+        self, tmp_path, fakes
+    ):
+        """Usage credits: a pause with no time to go on, which nothing
+        waits out."""
 
         def preflight(model):
-            raise Overloaded("overloaded")
+            raise UsageLimitReached("usage credits", reason=llm.OVERAGE)
+
+        fakes.preflight = preflight
+        waits = Waits()
+        driver = a_run(tmp_path, small(tmp_path), fakes, waits=waits)
+        with pytest.raises(UsageLimitReached):
+            driver.run()
+        assert waits.waited == []
+        assert not driver.state_dir.exists()
+
+    @pytest.mark.parametrize(
+        ("status", "words"), [(429, "rate-limited"), (529, "overloaded")]
+    )
+    def test_an_api_limit_status_refuses_the_run_to_try_again(
+        self, tmp_path, fakes, status, words
+    ):
+        """The anthropic engine's own limit errors, once its retries are
+        spent, carry the API status: the run is refused, to be tried
+        again, never a traceback."""
+
+        class Limited(Exception):
+            status_code = status
+
+        def preflight(model):
+            raise Limited("limited")
 
         fakes.preflight = preflight
         driver = a_run(tmp_path, small(tmp_path), fakes)
-        with pytest.raises(Overloaded):
+        with pytest.raises(PreflightFailed) as refused:
             driver.run()
+        assert refused.value.problems[0] == (
+            f"the API is {words} for {MODEL} (transcribe, effort low): "
+            "try again later"
+        )
         assert not driver.state_dir.exists()
 
     def test_through_the_engine_on_the_fake_cli(
@@ -2059,14 +2212,15 @@ class TestPreflightCalls:
         driver = a_run(tmp_path, small(tmp_path), fakes)
         with pytest.raises(PreflightFailed) as refused:
             driver.run()
-        (problem,) = refused.value.problems
+        problem = refused.value.problems[0]
         assert problem.startswith(
-            f"the engine cannot run {MODEL} (transcribe)"
+            f"the engine cannot run {MODEL} (transcribe, effort low)"
         )
         assert "version 2.1.280 or newer is required" in problem
         (call,) = cli.calls
         command = call[0]
         assert command[command.index("--model") + 1] == MODEL
+        assert command[command.index("--effort") + 1] == "low"
         assert call[1]["input"] == scratch.PREFLIGHT_PROMPT
         assert not driver.state_dir.exists()
 

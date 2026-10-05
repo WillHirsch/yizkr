@@ -78,31 +78,48 @@ and `yizkr.reset` for the reset.
   is registered yet (below), so a run needs no stack. A refusal lists
   every problem it found.
 
-  Once those checks pass, and still before any document is dispatched
-  or anything written, the driver makes **one trivial call per distinct
-  model** the roles name (`transcribe`, `extract`, `critique`; two roles
-  on one model make one call), through the engine as the run calls it:
-  the same engine, model and effort as the first role that names the
-  model, and the pinned claude CLI, but not through the LLM cache, so
-  the call reaches the engine. Every invocation makes them, the driver's
-  own after a subscription limit included. A call that fails with an
-  error that is not a subscription limit or an overload refuses the run,
-  naming the model and the engine's reason: a claude CLI too old for the
-  model (an API 400 asking for a newer version: install a CLI that runs
-  the model, or configure one this CLI runs), or any other API error. A
-  limit or an overload is the engine's to wait out: a limit the engine
-  would wait longer for pauses the run as a document's call would, and
-  the driver waits it out before it writes anything.
+  Once those checks pass, and once the settings are checked against
+  those a resumed run recorded (other settings, another claude CLI
+  among them, are refused as `RunSettingsConflict` before any call),
+  and still before any document is dispatched or anything written, the
+  driver makes **one trivial call per distinct (model, effort) pair**
+  that the roles this invocation calls run, through the engine as the
+  run calls it: the same engine, model and effort as the first role
+  that runs the pair, and the pinned claude CLI, but not through the
+  LLM cache, so the call reaches the engine. The roles are those of the
+  per-document stages within `--until` (`transcribe` for
+  transcription, `extract` for extraction and GEDCOM, `critique`), and
+  every role when a corpus stage in range may call the engine. An
+  invocation past the barrier only, whose corpus stages call no engine
+  (clustering), makes no call. Two roles on one model at one effort
+  make one call; at two efforts, two. Every invocation makes them, the
+  driver's own after a subscription limit included.
+
+  A call that fails with an error that is not a subscription limit or
+  an overload refuses the run, naming the model, the role, the effort
+  and the engine's reason: a claude CLI too old for the model (an API
+  400 that names the CLI version the model requires, or the CLI
+  itself), or any other API error. The models after an unsupported one
+  are listed as not tried. For the claude-code engine, a limit or an
+  overload is the engine's to wait out; a limit it would wait longer for
+  pauses the run as a document's call would, and the driver waits it out
+  before it writes anything. Such a wait shows **only in the driver's
+  output**: on a new run nothing has started yet, so `yizkr scratch
+  watch` and the status page show no run, `yizkr scratch abort` cannot
+  reach it, and only Ctrl-C stops the wait (the driver says so). For
+  the anthropic engine, a 429 or 529 its own retries did not get past
+  refuses the run, to be tried again later.
 - **A model the CLI stops supporting mid-run.** Should the API refuse a
   call in the middle of a run because the CLI does not support its
   model (a model changed under a pinned CLI), the engine takes it as a
   pause of the pass, never a document's failure: the invocation ends
   `paused` (reason `ModelUnsupported`), the driver exits with status 2
   without waiting, since nothing says when it clears, and the message
-  names the model and the CLI's reason. No document fails for it and no
-  further call is made. Settle the CLI or the model, then resume the
-  run; a CLI other than the one the run recorded is refused as another
-  setting, so that may mean a new run.
+  names the model and the CLI's reason. `yizkr scratch watch` shows it
+  as `paused   ModelUnsupported; no time to go on`. No document fails
+  for it and no further call is made. Both remedies, a CLI that runs
+  the model or another model, change the settings the run recorded, so
+  start a new run (`yizkr scratch run --new`).
 - **The kept-state marker** is the page `Project:Kept state` on the
   instance and the file `kept.json` in the record of the instance:
   keeper mode (#118) writes both, and `yizkr scratch reset` refuses while
@@ -145,10 +162,10 @@ and `yizkr.reset` for the reset.
     length only approaches, so a dense document can take more;
   - **not counted**: calls asked again after an engine error or a chunk
     answer cut off (up to 2 for a chunk), the preflight's one trivial
-    call per model the roles name, which every invocation makes, and
-    waits for the subscription, which make no call. A slice the anomaly checks pause
-    as the run unfolds (docs/ANOMALIES.md) makes fewer calls than
-    counted.
+    call per (model, effort) pair the invocation's roles run, which
+    every invocation makes, and waits for the subscription, which make
+    no call. A slice the anomaly checks pause as the run unfolds
+    (docs/ANOMALIES.md) makes fewer calls than counted.
 
   It writes nothing, and takes no lock: it runs beside a running driver,
   counting what the run and the cache hold as it reads them, and names

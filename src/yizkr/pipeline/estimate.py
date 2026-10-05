@@ -50,11 +50,11 @@ ceilings: the chunks an entity manifest makes follow its entities, which
 a text's length only approaches, so a dense document can take more. Not
 counted at all: a call asked again after an engine error, or after a
 chunk answer cut off (up to 2 a chunk), the preflight's one trivial call
-per distinct model the roles name, which every invocation of the run
-makes (scratch.PREFLIGHT_PROMPT), and the waits for the subscription,
-which are no calls. Nor is a slice the anomaly checks
-pause as the run unfolds (docs/ANOMALIES.md): it makes fewer calls than
-counted.
+per distinct (model, effort) pair the invocation's roles run, which
+every invocation of the run makes (scratch.PREFLIGHT_PROMPT), and the
+waits for the subscription, which are no calls. Nor is a slice the
+anomaly checks pause as the run unfolds (docs/ANOMALIES.md): it makes
+fewer calls than counted.
 
 **Nothing written, held or asked.** The estimate reads the corpus, the
 runs directory and the cache (llm.read_cache), and writes none of them;
@@ -1038,9 +1038,10 @@ def describe(estimate: Estimate) -> list[str]:
     lines.append(
         "- Not counted: calls asked again after an engine error or after a "
         "chunk answer cut off (at most 2 for a chunk), the preflight's one "
-        "trivial call per model the roles name, which every invocation "
-        "makes, and the waits for the subscription, which are no calls. A "
-        "slice the anomaly checks pause makes fewer calls than counted."
+        "trivial call per (model, effort) pair the invocation's roles run, "
+        "which every invocation makes, and the waits for the subscription, "
+        "which are no calls. A slice the anomaly checks pause makes fewer "
+        "calls than counted."
     )
     return lines + _notes(estimate)
 
