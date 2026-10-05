@@ -190,9 +190,17 @@ PEOPLE = [
     },
 ]
 
+
+def property_id(key: str) -> str:
+    """A manifest property's id as the ``vocabulary`` fixture numbers it."""
+    raw = yaml.safe_load(read_manifest_data())
+    return f"P{list(raw['properties']).index(key) + 1}"
+
+
 STATEMENTS = [
     {
         "person": uri("Q7"),
+        "prop": uri(property_id("date_of_death")),
         "propLabel": literal("date of death"),
         "st": uri("s1"),
         "value": time_literal("+1909-03-16T00:00:00Z"),
@@ -202,6 +210,7 @@ STATEMENTS = [
     },
     {
         "person": uri("Q7"),
+        "prop": uri(property_id("date_of_death")),
         "propLabel": literal("date of death"),
         "st": uri("s2"),
         "value": time_literal("+1909-01-01T00:00:00Z"),
@@ -211,6 +220,7 @@ STATEMENTS = [
     },
     {
         "person": uri("Q7"),
+        "prop": uri(property_id("spouse")),
         "propLabel": literal("spouse"),
         "st": uri("s3"),
         "value": uri("Q9"),
@@ -220,6 +230,7 @@ STATEMENTS = [
     },
     {
         "person": uri("Q7"),
+        "prop": uri(property_id("instance_of")),
         "propLabel": literal("instance of"),
         "st": uri("s4"),
         "value": uri("Q1"),
@@ -434,6 +445,46 @@ class TestPersonPage:
         assert "start time: 1859" in text
         # item values link to the person page of the target
         assert 'href="Q9.html"' in text
+
+    def test_instance_of_is_skipped_by_its_id_not_its_label(
+        self, tmp_path, vocabulary
+    ):
+        """`instance of` is the subtitle, found by the property's id: a
+        relabelled `instance of` is still skipped, and another property
+        that carries its English label is shown."""
+        statements = [
+            {
+                **STATEMENTS[3],
+                "propLabel": literal("ist ein"),
+            },
+            {
+                **STATEMENTS[2],
+                "propLabel": literal("instance of"),
+            },
+            # no such property is in the manifest; one that bears the
+            # label renders as any other
+            {
+                **STATEMENTS[0],
+                "propLabel": literal("living person"),
+            },
+        ]
+        site, _ = build(
+            tmp_path,
+            vocabulary,
+            {**RESPONSES, "GROUP_CONCAT(DISTINCT ?qualifierText": statements},
+        )
+        text = (site / "people/Q7.html").read_text()
+        assert "ist ein" not in text
+        assert "<dt>living person</dt>" in text
+        assert ">human<" not in text
+        assert "<dt>instance of</dt>" in text
+        assert 'href="Q9.html"' in text
+
+    def test_the_statements_query_selects_each_property_id(self):
+        from yizkr.staticsite import STATEMENTS_QUERY
+
+        assert "SELECT ?person ?prop ?propLabel" in STATEMENTS_QUERY
+        assert "GROUP BY ?person ?prop ?propLabel" in STATEMENTS_QUERY
 
     def test_labels_are_escaped(self, tmp_path, vocabulary):
         site, _ = build(tmp_path, vocabulary, RESPONSES)

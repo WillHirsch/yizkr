@@ -224,6 +224,64 @@ never narrow or guess.
   "Eugen /Löbig/") is that form whole, the name not written twice.
 - **Language.** A HEAD.LANG of `und` is taken as it is, uncounted.
 
+Amended by #388 (2026-10-04; the typed parts, whole birth names, chain
+links and known limits below decided by the orchestrator 2026-10-05,
+the owner may override): this settles where the first four
+readers after write that §10 lists find structure.
+
+- **Reconcile's blocking and the ADR-0019 sequencer** key on whole name
+  forms, folded as §7 folds a part (`part_keys`), never on name tokens or
+  prefixes. A manifest entity keys through its record:
+  - a person only with the status `name`, by its label, aliases,
+    unsplit forms and nicknames, and by the whole forms its typed parts
+    make: each given name, as written and as its standard form, and
+    each nickname, before each surname and patronymic, a pair whose two
+    parts fold alike making none. The postcard's "Gustl", read as
+    Gustav, keys "Gustav Löbig"; "Agnes Löbig geb. Nertler" keys "Agnes
+    Löbig" and "Agnes Nertler", whatever marker her label holds;
+  - a place only as a `toponym`, by its record's own names and address,
+    less a short form that is another name's toponym, so the camp never
+    meets its town;
+  - any other entity, or one without a record, by its label and aliases.
+
+  A graph item has no record, so it keys by its label, aliases and the
+  values of its typed name statements (`birth_name`, `nickname`,
+  `official_name`), each whole; a `married_name` is a family name alone
+  and keys nothing. The roster maps an item's kind to its manifest key
+  by the kind item's QID.
+- **The place hierarchy's parents** come from the chains of containers
+  a place's records state (`within`, §2.2), read from the batch views of
+  the run that wrote the graph and joined to the written item by the QID
+  reconcile resolved, else the item the writer used for its local id,
+  found under its label or minted (`write.json`'s `created_items`). A
+  chain is asked link by link: the place within the nearest
+  container that names an existing place, and each such container
+  within the next, every place of that name each a question for a human
+  (ADR-0009, as amended).
+- **The impossibility filter** reads containment by QID only, and in
+  clustering by the mention id that stands in for one; a name shared
+  with a container never prunes a pair (ADR-0017, as amended).
+- **The disagreement report** keeps comparing whole names, as §10
+  allows: a birth name is the graph's own typed name statement, kept in
+  the source's wording, and "Sörne" beside "Ida Sörne" are two values,
+  listed with their sources (ADR-0002).
+- The static site skips `instance of` by its property id, not its
+  English label, and no longer skips a "living person" label, a
+  property the manifest does not hold (§10's operator-side list).
+
+Known limits, to revisit with the readers' next round: a place
+whose record gives only an address ("8 Hawthorn Road, Stupfield,
+Victoria") keys only on the address, so its town never links it; and an
+event, which has no record (§2.5), keys on its label as a whole string,
+not on its participants; and a derivable alias the cleanup drops (§8,
+ADR-0022 §4) is composed again from the record's typed parts only for
+its own batch's blocking, so a later document giving only that form
+("Ida Löbig" against an item labelled "Ida Sörne Löbig") does not block
+against the written item.
+
+`kinship.rq`'s term table and the possibly-living readers stay with
+their own issues.
+
 Amended by #409 (2026-09-29): clustering keys on the records as §7 says,
 and settles what §7 leaves open. A person's kin agree only on a key a
 record gives (never on a recordless kin's name), and the couple of a
@@ -1354,10 +1412,10 @@ into "fix first, and measure in run 1": under the pre-baseline exception
   words (`pipeline/review.py:101-102`), the monitor's command grammar
   (`pipeline/monitor.py:183-218`), the model-alias check
   (`pipeline/rundir.py:369-385`) and the site's skip of a "living person"
-  label (`staticsite.py:541`).
+  label (`staticsite.py:541`; gone since #388, amended above).
 
 **Readers after write, moved in a follow-up issue.** Scratch run 1 writes
-nothing, so these wait:
+nothing, so these wait (the first four settled by #388, amended above):
 
 - reconcile's name tokens and prefix overlap
   (`pipeline/reconcile.py:256-273`), in the per-document reconcile

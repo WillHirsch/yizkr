@@ -1387,6 +1387,28 @@ class TestPlaces:
         assert len(listed(*statements, containment=hierarchy)) == 1
 
 
+class TestNames:
+    """A birth name compares as a whole name: one that writes fewer of
+    the other's words is another value, listed beside it (ADR-0002;
+    ADR-0035 §10 leaves this reader comparing whole names)."""
+
+    def test_a_surname_alone_beside_the_full_name_is_listed(self):
+        # the card gives only her birth surname; the compensation file the
+        # full name
+        statements = (
+            said("ida-loebig", "birth_name", text("SÖRNE", "en"), CARD),
+            said(
+                "ida-loebig",
+                "birth_name",
+                text("Ida Sörne", "de"),
+                COMPENSATION,
+            ),
+        )
+        assert [row[4:] for row in listed(*statements)] == [
+            ("Ida Sörne", "SÖRNE")
+        ]
+
+
 class TestDifferentArtifacts:
     """from_different_artifacts: two readings of one artifact are not two
     sources (ADR-0023 §4)."""

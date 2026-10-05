@@ -122,6 +122,10 @@ def test_roster_exposes_kinship_qids(client, config, written):
     # the father edge round-trips as a raw QID the filter can read
     assert elder.qid in younger.father_qids
     assert elder.qid in younger.kin_qids
+    # each kind maps back to its manifest key by the kind item's QID
+    # (#388)
+    assert younger.kind == elder.kind == "human"
+    assert _by_label(roster, TOWN).kind == "place"
 
 
 def test_kinship_edge_makes_the_pair_impossible(client, config, written):
@@ -138,7 +142,7 @@ def test_place_containment_closure_round_trips(client, config, written):
     containment = fetch_place_containment(client, config)
     # the town is transitively contained in the country
     assert containment.contains(country.qid, town.qid)
-    assert country.label in containment.container_labels(town.qid)
+    assert country.qid in containment.containers(town.qid)
     # ... so the same-name pair is ruled out before adjudication
     assert (
         impossible_pair(

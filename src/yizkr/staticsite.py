@@ -104,7 +104,7 @@ ORDER BY ?personLabel
 # above): value, time precision, sources, qualifiers — the raw material
 # of the plural-by-default person page
 STATEMENTS_QUERY = """\
-SELECT ?person ?propLabel ?st ?value ?valueLabel ?precision
+SELECT ?person ?prop ?propLabel ?st ?value ?valueLabel ?precision
        (GROUP_CONCAT(DISTINCT ?sourceLabel; separator="|") AS ?sources)
        (GROUP_CONCAT(DISTINCT ?qualifierText; separator="|")
         AS ?qualifierTexts)
@@ -161,7 +161,7 @@ WHERE {{
       AS ?qualifierText)
   }}
 }}
-GROUP BY ?person ?propLabel ?st ?value ?valueLabel ?precision
+GROUP BY ?person ?prop ?propLabel ?st ?value ?valueLabel ?precision
 ORDER BY ?person ?propLabel
 """
 
@@ -534,10 +534,9 @@ class SiteBuilder:
         grouped: dict[str, list[dict]] = defaultdict(list)
         for row in statements:
             prop = cell(row, "propLabel")
-            # "instance of" is the subtitle. No "living person" flag is
-            # written (ADR-0020); skip any such statement in the graph so
-            # it doesn't render as data.
-            if prop in ("instance of", "living person"):
+            # `instance of` is the subtitle, known by its id on the
+            # instance
+            if qid_of(row, "prop") == self.properties.get("instance_of"):
                 continue
             grouped[prop].append(row)
         body.append('<dl class="statements">')

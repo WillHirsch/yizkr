@@ -2,7 +2,8 @@
 
 Deterministic parts first — a roster prefetch of every graph entity
 (one SPARQL query; a family archive's roster fits a prompt for years)
-and candidate blocking (shared kind + shared name token). Only then an
+and candidate blocking (shared kind + a shared whole name form). Only
+then an
 LLM adjudication call, which weighs RELATIONAL evidence (same spouse,
 compatible dates beats edit distance) and emits equivalence proposals.
 
@@ -35,12 +36,21 @@ import json
 import sys
 import urllib.parse
 import urllib.request
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-from yizkr.claims import ClaimBatch, EntityRecord, ItemValue, LocalRef, QidRef
+from yizkr.claims import (
+    ClaimBatch,
+    EntityRecord,
+    ItemValue,
+    LocalRef,
+    PersonStructure,
+    PlaceStructure,
+    QidRef,
+)
 from yizkr.core.config import Config
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.extract import scan_json_objects
@@ -54,7 +64,10 @@ class RosterEntity(BaseModel):
     qid: str
     label: str
     aliases: list[str] = []
-    kind: str = ""  # manifest item key when recognized, else raw label
+    kind: str = ""  # manifest item key when recognized, else the kind's QID
+    # an unrecognized kind's label, shown beside its QID to the
+    # adjudicator and never read
+    kind_label: str = ""
     birth: str = ""
     death: str = ""
     spouses: list[str] = []
@@ -92,7 +105,8 @@ class RosterEntity(BaseModel):
         if self.aliases:
             parts.append(f"aliases: {', '.join(self.aliases)}")
         if self.kind:
-            parts.append(f"kind: {self.kind}")
+            shown = f" ({self.kind_label})" if self.kind_label else ""
+            parts.append(f"kind: {self.kind}{shown}")
         if self.birth_names:
             parts.append(f"birth name: {', '.join(self.birth_names)}")
         if self.married_names:
@@ -115,7 +129,7 @@ class RosterEntity(BaseModel):
 
 
 ROSTER_QUERY = """\
-SELECT ?item ?itemLabel ?kindLabel
+SELECT ?item ?itemLabel ?kind ?kindLabel
        (GROUP_CONCAT(DISTINCT ?alias; separator="|") AS ?aliases)
        (SAMPLE(?birthDate) AS ?birth) (SAMPLE(?deathDate) AS ?death)
        (SAMPLE(?birthEventDate) AS ?eventBirth)
@@ -178,15 +192,15 @@ WHERE {{
   OPTIONAL {{ ?item wdt:{sibling} ?siblingItem . }}
   SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en" . }}
 }}
-GROUP BY ?item ?itemLabel ?kindLabel
+GROUP BY ?item ?itemLabel ?kind ?kindLabel
 """
 
 
 def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
     """Every instance-of-bearing item with identity-relevant facts."""
     properties, items = client.vocabulary()
-    # map kind item labels back to manifest keys where possible
-    kind_label_to_key = {key.replace("_", " "): key for key in items}
+    # a kind item maps back to its manifest key by its QID, never by label
+    kind_key = {qid: key for key, qid in items.items()}
     query = prefix_block(config.concept_uri) + ROSTER_QUERY.format(
         instance_of=properties["instance_of"],
         date_of_birth=properties["date_of_birth"],
@@ -222,13 +236,16 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
 
     roster = []
     for binding in bindings:
-        kind_label = field(binding, "kindLabel")
+        kind_qid = field(binding, "kind").rsplit("/", 1)[-1]
         roster.append(
             RosterEntity(
                 qid=field(binding, "item").rsplit("/", 1)[-1],
                 label=field(binding, "itemLabel"),
                 aliases=split(binding, "aliases"),
-                kind=kind_label_to_key.get(kind_label, kind_label),
+                kind=kind_key.get(kind_qid, kind_qid),
+                kind_label=(
+                    "" if kind_qid in kind_key else field(binding, "kindLabel")
+                ),
                 # direct statements win; event-derived dates fill gaps
                 birth=(
                     field(binding, "birth") or field(binding, "eventBirth")
@@ -253,31 +270,113 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
     return roster
 
 
-def _name_tokens(*names: str) -> set[str]:
-    return {
-        token.strip(".,;:()\"'").lower()
-        for name in names
-        for token in name.split()
-        if len(token.strip(".,;:()\"'")) >= 3
-    }
+def _keys(names: Iterable[str]) -> set[str]:
+    """Each whole name's keys: its folded words, and its words with any
+    umlaut written out (``clustering.part_keys``, ADR-0035 §7)."""
+    from yizkr.pipeline.clustering import part_keys
+
+    return {key for name in names for key in part_keys(name)}
 
 
-def _tokens_overlap(first: set[str], second: set[str]) -> bool:
-    """Prefix-aware token match: 'Hilde' must block against 'Hildegard'
-    (nicknames and clipped forms are how family documents refer to
-    people)."""
-    if first & second:
-        return True
-    return any(
-        a.startswith(b) or b.startswith(a) for a in first for b in second
+def _composed(record: PersonStructure) -> list[str]:
+    """The whole forms a person's typed parts make, in the order the
+    writer's labels give a name: each given name, as written and as its
+    standard form, and each nickname, before each surname and
+    patronymic. A pair whose two parts fold alike makes none, as a given
+    name that repeats the surname is no name of two parts."""
+    from yizkr.pipeline.clustering import part_keys
+
+    firsts = [
+        form
+        for name in record.given
+        for form in (name.written, name.standard)
+        if form
+    ] + list(record.nicknames)
+    lasts = [name.written for name in record.surnames] + list(
+        record.patronymics
+    )
+    return [
+        f"{first} {last}"
+        for first in firsts
+        for last in lasts
+        if not part_keys(first) & part_keys(last)
+    ]
+
+
+def entity_name_keys(entity: EntityRecord) -> set[str]:
+    """What a manifest entity blocks on: its whole name forms, read
+    through its mention record (ADR-0035 §2), never split into words.
+
+    A person's record keys only when its status is `name`, a place's only
+    when it is `toponym`: a role, a kinship term, a courtesy appellation,
+    a placeholder, a composed description, a deictic or a generic head
+    names no one, so it keys nothing. A person keys by its label, its
+    aliases, its record's unsplit forms and nicknames, and the whole
+    forms its typed parts make (``_composed``: "Gustl", read as Gustav,
+    with the surname Löbig makes "Gustl Löbig" and "Gustav Löbig"); a
+    place by its record's own names and address, a short form that is
+    another of its names' toponym left out (so a camp never meets its
+    town), or by its label where the record names none. Every other
+    entity, and one without a record, keys by its label and aliases as
+    written."""
+    record = entity.structure
+    if isinstance(record, PersonStructure):
+        if record.status != "name":
+            return set()
+        return _keys(
+            [
+                entity.label,
+                *entity.aliases,
+                *record.unsplit,
+                *record.nicknames,
+                *_composed(record),
+            ]
+        )
+    if isinstance(record, PlaceStructure):
+        if record.status != "toponym":
+            return set()
+        toponyms = _keys(
+            name.toponym
+            for name in record.names
+            if name.toponym and _keys([name.toponym]) != _keys([name.written])
+        )
+        names = [
+            name.written
+            for name in record.names
+            if not _keys([name.written]) & toponyms
+        ]
+        if record.address is not None:
+            names.append(record.address.written)
+        return _keys(names or [entity.label])
+    return _keys([entity.label, *entity.aliases])
+
+
+def roster_name_keys(roster_entity: RosterEntity) -> set[str]:
+    """What a graph item blocks on: its label and aliases, and the values
+    of its typed name statements (birth, nickname, official name), each
+    whole. A married name is a family name alone by its property, so it
+    never stands for a whole name. A birth name is a full name by its
+    property; one a source gave as a surname alone keys as that surname,
+    which meets only an entity named by it whole, since telling the two
+    apart would read the value's words."""
+    return _keys(
+        [
+            roster_entity.label,
+            *roster_entity.aliases,
+            *roster_entity.birth_names,
+            *roster_entity.nicknames,
+            *roster_entity.official_names,
+        ]
     )
 
 
 # -- impossibility filter (ADR-0017) -----------------------------------------
 #
-# A shared name token blocks two entities as candidates, but the graph may
+# A shared name form blocks two entities as candidates, but the graph may
 # already assert a fact that makes identity IMPOSSIBLE — an irreflexive
 # kinship edge between them, or one place transitively inside the other.
+# Both are read by QID (or, in clustering's mention space, by the id that
+# stands in for one), never by a label: places share names.
 # Pruning those before adjudication saves an LLM call and a review row, and
 # is RECALL-SAFE: it drops only pairs the graph's own referenced statements
 # structurally contradict, never a pair that is merely dissimilar.
@@ -293,13 +392,9 @@ PLACE_KIND = "place"
 KINSHIP_PROPERTIES = ("father", "mother", "spouse", "child", "sibling")
 
 CONTAINMENT_QUERY = """\
-SELECT ?place ?ancestor ?ancestorLabel WHERE {{
+SELECT ?place ?ancestor WHERE {{
   ?place wdt:{instance_of} wd:{place_item} .
   ?place (wdt:{part_of}|wdt:{location})+ ?ancestor .
-  OPTIONAL {{
-    ?ancestor rdfs:label ?ancestorLabel .
-    FILTER(LANG(?ancestorLabel) = "en")
-  }}
 }}"""
 
 
@@ -313,26 +408,16 @@ class PlaceContainment:
     pair out.
     """
 
-    def __init__(
-        self, ancestors: dict[str, set[str]], labels: dict[str, str]
-    ) -> None:
+    def __init__(self, ancestors: dict[str, set[str]]) -> None:
         self._ancestors = ancestors
-        self._labels = labels
 
     def contains(self, container_qid: str, contained_qid: str) -> bool:
         """Does ``container_qid`` transitively contain ``contained_qid``?"""
         return container_qid in self._ancestors.get(contained_qid, set())
 
-    def container_labels(self, qid: str) -> set[str]:
-        """Non-empty labels of every place that transitively contains
-        ``qid`` — used to rule out a not-yet-written batch place (no QID)
-        against a graph candidate strictly inside a place of the batch
-        entity's name."""
-        return {
-            label
-            for ancestor in self._ancestors.get(qid, set())
-            if (label := self._labels.get(ancestor))
-        }
+    def containers(self, qid: str) -> set[str]:
+        """Every place that transitively contains ``qid``."""
+        return set(self._ancestors.get(qid, set()))
 
 
 def fetch_place_containment(
@@ -354,17 +439,11 @@ def fetch_place_containment(
     with urllib.request.urlopen(url, timeout=120) as response:
         bindings = json.load(response)["results"]["bindings"]
     ancestors: dict[str, set[str]] = {}
-    labels: dict[str, str] = {}
     for binding in bindings:
         place = binding["place"]["value"].rsplit("/", 1)[-1]
         ancestor = binding["ancestor"]["value"].rsplit("/", 1)[-1]
-        # the ancestor QID is always captured (drives the QID-form prune);
-        # its label is OPTIONAL in the query, kept only when present
         ancestors.setdefault(place, set()).add(ancestor)
-        label = binding.get("ancestorLabel", {}).get("value", "")
-        if label:
-            labels[ancestor] = label
-    return PlaceContainment(ancestors, labels)
+    return PlaceContainment(ancestors)
 
 
 @dataclass
@@ -373,7 +452,8 @@ class PairFacts:
 
     Built from a RosterEntity (graph side) or an EntityRecord + its batch
     claims (new-document side). ``qid`` is None for a batch entity not yet
-    written — its containment is matched by label instead. Corpus
+    written, which no containment rule can reach: the graph places it
+    nowhere yet, and a label never stands in for a place. Corpus
     clustering (yizkr.pipeline.clustering) builds it in mention space: a
     mention's fingerprint stands in for the QID, and its kin are the
     mentions its manifest relates it to, lifted from the manifest's local
@@ -381,7 +461,6 @@ class PairFacts:
     """
 
     kind: str
-    label: str
     qid: str | None = None
     kin_qids: set[str] = field(default_factory=set)
 
@@ -389,7 +468,6 @@ class PairFacts:
 def _roster_pair_facts(roster_entity: RosterEntity) -> PairFacts:
     return PairFacts(
         kind=roster_entity.kind,
-        label=roster_entity.label,
         qid=roster_entity.qid,
         kin_qids=roster_entity.kin_qids,
     )
@@ -403,7 +481,7 @@ def _batch_pair_facts(
     A batch entity references others by local id; only relations to items
     ALREADY in the graph (a QidRef) contribute kin_qids — those are the
     only ones the graph-side candidate can be compared against."""
-    facts = PairFacts(kind=entity.kind, label=entity.label, qid=entity.qid)
+    facts = PairFacts(kind=entity.kind, qid=entity.qid)
     if batch is None:
         return facts
     for claim in batch.claims:
@@ -429,8 +507,9 @@ def impossible_pair(
 
     Deterministic, symmetric, no I/O. Fires only on STRUCTURAL graph facts
     that identity would contradict — an irreflexive kinship edge, or one
-    place transitively inside the other. Anything softer (including a date
-    disagreement, which is a healthy coexisting state, ADR-0002) stays a
+    place transitively inside the other, each read by QID. Anything softer
+    (a date disagreement, which is a healthy coexisting state, ADR-0002,
+    or a name shared with a container: namesake places exist) stays a
     candidate for the human; rules 5 & 6 forbid silently narrowing."""
     # R1: an irreflexive kinship edge between them (you are never your own
     # parent, child, sibling, or spouse).
@@ -443,35 +522,14 @@ def impossible_pair(
         containment is not None
         and a.kind == PLACE_KIND
         and b.kind == PLACE_KIND
+        and a.qid
+        and b.qid
+        and (
+            containment.contains(a.qid, b.qid)
+            or containment.contains(b.qid, a.qid)
+        )
     ):
-        if (
-            a.qid
-            and b.qid
-            and (
-                containment.contains(a.qid, b.qid)
-                or containment.contains(b.qid, a.qid)
-            )
-        ):
-            return "place-containment"
-        # label form: one candidate is named exactly like a CONTAINER of the
-        # other — e.g. a new "Klurnau" (no QID) vs the graph's Lager Klurnau,
-        # which sits inside a place labelled "Klurnau". Skip when the two
-        # share a label: eponymous nested places exist (the town "Rekau"
-        # inside the urban district "Rekau"), so an equal label may be the
-        # SAME place, not its container — never prune that (recall-safe).
-        if a.label != b.label:
-            if (
-                b.qid
-                and a.label
-                and a.label in containment.container_labels(b.qid)
-            ):
-                return "place-containment"
-            if (
-                a.qid
-                and b.label
-                and b.label in containment.container_labels(a.qid)
-            ):
-                return "place-containment"
+        return "place-containment"
     return None
 
 
@@ -482,26 +540,24 @@ def block_candidates(
     batch: ClaimBatch | None = None,
     containment: PlaceContainment | None = None,
 ) -> dict[str, list[RosterEntity]]:
-    """Deterministic candidate generation: shared kind + shared name
-    token (prefix-aware), minus pairs the graph proves impossible
-    (ADR-0017). The LLM never free-searches the graph; it only adjudicates
-    the candidates this produces (auditability).
+    """Deterministic candidate generation: shared kind + a shared whole
+    name form (``entity_name_keys`` against ``roster_name_keys``), minus
+    pairs the graph proves impossible (ADR-0017). The LLM never
+    free-searches the graph; it only adjudicates the candidates this
+    produces (auditability).
 
     ``batch`` supplies each entity's own claims (dates, resolved kin) for
     the impossibility filter; ``containment`` the place-containment closure.
     Both optional — without them the filter simply prunes less."""
     candidates: dict[str, list[RosterEntity]] = {}
     for entity in entities:
-        tokens = _name_tokens(entity.label, *entity.aliases)
+        keys = entity_name_keys(entity)
         entity_pair_facts = _batch_pair_facts(entity, batch)
         matches = [
             roster_entity
             for roster_entity in roster
             if roster_entity.kind == entity.kind
-            and _tokens_overlap(
-                tokens,
-                _name_tokens(roster_entity.label, *roster_entity.aliases),
-            )
+            and keys & roster_name_keys(roster_entity)
             and not impossible_pair(
                 entity_pair_facts,
                 _roster_pair_facts(roster_entity),
@@ -957,13 +1013,12 @@ def propose_graph_pairs(
     containment: PlaceContainment | None = None,
 ) -> list[Proposal]:
     """Blocked roster x roster pairs -> adjudicated duplicate proposals,
-    in bounded batches per call. Two items of the same kind pair when a
-    name token is shared (prefix-aware); ``impossible_pair`` then prunes a
-    pair before adjudication when a structural graph fact rules identity
-    out: a kinship edge (father, mother, spouse, child or sibling) between
-    the two, or, for two places, one transitively inside the other or
-    named exactly like a place containing the other (never when the two
-    share a label). Without ``containment`` only the kinship rule applies.
+    in bounded batches per call. Two items of the same kind pair when they
+    share a whole name form (``roster_name_keys``); ``impossible_pair``
+    then prunes a pair before adjudication when a structural graph fact
+    rules identity out: a kinship edge (father, mother, spouse, child or
+    sibling) between the two, or, for two places, one transitively inside
+    the other. Without ``containment`` only the kinship rule applies.
     Dates never prune a pair: contradictory dates go to adjudication and
     review (ADR-0017).
 
@@ -972,14 +1027,12 @@ def propose_graph_pairs(
     automated here.
     """
     pairs: list[tuple[RosterEntity, RosterEntity]] = []
+    keys = [roster_name_keys(roster_entity) for roster_entity in roster]
     for index, first in enumerate(roster):
-        first_tokens = _name_tokens(first.label, *first.aliases)
-        for second in roster[index + 1 :]:
+        for offset, second in enumerate(roster[index + 1 :], index + 1):
             if first.kind != second.kind:
                 continue
-            if not _tokens_overlap(
-                first_tokens, _name_tokens(second.label, *second.aliases)
-            ):
+            if not keys[index] & keys[offset]:
                 continue
             if impossible_pair(
                 _roster_pair_facts(first),

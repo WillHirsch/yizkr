@@ -381,7 +381,8 @@ re-running one step in isolation — but for a normal ingest you only ever run
   input (#130); across a scratch run's corpus, identity is corpus
   clustering's (#105). The standalone `yizkr ingest reconcile` step still
   reads the graph: it blocks a batch's entities against a roster of the
-  whole graph (shared kind + name token), then an LLM adjudicates each
+  whole graph (shared kind + a whole name form, read through the mention
+  record: ADR-0007 as amended by #388), then an LLM adjudicates each
   candidate as same / uncertain / distinct. It passes the blocking
   neither the batch's claims nor the place containment, so the
   impossibility filter (ADR-0017) prunes next to nothing there. Only your
