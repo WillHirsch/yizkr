@@ -31,6 +31,10 @@ Amended by #371 (2026-10-02): a derived medium is flagged as an
 artifact is, on each registration, made or found, while a file another
 item names holds its bytes or its label, before any content tag, is the
 label of an item with no hash: see Amendments (#103's).
+Amended by #457 (2026-10-05): the anomaly checks' recheck reads the
+excerpts' directories too, and checks each excerpt's stored outputs as
+a document of its own, of the kind `excerpt` (docs/ANOMALIES.md,
+Recheck); #397's "Left for later" no longer lists it.
 
 ## Context
 
@@ -663,8 +667,7 @@ the compilation's.
   inputs, so a reading made again with other text that still passes the
   check leaves the excerpt's view as it was; an excerpt's write fails
   when one of the PDFs that place it no longer has the bytes it was read
-  with, even when another places the image; and the anomaly checks'
-  recheck does not read the excerpts' directories.
+  with, even when another places the image.
 
 Amended by #373 (2026-10-02): **a derived medium's file name keeps its
 container's title.** The names of the #103 amendment, `"<deck title>

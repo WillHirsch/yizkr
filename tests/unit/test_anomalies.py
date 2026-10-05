@@ -1053,6 +1053,647 @@ class TestExtraction:
         assert run.alerts() == []
 
 
+# -- implausible dates --------------------------------------------------------
+
+
+def a_time(year, precision=None, month=None, day=None) -> dict:
+    value = {"type": "time", "year": year}
+    for name, given in (
+        ("precision", precision),
+        ("month", month),
+        ("day", day),
+    ):
+        if given is not None:
+            value[name] = given
+    return value
+
+
+def a_dated_claim(who: str, prop: str, value: dict, qualifiers=()) -> dict:
+    """A claim about the entity `who`, with `qualifiers` given as
+    (property, time value) pairs."""
+    claim = {
+        "subject": {"kind": "local", "local_id": who},
+        "property": prop,
+        "value": value,
+        "source": {"artifact": {"kind": "artifact", "sha1": "a" * 40}},
+    }
+    if qualifiers:
+        claim["qualifiers"] = [
+            {"property": name, "value": time} for name, time in qualifiers
+        ]
+    return claim
+
+
+def a_dated_batch(*claims: dict) -> ClaimBatch:
+    names = {
+        "ursula": "Ursula Löbig",
+        "gustav": "Gustav Löbig",
+        "nicholas": "Nicholas Löbig",
+        "cäcilie": "Cäcilie Löbig",
+        "rahel": "Rahel Löbig",
+        "eugen": "Eugen Löbig",
+        "flörburg": "Flörburg",
+    }
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": RUN_META,
+            "claims": list(claims),
+            "entities": [
+                {
+                    "id": key,
+                    "label": label,
+                    "kind": "place" if key == "flörburg" else "human",
+                }
+                for key, label in names.items()
+            ],
+        }
+    )
+
+
+FLÖRBURG = {"type": "item", "value": {"kind": "local", "local_id": "flörburg"}}
+CIRCA = {"type": "item", "value": {"kind": "vocab", "key": "circa"}}
+URSULA_BORN = a_dated_claim("ursula", "date_of_birth", a_time(1911))
+# the family history's "I was born in '50", read in the wrong century
+NICHOLAS_BORN = a_dated_claim("nicholas", "date_of_birth", a_time(1850))
+
+
+def lived(who: str, *qualifiers) -> dict:
+    """A residence in Flörburg, dated by `qualifiers`."""
+    return a_dated_claim(who, "residence", FLÖRBURG, qualifiers)
+
+
+def dates_found(batch: ClaimBatch, overrides=None) -> list:
+    return anomalies.date_findings(
+        load_config(overrides=overrides), batch.claims
+    )
+
+
+def counted(batch: ClaimBatch, overrides=None) -> tuple[int, int] | None:
+    """(before the birth, after it), or None when nothing is counted."""
+    found = dates_found(batch, overrides)
+    if not found:
+        return None
+    (finding,) = found
+    return finding.fields["before_birth"], finding.fields["after_birth"]
+
+
+class TestImplausibleDate:
+    def test_a_claim_dated_before_the_birth_is_counted(self):
+        """A 1930s residence read as the 1st century lies wholly before
+        Ursula's birth in 1911."""
+        batch = a_dated_batch(
+            URSULA_BORN,
+            lived("ursula", ("point_in_time", a_time(1, "century"))),
+        )
+        (finding,) = dates_found(batch)
+        assert (finding.check, finding.value, finding.limit) == (
+            "implausible-date",
+            1,
+            None,
+        )
+        assert finding.fields == {
+            "before_birth": 1,
+            "after_birth": 0,
+            "max_years_after_birth": 120,
+        }
+
+    def test_a_claim_dated_too_long_after_the_birth_is_counted(self):
+        """Nicholas's birth read as 1850 puts his 2008 family history 158
+        years after it."""
+        batch = a_dated_batch(
+            NICHOLAS_BORN, lived("nicholas", ("start_time", a_time(2008)))
+        )
+        assert counted(batch) == (0, 1)
+
+    def test_a_claim_dated_on_both_sides_is_counted_once(self):
+        batch = a_dated_batch(
+            URSULA_BORN,
+            lived(
+                "ursula",
+                ("start_time", a_time(1801)),
+                ("end_time", a_time(2040)),
+            ),
+        )
+        (finding,) = dates_found(batch)
+        assert finding.value == 1
+        assert counted(batch) == (1, 0)
+
+    def test_the_threshold_is_the_last_plausible_year(self):
+        def after(years: int) -> ClaimBatch:
+            return a_dated_batch(
+                URSULA_BORN,
+                a_dated_claim("ursula", "date_of_death", a_time(1911 + years)),
+            )
+
+        assert dates_found(after(120)) == []
+        assert dates_found(after(121))[0].value == 1
+        later = {
+            "checks": {"implausible-date": {"max-years-after-birth": 130}}
+        }
+        assert dates_found(after(121), later) == []
+
+    def test_a_negative_threshold_is_refused(self):
+        with pytest.raises(AnomalyConfigError):
+            load_config(
+                overrides={
+                    "checks": {
+                        "implausible-date": {"max-years-after-birth": -1}
+                    }
+                }
+            )
+
+    def test_a_date_s_precision_is_never_narrowed(self):
+        """The 1910s and the 20th century both hold 1911, and a date in
+        the birth year is never before it, whatever its day."""
+        batch = a_dated_batch(
+            a_dated_claim(
+                "gustav", "date_of_birth", a_time(1919, month=7, day=1)
+            ),
+            lived("gustav", ("start_time", a_time(1919, month=1, day=7))),
+            URSULA_BORN,
+            lived("ursula", ("point_in_time", a_time(1910, "decade"))),
+            lived("ursula", ("point_in_time", a_time(1901, "century"))),
+        )
+        assert dates_found(batch) == []
+
+    @pytest.mark.parametrize(
+        ("birth", "date", "expected"),
+        [
+            # the 1900s end in 1909, before a birth in 1910
+            (a_time(1910), a_time(1900, "decade"), (1, 0)),
+            # the 1910s end in 1919, a birth's own year
+            (a_time(1919), a_time(1910, "decade"), None),
+            # the 19th century, 1801 to 1900, holds 1900
+            (a_time(1900), a_time(1801, "century"), None),
+            # a birth in the 1910s may be as late as 1919
+            (a_time(1910, "decade"), a_time(1912), None),
+            # a birth in the 20th century may be as late as 2000
+            (a_time(1901, "century"), a_time(2030), None),
+            # the 2030s begin 119 years after 1911
+            (a_time(1911), a_time(2030, "decade"), None),
+            # a decade stored by another of its years is counted as
+            # Wikibase counts it: 1905 names the 1900s, before 1911
+            (a_time(1911), a_time(1905, "decade"), (1, 0)),
+            # a century stored by another of its years: 1850 names the
+            # 19th century, 1801 to 1900, which ends before 1911
+            (a_time(1911), a_time(1850, "century"), (1, 0)),
+            # a century stored by its last year: 1900 names the 19th
+            # century, 1801 to 1900
+            (a_time(1900, "century"), a_time(1850), None),
+            (a_time(1911), a_time(1900, "century"), (1, 0)),
+            (a_time(1901), a_time(1801, "century"), (1, 0)),
+            # a month or a day before the birth year is before it
+            (a_time(1911), a_time(1801, "month", month=3), (1, 0)),
+            (a_time(1911), a_time(1801, "day", month=3, day=5), (1, 0)),
+        ],
+    )
+    def test_spans_are_counted_as_wikibase_counts_them(
+        self, birth, date, expected
+    ):
+        """Raw stored claims, as a batch.json may hold them, a century
+        stored by a year other than its first included."""
+        claims = [
+            a_dated_claim("ursula", "date_of_birth", birth),
+            lived("ursula", ("start_time", date)),
+        ]
+        found = anomalies.date_findings(load_config(), claims)
+        assert [
+            (finding.fields["before_birth"], finding.fields["after_birth"])
+            for finding in found
+        ] == ([expected] if expected else [])
+
+    def test_a_range_s_bounds_widen_a_date(self):
+        """Ursula's residence "after 1890" may run on past her birth in
+        1911, and Rahel, born between 1870 and 1871, may be 120 in
+        1991."""
+        after_1890 = lived(
+            "ursula",
+            ("point_in_time", a_time(1890)),
+            ("earliest_date", a_time(1890)),
+        )
+        assert counted(a_dated_batch(URSULA_BORN, after_1890)) is None
+        rahel_born = a_dated_claim(
+            "rahel",
+            "date_of_birth",
+            a_time(1870),
+            [("earliest_date", a_time(1870)), ("latest_date", a_time(1871))],
+        )
+
+        def rahel_in(year: int) -> ClaimBatch:
+            return a_dated_batch(
+                rahel_born, lived("rahel", ("point_in_time", a_time(year)))
+            )
+
+        assert counted(rahel_in(1991)) is None
+        assert counted(rahel_in(1992)) == (0, 1)
+        # the range is closed on its early side too
+        assert counted(rahel_in(1869)) == (1, 0)
+        # a coarse bound is read at its far edge: a birth in 1875 stated
+        # between the 1870s and 1880 may lie in 1870, and a residence
+        # bounded by the 1920s may last to 1929
+        coarse_earliest = a_dated_batch(
+            a_dated_claim(
+                "rahel",
+                "date_of_birth",
+                a_time(1875),
+                [
+                    ("earliest_date", a_time(1870, "decade")),
+                    ("latest_date", a_time(1880)),
+                ],
+            ),
+            lived("rahel", ("point_in_time", a_time(1872))),
+        )
+        assert counted(coarse_earliest) is None
+        # Eugen's birth read as 1925
+        coarse_latest = a_dated_batch(
+            a_dated_claim("eugen", "date_of_birth", a_time(1925)),
+            lived(
+                "eugen",
+                ("point_in_time", a_time(1920)),
+                ("earliest_date", a_time(1915)),
+                ("latest_date", a_time(1920, "decade")),
+            ),
+        )
+        assert counted(coarse_latest) is None
+        # of several earliest dates, the earliest is read
+        several = a_dated_batch(
+            a_dated_claim("gustav", "date_of_birth", a_time(1900)),
+            lived(
+                "gustav",
+                ("point_in_time", a_time(2050)),
+                ("earliest_date", a_time(2010)),
+                ("earliest_date", a_time(2030)),
+                ("latest_date", a_time(2060)),
+            ),
+        )
+        assert counted(several) is None
+        # a range within a decade lowers and raises nothing: a birth in
+        # the 1910s, "between 1915 and 1916", may still lie in 1912
+        narrower = a_dated_claim(
+            "ursula",
+            "date_of_birth",
+            a_time(1910, "decade"),
+            [("earliest_date", a_time(1915)), ("latest_date", a_time(1916))],
+        )
+        assert (
+            counted(
+                a_dated_batch(
+                    narrower, lived("ursula", ("start_time", a_time(1912)))
+                )
+            )
+            is None
+        )
+
+    def test_a_lone_bound_opens_its_side(self):
+        """Eugen's birth read as the 18th century, and his death "before
+        1926": the death may lie at any time up to 1926, so it is not
+        judged after the birth. Cäcilie born "before 1834" may be born
+        long before 1801, but not long before 1960."""
+        eugen = a_dated_batch(
+            a_dated_claim("eugen", "date_of_birth", a_time(1701, "century")),
+            a_dated_claim(
+                "eugen",
+                "date_of_death",
+                a_time(1926),
+                [("latest_date", a_time(1926))],
+            ),
+        )
+        assert counted(eugen) is None
+        before_1834 = a_dated_claim(
+            "cäcilie",
+            "date_of_birth",
+            a_time(1834),
+            [("latest_date", a_time(1834))],
+        )
+        assert (
+            counted(
+                a_dated_batch(
+                    before_1834, lived("cäcilie", ("start_time", a_time(1801)))
+                )
+            )
+            is None
+        )
+        assert counted(
+            a_dated_batch(
+                before_1834,
+                a_dated_claim("cäcilie", "date_of_death", a_time(1960)),
+            )
+        ) == (0, 1)
+
+    @pytest.mark.parametrize(
+        "batch",
+        [
+            # Nicholas, his birth read as 1850, moved in "before 2008"
+            a_dated_batch(
+                NICHOLAS_BORN,
+                lived(
+                    "nicholas",
+                    ("start_time", a_time(2008)),
+                    ("latest_start_date", a_time(2008)),
+                ),
+            ),
+            # Ursula's residence ended "after 1801"
+            a_dated_batch(
+                URSULA_BORN,
+                lived(
+                    "ursula",
+                    ("end_time", a_time(1801)),
+                    ("earliest_end_date", a_time(1801)),
+                ),
+            ),
+            # her death in 2040, "after 1920"
+            a_dated_batch(
+                URSULA_BORN,
+                a_dated_claim(
+                    "ursula",
+                    "date_of_death",
+                    a_time(2040),
+                    [("earliest_date", a_time(1920))],
+                ),
+            ),
+            # a residence observed in 1905, "before 1915"
+            a_dated_batch(
+                URSULA_BORN,
+                lived(
+                    "ursula",
+                    ("point_in_time", a_time(1905)),
+                    ("latest_date", a_time(1915)),
+                ),
+            ),
+        ],
+    )
+    def test_each_date_s_lone_bound_opens_its_own_side(self, batch):
+        """A start's lone latest start date, an end's lone earliest end
+        date, and a value's or a point in time's lone earliest or latest
+        date each leave the other side of that date open."""
+        assert counted(batch) is None
+
+    def test_a_partly_open_date_wholly_outside_the_life_counts(self):
+        """A residence "before 1890" for Ursula, born in 1911, lies wholly
+        before her birth however early it was; one "after 2040" for
+        Gustav, his birth read as 1900, wholly after his 120th year."""
+        before_1890 = lived(
+            "ursula",
+            ("point_in_time", a_time(1890)),
+            ("latest_date", a_time(1890)),
+        )
+        assert counted(a_dated_batch(URSULA_BORN, before_1890)) == (1, 0)
+        after_2040 = lived(
+            "gustav",
+            ("point_in_time", a_time(2040)),
+            ("earliest_date", a_time(2040)),
+        )
+        gustav_born = a_dated_claim("gustav", "date_of_birth", a_time(1900))
+        assert counted(a_dated_batch(gustav_born, after_2040)) == (0, 1)
+
+    def test_a_birth_is_read_from_its_value_and_bounds_alone(self):
+        """A birth's point in time, start or end dates its source (the
+        year the register extract was made), never the birth."""
+        recorded_1950 = a_dated_claim(
+            "ursula",
+            "date_of_birth",
+            a_time(1911),
+            [("point_in_time", a_time(1950))],
+        )
+        assert counted(
+            a_dated_batch(
+                recorded_1950, lived("ursula", ("start_time", a_time(2060)))
+            )
+        ) == (0, 1)
+        started_1800 = a_dated_claim(
+            "ursula",
+            "date_of_birth",
+            a_time(1911),
+            [("start_time", a_time(1800))],
+        )
+        # the residence of 1850 is before the birth, and so is the birth
+        # claim's own start, which dates its source as any claim's dates
+        # do
+        assert counted(
+            a_dated_batch(
+                started_1800, lived("ursula", ("start_time", a_time(1850)))
+            )
+        ) == (2, 0)
+
+    @pytest.mark.parametrize(
+        "unreadable",
+        [
+            {"type": "time", "year": True},
+            {"type": "time", "year": 0},
+            {"type": "time", "year": "1890"},
+            {"type": "time", "year": 1890.0},
+            {"type": "time", "year": None},
+            {"type": "time", "year": 1890, "precision": "millennium"},
+        ],
+    )
+    def test_a_date_with_an_unreadable_bound_is_not_judged(self, unreadable):
+        """Raw stored claims: a bound that cannot be read leaves its date
+        open, never closed on the side it bounds. Ursula's residence
+        "after 1890", and Cäcilie born "before 1834"."""
+        config = load_config()
+        residence = lived(
+            "ursula",
+            ("start_time", a_time(1890)),
+            ("earliest_date", a_time(1890)),
+        )
+        residence["qualifiers"][1]["value"] = unreadable
+        assert anomalies.date_findings(config, [URSULA_BORN, residence]) == []
+        birth = a_dated_claim(
+            "cäcilie",
+            "date_of_birth",
+            a_time(1834),
+            [("latest_date", unreadable)],
+        )
+        early = lived("cäcilie", ("start_time", a_time(1801)))
+        assert anomalies.date_findings(config, [birth, early]) == []
+
+    def test_a_circa_date_is_judged_on_neither_side(self):
+        """Cäcilie born c. 1833 may be born years either side of it; a
+        residence c. 1801 may lie years either side of that."""
+        circa_1833 = a_dated_claim(
+            "cäcilie",
+            "date_of_birth",
+            a_time(1833),
+            [("sourcing_circumstances", CIRCA)],
+        )
+        batch = a_dated_batch(
+            circa_1833,
+            lived("cäcilie", ("start_time", a_time(1801))),
+            a_dated_claim("cäcilie", "date_of_death", a_time(1960)),
+        )
+        assert counted(batch) is None
+        batch = a_dated_batch(
+            a_dated_claim("cäcilie", "date_of_birth", a_time(1833)),
+            lived(
+                "cäcilie",
+                ("start_time", a_time(1801)),
+                ("sourcing_circumstances", CIRCA),
+            ),
+        )
+        assert counted(batch) is None
+        # a circa birth beside an exact one leaves the exact one no
+        # preference (ADR-0002)
+        batch = a_dated_batch(
+            circa_1833,
+            a_dated_claim("cäcilie", "date_of_birth", a_time(1833)),
+            lived("cäcilie", ("start_time", a_time(1801))),
+        )
+        assert counted(batch) is None
+
+    def test_another_sourcing_circumstance_is_no_circa(self):
+        """A claim read from a machine translation is exact for all
+        that: its date is judged."""
+        machine = {
+            "type": "item",
+            "value": {"kind": "vocab", "key": "machine_assisted"},
+        }
+        batch = a_dated_batch(
+            URSULA_BORN,
+            lived(
+                "ursula",
+                ("start_time", a_time(1801)),
+                ("sourcing_circumstances", machine),
+            ),
+        )
+        assert counted(batch) == (1, 0)
+
+    def test_each_end_takes_its_own_bounds(self):
+        """A start runs to its latest start date, not to the latest date,
+        which bounds the end; an end runs from its earliest end date."""
+        start = ("start_time", a_time(1890))
+        assert counted(
+            a_dated_batch(
+                URSULA_BORN,
+                lived("ursula", start, ("latest_date", a_time(1915))),
+            )
+        ) == (1, 0)
+        assert (
+            counted(
+                a_dated_batch(
+                    URSULA_BORN,
+                    lived(
+                        "ursula", start, ("latest_start_date", a_time(1915))
+                    ),
+                )
+            )
+            is None
+        )
+        end = ("end_time", a_time(2040))
+        assert counted(
+            a_dated_batch(
+                URSULA_BORN,
+                lived("ursula", end, ("earliest_date", a_time(1920))),
+            )
+        ) == (0, 1)
+        assert (
+            counted(
+                a_dated_batch(
+                    URSULA_BORN,
+                    lived("ursula", end, ("earliest_end_date", a_time(1920))),
+                )
+            )
+            is None
+        )
+
+    def test_every_birth_counts_and_none_is_preferred(self):
+        """Two contradictory births coexist (ADR-0002): a date between
+        them is plausible for one, and is not counted."""
+        batch = a_dated_batch(
+            URSULA_BORN,
+            a_dated_claim("ursula", "date_of_birth", a_time(1921)),
+            lived("ursula", ("start_time", a_time(1915))),
+            a_dated_claim("ursula", "date_of_death", a_time(2035)),
+        )
+        assert dates_found(batch) == []
+
+    def test_undated_people_are_not_judged(self):
+        # the batch gives Gustav no birth
+        batch = a_dated_batch(
+            URSULA_BORN,
+            a_dated_claim("gustav", "date_of_death", a_time(1066)),
+        )
+        assert dates_found(batch) == []
+
+    def test_a_birth_is_not_judged_against_another(self):
+        """Births a millennium apart coexist; neither is counted against
+        the other."""
+        batch = a_dated_batch(
+            URSULA_BORN,
+            a_dated_claim("ursula", "date_of_birth", a_time(1, "century")),
+        )
+        assert dates_found(batch) == []
+
+    def test_a_person_named_by_qid_is_judged(self):
+        ursula = {"kind": "qid", "qid": "Q42"}
+        claims = [
+            {**URSULA_BORN, "subject": ursula},
+            {
+                **a_dated_claim("ursula", "date_of_death", a_time(1801)),
+                "subject": ursula,
+            },
+        ]
+        assert counted(a_dated_batch(*claims)) == (1, 0)
+
+    @pytest.mark.parametrize(
+        "birth",
+        [
+            {"type": "time", "year": True},
+            {"type": "time", "year": 0},
+            {"type": "time", "year": "1911"},
+            {"type": "time", "year": 1911.0},
+            {"type": "time", "year": None},
+            {"type": "time", "year": 1911, "precision": "millennium"},
+            {"type": "quantity", "amount": 1911, "year": 1911},
+            {"type": "string", "value": "1911"},
+        ],
+    )
+    def test_a_birth_that_is_no_dated_year_is_not_judged(self, birth):
+        """Raw stored claims, as a batch.json may hold them: a birth that
+        gives no year of a known precision dates nothing."""
+        claims = [
+            {**URSULA_BORN, "value": birth},
+            a_dated_claim("ursula", "date_of_death", a_time(1801)),
+        ]
+        config = load_config()
+        assert anomalies.date_findings(config, claims) == []
+
+    def test_disabled_it_finds_nothing(self):
+        batch = a_dated_batch(
+            URSULA_BORN,
+            a_dated_claim("ursula", "date_of_death", a_time(1801)),
+        )
+        assert dates_found(batch)
+        off = {"checks": {"implausible-date": {"enabled": False}}}
+        assert dates_found(batch, off) == []
+
+    def test_a_stored_batch_raises_one_alert_and_is_left_as_it_is(
+        self, tmp_path
+    ):
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "history.txt", text=NATURALISATION)
+        checks.stored(doc, "transcription", vision(NATURALISATION, "en"))
+        batch = a_dated_batch(
+            URSULA_BORN,
+            NICHOLAS_BORN,
+            a_dated_claim("ursula", "date_of_death", a_time(1801)),
+            # within 120 years of the misread birth, so not counted
+            lived("nicholas", ("start_time", a_time(1950))),
+            lived("nicholas", ("end_time", a_time(2008))),
+        )
+        before = batch.model_dump_json()
+        checks.stored(doc, "extraction", batch)
+        alert = only(run, "implausible-date")
+        assert alert["value"] == 2
+        assert alert.get("limit") is None
+        assert (
+            alert["before_birth"],
+            alert["after_birth"],
+            alert["max_years_after_birth"],
+        ) == (1, 1, 120)
+        assert alert["stage"] == "extraction"
+        assert batch.model_dump_json() == before
+
+
 # -- distributions ------------------------------------------------------------
 
 
@@ -2924,11 +3565,18 @@ def a_recorded_document(
     claims=0,
     record=True,
     document_class="letter",
+    excerpt=False,
 ):
     """A document directory as a run leaves it: its state, and its
     transcription and batch views. A vision transcription is made from
-    the record of one page holding `text`, unless `record` is False."""
-    directory = state_dir / name.split(".")[0]
+    the record of one page holding `text`, unless `record` is False. An
+    `excerpt`'s directory is named by its SHA-1, in the excerpts'
+    directory."""
+    directory = (
+        state_dir / "excerpts" / sha1_of(name)
+        if excerpt
+        else state_dir / name.split(".")[0]
+    )
     directory.mkdir(parents=True)
     resolution = resolve_language(text, "auto")
     (directory / "state.json").write_text(
@@ -3187,6 +3835,138 @@ class TestRecheck:
             if event["event"] == "anomaly-error"
         ]
         assert errors == [("TypeError", "recheck")]
+
+    def test_an_excerpt_is_rechecked_as_a_document_of_its_own(self, tmp_path):
+        """The image of Sebastian's 1939 letter that the 2011 booklet
+        places is an excerpt (ADR-0008): its transcription, batch and
+        critique are checked again as the booklet's are, under its own
+        kind."""
+        state = tmp_path / "state"
+        a_recorded_document(
+            state,
+            "family-booklet-2011.pdf",
+            text=NATURALISATION,
+            engine="llm-vision:fake-model",
+            claims=1,
+        )
+        excerpt = a_recorded_document(
+            state,
+            "letter-excerpt-1939.png",
+            text=MARRIAGE,
+            engine="llm-vision:fake-model",
+            excerpt=True,
+        )
+        (excerpt / "batch.json").write_text(
+            a_dated_batch(
+                URSULA_BORN,
+                a_dated_claim("ursula", "date_of_death", a_time(1801)),
+            ).model_dump_json()
+        )
+        (excerpt / "critique.json").write_text("[]")
+        events = len(RunDir(state).events())
+        alerts = recheck(
+            state,
+            load_config(
+                overrides={
+                    "checks": {
+                        "language-unexpected": {"expected": ["en"]},
+                    }
+                }
+            ),
+        )
+        subject = sha1_of("letter-excerpt-1939.png")[:12]
+        assert sorted(
+            (a["check"], a["stage"], a["kind"])
+            for a in alerts
+            if a["subject"] == subject
+        ) == [
+            ("implausible-date", "extraction", "excerpt"),
+            ("language-unexpected", "transcription", "excerpt"),
+        ]
+        (opened,) = [
+            event
+            for event in RunDir(state).events()[events:]
+            if event["event"] == "anomaly-recheck"
+        ]
+        assert opened["documents"] == 2
+
+    def test_a_directory_set_aside_is_not_read(self, tmp_path):
+        """A dot-prefixed directory, at the top or among the excerpts, is
+        set aside, and is neither checked nor counted, though it holds a
+        state.json as valid as any."""
+        state = tmp_path / "state"
+        a_recorded_document(
+            state, "brief.txt", text=MARRIAGE, engine="text-file:x"
+        )
+        aside = a_recorded_document(
+            state, "card.txt", text=MARRIAGE, engine="text-file:x"
+        )
+        aside.rename(aside.with_name(".card"))
+        excerpt = a_recorded_document(
+            state,
+            "letter-excerpt-1939.png",
+            text=MARRIAGE,
+            engine="text-file:x",
+            excerpt=True,
+        )
+        excerpt.rename(excerpt.with_name(f".{excerpt.name}"))
+        events = len(RunDir(state).events())
+        alerts = recheck(
+            state,
+            load_config(
+                overrides={
+                    "checks": {"language-unexpected": {"expected": ["en"]}}
+                }
+            ),
+        )
+        assert {a["subject"] for a in alerts} == {sha1_of("brief.txt")[:12]}
+        (opened,) = [
+            event
+            for event in RunDir(state).events()[events:]
+            if event["event"] == "anomaly-recheck"
+        ]
+        assert opened["documents"] == 1
+
+    def test_excerpts_meet_the_distributions(self, tmp_path):
+        """Four excerpts of one class: the one with twelve times the
+        claims, and the one whose critique finds twenty times as much,
+        are each outliers among the four."""
+        state = tmp_path / "state"
+        for n, claims in enumerate([60, 5, 5, 5]):
+            directory = a_recorded_document(
+                state,
+                f"excerpt{n}.png",
+                text=NATURALISATION,
+                engine="llm-vision:fake-model",
+                claims=claims,
+                document_class="photograph",
+                excerpt=True,
+            )
+            findings = 20 if n == 1 else 1
+            (directory / "critique.json").write_text(
+                json.dumps([{"note": "x"}] * findings)
+            )
+        alerts = recheck(
+            state,
+            load_config(
+                overrides={
+                    "checks": {
+                        "claim-yield": {"min-samples": 3},
+                        "critic-rate": {"min-samples": 3},
+                    }
+                }
+            ),
+        )
+        assert sorted(
+            (a["check"], a["subject"], a["kind"])
+            for a in alerts
+            if a["check"] in ("claim-yield", "critic-rate")
+        ) == sorted(
+            [
+                ("claim-yield", sha1_of("excerpt0.png")[:12], "excerpt"),
+                ("critic-rate", sha1_of("excerpt1.png")[:12], "excerpt"),
+            ]
+        )
 
     def test_the_module_s_command(self, tmp_path, capsys):
         folder = a_folder(tmp_path, brief_txt=MARRIAGE)

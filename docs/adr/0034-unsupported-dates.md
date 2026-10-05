@@ -70,6 +70,12 @@ wherever the project meets one, it fails explicitly, naming where.
   entry: a file that states one is not read at all, so nothing downstream
   meets it. A curator who wants the rest of the file read edits the
   export.
+  Amended by #478 (2026-10-05): the Gregorian calendar named before a
+  date (`@#DGREGORIAN@`, or GEDCOM 7's `GREGORIAN`) states the one
+  supported calendar, so the adapter reads the date as written without
+  it, whether it stands before the whole date or before each date of an
+  approximation, a range or a period; a date phrase in parentheses stays
+  free text.
 - **The review sheet's correction path** refuses a correction to a year
   before the common era (`0`, `-1836`), naming it as unsupported; it never
   takes a calendar, so a correction is always Gregorian. As with any

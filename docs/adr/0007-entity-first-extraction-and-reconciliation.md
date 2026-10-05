@@ -43,6 +43,12 @@ whole name. A shared surname or a clipped form ("Gus" against "Gustave
 Lobig") no longer blocks a pair. The roster maps an item's kind to its
 manifest key by the kind item's QID, so occupations and time periods
 block like any other kind.
+Amended by #477 (2026-10-05): every whole name form, a manifest's and a
+graph item's alike, and every record part it is composed from, is read
+in the form the instance keeps a term in (the writer's `stored_term`)
+before it is folded. Folding already took NFD and NFC alike; the stored
+form makes a control character one space and trims the edges, so
+"Cäcilie\x08Löbig" meets the graph's "Cäcilie Löbig".
 Amended by #407 (2026-09-29): the entity-manifest prompt asks for each
 record and note; one that fails validation is set aside, never repaired,
 and never refuses the manifest, and `coverage.json` counts the records
