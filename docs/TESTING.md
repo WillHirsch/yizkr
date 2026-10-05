@@ -324,10 +324,11 @@ tests = ["tests/unit/test_example.py::test_blank_names_are_dropped"]
   non-privileged export; `test_live_nonprivileged_export.py`'s munge
   and block checks over the full dump and the export; and
   `WikiClient.label_index`, which the writer and resolve read, and which
-  raises on any two entities that share an English label. A live mutant that breaks one of these (one that drops a
-  reference, mints a duplicate label, or leaves an entity the munger
-  drops) breaks every later session until the next scratch reset, which
-  is the remedy; the fixture's marker cannot help.
+  raises on any two entities that share an English label. A live mutant
+  that breaks one of these (one that drops a reference, mints a
+  duplicate label, or leaves an entity the munger drops) breaks every
+  later session until the next scratch reset, which is the remedy; the
+  fixture's marker cannot help.
 - **Stop what a test detaches.** Each pytest run has a process group of
   its own, killed when the run ends or outlives `--timeout` (default
   300 s). A process that leaves the group escapes, and can hold a lock or
