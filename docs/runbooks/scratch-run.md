@@ -95,8 +95,10 @@ and `yizkr.reset` for the reset.
   view**, a few trivial calls accepted as the cost of a check that
   never predicts what the run will reuse. An invocation past the
   barrier only, whose corpus stages call no engine (clustering), makes
-  none. Every invocation that calls the engine makes them, the driver's
-  own after a subscription limit included.
+  none. Every invocation whose range holds a per-document stage, or a
+  corpus stage that may call the engine, makes them, the driver's own
+  after a subscription limit included, unless the installed claude CLI
+  is not the run's (below).
 
   When the installed claude CLI is not the one the run recorded, the
   preflight checks no model, refuses nothing, and says so in one line.
@@ -200,11 +202,13 @@ and `yizkr.reset` for the reset.
     the cache may answer an excerpt's calls;
   - **not counted**: calls asked again after an engine error or a chunk
     answer cut off (up to 2 for a chunk), the preflight's one trivial
-    call per (model, effort) pair the invocation's roles run, which
-    every invocation that calls the engine makes, and waits for the
-    subscription, which make no call. A slice the anomaly checks pause
-    as the run unfolds (docs/ANOMALIES.md) makes fewer calls than
-    counted.
+    call per (model, effort) pair of the roles within the invocation's
+    `--until` range, which every invocation whose range holds a stage
+    that may call the engine makes, a resume that reuses every view
+    included, unless the installed claude CLI is not the run's; and
+    waits for the subscription, which make no call. A slice the anomaly
+    checks pause as the run unfolds (docs/ANOMALIES.md) makes fewer
+    calls than counted.
 
   It writes nothing, and takes no lock: it runs beside a running driver,
   counting what the run and the cache hold as it reads them, and names

@@ -50,11 +50,13 @@ ceilings: the chunks an entity manifest makes follow its entities, which
 a text's length only approaches, so a dense document can take more. Not
 counted at all: a call asked again after an engine error, or after a
 chunk answer cut off (up to 2 a chunk), the preflight's one trivial call
-per distinct (model, effort) pair the roles of the invocation's range
-run, which every invocation of the run that calls the engine makes
-(scratch.PREFLIGHT_PROMPT), and the waits for the subscription, which
-are no calls. Nor is a slice the anomaly checks pause as the run
-unfolds (docs/ANOMALIES.md): it makes fewer calls than counted.
+per distinct (model, effort) pair of the roles within the invocation's
+`--until` range (scratch.PREFLIGHT_PROMPT), which every invocation whose
+range holds a stage that may call the engine makes, a resume that reuses
+every view included, unless the installed claude CLI is not the run's;
+and the waits for the subscription, which are no calls. Nor is a slice
+the anomaly checks pause as the run unfolds (docs/ANOMALIES.md): it
+makes fewer calls than counted.
 
 **Excerpts.** An image a PDF places within a text-layer page, read on
 its own, becomes a document of its own, an excerpt (ADR-0008), found only
@@ -1229,10 +1231,12 @@ def describe(estimate: Estimate) -> list[str]:
     lines.append(
         "- Not counted: calls asked again after an engine error or after a "
         "chunk answer cut off (at most 2 for a chunk), the preflight's one "
-        "trivial call per (model, effort) pair the invocation's roles run, "
-        "which every invocation that calls the engine makes, and the waits "
-        "for the subscription, which are no calls. A slice the anomaly "
-        "checks pause makes fewer calls than counted."
+        "trivial call per (model, effort) pair of the roles within the "
+        "invocation's --until range, which every invocation whose range "
+        "holds a stage that may call the engine makes, a resume that "
+        "reuses every view included, unless the installed claude CLI is not "
+        "the run's; and the waits for the subscription, which are no calls. "
+        "A slice the anomaly checks pause makes fewer calls than counted."
     )
     return lines + _notes(estimate)
 

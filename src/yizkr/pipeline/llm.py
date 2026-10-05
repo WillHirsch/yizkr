@@ -1589,8 +1589,9 @@ def refusal(
 # 400 about a feature, a tool or the API is not read as one: a dotted
 # version required "or newer" (the version the model requires; not one an
 # SDK or the API names), the CLI as the subject of "requires a newer" or
-# "does not support", with at most its version between, or a newer CLI
-# required by name. Wording 1 excludes only "sdk " and "api " directly
+# "does not support", with at most its version between, a newer CLI
+# required by name, or the CLI required by name at a dotted version "or
+# newer". Wording 1 excludes only "sdk " and "api " directly
 # before "version": another dotted version said to be required ("Python
 # version 3.11 or newer") still matches. That false match only pauses the
 # pass, which is safe: the operator reads its reason and runs the pass
@@ -1602,7 +1603,9 @@ _UNSUPPORTED_MODEL = re.compile(
     r" is required"
     r"|\b(?:claude code|cli)(?: v?\d+(?:\.\d+)+)? (?:requires? (?:a )?newer"
     r"|(?:does not|doesn't) support)"
-    r"|\brequires? (?:a )?newer (?:version of )?(?:claude code|cli)\b",
+    r"|\brequires? (?:a )?newer (?:version of )?(?:claude code|cli)\b"
+    r"|\brequires? (?:claude code|cli) (?:version )?v?\d+(?:\.\d+)+ or"
+    r" (?:newer|later)\b",
     re.IGNORECASE,
 )
 

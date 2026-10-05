@@ -1027,20 +1027,27 @@ class ScratchDriver(Orchestrator):
         is not the one the run recorded, no pair is called and nothing
         refused: the run's own client refuses the CLI as another setting
         when a stage starts the engine (rundir.record_engine), and a resume
-        with nothing left for the engine goes on. PreflightFailed names each
-        pair whose call fails with an error that is not a subscription limit
-        or an overload, with the engine's reason, a model the CLI does not
-        support (llm.ModelUnsupported) among them; the pause that refusal
-        latches holds every later call of the process, so the pairs after it
-        are named as not tried. The claude-code engine waits out a limit or
-        an overload, or pauses the pass on it (UsageLimitReached), as for
-        any call; an API error with a limit's status (429, 529), which the
-        anthropic engine raises once its own retries are spent, refuses the
-        run with a request to try again. Any other pause stops the run as it
-        would a document's call."""
+        with nothing left for the engine goes on. So does a client that
+        cannot start for a pause the process has latched (llm.PassPaused
+        other than a subscription limit, such as a CLI updated while the
+        driver waited): no pair is called, and the run's own client start
+        meets the pause again within the invocation, which records it.
+        PreflightFailed names each pair whose call fails with an error that
+        is not a subscription limit or an overload, with the engine's
+        reason, a model the CLI does not support (llm.ModelUnsupported)
+        among them; the pause that refusal latches holds every later call of
+        the process, so the pairs after it are named as not tried. The
+        claude-code engine waits out a limit or an overload, or pauses the
+        pass on it (UsageLimitReached), as for any call; an API error with a
+        limit's status (429, 529), which the anthropic engine raises once
+        its own retries are spent, refuses the run with a request to try
+        again. Any other pause stops the run as it would a document's
+        call."""
         from yizkr.pipeline.llm import (
             LIMIT_STATUSES,
             ModelUnsupported,
+            PassPaused,
+            UsageLimitReached,
             make_client,
         )
 
@@ -1053,11 +1060,24 @@ class ScratchDriver(Orchestrator):
             model = self._configured_model(role)[0]
             what = f"{model} ({role}, effort {effort or 'unset'})"
             try:
-                engine = make_client(
-                    self.llm,
-                    effort=effort,
-                    model=self._engine_settings(role)[1],
-                )
+                try:
+                    engine = make_client(
+                        self.llm,
+                        effort=effort,
+                        model=self._engine_settings(role)[1],
+                    )
+                except PassPaused as exc:
+                    if isinstance(exc, UsageLimitReached):
+                        raise
+                    # a pause the process has latched (another CLI since
+                    # the driver began, a relative HOME, the CLI's own
+                    # environment): the run's own client start meets it
+                    # again, within the invocation, which records it
+                    self.log(
+                        "preflight: the engine's client cannot start "
+                        f"({type(exc).__name__}), so no model is checked"
+                    )
+                    break
                 try:
                     cli_version = getattr(engine, "cli_version", None)
                     if pinned and cli_version and cli_version != pinned:

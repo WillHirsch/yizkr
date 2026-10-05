@@ -2131,6 +2131,55 @@ class TestPreflightCalls:
         assert scratch.is_complete(run)
         assert RunDir(run).manifest()["engine"]["cli_version"] == CLI_RUN
 
+    def test_a_cli_updated_during_a_wait_is_recorded_at_the_engine(
+        self, tmp_path, fakes, monkeypatch
+    ):
+        """The claude CLI updates itself while the driver waits out a
+        limit met mid-run: the process's pin latches the change as the
+        preflight's client starts, so no model is checked, and the run's
+        own client start meets it within the invocation, which records it
+        (ET)."""
+        monkeypatch.setattr(llm, "_PIN", llm._CliPin())
+        installed = [CLI]
+
+        def make_client(engine, *, effort=None, model=None, **kwargs):
+            # as ClaudeCodeClient pins the CLI it finds installed
+            llm._PIN.adopt(installed[0], None)
+            return Engine(fakes, effort=effort, model=model)
+
+        monkeypatch.setattr(llm, "make_client", make_client)
+        corpus = small(tmp_path)
+        waits = Waits(lambda: installed.__setitem__(0, "9.9.10"), None, None)
+        limited: list[int] = []
+        lines: list[str] = []
+
+        def hook(what, name):
+            if what == "chunk" and name == LETTER and not limited:
+                limited.append(1)
+                raise usage_limit(waits, minutes=1)
+
+        fakes.hook = hook
+        driver = a_run(
+            tmp_path,
+            corpus,
+            fakes,
+            waits=waits,
+            poll=60,
+            log=lambda line, *a, **k: lines.append(str(line)),
+        )
+        with pytest.raises(CliVersionMismatch):
+            driver.run()
+        invocations = RunDir(driver.state_dir).manifest()["invocations"]
+        assert [(i["outcome"], i["reason"]) for i in invocations] == [
+            ("paused", "UsageLimitReached"),
+            ("paused", "CliVersionMismatch"),
+        ]
+        assert any(
+            "client cannot start (CliVersionMismatch), so no model is "
+            "checked" in line
+            for line in lines
+        )
+
     def test_the_same_cli_with_nothing_left_makes_its_calls(
         self, tmp_path, fakes
     ):
@@ -2243,6 +2292,40 @@ class TestPreflightCalls:
         assert fakes.calls == []
         assert not driver.state_dir.exists()
 
+    def test_an_unsupported_model_alone_is_one_problem(self, tmp_path, fakes):
+        """With no pair after the one the CLI cannot run, nothing is named
+        as not tried."""
+
+        def preflight(model):
+            raise llm.ModelUnsupported("paused", model=model, reason="x")
+
+        fakes.preflight = preflight
+        driver = a_run(tmp_path, small(tmp_path), fakes, until="transcription")
+        with pytest.raises(PreflightFailed) as refused:
+            driver.run()
+        assert refused.value.problems == [
+            f"the engine cannot run {MODEL} (transcribe, effort low): x"
+        ]
+
+    def test_an_effort_left_unset_is_named_so(self, tmp_path, fakes):
+        def preflight(model):
+            raise RuntimeError("API Error: 500")
+
+        fakes.preflight = preflight
+        driver = a_run(
+            tmp_path,
+            small(tmp_path),
+            fakes,
+            until="transcription",
+            extract_effort=None,
+        )
+        with pytest.raises(PreflightFailed) as refused:
+            driver.run()
+        (problem,) = refused.value.problems
+        assert problem.startswith(
+            f"a trivial call to {MODEL} (transcribe, effort unset) failed"
+        )
+
     def test_another_api_error_refuses_the_run(self, tmp_path, fakes):
         def preflight(model):
             raise RuntimeError(
@@ -2284,6 +2367,8 @@ class TestPreflightCalls:
             poll=60,
             log=lambda line, *a, **k: lines.append(str(line)),
         )
+        # a directory there, but no run started in it yet
+        driver.state_dir.mkdir(parents=True)
         assert driver.run() == EXIT_OK
         assert len(fakes.preflights) == 3
         assert waits.waited

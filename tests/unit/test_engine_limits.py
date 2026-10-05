@@ -571,12 +571,16 @@ class TestUnsupportedModel:
             "This model requires a newer CLI",
             "Claude Code 2.1.237 require a newer release",
             "This model requires newer Claude Code",
+            "This model requires Claude Code version 2.1.280 or newer.",
+            "claude-opus-5-5 requires CLI 2.1.280 or later",
         ],
         ids=["the version required", "the CLI does not support", "the CLI "
              "requires a newer", "a newer CLI required, in mixed case",
              "the CLI and its version", "or later", "doesn't",
              "requires newer", "a newer CLI", "require",
-             "newer Claude Code, with no article"],
+             "newer Claude Code, with no article",
+             "the CLI required at a version", "the CLI required, no word "
+             "version"],
     )  # fmt: skip
     def test_each_wording_tied_to_the_cli_is_one(self, text):
         step = {**UNSUPPORTED, "text": f"API Error: 400 {text}"}
@@ -610,6 +614,8 @@ class TestUnsupportedModel:
             "anthropic-version 2023.06.01 or later is required",
             "Claude Code sandbox does not support url sources",
             "version 3.0.1 or newer gives faster uploads",
+            "This tool requires Python version 3.11 or newer",
+            "requires Claude Code version 2.1.280 or so",
         ],
         ids=["a tool", "a feature", "the API's version", "the API", "other",
              "a tool after the CLI's name", "a feature after the CLI's name",
@@ -619,7 +625,9 @@ class TestUnsupportedModel:
              "a word ending in cli", "a version with no dot",
              "does not have", "or lower", "a dotted API version",
              "a word between the CLI and its verb",
-             "a version or newer, not required"],
+             "a version or newer, not required",
+             "another program required at a version",
+             "the CLI at a version, not or newer"],
     )  # fmt: skip
     def test_a_400_about_anything_but_the_cli_is_not_one(self, text):
         step = {**UNSUPPORTED, "text": f"API Error: 400 {text}"}

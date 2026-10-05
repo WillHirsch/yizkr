@@ -1826,9 +1826,10 @@ class TestReport:
         ) in text
         assert "- Not counted:" in text
         assert (
-            "the preflight's one trivial call per (model, effort) pair the "
-            "invocation's roles run, which every invocation that calls the "
-            "engine makes"
+            "the preflight's one trivial call per (model, effort) pair of the "
+            "roles within the invocation's --until range, which every "
+            "invocation whose range holds a stage that may call the engine "
+            "makes, a resume that reuses every view included"
         ) in text
 
     def test_holders_failures_and_what_the_preflight_would_refuse(

@@ -810,9 +810,10 @@ Two Anthropic-backed providers, differing in how usage is billed:
   pauses the pass (`ModelUnsupported`, with no time to go on) rather than
   failing a document, and no further call is made; a scratch run's
   preflight makes one trivial call per (model, effort) pair the
-  invocation's roles run, to refuse such a run before it starts. The first client pins the
-  installed version; every later client is checked when it
-  starts, and every call against the version its stream reports. A
+  invocation's roles run, to refuse such a run before it starts. The
+  first client pins the installed version; every later client is
+  checked when it starts, and every call against the version its stream
+  reports. A
   mismatch (an update landed mid-pass, say from another Claude Code
   session's auto-update) raises `CliVersionMismatch`, which pauses the
   pass: it unwinds past per-document error handling, no further call is
