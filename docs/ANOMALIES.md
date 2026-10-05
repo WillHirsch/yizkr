@@ -212,17 +212,30 @@ by default) after it: a misread century shows here. Only someone the
 batch itself gives a date of birth for (`date_of_birth`, about the same
 entity) is judged, and only in an extraction's batch: a GEDCOM date is
 the source's own reading. A claim is dated by its own time value and by
-its `point_in_time`, `start_time` and `end_time` qualifiers. Every date,
-a birth's included, is judged through the span its source states: the
-years its precision names, counted as Wikibase counts them (a decade
-from a year ending in 0, a century from a year ending in 01, whichever
-of its years is stored), its first year lowered by its earliest bound
-and its last raised by its latest one, a start between `earliest_date`
-and `latest_start_date` and an end between `earliest_end_date` and
-`latest_date`. A lone bound leaves its other side open ("after 1890"
-runs on from 1890), and a claim the source gives as circa
-(`sourcing_circumstances` → `circa`) is open on both sides, so neither
-is judged. So no date is narrowed, and years alone are compared: a date
+its `point_in_time`, `start_time` and `end_time` qualifiers; a birth is
+read from its time value and its `earliest_date` and `latest_date`
+alone, since a point in time, start or end on it dates its source (the
+year a register extract was made), not the birth, and is judged as any
+claim's date is. Every date, a birth's included, is judged through the
+span its source states: the years its precision names, counted as
+Wikibase counts them (a decade from a year ending in 0, a century from a
+year ending in 01, whichever of its years is stored), its first year
+lowered by its earliest bound and its last raised by its latest one, a
+start between `earliest_date` and `latest_start_date` and an end between
+`earliest_end_date` and `latest_date`. A stated range widens the years
+the precision names and never replaces them (the disagreement report
+replaces them): a birth in the 1910s stated "between 1915 and 1916" may
+still lie in 1912. The wider reading can only miss an alert, never
+invent one. A point in time takes `earliest_date` and `latest_date` too,
+so on a period the bounds of its start or end also widen its point in
+time. A lone bound leaves its other side open ("after 1890" runs on from
+1890), and a claim the source gives as circa (`sourcing_circumstances` →
+`circa`) is open on both sides, as is a date with a bound that cannot be
+read (in a hand-edited or damaged `batch.json`): neither side of it is
+judged. A partly open date is still judged by its closed side: a
+residence "before 1890" for someone born in 1911 lies wholly before the
+birth, and one "after 2040" for someone born in 1900 wholly after the
+threshold. So no date is narrowed, and years alone are compared: a date
 in a birth year is never before it. Every birth the batch gives the
 person counts and none is preferred (ADR-0002): a claim is counted only
 when a date of it lies wholly before the earliest year any of them may

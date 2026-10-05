@@ -826,33 +826,44 @@ def _circa(claim: Any) -> bool:
     )
 
 
-def _bounds(qualifiers: Sequence[Any], name: str) -> list[tuple[int, int]]:
-    """The years of each `name` qualifier's time value."""
+def _bounds(
+    qualifiers: Sequence[Any], name: str
+) -> list[tuple[int, int]] | None:
+    """The years of each `name` qualifier's time value; None when one of
+    them cannot be read, so that the side it bounds is never closed by
+    leaving it out."""
     found = []
     for qualifier in qualifiers:
         if _get(qualifier, "property") == name:
             years = _years(_get(qualifier, "value"))
-            if years is not None:
-                found.append(years)
+            if years is None:
+                return None
+            found.append(years)
     return found
 
 
-def _stated_spans(claim: Any) -> list[tuple[float, float]]:
+def _stated_spans(
+    claim: Any, *, dating: bool = True
+) -> list[tuple[float, float]]:
     """The years each date of a claim may lie in, as its source states
     them: its time value and its dating qualifiers (DATING_QUALIFIERS),
     each at the years its precision names, its first year lowered by its
     earliest bound and its last raised by its latest one (BOUNDS), and
     open on the side a lone bound leaves open ("after 1890" runs on from
     1890). A claim its source gives as circa says nothing certain of
-    either side, and each of its dates is open on both. Never narrower
-    than the source."""
+    either side, and each of its dates is open on both, as is a date with
+    a bound that cannot be read. Never narrower than the source. Without
+    `dating`, the time value alone is read, with its own bounds: a
+    birth's, whose dating qualifiers date its source, not the birth."""
     qualifiers = list(_get(claim, "qualifiers") or ())
     circa = _circa(claim)
-    dates = [("value", _get(claim, "value"))] + [
-        (_get(qualifier, "property"), _get(qualifier, "value"))
-        for qualifier in qualifiers
-        if _get(qualifier, "property") in DATING_QUALIFIERS
-    ]
+    dates = [("value", _get(claim, "value"))]
+    if dating:
+        dates += [
+            (_get(qualifier, "property"), _get(qualifier, "value"))
+            for qualifier in qualifiers
+            if _get(qualifier, "property") in DATING_QUALIFIERS
+        ]
     spans: list[tuple[float, float]] = []
     for name, value in dates:
         years = _years(value)
@@ -862,8 +873,12 @@ def _stated_spans(claim: Any) -> list[tuple[float, float]]:
             spans.append((-_OPEN, _OPEN))
             continue
         lower, upper = BOUNDS[name]
-        earliest = [bound[0] for bound in _bounds(qualifiers, lower)]
-        latest = [bound[1] for bound in _bounds(qualifiers, upper)]
+        lowers, uppers = _bounds(qualifiers, lower), _bounds(qualifiers, upper)
+        if lowers is None or uppers is None:
+            spans.append((-_OPEN, _OPEN))
+            continue
+        earliest = [bound[0] for bound in lowers]
+        latest = [bound[1] for bound in uppers]
         first: float = min([years[0], *earliest])
         last: float = max([years[1], *latest])
         if earliest and not latest:
@@ -892,13 +907,14 @@ def date_findings(
     it gives a date of birth for that are dated wholly before the earliest
     year any of those births may lie in, or wholly more than
     `max-years-after-birth` years after the latest. Every date, a birth's
-    included, is judged through the span its source states
-    (_stated_spans), so a year, a decade, a century or a range is never
-    narrowed, and years alone are compared, so a date in a birth year is
-    never before it. Every birth a batch gives someone counts, and none is
-    preferred (ADR-0002): only a date outside all of them is counted, so a
-    birth, which lies within them, never is. A claim is counted once,
-    before the birth if any of its dates is, else after it."""
+    included, is judged through the span its source states (_stated_spans;
+    a birth by its time value and its own bounds), so a year, a decade, a
+    century or a range is never narrowed, and years alone are compared, so
+    a date in a birth year is never before it. Every birth a batch gives
+    someone counts, and none is preferred (ADR-0002): only a date outside
+    all of them is counted, so a birth, which lies within them, never is.
+    A claim is counted once, before the birth if any of its dates is, else
+    after it."""
     settings = config.checks.implausible_date
     if not settings.enabled:
         return []
@@ -906,7 +922,9 @@ def date_findings(
     for claim in claims:
         key = _subject_key(_get(claim, "subject"))
         if key is not None and _get(claim, "property") == BIRTH:
-            births.setdefault(key, []).extend(_stated_spans(claim))
+            births.setdefault(key, []).extend(
+                _stated_spans(claim, dating=False)
+            )
     before = after = 0
     for claim in claims:
         key = _subject_key(_get(claim, "subject"))

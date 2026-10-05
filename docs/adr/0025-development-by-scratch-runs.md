@@ -373,9 +373,10 @@ futile, and explain itself afterwards.
   per-document rate; entity, claim or critic-finding rates far outside
   the run's distribution; claims dated before the birth of the person
   they are about, or implausibly long after it (amended by #463); and a
-  stage's failure rate over a rolling window. Each alert names the stage, the check, the document by SHA-1
-  prefix, the measured value, and whether it is *new* (on a computed
-  output) or *carried* (on a reused one). Thresholds live in one
+  stage's failure rate over a rolling window. Each alert names the
+  stage, the check, the document by SHA-1 prefix, the measured value,
+  and whether it is *new* (on a computed output) or *carried* (on a
+  reused one). Thresholds live in one
   documented config, and changing them re-evaluates stored outputs
   without recomputing any stage. Alerts are signals for the operator and
   the report. They never alter or drop a claim (ADR-0002). Registration

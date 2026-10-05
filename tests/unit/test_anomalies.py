@@ -1237,6 +1237,14 @@ class TestImplausibleDate:
             # a century stored by another of its years: 1850 names the
             # 19th century, 1801 to 1900, which ends before 1911
             (a_time(1911), a_time(1850, "century"), (1, 0)),
+            # a century stored by its last year: 1900 names the 19th
+            # century, 1801 to 1900
+            (a_time(1900, "century"), a_time(1850), None),
+            (a_time(1911), a_time(1900, "century"), (1, 0)),
+            (a_time(1901), a_time(1801, "century"), (1, 0)),
+            # a month or a day before the birth year is before it
+            (a_time(1911), a_time(1801, month=3), (1, 0)),
+            (a_time(1911), a_time(1801, month=3, day=5), (1, 0)),
         ],
     )
     def test_spans_are_counted_as_wikibase_counts_them(
@@ -1278,6 +1286,43 @@ class TestImplausibleDate:
 
         assert counted(rahel_in(1991)) is None
         assert counted(rahel_in(1992)) == (0, 1)
+        # the range is closed on its early side too
+        assert counted(rahel_in(1869)) == (1, 0)
+        # a coarse bound is read at its far edge: an earliest date in the
+        # 1870s from 1870, a latest date in the 1920s to 1929
+        coarse_earliest = a_dated_batch(
+            a_dated_claim("rahel", "date_of_birth", a_time(1875)),
+            lived(
+                "rahel",
+                ("point_in_time", a_time(1872)),
+                ("earliest_date", a_time(1870, "decade")),
+                ("latest_date", a_time(1880)),
+            ),
+        )
+        assert counted(coarse_earliest) is None
+        # Eugen's birth read as 1925
+        coarse_latest = a_dated_batch(
+            a_dated_claim("eugen", "date_of_birth", a_time(1925)),
+            lived(
+                "eugen",
+                ("point_in_time", a_time(1920)),
+                ("earliest_date", a_time(1915)),
+                ("latest_date", a_time(1920, "decade")),
+            ),
+        )
+        assert counted(coarse_latest) is None
+        # of several earliest dates, the earliest is read
+        several = a_dated_batch(
+            a_dated_claim("gustav", "date_of_birth", a_time(1900)),
+            lived(
+                "gustav",
+                ("point_in_time", a_time(2050)),
+                ("earliest_date", a_time(2010)),
+                ("earliest_date", a_time(2030)),
+                ("latest_date", a_time(2060)),
+            ),
+        )
+        assert counted(several) is None
         # a range within a decade lowers and raises nothing: a birth in
         # the 1910s, "between 1915 and 1916", may still lie in 1912
         narrower = a_dated_claim(
@@ -1331,6 +1376,133 @@ class TestImplausibleDate:
             )
         ) == (0, 1)
 
+    @pytest.mark.parametrize(
+        "batch",
+        [
+            # Nicholas, his birth read as 1850, moved in "before 2008"
+            a_dated_batch(
+                NICHOLAS_BORN,
+                lived(
+                    "nicholas",
+                    ("start_time", a_time(2008)),
+                    ("latest_start_date", a_time(2008)),
+                ),
+            ),
+            # Ursula's residence ended "after 1801"
+            a_dated_batch(
+                URSULA_BORN,
+                lived(
+                    "ursula",
+                    ("end_time", a_time(1801)),
+                    ("earliest_end_date", a_time(1801)),
+                ),
+            ),
+            # her death in 2040, "after 1920"
+            a_dated_batch(
+                URSULA_BORN,
+                a_dated_claim(
+                    "ursula",
+                    "date_of_death",
+                    a_time(2040),
+                    [("earliest_date", a_time(1920))],
+                ),
+            ),
+            # a residence observed in 1905, "before 1915"
+            a_dated_batch(
+                URSULA_BORN,
+                lived(
+                    "ursula",
+                    ("point_in_time", a_time(1905)),
+                    ("latest_date", a_time(1915)),
+                ),
+            ),
+        ],
+    )
+    def test_each_date_s_lone_bound_opens_its_own_side(self, batch):
+        """A start's lone latest start date, an end's lone earliest end
+        date, and a value's or a point in time's lone earliest or latest
+        date each leave the other side of that date open."""
+        assert counted(batch) is None
+
+    def test_a_partly_open_date_wholly_outside_the_life_counts(self):
+        """A residence "before 1890" for Ursula, born in 1911, lies wholly
+        before her birth however early it was; one "after 2040" for
+        Gustav, his birth read as 1900, wholly after his 120th year."""
+        before_1890 = lived(
+            "ursula",
+            ("point_in_time", a_time(1890)),
+            ("latest_date", a_time(1890)),
+        )
+        assert counted(a_dated_batch(URSULA_BORN, before_1890)) == (1, 0)
+        after_2040 = lived(
+            "gustav",
+            ("point_in_time", a_time(2040)),
+            ("earliest_date", a_time(2040)),
+        )
+        gustav_born = a_dated_claim("gustav", "date_of_birth", a_time(1900))
+        assert counted(a_dated_batch(gustav_born, after_2040)) == (0, 1)
+
+    def test_a_birth_is_read_from_its_value_and_bounds_alone(self):
+        """A birth's point in time, start or end dates its source (the
+        year the register extract was made), never the birth."""
+        recorded_1950 = a_dated_claim(
+            "ursula",
+            "date_of_birth",
+            a_time(1911),
+            [("point_in_time", a_time(1950))],
+        )
+        assert counted(
+            a_dated_batch(
+                recorded_1950, lived("ursula", ("start_time", a_time(2060)))
+            )
+        ) == (0, 1)
+        started_1800 = a_dated_claim(
+            "ursula",
+            "date_of_birth",
+            a_time(1911),
+            [("start_time", a_time(1800))],
+        )
+        # the residence of 1850 is before the birth, and so is the birth
+        # claim's own start, which dates its source as any claim's dates
+        # do
+        assert counted(
+            a_dated_batch(
+                started_1800, lived("ursula", ("start_time", a_time(1850)))
+            )
+        ) == (2, 0)
+
+    @pytest.mark.parametrize(
+        "unreadable",
+        [
+            {"type": "time", "year": True},
+            {"type": "time", "year": 0},
+            {"type": "time", "year": "1890"},
+            {"type": "time", "year": 1890.0},
+            {"type": "time", "year": None},
+            {"type": "time", "year": 1890, "precision": "millennium"},
+        ],
+    )
+    def test_a_date_with_an_unreadable_bound_is_not_judged(self, unreadable):
+        """Raw stored claims: a bound that cannot be read leaves its date
+        open, never closed on the side it bounds. Ursula's residence
+        "after 1890", and Cäcilie born "before 1834"."""
+        config = load_config()
+        residence = lived(
+            "ursula",
+            ("start_time", a_time(1890)),
+            ("earliest_date", a_time(1890)),
+        )
+        residence["qualifiers"][1]["value"] = unreadable
+        assert anomalies.date_findings(config, [URSULA_BORN, residence]) == []
+        birth = a_dated_claim(
+            "cäcilie",
+            "date_of_birth",
+            a_time(1834),
+            [("latest_date", unreadable)],
+        )
+        early = lived("cäcilie", ("start_time", a_time(1801)))
+        assert anomalies.date_findings(config, [birth, early]) == []
+
     def test_a_circa_date_is_judged_on_neither_side(self):
         """Cäcilie born c. 1833 may be born years either side of it; a
         residence c. 1801 may lie years either side of that."""
@@ -1355,6 +1527,31 @@ class TestImplausibleDate:
             ),
         )
         assert counted(batch) is None
+        # a circa birth beside an exact one leaves the exact one no
+        # preference (ADR-0002)
+        batch = a_dated_batch(
+            circa_1833,
+            a_dated_claim("cäcilie", "date_of_birth", a_time(1833)),
+            lived("cäcilie", ("start_time", a_time(1801))),
+        )
+        assert counted(batch) is None
+
+    def test_another_sourcing_circumstance_is_no_circa(self):
+        """A claim read from a machine translation is exact for all
+        that: its date is judged."""
+        machine = {
+            "type": "item",
+            "value": {"kind": "vocab", "key": "machine_assisted"},
+        }
+        batch = a_dated_batch(
+            URSULA_BORN,
+            lived(
+                "ursula",
+                ("start_time", a_time(1801)),
+                ("sourcing_circumstances", machine),
+            ),
+        )
+        assert counted(batch) == (1, 0)
 
     def test_each_end_takes_its_own_bounds(self):
         """A start runs to its latest start date, not to the latest date,
