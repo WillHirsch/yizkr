@@ -676,6 +676,24 @@ refuses). The module docstring is the full account; in short:
   overrides with never-re-ask with #107. The owner reviews ambiguous and
   conflicting clusters once, before the keeper run.
 
+## The run-to-run diff (`rundiff.py`, ADR-0025 §4)
+
+`yizkr scratch diff [<baseline>] [<run>]` says what changed between two
+scratch runs, and why: the settings that differ; per stage, how each
+document's stage came about in each run, each recompute put down to the
+components of its calls' keys that changed against the baseline's
+(read, components alone, from the LLM cache), and whether each view
+changed; every figure of the two run reports side by side (absent, never
+0, where an older report lacks one); anomaly findings new and resolved;
+documents newly failing or no longer failing; claims matched by their
+fingerprints, added, removed and changed per document and property;
+mentions added and removed; and cluster merges and splits by membership.
+The baseline defaults to the latest completed run on main. It reads the
+two run directories alone (and the cache's key components), never the
+wiki, the engine or the corpus, and writes `diff.json` (local) and
+`diff.md` (aggregates, may be posted) into the run's `.diff/<baseline>/`.
+docs/RUN_DIFF.md has the details and the reviewer checklist.
+
 ## Face proposals (`ingest/faces.py`, ADR-0005)
 
 A face proposal is an ordinary claim — `depicts` on the photograph,

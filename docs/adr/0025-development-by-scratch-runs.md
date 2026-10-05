@@ -121,6 +121,32 @@ ref in an earlier claim can change it; and two mentions equal in every
 other component swap fingerprints when their manifest lists them in the
 other order.
 
+Amended by #198 (2026-10-05): §4's diff is `yizkr scratch diff`
+(`pipeline/rundiff.py`, docs/RUN_DIFF.md, which holds the reviewer
+checklist). It reads the two run directories, their stored run reports
+(built afresh when missing or older than the run's end), and of the LLM
+cache, through the client factory's read-only view (ADR-0032), only the
+components of the keys their events name, never a response, and
+attributes each recompute to the components of its key
+that differ from the closest of the baseline's calls for the same
+document and stage. The baseline defaults to the latest run older than
+the diffed run whose last invocation went through every stage, on clean
+code of a commit on main, and, where an invocation took it past its
+barrier on other code, that code too.
+A figure an older report.json does not hold is absent, never 0. Claims
+are matched by fingerprint as multisets; a removed and an added claim
+sharing subject, property and artifact are paired as changed; an
+excerpt change on a matched claim is counted apart. Clusters are
+compared by membership over the mentions both identity maps hold.
+Flags and different-source contradictions are compared once a report
+counts them, and are not available until then. The detailed
+`diff.json` stays local; `diff.md` is the aggregate summary that may be
+posted. It follows `report.md`'s rules: never counts or deltas per
+language, nor an alert's value or limit; and of the run settings it
+names only an allow-list (models, efforts, epochs, the engine's name and
+version, the code's commit and dirty flag, and the client's
+configuration hash as its first 12 hex digits), counting the others.
+
 Amended by #463 (2026-10-05): §3's anomaly classes include claims dated
 implausibly for the person they are about: wholly before a birth their
 batch gives that person, or more than a configured number of years

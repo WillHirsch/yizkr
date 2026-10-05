@@ -327,8 +327,12 @@ calls from the cache.
   line.
 - `yizkr scratch watch <run> --once`: the monitor's view, at any time,
   finished runs included.
-- The run report (`yizkr scratch report`, #124) and the run-to-run diff
-  (`yizkr scratch diff`, #198) come with their issues.
+- `yizkr scratch report <run>`: the run report (docs/RUN_REPORT.md).
+- `yizkr scratch diff [<baseline>] [<run>]`: what changed between a run
+  and a baseline, by default the latest completed run on main, and why,
+  with the reviewer checklist a scratch-diff is read by
+  (docs/RUN_DIFF.md). Its `diff.md` may be posted; its `diff.json` stays
+  local.
 
 In the monitor's counts, **done** is a view made in this run, **reused**
 a view that stood or one whose every call the cache answered (by the
@@ -520,7 +524,8 @@ Everything a run writes is under `var/`, and is local-only data
 status page) and the LLM cache (model answers and session transcripts).
 Nothing from them goes into the repository, GitHub or a cloud session.
 
-- Only a run's aggregate report and diff summary may leave the machine.
+- Only a run's aggregate report and diff summary (`report.md`,
+  `diff.md`) may leave the machine.
   In an issue or a PR, cite a document by its SHA-1 prefix and a generic
   descriptor, and give metrics as aggregates.
 - Serve the status page with `watch --serve` alone: never serve the run
