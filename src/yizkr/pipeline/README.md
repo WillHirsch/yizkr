@@ -772,8 +772,13 @@ Two Anthropic-backed providers, differing in how usage is billed:
 
   A pass runs on one **pinned** CLI version (#133): the one installed
   when its first client starts. Install 2.1.288, which `claude-opus-5-5`
-  needs (2.1.280 or newer; docs/runbooks/scratch-run.md); the engine
-  itself does not refuse an older one. The first client pins the
+  needs (2.1.280 or newer; docs/runbooks/scratch-run.md). The engine
+  does not compare the version with the model's needs, but a call the
+  API refuses with status 400 because the CLI does not support its model
+  pauses the pass (`ModelUnsupported`, with no time to go on) rather than
+  failing a document, and no further call is made; a scratch run's
+  preflight makes one trivial call per model to refuse such a run before
+  it starts. The first client pins the
   installed version; every later client is checked when it
   starts, and every call against the version its stream reports. A
   mismatch (an update landed mid-pass, say from another Claude Code

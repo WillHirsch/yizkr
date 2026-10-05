@@ -63,6 +63,8 @@ from yizkr.pipeline.scratch import (
 from yizkr.pipeline.stages import read_jsonl
 
 SOURCES = {source.key: source for source in u.SOURCES}
+# the engine's own client factory, which the fakes fixture replaces
+MAKE_CLIENT = llm.make_client
 MODEL = "claude-opus-5-5"
 CLI = "9.9.9"
 DOCUMENT_STAGES = {"transcription", "extraction", "critique", "gedcom"}
@@ -158,12 +160,16 @@ def small(tmp_path: Path) -> Corpus:
 
 class Fakes:
     """The fake engine's corpus, its log of calls, as (what, file), and a
-    hook that sees each call before it is answered."""
+    hook that sees each call before it is answered; and apart from them,
+    the preflight's calls, as (model, effort), and a hook that sees each
+    of those, with the model, before it is answered."""
 
     def __init__(self) -> None:
         self.corpus: Corpus | None = None
         self.calls: list[tuple[str, str | None]] = []
         self.hook = None
+        self.preflights: list[tuple[str | None, str | None]] = []
+        self.preflight = None
 
 
 class Engine:
@@ -185,6 +191,11 @@ class Engine:
         self.model_identifier = f"claude-code/{CLI}:{self.model}"
 
     def complete(self, prompt, image_paths=()):
+        if prompt == scratch.PREFLIGHT_PROMPT and not image_paths:
+            self.fakes.preflights.append((self.model, self.effort))
+            if self.fakes.preflight is not None:
+                self.fakes.preflight(self.model)
+            return "ready"
         corpus = self.fakes.corpus
         if image_paths:
             what, name = "vision", Path(image_paths[0]).name
@@ -1350,6 +1361,31 @@ class TestSubscription:
         assert outcome(driver.state_dir) == ("paused", "CliVersionMismatch")
         assert events(driver.state_dir)[-1]["event"] == "run-end"
 
+    def test_a_model_the_cli_stops_supporting_stops_the_run_once(
+        self, tmp_path, fakes
+    ):
+        """A model change in the middle of a run (#455): the engine pauses
+        the pass with no time to go on, the driver ends without waiting,
+        and no document fails."""
+        corpus = small(tmp_path)
+
+        def hook(what, name):
+            raise llm.ModelUnsupported(
+                "paused",
+                model=MODEL,
+                reason="version 2.1.280 or newer is required",
+            )
+
+        fakes.hook = hook
+        waits = Waits()
+        driver = a_run(tmp_path, corpus, fakes, waits=waits)
+        with pytest.raises(llm.ModelUnsupported):
+            driver.run()
+        assert outcome(driver.state_dir) == ("paused", "ModelUnsupported")
+        assert "failed" not in statuses(driver.state_dir)
+        assert len(RunDir(driver.state_dir).manifest()["invocations"]) == 1
+        assert waits.waited == []
+
 
 # -- the barrier and the corpus stages ----------------------------------------
 
@@ -1871,6 +1907,167 @@ class TestPreflight:
         driver = a_run(tmp_path, corpus, fakes)
         with pytest.raises(PreflightFailed, match="poppler"):
             driver.run()
+        assert not driver.state_dir.exists()
+
+
+class TestPreflightCalls:
+    """The preflight's one trivial call per distinct model the roles name
+    (#455), made through the engine as the run calls it, after every other
+    check and before any document is dispatched or anything written."""
+
+    def test_one_call_per_distinct_model_before_any_document(
+        self, tmp_path, fakes
+    ):
+        seen: list[int] = []
+        fakes.hook = lambda what, name: seen.append(len(fakes.preflights))
+        driver = a_run(
+            tmp_path,
+            small(tmp_path),
+            fakes,
+            extract_model="claude-sonnet-5",
+            review_effort="max",
+            until="critique",
+        )
+        assert driver.run() == EXIT_OK
+        # transcribe and critique share the model: one call for both, as
+        # the first role naming it (transcribe) calls it
+        assert fakes.preflights == [
+            (MODEL, driver.extract_effort),
+            ("claude-sonnet-5", driver.extract_effort),
+        ]
+        assert seen and set(seen) == {2}
+        # no event of the run's: each call event is a document's call
+        calls = events(driver.state_dir, llm.ENGINE_CALL)
+        assert len(calls) == len(fakes.calls)
+        assert all(event.get("subject") for event in calls)
+
+    def test_every_invocation_makes_them(self, tmp_path, fakes):
+        corpus = small(tmp_path)
+        assert command(tmp_path, corpus, fakes, until="transcription") == 0
+        assert command(tmp_path, corpus, fakes, until="transcription") == 0
+        assert len(fakes.preflights) == 2
+
+    def test_no_call_while_another_check_fails(
+        self, tmp_path, fakes, monkeypatch
+    ):
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "nowhere"))
+        driver = a_run(tmp_path, small(tmp_path), fakes)
+        with pytest.raises(PreflightFailed, match="no login"):
+            driver.run()
+        assert fakes.preflights == []
+
+    def test_a_model_the_cli_does_not_support_refuses_the_run(
+        self, tmp_path, fakes
+    ):
+        reason = "version 2.1.280 or newer is required"
+
+        def preflight(model):
+            if model == MODEL:
+                raise llm.ModelUnsupported(
+                    "paused", model=model, reason=reason
+                )
+
+        fakes.preflight = preflight
+        driver = a_run(
+            tmp_path, small(tmp_path), fakes, extract_model="claude-sonnet-5"
+        )
+        with pytest.raises(PreflightFailed) as refused:
+            driver.run()
+        problems = refused.value.problems
+        assert problems[0] == (
+            f"the engine cannot run {MODEL} (transcribe): {reason}"
+        )
+        # the pause holds every later call of the process
+        assert "not tried" in problems[1] and "claude-sonnet-5" in problems[1]
+        assert len(fakes.preflights) == 1
+        assert fakes.calls == []
+        assert not driver.state_dir.exists()
+
+    def test_another_api_error_refuses_the_run(self, tmp_path, fakes):
+        def preflight(model):
+            raise RuntimeError(
+                "claude CLI reported an error that is not a subscription "
+                "limit: API Error: 500 Internal server error"
+            )
+
+        fakes.preflight = preflight
+        driver = a_run(tmp_path, small(tmp_path), fakes)
+        with pytest.raises(PreflightFailed) as refused:
+            driver.run()
+        (problem,) = refused.value.problems
+        assert problem.startswith(
+            f"a trivial call to {MODEL} (transcribe) failed: RuntimeError: "
+        )
+        assert "API Error: 500" in problem
+        assert fakes.calls == []
+        assert not driver.state_dir.exists()
+
+    def test_a_limit_is_the_engines_and_waited_out(self, tmp_path, fakes):
+        waits = Waits(None, None)
+        limited: list[int] = []
+
+        def preflight(model):
+            if not limited:
+                limited.append(1)
+                raise usage_limit(waits, minutes=1)
+
+        fakes.preflight = preflight
+        driver = a_run(tmp_path, small(tmp_path), fakes, waits=waits, poll=60)
+        assert driver.run() == EXIT_OK
+        assert len(fakes.preflights) == 2
+        # nothing was written before the wait: one invocation in all
+        assert len(RunDir(driver.state_dir).manifest()["invocations"]) == 1
+
+    def test_an_api_limit_status_is_the_engines(self, tmp_path, fakes):
+        """The anthropic engine's own limit errors carry the API status:
+        a rate limit or an overload is never a refusal of the run."""
+
+        class Overloaded(Exception):
+            status_code = 529
+
+        def preflight(model):
+            raise Overloaded("overloaded")
+
+        fakes.preflight = preflight
+        driver = a_run(tmp_path, small(tmp_path), fakes)
+        with pytest.raises(Overloaded):
+            driver.run()
+        assert not driver.state_dir.exists()
+
+    def test_through_the_engine_on_the_fake_cli(
+        self, tmp_path, fakes, monkeypatch
+    ):
+        """The claude-code engine itself, on the fake CLI: the API refuses
+        the call for a model the CLI does not support."""
+        from tests.unit.test_claude_code_pinning import install_fake_cli
+        from tests.unit.test_engine_limits import (
+            UNSUPPORTED,
+            Clock,
+            LimitedCli,
+        )
+
+        clock = Clock()
+        monkeypatch.setattr(
+            llm, "_PACER", llm._Pacer(clock=clock, sleep=clock.sleep)
+        )
+        plain = install_fake_cli(monkeypatch, tmp_path)
+        cli = LimitedCli(plain.projects, subprocess.run)
+        monkeypatch.setattr(llm.subprocess, "run", cli)
+        monkeypatch.setattr(llm, "make_client", MAKE_CLIENT)
+        monkeypatch.setenv("YIZKR_LLM_MODEL", MODEL)
+        cli.script = [UNSUPPORTED]
+        driver = a_run(tmp_path, small(tmp_path), fakes)
+        with pytest.raises(PreflightFailed) as refused:
+            driver.run()
+        (problem,) = refused.value.problems
+        assert problem.startswith(
+            f"the engine cannot run {MODEL} (transcribe)"
+        )
+        assert "version 2.1.280 or newer is required" in problem
+        (call,) = cli.calls
+        command = call[0]
+        assert command[command.index("--model") + 1] == MODEL
+        assert call[1]["input"] == scratch.PREFLIGHT_PROMPT
         assert not driver.state_dir.exists()
 
 

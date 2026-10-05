@@ -67,6 +67,7 @@ from yizkr.pipeline.llm import (
     CliVersionMismatch,
     ConversationalLlmClient,
     ConversationChanged,
+    ModelUnsupported,
     PassPaused,
     Refusal,
     RejectingLlmClient,
@@ -80,6 +81,7 @@ from yizkr.pipeline.llm import (
     open_cache,
     refusal,
     run_calls,
+    unsupported_model,
 )
 from yizkr.pipeline.orchestrate import AWAITING_CLAIMS, BATCHED, Orchestrator
 from yizkr.pipeline.review import export_review_csv
@@ -163,6 +165,26 @@ API_ERROR = {
     "status": 500,
     "error": None,
     "text": "API Error: Internal server error",
+}
+
+# a call the API refuses because the CLI does not support the model it
+# names: an API 400 that names the CLI version the model needs (#455)
+UNSUPPORTED = {
+    "info": None,
+    "status": 400,
+    "error": "invalid_request",
+    "text": 'API Error: 400 {"type":"error","error":{"type":'
+    '"invalid_request_error","message":"claude-opus-5-5 cannot be used '
+    "with this version of Claude Code: version 2.1.280 or newer is "
+    'required."}}',
+}
+# another 400: an error of the call like any other, never a pause
+BAD_REQUEST = {
+    "info": None,
+    "status": 400,
+    "error": "invalid_request",
+    "text": 'API Error: 400 {"type":"error","error":{"type":'
+    '"invalid_request_error","message":"prompt is too long"}}',
 }
 
 
@@ -429,6 +451,83 @@ class TestRefusal:
         assert refusal(events, 0) == Refusal(
             USAGE_LIMIT, "five_hour", START + HOUR
         )
+
+
+class TestUnsupportedModel:
+    """What the engine reads from a call's stream as a refusal of a model
+    the CLI does not support (llm.unsupported_model): an API 400 whose
+    text names the CLI version the model needs."""
+
+    def test_a_400_naming_a_newer_cli_is_one(self):
+        events = [INIT, *refused_events(UNSUPPORTED, "s1")]
+        reason = unsupported_model(events, 1)
+        assert reason is not None
+        assert "version 2.1.280 or newer is required" in reason
+        assert "\n" not in reason and len(reason) <= 300
+
+    def test_the_words_alone_on_an_assistant_event_count(self):
+        events = [
+            INIT,
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": UNSUPPORTED["text"]}]
+                },
+            },
+            {"type": "result", "is_error": True, "api_error_status": 400},
+        ]
+        assert "or newer is required" in unsupported_model(events, 1)
+
+    @pytest.mark.parametrize(
+        "step",
+        [BAD_REQUEST, {**UNSUPPORTED, "status": 500}, RATE_LIMITED],
+        ids=["another 400", "the words on a 500", "a rate limit"],
+    )
+    def test_anything_else_is_not_one(self, step):
+        events = [INIT, *refused_events(step, "s1")]
+        assert unsupported_model(events, 1) is None
+
+    def test_an_answered_call_is_not_one(self):
+        events = [
+            INIT,
+            {
+                "type": "result",
+                "is_error": False,
+                "api_error_status": 400,
+                "result": UNSUPPORTED["text"],
+            },
+        ]
+        assert unsupported_model(events, 0) is None
+
+    def test_it_pauses_the_pass_with_no_time_to_go_on(self, cli, clock):
+        client = ClaudeCodeClient(model="claude-opus-5-5")
+        cli.script = [UNSUPPORTED]
+        with pytest.raises(ModelUnsupported) as paused:
+            try:
+                client.complete("Read the letter.")
+            except Exception:  # what isolation handlers catch
+                pytest.fail("the refusal was caught as a document failure")
+        assert isinstance(paused.value, PassPaused)
+        assert paused.value.resumes_at is None
+        assert paused.value.model == "claude-opus-5-5"
+        assert "2.1.280 or newer" in paused.value.reason
+        assert "claude-opus-5-5" in str(paused.value)
+        assert "2.1.280 or newer" in str(paused.value)
+        # never asked again, and never waited for
+        assert len(cli.calls) == 1
+        assert clock.slept == []
+        # the pause is the process's: another role's client pauses at once,
+        # without a call
+        with pytest.raises(ModelUnsupported):
+            ClaudeCodeClient(effort="high").complete("Critique the batch.")
+        assert len(cli.calls) == 1
+
+    def test_another_400_fails_the_call_alone(self, cli, clock):
+        cli.script = [BAD_REQUEST]
+        client = ClaudeCodeClient()
+        with pytest.raises(RuntimeError, match="prompt is too long"):
+            client.complete("Read the letter.")
+        assert client.complete("Read the letter.") == "answer"
 
 
 # -- asking again ------------------------------------------------------------
@@ -1696,6 +1795,44 @@ class TestNoDocumentFails:
         first, last = again.documents()
         assert last.state.status == AWAITING_CLAIMS
         # only the last letter's critique is asked again
+        assert len(cli.calls) == 3
+
+    def test_a_model_the_cli_does_not_support_stops_the_run_once(
+        self, cli, clock, tmp_path, monkeypatch
+    ):
+        """A model change in the middle of a run: the API refuses the last
+        letter's critique for a model the CLI does not support. The run
+        pauses with no time to go on, no document fails, and the next run,
+        on a CLI that runs the model, goes on from where it stopped."""
+        cli.answer = CRITIQUE_ANSWER
+        cli.script = [None, UNSUPPORTED]
+        run = Run(a_folder(tmp_path), tmp_path / "state")
+        with pytest.raises(ModelUnsupported):
+            run.run()
+        first, last = run.documents()
+        assert first.state.status == AWAITING_CLAIMS
+        assert last.state.status == BATCHED
+        assert last.state.error is None
+        events = run.rundir.events()
+        assert not [
+            event
+            for event in events
+            if event["event"] in ("failed", DOCUMENT_FAILED)
+        ]
+        (invocation,) = run.rundir.manifest()["invocations"]
+        assert (invocation["outcome"], invocation["reason"]) == (
+            "paused",
+            "ModelUnsupported",
+        )
+        made = [event for event in events if event["event"] == ENGINE_CALL]
+        assert [e["outcome"] for e in made] == ["ok", "paused"]
+        assert len(cli.calls) == 2
+
+        # a new process, on a CLI that runs the model
+        monkeypatch.setattr(llm, "_PIN", llm._CliPin())
+        again = Run(a_folder(tmp_path), tmp_path / "state")
+        assert again.run() == 2
+        assert again.documents()[1].state.status == AWAITING_CLAIMS
         assert len(cli.calls) == 3
 
     def test_calls_the_cache_answers_are_no_engine_calls(

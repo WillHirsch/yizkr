@@ -2940,6 +2940,10 @@ class TestThePipeline:
             def _engine(self, role):
                 return engine
 
+            def _preflight_models(self):
+                # the preflight's calls bypass the cache (test_scratch.py)
+                pass
+
         repo = a_repository(tmp_path, monkeypatch)
         monkeypatch.setenv("YIZKR_LLM_MODEL", "claude-opus-5-5")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "fictional")

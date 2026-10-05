@@ -76,9 +76,15 @@ list, and runs its preflight: the engine's CLI and its login, a full
 model id for every role, the engine's pacing settings, free disk space,
 the PDF renderer when the corpus holds a PDF, and, only when a stage
 that touches the wiki is to run, a reachable stack and an instance that
-carries no kept-state marker. One driver at a time uses a runs
-directory (hold), and a run is invoked only from the runs directory it
-is in.
+carries no kept-state marker. Once those pass, and before any document is
+dispatched or anything written, it makes one trivial call per distinct
+model the roles name, through the engine as the run calls it but not
+through the cache, and refuses the run, naming the model and the
+engine's reason, when one fails with an error that is not a
+subscription limit or an overload: a model the claude CLI does not
+support among them. Every invocation makes these calls. One driver at a
+time uses a runs directory (hold), and a run is invoked only from the
+runs directory it is in.
 
 Run directories hold transcriptions, claims and the cache's raw model
 output: they are local-only data, kept under var/ (docs/AGENT_PROTOCOL.md
@@ -178,6 +184,9 @@ _COMPLETED = frozenset({DONE, NEEDS_ATTENTION})
 REPORT_COMMAND = "yizkr stages state"
 # how often the driver reads the control file while nothing can go on
 POLL_SECONDS = 5.0
+# what the preflight asks each model the run's roles name: a call that
+# reads no file and needs no thought, so that it costs next to nothing
+PREFLIGHT_PROMPT = "Reply with the single word: ready"
 # the free space a run needs on the filesystems of its run directory and
 # of the LLM cache
 MIN_FREE_BYTES = 2 * 1024**3
@@ -967,6 +976,61 @@ class ScratchDriver(Orchestrator):
         if problems:
             raise PreflightFailed(problems)
 
+    def _preflight_models(self) -> None:
+        """One trivial call (PREFLIGHT_PROMPT) per distinct model the
+        run's roles name, through a client the engine makes as the run's
+        for the first role naming it (its engine, model and effort), and
+        never through the LLM cache, whose answer would be no call.
+        PreflightFailed names each model whose call fails with an error
+        that is not a subscription limit or an overload, with the engine's
+        reason, a model the CLI does not support (llm.ModelUnsupported)
+        among them; the pause that refusal latches holds every later call
+        of the process, so the models after it are named as not tried. A
+        limit or an overload is the engine's to wait out, or to pause the
+        pass on, as for any call; any other pause stops the run as it
+        would a document's call."""
+        from yizkr.pipeline.llm import (
+            LIMIT_STATUSES,
+            ModelUnsupported,
+            make_client,
+        )
+
+        first: dict[str | None, str] = {}
+        for role in MODEL_ROLES:
+            first.setdefault(self._configured_model(role)[0], role)
+        problems: list[str] = []
+        models = list(first.items())
+        for index, (model, role) in enumerate(models):
+            effort, override = self._engine_settings(role)
+            try:
+                engine = make_client(self.llm, effort=effort, model=override)
+                try:
+                    engine.complete(PREFLIGHT_PROMPT)
+                finally:
+                    close = getattr(engine, "close", None)
+                    if callable(close):
+                        close()
+            except ModelUnsupported as exc:
+                problems.append(
+                    f"the engine cannot run {model} ({role}): "
+                    f"{exc.reason or exc}"
+                )
+                untried = [name for name, _role in models[index + 1 :]]
+                if untried:
+                    problems.append(
+                        "not tried, since that pause holds every later "
+                        f"call: {', '.join(map(str, untried))}"
+                    )
+                break
+            except Exception as exc:
+                if getattr(exc, "status_code", None) in LIMIT_STATUSES:
+                    raise
+                problems.append(
+                    f"a trivial call to {model} ({role}) failed: {_why(exc)}"
+                )
+        if problems:
+            raise PreflightFailed(problems)
+
     def _preflight_documents(self, docs: Sequence[DocumentRun]) -> None:
         """The PDF renderer, when the corpus holds a PDF (the vision
         engine reads one through it, and the transcription check counts
@@ -1607,6 +1671,15 @@ class ScratchDriver(Orchestrator):
         unread = [doc for doc in found if doc.unreadable is not None]
         docs = [doc for doc in found if doc.unreadable is None]
         self._preflight_documents(docs)
+        try:
+            self._preflight_models()
+        except UsageLimitReached as exc:
+            # waited out as a limit a document's call meets is, before
+            # anything is written
+            if exc.resumes_at is None:
+                raise
+            self.log(str(exc))
+            return exc
         taken, duplicates = self._canonical(docs)
         canaries = self._canaries(taken)
         # the excerpts the documents' directories hold already join the

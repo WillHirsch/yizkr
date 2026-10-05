@@ -122,6 +122,10 @@ class Engine:
         return next(n for n in corpus.texts if corpus.sha1(n) == sha1)
 
     def complete(self, prompt, image_paths=()):
+        if prompt == scratch.PREFLIGHT_PROMPT and not image_paths:
+            # the run's preflight (#455), which the estimate never makes
+            self.fakes.preflights.append((self.model, self.effort))
+            return "ready"
         if image_paths:
             name = Path(image_paths[0]).name
             number = self._call("vision", name)
@@ -1370,6 +1374,8 @@ class TestNothingTouched:
             pass
         counted = estimate_of(tmp_path, small(tmp_path), engine)
         assert counted.total().engine_calls == 14
+        # nor does it make the run's preflight calls (#455)
+        assert engine.preflights == []
         assert [line.split(" by ")[0] for line in counted.holders] == [
             f"the runs directory {runs}",
             f"the LLM cache {cache}",
@@ -1819,6 +1825,10 @@ class TestReport:
             "one each."
         ) in text
         assert "- Not counted:" in text
+        assert (
+            "the preflight's one trivial call per model the roles name, "
+            "which every invocation makes"
+        ) in text
 
     def test_holders_failures_and_what_the_preflight_would_refuse(
         self, tmp_path, engine, monkeypatch

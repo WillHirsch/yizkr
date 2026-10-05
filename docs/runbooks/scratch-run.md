@@ -77,6 +77,32 @@ and `yizkr.reset` for the reset.
   answer and the instance must carry no kept-state marker. No such stage
   is registered yet (below), so a run needs no stack. A refusal lists
   every problem it found.
+
+  Once those checks pass, and still before any document is dispatched
+  or anything written, the driver makes **one trivial call per distinct
+  model** the roles name (`transcribe`, `extract`, `critique`; two roles
+  on one model make one call), through the engine as the run calls it:
+  the same engine, model and effort as the first role that names the
+  model, and the pinned claude CLI, but not through the LLM cache, so
+  the call reaches the engine. Every invocation makes them, the driver's
+  own after a subscription limit included. A call that fails with an
+  error that is not a subscription limit or an overload refuses the run,
+  naming the model and the engine's reason: a claude CLI too old for the
+  model (an API 400 asking for a newer version: install a CLI that runs
+  the model, or configure one this CLI runs), or any other API error. A
+  limit or an overload is the engine's to wait out: a limit the engine
+  would wait longer for pauses the run as a document's call would, and
+  the driver waits it out before it writes anything.
+- **A model the CLI stops supporting mid-run.** Should the API refuse a
+  call in the middle of a run because the CLI does not support its
+  model (a model changed under a pinned CLI), the engine takes it as a
+  pause of the pass, never a document's failure: the invocation ends
+  `paused` (reason `ModelUnsupported`), the driver exits with status 2
+  without waiting, since nothing says when it clears, and the message
+  names the model and the CLI's reason. No document fails for it and no
+  further call is made. Settle the CLI or the model, then resume the
+  run; a CLI other than the one the run recorded is refused as another
+  setting, so that may mean a new run.
 - **The kept-state marker** is the page `Project:Kept state` on the
   instance and the file `kept.json` in the record of the instance:
   keeper mode (#118) writes both, and `yizkr scratch reset` refuses while
@@ -118,8 +144,9 @@ and `yizkr.reset` for the reset.
     chunks an entity manifest makes follow its entities, which a text's
     length only approaches, so a dense document can take more;
   - **not counted**: calls asked again after an engine error or a chunk
-    answer cut off (up to 2 for a chunk), and waits for the
-    subscription, which make no call. A slice the anomaly checks pause
+    answer cut off (up to 2 for a chunk), the preflight's one trivial
+    call per model the roles name, which every invocation makes, and
+    waits for the subscription, which make no call. A slice the anomaly checks pause
     as the run unfolds (docs/ANOMALIES.md) makes fewer calls than
     counted.
 

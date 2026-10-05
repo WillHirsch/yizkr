@@ -383,6 +383,30 @@ class CliHomeRelative(PassPaused):
     against different directories."""
 
 
+class ModelUnsupported(PassPaused):
+    """The API refused a call with status 400 because the claude CLI does
+    not support the model the call names (unsupported_model): no call of
+    that model can succeed on this CLI, so no document fails for it. The
+    pass is paused instead, with no time to go on (`resumes_at` is None):
+    the operator installs a CLI that runs the model, or configures one the
+    CLI runs, and runs the pass again. `model` names the model and
+    `reason` gives the CLI's own words; a pause latched by an earlier
+    call (_CliPin) gives its message alone."""
+
+    resumes_at = None
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        model: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.model = model
+        self.reason = reason
+
+
 class UsageLimitReached(PassPaused):
     """The claude subscription cannot serve the pass's next call within
     the longest wait the engine allows (see "Subscription limits" below):
@@ -1558,6 +1582,53 @@ def refusal(
     return Refusal(RATE_LIMIT)
 
 
+# The API status of a request the API refuses as invalid, and the words
+# with which it says, in such a refusal, that the claude CLI does not
+# support the model the request names (a model newer than the CLI, which
+# names the CLI version it requires). Another 400 is an error of the call
+# like any other.
+BAD_REQUEST = 400
+_UNSUPPORTED_MODEL = re.compile(
+    r"or (?:newer|later) is required"
+    r"|requires? (?:a )?newer (?:version|claude code|cli)"
+    r"|(?:does not|doesn't) support (?:the |this )?model"
+    r"|model is not supported (?:by|on|in) this (?:version|cli)",
+    re.IGNORECASE,
+)
+
+
+def unsupported_model(
+    events: Sequence[Mapping[str, Any]], returncode: int
+) -> str | None:
+    """The CLI's account of why the API refused a call, when it refused it
+    with status 400 because the CLI does not support the call's model;
+    else None. Read from the call's stream-json events and exit status: a
+    call that ended with an explicit non-error result was not refused
+    (as for `refusal`); one that was carries api_error_status 400 on its
+    result event, and the words _UNSUPPORTED_MODEL matches in its result
+    or in an assistant event's text. The account is one line, of at most
+    300 characters."""
+    result = _last_event(events, "result")
+    if returncode == 0 and result.get("is_error") is False:
+        return None
+    if result.get("api_error_status") != BAD_REQUEST:
+        return None
+    texts = [result.get("result")]
+    for event in events:
+        message = event.get("message")
+        if event.get("type") == "assistant" and isinstance(message, dict):
+            content = message.get("content")
+            texts += [
+                block.get("text")
+                for block in (content if isinstance(content, list) else [])
+                if isinstance(block, dict)
+            ]
+    for text in texts:
+        if isinstance(text, str) and _UNSUPPORTED_MODEL.search(text):
+            return " ".join(text.split())[:300]
+    return None
+
+
 class _Refused(Exception):
     """An attempt at a call that the subscription refused for a limit;
     ClaudeCodeClient asks again, or pauses the pass."""
@@ -2064,7 +2135,9 @@ class ClaudeCodeClient:
     checked when it returns. A mismatch pauses the pass
     (``CliVersionMismatch``) and the call's output is discarded, as it is
     when a call's stream reports offering the model any tool but Read
-    (``CliToolsMismatch``).
+    (``CliToolsMismatch``). So does a call the API refuses because this
+    CLI does not support the model the call names (``ModelUnsupported``):
+    no document fails for the CLI the pass runs on.
 
     **Tool errors.** A one-shot call's stream reports every Read the model
     makes and its result. When a Read of a file the call was given fails,
@@ -2552,7 +2625,10 @@ class ClaudeCodeClient:
         it is an attempt at. Its sessions' transcripts are released when it
         ends, unless ``hold`` keeps a successful call's session open for
         forking. A call the subscription refused for a limit raises
-        _Refused, before any other check. A call whose stream says the CLI
+        _Refused, before any other check. A call the API refused because
+        the CLI does not support its model (unsupported_model) pauses the
+        pass next (ModelUnsupported), latched as a version mismatch is, so
+        no later call of the process is made. A call whose stream says the CLI
         gave up on its answer at the output token limit raises
         OutputLimitReached next (output_limit_reached), whatever the exit
         status. A call whose terminal result reports another error that is
@@ -2584,6 +2660,22 @@ class ClaudeCodeClient:
             refused = refusal(events, result.returncode)
             if refused is not None:
                 raise _Refused(refused)
+            unsupported = unsupported_model(events, result.returncode)
+            if unsupported is not None:
+                raise self._pin._latch(
+                    ModelUnsupported(
+                        f"the claude CLI {self.cli_version} does not support "
+                        f"the model {self.model or '(its default)'}: the API "
+                        f"refused a call with status {BAD_REQUEST} "
+                        f"({unsupported}). The pass is paused and makes no "
+                        "further calls; its completed outputs are kept. "
+                        "Install a claude CLI that runs the model, or "
+                        "configure a model this one runs, then run the pass "
+                        "again.",
+                        model=self.model,
+                        reason=unsupported,
+                    )
+                )
             if output_limit_reached(events):
                 raise OutputLimitReached()
             if result.returncode != 0:
