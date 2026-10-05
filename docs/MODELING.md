@@ -30,8 +30,8 @@
   so a label given in another form finds its item again; the registrar
   compares and sets an artifact's title by the same rule, which it takes
   from the writer (#369, #403), and so do the resolve step, matching an
-  entity's label (its record's, else its first ref's, as the writer reads
-  it, #476), the place-hierarchy pass, finding its run item, and alias
+  entity's label as the writer's plan reads it (its manifest record's,
+  else its first ref's; #476), the place-hierarchy pass, finding its run item, and alias
   hygiene, comparing an alias with the label and the other aliases
   (#370). A term still over 250 characters in that
   form is cut as a long locator is (below), with the digest of the whole,

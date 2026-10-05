@@ -14,6 +14,8 @@ export and the 1890s studio portrait.
 
 from __future__ import annotations
 
+import pytest
+
 from tests.unit.test_registrar import (
     PORTRAIT,
     RESCAN,
@@ -30,7 +32,13 @@ from tests.unit.test_registration_flags import (
     naming,
     needs_unknown_mark,
 )
-from yizkr.claims import ClaimBatch, ItemValue, LocalRef, QidRef
+from yizkr.claims import (
+    ClaimBatch,
+    EntityRecord,
+    ItemValue,
+    LocalRef,
+    QidRef,
+)
 from yizkr.pipeline.registrar import Registrar
 from yizkr.pipeline.resolve import resolvable_labels, resolve_batch
 from yizkr.pipeline.review import export_review_csv
@@ -323,24 +331,33 @@ def line_range(wiki, *refs: dict):
     return ClaimBatch.model_validate(given)
 
 
+class PlaceWiki(WritingWiki):
+    """The in-memory wiki with a place class in its vocabulary."""
+
+    ITEMS = {**WritingWiki.ITEMS, "place": "Q10"}
+
+
 class TestARefWithoutARecordUnderAnArtifactsLabel:
     """Sebastian named by a ref with no manifest record, his name held by
     a registered scan and a bare item under his tagged label."""
 
     def instance(self, tmp_path):
-        wiki = WritingWiki()
+        wiki = PlaceWiki()
         Registrar(wiki).register_artifact(
             scan(tmp_path, PORTRAIT), "photograph", SEBASTIAN
         )
         tagged = wiki.item(SEBASTIAN + ENTITY_TAG)
         return wiki, tagged
 
-    def test_resolves_and_gives_the_item_what_the_ref_would(self, tmp_path):
+    @pytest.mark.parametrize("kind", ["human", "place"])
+    def test_resolves_and_gives_the_item_what_the_ref_would(
+        self, tmp_path, kind
+    ):
         ref = {
             "kind": "local",
             "local_id": "e0",
             "label": SEBASTIAN,
-            "instance_of": "human",
+            "instance_of": kind,
         }
         wiki, tagged = self.instance(tmp_path)
         other, same = self.instance(tmp_path)
@@ -349,15 +366,48 @@ class TestARefWithoutARecordUnderAnArtifactsLabel:
 
         assert as_resolved(wiki, batch)["e0"] == tagged
         assert as_written(wiki, batch)["e0"] == tagged
-        BatchWriter(wiki).write_batch(resolved(wiki, batch))
+        out = resolved(wiki, batch)
+        assert out.entities == [
+            EntityRecord(id="e0", label=SEBASTIAN, kind=kind)
+        ]
+        BatchWriter(wiki).write_batch(out)
         BatchWriter(other).write_batch(line_range(other, ref))
 
         for instance in (wiki, other):
             aliases = instance.entities[tagged]["aliases"].get("en", [])
             assert [alias["value"] for alias in aliases] == [SEBASTIAN]
             assert strings(instance, tagged, "instance_of") == [
-                WritingWiki.ITEMS["human"]
+                PlaceWiki.ITEMS[kind]
             ]
+
+    def test_one_of_a_batch_citing_two_artifacts_stays_local(self, tmp_path):
+        """Two documents' claims name e0: a record would cite its kind to
+        the first claim's artifact alone, so the ref stays local, and the
+        writer finds the tagged item itself and cites each."""
+        from yizkr.claims import ArtifactRef
+
+        wiki, tagged = self.instance(tmp_path)
+        ref = {
+            "kind": "local",
+            "local_id": "e0",
+            "label": SEBASTIAN,
+            "instance_of": "human",
+        }
+        given = line_range(wiki, ref, ref).model_dump(mode="json")
+        letter = ArtifactRef.from_bytes(b"synthetic scan of a 1952 letter")
+        wiki.item(
+            "letter-to-sipkje-1952",
+            ("instance_of", WritingWiki.ITEMS["photograph"], None),
+            ("media_sha1", letter.sha1, None),
+        )
+        given["claims"][1]["source"]["artifact"] = letter.model_dump(
+            mode="json"
+        )
+        batch = ClaimBatch.model_validate(given)
+
+        assert as_resolved(wiki, batch)["e0"] == "NEW"
+        assert resolved(wiki, batch).entities == []
+        assert as_written(wiki, batch)["e0"] == tagged
 
     def test_one_with_no_kind_stays_local(self, tmp_path):
         """No record can be made without a kind: the ref stays local, and
@@ -373,23 +423,73 @@ class TestARefWithoutARecordUnderAnArtifactsLabel:
 
 
 class TestAsTheWriterReadsAnEntity:
-    def test_a_ref_in_a_claim_refused_before_the_plan_is_passed_over(self):
-        """p1's first ref is in a claim that also names u, whose label
-        holds a character Python's Unicode tables do not know: the writer
-        refuses that claim before its plan and reads p1 by its next ref,
-        and so does resolve."""
+    @needs_unknown_mark
+    @pytest.mark.parametrize("unknown_at", ["subject", "value", "qualifier"])
+    def test_a_ref_in_a_claim_refused_before_the_plan_is_passed_over(
+        self, unknown_at
+    ):
+        """p1's first ref is in a claim that also names u, as its subject,
+        its value or a qualifier's, whose label holds a character Python's
+        Unicode tables do not know: the writer refuses that claim before
+        its plan and reads p1 by its next ref, and so does resolve."""
         wiki = WritingWiki()
         sebastian = person(wiki, SEBASTIAN)
         person(wiki, HILDEGARD)
         family_gedcom(wiki)
-        given = naming("x", "x").model_dump(mode="json")
-        first, second = given["claims"]
-        first["property"] = "relative"
-        first["subject"] = {
+        export = wiki.find_item_by_label("family-tree-export.ged")
+        u = {
             "kind": "local",
             "local_id": "u",
             "label": "Gustav" + UNKNOWN_MARK,
         }
+        p1 = {"kind": "local", "local_id": "p1", "label": HILDEGARD}
+        given = naming("x", "x").model_dump(mode="json")
+        first, second = given["claims"]
+        first["property"] = "relative"
+        first["qualifiers"] = []
+        if unknown_at == "subject":
+            first["subject"] = u
+            first["value"] = {"type": "item", "value": p1}
+        else:
+            first["subject"] = p1
+            if unknown_at == "value":
+                first["value"] = {"type": "item", "value": u}
+            else:
+                first["value"] = {
+                    "type": "item",
+                    "value": {"kind": "qid", "qid": export},
+                }
+                first["qualifiers"] = [
+                    {
+                        "property": "participant",
+                        "value": {"type": "item", "value": u},
+                    }
+                ]
+        second["subject"] = dict(p1, label=SEBASTIAN)
+        batch = ClaimBatch.model_validate(given)
+
+        assert resolvable_labels(wiki, batch) == {SEBASTIAN: sebastian}
+        out = resolved(wiki, batch)
+        assert out.claims[1].subject == QidRef(qid=sebastian)
+        dry = BatchWriter(wiki, dry_run=True).write_batch(batch)
+        assert dry.created_items["p1"] == sebastian
+
+    @needs_unknown_mark
+    def test_an_equivalence_record_with_an_unknown_character_refuses_nothing(
+        self,
+    ):
+        """The writer finds an approved equivalence's item by its QID, so
+        its record's label refuses no claim: p1's first ref, beside it,
+        gives p1 its label, in resolve as in the writer."""
+        wiki = WritingWiki()
+        person(wiki, SEBASTIAN)
+        hildegard = person(wiki, HILDEGARD)
+        gustav = person(wiki, "Gustav Löbig")
+        family_gedcom(wiki)
+        given = naming("x", "x").model_dump(mode="json")
+        first, second = given["claims"]
+        first["property"] = "relative"
+        first["subject"] = {"kind": "local", "local_id": "q1"}
         first["value"] = {
             "type": "item",
             "value": {"kind": "local", "local_id": "p1", "label": HILDEGARD},
@@ -399,14 +499,18 @@ class TestAsTheWriterReadsAnEntity:
             "local_id": "p1",
             "label": SEBASTIAN,
         }
+        given["entities"] += [
+            {
+                "id": "q1",
+                "label": "Gustav" + UNKNOWN_MARK,
+                "kind": "human",
+                "qid": gustav,
+            }
+        ]
         batch = ClaimBatch.model_validate(given)
 
-        assert resolvable_labels(wiki, batch) == {SEBASTIAN: sebastian}
-        out = resolved(wiki, batch)
-        assert out.claims[1].subject == QidRef(qid=sebastian)
-        assert out.claims[0].value.value == QidRef(qid=sebastian)
-        dry = BatchWriter(wiki, dry_run=True).write_batch(batch)
-        assert dry.created_items["p1"] == sebastian
+        assert as_resolved(wiki, batch)["p1"] == hildegard
+        assert as_written(wiki, batch)["p1"] == hildegard
 
     @needs_unknown_mark
     def test_a_record_with_an_unknown_character_stays_new(self):

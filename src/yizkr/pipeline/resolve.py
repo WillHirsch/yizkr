@@ -5,7 +5,10 @@ existing item for by its label with `qid` references to that item.
 Deliberately conservative: exact label match only; anything fuzzier
 needs the human reviewer, who sees the resolution outcome in the review
 CSV (resolved QID or "NEW:<local_id>") and can reject claims that would
-create duplicates. The CSV so shows the item the write will reuse.
+create duplicates. The CSV so shows the item the write will reuse, but
+for an entity without a record whose item is under its tagged label and
+that has no kind or is in a batch citing more than one artifact (below):
+it stays local, as NEW, and the writer finds that item itself.
 
 An entity is matched by the label and the side rules the writer finds
 its item by (yizkr.pipeline.writer, step 2), through the helpers the
@@ -47,13 +50,14 @@ plain or tagged, of the batch's entities (`fetch_claims`), never every
 item's.
 
 An entity's label and kind are read as the writer's plan reads them,
-past the claims the writer refuses before its plan for naming an entity
-whose label holds such a character. The writer refuses other claims
-before its plan too (for their own text or a misplaced document
-subject), and more while it plans (an entity it may place under neither
-label); resolve does not see those, so where the first ref to a local
-id without a record is in such a claim and a later ref gives another
-label, resolve may read the entity by that first ref's label.
+past every claim the writer refuses before its plan (`pre_plan_refusals`:
+for its own text, a misplaced document subject, or naming an entity
+whose label holds such a character, `unnamed_entities`), so an entity
+named only in such claims stays local. The writer refuses more claims
+while it plans (with an entity it may place under neither label);
+resolve does not see those, so where the first ref to a local id without
+a record is in such a claim and a later ref gives another label, resolve
+may read the entity by that first ref's label.
 
 An entity without a manifest record that resolves to the item under its
 tagged label is given a record in the resolved batch, its first ref's
@@ -61,7 +65,11 @@ label and kind (`_tagged_records`): the writer then pairs it with that
 item after the claims, as it pairs any record (yizkr.pipeline.writer,
 step 5), and gives the item its label as an alias and its kind, as the
 local refs would have. One with no kind stays local, for the writer to
-find that item itself, as no record can be made without a kind.
+find that item itself, as no record can be made without a kind. So does
+any such entity of a batch whose claims cite more than one artifact: a
+record's kind is cited to the artifact of the first claim that mentions
+the item, where a ref's is cited to the artifact of each claim it is in,
+so a record could cite its kind to an artifact that does not state it.
 
 Unresolved local refs are left in place: the writer creates new items
 for them at write time.
@@ -82,10 +90,10 @@ from yizkr.pipeline.writer import (
     entity_terms,
     is_artifact_item,
     is_artifact_kind,
-    local_refs,
+    pre_plan_refusals,
     reused_item,
     tagged_label,
-    unknown_characters,
+    unnamed_entities,
 )
 
 
@@ -127,27 +135,11 @@ def resolvable_labels(client, batch: ClaimBatch) -> dict[str, str]:
 def _resolvable(batch: ClaimBatch) -> dict[str, tuple[str, str | None]]:
     """The entities of `batch` resolved by their label, local id ->
     (label, kind), as the writer reads them (entity_terms) past the claims
-    it refuses before its plan for naming an entity whose label holds a
-    character Python's Unicode tables do not know, so no such entity is
-    among them: all but those on the artifact side (the module
-    docstring)."""
+    it refuses before its plan (pre_plan_refusals), so no entity whose
+    label holds a character Python's Unicode tables do not know is among
+    them: all but those on the artifact side (the module docstring)."""
     records = entity_records(batch)
-    unknown = {
-        record.id
-        for record in records.values()
-        if unknown_characters(record.label)
-    }
-    unknown.update(
-        ref.local_id
-        for claim in batch.claims
-        for ref in local_refs(claim)
-        if ref.local_id not in records and unknown_characters(ref.label or "")
-    )
-    refused = {
-        index
-        for index, claim in enumerate(batch.claims)
-        if any(ref.local_id in unknown for ref in local_refs(claim))
-    }
+    refused = pre_plan_refusals(batch, unnamed_entities(batch, records))
     return {
         local_id: (label, kind)
         for local_id, (label, kind) in entity_terms(
@@ -164,9 +156,10 @@ def _tagged_records(
     record that `label_to_qid` resolves to the item under its tagged label
     (resolvable_labels gives that label the same item): a record of its
     label and kind, so the writer pairs it with the item (the module
-    docstring); and the local ids of those with no kind, which stay
-    local."""
+    docstring); and the local ids of those with no kind, or of a batch
+    whose claims cite more than one artifact, which stay local."""
     records = entity_records(batch)
+    several = len({claim.source.artifact.sha1 for claim in batch.claims}) > 1
     made: list[EntityRecord] = []
     kept: set[str] = set()
     for local_id, (label, kind) in entities.items():
@@ -177,7 +170,7 @@ def _tagged_records(
             or label_to_qid.get(tagged_label(label, kind)) != qid
         ):
             continue
-        if kind is None:
+        if kind is None or several:
             kept.add(local_id)
         else:
             made.append(EntityRecord(id=local_id, label=label, kind=kind))

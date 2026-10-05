@@ -196,8 +196,8 @@ and local refs.
   pairs it with a QID that one of the batch's claims mentions, by that
   item's label; a record no claim mentions adds no alias. The label is
   the record's, or its tagged label where the writer would place the
-  record under it (ADR-0010), its own label then going among the
-  aliases (amended by #476, 2026-10-05).
+  record under it (ADR-0010), its own label then an alias, with the
+  record's aliases (amended by #476, 2026-10-05).
 - **Kinds without a manifest.** A batch without an entity manifest, such
   as the line-range tier of ADR-0006 produces, states each entity's kind
   only on its local refs' `instance_of`. When the writer matches such a
@@ -233,8 +233,14 @@ and local refs.
   the item under its tagged label (ADR-0010) is given a manifest record of
   its first ref's label and kind in the resolved batch, so its kind and
   its label, as an alias, reach that item as the unresolved write gives
-  them; one with no kind stays local, for the writer to find that item
-  itself. #109, whose identity map is to replace
+  them. One with no kind stays local, for the writer to find that item
+  itself, and so does one of a batch whose claims cite more than one
+  artifact, as a record's kind cites the first claim's artifact alone,
+  where a ref's cites each claim's own. Resolve reads the entity past
+  every claim the writer refuses before its plan (the writer's
+  `pre_plan_refusals`), so a made record's label and kind never come from
+  such a claim; only the claims the writer refuses while it plans are
+  unseen by it. #109, whose identity map is to replace
   exact-label resolution, takes on carrying every ref's kind to its
   item.
 - The orchestrator's write summary (`write.json`) and its log line count

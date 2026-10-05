@@ -474,8 +474,13 @@ replaces the `local` refs to an entity with the existing item the writer
 would reuse for it, by the entity's label (its manifest record's, else
 its first ref's): the item under that label, or, where an artifact or a
 part of one holds it, the item under its `" [not an artifact]"` tagged
-label (ADR-0010, amended by #476). So a document meets the artifacts
-written before it under the same names only. A ref of an
+label (ADR-0010, amended by #476). A ref without a manifest record that
+resolves to the tagged item gains a record of its first ref's label and
+kind in the resolved batch, so the writer gives that item the ref's name
+as an alias and its kind; one with no kind, or of a batch citing more
+than one artifact, stays local, and the writer finds the tagged item
+itself. So a document meets the artifacts written before it under the
+same names only. A ref of an
 artifact kind or of artifact fragment is never resolved so, nor is any ref resolved to an
 artifact or a part of one: no artifact-kind entity is matched to a
 registered artifact (one with a hash, or its page fragment), no other

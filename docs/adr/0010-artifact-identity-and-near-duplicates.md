@@ -45,16 +45,17 @@ record's label where it has one, otherwise its first ref's, and where an
 artifact or a part of one holds that label, the item under its tagged
 label (`" [not an artifact]"`) when that one is not. So the review sheet
 shows the QID the write reuses, for a GEDCOM person whose name is on its
-record alone and for a person under an artifact's label alike. The
+record alone and for a person under an artifact's label alike, but for a
+ref without a record whose item is the tagged one when it has no kind or
+its batch cites more than one artifact: that ref stays local, shown NEW,
+and the writer finds the tagged item itself. The
 writer pairs a record with a tagged item resolve gave its refs, its own
 label then an alias, as it does an item it finds there itself ("What is
 still matched by label"). A ref without a record that resolves to a
 tagged item is given a record of its first ref's label and kind in the
-resolved batch, so the writer pairs it the same way; one with no kind
-stays local (ADR-0007). Resolve reads an entity's label past the claims
-the writer refuses before its plan for naming an entity whose label
-holds a character Python's Unicode tables do not know, as the writer's
-plan does.
+resolved batch, so the writer pairs it the same way (ADR-0007). Resolve
+reads an entity's label past every claim the writer refuses before its
+plan (the writer's `pre_plan_refusals`), as the writer's plan does.
 Amended by #373 (2026-10-02): a file is uploaded under a name in the form
 MediaWiki takes as it is, every letter kept, within MediaWiki's 240-byte
 limit with room for the content tag, and the description registration
