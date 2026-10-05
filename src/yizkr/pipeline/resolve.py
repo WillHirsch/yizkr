@@ -56,8 +56,8 @@ whose label holds such a character, `unnamed_entities`), so an entity
 named only in such claims stays local. The writer refuses more claims
 while it plans (with an entity it may place under neither label);
 resolve does not see those, so where the first ref to a local id without
-a record is in such a claim and a later ref gives another label, resolve
-may read the entity by that first ref's label.
+a record is in such a claim and a later ref gives another label or kind,
+resolve may read the entity by that first ref's label and kind.
 
 An entity without a manifest record that resolves to the item under its
 tagged label is given a record in the resolved batch, its first ref's
@@ -66,10 +66,11 @@ item after the claims, as it pairs any record (yizkr.pipeline.writer,
 step 5), and gives the item its label as an alias and its kind, as the
 local refs would have. One with no kind stays local, for the writer to
 find that item itself, as no record can be made without a kind. So does
-any such entity of a batch whose claims cite more than one artifact: a
-record's kind is cited to the artifact of the first claim that mentions
-the item, where a ref's is cited to the artifact of each claim it is in,
-so a record could cite its kind to an artifact that does not state it.
+any such entity of a batch whose claims the writer writes cite more than
+one artifact: a record's kind is cited to the artifact of the first claim
+that mentions the item, where a ref's kind is cited to the artifact of
+the first claim of each local id, so a record would cite the kind once
+where the local refs of two documents cite it to each.
 
 Unresolved local refs are left in place: the writer creates new items
 for them at write time.
@@ -157,9 +158,17 @@ def _tagged_records(
     (resolvable_labels gives that label the same item): a record of its
     label and kind, so the writer pairs it with the item (the module
     docstring); and the local ids of those with no kind, or of a batch
-    whose claims cite more than one artifact, which stay local."""
+    whose claims the writer writes, all but those it refuses before its
+    plan (pre_plan_refusals), cite more than one artifact, which stay
+    local."""
     records = entity_records(batch)
-    several = len({claim.source.artifact.sha1 for claim in batch.claims}) > 1
+    refused = pre_plan_refusals(batch, unnamed_entities(batch, records))
+    cited = {
+        claim.source.artifact.sha1
+        for index, claim in enumerate(batch.claims)
+        if index not in refused
+    }
+    several = len(cited) > 1
     made: list[EntityRecord] = []
     kept: set[str] = set()
     for local_id, (label, kind) in entities.items():
@@ -216,8 +225,8 @@ def resolve_batch(
     keyed by labels as the instance serves them, and an entity is looked
     up by its label in that form, its record's or its first ref's
     (entity_terms). An entity without a record resolved to the item under
-    its tagged label gains a record, or stays local when it has no kind
-    (_tagged_records)."""
+    its tagged label gains a record, or stays local when it has no kind or
+    its batch's claims cite more than one artifact (_tagged_records)."""
     entities = _resolvable(batch)
     made, kept = _tagged_records(batch, label_to_qid, entities)
     for local_id in kept:

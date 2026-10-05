@@ -1058,7 +1058,8 @@ def unnamed_entities(
     with an equivalence names its item by QID), and otherwise that of
     each ref to the id in the batch, any of which may be the first the
     writer resolves. `records` is the batch's manifest (entity_records).
-    The resolve step reads the entities as the writer does by it."""
+    The resolve step calls this too, so that it passes over the same
+    entities as the writer."""
     unnamed: dict[str, list[str]] = {}
     for record in records.values():
         unknown = unknown_characters(record.label)
@@ -1981,8 +1982,8 @@ class BatchWriter:
         # cleaned up as the instance gives it back and cut to what the
         # instance holds, never failing the write (one holding a
         # character Python's Unicode tables do not know has refused its
-        # claim before: pre_plan_refusals), and one of whitespace alone is left
-        # out (_locator_text)
+        # claim before: pre_plan_refusals), and one of whitespace alone is
+        # left out (_locator_text)
         source = claim.source if claim is not None else None
         page = _locator_text(source.page_number or "") if source else ""
         if page:
@@ -2407,8 +2408,8 @@ class BatchWriter:
         hint), and a warning for each that names the entity and the
         characters, quoting no text. `unnamed` holds the entities whose
         label keeps the writer from finding or minting their item
-        (unnamed_entities): their label is named, and nothing else of them, as
-        nothing else of them is sent. An approved equivalence's record
+        (unnamed_entities): their label is named, and nothing else of them,
+        as nothing else of them is sent. An approved equivalence's record
         gives its label as an alias of its item, and no description, as
         the writer sends none to an item it names. A description goes
         only on the item a ref mints, so one is named only when a claim
@@ -2419,8 +2420,8 @@ class BatchWriter:
         mentions it, as the writer may send them to an item the resolve
         step matched the record to, but for a record of which nothing is
         sent (_unsent_records): the claims that name it by a local ref
-        are all refused, before the plan (pre_plan_refusals) or with an entity
-        the plan blocks.
+        are all refused, before the plan (pre_plan_refusals) or with an
+        entity the plan blocks.
         `refused` holds the places in the batch of the claims the writer
         refuses."""
         named: list[str] = []
@@ -2470,15 +2471,15 @@ class BatchWriter:
         self, batch: ClaimBatch, refused: Collection[int]
     ) -> set[str]:
         """The local ids of the manifest records without an approved
-        equivalence that claims of `batch` name by a local ref, but only
-        claims at the places `refused`, which the writer refuses, before
-        the plan (pre_plan_refusals: for their text, or as a misplaced document
-        subject) or with an entity the plan blocks (step 2 of the module
-        docstring): no item is found or made for such a record, and none
-        of its terms, kind or type hint is sent anywhere, nor matched to
-        an item by its label (_found_entities). A record counts as written
-        only through a local ref to it in a claim the writer writes: one
-        that claim names by the QID resolve gave it does not count."""
+        equivalence that claims of `batch` name by a local ref, but only claims
+        at the places `refused`, which the writer refuses, before the plan
+        (pre_plan_refusals: for their text, or as a misplaced document subject)
+        or with an entity the plan blocks (step 2 of the module docstring): no
+        item is found or made for such a record, and none of its terms, kind or
+        type hint is sent anywhere, nor matched to an item by its label
+        (_found_entities). A record counts as written only through a local ref
+        to it in a claim the writer writes: one that claim names by the QID
+        resolve gave it does not count."""
         named: set[str] = set()
         written: set[str] = set()
         for index, claim in enumerate(batch.claims):

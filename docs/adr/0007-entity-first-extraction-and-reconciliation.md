@@ -234,13 +234,14 @@ and local refs.
   its first ref's label and kind in the resolved batch, so its kind and
   its label, as an alias, reach that item as the unresolved write gives
   them. One with no kind stays local, for the writer to find that item
-  itself, and so does one of a batch whose claims cite more than one
-  artifact, as a record's kind cites the first claim's artifact alone,
-  where a ref's cites each claim's own. Resolve reads the entity past
+  itself, and so does one of a batch whose written claims cite more than
+  one artifact, as a record's kind cites the artifact of the first claim
+  that mentions the item alone, where a ref's kind cites the artifact of
+  the first claim of each local id. Resolve reads the entity past
   every claim the writer refuses before its plan (the writer's
   `pre_plan_refusals`), so a made record's label and kind never come from
   such a claim; only the claims the writer refuses while it plans are
-  unseen by it. #109, whose identity map is to replace
+  unseen by it, and there a first ref may give the label and kind. #109, whose identity map is to replace
   exact-label resolution, takes on carrying every ref's kind to its
   item.
 - The orchestrator's write summary (`write.json`) and its log line count
