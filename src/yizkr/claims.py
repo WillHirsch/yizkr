@@ -18,7 +18,8 @@ The schema makes the archive's core conventions structural:
   field. Machine writes are always normal rank; preferring/deprecating
   is a curator action on the wiki, never part of the pipeline contract.
 * Uncertainty is structural (docs/MODELING.md): time values carry explicit
-  precision (day/month/year/decade/century) and a calendar; ranges and
+  precision (day/month/year/decade/century) and the Gregorian calendar,
+  the only one supported, with a year of 1 CE or later (ADR-0034); ranges and
   approximation are expressed with `earliest_date`/`latest_date`/
   `sourcing_circumstances` qualifiers, and a range for the start or end
   time qualifier of a period (a residence, an occupation) with that end's
@@ -29,7 +30,8 @@ Vocabulary: `property` fields and vocabulary references hold *manifest
 keys* (e.g. ``residence``, ``circa``) from model/manifest.yaml — stable,
 instance-independent names. `validate_against_manifest()` checks that
 keys exist, that each value's type matches the property's datatype, and
-that an item value is of a kind its property accepts (ADR-0035 §3.5).
+that an item value is of a kind its property accepts (ADR-0035 §3.5)
+and is not the claim's own subject.
 Local P/Q ids never appear in pipeline JSON (they differ per instance);
 only the writer resolves keys to ids, at write time.
 
@@ -86,6 +88,13 @@ from pydantic import (
 )
 from pydantic.json_schema import SkipJsonSchema
 
+from yizkr.core.dates import (
+    GREGORIAN,
+    GREGORIAN_NAME,
+    UnsupportedDate,
+    calendar_problem,
+    year_problem,
+)
 from yizkr.model.schema import (
     DEFAULT_MANIFEST,
     Acceptance,
@@ -183,29 +192,7 @@ WIKIBASE_PRECISION = {
     "month": 10,
     "day": 11,
 }
-CALENDAR_URI = {
-    "gregorian": "http://www.wikidata.org/entity/Q1985727",
-    "julian": "http://www.wikidata.org/entity/Q1985786",
-}
-
-
-def century_of(year: int) -> int:
-    """The century a year falls in, counted as Wikibase and Wikidata count
-    centuries (docs/MODELING.md, "Uncertainty and time"): the nth century
-    runs from year 100(n - 1) + 1 to year 100n, so 1801 to 1900 is the 19th
-    century and 1800 is the last year of the 18th. There is no year zero: a
-    negative year counts back from 1 BCE, and its century is negative, so
-    -1800 to -1701 is the 18th century BCE, -18."""
-    count = (abs(year) + 99) // 100
-    return count if year > 0 else -count
-
-
-def century_years(century: int) -> tuple[int, int]:
-    """The first and last year of a century as `century_of` counts it: 1801
-    and 1900 for the 19th, and -1800 and -1701 for the 18th BCE (-18)."""
-    if century > 0:
-        return 100 * century - 99, 100 * century
-    return 100 * century, 100 * century + 99
+CALENDAR_URI = {GREGORIAN_NAME: GREGORIAN}
 
 
 class TimeValue(StrictModel):
@@ -220,6 +207,11 @@ class TimeValue(StrictModel):
     the 19th century is 1801-1900, so use its first year (19th century
     -> year=1801, precision=century); 1800 is in the 18th. The 1800s,
     meaning 1800-1899, are no such century: give them as a range.
+    Only dates of 1 CE or later in the Gregorian calendar are supported:
+    a date before the common era or in the Julian or any other calendar
+    is refused, never converted to another calendar or year. Give a
+    Julian (old style) source date as written, with calendar "julian":
+    it is a reported reject, never converted.
     Ranges ("between 1938 and 1939") are NOT a precision problem: use
     earliest_date/latest_date qualifiers on the claim. A start_time or
     end_time qualifier dating a period (a residence, an occupation) takes
@@ -241,9 +233,28 @@ class TimeValue(StrictModel):
     @field_validator("year")
     @classmethod
     def check_year(cls, value: int) -> int:
-        if value == 0:
-            raise ValueError("there is no year zero")
+        problem = year_problem(value)
+        if problem is not None:
+            raise UnsupportedDate(problem)
         return value
+
+    @field_validator("calendar")
+    @classmethod
+    def check_calendar(cls, value: str) -> str:
+        # the schema names "julian" so that a source's Julian date is
+        # stated as one, and refused here; a name the schema does not
+        # have fails the literal's own check
+        problem = calendar_problem(value)
+        if problem is not None:
+            raise UnsupportedDate(problem)
+        return value
+
+    def problem(self) -> str | None:
+        """Why this date is unsupported (ADR-0034), or None. Validation
+        refuses such a date, so only a value built without it (a
+        ``model_construct``) can have one; the writer asks before it
+        writes anything."""
+        return year_problem(self.year) or calendar_problem(self.calendar)
 
     @model_validator(mode="after")
     def check_component_consistency(self) -> TimeValue:
@@ -265,15 +276,11 @@ class TimeValue(StrictModel):
             # counts centuries: every source that names it states one
             # value, and a round hundred, which starts "the 1800s" but ends
             # the 18th century in that count, never stands for the 19th.
-            if (
-                self.precision == "century"
-                and century_years(century_of(self.year))[0] != self.year
-            ):
+            if self.precision == "century" and self.year % 100 != 1:
                 raise ValueError(
                     f"precision 'century' takes the first year of the "
                     f"century, as Wikibase counts centuries: the 19th "
-                    f"century is 1801-1900, so year=1801 (the 18th century "
-                    f"BCE is -1800 to -1701, so year=-1800); year "
+                    f"century is 1801-1900, so year=1801; year "
                     f"{self.year} is not a century's first year"
                 )
         elif PRECISIONS.index(finest) > PRECISIONS.index(self.precision):
@@ -293,10 +300,13 @@ class TimeValue(StrictModel):
         """Wikibase time datavalue (unspecified parts zeroed, as on
         Wikidata). The year is written as given, so a century's first
         year is stored, which Wikibase shows as that century: 1801 at
-        century precision is "19. century"."""
-        sign = "-" if self.year < 0 else "+"
+        century precision is "19. century". An unsupported date
+        (``problem``) raises UnsupportedDate: it is never stored."""
+        problem = self.problem()
+        if problem is not None:
+            raise UnsupportedDate(problem)
         return {
-            "time": f"{sign}{abs(self.year):04d}-{self.month or 0:02d}-"
+            "time": f"+{self.year:04d}-{self.month or 0:02d}-"
             f"{self.day or 0:02d}T00:00:00Z",
             "precision": WIKIBASE_PRECISION[self.precision],
             "calendarmodel": CALENDAR_URI[self.calendar],
@@ -796,8 +806,18 @@ def validate_against_manifest(
     * a claim of a retired property is refused (ADR-0036);
     * a reference property (`stated_in`, the judgement note's) is refused
       as a claim's or a qualifier's property;
-    * a vocabulary ref to an entity kind (`human`, `place`) is a class,
-      so a property that accepts entities of that kind refuses it;
+    * a vocabulary ref to a kind key, an entity kind (`human`, `place`)
+      or another entity class (`time_period_class`, `photograph`), is a
+      class, so only a property that accepts a class takes it, and such a
+      property takes no vocabulary value (`circa`) either; a property that
+      accepts any kind (`depicts`) or the subject's own takes no
+      vocabulary item at all. An item value
+      is thus an entity of the batch, an existing item named by its QID,
+      or a vocabulary item its property accepts;
+    * an item value, a claim's or a qualifier's, never names the claim's
+      own subject: the same local id, the same QID, the same vocabulary
+      item, or a local ref resolved to the subject's QID. No property of
+      the manifest takes its subject as its own value;
     * a death's principal is never also its informant (ADR-0035 §3.2);
     * a claim whose subject is a document (an artifact reference) names
       its own source, by a property the manifest marks
@@ -827,6 +847,9 @@ def validate_against_manifest(
     }
     entity_labels: dict[str, str] = {
         entity.id: entity.label for entity in batch.entities
+    }
+    entity_qids: dict[str, str] = {
+        entity.id: entity.qid for entity in batch.entities if entity.qid
     }
     seen_entity_ids: set[str] = set()
     for e_index, entity in enumerate(batch.entities):
@@ -894,6 +917,11 @@ def validate_against_manifest(
             )
         if isinstance(value, ItemValue):
             check_ref(value.value, f"{where}.value")
+            if isinstance(value.value, VocabRef) and value.value.key not in (
+                items
+            ):
+                # an unknown key has one reason, which check_ref gives
+                return
             refusal = acceptance.refusal(
                 prop,
                 kind_of(value.value),
@@ -911,6 +939,21 @@ def validate_against_manifest(
         if isinstance(ref, ArtifactRef):
             return str(ref)
         return f"vocab:{ref.key}"
+
+    def entity_key(ref) -> str:
+        # a local ref resolved to an existing item is that item
+        if isinstance(ref, LocalRef) and ref.local_id in entity_qids:
+            return f"qid:{entity_qids[ref.local_id]}"
+        return ref_key(ref)
+
+    def check_not_subject(value, subject_key: str, where: str) -> None:
+        if isinstance(value, ItemValue) and (
+            entity_key(value.value) == subject_key
+        ):
+            errors.append(
+                f"{where}.value: names the claim's own subject, "
+                f"{subject_key}; a value is never its own subject"
+            )
 
     # roles each person holds in each death, across the batch's claims
     death_roles: dict[tuple[str, str], set[str]] = {}
@@ -938,6 +981,8 @@ def validate_against_manifest(
                 f"as its subject (ADR-0035 §3.4)"
             )
         check_property_value(claim.property, claim.value, where, subject_kind)
+        subject_key = entity_key(claim.subject)
+        check_not_subject(claim.value, subject_key, where)
         if claim.property == "name" and isinstance(
             claim.value, MonolingualValue
         ):
@@ -972,6 +1017,11 @@ def validate_against_manifest(
                 qualifier.value,
                 f"{where}.qualifiers[{q_index}]",
                 subject_kind,
+            )
+            check_not_subject(
+                qualifier.value,
+                subject_key,
+                f"{where}.qualifiers[{q_index}]",
             )
         if (
             claim.property == "participant"

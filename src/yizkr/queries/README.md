@@ -27,7 +27,8 @@ uv run yizkr publish-queries             # or: make publish-queries
   stated-in source, so the values that different sources attribute to one
   entity and property are listed side by side. Rows here are a healthy
   resting state (ADR-0002), not errors. Each row carries the statement's
-  rank, its value with its precision, the earliest and latest dates its
+  rank, its value with its precision (and a time's calendar model, which
+  the comparison checks: ADR-0034), the earliest and latest dates its
   source gives, its start time, end time and point in time, the latest
   start date and earliest end date that bound a residence's or a
   marriage's start and end, and the artifact each source belongs to (a
