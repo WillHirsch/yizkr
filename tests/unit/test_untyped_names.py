@@ -172,6 +172,9 @@ def test_the_key_lower_cases_and_keeps_a_sharp_s():
     # name spelled with one)
     assert name_form_key("EHESCHLIESSUNG") == name_form_key("Eheschliessung")
     assert name_form_key("Eheschließung") != name_form_key("Eheschliessung")
+    # NFC, not NFKC: a compatibility form (full-width letters) is kept
+    assert name_form_key("\uff29da Sörne") != name_form_key("Ida Sörne")
+    assert name_form_key("So\u0308rne") == name_form_key("Sörne")
 
 
 def test_salvage_counts_a_refused_name_as_a_reject():
