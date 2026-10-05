@@ -55,7 +55,10 @@ Source-first conventions carry over unchanged:
   naming each such line by its number (ADR-0034): such a date is
   unsupported, and is never converted to the Gregorian calendar or
   another year, nor read as an unparsed date. A date phrase in
-  parentheses is free text, and is not read for these markers.
+  parentheses (from the first `(` to the last `)`, or to the end of the
+  value) is free text, and is not read for these markers; free text
+  outside one that names a calendar ("St Julian's day 1836") fails the
+  file, which errs on the side of refusing.
 
 Every occurrence of an event, of a DATE, PLAC or CAUS beneath one where
 the adapter reads that tag (a CAUS beneath any event but a death is
@@ -402,21 +405,28 @@ def parse_gedcom_date(text: str) -> tuple[dict | None, list[dict]]:
     return (value, []) if value else (None, [])
 
 
-# a date's markers of an unsupported date (ADR-0034), read case-blind: an
-# epoch before the common era (GEDCOM 5.5.1's B.C., and BC or BCE, spaced
-# or not), a GEDCOM 5.5.1 calendar escape other than the Gregorian's, and
-# a GEDCOM 7 calendar other than the Gregorian (its named ones, and an
-# extension calendar, which starts with an underscore). A year written
-# with a minus, or as 0, is read by the grammar (_parsed_years).
+# a date's markers of an unsupported date (ADR-0034), read case-blind
+# outside its date phrase: an epoch before the common era (GEDCOM 5.5.1's
+# B.C., and BC or BCE, its letters spaced or not), a GEDCOM 5.5.1
+# calendar escape other than the Gregorian's, a GEDCOM 7 calendar other
+# than the Gregorian (its named ones, and an extension calendar, which
+# starts with an underscore), and a year written with a minus or as 0,
+# whether or not the grammar reads the rest. Free text outside a phrase
+# that names a calendar ("St Julian's day 1836") is read as naming it,
+# and fails the file.
 _UNSUPPORTED_DATE = re.compile(
-    r"(?<![A-Z])B\.?\s*C\.?(?:\s*E\.?)?(?![A-Z])"
+    r"(?<![A-Z])B\s*\.?\s*C\s*\.?(?:\s*E\s*\.?)?(?![A-Z])"
     r"|@#\s*D(?!\s*GREGORIAN\s*@)"
     r"|(?<![A-Z_])(?:JULIAN|HEBREW|FRENCH_R)(?![A-Z_])"
-    r"|(?<![A-Z0-9_])_[A-Z][A-Z0-9_]*",
+    r"|(?<![A-Z0-9_])_[A-Z0-9][A-Z0-9_]*"
+    r"|(?<![\w-])-\d"
+    r"|(?<![\w-])0+(?![\w])",
     re.IGNORECASE,
 )
-# a date phrase: free text, never read for those markers
-_DATE_PHRASE = re.compile(r"\([^)]*\)?")
+# a date phrase: free text, never read for those markers. It runs from the
+# first "(" to the last ")", so a phrase holding parentheses is one
+# phrase, or to the end of the value when it is not closed.
+_DATE_PHRASE = re.compile(r"\((?:.*\)|.*)", re.DOTALL)
 
 
 def _parsed_years(text: str) -> list[int]:
@@ -1538,7 +1548,8 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     citing `artifact`, the export's content key: the SHA-1 of the file's
     bytes, of which `text` is the decoded form. Raises UnsupportedDate,
     before any claim is made, for a file stating a date before the common
-    era or in the Julian calendar (refuse_unsupported_dates)."""
+    era or in a calendar other than the Gregorian
+    (refuse_unsupported_dates)."""
     roots = parse_gedcom(text)
     refuse_unsupported_dates(roots)
     individuals = {r.xref: r for r in roots if r.tag == "INDI" and r.xref}

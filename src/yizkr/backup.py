@@ -102,7 +102,7 @@ from pathlib import Path
 
 from yizkr.core import sparql
 from yizkr.core.config import Config, read_env_file
-from yizkr.core.dates import unsupported_in_graph
+from yizkr.core.dates import UnsupportedDate, unsupported_in_graph
 from yizkr.core.privacy import (
     BIRTHS_QUERY,
     DEFAULT_CUTOFF_YEARS,
@@ -1041,6 +1041,13 @@ class UnfilterableDump(NonprivilegedExportRefused):
     reviewed for. The export refuses to run."""
 
 
+class UnsupportedDateRefused(NonprivilegedExportRefused, UnsupportedDate):
+    """The graph holds a date before the common era or in a calendar
+    other than the proleptic Gregorian (ADR-0034), named by its item and
+    statement. The check reads no such date, so it releases no one: the
+    export refuses to run."""
+
+
 # The types of property the export is made to filter, as the dump names
 # them: those the model manifest uses, an item, a string, a text in a
 # language, an external identifier, a time, a quantity and a globe
@@ -1647,9 +1654,12 @@ def export_nonprivileged(
     await_query_service(
         run, reading.revisions, timeout=lag_timeout, sleep=sleep, clock=clock
     )
-    report = exclusion_report(
-        config, cutoff_years=cutoff_years, run=run, vocabulary=vocabulary
-    )
+    try:
+        report = exclusion_report(
+            config, cutoff_years=cutoff_years, run=run, vocabulary=vocabulary
+        )
+    except UnsupportedDate as found:
+        raise UnsupportedDateRefused(str(found)) from found
     changed = stale_entities(run, reading.revisions)
     if changed:
         raise QueryServiceLag(
@@ -1717,8 +1727,9 @@ def run_backup(
     """Full backup run; returns the manifest that is also written to disk.
 
     A non-privileged export that refuses to run
-    (NonprivilegedExportRefused: the query service lags, or the dump holds
-    what the export is not made to filter) leaves the other dumps in place:
+    (NonprivilegedExportRefused: the query service lags, the dump holds
+    what the export is not made to filter, or the graph holds an
+    unsupported date) leaves the other dumps in place:
     the manifest records them and the refusal, old runs are pruned, and the
     refusal is raised."""
     stamp = datetime.datetime.now(datetime.UTC).strftime(TIMESTAMP_FORMAT)

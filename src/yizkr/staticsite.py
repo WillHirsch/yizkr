@@ -325,7 +325,10 @@ def format_time(
     return date
 
 
-def range_text(bounds: Iterable[tuple[str, str, str]]) -> str:
+def range_text(
+    bounds: Iterable[tuple[str, str, str]],
+    where: str = "a date the site shows",
+) -> str:
     """The range a source states for a date, as text to show beside it.
     Each bound is (the label of the qualifier that states it, its
     xsd:dateTime, its precision) and shows at its own precision, in the
@@ -334,7 +337,7 @@ def range_text(bounds: Iterable[tuple[str, str, str]]) -> str:
     source gives, so a range open at one end names the one bound it has
     ("earliest date: 1945"), never a closed range or a bare date."""
     return "; ".join(
-        f"{label}: {format_time(value, precision)}"
+        f"{label}: {format_time(value, precision, where)}"
         for label, value, precision in bounds
     )
 
@@ -438,7 +441,7 @@ class SiteBuilder:
             bounds.append(
                 (label, cell(row, bound), cell(row, f"{bound}Precision"))
             )
-        return range_text(bounds)
+        return range_text(bounds, f"{qid_of(row, 'person')} timeline date")
 
     # -- sections -----------------------------------------------------------
 
@@ -574,7 +577,8 @@ class SiteBuilder:
             text = cell(row, "valueLabel") or target
             rendered = f'<a href="{esc(target)}.html">{esc(text)}</a>'
         elif value.get("datatype", "").endswith("dateTime"):
-            rendered = esc(format_time(raw, cell(row, "precision")))
+            where = f"{qid_of(row, 'person')} statement {qid_of(row, 'st')}"
+            rendered = esc(format_time(raw, cell(row, "precision"), where))
         else:
             rendered = esc(cell(row, "valueLabel") or raw)
         qualifiers = [q for q in cell(row, "qualifierTexts").split("|") if q]
@@ -629,7 +633,13 @@ class SiteBuilder:
                 value = row.get("value", {})
                 raw = value.get("value", "")
                 if value.get("datatype", "").endswith("dateTime"):
-                    shown = esc(format_time(raw, cell(row, "precision")))
+                    where = (
+                        f"{subject_qid} as {qid_of(artifact, 'artifact')} "
+                        "asserts it"
+                    )
+                    shown = esc(
+                        format_time(raw, cell(row, "precision"), where)
+                    )
                 else:
                     shown = esc(
                         cell(row, "valueLabel")
@@ -754,7 +764,11 @@ class SiteBuilder:
                 start["day"] = parts[2]
             stated = self.timeline_range(row)
             if stated:
-                shown = format_time(date, cell(row, "precision"))
+                shown = format_time(
+                    date,
+                    cell(row, "precision"),
+                    f"{qid_of(row, 'person')} timeline date",
+                )
                 start["display_date"] = esc(f"{shown} ({stated})")
             events.append(
                 {
@@ -935,12 +949,15 @@ class SiteBuilder:
             low, high = disagreement.BOUNDS[row.qualifier]
             return qualifier_span(
                 range_text(
-                    (labels[key], time.value, str(time.precision))
-                    for key, time in (
-                        (low, side.value.earliest),
-                        (high, side.value.latest),
-                    )
-                    if time is not None
+                    (
+                        (labels[key], time.value, str(time.precision))
+                        for key, time in (
+                            (low, side.value.earliest),
+                            (high, side.value.latest),
+                        )
+                        if time is not None
+                    ),
+                    f"{row.entity_qid} {row.property}",
                 )
             )
 
@@ -948,7 +965,11 @@ class SiteBuilder:
             value = side.value
             if value.term.is_time:
                 precision = "" if value.precision is None else value.precision
-                shown = format_time(value.term.value, str(precision))
+                shown = format_time(
+                    value.term.value,
+                    str(precision),
+                    f"{row.entity_qid} {row.property}",
+                )
                 return esc(shown) + stated_range(row, side)
             if value.term.kind == "uri":
                 return esc(value.label or value.term.value.rsplit("/", 1)[-1])

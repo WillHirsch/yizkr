@@ -222,10 +222,13 @@ class TestTheGedcomAdapter:
             "HEBREW 5596",
             "FRENCH_R 1 VEND 45",
             "_LOEBIG 1836",
+            "_1CAL 1836",
+            "@#DGREGORIANX@ 1836",
             # an epoch before the common era, spaced or not, any case
             "1836 B.C.",
             "1836 B. C.",
             "1836 B C",
+            "1836 B . C .",
             "1836 b.c.",
             "1836 BC",
             "ABT 1836 BCE",
@@ -235,6 +238,12 @@ class TestTheGedcomAdapter:
             "BET 0 AND 1836",
             "BET 1836 AND 0",
             "FROM 1836 TO 0",
+            # a minus or zero year the grammar cannot read is still one
+            "INT -1836 (the clerk's note)",
+            "@#DGREGORIAN@ -1836",
+            "GREGORIAN 0",
+            # free text outside a phrase that names a calendar (decision CN)
+            "St Julian's day 1836",
         ],
     )
     def test_a_file_stating_one_fails_naming_the_line(self, date):
@@ -269,6 +278,20 @@ class TestTheGedcomAdapter:
             "INT 1836 (BC register of Peiltal)",
             "INT 1836 (per the Brüsrich ledger, page -2)",
             "INT 1836 (Abc)",
+            # a phrase runs to its last ")", or to the end when unclosed
+            "INT 1836 (Julian (the clerk) BC note)",
+            "INT 1836 (Julian the clerk's note",
+            # letters beside a marker make another word
+            "1836 ABC",
+            "1836 BCD",
+            "XJULIAN 1836",
+            "JULIANX 1836",
+            "HEBREWS 1836",
+            "A_CAL 1836",
+            # a hyphen inside a date, and years that are not 0
+            "1836-1840",
+            "10 JAN 1836",
+            "100",
         ],
     )
     def test_the_same_file_with_a_supported_date_is_read(self, date):
@@ -650,6 +673,23 @@ class TestTheReaderQueries:
         ) in query
         assert "?entity ?claim ?statement ." in query
 
+    def test_the_graph_check_never_narrows_what_it_searches(self):
+        # every rank (a deprecated statement too), and any predicate from
+        # a statement (its value or a qualifier) or a reference to a time
+        # node: ?link is bound by the two branches alone, no rank is
+        # read, and the only filter is the date's own
+        query = flat(
+            dates.UNSUPPORTED_QUERY.format(gregorian=GREGORIAN, limit=1)
+        )
+        assert query.count("?link") == 2
+        assert "rank" not in query.lower()
+        assert query.count("FILTER") == 1
+        assert "?statement ?link ?node" in query
+        assert "?reference ?link ?node" in query
+        # the entity reaches its statement through any property's claim
+        assert "?property wikibase:claim ?claim ." in query
+        assert query.count("?claim") == 2
+
     def test_the_graph_check_says_when_it_lists_its_limit(self):
         row = {
             "entity": {"value": EUGEN},
@@ -724,3 +764,29 @@ class TestTheExport:
             )
         (query,) = sent
         assert query.startswith(f"PREFIX wd: <{CONCEPT}/entity/>")
+
+
+class TestThePersonPage:
+    """A person page's backstop names the person and the statement."""
+
+    def test_a_person_page_names_the_statement(self, tmp_path):
+        builder = SiteBuilder(
+            SimpleNamespace(concept_uri=CONCEPT),
+            tmp_path / "site",
+            run=lambda query: [],
+            vocabulary=({}, {}),
+        )
+        row = {
+            "person": {"value": EUGEN},
+            "st": {"value": STATEMENT},
+            "value": {
+                "type": "literal",
+                "value": "-1836-01-07T00:00:00Z",
+                "datatype": XSD,
+            },
+            "precision": {"value": "11"},
+        }
+        with pytest.raises(
+            UnsupportedDate, match="^Q1001 statement Q1001-born: "
+        ):
+            builder.render_value(row)

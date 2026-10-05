@@ -63,13 +63,14 @@ from yizkr.backup import (
     stale_entities,
 )
 from yizkr.core.config import Config
-from yizkr.core.dates import UNSUPPORTED_QUERY
+from yizkr.core.dates import UNSUPPORTED_QUERY, UnsupportedDate
 from yizkr.core.privacy import BIRTHS_QUERY, people_selection
 from yizkr.model.schema import load_manifest, read_manifest_data
 from yizkr.queries.publish import prefix_block
 
 # the first line of the graph-wide unsupported-date check (ADR-0034)
 UNSUPPORTED_SELECT = UNSUPPORTED_QUERY.split("\n")[0]
+JULIAN = "http://www.wikidata.org/entity/Q1985786"
 
 # how long a run that should end at once may take before it counts as hung
 HANG_GUARD = 30
@@ -2844,6 +2845,8 @@ class ExportRun:
         self.released = set(released)
         self.revisions = list(revisions or [dumped])
         self.queries: list[str] = []
+        # the graph check's rows: none, unless a test sets them (#338)
+        self.unsupported: list[dict] = []
 
     def __call__(self, query: str) -> list[dict]:
         self.queries.append(query)
@@ -2859,7 +2862,7 @@ class ExportRun:
         if 'BIND("value" AS ?bound)' in query:
             return birth_rows("Q404", [(("1990-01-01T00:00:00Z", 9), [], [])])
         if UNSUPPORTED_SELECT in query:
-            return []  # a graph with no unsupported date (#338)
+            return self.unsupported
         raise AssertionError(f"unexpected query: {query}")
 
 
@@ -4542,9 +4545,12 @@ class TestTheBackupsNonprivilegedExport:
             ),
         )
 
-        def backed_up(revisions=None, keep=0, lines=(), command=False):
+        def backed_up(
+            revisions=None, keep=0, lines=(), command=False, unsupported=()
+        ):
             extra[:] = lines
             runner = ExportRun(dump.revisions, ["Q401"], revisions)
+            runner.unsupported = list(unsupported)
             monkeypatch.setattr(backup.sparql, "runner", lambda config: runner)
             if command:  # through `yizkr backup`, which returns its exit code
                 from yizkr import cli
@@ -4595,6 +4601,33 @@ class TestTheBackupsNonprivilegedExport:
         # the refusal carries the manifest, for the command to report
         assert refused.value.manifest == manifest
 
+    def test_an_unsupported_date_leaves_the_backup_recorded(
+        self, tmp_path, backed_up
+    ):
+        # a deprecated Julian birth (ADR-0034, #338): the graph check
+        # finds it, and the export refuses as it does for a lag
+        (tmp_path / "20260101T000000Z").mkdir()  # an older run
+        found = {
+            "entity": {"value": f"{CONCEPT}/entity/Q401"},
+            "statement": {"value": f"{CONCEPT}/entity/statement/Q401-b"},
+            "time": {"value": "1836-01-07T00:00:00Z"},
+            "calendar": {"value": JULIAN},
+        }
+        with pytest.raises(backup.UnsupportedDateRefused) as refused:
+            backed_up(unsupported=[found], keep=1)
+        assert isinstance(refused.value, UnsupportedDate)
+        assert isinstance(refused.value.__cause__, UnsupportedDate)
+        (out_dir,) = tmp_path.iterdir()
+        manifest = json.loads((out_dir / "manifest.json").read_text())
+        assert set(manifest["components"]) == {"database", "media", "rdf"}
+        assert (
+            "Q401 statement Q401-b"
+            in (manifest["nonprivileged_export_refused"])
+        )
+        assert manifest["pruned"] == ["20260101T000000Z"]
+        assert not list(out_dir.glob("nonprivileged*"))
+        assert refused.value.manifest == manifest
+
     def test_an_unfilterable_dump_leaves_the_backup_recorded(
         self, tmp_path, backed_up
     ):
@@ -4612,7 +4645,9 @@ class TestTheBackupsNonprivilegedExport:
         assert not (out_dir / "nonprivileged.nt.gz").exists()
         assert refused.value.manifest == manifest
 
-    @pytest.mark.parametrize("kind", ["unfilterable", "lag", "changed"])
+    @pytest.mark.parametrize(
+        "kind", ["unfilterable", "lag", "changed", "unsupported date"]
+    )
     def test_the_command_reports_an_unfilterable_dump_without_a_traceback(
         self, tmp_path, vocabulary, backed_up, monkeypatch, kind
     ):
@@ -4640,6 +4675,24 @@ class TestTheBackupsNonprivilegedExport:
                 "the graph changed while the non-privileged export "
                 "assessed it: the query service now holds another revision "
                 "than the dump of 1 entity (Q401)",
+            ),
+            # a Julian date the graph holds, named by item and statement
+            # (ADR-0034, #338)
+            "unsupported date": (
+                {
+                    "unsupported": [
+                        {
+                            "entity": {"value": f"{CONCEPT}/entity/Q401"},
+                            "statement": {
+                                "value": f"{CONCEPT}/entity/statement/Q401-b"
+                            },
+                            "time": {"value": "1836-01-07T00:00:00Z"},
+                            "calendar": {"value": JULIAN},
+                        }
+                    ]
+                },
+                "Q401 statement Q401-b holds 1836-01-07T00:00:00Z "
+                "(calendar Q1985786)",
             ),
         }[kind]
 

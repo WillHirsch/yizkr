@@ -53,13 +53,18 @@ wherever the project meets one, it fails explicitly, naming where.
   unsupported date.
 - **The GEDCOM adapter** fails the whole file, before any claim is
   made, when any DATE line states a date before the common era (a
-  `B.C.`, `BC` or `BCE` epoch, spaced or not, or a year the grammar
-  reads below 1, at either end of a range) or in any calendar but the
+  `B.C.`, `BC` or `BCE` epoch, its letters spaced or not, a year
+  written with a minus or as 0, or a year the grammar reads below 1, at
+  either end of a range) or in any calendar but the
   Gregorian: a GEDCOM 5.5.1 escape other than `@#DGREGORIAN@`
   (`@#DJULIAN@`, `@#DHEBREW@`, `@#DFRENCH R@`, `@#DROMAN@`,
   `@#DUNKNOWN@`), or GEDCOM 7's `JULIAN`, `HEBREW`, `FRENCH_R` or an
-  extension calendar. A date phrase in parentheses is free text and is
-  not read for these markers. The error names each such line by its
+  extension calendar. A date phrase in parentheses (from the first `(`
+  to the last `)`, or to the end of the value) is free text and is not
+  read for these markers. Free text outside a phrase that names a
+  calendar ("St Julian's day 1836") is read as naming it, and fails the
+  file: the scan errs on the side of refusing (CN, decided with the
+  build; the owner may veto it at merge). The error names each such line by its
   number, never what it says. Of the two outcomes #338 offered, failing
   the file is the hard failure the owner asked for, and needs no census
   entry: a file that states one is not read at all, so nothing downstream
@@ -110,7 +115,11 @@ is in question:
   in the graph, at any rank (a deprecated birth, a date of death, a
   qualifier or a reference included), and not only on a birth the check
   reads: the failure closes it, rather than releasing or withholding a
-  person, or copying out a date, nobody can read.
+  person, or copying out a date, nobody can read. The refusal takes the
+  export's own refusal path (`UnsupportedDateRefused`, a
+  `NonprivilegedExportRefused` and an `UnsupportedDate`): the backup
+  keeps its full dumps, records the refusal in its manifest, prunes old
+  runs, and `yizkr backup` reports it on one line and exits 1.
 - **Reconcile's roster**, whose birth and death dates are the
   adjudication facts for items already in the graph, is read only after
   the same graph-wide check. The facts of a batch's own entities come
@@ -131,16 +140,17 @@ time").
 
 ## Consequences
 
-- No feature has to answer what a date before the common era or a Julian
-  date means; each refuses one by name, and one test per layer
+- No feature has to answer what a date before the common era or in a
+  calendar other than the Gregorian means; each refuses one by name, and one test per layer
   (`tests/unit/test_unsupported_dates.py`,
   `tests/integration/test_live_unsupported_dates.py`) pins it.
 - A curator who enters such a date in the wiki stops the site build, the
   disagreement report, the non-privileged export and the graph
   reconcile until it is removed, deprecated rank or not: rank is an
   overlay, and the date is still in the graph.
-- A GEDCOM export with one Julian or BCE date anywhere is not ingested
-  at all until it is edited.
+- A GEDCOM export with one date before the common era or in a calendar
+  other than the Gregorian anywhere is not ingested at all until it is
+  edited.
 - The extraction prompts' schema text changes (the description says
   that dates before 1 CE and other calendars are refused, and asks for a
   Julian date as written with calendar `julian`), a change to a stage
