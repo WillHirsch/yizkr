@@ -461,6 +461,12 @@ class TestPersonPage:
                 **STATEMENTS[2],
                 "propLabel": literal("instance of"),
             },
+            # no such property is in the manifest; one that bears the
+            # label renders as any other
+            {
+                **STATEMENTS[0],
+                "propLabel": literal("living person"),
+            },
         ]
         site, _ = build(
             tmp_path,
@@ -469,6 +475,7 @@ class TestPersonPage:
         )
         text = (site / "people/Q7.html").read_text()
         assert "ist ein" not in text
+        assert "<dt>living person</dt>" in text
         assert ">human<" not in text
         assert "<dt>instance of</dt>" in text
         assert 'href="Q9.html"' in text

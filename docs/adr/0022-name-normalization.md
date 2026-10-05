@@ -21,9 +21,16 @@ those parts rather than on token shapes (ADR-0035 §2.6, §8).
 Amended by #388 (2026-10-04): reconcile's blocking keys on whole name forms
 read through the mention record (ADR-0007, as amended by #388), not on
 `_name_tokens`/`_tokens_overlap`, which are gone. Dropping a derivable
-alias (§4) is recall-safe only where the record's typed parts compose
-the dropped form again ("Ida Löbig" from the given name Ida and the
-surname Löbig); a dropped form they do not compose no longer keys.
+alias (§4) is no longer recall-safe across documents. The record's
+typed parts compose the dropped form again ("Ida Löbig" from the given
+name Ida and the surname Löbig) only for that batch's own blocking; the
+written item no longer carries it, and the graph holds no name parts,
+so a later document giving only that form ("Ida Löbig" against an item
+labelled "Ida Sörne Löbig") does not block against it. Derivable
+aliases stay dropped meanwhile (decided by the orchestrator 2026-10-05,
+the owner may override): keeping them would change a stage before
+write, a question for after scratch run 2. ADR-0035 lists this among
+its known limits.
 
 ## Context
 

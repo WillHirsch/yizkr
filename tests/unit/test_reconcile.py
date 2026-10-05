@@ -372,8 +372,9 @@ class TestBlocking:
             "Q52",
         ]
 
+    @pytest.mark.parametrize("misread", ["LÖBIG", "Lobig", "Loebig"])
     def test_a_given_name_that_folds_like_the_surname_composes_nothing(
-        self,
+        self, misread
     ):
         """A register's "Löbig" read as a given name beside the surname
         Löbig makes no "Löbig Löbig" (the guard of #361)."""
@@ -386,7 +387,7 @@ class TestBlocking:
             structure={
                 "kind": "human",
                 "given": [
-                    {"written": "LÖBIG"},
+                    {"written": misread},
                     {"written": "Ursula", "standard": "Ursula"},
                 ],
                 "surnames": [{"written": "Löbig"}],

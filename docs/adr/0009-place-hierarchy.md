@@ -18,9 +18,19 @@ used for its local id, found under its label or minted (`write.json`'s
 `created_items`). A chain is asked link by link: the place within the
 nearest of its containers that names an existing place, and each such
 container within the next, so an approved chain writes no shortcut edge
-("Fläckfeld part_of Germany" beside "Fläckfeld part_of Kreis
-Mockburg"), and a nearest container that states no parent of its own is
-still placed. A container names every place whose label or alias is
+of its own ("Fläckfeld part_of Germany" beside "Fläckfeld part_of Kreis
+Mockburg" from one record's "Fläckfeld, Kreis Mockburg, Germany"), and a
+nearest container that states no parent of its own is still placed.
+Records that stop at different depths can still propose one: a second
+record's "Fläckfeld, Germany" asks Fläckfeld within Germany beside the
+first's links. Each record's statement is asked as made, with no
+reduction across chains (decided by the orchestrator 2026-10-05, the
+owner may override). Likewise a container missing from the graph is
+passed over, so its neighbours are asked of each other ("Kreis Mockburg"
+within "Germany" where no Hesse exists); once the middle container is
+minted, a later round asks the links through it, and the earlier edge
+becomes a shortcut, since the check against the graph's containment
+never removes an edge. A container names every place whose label or alias is
 that name, folded as ADR-0035 §7 folds a part; namesakes are each
 asked, and a pair the graph already nests either way is not. Questions
 are ordered spine-first by the graph's own containment: a question
@@ -73,8 +83,8 @@ One SPARQL round-trip yields, in order of preference:
    the generative path (ADR-0006): these arrive pre-evidenced, the
    adjudicator (and reviewer) merely confirms.
 
-Questions are ordered spine-first: fewer commas ≈ larger scale (by the
-graph's own containment since #388, above), so
+Questions are ordered spine-first (amended by #388: a question whose
+places the graph puts more places inside comes first), so
 container-side questions come before the places that attach to them,
 and each apply round re-derives the worklist through the closure —
 transitive elimination between rounds. Convergence is typically two

@@ -262,7 +262,11 @@ Known limits, to revisit with the readers' next round: a place
 whose record gives only an address ("8 Hawthorn Road, Stupfield,
 Victoria") keys only on the address, so its town never links it; and an
 event, which has no record (§2.5), keys on its label as a whole string,
-not on its participants.
+not on its participants; and a derivable alias the cleanup drops (§8,
+ADR-0022 §4) is composed again from the record's typed parts only for
+its own batch's blocking, so a later document giving only that form
+("Ida Löbig" against an item labelled "Ida Sörne Löbig") does not block
+against the written item.
 
 `kinship.rq`'s term table and the possibly-living readers stay with
 their own issues.

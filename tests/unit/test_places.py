@@ -82,6 +82,34 @@ class TestStatedParentCandidates:
             ("Q21", "Q1"),
         ]
 
+    def test_every_link_of_a_chain_is_asked(self):
+        found = [
+            PlaceRecord(
+                qid="Q20",
+                label="Fläckfeld",
+                chains=[["Kreis Mockburg", "Hesse", "Germany"]],
+            ),
+            PlaceRecord(qid="Q21", label="Kreis Mockburg"),
+            PlaceRecord(qid="Q22", label="Hesse"),
+            PlaceRecord(qid="Q1", label="Germany"),
+        ]
+        assert pairs(stated_parent_candidates(found)) == [
+            ("Q20", "Q21"),
+            ("Q21", "Q22"),
+            ("Q22", "Q1"),
+        ]
+
+    def test_a_chain_naming_nothing_does_not_stop_the_next(self):
+        found = [
+            PlaceRecord(
+                qid="Q20",
+                label="Fläckfeld",
+                chains=[["Hesse-Nassau"], ["Kreis Mockburg"]],
+            ),
+            PlaceRecord(qid="Q21", label="Kreis Mockburg"),
+        ]
+        assert pairs(stated_parent_candidates(found)) == [("Q20", "Q21")]
+
     def test_each_record_s_chain_is_its_own(self):
         # two records: Kreis Mockburg alone, and Hesse alone; neither is
         # put within the other
@@ -331,7 +359,15 @@ class TestRecordContainers:
 
     @pytest.mark.parametrize(
         "written",
-        ["[]", '"x"', "3", '{"created_items": []}', '{"created_items": 3}'],
+        [
+            "[]",
+            '"x"',
+            "3",
+            '{"created_items": []}',
+            '{"created_items": 3}',
+            '{"created_items": {"e1": 5}}',
+            '{"created_items": {"e1": ["Q20"]}}',
+        ],
     )
     def test_a_write_json_of_another_shape_is_no_join(self, tmp_path, written):
         _written(
