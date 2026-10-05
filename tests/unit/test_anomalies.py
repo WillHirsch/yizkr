@@ -1235,7 +1235,14 @@ class TestImplausibleDate:
             ),
             # the batch gives Gustav no birth
             a_dated_claim("gustav", "date_of_death", a_time(1066)),
-            # a birth is not judged against itself
+        )
+        assert dates_found(batch) == []
+
+    def test_a_birth_is_not_judged_against_another(self):
+        """Births a millennium apart coexist; neither is counted against
+        the other."""
+        batch = a_dated_batch(
+            URSULA_BORN,
             a_dated_claim("ursula", "date_of_birth", a_time(1, "century")),
         )
         assert dates_found(batch) == []
