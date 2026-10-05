@@ -43,6 +43,12 @@ whole name. A shared surname or a clipped form ("Gus" against "Gustave
 Lobig") no longer blocks a pair. The roster maps an item's kind to its
 manifest key by the kind item's QID, so occupations and time periods
 block like any other kind.
+Amended by #477 (2026-10-05): every whole name form, a manifest's and a
+graph item's alike, and every record part it is composed from, is read
+in the form the instance keeps a term in (the writer's `stored_term`)
+before it is folded. Folding already took NFD and NFC alike; the stored
+form makes a control character one space and trims the edges, so
+"Cäcilie\x08Löbig" meets the graph's "Cäcilie Löbig".
 Amended by #407 (2026-09-29): the entity-manifest prompt asks for each
 record and note; one that fails validation is set aside, never repaired,
 and never refuses the manifest, and `coverage.json` counts the records
@@ -194,7 +200,10 @@ and local refs.
   a record the writer matches or an approved equivalence names already
   does. The resolve step leaves the record without a `qid`, so the writer
   pairs it with a QID that one of the batch's claims mentions, by that
-  item's label; a record no claim mentions adds no alias.
+  item's label; a record no claim mentions adds no alias. The label is
+  the record's, or its tagged label where the writer would place the
+  record under it (ADR-0010), its own label then an alias, with the
+  record's aliases (amended by #476, 2026-10-05).
 - **Kinds without a manifest.** A batch without an entity manifest, such
   as the line-range tier of ADR-0006 produces, states each entity's kind
   only on its local refs' `instance_of`. When the writer matches such a
@@ -225,7 +234,20 @@ and local refs.
   bring it. A manifest record's kind still arrives, through the resolve
   step's label match (see the #233 amendment). Nor does a later ref to a
   local id an earlier ref named bring a kind, since the first ref to
-  each local id gives it. #109, whose identity map is to replace
+  each local id gives it. The one exception (amended by #476,
+  2026-10-05): a ref without a record that the resolve step resolves to
+  the item under its tagged label (ADR-0010) is given a manifest record of
+  its first ref's label and kind in the resolved batch, so its kind and
+  its label, as an alias, reach that item as the unresolved write gives
+  them. One with no kind stays local, for the writer to find that item
+  itself, and so does one of a batch whose written claims cite more than
+  one artifact, as a record's kind cites the artifact of the first claim
+  that mentions the item alone, where a ref's kind cites the artifact of
+  the first claim of each local id. Resolve reads the entity past
+  every claim the writer refuses before its plan (the writer's
+  `pre_plan_refusals`), so a made record's label and kind never come from
+  such a claim; only the claims the writer refuses while it plans are
+  unseen by it, and there a first ref may give the label and kind. #109, whose identity map is to replace
   exact-label resolution, takes on carrying every ref's kind to its
   item.
 - The orchestrator's write summary (`write.json`) and its log line count

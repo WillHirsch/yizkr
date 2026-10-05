@@ -280,7 +280,7 @@ feature, decision, ingestion pass). An agent that files an issue with
      `yizkr scratch diff <baseline> <run>`. The HTML and JSON reports and
      the detailed diff stay under `var/` (§6).
   3. **Read.** The owner, or a reviewer agent, reads them with the
-     reviewer checklist that the diff issue adds (#198). A reviewer agent
+     reviewer checklist in docs/RUN_DIFF.md (#198). A reviewer agent
      that reads anything beyond the aggregate summary must be a local
      session.
   4. **Post.** The aggregate `report.md`, the diff summary and the verdict
@@ -293,9 +293,9 @@ feature, decision, ingestion pass). An agent that files an issue with
   Until the first whole-corpus scratch run (#145) starts, the
   pre-baseline exception applies (§2): a PR that changes a stage carries
   its `stage:*` label but not this one, and the first run's baseline
-  includes the change. Until the scratch driver, report and diff land
-  (#194, #124, #198), no scratch-diff evidence exists, and PRs with the
-  label wait.
+  includes the change. The scratch driver, the report and the diff
+  (#194, #124, #198) make the evidence: `yizkr scratch run`,
+  `yizkr scratch report` and `yizkr scratch diff`.
 - While a PR waits for this evidence, its Project Status is *Needs local
   verify*. Cloud agents never provide the evidence; they leave the label
   for a local session.

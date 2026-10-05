@@ -68,8 +68,9 @@ CATEGORIES: dict[str, str] = {
     ),
     "kinship_term_alias": (
         "a kinship term or other relational appellation recorded as an "
-        'alias ("my husband", "our great grandmother", "Oma", "Nana '
-        'Maisie", "Bubele"): it is not a name; suggest `relative` + '
+        'alias, or as the label of a person the document names ("my '
+        'husband", "our great grandmother", "Oma", "Nana Maisie", '
+        '"Bubele"): it is not a name; suggest `relative` + '
         "`kinship_type` (a literal kinship term), a marriage (a spousal "
         "term) or `referred_to_as` (any other relational appellation), NOT "
         "an alias (ADR-0018)"
@@ -80,7 +81,12 @@ CATEGORIES: dict[str, str] = {
     ),
     "escape_hatch_misused": (
         "an entity marked `unclassified_entity` that clearly fits a real "
-        "kind (the escape hatch was used when it should not have been)"
+        "kind (the escape hatch was used when it should not have been): an "
+        "agency, office or firm's department is an `organization`; a "
+        "cemetery or a building a `place`; a named ship a `vessel`. A "
+        "named aircraft rightly takes it, as does a letter or a "
+        "certificate a source mentions, since an artifact kind is no kind "
+        "of entity"
     ),
     "misapplied_property": "a claim whose property is plainly misapplied",
     "office_holder_as_organization": (
@@ -101,6 +107,16 @@ CATEGORIES: dict[str, str] = {
     "implausible_value": (
         "a value the source is unlikely to say as read, such as a birth "
         "year a century before the parents married"
+    ),
+    "unsupported_containment": (
+        "a place's `part_of` claim (its container, or its country) that its "
+        "excerpt does not state, neither in the place's mention, nor in the "
+        "fields a form gives that place, nor as a link of a chain of "
+        "containers: inferred from what is known of the place, or carried "
+        "over from another place's container "
+        "(Fläckfeld put in Kreis Peiltal on an excerpt that reads only "
+        '"Fläckfeld"); containment the source does not state is proposed '
+        "later, never extracted (ADR-0009): suggest drop"
     ),
 }
 
@@ -192,6 +208,12 @@ Entities (id | kind | label | aliases):
 Claims (subject | property | value):
 {claims_block}
 
+Each `part_of` claim above, with the excerpt of the source it cites:
+{containment_block}
+Check each against its excerpt: a containment the excerpt does not state
+(in the place's mention, in the fields a form gives that place, or as a
+link of a chain of containers) is a concern (unsupported_containment).
+
 Output NDJSON, one finding per line, no prose, no code fences:
 {{"entity": "<the entity id the finding concerns>",
 "claim": {{"subject": "<subject as listed>", "property": "<property as \
@@ -238,11 +260,29 @@ def _ref_id(ref: Any) -> str:
     return "?"
 
 
+# the characters other than a line feed at which str.splitlines() breaks a
+# line, each with the escape a prompt listing writes for it
+_LINE_BREAKS = str.maketrans(
+    {
+        "\r": "\\r",
+        "\x0b": "\\x0b",
+        "\x0c": "\\x0c",
+        "\x1c": "\\x1c",
+        "\x1d": "\\x1d",
+        "\x1e": "\\x1e",
+        "\x85": "\\x85",
+        "\u2028": "\\u2028",
+        "\u2029": "\\u2029",
+    }
+)
+
+
 def _value(claim: Claim) -> str:
     """A claim's value as the prompt lists it: an item by its id, which
     the entities block labels; a quantity in full; a text with its
-    language; anything else as the review sheet shows it. A line break is
-    listed as a backslash and an n, so each claim is one line."""
+    language; anything else as the review sheet shows it. A line feed is
+    listed as a backslash and an n, and every other line break as its
+    escape (_LINE_BREAKS), so each claim is one line."""
     value = claim.value
     if isinstance(value, ItemValue):
         rendered = _ref_id(value.value)
@@ -250,7 +290,11 @@ def _value(claim: Claim) -> str:
         rendered = repr(value.amount)
     else:
         rendered = describe_value(value)
-    return rendered.replace("\\", "\\\\").replace("\n", "\\n")
+    return (
+        rendered.replace("\\", "\\\\")
+        .replace("\n", "\\n")
+        .translate(_LINE_BREAKS)
+    )
 
 
 def listings(batch: ClaimBatch) -> list[tuple[str, str, str]]:
@@ -274,6 +318,32 @@ def listings(batch: ClaimBatch) -> list[tuple[str, str, str]]:
 
 def _claims_block(batch: ClaimBatch) -> str:
     return "\n".join(" | ".join(listing) for listing in listings(batch))
+
+
+def _containment_block(batch: ClaimBatch) -> str:
+    """Each `part_of` claim as the claims block lists it, with the excerpt
+    its source cites ("-" for none), so the critic can check that the
+    source states the containment (ADR-0009). Each line opens with a dash
+    and lists the claim without the claims block's separators, so it is
+    never taken for a claim or an entity row; the excerpt is quoted as a
+    JSON string, with the line breaks JSON leaves raw escaped
+    (_LINE_BREAKS), so it stays on its line."""
+    lines = []
+    for claim, (subject, prop, value) in zip(
+        batch.claims, listings(batch), strict=True
+    ):
+        if prop != "part_of":
+            continue
+        excerpt = claim.source.transcription_excerpt
+        quoted = (
+            json.dumps(excerpt.text, ensure_ascii=False).translate(
+                _LINE_BREAKS
+            )
+            if excerpt
+            else "-"
+        )
+        lines.append(f"- {subject} part_of {value}: {quoted}")
+    return "\n".join(lines)
 
 
 def named(claim: Claim) -> list[str]:
@@ -397,6 +467,7 @@ def run_critique(
         properties=", ".join(sorted(properties)),
         entities_block=_entities_block(batch) or "(none)",
         claims_block=_claims_block(batch) or "(none)",
+        containment_block=_containment_block(batch) or "(none)",
     )
     try:
         response = client.complete(prompt)
@@ -501,11 +572,11 @@ def counterparts(extracted: ClaimBatch, rows: ClaimBatch) -> list[int | None]:
     local ref to an approved entity with its QID, and set that entity's
     `qid`, and a claim they make identical to an earlier one is dropped
     (reconcile.apply_equivalences). Then each remaining local ref may be
-    replaced with a QID by its own label, claim for claim, in order
-    (resolve.resolve_batch). The first step is replayed here exactly, from
-    the entities whose `qid` `rows` sets; the second is checked claim by
-    claim, a local ref against the ref at its place, so one local id may
-    become different QIDs in different claims."""
+    replaced with a QID by its entity's label (resolve.resolve_batch).
+    The first step is replayed here exactly, from the entities whose
+    `qid` `rows` sets; the second is checked claim by claim, a local ref
+    against the ref at its place, so rows in which one local id became
+    different QIDs in different claims match too."""
     from yizkr.pipeline.reconcile import apply_equivalences
 
     before = {entity.id: entity.qid for entity in extracted.entities}

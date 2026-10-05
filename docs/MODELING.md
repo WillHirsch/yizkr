@@ -29,10 +29,11 @@
   either end dropped, and finds an item by its label in it,
   so a label given in another form finds its item again; the registrar
   compares and sets an artifact's title by the same rule, which it takes
-  from the writer (#369, #403), and so do the resolve step, matching a
-  ref's label, the place-hierarchy pass, finding its run item, and alias
-  hygiene, comparing an alias with the label and the other aliases
-  (#370). A term still over 250 characters in that
+  from the writer (#369, #403), and so do the resolve step, matching an
+  entity's label as the writer's plan reads it (its manifest record's,
+  else its first ref's; #476), the place-hierarchy pass, finding its
+  run item, and alias hygiene, comparing an alias with the label and the
+  other aliases (#370). A term still over 250 characters in that
   form is cut as a long locator is (below), with the digest of the whole,
   so whitespace around a term never counts towards the limit, two labels
   that agree up to the cut stay two items' labels, and the run item's
@@ -518,7 +519,11 @@ artifact a new QID, changes neither.
   possibly-living check, the non-privileged export, which checks the
   whole graph at any rank first, and reconcile's roster) stops with
   `UnsupportedDate`, naming the item and the statement, if a curator has
-  entered one.
+  entered one. A GEDCOM date that names the Gregorian calendar
+  (`@#DGREGORIAN@`, or GEDCOM 7's `GREGORIAN`), before the whole date or
+  before one of its dates, reads as the same date written without it; a
+  calendar inside a date phrase, or one named twice in a row, reads no
+  date, and the adapter warns as for any date it cannot parse.
 - Centuries and millennia are counted as Wikibase and Wikidata count
   them, from year 1: the nth century runs from year 100(n−1)+1 to year
   100n, so a date at century precision stored as any year from 1801 to
@@ -598,6 +603,13 @@ artifact a new QID, changes neither.
   GeoNames dataset item). The inconsistency report suppresses value
   pairs connected by a `(location|part_of)+` path — differences of
   resolution, not contradictions.
+- Extraction gives a place's `part_of` only where the source states it
+  (in the place's mention, "Fläckfeld, Kreis Mockburg"; in the fields a
+  form gives that place; or as a link of a chain of containers), never
+  from what is known of the place or from another place's container; the
+  extraction critic
+  flags a `part_of` claim its excerpt does not state
+  (`unsupported_containment`, ADR-0023).
 
 ## Artifact coverage — cross-domain relations (planned)
 

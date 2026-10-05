@@ -16,6 +16,7 @@
                            driver to stop or go on
     yizkr scratch report   what a scratch run did, per stage and per
                            document, from its run directory alone
+    yizkr scratch diff     what changed between two scratch runs, and why
     yizkr scratch reset    reset the instance and repopulate it for a
                            scratch run; refuses on a kept instance
 
@@ -935,6 +936,41 @@ def cmd_scratch_report(args) -> int:
     return 0
 
 
+def cmd_scratch_diff(args) -> int:
+    from yizkr.pipeline import rundiff, scratch
+
+    named = args.run
+    if len(named) > 2:
+        sys.exit("name two runs at most: the baseline, then the run")
+    try:
+        run = scratch.resolve_run(args.runs, named[-1] if named else None)
+        if len(named) == 2:
+            baseline = scratch.resolve_run(args.runs, named[0])
+        else:
+            baseline = rundiff.baseline_run(
+                args.runs, run, refs=args.main or rundiff.MAIN_REFS
+            )
+    except (scratch.ScratchRefused, rundiff.DiffError) as exc:
+        sys.exit(str(exc))
+    if baseline.resolve() == run.resolve():
+        sys.exit(f"{run.name} is the baseline itself: name another run")
+    try:
+        written = rundiff.write_diff(
+            baseline, run, cache=args.cache, rebuild=args.rebuild
+        )
+    except rundiff.DiffError as exc:
+        sys.exit(str(exc))
+    print(f"baseline   {baseline}")
+    print(f"run        {run}")
+    for name in (rundiff.MARKDOWN_FILE, rundiff.JSON_FILE):
+        print(f"{name:10} {written[name]}")
+    print(
+        f"{rundiff.MARKDOWN_FILE} holds the aggregates alone, and may be "
+        f"posted; {rundiff.JSON_FILE} stays local (docs/RUN_DIFF.md)"
+    )
+    return 0
+
+
 def cmd_scratch_control(args) -> int:
     from yizkr.pipeline import monitor
     from yizkr.pipeline.rundir import ABORT, RESUME, RunDir
@@ -1730,7 +1766,8 @@ def _scratch_parsers(sub, effort_choices) -> None:
         "scratch",
         help="whole-corpus scratch runs: import archived transcriptions for "
         "one's calls, estimate its calls, run it, follow it, pause, resume "
-        "or abort it, and reset the instance for it "
+        "or abort it, report it, diff it with another, and reset the "
+        "instance for it "
         "(docs/runbooks/scratch-run.md)",
     )
     ssub = group.add_subparsers(dest="action", required=True)
@@ -1858,6 +1895,54 @@ def _scratch_parsers(sub, effort_choices) -> None:
         "--runs", type=Path, default=scratch.DEFAULT_RUNS, help=runs_help
     )
     p.set_defaults(func=cmd_scratch_report)
+
+    p = ssub.add_parser(
+        "diff",
+        help="what changed between two scratch runs, and why: stages "
+        "reused or recomputed (by the key component that changed), "
+        "figures, anomalies, failures, claims, mentions and clusters. "
+        "Writes diff.json, which stays local, and diff.md, the aggregates "
+        "alone, which may be posted, into the run's .diff folder "
+        "(docs/RUN_DIFF.md)",
+        description="Diffs a run (the latest by default) against a "
+        "baseline (by default the latest completed run on main in the "
+        "runs directory that is older than the run, run on clean code). "
+        "Name one run to diff it with "
+        "that baseline, or two: the baseline, then the run. It reads the "
+        "two run directories, and of the LLM cache only the components of "
+        "the keys their events name; never the wiki, the engine or the "
+        "corpus.",
+    )
+    p.add_argument(
+        "run",
+        nargs="*",
+        help="the run, or the baseline then the run (run ids or directories)",
+    )
+    p.add_argument(
+        "--runs", type=Path, default=scratch.DEFAULT_RUNS, help=runs_help
+    )
+    p.add_argument(
+        "--main",
+        action="append",
+        metavar="REF",
+        help="the git ref that is main, for the default baseline "
+        "(default origin/main, else main; repeatable, the first git "
+        "knows is taken)",
+    )
+    p.add_argument(
+        "--cache",
+        type=Path,
+        metavar="DIR",
+        help="the LLM cache whose entries' key components attribute each "
+        "recompute (default the one the run's run.json names)",
+    )
+    p.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="build both runs' reports afresh, rather than read the "
+        "report.json each holds",
+    )
+    p.set_defaults(func=cmd_scratch_diff)
 
     _scratch_reset_parser(ssub)
 

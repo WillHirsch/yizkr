@@ -33,7 +33,8 @@ fictional scan registered under exactly its media object's title:
 * a scan registered under the person's name first: the person is an
   item of its own under its name tagged `" [not an artifact]"`, its
   name an alias, the scan's item unchanged, and resolve's labels leave
-  the scan out (decision AN); a ref with no kind naming him, written
+  the scan out, finding his item under his name as the writer does
+  (decision AN, #476); a ref with no kind naming him, written
   after, joins that item, as the tag is one for every kind (decision
   AZ);
 * Sebastian's portrait titled with Hildegard's name, his claim naming
@@ -409,10 +410,11 @@ def test_a_person_under_a_scans_label_is_an_item_of_its_own(client, tmp_path):
     assert label(client, artifact) == person(order)
     assert flagged(written) == []
     # the refs resolve reads the labels of: Sebastian, under his name and
-    # under his tagged label
+    # under his tagged label; each finds his item, as the writer does,
+    # under the tagged label where the scan holds his name (#476)
     named = (person(order), f"{person(order)}{ENTITY_TAG}")
     labels = resolvable_labels(client, naming(order, *named))
-    assert person(order) not in labels
+    assert labels[person(order)] == sebastian
     assert labels[f"{person(order)}{ENTITY_TAG}"] == sebastian
     again = write_export(client, tmp_path, order)
     assert again.created_items["i1"] == sebastian
@@ -422,7 +424,7 @@ def test_a_person_under_a_scans_label_is_an_item_of_its_own(client, tmp_path):
     assert entity(client, artifact)["lastrevid"] == before["lastrevid"]
     assert label(client, artifact) == person(order)
     labels = resolvable_labels(client, naming(order, *named))
-    assert person(order) not in labels
+    assert labels[person(order)] == sebastian
     assert labels[f"{person(order)}{ENTITY_TAG}"] == sebastian
 
 

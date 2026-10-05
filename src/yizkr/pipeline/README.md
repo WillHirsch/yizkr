@@ -469,15 +469,25 @@ re-running one step in isolation — but for a normal ingest you only ever run
 
 In `ingest run`, reconcile matches a document's entities against nothing
 (above), so no Gate 1 row ties an entity to an item already in the graph.
-**Resolve** still does, by exact label: it replaces a `local` ref whose
-label exactly matches an existing item's, so a document meets the
-artifacts written before it under the same names only. A ref of an
+**Resolve** still does, by exact label, as the writer finds an item: it
+replaces the `local` refs to an entity with the existing item the writer
+would reuse for it, by the entity's label (its manifest record's, else
+its first ref's): the item under that label, or, where an artifact or a
+part of one holds it, the item under its `" [not an artifact]"` tagged
+label (ADR-0010, amended by #476). A ref without a manifest record that
+resolves to the tagged item gains a record of its first ref's label and
+kind in the resolved batch, so the writer gives that item the ref's name
+as an alias and its kind; one with no kind, or of a batch citing more
+than one artifact, stays local, and the writer finds the tagged item
+itself. So a document meets the artifacts written before it under the
+same names only. A ref of an
 artifact kind or of artifact fragment is never resolved so, nor is any ref resolved to an
 artifact or a part of one: no artifact-kind entity is matched to a
 registered artifact (one with a hash, or its page fragment), no other
 entity to an artifact or a part of one, and no artifact is adopted, by
 its title or label (ADR-0010). It reads the instance's labels once a
-batch, and the statements of only the items its refs' labels name; the
+batch, and the statements of only the items under its entities' plain
+or tagged labels; the
 write reads the labels once too, with the vocabulary known (a fresh
 client reads them for the vocabulary as well). By default the
 loop takes every document to the gates in one pass, before any is
@@ -675,6 +685,24 @@ refuses). The module docstring is the full account; in short:
   it with #109, adjudication of ambiguous pairs comes with #106, and
   overrides with never-re-ask with #107. The owner reviews ambiguous and
   conflicting clusters once, before the keeper run.
+
+## The run-to-run diff (`rundiff.py`, ADR-0025 §4)
+
+`yizkr scratch diff [<baseline>] [<run>]` says what changed between two
+scratch runs, and why: the settings that differ; per stage, how each
+document's stage came about in each run, each recompute put down to the
+components of its calls' keys that changed against the baseline's
+(read, components alone, from the LLM cache), and whether each view
+changed; every figure of the two run reports side by side (absent, never
+0, where an older report lacks one); anomaly findings new and resolved;
+documents newly failing or no longer failing; claims matched by their
+fingerprints, added, removed and changed per document and property;
+mentions added and removed; and cluster merges and splits by membership.
+The baseline defaults to the latest completed run on main. It reads the
+two run directories alone (and the cache's key components), never the
+wiki, the engine or the corpus, and writes `diff.json` (local) and
+`diff.md` (aggregates, may be posted) into the run's `.diff/<baseline>/`.
+docs/RUN_DIFF.md has the details and the reviewer checklist.
 
 ## Face proposals (`ingest/faces.py`, ADR-0005)
 

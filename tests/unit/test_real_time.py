@@ -131,6 +131,13 @@ def uses(source: str, **options) -> list[str]:
         "def f(path):\n    path.touch()\n    return path.stat().st_mtime_ns\n",
         "import os\n\ndef f(p):\n    p.touch()\n    os.path.getmtime(p)\n",
         "path.touch()\nstamp = path.stat().st_ctime\n",
+        # a member given by name is stamped with the current time (#479)
+        'def f(archive):\n    archive.writestr("a.xml", "<a/>")\n',
+        "def f(archive, name):\n    archive.writestr(name, data)\n",
+        'def f(archive):\n    archive.writestr(f"{n}.xml", data)\n',
+        'def f(a):\n    a.writestr(zinfo_or_arcname="a.xml", data="")\n',
+        "def f(archive):\n    archive.writestr(str(path), data)\n",
+        "info = ZipInfo(n)\ndef f(archive):\n    archive.writestr(n, data)\n",
     ],
 )
 def test_each_spelling_of_a_real_clock_is_found(source):
@@ -272,6 +279,11 @@ def test_what_a_test_may_do_is_not_found():
         os.utime(path, (1, 1))
         os.utime(path, times=(1, 1))
         before = path.stat().st_mtime_ns
+        archive.writestr(zipfile.ZipInfo("a.xml", date_time=FIXED), "<a/>")
+        archive.writestr(ZipInfo(name, date_time=FIXED), data)
+        info = zipfile.ZipInfo("b.xml", date_time=FIXED)
+        archive.writestr(info, data)
+        archive.writestr(zinfo_or_arcname=info, data=data)
 
         def touched(path):
             path.touch()

@@ -36,6 +36,15 @@ asked, and a pair the graph already nests either way is not. Questions
 are ordered spine-first by the graph's own containment: a question
 whose places hold more places comes first, then one whose places sit
 less deep.
+Amended by #465 (2026-10-05): extraction gives a place's `part_of` (its
+country among them) only where the source states it: in the place's
+mention, in the fields a form gives that place, or in a chain of
+containers, which states each link ("Snylsjum, gemeente Drakeradiel,
+Fryslân" also puts gemeente Drakeradiel in Fryslân). It is never
+inferred from what is known of the place or carried over from another
+place the document names; the critic flags a `part_of` its excerpt does
+not state (`unsupported_containment`, ADR-0023). Everything else is this
+pass's to propose.
 
 ## Context
 

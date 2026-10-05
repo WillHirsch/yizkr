@@ -472,7 +472,9 @@ cache would refuse to open it refuses too (`CacheRefused`; The cache
 folder, above). A kept session comes back as the names of its files
 only, with no bytes, and comes back whole however the holder keeps that
 session meanwhile: a session kept for an answer is never read empty, and
-a read never fails and never waits.
+a read never fails and never waits. `asides(key)` gives the entries moved
+aside under a key, rejected or replaced, each as it was kept; the run
+diff reads their key components (docs/RUN_DIFF.md).
 
 Two things hold it, against a keep that publishes a session by moving the
 folder it finds at the answer's path aside and renaming its own in. The
@@ -1280,7 +1282,12 @@ stale stage through the pipeline's own code with the cache as it is
 is known. It estimates only
 the calls whose keys wait on an answer the engine has yet to give: by
 `llm.estimate_calls`, or, for the forks after a conversation it replays,
-by the chunks the cache kept.
+by the chunks the cache kept. The excerpts a PDF's placed images may
+become (ADR-0008), which no plan names until the PDF is transcribed, it
+counts from the PDF's own reading of the file, or, for a transcription
+that stands, from the excerpts its directory holds, and gives their
+calls, by the mean for excerpts over the runs measured, else as typical,
+as up to so many more.
 
 ## Checks once per run
 
