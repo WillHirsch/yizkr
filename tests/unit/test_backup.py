@@ -161,6 +161,14 @@ FACTS = [
 ]
 
 
+@pytest.mark.parametrize("name", ["now", "utcnow", "today"])
+def test_the_backup_module_reads_no_real_clock_here(name):
+    """The fence every test here runs behind: each clock call of the
+    backup module's datetime fails."""
+    with pytest.raises(AssertionError, match="the real clock was read"):
+        getattr(backup.datetime.datetime, name)()
+
+
 class TestExclusionReport:
     """The non-privileged export's call (ADR-0020): every person the facts
     query lists, with the births the privacy module's query reads (#334).
