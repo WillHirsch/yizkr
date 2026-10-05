@@ -8,6 +8,12 @@ Amended by #222 (2026-09-27): in "Reciprocal / dyadic naming", the
 example records the literal "Oma" as (A), `relative` + `kinship_type`, as
 Ruling 2 routes it, and the section tells the two statements apart by
 subject and ego (the `relative` object or the `perspective` qualifier).
+Amended by #459 (2026-10-05): the extraction prompts restate the rule
+where labels and aliases are asked for: a kinship word is never the
+label or an alias of a person the document names, alone ("Oma"), with a
+name ("Aunt Pünktchen" gives the alias "Pünktchen") or as a writer's
+"your father"; only a person the document never names is labelled with
+its kinship words ("Dein Vater" on the postcard).
 Amended by [ADR-0035](0035-mention-records.md) (owner decision
 2026-09-29, #385): a `relative` claim gains a controlled `kinship_class`,
 with the side, degree and removes its term states, beside the verbatim

@@ -80,7 +80,11 @@ CATEGORIES: dict[str, str] = {
     ),
     "escape_hatch_misused": (
         "an entity marked `unclassified_entity` that clearly fits a real "
-        "kind (the escape hatch was used when it should not have been)"
+        "kind (the escape hatch was used when it should not have been): an "
+        "agency, office or firm's department is an `organization`; a "
+        "cemetery or a building a `place`; a named ship or aircraft a "
+        "`vessel`. A letter or a certificate a source mentions rightly "
+        "takes it, since an artifact kind is no kind of entity"
     ),
     "misapplied_property": "a claim whose property is plainly misapplied",
     "office_holder_as_organization": (
@@ -101,6 +105,14 @@ CATEGORIES: dict[str, str] = {
     "implausible_value": (
         "a value the source is unlikely to say as read, such as a birth "
         "year a century before the parents married"
+    ),
+    "unsupported_containment": (
+        "a place's `part_of` claim (its container, or its country) that its "
+        "excerpt does not state for that place: inferred from what is known "
+        "of the place, or carried over from another place's container "
+        "(Fläckfeld put in Kreis Peiltal on an excerpt that reads only "
+        '"Fläckfeld"); containment the source does not state is proposed '
+        "later, never extracted (ADR-0009): suggest drop"
     ),
 }
 
@@ -192,6 +204,11 @@ Entities (id | kind | label | aliases):
 Claims (subject | property | value):
 {claims_block}
 
+Each `part_of` claim above, with the excerpt of the source it cites:
+{containment_block}
+Check each against its excerpt: a containment the excerpt does not state
+for that place is a concern (unsupported_containment).
+
 Output NDJSON, one finding per line, no prose, no code fences:
 {{"entity": "<the entity id the finding concerns>",
 "claim": {{"subject": "<subject as listed>", "property": "<property as \
@@ -274,6 +291,26 @@ def listings(batch: ClaimBatch) -> list[tuple[str, str, str]]:
 
 def _claims_block(batch: ClaimBatch) -> str:
     return "\n".join(" | ".join(listing) for listing in listings(batch))
+
+
+def _containment_block(batch: ClaimBatch) -> str:
+    """Each `part_of` claim as the claims block lists it, with the excerpt
+    its source cites ("-" for none), so the critic can check that the
+    source states the containment (ADR-0009). Each line opens with a dash
+    and lists the claim without the claims block's separators, so it is
+    never taken for a claim or an entity row."""
+    lines = []
+    for claim, (subject, prop, value) in zip(
+        batch.claims, listings(batch), strict=True
+    ):
+        if prop != "part_of":
+            continue
+        excerpt = claim.source.transcription_excerpt
+        quoted = (
+            json.dumps(excerpt.text, ensure_ascii=False) if excerpt else "-"
+        )
+        lines.append(f"- {subject} part_of {value}: {quoted}")
+    return "\n".join(lines)
 
 
 def named(claim: Claim) -> list[str]:
@@ -397,6 +434,7 @@ def run_critique(
         properties=", ".join(sorted(properties)),
         entities_block=_entities_block(batch) or "(none)",
         claims_block=_claims_block(batch) or "(none)",
+        containment_block=_containment_block(batch) or "(none)",
     )
     try:
         response = client.complete(prompt)

@@ -62,6 +62,11 @@ Rules — these mirror the archive's non-negotiable conventions:
   century), earliest_date/latest_date qualifiers for ranges, and the
   sourcing_circumstances qualifier with the "circa" vocabulary item for
   approximate values.
+- A year alone is year precision, never a full date: "1905" is never
+  1 January 1905 at day precision. A century or a decade the source
+  implies ("in the thirties", "в тридцатые годы") is read in the
+  document's own context (the 1930s, in a letter of 1958), never as a
+  literal "1st century" or the year 30.
 - Every claim MUST include the source reference: the artifact
   {{"kind": "artifact", "sha1": "{artifact_sha1}"}}, plus page number and a
   short verbatim transcription excerpt supporting it. The page number is
@@ -70,6 +75,24 @@ Rules — these mirror the archive's non-negotiable conventions:
 - Refer to people, places, and events the document mentions with "local"
   references (stable local_id per entity within this batch, label as
   written, instance_of from: {kinds}).
+- A kinship word is never the label of a person the document names:
+  take the name, never the kinship word. "Aunt Pünktchen" is labelled
+  "Pünktchen", or a fuller name the document gives her, and a writer's
+  "Dein Vater" ("your father") takes the father's name where the
+  document gives it. Only a person the document never
+  names is labelled with its kinship words ("Mem").
+- Kinds: a group of people is never one human. "The Löbig children" is
+  a family where the source presents a family or household, else each
+  child it names; where it names none, their count is the parent's
+  `number_of_children`. A year or a date alone is no entity and no event:
+  it dates the event it belongs to. `unclassified_entity` is right only
+  where no kind fits: an agency, an office or a firm's department is an
+  organization; a cemetery or a building a place; a named ship or
+  aircraft a vessel.
+- Give a place's containment (`part_of`, its country among them) only
+  where the source states it for that place ("Fläckfeld, Kreis
+  Mockburg"). Never infer it from what you know of a place, and never
+  carry it over from another place the document names.
 - Use ONLY these property keys (property key: datatype — what it means),
   for claims and qualifiers alike — a claim naming any other key is
   discarded. The description is authoritative: it says what the VALUE

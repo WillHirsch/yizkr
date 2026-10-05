@@ -192,6 +192,12 @@ Rules — these mirror the archive's non-negotiable conventions:
   sourcing_circumstances qualifier with the "circa" vocabulary item for
   approximate values. Never silently disambiguate an ambiguous date
   format — downgrade to the precision actually supported.
+- A year alone is year precision, never a full date: "1905" is never
+  1 January 1905 at day precision, and "im Mai 1938" is month
+  precision. A century or a decade the source implies ("in the
+  thirties", "в тридцатые годы") is read in the document's own context
+  (the 1930s, in a letter of 1958), never as a literal "1st century" or
+  the year 30.
 - Every claim MUST include the source reference: the artifact
   {{"kind": "artifact", "sha1": "{artifact_sha1}"}}, plus page number and a
   short verbatim transcription excerpt supporting it. The page number is
@@ -300,6 +306,13 @@ Rules — these mirror the archive's non-negotiable conventions:
     named person or family — never invent an entity to fill it.
   When unsure whether a term is literal kinship, prefer `referred_to_as`
   (it asserts only that the term was used, never a relation).
+  A kinship word is never the label or an alias of a person the document
+  names: take the name, never the kinship word. A kinship term alone
+  ("Oma", "Mum", "Grandma", "Mem") is no alias; with a name ("Aunt
+  Pünktchen", "Tante Rahel", "дядя Себастьян") only the name is an alias
+  ("Pünktchen"); a writer's "your father" ("Dein Vater", "Ваш отец") for
+  a person named elsewhere leaves that name the label. Only a person the
+  document never names is labelled with its kinship words.
 - Events and their participants (ADR-0035 §3.2): a `participant` claim
   has the EVENT as subject and the person as value, with an
   `object_has_role` qualifier saying how they took part: `principal` (in
@@ -357,6 +370,15 @@ Rules — these mirror the archive's non-negotiable conventions:
   `start_time` and `end_time` qualifiers; an entity's own `start_time` or
   `end_time` claim (a firm's founding, a detention's start) is a date
   value that `earliest_date` and `latest_date` bound.
+- Give a place's containment (`part_of`, its country among them) only
+  where the source states it for THAT place, in the place's own mention
+  ("Fläckfeld, Kreis Mockburg"; "Snylsjum, gemeente Drakeradiel,
+  Fryslân, Nederlân"). Containment the source does not state is world
+  knowledge, proposed later by the place pass (ADR-0009): never infer it
+  from what you know of a place (that Flörburg lies in Kreis Peiltal, in
+  Hesse), and never carry it over from another place the document names.
+  Where a source writes "Flörburg, Kreis Peiltal" and, elsewhere, a bare
+  "Fläckfeld", Fläckfeld takes no `part_of` at all.
 - Persecution and displacement are EVENTS, not relations and not
   locations on a person (ADR-0014). "Deported to Klurnau in 1942" is a
   `deportation`; "held at", "interned at", "taken to" an
@@ -406,7 +428,15 @@ LINE_ASSIGNMENT_BLOCK = """\
 Refer to people, places, organizations, events, unions and occupations
 with "local" references (stable local_id per entity within this
 response, label as written — prefer the fullest name the document gives
-for a person anywhere, instance_of from: {kinds}).
+for a person anywhere, never a kinship word where the document names the
+person, instance_of from: {kinds}).
+A group of people is never one human: it is a family where the source
+presents a family or household, else each member it names; where it
+names none, their count is the parent's `number_of_children`. A year or
+a date alone is no entity and no event: it dates the event it belongs
+to. `unclassified_entity` is right only where no kind fits: an agency,
+an office or a firm's department is an organization; a cemetery or a
+building a place; a named ship or aircraft a vessel.
 The relation decides the kind: an institution named only as where
 something happened is a place; one the source shows acting (issuing,
 employing, educating, carrying out an event) is an organization.
@@ -483,6 +513,15 @@ Also:
   `family`; a ship is a `vessel`; a cited law, decree, gazette, or
   register is a `legal_instrument`; a regiment or brigade is a
   `military_unit`;
+- a group of people is never one `human`. "The Löbig children" or
+  "Sebastian's children" is a `family` where the source presents them as
+  a family or household; else each child the source names is a `human`
+  of their own (Ursula, Klara, Gustav); where it names none ("drei
+  Kinder"), the group is no entity at all, and their count is the
+  parent's `number_of_children` claim at extraction;
+- a year or a date alone ("1938", "im Jahre 1905") is never an entity,
+  and never an `event`: it is a time value (`point_in_time`,
+  `start_time`, `end_time`) on the event it dates, given at extraction;
 - a forced removal is a `deportation` event, a detention an
   `imprisonment` event, a freeing a `release` event (each an event with a
   person participant, a place, and a date) — not a place or a bare
@@ -526,6 +565,18 @@ names the person through a relation but is no literal kinship term
 ("Bubele", "Nana Maisie", "Рудольфиха"), is `referred_to_as`: never an
 alias and never a record nickname. A name a writer simply uses for someone,
 in a greeting ("Liebes Pünktchen!") or a mention, is their name.
+A kinship word is never a label or an alias of a person the document
+names: the label and aliases take the name, never the kinship word
+(ADR-0018). Three cases:
+- a kinship term alone ("Oma", "Mum", "Grandma", "Mem", "дядя"): never
+  an alias; it is a label only for a person the document never names
+  (below);
+- a kinship term with a name ("Aunt Pünktchen", "Tante Rahel", "дядя
+  Себастьян"): the name alone is the alias ("Pünktchen", "Rahel",
+  "Себастьян"), never the whole phrase and never the kinship word;
+- a writer's "your father" ("Dein Vater", "Ваш отец", "your aunt") for a
+  person the document names elsewhere: the label is that name, and the
+  phrase is neither label nor alias.
 A person the document does not name is labelled with the document's own
 words for them: the postcard's writer signs "Dein Vater", so that is his
 label. Only where the document has no words for a person at all do you
@@ -648,12 +699,28 @@ Rules:
 - One entry per real-world entity, however many aliases it has.
 - ids must be unique. Do NOT include a "qid" field.
 - NEVER force an entity into a wrong-but-adjacent kind. If an entity
-  clearly exists but NO listed kind fits it (a building that is not a
-  settlement, a brickworks the source names only as a building), use
-  kind `unclassified_entity` and set `type_hint` to what it actually is,
-  in English whatever the document's language ("military regiment",
-  "brickworks"). This is a LAST resort — use a real kind whenever one
-  fits; `unclassified_entity` without a type_hint is invalid.
+  clearly exists but NO kind in the list describes it (an animal the
+  source names, a named object that is no document), use kind
+  `unclassified_entity` and set `type_hint` to what it actually is, in
+  English whatever the document's language ("horse"). This is a LAST
+  resort, right only where nothing in the list fits — use a real kind
+  whenever one fits; `unclassified_entity` without a type_hint is
+  invalid. These always have a real kind, the one the relation calls
+  for (above):
+  * an agency, a ministry, an office, a chancellery, a registry or a
+    firm's department is an `organization` (the Wiedergutmachungsamt
+    Peiltal, the Standesamt Flörburg), or a `place` where the source
+    names it only as where something happened;
+  * a cemetery, a building, an address or another site is a `place`
+    (the Friedhof Flörburg, Brunnenring 35), unless the source shows it
+    acting (above);
+  * a named ship or aircraft is a `vessel` (the RMS Flund);
+  * a law, a decree, a gazette or a register the source cites is a
+    `legal_instrument` (above).
+  A letter or a certificate the source mentions, other than the document
+  you are reading, has no kind in the list: it is `unclassified_entity`
+  with its type_hint ("letter", "death certificate"), as the 1958
+  letter's enclosed certificate of Rudolf's death is.
 - Prefer completeness: an entity mentioned once still gets an entry.
 - extract=false for entities that appear ONLY in non-assertive context:
   travel or event logistics (schedules, bookings, contact lists), people
