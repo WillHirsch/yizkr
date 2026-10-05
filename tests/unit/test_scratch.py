@@ -337,23 +337,6 @@ def command(tmp_path, corpus, fakes, **kwargs) -> int:
     )
 
 
-def estimate_now(tmp_path, corpus, fakes, **kwargs):
-    """`yizkr scratch estimate`, as the command counts it, over the
-    corpus, with the test driver's defaults."""
-    from yizkr.pipeline import estimate
-
-    fakes.corpus = corpus
-    kwargs.setdefault("cache_dir", tmp_path / "cache")
-    return estimate.scratch_estimate(
-        corpus.folder,
-        runs=runs_dir(tmp_path),
-        exclusions=ExclusionList(),
-        log=quiet,
-        min_free=0,
-        **kwargs,
-    )
-
-
 def events(run, *names: str, invocation: int | None = None) -> list[dict]:
     """The run's events, those named when names are given, of its
     `invocation`-th invocation (0 the first, -1 the latest) when given."""
@@ -2020,57 +2003,6 @@ class TestPreflightCalls:
         assert command(tmp_path, corpus, fakes, **options) == 0
         assert fakes.preflights == [(MODEL, "low")]
 
-    def test_only_the_stages_still_to_make(self, tmp_path, fakes):
-        """A role counts while a document has a stage of it to make: an
-        invocation whose stages within range have all ended calls nothing
-        (DW), and the next one calls the roles of the stages it adds."""
-        corpus = small(tmp_path)
-        assert command(tmp_path, corpus, fakes, until="transcription") == 0
-        assert command(tmp_path, corpus, fakes, until="transcription") == 0
-        assert fakes.preflights == [(MODEL, "low")]
-        fakes.preflights.clear()
-        assert command(tmp_path, corpus, fakes, until="critique") == 0
-        # extraction (MODEL, low) and critique (MODEL, high) are to make
-        assert fakes.preflights == [(MODEL, "low"), (MODEL, "high")]
-
-    def test_a_failed_stage_is_to_make_again(self, tmp_path, fakes):
-        corpus = small(tmp_path)
-
-        def hook(what, name):
-            if what == "manifest" and name == LETTER:
-                raise RuntimeError("engine down")
-
-        fakes.hook = hook
-        failed = command(tmp_path, corpus, fakes, until="critique")
-        assert failed == EXIT_FAILED
-        (run,) = scratch.runs_in(runs_dir(tmp_path))
-        fakes.hook = None
-        fakes.preflights.clear()
-        resumed = command(
-            tmp_path, corpus, fakes, resume=run.name, until="critique"
-        )
-        assert resumed == EXIT_OK
-        # the letter's extraction failed, and its critique never ran
-        assert fakes.preflights == [(MODEL, "low"), (MODEL, "high")]
-
-    def test_a_refreshed_role_is_to_make_again(self, tmp_path, fakes):
-        corpus = small(tmp_path)
-        assert command(tmp_path, corpus, fakes, until="critique") == EXIT_OK
-        (run,) = scratch.runs_in(runs_dir(tmp_path))
-        refreshed = {
-            "resume": run.name,
-            "until": "critique",
-            "refresh": ["critique"],
-        }
-        fakes.preflights.clear()
-        assert command(tmp_path, corpus, fakes, **refreshed) == EXIT_OK
-        # every critique is done, and the refresh makes them again
-        assert fakes.preflights == [(MODEL, "high")]
-        fakes.preflights.clear()
-        assert command(tmp_path, corpus, fakes, **refreshed) == EXIT_OK
-        # the views the refresh made stand for the rest of the run
-        assert fakes.preflights == []
-
     @pytest.mark.parametrize("calls_engine", [False, True])
     def test_past_the_barrier_only_the_corpus_stages_count(
         self, tmp_path, fakes, monkeypatch, calls_engine
@@ -2149,27 +2081,39 @@ class TestPreflightCalls:
         assert fakes.preflights == []
         assert (run / "run.json").read_bytes() == before
 
-    def test_another_cli_is_refused_before_its_call(
+    def test_another_cli_with_a_stage_left_is_refused_at_the_engine(
         self, tmp_path, fakes, monkeypatch
     ):
+        """On another claude CLI the preflight checks no model and refuses
+        nothing; the extraction left to make starts the engine, whose
+        client refuses the CLI as another setting, as without a preflight
+        (ES)."""
         corpus = small(tmp_path)
         assert command(tmp_path, corpus, fakes, until="transcription") == 0
         (run,) = scratch.runs_in(runs_dir(tmp_path))
-        before = (run / "run.json").read_bytes()
         fakes.preflights.clear()
+        asked = len(fakes.calls)
+        lines: list[str] = []
         monkeypatch.setattr(sys.modules[__name__], "CLI", "9.9.10")
-        # extraction is left to make, on the other CLI
         with pytest.raises(RunSettingsConflict, match="cli_version"):
-            command(tmp_path, corpus, fakes, until="extraction")
-        assert fakes.preflights == []
-        assert (run / "run.json").read_bytes() == before
+            command(
+                tmp_path,
+                corpus,
+                fakes,
+                until="extraction",
+                log=lambda line, *a, **k: lines.append(str(line)),
+            )
+        assert fakes.preflights == [] and len(fakes.calls) == asked
+        (skipped,) = [line for line in lines if line.startswith("preflight:")]
+        assert "9.9.10, not the run's 9.9.9, so no model is checked" in skipped
+        assert outcome(run) == ("refused", "RunSettingsConflict")
 
-    def test_a_resume_with_nothing_left_goes_on_on_another_cli(
+    def test_another_cli_with_nothing_left_goes_on(
         self, tmp_path, fakes, monkeypatch
     ):
-        """Every document's stages have ended, and only the barrier and
+        """Every document's views stand, and only the barrier and
         clustering, which call no engine, are left: the run goes on, as
-        RunDir.start lets it (DW)."""
+        RunDir.start lets it, with no preflight call (ES)."""
         corpus = small(tmp_path)
         assert command(tmp_path, corpus, fakes, until="critique") == 0
         (run,) = scratch.runs_in(runs_dir(tmp_path))
@@ -2180,6 +2124,48 @@ class TestPreflightCalls:
         assert fakes.preflights == [] and len(fakes.calls) == asked
         assert scratch.is_complete(run)
         assert RunDir(run).manifest()["engine"]["cli_version"] == CLI_RUN
+
+    def test_the_same_cli_with_nothing_left_makes_its_calls(
+        self, tmp_path, fakes
+    ):
+        """The preflight reads no run state: a resume that reuses every
+        view still checks each pair in its range, one call each (ES)."""
+        corpus = small(tmp_path)
+        assert command(tmp_path, corpus, fakes, until="critique") == 0
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        fakes.preflights.clear()
+        asked = len(fakes.calls)
+        resumed = command(
+            tmp_path, corpus, fakes, resume=run.name, until="critique"
+        )
+        assert resumed == EXIT_OK
+        assert fakes.preflights == [(MODEL, "low"), (MODEL, "high")]
+        assert len(fakes.calls) == asked
+
+    @pytest.mark.parametrize(
+        ("until", "expected"),
+        [
+            ("transcription", [(MODEL, "low")]),
+            ("extraction", [(MODEL, "low"), ("claude-sonnet-5", "low")]),
+            (
+                None,
+                [(MODEL, "low"), ("claude-sonnet-5", "low"), (MODEL, "high")],
+            ),
+        ],
+        ids=["transcription", "extraction", "all"],
+    )
+    def test_the_pairs_are_those_within_until(
+        self, tmp_path, fakes, until, expected
+    ):
+        driver = a_run(
+            tmp_path,
+            small(tmp_path),
+            fakes,
+            until=until,
+            extract_model="claude-sonnet-5",
+        )
+        assert driver.run() == EXIT_OK
+        assert fakes.preflights == expected
 
     @pytest.mark.parametrize("refusal", ["login", "renderer", "stack", "disk"])
     def test_no_call_while_another_check_fails(
@@ -2412,161 +2398,6 @@ class TestPreflightCalls:
         assert resumed == EXIT_OK
         assert fakes.preflights == expected
 
-    def test_a_refresh_upstream_makes_the_stages_after_it_to_make(
-        self, tmp_path, fakes
-    ):
-        """--refresh transcribe makes every reading again, and with it
-        each document's stages after it: the extraction model, another
-        than the reading's, is preflighted, and refuses the run when the
-        CLI cannot run it (EH)."""
-        corpus = small(tmp_path)
-        options = {"until": "critique", "extract_model": "claude-sonnet-5"}
-        assert command(tmp_path, corpus, fakes, **options) == EXIT_OK
-        (run,) = scratch.runs_in(runs_dir(tmp_path))
-        # the engine reads the photograph otherwise now
-        corpus.texts[PHOTO] = SOURCES["letter-to-sipkje-1952"].text
-
-        def preflight(model):
-            if model == "claude-sonnet-5":
-                raise llm.ModelUnsupported("paused", model=model, reason="x")
-
-        fakes.preflight = preflight
-        fakes.preflights.clear()
-        with pytest.raises(PreflightFailed, match="claude-sonnet-5 .extract"):
-            command(
-                tmp_path,
-                corpus,
-                fakes,
-                resume=run.name,
-                refresh=["transcribe"],
-                **options,
-            )
-        assert ("claude-sonnet-5", "low") in fakes.preflights
-
-    def test_a_correction_makes_the_stages_after_it_to_make(
-        self, tmp_path, fakes, monkeypatch
-    ):
-        """A curator's correction added once the stages have ended: the
-        transcription is made from it, with no call, and the extraction
-        and critique after it are to make; on another CLI the run is
-        refused before it starts."""
-        corpus = small(tmp_path)
-        options = {"until": "critique", "extract_model": "claude-sonnet-5"}
-        assert command(tmp_path, corpus, fakes, **options) == EXIT_OK
-        (run,) = scratch.runs_in(runs_dir(tmp_path))
-        correction = run / Path(PHOTO).stem / "transcription.corrected.txt"
-        assert correction.parent.is_dir()
-        correction.write_text(SOURCES["studio-photo-1890s"].text)
-        fakes.preflights.clear()
-        assert command(
-            tmp_path, corpus, fakes, resume=run.name, **options
-        ) == EXIT_OK  # fmt: skip
-        assert fakes.preflights == [
-            ("claude-sonnet-5", "low"),
-            (MODEL, "high"),
-        ]
-
-        correction.write_text(SOURCES["postcard-1938"].text)
-        before = (run / "run.json").read_bytes()
-        fakes.preflights.clear()
-        monkeypatch.setattr(sys.modules[__name__], "CLI", "9.9.10")
-        # the estimate refuses it up front too
-        with pytest.raises(RunSettingsConflict, match="cli_version"):
-            estimate_now(tmp_path, corpus, fakes, resume=run.name, **options)
-        with pytest.raises(RunSettingsConflict, match="cli_version"):
-            command(tmp_path, corpus, fakes, resume=run.name, **options)
-        assert fakes.preflights == []
-        assert (run / "run.json").read_bytes() == before
-
-    def test_a_held_stage_whose_view_stands_is_not_to_make(
-        self, tmp_path, fakes, monkeypatch
-    ):
-        """A done stage that a later invocation held reads as pending, yet
-        its view stands: a resume on another CLI with nothing else left
-        goes on, with no preflight call (EH)."""
-        corpus = small(tmp_path)
-        assert command(tmp_path, corpus, fakes, until="critique") == EXIT_OK
-        (run,) = scratch.runs_in(runs_dir(tmp_path))
-        corpus.text("e-letter-1952.txt", "letter-to-sipkje-1952")
-
-        def hook(what, name):
-            if name == "e-letter-1952.txt" and what == "manifest":
-                request(run, "abort", kind="media", reason="blurred")
-
-        fakes.hook = hook
-        held = command(
-            tmp_path, corpus, fakes, resume=run.name, until="critique"
-        )
-        assert held == EXIT_STOPPED
-        assert "pending" in statuses(run)
-        fakes.hook = None
-        fakes.preflights.clear()
-        asked = len(fakes.calls)
-        monkeypatch.setattr(sys.modules[__name__], "CLI", "9.9.10")
-        # the estimate accepts it, and counts no call
-        counted = estimate_now(
-            tmp_path, corpus, fakes, resume=run.name, until="critique"
-        )
-        assert counted.total().engine_calls == 0
-        resumed = command(
-            tmp_path, corpus, fakes, resume=run.name, until="critique"
-        )
-        assert resumed == EXIT_OK
-        assert fakes.preflights == [] and len(fakes.calls) == asked
-
-    def test_a_stage_needing_attention_is_not_to_make(
-        self, tmp_path, fakes, monkeypatch
-    ):
-        """A critique the engine gave up on at its output limit needs
-        attention: dispatch reuses it, and so the preflight calls nothing
-        for it (EK)."""
-        corpus = small(tmp_path)
-
-        def hook(what, name):
-            if what == "critique":
-                raise llm.OutputLimitReached()
-
-        fakes.hook = hook
-        assert command(tmp_path, corpus, fakes, until="critique") == EXIT_OK
-        (run,) = scratch.runs_in(runs_dir(tmp_path))
-        assert "needs attention" in statuses(run)
-        fakes.hook = None
-        fakes.preflights.clear()
-        monkeypatch.setattr(sys.modules[__name__], "CLI", "9.9.10")
-        resumed = command(
-            tmp_path, corpus, fakes, resume=run.name, until="critique"
-        )
-        assert resumed == EXIT_OK
-        assert fakes.preflights == []
-
-    def test_a_gedcom_only_corpus_calls_nothing(self, tmp_path, fakes):
-        """The GEDCOM adapter makes no call: a corpus of GEDCOM files
-        alone preflights no pair."""
-        corpus = Corpus(tmp_path / "corpus")
-        corpus.gedcom("a-tree.ged")
-        driver = a_run(tmp_path, corpus, fakes, until="critique")
-        assert driver.run() == EXIT_OK
-        assert fakes.preflights == []
-
-    def test_a_reading_the_check_now_fails_is_to_make(
-        self, tmp_path, fakes, monkeypatch
-    ):
-        """The transcription check, stricter since, fails a reading that
-        stands otherwise: the driver reads the scan again, so the
-        preflight calls its pair."""
-        corpus = small(tmp_path)
-        assert command(tmp_path, corpus, fakes, until="transcription") == 0
-        fakes.preflights.clear()
-        monkeypatch.setattr(
-            scratch.ScratchDriver,
-            "_transcription_failure",
-            lambda self, doc, transcription: (
-                "stricter" if doc.source.name == PHOTO else None
-            ),
-        )
-        assert command(tmp_path, corpus, fakes, until="transcription") == 0
-        assert fakes.preflights == [(MODEL, "low")]
-
     def test_a_control_file_shorter_than_counted_is_read_whole(
         self, tmp_path, fakes
     ):
@@ -2579,7 +2410,7 @@ class TestPreflightCalls:
         driver = Driver(corpus.folder, run)
         driver._asked_since = len(read_jsonl(run / CONTROL)) + 5
         request(run, "abort", reason="enough")
-        assert driver._asked()[-1]["action"] == "abort"
+        assert driver._requests_since()[-1]["action"] == "abort"
 
     def test_two_preflight_limits_keep_an_abort_asked_during_the_first(
         self, tmp_path, fakes

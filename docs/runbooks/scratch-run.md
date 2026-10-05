@@ -82,34 +82,28 @@ and `yizkr.reset` for the reset.
   those a resumed run recorded (other settings are refused as
   `RunSettingsConflict` before any call), and still before any document
   is dispatched or anything written, the driver makes **one trivial
-  call per distinct (model, effort) pair** that the roles this
-  invocation will call run, through the engine as the run calls it:
-  the same engine, model and effort as the first role that runs the
-  pair, and the pinned claude CLI, but not through the LLM cache, so
-  the call reaches the engine. Which stages call the engine is decided
-  exactly as the driver decides what to reuse, and as `yizkr scratch
-  estimate` does: within `--until`, a document's stages are made from
-  the first whose view does not stand (there is none yet, it is not
-  current, `--refresh` names its role and has not made it in this run
-  yet, or a transcription the check now fails), and every one after it;
-  a document set aside, or new to the run, makes every stage. A stage
-  whose view stands is reused, whatever its latest status says (a
-  stage held by an abort, or needing attention). A role counts when one
-  of the stages to make calls it: a transcription the vision engine
-  makes (`transcribe`), an extraction (`extract`), a critique
-  (`critique`); never the GEDCOM adapter, nor a transcription read from
-  a text, a slide deck, a correction or an excerpt's reading. Every role
-  counts when a corpus stage in range may call the engine. So a resume
-  with nothing left for the engine, such as one past the barrier only,
-  or one whose views all stand with only the barrier and clustering to
-  go, makes no call. Two roles on one model at one effort make one
-  call; at two efforts, two. Every invocation that calls the engine
-  makes them, the driver's own after a subscription limit included. A
-  pair's client on another claude CLI than the run recorded refuses the
-  run as `RunSettingsConflict` before its call, as the run's own client
-  would when it starts; a resume with nothing left for the engine goes
-  on, on whatever CLI is installed, as `RunDir.start` and the estimate
-  let it.
+  call per distinct (model, effort) pair** that the roles of the
+  invocation's range run, through the engine as the run calls it: the
+  same engine, model and effort as the first role that runs the pair,
+  and the claude CLI it would use, but not through the LLM cache, so
+  the call reaches the engine. The roles are those of the per-document
+  stages within `--until` (`transcribe` for transcription, `extract`
+  for extraction and GEDCOM, `critique`), and every role when a corpus
+  stage in range may call the engine. Two roles on one model at one
+  effort make one call; at two efforts, two. The preflight reads no run
+  state: **a resume makes these calls even when it will reuse every
+  view**, a few trivial calls accepted as the cost of a check that
+  never predicts what the run will reuse. An invocation past the
+  barrier only, whose corpus stages call no engine (clustering), makes
+  none. Every invocation that calls the engine makes them, the driver's
+  own after a subscription limit included.
+
+  When the installed claude CLI is not the one the run recorded, the
+  preflight checks no model, refuses nothing, and says so in one line.
+  The refusal stays with the run's own engine client, as for any other
+  setting: a resume with a stage left to make is refused as
+  `RunSettingsConflict` when that stage starts the engine, and one with
+  nothing left for the engine goes on.
 
   A call that fails with an error that is not a subscription limit or
   an overload refuses the run, naming the model, the role, the effort

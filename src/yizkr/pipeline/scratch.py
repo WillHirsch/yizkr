@@ -87,13 +87,15 @@ effort) pair the roles this invocation will call run, through the
 engine as the run calls it but not through the cache, and refuses the
 run, naming the model and the engine's reason, when one fails with an
 error that is not a subscription limit or an overload: a model the
-claude CLI does not support among them. The stages that will call the
-engine are decided as the reuse of their views decides them
-(_stages_to_make): within `--until`, from a document's first stage
-whose view does not stand, and every corpus stage in range that may
-call the engine. An invocation with nothing left for the engine makes
-no call. One driver at a time uses a runs directory (hold), and a run
-is invoked only from the runs directory it is in.
+claude CLI does not support among them. The pairs are those of the
+roles whose stages fall within the invocation's range (`--until`), and
+every role when a corpus stage in range may call the engine; it reads no
+run state, so a resume makes them though it reuses every view, and an
+invocation past the barrier only, whose corpus stages call no engine,
+makes none. On a claude CLI other than the run recorded it checks no
+model and refuses nothing: the run's own client refuses the CLI when a
+stage starts the engine. One driver at a time uses a runs directory
+(hold), and a run is invoked only from the runs directory it is in.
 
 Run directories hold transcriptions, claims and the cache's raw model
 output: they are local-only data, kept under var/ (docs/AGENT_PROTOCOL.md
@@ -105,7 +107,6 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
-import functools
 import json
 import os
 import re
@@ -993,97 +994,20 @@ class ScratchDriver(Orchestrator):
         if problems:
             raise PreflightFailed(problems)
 
-    def _fresh(self, doc: DocumentRun) -> bool:
-        """Whether every view of the document is made afresh: it has no
-        directory yet, or the driver sets its directory aside (_prepare)."""
-        if not doc.dir.is_dir():
-            return True
-        if doc.state.content_sha1 and doc.state.content_sha1 != doc.sha1:
-            return True
-        return doc.unrecorded
-
-    def _stands(
-        self,
-        doc: DocumentRun,
-        view: Path,
-        load: Callable[[str], Any],
-        recheck: Callable[[Any], str | None] | None = None,
-    ) -> Any:
-        """The view, loaded, when the driver would reuse it
-        (_reused_view), without a word of it said: current, not refreshed
-        in this invocation unless a refresh made it in the run already,
-        and passing `recheck`. None when the view is to be made."""
-        role, stage = doc.views[view]
-        if role in self.refresh and (doc.sha1, stage) not in self._refreshed:
-            return None
-        if not doc.derivations.current(view):
-            return None
-        try:
-            loaded = load(view.read_text())
-        except (OSError, ValueError):
-            return None
-        if recheck is not None and recheck(loaded) is not None:
-            return None
-        return loaded
-
-    def _stages_to_make(self, doc: DocumentRun) -> list[str]:
-        """The document's planned stages whose views this invocation makes
-        rather than reuses, as the driver's reuse of its views decides it
-        (_stands): every one for a document made afresh, else the first
-        whose view does not stand (none yet, not current, refreshed and
-        not made by the refresh yet, or a transcription the check now
-        fails) and every one after it. A stage that ended and whose view
-        stands, whatever its latest status says (held, needing
-        attention), is reused."""
-        from yizkr.claims import ClaimBatch
-        from yizkr.pipeline.orchestrate import EXCERPT, _findings
-        from yizkr.pipeline.transcribe import Transcription
-
-        planned = self._planned(doc)
-        if self._fresh(doc):
-            return planned
-        checked = self._route(doc) in ("vision", "text-file", EXCERPT)
-        views = {
-            "transcription": (
-                doc.transcription,
-                Transcription.model_validate_json,
-                functools.partial(self._transcription_failure, doc)
-                if checked
-                else None,
-            ),
-            "extraction": (doc.batch, ClaimBatch.model_validate_json, None),
-            "gedcom": (doc.batch, ClaimBatch.model_validate_json, None),
-            "critique": (doc.critique, _findings, None),
-        }
-        for at, stage in enumerate(planned):
-            if self._stands(doc, *views[stage]) is None:
-                return planned[at:]
-        return []
-
-    def _preflight_pairs(
-        self, docs: Sequence[DocumentRun], past: bool
-    ) -> list[tuple[str, str | None]]:
+    def _preflight_pairs(self, past: bool) -> list[tuple[str, str | None]]:
         """(role, effort) for each distinct (model, effort) pair the roles
-        this invocation will call run, in MODEL_ROLES order, each the
-        first role that runs it. A role counts when some document has a
-        stage of it that calls the engine among the stages this invocation
-        makes rather than reuses (_stages_to_make): a transcription the
-        vision engine makes, an extraction, a critique; never the GEDCOM
-        adapter, nor a transcription read from a text, a slide deck, a
-        correction or an excerpt's reading. An invocation past the barrier
-        only makes no document's stage. Every role counts when a corpus
-        stage within the invocation's range may call the engine
-        (CorpusStage.calls_engine), since none says which."""
+        of this invocation's range run, in MODEL_ROLES order, each the
+        first role that runs it: the roles of the per-document stages
+        within `--until`, none for an invocation past the barrier only,
+        and every role when a corpus stage within the range may call the
+        engine (CorpusStage.calls_engine), since none says which. It reads
+        no run state: a stage whose view the invocation will reuse counts
+        all the same."""
         roles: set[str] = set()
         if not past:
-            for doc in docs:
-                for stage in self._stages_to_make(doc):
-                    if stage == "gedcom" or (
-                        stage == "transcription"
-                        and self._route(doc) != "vision"
-                    ):
-                        continue
-                    roles.add(STAGE_ROLES[stage])
+            roles = {
+                STAGE_ROLES[stage] for stage in PHASES if self._within(stage)
+            }
         if any(stage.calls_engine for stage in self._corpus_in_range()):
             roles = set(MODEL_ROLES)
         pairs: dict[tuple[str | None, str | None], str] = {}
@@ -1094,27 +1018,26 @@ class ScratchDriver(Orchestrator):
                 pairs.setdefault((model, effort), role)
         return [(role, effort) for (_m, effort), role in pairs.items()]
 
-    def _preflight_models(
-        self, docs: Sequence[DocumentRun], past: bool
-    ) -> None:
+    def _preflight_models(self, past: bool) -> None:
         """One trivial call (PREFLIGHT_PROMPT) per distinct (model, effort)
-        pair the roles this invocation calls run (_preflight_pairs),
-        through a client the engine makes as the run's for the first role
-        that runs the pair (its engine, model and effort), and never
-        through the LLM cache, whose answer would be no call. A client on
-        another claude CLI than the run recorded raises
-        RunSettingsConflict before its call, as the run's own client
-        would. PreflightFailed names each pair whose call fails with an
-        error that is not a subscription limit or an overload, with the
-        engine's reason, a model the CLI does not support
-        (llm.ModelUnsupported) among them; the pause that refusal latches
-        holds every later call of the process, so the pairs after it are
-        named as not tried. The claude-code engine waits out a limit or an
-        overload, or pauses the pass on it (UsageLimitReached), as for any
-        call; an API error with a limit's status (429, 529), which the
-        anthropic engine raises once its own retries are spent, refuses
-        the run with a request to try again. Any other pause stops the
-        run as it would a document's call."""
+        pair the roles this invocation calls run (_preflight_pairs), through
+        a client the engine makes as the run's for the first role that runs
+        the pair (its engine, model and effort), and never through the LLM
+        cache, whose answer would be no call. When the claude CLI installed
+        is not the one the run recorded, no pair is called and nothing
+        refused: the run's own client refuses the CLI as another setting
+        when a stage starts the engine (rundir.record_engine), and a resume
+        with nothing left for the engine goes on. PreflightFailed names each
+        pair whose call fails with an error that is not a subscription limit
+        or an overload, with the engine's reason, a model the CLI does not
+        support (llm.ModelUnsupported) among them; the pause that refusal
+        latches holds every later call of the process, so the pairs after it
+        are named as not tried. The claude-code engine waits out a limit or
+        an overload, or pauses the pass on it (UsageLimitReached), as for
+        any call; an API error with a limit's status (429, 529), which the
+        anthropic engine raises once its own retries are spent, refuses the
+        run with a request to try again. Any other pause stops the run as it
+        would a document's call."""
         from yizkr.pipeline.llm import (
             LIMIT_STATUSES,
             ModelUnsupported,
@@ -1125,7 +1048,7 @@ class ScratchDriver(Orchestrator):
             "cli_version"
         )
         problems: list[str] = []
-        pairs = self._preflight_pairs(docs, past)
+        pairs = self._preflight_pairs(past)
         for index, (role, effort) in enumerate(pairs):
             model = self._configured_model(role)[0]
             what = f"{model} ({role}, effort {effort or 'unset'})"
@@ -1138,10 +1061,13 @@ class ScratchDriver(Orchestrator):
                 try:
                     cli_version = getattr(engine, "cli_version", None)
                     if pinned and cli_version and cli_version != pinned:
-                        raise RunSettingsConflict(
-                            self.state_dir,
-                            [("engine.cli_version", pinned, cli_version)],
+                        self.log(
+                            f"preflight: the claude CLI is {cli_version}, "
+                            f"not the run's {pinned}, so no model is "
+                            "checked: a stage that starts the engine "
+                            "refuses the CLI as another setting"
                         )
+                        break
                     engine.complete(PREFLIGHT_PROMPT)
                 finally:
                     close = getattr(engine, "close", None)
@@ -1288,9 +1214,9 @@ class ScratchDriver(Orchestrator):
         id, the requests in force just before that invocation's start
         marker, since the one before it; otherwise those in force now.
         With `since`, a count of the file's requests, only the requests
-        after that many count (_asked)."""
+        after that many count (_requests_since)."""
         held: dict[str, dict] = {}
-        for request in self._asked(since or 0):
+        for request in self._requests_since(since or 0):
             action = request.get("action")
             if action == "start":
                 if before is not None and request.get("invocation") == before:
@@ -1855,9 +1781,8 @@ class ScratchDriver(Orchestrator):
             conflicts = settings_conflicts(recorded, fields)
             if conflicts:
                 raise RunSettingsConflict(self.state_dir, conflicts)
-        self._refreshed = self._refreshes_made()
         try:
-            self._preflight_models([*taken, *known], past)
+            self._preflight_models(past)
         except UsageLimitReached as exc:
             # waited out as a limit a document's call meets is, before
             # anything is written
@@ -1867,6 +1792,7 @@ class ScratchDriver(Orchestrator):
             return exc
         self._views, self._derived, self._batches = {}, {}, {}
         self._prepared = set()
+        self._refreshed = self._refreshes_made()
         self.state_dir.mkdir(parents=True, exist_ok=True)
         # refused here, before anything is written, when the settings differ
         self.rundir.start(fixed_settings=True, **fields)
@@ -1950,7 +1876,7 @@ class ScratchDriver(Orchestrator):
         pause past the time it reported, so the run is never invoked again
         sooner than the margin after a pause. A pause of the run keeps it
         waiting until a resume, past that time if need be. The wait reads
-        only the requests written since this driver began (_asked)."""
+        only the requests written since this driver began (_requests_since)."""
         margin = timedelta(seconds=RESUME_MARGIN)
         resumes = max(pause.resumes_at, self._clock()) + margin
         if RunDir(self.state_dir).manifest().get("run_id"):
@@ -1969,7 +1895,7 @@ class ScratchDriver(Orchestrator):
         )
         announced: set[str] = set()
         while True:
-            whole = fold_control(self._asked()).stopped()
+            whole = fold_control(self._requests_since()).stopped()
             if whole is not None and whole.endswith("aborted"):
                 self.log(f"not invoked again ({whole})")
                 return False
@@ -1981,7 +1907,7 @@ class ScratchDriver(Orchestrator):
                 left = (resumes - self._clock()).total_seconds()
                 self._sleep(max(0.0, min(self.poll, left)))
 
-    def _asked(self, since: int | None = None) -> list[dict]:
+    def _requests_since(self, since: int | None = None) -> list[dict]:
         """The control file's requests after the first `since` of them
         (_asked_since by default): all of them when the file holds fewer,
         since one replaced holds none of those counted."""
