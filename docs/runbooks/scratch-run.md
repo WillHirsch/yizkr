@@ -125,18 +125,20 @@ and `yizkr.reset` for the reset.
     no model call), so the estimate knows each image it places: once
     however many PDFs place it, and none that the never-ingest list
     names or whose bytes a document of the corpus has. An image whose
-    reading the cache answers as the run would make no excerpt of (one
-    the check fails, or one that calls every page blank or not a
-    document page) is left out. Each image left counts the calls of an
-    excerpt's transcription, extraction and critique (as `--until`
-    plans them), each by the mean for excerpts over the runs in the runs
-    directory that measured any, else as typical (none, an entity
-    manifest and a chunk, one), and the line says which. They are given
-    as up to so many: an image the engine reads blank, or as no document
-    page, makes no excerpt, and the cache may answer an excerpt's calls.
-    Only the images of a PDF whose transcription the run makes are
-    counted: the excerpts a run invoked again found earlier, from a
-    transcription that stands, are not;
+    kept reading (one that passed the check, which the cache answers)
+    calls every page blank or not a document page is left out, as the
+    run makes no excerpt of it; an image whose earlier reading failed
+    the check is read again, and counted. In a run invoked again, a PDF
+    whose transcription stands is not read again: its excerpts are those
+    its directory holds, and each counts the stages whose views do not
+    stand, and every stage after the first of them. Each excerpt stage
+    (as `--until` plans them) is counted by the mean for excerpts over
+    every run in the runs directory that measured the stage for one,
+    pooled, so a run made under older prompts or models counts too, else
+    as typical (none, an entity manifest and a chunk, one), rounded up;
+    the line says for each stage which. They are given as up to so many:
+    an image the engine reads blank, or as no document page, makes no
+    excerpt, and the cache may answer an excerpt's calls;
   - **not counted**: calls asked again after an engine error or a chunk
     answer cut off (up to 2 for a chunk), and waits for the
     subscription, which make no call. A slice the anomaly checks pause

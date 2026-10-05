@@ -1282,8 +1282,10 @@ the calls whose keys wait on an answer the engine has yet to give: by
 `llm.estimate_calls`, or, for the forks after a conversation it replays,
 by the chunks the cache kept. The excerpts a PDF's placed images may
 become (ADR-0008), which no plan names until the PDF is transcribed, it
-counts from the PDF's own reading of the file, and gives their calls, by
-the mean for excerpts over the runs measured, as up to so many more.
+counts from the PDF's own reading of the file, or, for a transcription
+that stands, from the excerpts its directory holds, and gives their
+calls, by the mean for excerpts over the runs measured, as up to so many
+more.
 
 ## Checks once per run
 

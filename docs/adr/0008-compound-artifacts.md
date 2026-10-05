@@ -695,11 +695,14 @@ PDF page by page from the file (pypdfium2, no model call), so it knows
 each image placed within a text-layer page: by the SHA-1 of its bytes,
 once however many PDFs place it, and none the never-ingest list names or
 whose bytes a document of the corpus has, as the driver takes excerpts.
-An image whose reading the LLM cache answers as no excerpt (one the
-check fails, or blank or not a document page throughout) is left out.
-Each image left counts an excerpt's transcription, extraction and
-critique calls by the mean for excerpts over the runs measured, else as
-typical, reported as up to so many more, since an image the engine reads
-blank or as no document page makes no excerpt
-(docs/runbooks/scratch-run.md, Before a run). The excerpts a run invoked
-again found from a transcription that stands are not counted.
+An image whose kept reading (one that passed the check, which the LLM
+cache answers) calls every page blank or not a document page is left
+out; one whose earlier reading failed the check is read again, and
+counted. In a run invoked again, the excerpts a PDF whose transcription
+stands holds already are counted from its directory, each for the
+stages whose views do not stand and every stage after the first of
+them. Each excerpt stage's calls are counted by the mean for excerpts
+over every run that measured the stage for one, pooled, else as typical,
+rounded up, and reported as up to so many more, since an image the
+engine reads blank or as no document page makes no excerpt
+(docs/runbooks/scratch-run.md, Before a run).
