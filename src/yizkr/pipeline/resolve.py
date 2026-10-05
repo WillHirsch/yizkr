@@ -128,9 +128,9 @@ def _resolvable(batch: ClaimBatch) -> dict[str, tuple[str, str | None]]:
     """The entities of `batch` resolved by their label, local id ->
     (label, kind), as the writer reads them (entity_terms) past the claims
     it refuses before its plan for naming an entity whose label holds a
-    character Python's Unicode tables do not know: all but those on the
-    artifact side and those whose label holds such a character (the
-    module docstring)."""
+    character Python's Unicode tables do not know, so no such entity is
+    among them: all but those on the artifact side (the module
+    docstring)."""
     records = entity_records(batch)
     unknown = {
         record.id
@@ -153,7 +153,7 @@ def _resolvable(batch: ClaimBatch) -> dict[str, tuple[str, str | None]]:
         for local_id, (label, kind) in entity_terms(
             batch, records, refused
         ).items()
-        if not is_artifact_kind(kind) and local_id not in unknown
+        if not is_artifact_kind(kind)
     }
 
 
