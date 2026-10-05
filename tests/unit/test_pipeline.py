@@ -35,6 +35,7 @@ from yizkr.pipeline.extract import (
 from yizkr.pipeline.resolve import resolve_batch
 from yizkr.pipeline.review import (
     APPROVE,
+    CSV_COLUMNS,
     accept_all,
     apply_review,
     claim_id,
@@ -1007,6 +1008,104 @@ class TestReviewRoundTrip:
         approved, warnings = apply_review(edited, csv_path)
         assert any("no row in the CSV" in w for w in warnings)
         assert any("matches no claim" in w for w in warnings)
+
+    @staticmethod
+    def booklet_batch() -> ClaimBatch:
+        """`batch()`'s claims read from *Our Family from Germany*'s physical
+        page 6, printed as page 4 (docs/EXAMPLES.md), then `batch()`'s
+        own birth claim, which cites no page, and its sibling claim on a
+        page 2 the record gives no printed number."""
+        booklet = copy.deepcopy(CLAIMS)
+        for claim in booklet:
+            claim["source"]["page_number"] = "6"
+            claim["source"]["printed_page_number"] = "4"
+        unprinted = copy.deepcopy(CLAIMS[0])
+        unprinted["source"]["page_number"] = "2"
+        return ClaimBatch.model_validate(
+            {
+                "extraction_run": RUN,
+                "claims": [*booklet, CLAIMS[1], unprinted],
+            }
+        )
+
+    @staticmethod
+    def read_rows(path) -> tuple[list[str], list[dict]]:
+        with open(path, newline="") as f:
+            reader = csv.DictReader(f)
+            return list(reader.fieldnames or []), list(reader)
+
+    def test_printed_page_is_shown_beside_the_page(self, tmp_path):
+        csv_path = tmp_path / "review.csv"
+        export_review_csv(self.booklet_batch(), csv_path)
+        fieldnames, rows = self.read_rows(csv_path)
+        assert fieldnames.index("printed_page") == (
+            fieldnames.index("page") + 1
+        )
+        assert [(r["page"], r["printed_page"]) for r in rows] == [
+            ("6", "4"),  # the booklet's printed number for its page 6
+            ("6", "4"),
+            ("", ""),  # no page cited, so no printed number
+            ("2", ""),  # a page the record gives no printed number
+        ]
+
+    def test_edited_printed_page_cells_are_never_written(self, tmp_path):
+        source = self.booklet_batch()
+        csv_path = tmp_path / "review.csv"
+        export_review_csv(source, csv_path)
+
+        def edit_locators_and_approve(rows):
+            # a curator "fixes" the locators, then approves every row
+            for row in rows:
+                row["page"] = "5"
+                row["printed_page"] = "17"
+                row["decision"] = "approve"
+            return rows
+
+        self.edit_csv(csv_path, edit_locators_and_approve)
+        approved, warnings = apply_review(source, csv_path)
+        assert warnings == []
+        assert approved.claims == source.claims
+        assert [
+            (c.source.page_number, c.source.printed_page_number)
+            for c in approved.claims
+        ] == [("6", "4"), ("6", "4"), (None, None), ("2", None)]
+
+    def test_a_dropped_printed_page_column_changes_nothing(self, tmp_path):
+        source = self.booklet_batch()
+        csv_path = tmp_path / "review.csv"
+        export_review_csv(source, csv_path)
+        with open(csv_path, newline="") as f:
+            rows = list(csv.DictReader(f))
+        fieldnames = [n for n in CSV_COLUMNS if n != "printed_page"]
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in rows:
+                row.pop("printed_page")
+                writer.writerow({**row, "decision": "approve"})
+        approved, warnings = apply_review(source, csv_path)
+        assert warnings == []
+        assert approved.claims[0].source.printed_page_number == "4"
+
+    def test_a_corrected_claim_keeps_its_printed_page(self, tmp_path):
+        source = self.booklet_batch()
+        csv_path = tmp_path / "review.csv"
+        export_review_csv(source, csv_path)
+
+        def correct_the_booklet_row(rows):
+            for row in rows:
+                row["decision"] = "approve"
+                row["printed_page"] = ""  # cleared by the curator
+            rows[1]["correction"] = "1914-05-29"
+            return rows
+
+        self.edit_csv(csv_path, correct_the_booklet_row)
+        approved, warnings = apply_review(source, csv_path)
+        assert warnings == []
+        corrected = approved.claims[1]
+        assert corrected.curated and corrected.value.day == 29
+        assert corrected.source.page_number == "6"
+        assert corrected.source.printed_page_number == "4"
 
     def test_claim_id_stable_across_serialization(self):
         first = batch().claims[0]
