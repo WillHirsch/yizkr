@@ -2077,6 +2077,33 @@ class TestPreflightCalls:
         expected = [(MODEL, "low"), (MODEL, "high")] if calls_engine else []
         assert fakes.preflights == expected
 
+    def test_past_the_barrier_only_a_failed_stage_is_not_made(
+        self, tmp_path, fakes, monkeypatch
+    ):
+        """A failed document's stages wait for an invocation on the run's
+        code: one past the barrier only makes none of them, so calls
+        nothing for them."""
+        corpus = small(tmp_path)
+
+        def hook(what, name):
+            if what == "manifest" and name == LETTER:
+                raise RuntimeError("engine down")
+
+        fakes.hook = hook
+        assert command(tmp_path, corpus, fakes) == EXIT_FAILED
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        other = dict(RunDir(run).manifest()["code"], commit="f" * 40)
+        monkeypatch.setattr(scratch, "code_version", lambda: dict(other))
+        fakes.hook = None
+        fakes.preflights.clear()
+        stages = [CorpusStage("clustering", Recorder(), calls_engine=False)]
+        again = command(
+            tmp_path, corpus, fakes, resume=run.name, corpus_stages=stages
+        )
+        assert again == EXIT_FAILED
+        assert RunDir(run).manifest()["scratch"]["past_barrier_only"] is True
+        assert fakes.preflights == []
+
     @pytest.mark.parametrize(
         ("change", "setting"),
         [
@@ -2099,8 +2126,9 @@ class TestPreflightCalls:
             monkeypatch.setenv(
                 "YIZKR_LLM_MODEL", options.pop("YIZKR_LLM_MODEL")
             )
+        # extraction is left to make
         with pytest.raises(RunSettingsConflict, match=re.escape(setting)):
-            command(tmp_path, corpus, fakes, until="transcription", **options)
+            command(tmp_path, corpus, fakes, until="extraction", **options)
         assert fakes.preflights == []
         assert (run / "run.json").read_bytes() == before
 

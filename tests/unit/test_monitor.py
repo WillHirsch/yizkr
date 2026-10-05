@@ -1093,6 +1093,11 @@ class TestCallEvents:
         assert "paused   ModelUnsupported; no time to go on" in view
         assert "paused   for the subscription" not in view
 
+    def test_a_pause_that_says_nothing_is_no_subscriptions(self, run):
+        append(run, self.paused())
+        view = render_terminal(summarise_run(run, NOW), width=200)
+        assert "paused   ?; no time to go on" in view
+
     def test_a_model_pause_after_a_limit_held_the_call(self, run):
         """The call was held for a rate limit first, then paused for a
         model the CLI does not support: the pause is the model's, not the
