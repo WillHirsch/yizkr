@@ -79,34 +79,44 @@ and `yizkr.reset` for the reset.
   every problem it found.
 
   Once those checks pass, and once the settings are checked against
-  those a resumed run recorded (other settings, another claude CLI
-  among them, are refused as `RunSettingsConflict` before any call),
-  and still before any document is dispatched or anything written, the
-  driver makes **one trivial call per distinct (model, effort) pair**
-  that the roles this invocation calls run, through the engine as the
-  run calls it: the same engine, model and effort as the first role
-  that runs the pair, and the pinned claude CLI, but not through the
-  LLM cache, so the call reaches the engine. The roles are those of the
-  per-document stages within `--until` (`transcribe` for
-  transcription, `extract` for extraction and GEDCOM, `critique`), and
-  every role when a corpus stage in range may call the engine. An
-  invocation past the barrier only, whose corpus stages call no engine
-  (clustering), makes no call. Two roles on one model at one effort
-  make one call; at two efforts, two. Every invocation makes them, the
-  driver's own after a subscription limit included.
+  those a resumed run recorded (other settings are refused as
+  `RunSettingsConflict` before any call), and still before any document
+  is dispatched or anything written, the driver makes **one trivial
+  call per distinct (model, effort) pair** that the roles this
+  invocation will call run, through the engine as the run calls it:
+  the same engine, model and effort as the first role that runs the
+  pair, and the pinned claude CLI, but not through the LLM cache, so
+  the call reaches the engine. A role counts when some document still
+  has a stage of it within `--until` to make (`transcribe` for
+  transcription, `extract` for extraction and GEDCOM, `critique`): one
+  not done or needing attention yet (a failed stage is made again), or
+  one `--refresh` of the role makes again. Every role counts when a
+  corpus stage in range may call the engine. So a resume with nothing
+  left for the engine, such as one past the barrier only, or one whose
+  per-document stages have all ended with only the barrier and
+  clustering to go, makes no call. Two roles on one model at one effort
+  make one call; at two efforts, two. Every invocation that calls the
+  engine makes them, the driver's own after a subscription limit
+  included. A pair's client on another claude CLI than the run recorded
+  refuses the run as `RunSettingsConflict` before its call, as the
+  run's own client would when it starts; a resume with nothing left for
+  the engine goes on, on whatever CLI is installed.
 
   A call that fails with an error that is not a subscription limit or
   an overload refuses the run, naming the model, the role, the effort
   and the engine's reason: a claude CLI too old for the model (an API
-  400 that names the CLI version the model requires, or the CLI
-  itself), or any other API error. The models after an unsupported one
-  are listed as not tried. For the claude-code engine, a limit or an
-  overload is the engine's to wait out; a limit it would wait longer for
-  pauses the run as a document's call would, and the driver waits it out
-  before it writes anything. Such a wait shows **only in the driver's
-  output**: on a new run nothing has started yet, so `yizkr scratch
-  watch` and the status page show no run, `yizkr scratch abort` cannot
-  reach it, and only Ctrl-C stops the wait (the driver says so). For
+  400 that names the dotted version the model requires, or has the CLI
+  as the subject of "requires a newer" or "does not support"), or any
+  other API error. The pairs after an unsupported one are listed as not
+  tried. For the claude-code engine, a limit or an overload is the
+  engine's to wait out; a limit it would wait longer for pauses the run
+  as a document's call would, and the driver waits it out before it
+  writes anything. Such a wait shows **only in the driver's output**:
+  on a new run nothing has started yet, so `yizkr scratch watch` and
+  the status page show no run, `yizkr scratch abort` cannot reach it,
+  and only Ctrl-C stops the wait (the driver says so). On a resume, the
+  wait and the invocation after it honour only the pauses and aborts
+  asked since the wait began, never those of an earlier invocation. For
   the anthropic engine, a 429 or 529 its own retries did not get past
   refuses the run, to be tried again later.
 - **A model the CLI stops supporting mid-run.** Should the API refuse a

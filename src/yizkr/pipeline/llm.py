@@ -1585,14 +1585,19 @@ def refusal(
 
 # The API status of a request the API refuses as invalid, and the words
 # with which it says, in such a refusal, that the claude CLI does not
-# support the model the request names: each alternative names the CLI
-# version the model requires, or the CLI itself, so that a 400 about a
-# feature, a tool or the API's own version is never read as one. Another
-# 400 is an error of the call like any other.
+# support the model the request names. Each wording is narrow, so that a
+# 400 about a feature, a tool or the API is never read as one: a dotted
+# version required "or newer" (the version the model requires; not one an
+# SDK or the API names), the CLI as the subject of "requires a newer" or
+# "does not support", with at most its version between, or a newer CLI
+# required by name. No wording has an unbounded gap, so a search takes
+# time linear in the text. Another 400 is an error of the call like any
+# other.
 BAD_REQUEST = 400
 _UNSUPPORTED_MODEL = re.compile(
-    r"\bversion \d+(?:\.\d+)+ or (?:newer|later) is required"
-    r"|\b(?:claude code|cli)\b.*\b(?:requires? (?:a )?newer"
+    r"(?<![\w-])(?<!sdk )(?<!api )version \d+(?:\.\d+)+ or (?:newer|later)"
+    r" is required"
+    r"|\b(?:claude code|cli)(?: v?\d+(?:\.\d+)+)? (?:requires? (?:a )?newer"
     r"|(?:does not|doesn't) support)"
     r"|\brequires? (?:a )?newer (?:version of )?(?:claude code|cli)\b",
     re.IGNORECASE,

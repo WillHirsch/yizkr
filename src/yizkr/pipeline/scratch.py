@@ -79,15 +79,15 @@ that touches the wiki is to run, a reachable stack and an instance that
 carries no kept-state marker. Once those pass and the settings match
 those a resumed run recorded, and before any document is dispatched or
 anything written, it makes one trivial call per distinct (model,
-effort) pair the roles this invocation calls run (within `--until`;
-none past the barrier only, unless a corpus stage there may call the
-engine), through the engine as the run calls it but not through the
-cache, and refuses the run, naming the model and the engine's reason,
-when one fails with an error that is not a subscription limit or an
-overload: a model the claude CLI does not support among them. Every
-invocation makes these calls. One driver at a time uses a runs
-directory (hold), and a run is invoked only from the runs directory it
-is in.
+effort) pair the roles this invocation will call run (a role with a
+stage within `--until` still to make; every role when a corpus stage in
+range may call the engine), through the engine as the run calls it but
+not through the cache, and refuses the run, naming the model and the
+engine's reason, when one fails with an error that is not a
+subscription limit or an overload: a model the claude CLI does not
+support among them. An invocation with nothing left for the engine
+makes none. One driver at a time uses a runs directory (hold), and a
+run is invoked only from the runs directory it is in.
 
 Run directories hold transcriptions, claims and the cache's raw model
 output: they are local-only data, kept under var/ (docs/AGENT_PROTOCOL.md
@@ -143,6 +143,7 @@ from yizkr.pipeline.rundir import (
     RunSettingsConflict,
     code_version,
     exclusions_record,
+    fold_control,
     run_state,
     settings_conflicts,
     summarise,
@@ -318,7 +319,8 @@ class ScratchRefused(RuntimeError):
 
 class PreflightFailed(ScratchRefused):
     """The host or the configuration cannot serve a scratch run: every
-    problem the preflight found, before anything was written or called."""
+    problem the preflight found, before anything was written or any
+    document dispatched."""
 
     def __init__(self, problems: Sequence[str]) -> None:
         self.problems = list(problems)
@@ -811,6 +813,14 @@ class ScratchDriver(Orchestrator):
         # order (_stages, _arrivals), and the next place for an excerpt
         self._slots: dict[tuple[int, str], tuple] = {}
         self._next_order = 0
+        # where in the control file a wait for the subscription that began
+        # before its invocation's start marker began (its count of
+        # requests), for that wait and the next invocation's carry to read
+        # only what was asked since: what an earlier invocation asked, an
+        # abort among them, no start marker has cleared yet. None for a
+        # wait that began after its invocation's start.
+        self._asked_since: int | None = None
+        self._limit_before_start = False
 
     # -- stages -----------------------------------------------------------
 
@@ -979,21 +989,37 @@ class ScratchDriver(Orchestrator):
         if problems:
             raise PreflightFailed(problems)
 
-    def _preflight_pairs(self, past: bool) -> list[tuple[str, str | None]]:
+    def _preflight_pairs(
+        self, docs: Sequence[DocumentRun], past: bool
+    ) -> list[tuple[str, str | None]]:
         """(role, effort) for each distinct (model, effort) pair the roles
-        this invocation calls in run, in MODEL_ROLES order, each the first
-        role that runs it: the roles of the per-document stages within its
-        range (`--until`), none for an invocation past the barrier only,
-        and every role when a corpus stage within its range may call the
-        engine (CorpusStage.calls_engine), since none says which."""
-        roles = set()
+        this invocation will call run, in MODEL_ROLES order, each the
+        first role that runs it. A role counts when some document still
+        has a stage of it within the invocation's range (`--until`) that
+        is to be made: one not done or needing attention yet (a failed
+        stage is made again), or one a refresh of the role is to make
+        again. An invocation past the barrier only makes no document's
+        stage. Every role counts when a corpus stage within the range may
+        call the engine (CorpusStage.calls_engine), since none says
+        which."""
+        roles: set[str] = set()
         if not past:
-            roles = {
-                STAGE_ROLES[stage] for stage in PHASES if self._within(stage)
-            }
-        if self._past_the_barrier() and any(
-            stage.calls_engine for stage in self._corpus_in_range()
-        ):
+            states = run_state(self.rundir)
+            refreshed = self._refreshes_made()
+            for doc in docs:
+                for stage in self._planned(doc):
+                    role = STAGE_ROLES[stage]
+                    state = states.get((doc.sha1, stage))
+                    if (
+                        state is None
+                        or state.status not in _COMPLETED
+                        or (
+                            role in self.refresh
+                            and (doc.sha1, stage) not in refreshed
+                        )
+                    ):
+                        roles.add(role)
+        if any(stage.calls_engine for stage in self._corpus_in_range()):
             roles = set(MODEL_ROLES)
         pairs: dict[tuple[str | None, str | None], str] = {}
         for role in MODEL_ROLES:
@@ -1003,7 +1029,9 @@ class ScratchDriver(Orchestrator):
                 pairs.setdefault((model, effort), role)
         return [(role, effort) for (_m, effort), role in pairs.items()]
 
-    def _preflight_models(self, past: bool) -> None:
+    def _preflight_models(
+        self, docs: Sequence[DocumentRun], past: bool
+    ) -> None:
         """One trivial call (PREFLIGHT_PROMPT) per distinct (model, effort)
         pair the roles this invocation calls run (_preflight_pairs),
         through a client the engine makes as the run's for the first role
@@ -1032,7 +1060,7 @@ class ScratchDriver(Orchestrator):
             "cli_version"
         )
         problems: list[str] = []
-        pairs = self._preflight_pairs(past)
+        pairs = self._preflight_pairs(docs, past)
         for index, (role, effort) in enumerate(pairs):
             model = self._configured_model(role)[0]
             what = f"{model} ({role}, effort {effort or 'unset'})"
@@ -1185,15 +1213,19 @@ class ScratchDriver(Orchestrator):
 
     # -- control ------------------------------------------------------------
 
-    def _stops_in_force(self, before: str | None = None) -> list[dict]:
+    def _stops_in_force(
+        self, before: str | None = None, since: int | None = None
+    ) -> list[dict]:
         """The requests that stop the run or a slice (a stage or a kind),
         as the control file holds them since a start marker: the abort
         that holds a scope, or the pause that does. Read as
         rundir.fold_control reads the file. With `before`, an invocation's
         id, the requests in force just before that invocation's start
-        marker, since the one before it; otherwise those in force now."""
+        marker, since the one before it; otherwise those in force now.
+        With `since`, a count of the file's requests, only the requests
+        after that many count."""
         held: dict[str, dict] = {}
-        for request in read_jsonl(self.state_dir / CONTROL):
+        for request in read_jsonl(self.state_dir / CONTROL)[since or 0 :]:
             action = request.get("action")
             if action == "start":
                 if before is not None and request.get("invocation") == before:
@@ -1225,8 +1257,14 @@ class ScratchDriver(Orchestrator):
         when it started: the requests in force just before its start
         marker, which voids them, written again after it, with who asked
         and why, and marked carried. So a request written while the driver
-        waited, or while this invocation was getting ready, is honoured."""
-        for request in self._stops_in_force(before=self.rundir.invocation):
+        waited, or while this invocation was getting ready, is honoured.
+        After a wait that began before the last invocation's start marker,
+        only the requests written since the wait began count: an earlier
+        invocation's are not this run's to honour again."""
+        since, self._asked_since = self._asked_since, None
+        for request in self._stops_in_force(
+            before=self.rundir.invocation, since=since
+        ):
             which, _, name = (request.get("scope") or "run").partition(":")
             self.rundir.request(
                 request["action"],
@@ -1754,13 +1792,14 @@ class ScratchDriver(Orchestrator):
             if conflicts:
                 raise RunSettingsConflict(self.state_dir, conflicts)
         try:
-            self._preflight_models(past)
+            self._preflight_models([*taken, *known], past)
         except UsageLimitReached as exc:
             # waited out as a limit a document's call meets is, before
             # anything is written
             if exc.resumes_at is None:
                 raise
             self.log(str(exc))
+            self._limit_before_start = True
             return exc
         self._views, self._derived, self._batches = {}, {}, {}
         self._prepared = set()
@@ -1847,7 +1886,9 @@ class ScratchDriver(Orchestrator):
         that time has passed already, as it has when the engine holds a
         pause past the time it reported, so the run is never invoked again
         sooner than the margin after a pause. A pause of the run keeps it
-        waiting until a resume, past that time if need be."""
+        waiting until a resume, past that time if need be. A wait the
+        preflight began, before the invocation's start marker, reads only
+        the requests written since it began."""
         margin = timedelta(seconds=RESUME_MARGIN)
         resumes = max(pause.resumes_at, self._clock()) + margin
         if RunDir(self.state_dir).manifest().get("run_id"):
@@ -1864,9 +1905,16 @@ class ScratchDriver(Orchestrator):
             f"waiting until {resumes:%Y-%m-%d %H:%M:%S} UTC, then invoking "
             f"the run again ({stops})"
         )
+        control = self.state_dir / CONTROL
+        if self._limit_before_start:
+            # no start marker has cleared what an earlier invocation asked
+            self._limit_before_start = False
+            self._asked_since = len(read_jsonl(control))
         announced: set[str] = set()
         while True:
-            whole = RunDir(self.state_dir).control().stopped()
+            whole = fold_control(
+                read_jsonl(control)[self._asked_since or 0 :]
+            ).stopped()
             if whole is not None and whole.endswith("aborted"):
                 self.log(f"not invoked again ({whole})")
                 return False

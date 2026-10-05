@@ -2940,7 +2940,7 @@ class TestThePipeline:
             def _engine(self, role):
                 return engine
 
-            def _preflight_models(self, past):
+            def _preflight_models(self, docs, past):
                 # the preflight's calls bypass the cache (test_scratch.py)
                 pass
 

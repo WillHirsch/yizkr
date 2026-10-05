@@ -19,6 +19,7 @@ from __future__ import annotations
 import inspect
 import json
 import math
+import re
 import shutil
 import subprocess
 import threading
@@ -489,6 +490,50 @@ class TestUnsupportedModel:
         ]
         assert "or newer is required" in unsupported_model(events, 1)
 
+    def test_the_words_in_the_result_alone_count(self):
+        events = [
+            INIT,
+            {
+                "type": "result",
+                "is_error": True,
+                "api_error_status": 400,
+                "result": UNSUPPORTED["text"],
+            },
+        ]
+        assert "or newer is required" in unsupported_model(events, 1)
+
+    @pytest.mark.parametrize(
+        "event",
+        [
+            {"type": "assistant", "is_api_error_message": False},
+            {"type": "assistant", "is_api_error_message": "true"},
+            {"type": "assistant", "error": 400},
+            {"type": "user", "is_api_error_message": True},
+        ],
+        ids=["flag false", "flag a string", "error not a string", "not "
+             "an assistant event"],
+    )  # fmt: skip
+    def test_the_words_elsewhere_do_not_count(self, event):
+        """The words on an event that does not stand for the API error,
+        before an unrelated 400, are no refusal of the model."""
+        words = {
+            **event,
+            "message": {
+                "content": [{"type": "text", "text": UNSUPPORTED["text"]}]
+            },
+        }
+        events = [
+            INIT,
+            words,
+            {
+                "type": "result",
+                "is_error": True,
+                "api_error_status": 400,
+                "result": "API Error: 400 prompt is too long",
+            },
+        ]
+        assert unsupported_model(events, 1) is None
+
     def test_the_models_own_text_is_never_read(self):
         """The model's own text may quote anything, a notice saying what
         version is required among them: a later, unrelated 400 is still
@@ -519,9 +564,11 @@ class TestUnsupportedModel:
             "Claude Code 2.1.237 does not support claude-opus-5-5.",
             "The installed CLI requires a newer release for this model.",
             "This model REQUIRES A NEWER VERSION OF CLAUDE CODE.",
+            "Claude Code v2.1.237 requires a newer release for this model.",
         ],
         ids=["the version required", "the CLI does not support", "the CLI "
-             "requires a newer", "a newer CLI required, in mixed case"],
+             "requires a newer", "a newer CLI required, in mixed case",
+             "the CLI and its version"],
     )  # fmt: skip
     def test_each_wording_tied_to_the_cli_is_one(self, text):
         step = {**UNSUPPORTED, "text": f"API Error: 400 {text}"}
@@ -536,9 +583,25 @@ class TestUnsupportedModel:
             "feature",
             "Model is not supported by this version of the API",
             "an image is required",
+            "Claude Code: the web_search tool does not support the model "
+            "claude-sonnet-5",
+            "Claude Code: PDF support requires a newer version of the API",
+            "messages.0: cli-generated content; image source type does not "
+            "support url",
+            "Client does not support streaming",
+            "the tool requires a newer client",
+            "Claude Code requires authentication",
+            "API version 2 or newer is required",
+            "subversion 2.1 or newer is required",
+            "Python SDK version 0.40.0 or later is required",
+            "API version 2.0.0 or later is required",
         ],
-        ids=["a tool", "a feature", "the API's version", "the API", "other"],
-    )
+        ids=["a tool", "a feature", "the API's version", "the API", "other",
+             "a tool after the CLI's name", "a feature after the CLI's name",
+             "cli- in another word", "Client", "a newer client",
+             "authentication", "an undotted version", "subversion",
+             "an SDK's version", "the API's dotted version"],
+    )  # fmt: skip
     def test_a_400_about_anything_but_the_cli_is_not_one(self, text):
         step = {**UNSUPPORTED, "text": f"API Error: 400 {text}"}
         assert (
@@ -553,6 +616,14 @@ class TestUnsupportedModel:
     def test_anything_else_is_not_one(self, step):
         events = [INIT, *refused_events(step, "s1")]
         assert unsupported_model(events, 1) is None
+
+    def test_the_wordings_have_no_unbounded_gap(self):
+        """A search takes time linear in the text: no wording has a gap
+        of any length, which made a long text that never matches take
+        quadratic time."""
+        pattern = llm._UNSUPPORTED_MODEL.pattern
+        assert not re.search(r"\.[*+]|\{\d*,\}", pattern)
+        assert llm._UNSUPPORTED_MODEL.search("cli " * 16000) is None
 
     def test_an_answered_call_is_not_one(self):
         events = [

@@ -604,12 +604,20 @@ class SliceState:
     reason: str | None = None
 
 
+# the name of the engine's pause for the subscription's limits
+# (llm.UsageLimitReached), as a call event gives it
+SUBSCRIPTION_PAUSE = "UsageLimitReached"
+
+
 @dataclass
 class CallPause:
     """The latest invocation's pause of the pass, as the engine's call
-    event gives it: for the subscription when the event says what held it
-    (`held`) or names a usage window, else the pause's name (`error`), as
-    for a model the CLI does not support, with no time to go on."""
+    event gives it: for the subscription when the pause is the
+    subscription's (UsageLimitReached, or one the event does not name) and
+    the event says what held it (`held`) or names a usage window; else by
+    the pause's name (`error`), as for a model the CLI does not support,
+    with no time to go on, whatever an earlier attempt of the call was
+    held for."""
 
     held: str
     window: str | None
@@ -618,7 +626,9 @@ class CallPause:
 
     @property
     def subscription(self) -> bool:
-        return self.held != "?" or self.window is not None
+        return self.error in (None, SUBSCRIPTION_PAUSE) and (
+            self.held != "?" or self.window is not None
+        )
 
 
 @dataclass
