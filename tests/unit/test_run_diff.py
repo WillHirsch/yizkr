@@ -410,6 +410,10 @@ class TestBaseline:
         assert rundiff.baseline_run(
             runs, runs / "20261002T090000Z-000002"
         ) == (runs / "20261001T090000Z-000001")
+        # a run on a branch is no baseline, however late
+        assert rundiff.baseline_run(
+            runs, runs / "20261004T090000Z-000004"
+        ) == (runs / "20261002T090000Z-000002")
         # a ref git does not know is passed over for the next
         assert rundiff.baseline_run(
             runs, run, refs=("origin/nowhere", "main")
@@ -699,6 +703,58 @@ class TestClaims:
         assert after.value[1] == 1918 and parts == ("value",)
         (added,) = changes.added
         assert added.value[1] == 1920
+
+
+def test_names_the_manifest_lacks_are_other(tmp_path):
+    """A property or an entity kind the model manifest does not hold is
+    counted as other, so the aggregates never carry it."""
+
+    def a_document(name, found):
+        folder = tmp_path / name
+        folder.mkdir()
+        (folder / "batch.json").write_text(found.model_dump_json())
+        return _Document(
+            BIRTH,
+            "text",
+            stages={"extraction": {"status": "done"}},
+            directory=folder,
+        )
+
+    later = the_extract()
+    later.entities[1].kind = "klurnau_inmate"
+    number = claim(
+        BIRTH,
+        ref("e1"),
+        "klurnau_number",
+        {"type": "string", "value": "Lager Klurnau 17"},
+    )
+    later = batch(
+        [e.model_dump(mode="json") for e in later.entities],
+        [
+            *(
+                c.model_dump(mode="json", exclude_none=True)
+                for c in later.claims
+            ),
+            number,
+        ],
+    )
+    claims, mentions, detail = rundiff._compare_documents(
+        (
+            {BIRTH: a_document("a", the_extract())},
+            {BIRTH: a_document("b", later)},
+        ),
+        rundiff._Names.of({}, {}),
+    )
+    assert claims["by_property"]["other"] == {
+        "added": 1,
+        "removed": 0,
+        "changed": 0,
+    }
+    assert mentions["added_by_kind"] == {"other": 1}
+    assert mentions["removed_by_kind"] == {"human": 1}
+    assert not [s for s in strings([claims, mentions]) if "lurnau" in s]
+    # the detail keeps them
+    assert "klurnau_number" in json.dumps(detail)
 
 
 # -- anomalies, failures, flags -----------------------------------------------

@@ -175,9 +175,6 @@ _SHA1 = re.compile(r"[0-9a-f]{40}")
 _KEY = re.compile(r"[0-9a-f]{64}")
 # the run manifest's sections a setting is read from
 SETTING_SECTIONS = ("engine", "roles", "code", "config")
-# settings whose values are never shown, only that they differ: a hash
-# that could confirm a guess at a small difference
-_HIDDEN = re.compile(r"code\.diff_sha256")
 
 
 class DiffError(RuntimeError):
@@ -459,9 +456,9 @@ def _setting_name(name: str) -> str | None:
 def _shown_setting(name: str, value: Any) -> Any:
     """A setting's value as the aggregates may show it, else OTHER: a
     model id, an effort, an engine, a version, a commit, a role, a
-    number, a boolean or none. A language is never shown."""
-    if _HIDDEN.fullmatch(name):
-        return OTHER if value is not None else None
+    number, a boolean or none. A language is never shown, and nor is a
+    hash (the code's difference from its commit), which could confirm a
+    guess at a small difference."""
     if value is None or isinstance(value, bool):
         return value
     if _number(value) is not None:
