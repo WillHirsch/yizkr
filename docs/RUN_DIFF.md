@@ -80,11 +80,15 @@ fails if asked. From each run it reads:
 - the clustering stage's `corpus/clustering/identity-map.json`, when its
   decisions hash to its hash (`clustering.read_identity_map`).
 
-From the LLM cache it reads, for each key the events name, the entry
+From the LLM cache it reads, through the client factory's view of the
+cache as it is (`llm.read_cache`: no lock taken, nothing written, so it
+runs beside a running pass), for each key the events name the entry
 served under it, else one moved aside under it (rejected or replaced),
-and of that entry only its `components`, and only when they hash to its
-key: never a response. A cache that is not there leaves the recomputes
-unattributed (`not available`), and the rest of the diff as it is.
+and uses of that entry only its `components`, and only when they hash
+to its key: never a response. A cache that is not there, or one the
+cache would refuse (a folder a git work tree would track, or one open
+to other users), leaves the recomputes unattributed (`not available`),
+and the rest of the diff as it is.
 
 ## What it compares
 

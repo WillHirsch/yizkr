@@ -125,8 +125,9 @@ Amended by #198 (2026-10-05): §4's diff is `yizkr scratch diff`
 (`pipeline/rundiff.py`, docs/RUN_DIFF.md, which holds the reviewer
 checklist). It reads the two run directories, their stored run reports
 (built afresh when missing or older than the run's end), and of the LLM
-cache only the components of the keys their events name, never a
-response, and attributes each recompute to the components of its key
+cache, through the client factory's read-only view (ADR-0032), only the
+components of the keys their events name, never a response, and
+attributes each recompute to the components of its key
 that differ from the closest of the baseline's calls for the same
 document and stage. The baseline defaults to the latest run whose last
 invocation went through every stage, on clean code of a commit on main.

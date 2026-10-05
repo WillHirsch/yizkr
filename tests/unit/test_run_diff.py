@@ -33,7 +33,6 @@ from tests.unit.test_scratch import (  # noqa: F401
 )
 from yizkr.pipeline import clustering, llm, report, rundiff, scratch
 from yizkr.pipeline.fingerprints import claim_prints
-from yizkr.pipeline.llmcache import call_key
 from yizkr.pipeline.rundiff import (
     ABSENT,
     NO_BASELINE,
@@ -48,6 +47,7 @@ from yizkr.pipeline.rundiff import (
     findings,
     keyed_calls,
 )
+from yizkr.pipeline.stages import canonical_json, sha256_text
 
 LABEL = "Eugen Löbig"
 
@@ -446,9 +446,12 @@ def components(**changed) -> dict:
 
 
 def an_entry(cache: Path, found: dict, *, aside: bool = False) -> str:
-    key = call_key(found)
+    key = sha256_text(canonical_json(found))
     folder = cache / key[:2]
-    folder.mkdir(parents=True, exist_ok=True)
+    # private to its owner, as the cache makes its folders
+    for made in (cache, folder):
+        made.mkdir(mode=0o700, exist_ok=True)
+        made.chmod(0o700)
     name = (
         f"{key}.replaced-20261001T090000Z-ab.json" if aside else f"{key}.json"
     )
@@ -552,6 +555,10 @@ class TestAttribution:
         entry.write_text(json.dumps(found))
         assert Components(cache)(key) is None
         assert not Components(tmp_path / "none").available
+        # a folder open to other users, which the cache refuses, is not
+        # read
+        cache.chmod(0o755)
+        assert not Components(cache).available
         assert Components(None)(key) is None
 
     def test_cache_events_are_keyed_to_their_stages_latest_attempt(

@@ -20,8 +20,9 @@ corpus. From each it reads:
                          batch.json and critique.json
     corpus/clustering/   the clustering stage's identity-map.json
 
-and from the LLM cache the run names, only the `components` of the
-entries those events key: never a response. A recompute is attributed to
+and from the LLM cache the run names, read as it is through the client
+factory (llm.read_cache), only the `components` of the entries those
+events key: never a response. A recompute is attributed to
 the components of its call's key that differ from the baseline's calls
 for the same document and stage (ADR-0032 §11): the prompt, a file, the
 model, the configuration, the attempt, the epoch.
@@ -75,6 +76,7 @@ a language code.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -92,12 +94,11 @@ from yizkr.pipeline import report
 from yizkr.pipeline.clustering import IDENTITY_MAP, read_identity_map
 from yizkr.pipeline.clustering import STAGE as CLUSTERING
 from yizkr.pipeline.fingerprints import ClaimPrint, claim_prints, mentions_of
-from yizkr.pipeline.llm import ROLE_STAGES
-from yizkr.pipeline.llmcache import call_key
+from yizkr.pipeline.llm import ROLE_STAGES, PassPaused, read_cache
 from yizkr.pipeline.orchestrate import BATCH_VOLATILE, TRANSCRIPTION_VOLATILE
 from yizkr.pipeline.rundir import ALERTS, EVENTS, MANIFEST, RUN_START
 from yizkr.pipeline.scratch import CORPUS_DIR, is_complete, runs_in
-from yizkr.pipeline.stages import content_hash
+from yizkr.pipeline.stages import canonical_json, content_hash, sha256_text
 
 # the version of diff.json's layout
 FORMAT = 1
@@ -295,22 +296,26 @@ def keyed_calls(path: Path) -> dict[tuple[str, str], list[_Call]]:
 
 
 class Components:
-    """The components of LLM cache keys, read from the cache folder: the
-    entry served under the key, else one moved aside under it (rejected
-    or replaced), whose components are the key's all the same. Only an
-    entry's `components` is read, and only when they hash to its key;
+    """The components of LLM cache keys, read from the cache folder as it
+    is (llm.read_cache: no lock taken, nothing written): the entry
+    served under the key, else one moved aside under it (rejected or
+    replaced), whose components are the key's all the same. Only an
+    entry's `components` is used, and only when they hash to its key;
     never its response. None for a key with no such entry, and for every
-    key when there is no folder."""
+    key when there is no folder, or one the cache would refuse."""
 
     def __init__(self, folder: Path | None) -> None:
-        self.folder = (
-            folder if folder is not None and folder.is_dir() else None
-        )
+        self.cache: Any = None
+        if folder is not None and Path(folder).is_dir():
+            try:
+                self.cache = read_cache(folder)
+            except (PassPaused, OSError):
+                self.cache = None
         self._read: dict[str, dict | None] = {}
 
     @property
     def available(self) -> bool:
-        return self.folder is not None
+        return self.cache is not None
 
     def __call__(self, key: str) -> dict | None:
         if key not in self._read:
@@ -318,23 +323,22 @@ class Components:
         return self._read[key]
 
     def _find(self, key: str) -> dict | None:
-        if self.folder is None or not _KEY.fullmatch(key):
+        if self.cache is None or not _KEY.fullmatch(key):
             return None
-        directory = self.folder / key[:2]
-        try:
-            paths = [directory / f"{key}.json"] + sorted(
-                directory.glob(f"{key}.*.json")
-            )
-        except OSError:
-            return None
-        for path in paths:
-            entry = report._json(path)
+        entries = [self.cache.get(key)]
+        path = self.cache.path(key)
+        with contextlib.suppress(OSError):
+            entries += [
+                report._json(aside)
+                for aside in sorted(path.parent.glob(f"{key}.*.json"))
+            ]
+        for entry in entries:
             if not isinstance(entry, dict) or entry.get("key") != key:
                 continue
             components = entry.get("components")
             if isinstance(components, dict):
                 try:
-                    if call_key(components) == key:
+                    if sha256_text(canonical_json(components)) == key:
                         return components
                 except (TypeError, ValueError):
                     continue
