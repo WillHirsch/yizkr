@@ -5934,6 +5934,15 @@ class TestRound3Families:
         assert on(result.batch, "i12", "mother") == []
         assert result.outcomes["FAM one person as HUSB and WIFE"] == 1
 
+    def test_a_parent_listed_as_their_own_child_loses_that_link_alone(self):
+        # decision CR (#461): a family listing its husband as its child
+        # makes no claim that he is his own father, and counts it; the
+        # other parent's claim stands and the document is adapted
+        result = adapt_gedcom(family("1 CHIL @I11@"), artifact=EXPORT)
+        assert on(result.batch, "i11", "father") == []
+        assert on(result.batch, "i11", "mother") == [("mother", "i17", [])]
+        assert result.outcomes["FAM one person as parent and CHIL"] == 1
+
 
 def test_a_particle_and_surname_restated_apart_give_their_form():
     # the value holds 'de' and 'Sörne' but not 'de Sörne', which the parts

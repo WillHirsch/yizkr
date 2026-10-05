@@ -614,3 +614,382 @@ class TestJsonSchemaExport:
         assert artifact == {"$ref": "#/$defs/ArtifactRef"}
         sha1 = schema["$defs"]["ArtifactRef"]["properties"]["sha1"]
         assert sha1["pattern"] == "^[0-9a-f]{40}$"
+
+
+# -- a value is never its own subject; a kind key is no value (#461, #462) ---
+
+# Gustav's birth register extract from Flörburg (docs/EXAMPLES.md): its
+# people and places, by the ids an entity manifest gives them
+ENTITIES = [
+    {"id": "sebastian", "label": "Sebastian Löbig", "kind": "human"},
+    {"id": "eugen", "label": "Eugen Löbig", "kind": "human"},
+    {"id": "gustav", "label": "Gustav Löbig", "kind": "human"},
+    {"id": "floerburg", "label": "Flörburg", "kind": "place"},
+    {"id": "birth", "label": "Gustav's birth", "kind": "birth"},
+]
+
+
+def local_item(local_id: str) -> dict:
+    return {"type": "item", "value": {"kind": "local", "local_id": local_id}}
+
+
+def qid_item(qid: str) -> dict:
+    return {"type": "item", "value": {"kind": "qid", "qid": qid}}
+
+
+def vocab_item(key: str) -> dict:
+    return {"type": "item", "value": {"kind": "vocab", "key": key}}
+
+
+def about(subject: str | dict, prop: str, value: dict, *qualifiers) -> dict:
+    return {
+        "subject": (
+            {"kind": "local", "local_id": subject}
+            if isinstance(subject, str)
+            else subject
+        ),
+        "property": prop,
+        "value": value,
+        "qualifiers": list(qualifiers),
+        "source": source(),
+    }
+
+
+def problems_of(*claims: dict, entities=ENTITIES) -> list[str]:
+    return validate_against_manifest(
+        ClaimBatch.model_validate(
+            {
+                "extraction_run": RUN,
+                "claims": list(claims),
+                "entities": entities,
+            }
+        )
+    )
+
+
+def own_subject(found: list[str]) -> list[str]:
+    return [p for p in found if "never its own subject" in p]
+
+
+class TestAValueIsNeverItsOwnSubject:
+    @pytest.mark.parametrize(
+        "claim",
+        [
+            # Flörburg located in Flörburg; Flörburg its own residence
+            about("floerburg", "location", local_item("floerburg")),
+            about("floerburg", "residence", local_item("floerburg")),
+            # Sebastian his own father, child, sibling or relative
+            about("sebastian", "father", local_item("sebastian")),
+            about("sebastian", "child", local_item("sebastian")),
+            about("sebastian", "sibling", local_item("sebastian")),
+            about("sebastian", "relative", local_item("sebastian")),
+            # the same vocabulary item
+            about(
+                {"kind": "vocab", "key": "photograph"},
+                "subclass_of",
+                vocab_item("photograph"),
+            ),
+        ],
+    )
+    def test_a_claim_naming_its_subject_is_refused(self, claim):
+        found = problems_of(claim)
+        assert own_subject(found), found
+        (problem,) = own_subject(found)
+        assert problem.startswith("claims[0].value: ")
+
+    def test_on_every_item_valued_property(self):
+        """No property of the manifest takes its subject as its value, so
+        the check holds on each one, whatever else refuses the claim."""
+        properties, _ = load_vocabulary()
+        item_valued = sorted(
+            key
+            for key, datatype in properties.items()
+            if datatype == "wikibase-item"
+        )
+        assert len(item_valued) > 20
+        for prop in item_valued:
+            found = problems_of(
+                about("sebastian", prop, local_item("sebastian"))
+            )
+            assert own_subject(found), prop
+
+    def test_the_same_qid_is_the_same_entity(self):
+        sebastian = {"kind": "qid", "qid": "Q71"}
+        found = problems_of(about(sebastian, "father", qid_item("Q71")))
+        assert len(own_subject(found)) == 1
+        assert "qid:Q71" in own_subject(found)[0]
+
+    def test_a_local_ref_resolved_to_the_subjects_qid_is_it(self):
+        # a reviewer matched the document's Sebastian to the existing Q71
+        entities = [
+            dict(entity, qid="Q71") if entity["id"] == "sebastian" else entity
+            for entity in ENTITIES
+        ]
+        sebastian = {"kind": "qid", "qid": "Q71"}
+        found = problems_of(
+            about(sebastian, "father", local_item("sebastian")),
+            entities=entities,
+        )
+        assert len(own_subject(found)) == 1
+        # and the other way round
+        found = problems_of(
+            about("sebastian", "father", qid_item("Q71")), entities=entities
+        )
+        assert len(own_subject(found)) == 1
+
+    def test_a_qualifier_naming_the_subject_is_refused(self):
+        # Sebastian as the ego of a name he is called by
+        claim = about(
+            "sebastian",
+            "referred_to_as",
+            {
+                "type": "monolingual",
+                "value": {"text": "Wastl", "language": "de"},
+            },
+            {"property": "perspective", "value": local_item("sebastian")},
+        )
+        (problem,) = problems_of(claim)
+        assert problem.startswith("claims[0].qualifiers[0].value: ")
+        assert "never its own subject" in problem
+
+    def test_every_qualifier_is_checked(self):
+        # the subject among two perspectives: the second is refused
+        claim = about(
+            "sebastian",
+            "referred_to_as",
+            {
+                "type": "monolingual",
+                "value": {"text": "Wastl", "language": "de"},
+            },
+            {"property": "perspective", "value": local_item("eugen")},
+            {"property": "perspective", "value": local_item("sebastian")},
+        )
+        (problem,) = problems_of(claim)
+        assert problem.startswith("claims[0].qualifiers[1].value: ")
+        assert "never its own subject" in problem
+
+    def test_one_reflexive_qualifier_rejects_the_whole_claim(self):
+        from yizkr.pipeline.extract import salvage_valid_claims
+
+        claim = about(
+            "eugen",
+            "father",
+            local_item("sebastian"),
+            {"property": "perspective", "value": local_item("eugen")},
+        )
+        valid, rejects = salvage_valid_claims([claim], RUN, entities=ENTITIES)
+        assert valid.claims == []
+        (reject,) = rejects
+        assert own_subject(reject["problems"])
+
+    @pytest.mark.parametrize(
+        "claim",
+        [
+            about("eugen", "father", local_item("sebastian")),
+            about("gustav", "residence", local_item("floerburg")),
+            about("gustav", "place_of_birth", local_item("floerburg")),
+            about("eugen", "father", qid_item("Q71")),
+            about(
+                "eugen",
+                "referred_to_as",
+                {
+                    "type": "monolingual",
+                    "value": {"text": "Wastl", "language": "de"},
+                },
+                {"property": "perspective", "value": local_item("sebastian")},
+            ),
+        ],
+    )
+    def test_another_entity_stands(self, claim):
+        assert problems_of(claim) == []
+
+    def test_it_is_a_counted_reject_that_sinks_no_other_claim(self):
+        from yizkr.pipeline.extract import salvage_valid_claims
+
+        valid, rejects = salvage_valid_claims(
+            [
+                about("eugen", "father", local_item("sebastian")),
+                about("sebastian", "father", local_item("sebastian")),
+                about("floerburg", "location", local_item("floerburg")),
+            ],
+            RUN,
+            entities=ENTITIES,
+        )
+        assert len(valid.claims) == 1
+        assert len(rejects) == 2
+        for reject in rejects:
+            assert own_subject(reject["problems"])
+
+    def test_the_chunk_prompt_says_so(self):
+        from yizkr.pipeline.chunking import CHUNK_PROMPT
+
+        prompt = " ".join(CHUNK_PROMPT.split())
+        assert "qualifier's, is never its own subject" in prompt
+        assert (
+            'a kind key ("place", "time_period_class") is a value of '
+            "instance_of or subclass_of alone" in prompt
+        )
+
+
+class TestAKindKeyIsNoValue:
+    @pytest.mark.parametrize(
+        ("claim", "kind"),
+        [
+            # the manifest's kind key for periods, not a period
+            (
+                about("birth", "time_period", vocab_item("time_period_class")),
+                "time_period_class",
+            ),
+            # the class of places, not a country
+            (
+                about("gustav", "country_of_citizenship", vocab_item("place")),
+                "place",
+            ),
+            (about("gustav", "residence", vocab_item("place")), "place"),
+            # the classes of documents, not a document
+            (about("gustav", "image", vocab_item("artifact")), "artifact"),
+            (about("gustav", "image", vocab_item("photograph")), "photograph"),
+            # depicts takes an entity of any kind, never a class
+            (about("gustav", "depicts", vocab_item("human")), "human"),
+            # nor does the subject's own kind take one
+            (
+                about(
+                    "sebastian", "said_to_be_the_same_as", vocab_item("human")
+                ),
+                "human",
+            ),
+        ],
+    )
+    def test_a_kind_key_as_a_value_is_refused(self, claim, kind):
+        (problem,) = problems_of(claim)
+        assert problem.startswith("claims[0].value: ")
+        assert f"{kind!r} is a kind key" in problem
+
+    @pytest.mark.parametrize(
+        "claim",
+        [
+            about("gustav", "instance_of", vocab_item("human")),
+            about("gustav", "instance_of", vocab_item("time_period_class")),
+            about("gustav", "instance_of", vocab_item("photograph")),
+            # an existing class, named by its QID
+            about("gustav", "instance_of", qid_item("Q5")),
+            # an existing period item, named by its QID
+            about("birth", "time_period", qid_item("Q88")),
+            # a vocabulary value the property names
+            about("gustav", "sex_or_gender", vocab_item("male")),
+            about(
+                "birth",
+                "point_in_time",
+                {"type": "time", "year": 1919},
+                {
+                    "property": "sourcing_circumstances",
+                    "value": vocab_item("circa"),
+                },
+            ),
+        ],
+    )
+    def test_a_class_where_a_class_is_taken_and_a_value_where_named(
+        self, claim
+    ):
+        assert problems_of(claim) == []
+
+    def test_a_class_property_takes_no_vocabulary_value(self):
+        (problem,) = problems_of(
+            about("gustav", "instance_of", vocab_item("circa"))
+        )
+        assert "'circa' is a vocabulary value, not a class" in problem
+
+    def test_an_unknown_key_has_one_reason(self):
+        (problem,) = problems_of(
+            about("gustav", "instance_of", vocab_item("hat_maker"))
+        )
+        assert "unknown vocabulary item key 'hat_maker'" in problem
+
+    @pytest.mark.parametrize(
+        "claim",
+        [
+            about("sebastian", "depicts", vocab_item("circa")),
+            about(
+                {"kind": "qid", "qid": "Q71"},
+                "said_to_be_the_same_as",
+                vocab_item("circa"),
+            ),
+        ],
+    )
+    def test_an_entity_property_takes_no_vocabulary_value(self, claim):
+        (problem,) = problems_of(claim)
+        assert problem.startswith("claims[0].value: ")
+        assert "takes an entity, not the vocabulary value 'circa'" in problem
+
+    def test_a_qualifier_is_checked_too(self):
+        claim = about(
+            "gustav",
+            "residence",
+            local_item("floerburg"),
+            {"property": "perspective", "value": vocab_item("family")},
+        )
+        (problem,) = problems_of(claim)
+        assert problem.startswith("claims[0].qualifiers[0].value: ")
+        assert "'family' is a kind key" in problem
+
+    @pytest.mark.parametrize(
+        ("value", "reason"),
+        [
+            (vocab_item("time_period"), "unknown vocabulary item key"),
+            (vocab_item("circa"), "does not accept a 'circa'"),
+            (
+                local_item("the_war_years"),
+                "not in the batch's entity manifest",
+            ),
+        ],
+    )
+    def test_anything_else_is_refused(self, value, reason):
+        found = problems_of(about("birth", "time_period", value))
+        assert any(reason in problem for problem in found), found
+
+    def test_it_is_a_counted_reject_that_sinks_no_other_claim(self):
+        from yizkr.pipeline.extract import salvage_valid_claims
+
+        valid, rejects = salvage_valid_claims(
+            [
+                about("gustav", "residence", local_item("floerburg")),
+                about("birth", "time_period", vocab_item("time_period_class")),
+            ],
+            RUN,
+            entities=ENTITIES,
+        )
+        assert len(valid.claims) == 1
+        (reject,) = rejects
+        assert "is a kind key" in reject["problems"][0]
+
+
+class TestCountryOfCitizenship:
+    """The place model has no country class, so `country_of_citizenship`
+    accepts a place, and the prompt guidance, its manifest description,
+    says it is a country, never a town within one."""
+
+    def test_a_citizenship_of_floerburg_is_a_place_validation_takes(self):
+        # validation cannot tell a town from a country: the guidance does
+        claim = about(
+            "gustav", "country_of_citizenship", local_item("floerburg")
+        )
+        assert problems_of(claim) == []
+
+    def test_it_accepts_places_and_the_escape_hatch(self):
+        from yizkr.model.schema import load_acceptance
+
+        assert load_acceptance().accepts["country_of_citizenship"] == {
+            "place",
+            "unclassified_entity",
+        }
+
+    def test_the_prompt_says_a_country_never_a_town(self):
+        from yizkr.pipeline.extract import vocabulary_prompt_lines
+
+        property_lines, _ = vocabulary_prompt_lines()
+        (line,) = [
+            line
+            for line in property_lines.splitlines()
+            if line.strip().startswith("country_of_citizenship:")
+        ]
+        assert "a country, never a town, city or region within one" in line

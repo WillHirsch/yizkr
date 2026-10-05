@@ -59,6 +59,14 @@ children, counted as `FAM one person as HUSB and WIFE`: one person as
 both father and mother is a reading the record cannot mean, so it is not
 guessed.
 
+Amended by #461 (2026-10-05; decided by the orchestrator, the owner may
+override): **a parent listed as their own child.** A family whose CHIL
+names its HUSB or its WIFE gives no claim that the person is their own
+father or mother, counted as `FAM one person as parent and CHIL`; the
+other parent's claim and the family's union stand. Validation refuses a
+claim whose value is its own subject (ADR-0035 §3.5), so the adapter
+leaves that one link out rather than failing the whole document.
+
 Amended by #409 (2026-09-29): §3's union that names only one of its
 couple is ambiguous with every other union of that person, whether or
 not a second union of theirs is known, since clustering cannot count a
