@@ -23,14 +23,22 @@ import pytest
 
 from yizkr.claims import ClaimBatch, TimeValue
 from yizkr.core.dates import UnsupportedDate
+from yizkr.pipeline import writer
 from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import BatchWriter, batch_fingerprint
 
-from .conftest import register_fictional
+from .conftest import fixture_mark, register_fictional
 
 pytestmark = pytest.mark.live
 
-PERSON = "Unsupported Date Fixture Eugen Löbig"
+FIXTURE = (
+    "Eugen Löbig's 1836 birth, given before the common era, in the Julian "
+    "calendar, or with an earliest date before the common era"
+)
+# this session's marker, so no earlier session's or live mutant's items
+# are found (tests/integration/conftest.py, fixture_mark)
+MARK = fixture_mark(FIXTURE, writer)
+PERSON = f"Unsupported Date Fixture Eugen Löbig {MARK}"
 
 
 def unsupported(fields: dict) -> TimeValue:
@@ -57,7 +65,7 @@ CASES = {
 @pytest.fixture(scope="module")
 def source(client):
     return register_fictional(
-        client, "Unsupported date fixture source", "certificate"
+        client, f"Unsupported date fixture source {MARK}", "certificate"
     )
 
 
