@@ -16,11 +16,14 @@ import datetime
 import errno
 import gzip
 import hashlib
+import inspect
 import io
 import json
 import os
 import re
 import threading
+import time
+import types
 from pathlib import Path
 
 import pytest
@@ -56,6 +59,7 @@ from yizkr.backup import (
     exclusion_report,
     export_nonprivileged,
     filter_nonprivileged_export,
+    next_backup_name,
     nonprivileged_exclusions,
     prune_old_backups,
     read_dump,
@@ -69,6 +73,53 @@ from yizkr.queries.publish import prefix_block
 
 # how long a run that should end at once may take before it counts as hung
 HANG_GUARD = 30
+# the time the backup's clock reads, unless a test sets another
+NOW = datetime.datetime(2026, 9, 28, 9, 0, tzinfo=datetime.UTC)
+
+
+def at(moment: datetime.datetime):
+    """A clock that reads `moment`."""
+    return lambda: moment
+
+
+def stand_in_datetime(stand_in: type) -> types.SimpleNamespace:
+    """The datetime module, with `stand_in` for its datetime class."""
+    return types.SimpleNamespace(**{**vars(datetime), "datetime": stand_in})
+
+
+@pytest.fixture
+def host_zone():
+    """Sets the host's local time zone (TZ) for one test, and puts the
+    host's own back after it."""
+    before = os.environ.get("TZ")
+
+    def set_zone(name: str) -> None:
+        os.environ["TZ"] = name
+        time.tzset()
+
+    yield set_zone
+    if before is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = before
+    time.tzset()
+
+
+@pytest.fixture(autouse=True)
+def no_real_clock(monkeypatch):
+    """Every test here reads the backup's clock from what it sets: a read
+    of the real wall clock in the backup module fails the test, through
+    any of datetime's clock calls (#437)."""
+
+    def unread(cls, tz=None):
+        raise AssertionError("the real clock was read")
+
+    Unread = type(
+        "Unread",
+        (datetime.datetime,),
+        {name: classmethod(unread) for name in ("now", "utcnow", "today")},
+    )
+    monkeypatch.setattr(backup, "datetime", stand_in_datetime(Unread))
 
 
 @pytest.fixture(scope="module")
@@ -110,12 +161,22 @@ FACTS = [
 ]
 
 
+@pytest.mark.parametrize("name", ["now", "utcnow", "today"])
+def test_the_backup_module_reads_no_real_clock_here(name):
+    """The fence every test here runs behind: each clock call of the
+    backup module's datetime fails."""
+    with pytest.raises(AssertionError, match="the real clock was read"):
+        getattr(backup.datetime.datetime, name)()
+
+
 class TestExclusionReport:
     """The non-privileged export's call (ADR-0020): every person the facts
-    query lists, with the births the privacy module's query reads (#334)."""
+    query lists, with the births the privacy module's query reads (#334).
+    The cutoff year is read from a clock the test sets."""
 
     def report(self, vocabulary, facts=FACTS, births=BIRTHS, **options):
         calls = []
+        options.setdefault("now", at(NOW))
 
         def run(query: str) -> list[dict]:
             calls.append(query)
@@ -147,9 +208,63 @@ class TestExclusionReport:
 
     def test_the_cutoff_moves_with_cutoff_years(self, vocabulary):
         # a cutoff in 1990 releases the births of 1990 and before
-        years = datetime.datetime.now(datetime.UTC).year - 1990
-        found, _ = self.report(vocabulary, cutoff_years=years)
+        found, _ = self.report(vocabulary, cutoff_years=NOW.year - 1990)
         assert {"Q303", "Q304", "Q308"} & found.excluded == {"Q303"}
+
+    def test_the_cutoff_moves_with_the_clock(self, vocabulary):
+        # a cutoff in 1989 keeps a birth of 1990; the same cutoff_years a
+        # year later releases it
+        years = NOW.year - 1989
+        later = NOW.replace(year=NOW.year + 1)
+        found, _ = self.report(vocabulary, cutoff_years=years)
+        moved, _ = self.report(vocabulary, cutoff_years=years, now=at(later))
+        assert "Q304" in found.excluded - moved.excluded
+
+    def test_the_cutoff_is_read_in_utc(self, vocabulary, host_zone):
+        # New Year's Day at Kredfeld (UTC+1) is still the old year in UTC,
+        # whose cutoff in 1989 keeps a birth of 1990; on the host's clock,
+        # far east of both, it is the new year already
+        host_zone("Pacific/Kiritimati")
+        years = NOW.year - 1989
+        new_year = datetime.datetime(
+            NOW.year + 1,
+            1,
+            1,
+            0,
+            30,
+            tzinfo=datetime.timezone(datetime.timedelta(hours=1)),
+        )
+        found, _ = self.report(
+            vocabulary, cutoff_years=years, now=at(new_year)
+        )
+        assert "Q304" in found.excluded
+
+    def test_a_clock_with_no_time_zone_is_refused(self, vocabulary):
+        naive = NOW.replace(tzinfo=None)
+        with pytest.raises(ValueError, match="no time zone"):
+            self.report(vocabulary, now=at(naive))
+
+    def test_the_cutoff_reads_the_real_utc_clock_by_default(
+        self, vocabulary, monkeypatch
+    ):
+        """With no clock given, the cutoff is read from the system's clock
+        in UTC: here a stand-in for datetime that reads a fixed time, so
+        the test reads no real clock."""
+        asked = []
+
+        class Fixed(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                asked.append(tz)
+                return cls(NOW.year + 1, 3, 14, tzinfo=datetime.UTC)
+
+        monkeypatch.setattr(backup, "datetime", stand_in_datetime(Fixed))
+        # a cutoff in 1989 by NOW, in 1990 by the year after
+        found, _ = self.report(
+            vocabulary, cutoff_years=NOW.year - 1989, now=None
+        )
+        assert asked == [datetime.UTC]
+        assert "Q304" in found.included
 
     def test_births_are_read_with_the_privacy_modules_query(self, vocabulary):
         properties, _ = vocabulary
@@ -1581,6 +1696,87 @@ class TestPruning:
         assert (tmp_path / "20260101T000000Z").exists()
 
 
+class TestBackupNames:
+    """A backup run's directory is named by the UTC second its clock
+    reads, and always sorts after every run already there, so the names
+    order the runs as they were made whatever the clock does, and pruning
+    never removes the run just made (#437)."""
+
+    def name(self, root, moment=NOW):
+        return next_backup_name(root, now=at(moment))
+
+    def test_a_run_is_named_by_its_utc_second(self, tmp_path):
+        assert self.name(tmp_path) == "20260928T090000Z"
+
+    def test_the_second_is_read_in_utc(self, tmp_path):
+        kredfeld = datetime.timezone(datetime.timedelta(hours=1))
+        moment = datetime.datetime(2026, 9, 28, 10, 0, 0, 750, kredfeld)
+        assert self.name(tmp_path, moment) == "20260928T090000Z"
+
+    def test_a_root_not_made_yet_takes_the_clocks_second(self, tmp_path):
+        assert self.name(tmp_path / "backups") == "20260928T090000Z"
+
+    def test_a_second_run_in_one_second_takes_the_next(self, tmp_path):
+        (tmp_path / "20260928T090000Z").mkdir()
+        assert self.name(tmp_path) == "20260928T090001Z"
+
+    def test_a_clock_set_back_names_a_run_after_the_latest(self, tmp_path):
+        for stamp in ("20260101T000000Z", "20261231T235959Z"):
+            (tmp_path / stamp).mkdir()
+        assert self.name(tmp_path) == "20270101T000000Z"
+
+    def test_a_clock_past_the_latest_is_read_as_it_is(self, tmp_path):
+        (tmp_path / "20260101T000000Z").mkdir()
+        assert self.name(tmp_path) == "20260928T090000Z"
+
+    def test_a_file_named_like_a_run_counts(self, tmp_path):
+        # pruning skips it, but no run takes its name
+        (tmp_path / "20260928T090000Z").write_text("")
+        assert self.name(tmp_path) == "20260928T090001Z"
+
+    def test_other_names_are_not_runs(self, tmp_path):
+        for name in ("not-a-backup", "20990101T000000Z.old", "2099"):
+            (tmp_path / name).mkdir()
+        assert self.name(tmp_path) == "20260928T090000Z"
+
+    def test_a_year_before_1000_keeps_four_digits(self, tmp_path):
+        early = datetime.datetime(999, 1, 2, 3, 4, 5, tzinfo=datetime.UTC)
+        assert self.name(tmp_path, early) == "09990102T030405Z"
+        (tmp_path / "09990102T030405Z").mkdir()
+        assert self.name(tmp_path, early) == "09990102T030406Z"
+
+    @pytest.mark.parametrize(
+        "latest", ["99991231T235959Z", "20261399T000000Z", "99999999T999999Z"]
+    )
+    def test_a_latest_run_no_name_sorts_after_refuses(self, tmp_path, latest):
+        (tmp_path / latest).mkdir()
+        with pytest.raises(ValueError) as refused:
+            self.name(tmp_path)
+        assert str(tmp_path / latest) in str(refused.value)
+
+    def test_a_clock_with_no_time_zone_is_refused(self, tmp_path):
+        with pytest.raises(ValueError, match="no time zone"):
+            self.name(tmp_path, NOW.replace(tzinfo=None))
+
+    def test_the_name_reads_the_real_utc_clock_by_default(
+        self, tmp_path, monkeypatch
+    ):
+        """With no clock given, the system's clock is read in UTC: here a
+        stand-in for datetime that reads a fixed time, so the test reads no
+        real clock."""
+        asked = []
+
+        class Fixed(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                asked.append(tz)
+                return cls(2026, 3, 14, 9, 26, 53, tzinfo=datetime.UTC)
+
+        monkeypatch.setattr(backup, "datetime", stand_in_datetime(Fixed))
+        assert next_backup_name(tmp_path) == "20260314T092653Z"
+        assert asked == [datetime.UTC]
+
+
 # -- the non-privileged export keeps only released people (#344) -----------
 
 DATA = f"{CONCEPT}/wiki/Special:EntityData/"
@@ -2737,6 +2933,17 @@ class Clock:
         self.now += seconds
 
 
+class TestTheClockDefaults:
+    def test_the_lag_wait_naps_and_reads_the_real_monotonic_clock(self):
+        """Without a clock given, the wait for the query service naps with
+        time.sleep and reads time.monotonic, checked by identity and never
+        called."""
+        for waits in (await_query_service, export_nonprivileged):
+            defaults = inspect.signature(waits).parameters
+            assert defaults["sleep"].default is time.sleep
+            assert defaults["clock"].default is time.monotonic
+
+
 class TestTheQueryServiceLag:
     """The check runs on the query service and the export filters the
     dump, which comes from the database: the export needs the two to hold
@@ -2882,6 +3089,7 @@ class TestExportNonprivileged:
             lag_timeout=60,
             sleep=clock.sleep,
             clock=clock,
+            now=at(NOW),
         )
         return counts, runner
 
@@ -2957,6 +3165,7 @@ class TestExportNonprivileged:
             lag_timeout=60,
             sleep=clock.sleep,
             clock=clock,
+            now=at(NOW),
         )
 
     def test_a_person_event_that_names_no_participant_goes(
@@ -4522,22 +4731,37 @@ class TestTheBackupsNonprivilegedExport:
                 return vocabulary
 
         monkeypatch.setattr("yizkr.core.wiki.WikiClient", Wiki)
-        # the backup waits on a clock that only its naps move on
-        clock, wait = Clock(), backup.await_query_service
-        monkeypatch.setattr(
-            backup,
-            "await_query_service",
-            lambda run, revisions, **options: wait(
+        # the backup waits on a clock that only its naps move on; the
+        # options it asked for are kept in `waits`
+        clock, await_query_service = Clock(), backup.await_query_service
+        waits: list[dict] = []
+
+        def wait_for_the_query_service(run, revisions, **options):
+            waits.append(options)
+            await_query_service(
                 run, revisions, timeout=60, sleep=clock.sleep, clock=clock
-            ),
+            )
+
+        monkeypatch.setattr(
+            backup, "await_query_service", wait_for_the_query_service
         )
 
-        def backed_up(revisions=None, keep=0, lines=(), command=False):
+        def backed_up(
+            revisions=None, keep=0, lines=(), command=False, now=NOW
+        ):
             extra[:] = lines
             runner = ExportRun(dump.revisions, ["Q401"], revisions)
             monkeypatch.setattr(backup.sparql, "runner", lambda config: runner)
             if command:  # through `yizkr backup`, which returns its exit code
                 from yizkr import cli
+
+                monkeypatch.setattr(
+                    backup,
+                    "run_backup",
+                    lambda *args, **options: run_backup(
+                        *args, **options, now=at(now)
+                    ),
+                )
 
                 monkeypatch.setattr(
                     cli.Config, "load", lambda env_file=None: config()
@@ -4553,9 +4777,10 @@ class TestTheBackupsNonprivilegedExport:
                 )
                 return args.func(args)
             return run_backup(
-                config(), tmp_path, deploy_dir=tmp_path, keep=keep
+                config(), tmp_path, deploy_dir=tmp_path, keep=keep, now=at(now)
             )
 
+        backed_up.waits = waits
         return backed_up
 
     def test_the_backup_writes_the_export_of_released_people(
@@ -4568,6 +4793,52 @@ class TestTheBackupsNonprivilegedExport:
         assert export["excluded_persons"] == len(DROPPED)
         _, mentioned = TestExportNonprivileged.public(out_dir)
         assert not (set(PEOPLE) - {"Q401"}) & mentioned
+
+    def test_the_export_waits_for_the_query_service_its_full_time(
+        self, backed_up
+    ):
+        backed_up()
+        assert [wait["timeout"] for wait in backed_up.waits] == [
+            backup.LAG_TIMEOUT
+        ]
+
+    def test_two_backups_in_one_second_keep_two_directories(
+        self, tmp_path, backed_up
+    ):
+        first = backed_up()
+        second = backed_up(keep=1)
+        assert (first["timestamp"], second["timestamp"]) == (
+            "20260928T090000Z",
+            "20260928T090001Z",
+        )
+        # the newer is kept, whole, and the older pruned
+        assert second["pruned"] == [first["timestamp"]]
+        (out_dir,) = tmp_path.iterdir()
+        assert out_dir.name == second["timestamp"]
+        assert json.loads((out_dir / "manifest.json").read_text()) == second
+
+    def test_a_clock_set_back_never_prunes_the_newest_backup(
+        self, tmp_path, backed_up
+    ):
+        later = backed_up()
+        earlier = backed_up(keep=1, now=NOW - datetime.timedelta(days=400))
+        assert earlier["timestamp"] > later["timestamp"]
+        assert earlier["pruned"] == [later["timestamp"]]
+        (out_dir,) = tmp_path.iterdir()
+        assert out_dir.name == earlier["timestamp"]
+
+    def test_a_directory_made_meanwhile_is_never_shared(
+        self, tmp_path, backed_up, monkeypatch
+    ):
+        # another run takes the name between its choice and its mkdir
+        def raced(backup_root, *, now=None):
+            (backup_root / "20260928T090000Z").mkdir()
+            return "20260928T090000Z"
+
+        monkeypatch.setattr(backup, "next_backup_name", raced)
+        with pytest.raises(FileExistsError):
+            backed_up()
+        assert list((tmp_path / "20260928T090000Z").iterdir()) == []
 
     def test_a_refused_export_leaves_the_backup_recorded(
         self, tmp_path, vocabulary, backed_up

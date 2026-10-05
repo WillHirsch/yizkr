@@ -13,10 +13,8 @@ event holds CI for hours. A name bound by a `match` capture, an `except
 starter is checked to start its timers with a wait of 0, in every module.
 An entry that no longer matches a use is stale and fails, as does an
 entry naming a module that does not exist, and one limited to a name that
-names more than one class or function. A held module, which another open
-pull request edits, is left out whole until that request merges, and its
-entry is stale once the finder sees no use in it, so the list never grows
-to cover a new use.
+names more than one class or function, so the list never grows to cover
+a new use. No module is left out whole.
 """
 
 from __future__ import annotations
@@ -39,15 +37,13 @@ MIN_HANG_GUARD = 30
 MAX_HANG_GUARD = 600
 # the names a real timer is started by, which must ask for a wait of 0
 REAL_TIMERS = frozenset({"START_TIMER", "_start_timer"})
-# the call of an entry that holds its module whole
-HELD = "*"
 
 
 @dataclass(frozen=True)
 class Allowed:
     """A use of the real clock a module may keep: `call` is the use as the
-    finder words it without its line ('sleep(', 'wait( with a timeout'),
-    or HELD for the whole module; `inside` limits it to one class or
+    finder words it without its line ('sleep(', 'wait( with a timeout');
+    `inside` limits it to one class or
     function, by its qualified name (`TestX.test_y`) or, when that names
     only one, by its own."""
 
@@ -96,6 +92,17 @@ ALLOWED = (
         )
         for name in ("monotonic", "sleep", "now")
     ),
+    *(
+        Allowed(
+            "test_backup.py",
+            f"{name} uncalled",
+            "checks that the query-service lag wait's sleep and clock"
+            " default to the real clock functions by identity, and calls"
+            " them never",
+            inside="test_the_lag_wait_naps_and_reads_the_real_monotonic_clock",
+        )
+        for name in ("monotonic", "sleep")
+    ),
     Allowed(
         "test_monitor.py",
         "sleep uncalled",
@@ -104,7 +111,6 @@ ALLOWED = (
         inside="TestTerminalKeys.test_the_interval_is_slept_on_the_real_clock"
         "_by_default",
     ),
-    Allowed("test_backup.py", HELD, "phase 2 of #437"),
 )
 
 
@@ -182,28 +188,19 @@ def problems(directory: Path, allowed: Iterable[Allowed]) -> list[str]:
     """What fails the guard over the modules in `directory`: each use of
     the real clock no entry of `allowed` names, each hang guard that is
     no module-level number of at least MIN_HANG_GUARD seconds, each entry
-    that matches no use (a held module's, when the finder sees no use in
-    it), each entry limited to a name that names more than one class or
-    function and each entry naming no module."""
+    that matches no use, each entry limited to a name that names more
+    than one class or function and each entry naming no module."""
     allowed = tuple(allowed)
     found = [
         f"{entry.file}: the allow-list names a module that does not exist"
         for entry in allowed
         if not (directory / entry.file).is_file()
     ]
-    held = {entry.file for entry in allowed if entry.call == HELD}
     matched: set[Allowed] = set()
     for path in sorted(directory.rglob("*.py")):
         name = path.relative_to(directory).as_posix()
         source = path.read_text(encoding="utf-8")
         uses = _uses(source)
-        if name in held:
-            if not uses:
-                found.append(
-                    f"{name}: the allow-list holds a module with no use of"
-                    " the real clock; remove it"
-                )
-            continue
         found.extend(
             f"{name} {problem}" for problem in hang_guard_problems(source)
         )
@@ -236,9 +233,7 @@ def problems(directory: Path, allowed: Iterable[Allowed]) -> list[str]:
         + (f" inside {entry.inside}" if entry.inside else "")
         + " matches no use; remove it"
         for entry in allowed
-        if entry.call != HELD
-        and entry not in matched
-        and (directory / entry.file).is_file()
+        if entry not in matched and (directory / entry.file).is_file()
     )
     return found
 
@@ -378,28 +373,6 @@ class TestTheGuard:
             " matches no use; remove it"
         ]
 
-    def test_a_held_module_is_left_out_whole(self, tmp_path):
-        self.write(
-            tmp_path,
-            "test_held.py",
-            "import time\nHANG_GUARD = 0.2\ntime.sleep(1)\n",
-        )
-        allowed = [Allowed("test_held.py", HELD, "phase 2")]
-        assert problems(tmp_path, allowed) == []
-        assert problems(tmp_path, ()) == [
-            "test_held.py line 2: a hang guard is bound other than at module"
-            " level to a number of 30 to 600 seconds",
-            "test_held.py line 3: sleep(: no allow-list entry names it",
-        ]
-
-    def test_a_held_module_with_no_use_is_stale(self, tmp_path):
-        self.write(tmp_path, "test_quiet.py", "HANG_GUARD = 60\n")
-        allowed = [Allowed("test_quiet.py", HELD, "phase 2")]
-        assert problems(tmp_path, allowed) == [
-            "test_quiet.py: the allow-list holds a module with no use of"
-            " the real clock; remove it"
-        ]
-
     @pytest.mark.parametrize(
         "source",
         [
@@ -508,9 +481,9 @@ class TestTheGuard:
             " test_x names 2 classes and functions; qualify it (TestX.test_y)"
         ]
 
-    @pytest.mark.parametrize("call", [HELD, "sleep("])
-    def test_an_entry_naming_no_module_fails(self, tmp_path, call):
+    def test_an_entry_naming_no_module_fails(self, tmp_path):
         self.write(tmp_path, "test_x.py", "x = 1\n")
-        assert problems(tmp_path, [Allowed("test_gone.py", call, "why")]) == [
+        entry = Allowed("test_gone.py", "sleep(", "why")
+        assert problems(tmp_path, [entry]) == [
             "test_gone.py: the allow-list names a module that does not exist"
         ]

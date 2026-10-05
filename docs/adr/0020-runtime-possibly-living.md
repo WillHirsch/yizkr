@@ -178,6 +178,15 @@ reference names goes with the reference). Unit tests check every
 export they write against an offline mirror of the munger's blocks, and
 so does the live test, before the munger runs.
 
+Amended by #437 (2026-10-05): the check's cutoff year, and the backup
+run's directory name, are read from one clock (`now`, the system's UTC
+clock by default), which tests set. A clock that gives a time with no
+time zone is refused. A run's directory is named by the UTC second it
+starts, or, when that would not sort after every run already there (a
+second run in one second, or a clock set back), by the second after the
+latest. So two runs never share a directory, and `--keep N` never
+prunes the run just made.
+
 ## Context
 
 Privacy is non-negotiable (R7, CLAUDE.md rule 7): the archive holds
