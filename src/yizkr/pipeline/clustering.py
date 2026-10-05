@@ -512,8 +512,17 @@ def fold(text: str) -> str:
 
 
 def _words(text: str) -> list[str]:
-    """A part's words as written, each without its edge punctuation."""
-    return [word for raw in text.split() if (word := raw.strip(_STRIP))]
+    """A part's words as the instance would keep the part
+    (writer.stored_term: a run of control characters one space, U+FFFE
+    and U+FFFF made U+FFFD, then NFC), each without its edge
+    punctuation. Every key of a part is made from these words, so a
+    part keys as the instance keeps it, whatever form a batch gives it
+    in."""
+    return [
+        word
+        for raw in stored_term(text).split()
+        if (word := raw.strip(_STRIP))
+    ]
 
 
 @functools.lru_cache(maxsize=1 << 16)

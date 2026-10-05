@@ -67,14 +67,18 @@ the instance would keep nothing of, such as control characters alone,
 is blank and dropped.
 
 Amended by #477 (2026-10-05): the other comparisons of names before the
-write take both sides in that same form (`stored_term`): reconcile's
-blocking reads every whole name form, a manifest's and a graph item's,
-through it before folding (`part_keys`), so a decomposed "Flörburg"
-meets the instance's composed item; and clustering leaves out of a
-mention's aliases each one the instance would keep as its label, and,
-for a batch without a manifest, takes each label its refs give once in
-that form. The identity map's code key (`CODE`) holds writer.py, which
-gives the form.
+write take both sides in that same form (`stored_term`). Every key §7
+makes, of a label, an alias or a record's part, reads the part's words
+in that form before folding (`part_keys`), and reconcile's blocking
+keys through it, a manifest's names and a graph item's alike. Folding
+already took NFD and NFC alike; what the stored form changes is a
+control character, made one space, the edge characters it trims (such
+as U+180E), and U+FFFE and U+FFFF, made U+FFFD: "Cäcilie\x08Löbig"
+now meets "Cäcilie Löbig". Clustering leaves out of a mention's
+aliases each one the instance would keep as its label, and, for a
+batch without a manifest, takes each label its refs give once by that
+form, the first as given. The identity map's code key (`CODE`) holds
+writer.py, which gives the form.
 
 Amended by #434 (2026-10-02): a record nickname is a name the source
 gives as what the person is called, by anyone, and so also an alias; a

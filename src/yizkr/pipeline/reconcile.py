@@ -272,14 +272,14 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
 
 def _keys(names: Iterable[str]) -> set[str]:
     """Each whole name's keys: its folded words, and its words with any
-    umlaut written out (``clustering.part_keys``, ADR-0035 §7), read in
-    the form the instance keeps a term in (writer.stored_term), so a
-    manifest's name and a graph item's label key alike whatever form the
-    batch gives the name in."""
+    umlaut written out (``clustering.part_keys``, ADR-0035 §7). The words
+    are read in the form the instance keeps a term in
+    (writer.stored_term), so a control character inside a name keys as
+    the space the instance keeps it as: "Cäcilie\\x08Löbig" meets the
+    graph's "Cäcilie Löbig"."""
     from yizkr.pipeline.clustering import part_keys
-    from yizkr.pipeline.writer import stored_term
 
-    return {key for name in names for key in part_keys(stored_term(name))}
+    return {key for name in names for key in part_keys(name)}
 
 
 def _composed(record: PersonStructure) -> list[str]:
@@ -321,8 +321,8 @@ def entity_name_keys(entity: EntityRecord) -> set[str]:
     place by its record's own names and address, a short form that is
     another of its names' toponym left out (so a camp never meets its
     town), or by its label where the record names none. Every other
-    entity, and one without a record, keys by its label and aliases as
-    written."""
+    entity, and one without a record, keys by its label and aliases,
+    each whole."""
     record = entity.structure
     if isinstance(record, PersonStructure):
         if record.status != "name":
