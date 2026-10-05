@@ -29,8 +29,8 @@ directory's `.report` folder and prints where:
 
 | File | Holds | Leaves the machine |
 |---|---|---|
-| `report.md` | the aggregates alone: counts, rates and times | yes: it is what is posted |
-| `report.html` | the aggregates, each invocation and control request with its reason, and every document one by one (a drill-down per document) | never |
+| `report.md` | the aggregates alone: counts, rates and times, but for the documents per language | yes: it is what is posted |
+| `report.html` | the aggregates (the documents per language among them), each invocation and control request with its reason, and every document one by one (a drill-down per document) | never |
 | `report.json` | everything the page shows, as data | never |
 
 Run again, it replaces each file whole. The folder is made private to its
@@ -99,7 +99,8 @@ refresh and client configuration hash. A run still running is a
 snapshot, and says so.
 
 **Documents.** The documents planned (a SHA-1 planned twice is one
-document) by kind; languages, by the transcriptions read, and by kind;
+document) by kind; languages, by the transcriptions read, and by kind
+(in `report.html` and `report.json` alone: see below);
 the transcription routes (vision, text file, slide text, correction) and
 how each language was resolved (record, detected, fallback, override); the
 documents that failed, each once: those whose stage failed, as their
@@ -350,8 +351,15 @@ a label, an excerpt, a quote, or a number a document gives
   one the pipeline writes (an attention reason's, or a failure outside a
   stage's), or by the class of the exception a failure names, without its
   module path; anything else is `other`;
-- a language is shown only as a two- or three-letter code, with at most a
-  region; a model only as a full model id; the run id, the code's commit
+- no language is named: the aggregates count the documents per language,
+  by two- or three-letter code with at most a region, but `report.md`
+  leaves that table out and says the counts are in the local report
+  alone, since the codes would list the languages the corpus is written
+  in, which the operator keeps private in their anomaly thresholds
+  (#458). An alert is counted by its check and stage alone, never by its
+  value or limit (a `language-unexpected` alert's value is a language,
+  and its limit the private list itself);
+- a model is shown only as a full model id; the run id, the code's commit
   and the configuration hashes only in their own forms; and of the code's
   difference from its commit only that there is one, never its hash,
   which would confirm a guess at a small difference;
@@ -359,7 +367,7 @@ a label, an excerpt, a quote, or a number a document gives
   corpus folder, the cache or the never-ingest list, nor that list's hash,
   which a short list could be recovered from by guessing (#255).
 
-Unit tests (`tests/unit/test_run_report.py`) guard it three ways. A
+Unit tests (`tests/unit/test_run_report.py`) guard it four ways. A
 fictional run's file names, paths, labels, excerpts, reasons, alert
 fields and identity map carry names from the example universe
 (docs/EXAMPLES.md), and none of them, nor any document's SHA-1, may
@@ -368,9 +376,12 @@ carries a name in every field the aggregates name something by (a stage,
 a kind, a role, a reason, an outcome, a hold, an error, a requester, a
 route, a fallback tier, a critic's axis and category, a set-aside reason,
 a record status, a note category, the mode, the state, the engine,
-a model, the code's version), and each must fold into `other`. And the
-run rewritten, with every document's name and SHA-1 replaced in every file
-of its directory, must give a `report.md` the same byte for byte. Still,
+a model, the code's version), and each must fold into `other`. The same
+run's transcriptions in four languages, and an alert whose value is a
+language, must leave no language code in `report.md`, and `report.html`
+must still list them. And the run rewritten, with every document's name
+and SHA-1 replaced in every file of its directory, must give a
+`report.md` the same byte for byte. Still,
 re-read `report.md` before posting it (the self-review of
 docs/AGENT_PROTOCOL.md §7).
 

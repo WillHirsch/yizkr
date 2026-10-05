@@ -77,7 +77,12 @@ OTHER; an exception is named by its class alone. No document appears in
 them, not even by its SHA-1, and neither does the never-ingest list's
 hash, which a short list could be recovered from by guessing, nor the
 hash of the code's difference from its commit, which a small difference
-could be confirmed by.
+could be confirmed by. The aggregates count documents per language, but
+report.md leaves that table out and says the counts are in the local
+report alone: the codes would list the languages the corpus is written
+in, which the operator keeps private (their anomaly thresholds name
+them). No other line of report.md names a language: an alert is counted
+by its check and stage, never by its value or limit.
 
 Some counts need what the run directory does not hold, and the report
 says so (NOT_AVAILABLE) rather than count none: depicts proposals, since
@@ -1246,7 +1251,8 @@ def _match(subject: str, known: list[str]) -> str | None:
 
 def build(path: Path | str, *, now: datetime | None = None) -> dict[str, Any]:
     """The report of the run directory at `path`, as report.json holds it:
-    the run, its `aggregate` (what report.md shows), each document, the
+    the run, its `aggregate` (what report.md shows, but for the documents
+    per language), each document, the
     documents that failed before their source was read, the corpus stages
     and the control requests. ReportError when the directory holds no
     run.json, or its event log cannot be read."""
@@ -1770,10 +1776,11 @@ def _aggregate(
     vocabulary: _Vocabulary,
     now: datetime,
 ) -> dict[str, Any]:
-    """The report's aggregates, which report.md shows: counts, rates and
-    times, keyed by names of the vocabulary alone, with OTHER for any name
-    it does not hold. No document, file, path, label, excerpt, quote or
-    free-text reason is ever put in them."""
+    """The report's aggregates, which report.md shows all of but the
+    documents per language: counts, rates and times, keyed by names of
+    the vocabulary alone, with OTHER for any name it does not hold. No
+    document, file, path, label, excerpt, quote or free-text reason is
+    ever put in them."""
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "run": _aggregate_run(run, vocabulary),
@@ -2543,12 +2550,12 @@ def _table(
     )
 
 
-def _sections(aggregate: Mapping[str, Any]) -> list[_Section]:
+def _sections(aggregate: Mapping[str, Any], *, local: bool) -> list[_Section]:
     """The aggregates as sections of paragraphs, lists and tables, which
-    report.md renders as Markdown and report.html as HTML."""
+    report.md renders as Markdown and report.html (`local`) as HTML."""
     return [
         _run_section(aggregate["run"]),
-        _documents_section(aggregate["documents"]),
+        _documents_section(aggregate["documents"], local=local),
         *_stage_sections(aggregate["stages"], aggregate["corpus_stages"]),
         _anomalies_section(aggregate["anomalies"]),
         *_content_sections(aggregate["content"]),
@@ -2650,7 +2657,12 @@ def _run_section(run: Mapping[str, Any]) -> _Section:
     return _Section(title, blocks, level=1)
 
 
-def _documents_section(documents: Mapping[str, Any]) -> _Section:
+def _documents_section(
+    documents: Mapping[str, Any], *, local: bool
+) -> _Section:
+    """The documents: by kind, failed, and, in the local report alone, by
+    language; report.md says where the counts per language are, and
+    names no language."""
     line = (
         f"{_n(documents['planned'])} documents planned, from "
         f"{_n(documents['files'])} files ({_n(documents['duplicates'])} "
@@ -2685,18 +2697,25 @@ def _documents_section(documents: Mapping[str, Any]) -> _Section:
     ]
     blocks.append(items)
     languages = documents["languages"]
-    blocks.append(
-        _table(
-            ("Language", "Documents", "By kind"),
-            [
-                (language, entry["documents"], _listed(entry["by_kind"]))
-                for language, entry in languages.items()
-            ],
-            numbers=(1,),
+    if not local:
+        # the codes would list the corpus's languages, which stay private
+        blocks.append(
+            "Documents per language: in the local report alone "
+            "(report.html, report.json)."
         )
-        if languages
-        else "No transcription read."
-    )
+    elif languages:
+        blocks.append(
+            _table(
+                ("Language", "Documents", "By kind"),
+                [
+                    (language, entry["documents"], _listed(entry["by_kind"]))
+                    for language, entry in languages.items()
+                ],
+                numbers=(1,),
+            )
+        )
+    else:
+        blocks.append("No transcription read.")
     blocks.append(
         [
             "Not transcribed, or its transcription not read: "
@@ -3235,7 +3254,7 @@ def _md_cell(text: str) -> str:
 def render_markdown(aggregate: Mapping[str, Any]) -> str:
     """report.md: the aggregates alone, as Markdown."""
     out: list[str] = []
-    for index, section in enumerate(_sections(aggregate)):
+    for index, section in enumerate(_sections(aggregate, local=False)):
         out.append("#" * section.level + " " + section.title)
         out.append("")
         if index == 0:
@@ -3360,11 +3379,12 @@ def _anchor(title: str) -> str:
 
 
 def render_html(report: Mapping[str, Any]) -> str:
-    """report.html: the aggregates, as report.md shows them, then what only
-    the local report holds: each invocation and control request with its
+    """report.html: the aggregates, as report.md shows them and with the
+    documents per language, then what only the local report holds: each
+    invocation and control request with its
     reason, and every document one by one, with its stages, calls, views,
     alerts, failures and set-asides."""
-    sections = _sections(report["aggregate"])
+    sections = _sections(report["aggregate"], local=True)
     run = report["run"]
     parts = []
     for index, section in enumerate(sections):

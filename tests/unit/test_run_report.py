@@ -1427,6 +1427,55 @@ class TestAggregateOnly:
         assert control["by_requester"][OTHER] == 1
         assert control["pauses"][OTHER] == 1
 
+    def test_report_md_names_no_language(self, run):
+        """The documents per language would list the corpus's languages,
+        which the operator keeps private (#458): report.md says where the
+        counts are and names no language code, neither a transcription's
+        nor an alert's value; report.html and report.json keep them."""
+        for sha1, language in ((DIRECTORY, "ru"), (POSTCARD, "fy")):
+            path = run / slugify(Path(FILES[sha1][0]).stem)
+            view = json.loads((path / "transcription.json").read_text())
+            view["language"] = language
+            (path / "transcription.json").write_text(json.dumps(view))
+        written = write_report(run, now=NOW)
+        made = json.loads(written["report.json"].read_text())
+        codes = set(made["aggregate"]["documents"]["languages"]) - {OTHER}
+        assert codes == {"de", "en", "ru", "fy"}
+        # the alert on the certificate gives a language as its value
+        (alert,) = [
+            line
+            for line in map(json.loads, (run / "alerts.jsonl").open())
+            if line["check"] == "language-unexpected"
+        ]
+        assert alert["value"] == "yi"
+        text = written["report.md"].read_text()
+        named = [
+            code
+            for code in sorted(codes | {"yi"})
+            if re.search(rf"(?<![\w-]){code}(?![\w-])", text)
+        ]
+        assert named == []
+        assert "| Language |" not in text
+        assert (
+            "Documents per language: in the local report alone "
+            "(report.html, report.json)."
+        ) in text
+        page = written["report.html"].read_text()
+        for code in codes:
+            assert f"<td>{code}</td>" in page
+
+    def test_no_transcription_read_says_so_in_report_html(self, made):
+        """With no transcription read, report.html says so in place of the
+        table of documents per language; report.md names no language
+        either way."""
+        made["aggregate"]["documents"]["languages"] = {}
+        page = report.render_html(made)
+        assert "No transcription read." in page
+        assert "<th>Language</th>" not in page
+        assert "No transcription read." not in render_markdown(
+            made["aggregate"]
+        )
+
     def test_report_md_is_the_same_whatever_the_documents_say(self, tmp_path):
         """Every document's name and SHA-1, in every file of the run
         directory, replaced by other words and hashes: report.md comes out
