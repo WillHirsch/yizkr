@@ -814,6 +814,21 @@ class TestRegisterArtifact:
         assert not result.created
         assert len(wiki.entities) == 2
 
+    def test_the_earliest_of_two_items_is_earliest_by_number(self, tmp_path):
+        """Of Q99 and Q100, which carry one media SHA-1, the earliest is
+        Q99: QIDs order by number, never as strings, where "Q100" sorts
+        before "Q99"."""
+        wiki = FakeWiki()
+        wiki._next_qid = 99
+        hashed = ("media_sha1", sha1(PORTRAIT), None)
+        first = wiki.item("Studio portrait, first copy", hashed)
+        second = wiki.item("Studio portrait, second copy", hashed)
+        assert (first, second) == ("Q99", "Q100")
+        result = register(wiki, scan(tmp_path, PORTRAIT))
+        assert result.artifact_qid == "Q99"
+        assert not result.created
+        assert len(wiki.entities) == 2
+
     @pytest.mark.parametrize("length", [250, 251])
     def test_a_label_of_250_characters_is_taken_and_251_cut(
         self, tmp_path, length

@@ -47,6 +47,7 @@ import pytest
 from tests.fixtures import example_universe as u
 from tests.fixtures.records import record_answer
 from tests.unit.test_presentation import (
+    DECK_TIME,
     IMAGE_REL,
     NOTES_REL,
     SLIDE_REL,
@@ -170,8 +171,6 @@ DECK = "Hutmacherei zum Blauen Hut.pptx"
 SHOP_FRONT = b"\x89PNG synthetic: the shop front at Brunnenring 35"
 PORTRAIT = b"\x89PNG synthetic: " + "Photograph Brüsrich, Peiltal".encode()
 FILM = b"synthetic film"
-# every member of a built deck carries this one timestamp
-DECK_TIME = (2020, 1, 1, 0, 0, 0)
 
 
 def sha1(data: bytes) -> str:

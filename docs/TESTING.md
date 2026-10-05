@@ -107,7 +107,11 @@ itself in its own `--help`.
   `HANG_GUARD`, None or 0, and any `asyncio.timeout_at` given a
   deadline; a clock function named by a string (`getattr(time,
   "sleep")`, `time.__dict__["sleep"]`, `vars(time)["sleep"]`); an
-  `os.utime` given no times, which sets the current time; a file's time
+  `os.utime` given no times, which sets the current time; a ZIP
+  archive's `.writestr` given its member's name rather than a `ZipInfo`
+  (a `ZipInfo(...)` call, or a name the module assigns one to), which
+  stamps the member with the current time, so a deck built twice has
+  two SHA-1s (#479); a file's time
   (`st_mtime` and the rest, `getmtime`) read in a function that also
   touches a file; and a real timer started by anomalies' timer starter
   with a wait other than 0. A `.join`'s, a `.poll`'s or a selector's
