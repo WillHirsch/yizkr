@@ -161,6 +161,8 @@ class TestCritique:
             "relation_kind_mismatch",
             # the owner's default of 2026-09-29, in the review of #411
             "implausible_value",
+            # a containment its excerpt does not state (#465)
+            "unsupported_containment",
         ]
         assert "ADR-0031" in CATEGORIES["relation_kind_mismatch"]
 
