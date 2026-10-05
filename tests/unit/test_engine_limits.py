@@ -463,7 +463,12 @@ class TestUnsupportedModel:
         reason = unsupported_model(events, 1)
         assert reason is not None
         assert "version 2.1.280 or newer is required" in reason
-        assert "\n" not in reason and len(reason) <= 300
+
+    def test_its_reason_is_one_short_line(self):
+        long = {**UNSUPPORTED, "text": UNSUPPORTED["text"] + "\n" + "x" * 400}
+        reason = unsupported_model([INIT, *refused_events(long, "s1")], 1)
+        assert "version 2.1.280 or newer is required" in reason
+        assert "\n" not in reason and len(reason) == 300
 
     def test_the_words_alone_on_an_assistant_event_count(self):
         events = [
