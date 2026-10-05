@@ -2738,6 +2738,8 @@ def _curses_styles(curses: Any, color: bool) -> dict[str, int]:
 # how long curses waits, in milliseconds, after an Escape for the rest of
 # a key's sequence (an arrow key's, say) before taking it as Escape alone
 ESCAPE_DELAY = 25
+# the most keys of a control sequence's parameters an Escape's burst drops
+SEQUENCE_LIMIT = 32
 # the environment variables that would fix curses' idea of the window's
 # size: while the view is open they are set aside, so that it follows
 # the window as it is resized
@@ -2871,12 +2873,24 @@ class _CursesScreen:
         return key if isinstance(key, str) else None
 
     def _drop_burst(self) -> None:
-        """Read and drop the keys already waiting: the rest of a sequence
-        that began with Escape."""
-        self.window.timeout(0)
+        """Read and drop, of the keys already waiting, the rest of one
+        sequence that began with Escape (a key curses did not read as
+        one): after `[`, up to its final byte (0x40 to 0x7E, at most
+        SEQUENCE_LIMIT keys); after `O`, one key; otherwise the one key
+        (Alt and a key). Keys typed after the sequence are left to be
+        read. An Escape followed by a key already waiting cannot be told
+        from Alt and that key, so that key is dropped."""
+        window = self.window
+        window.timeout(0)
         with contextlib.suppress(self.curses.error):
-            while True:
-                self.window.get_wch()
+            first = window.get_wch()
+            if first == "O":
+                window.get_wch()
+            elif first == "[":
+                for _ in range(SEQUENCE_LIMIT):
+                    key = window.get_wch()
+                    if isinstance(key, str) and "\x40" <= key <= "\x7e":
+                        break
 
     def wait(self, timeout: float) -> str | None:
         self.window.timeout(max(0, round(timeout * 1000)))

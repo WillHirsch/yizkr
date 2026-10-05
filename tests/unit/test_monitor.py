@@ -24,6 +24,7 @@ import random
 import re
 import select
 import shutil
+import signal
 import socket
 import struct
 import subprocess
@@ -3868,26 +3869,56 @@ class TestCursesScreen:
         assert rows[-1] == fits
 
     def test_escape_cancels_the_command_line_and_its_burst(self, fake_locale):
-        """An Escape cancels; what comes with it (an arrow key curses did
-        not read as one, and an Enter after it) is dropped, never typed
-        into a command; keys typed later are read as keys."""
-        curses = FakeCurses(["p", "a", "\x1b", "[", "A", "\n"])
+        """An Escape cancels; the rest of its sequence (an arrow key curses
+        did not read as one) is dropped, never typed into a command; keys
+        typed after it are read as keys."""
+        curses = FakeCurses(["p", "a", "\x1b", "[", "A", "\n", None, "q"])
         with monitor._CursesScreen(False, curses=curses) as screen:
             assert screen.prompt("command> ") is None
-            # the burst read without waiting, all of it
+            # the sequence read without waiting, and no more of it
             assert ("timeout", 0) in curses.calls
-            assert curses.window.keys == []
+            assert curses.window.keys == ["\n", None, "q"]
             rows = [call[3] for call in curses.calls if call[0] == "addstr"]
             assert rows[-1] == "command> pa"
-            curses.window.keys = ["q"]
-            assert screen.wait(0) == "q"
 
-    def test_an_escape_burst_in_the_view_is_no_key(self, fake_locale):
-        curses = FakeCurses(["\x1b", "[", "q", None, "q"])
+    @pytest.mark.parametrize(
+        "sequence",
+        [
+            # Alt and a key: the one key
+            ["x"],
+            # a control sequence: up to its final byte, parameters and all
+            ["[", "A"],
+            ["[", "1", ";", "5", "C"],
+            ["[", "2", "0", "0", "~"],
+            # a single shift: one key more
+            ["O", "P"],
+            # an Escape alone
+            [],
+        ],
+    )
+    def test_an_escape_drops_one_sequence_in_the_view(
+        self, fake_locale, sequence
+    ):
+        """A key typed ahead after an Escape's sequence is read as a key:
+        `q` still quits."""
+        curses = FakeCurses(["\x1b", *sequence, "q", None])
         with monitor._CursesScreen(False, curses=curses) as screen:
-            # the burst's 'q' does not quit
+            if not sequence:
+                # an Escape and a key waiting behind it are Alt and that
+                # key, which goes with it
+                assert screen.wait(0) is None
+                assert curses.window.keys == [None]
+                return
             assert screen.wait(0) is None
             assert screen.wait(0) == "q"
+
+    def test_a_control_sequence_is_dropped_up_to_its_limit(self, fake_locale):
+        assert monitor.SEQUENCE_LIMIT == 32
+        parameters = ["1"] * 40
+        curses = FakeCurses(["\x1b", "[", *parameters, "q"])
+        with monitor._CursesScreen(False, curses=curses) as screen:
+            assert screen.wait(0) is None
+        assert curses.window.keys == ["1"] * 8 + ["q"]
 
     def test_a_resize_during_the_command_line_draws_the_view_again(
         self, fake_locale
@@ -4114,7 +4145,7 @@ while True:
     _, status = os.waitpid(pid, os.WUNTRACED)
     if os.WIFSTOPPED(status):
         os.tcsetpgrp(0, os.getpgrp())
-        report.write("stopped\\n")
+        report.write(f"stopped {os.WSTOPSIG(status)}\\n")
         report.flush()
         control.readline()
         os.tcsetpgrp(0, pid)
@@ -4279,6 +4310,8 @@ def _until_reading_keys(pid):
     after each yield of the processor. curses holds Ctrl-Z off (ignores
     SIGTSTP) while it updates the screen, so a Ctrl-Z meant to stop a
     view waiting for keys must reach it while it waits."""
+    if not Path("/proc/self/syscall").exists():
+        pytest.skip("no /proc/PID/syscall to tell a process waits for keys")
     call = READ_CALLS.get(platform.machine())
     if call is None:
         pytest.skip(f"no read system call number for {platform.machine()}")
@@ -4458,8 +4491,19 @@ class TestRealTerminal:
                 terminal.type(b"\x1a")
                 ready, _, _ = select.select([report_read], [], [], HANG_GUARD)
                 assert ready
-                assert os.read(report_read, 64) == b"stopped\n"
+                stopped = f"stopped {signal.SIGTSTP.value}\n".encode()
+                assert os.read(report_read, 64) == stopped
+                # stopped, the shell has its screen, cursor and settings
                 terminal.until(lambda data: _xterm("rmcup") in data[mark:])
+                # the cursor shown (the command line had shown it): the last
+                # of xterm's visibility strings written is cnorm
+                written = terminal.data
+                assert written.rfind(_xterm("cnorm")) > written.rfind(
+                    _xterm("civis")
+                )
+                assert terminal.termios.tcgetattr(terminal.follower) == (
+                    terminal.before
+                )
                 mark = terminal.mark()
                 os.write(control_write, b"fg\n")
                 terminal.until(
@@ -4471,8 +4515,12 @@ class TestRealTerminal:
                 terminal.type(b"feld\r")
                 terminal.until(lambda data: b"now paused" in data[mark:])
                 assert RunDir(run).control().stopped() == "run paused"
+                *_, line = (run / "control.jsonl").read_text().splitlines()
+                assert json.loads(line)["reason"] == "Kredfeld"
+                # an Alt-x (an Escape and a key) drops the one key: the 'q'
+                # typed after it quits
                 mark = terminal.mark()
-                terminal.type(b"q")
+                terminal.type(b"\x1bxq")
         finally:
             for fd in (report_read, report_write, control_read, control_write):
                 if fd is not None:
