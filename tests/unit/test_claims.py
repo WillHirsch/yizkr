@@ -13,11 +13,10 @@ from yizkr.claims import (
     ClaimBatch,
     RegionPercent,
     TimeValue,
-    century_of,
-    century_years,
     load_vocabulary,
     validate_against_manifest,
 )
+from yizkr.core.dates import UnsupportedDate
 
 RUN = {
     "model_identifier": "example-vision-model-2026-01",
@@ -260,9 +259,40 @@ class TestTimeValues:
         with pytest.raises(ValidationError):
             TimeValue(year=1920, month=5, precision="decade")
 
-    def test_year_zero_rejected(self):
-        with pytest.raises(ValidationError, match="year zero"):
-            TimeValue(year=0)
+    @pytest.mark.parametrize("year", [0, -1, -1836, -1800])
+    def test_a_year_before_the_common_era_is_unsupported(self, year):
+        # ADR-0034 (#338): refused with its reason, never converted
+        with pytest.raises(
+            ValidationError, match="unsupported: year .* before the common era"
+        ):
+            TimeValue(year=year)
+
+    def test_the_julian_calendar_is_unsupported(self):
+        # Eugen Löbig's birth given (here) as a Julian date: refused with
+        # its reason, never converted to the Gregorian (ADR-0034, #338)
+        with pytest.raises(
+            ValidationError, match="unsupported: calendar 'julian'"
+        ):
+            TimeValue(year=1836, calendar="julian")
+
+    @pytest.mark.parametrize("calendar", ["Gregorian", " gregorian", "hebrew"])
+    def test_a_calendar_the_schema_does_not_name_is_a_schema_error(
+        self, calendar
+    ):
+        # an unknown name is no ADR-0034 refusal: the literal refuses it
+        with pytest.raises(ValidationError) as refused:
+            TimeValue(year=1836, calendar=calendar)
+        assert "unsupported:" not in str(refused.value)
+
+    def test_the_schema_the_model_sees_names_the_julian_calendar(self):
+        # so that a Julian source date is stated as one, and refused
+        schema = TimeValue.model_json_schema()
+        assert schema["properties"]["calendar"]["enum"] == [
+            "gregorian",
+            "julian",
+        ]
+        description = " ".join(schema["description"].split())
+        assert 'with calendar "julian": it is a reported reject' in description
 
     def test_wikibase_serialization(self):
         assert TimeValue(year=1876).to_wikibase() == {
@@ -270,17 +300,26 @@ class TestTimeValues:
             "precision": 9,
             "calendarmodel": "http://www.wikidata.org/entity/Q1985727",
         }
-        julian = TimeValue(
-            year=1752, month=9, day=2, calendar="julian"
-        ).to_wikibase()
-        assert julian["time"] == "+1752-09-02T00:00:00Z"
-        assert julian["precision"] == 11
-        assert julian["calendarmodel"].endswith("Q1985786")
-        assert (
-            TimeValue(year=-44, month=3)
-            .to_wikibase()["time"]
-            .startswith("-0044-03")
-        )
+        assert TimeValue(year=1, calendar="gregorian").to_wikibase() == {
+            "time": "+0001-00-00T00:00:00Z",
+            "precision": 9,
+            "calendarmodel": "http://www.wikidata.org/entity/Q1985727",
+        }
+
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            {"year": -1836, "precision": "year", "calendar": "gregorian"},
+            {"year": 0, "precision": "year", "calendar": "gregorian"},
+            {"year": 1836, "precision": "year", "calendar": "julian"},
+        ],
+    )
+    def test_an_unsupported_date_is_never_serialized(self, fields):
+        # one built around validation is still never stored (#338)
+        value = TimeValue.model_construct(**fields)
+        assert value.problem().startswith("unsupported: ")
+        with pytest.raises(UnsupportedDate):
+            value.to_wikibase()
 
 
 class TestCenturies:
@@ -288,50 +327,18 @@ class TestCenturies:
     gives it by its first year (#241; docs/MODELING.md, "Uncertainty and
     time")."""
 
-    @pytest.mark.parametrize(
-        ("year", "century"),
-        [
-            (1801, 19),  # the 19th century's first year
-            (1900, 19),  # and its last
-            (1800, 18),  # the 18th century's last year
-            (1901, 20),  # the 20th century's first
-            (1, 1),
-            (100, 1),
-            (101, 2),
-            # before the common era the count runs back from 1 BCE
-            (-1, -1),
-            (-100, -1),
-            (-101, -2),
-            (-1701, -18),
-            (-1800, -18),
-            (-1801, -19),
-        ],
-    )
-    def test_a_year_is_in_the_century_wikibase_counts(self, year, century):
-        assert century_of(year) == century
-
-    def test_every_year_is_counted_as_wikibase_formats_it(self):
+    def test_a_century_is_given_by_the_first_year_wikibase_counts(self):
         # MwTimeIsoFormatter names the century of a stored year
-        # ceil(|year| / 100), "BCE" for a negative year
-        for year in range(-2500, 2501):
-            if year:
-                wikibase = math.ceil(abs(year) / 100)
-                assert century_of(year) == math.copysign(wikibase, year)
-
-    @pytest.mark.parametrize(
-        ("century", "years"),
-        [
-            (19, (1801, 1900)),
-            (1, (1, 100)),
-            (-1, (-100, -1)),
-            (-18, (-1800, -1701)),
-        ],
-    )
-    def test_a_century_runs_from_its_first_to_its_last_year(
-        self, century, years
-    ):
-        assert century_years(century) == years
-        assert {century_of(year) for year in years} == {century}
+        # ceil(year / 100): a century precision takes just the first year
+        # of each, 1, 101, ..., 1801
+        for year in range(1, 2501):
+            first = math.ceil(year / 100) * 100 - 99 == year
+            try:
+                TimeValue(year=year, precision="century")
+            except ValidationError:
+                assert not first, year
+            else:
+                assert first, year
 
     def test_the_19th_century_is_written_as_its_first_year(self):
         # Eugen Löbig born (here) in the 19th century
@@ -353,17 +360,6 @@ class TestCenturies:
     def test_a_century_takes_only_its_first_year(self, year):
         with pytest.raises(ValidationError, match="century's first year"):
             TimeValue(year=year, precision="century")
-
-    def test_a_century_before_the_common_era(self):
-        # the 18th century BCE runs from 1800 to 1701 BCE, so its first
-        # year is -1800
-        written = TimeValue(year=-1800, precision="century").to_wikibase()
-        assert (written["time"], written["precision"]) == (
-            "-1800-00-00T00:00:00Z",
-            7,
-        )
-        with pytest.raises(ValidationError, match="century's first year"):
-            TimeValue(year=-1701, precision="century")
 
     def test_a_decade_is_not_held_to_a_centurys_first_year(self):
         # the 1800s as a decade, 1800 to 1809, stored as 1800

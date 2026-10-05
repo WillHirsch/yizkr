@@ -46,6 +46,19 @@ Source-first conventions carry over unchanged:
   the TO.
   A date the grammar cannot parse yields NO date claim and a warning —
   never a guess.
+* A date before the common era (a `B.C.`, `BC` or `BCE` epoch, spaced
+  or not, or a year below 1) or in any calendar but the Gregorian (a
+  calendar escape other than `@#DGREGORIAN@`, such as `@#DJULIAN@`,
+  `@#DHEBREW@`, `@#DFRENCH R@`, `@#DROMAN@` or `@#DUNKNOWN@`, or GEDCOM
+  7's `JULIAN`, `HEBREW`, `FRENCH_R` or an extension calendar), on any
+  DATE line of the file, fails the whole file with UnsupportedDate
+  naming each such line by its number (ADR-0034): such a date is
+  unsupported, and is never converted to the Gregorian calendar or
+  another year, nor read as an unparsed date. A date phrase in
+  parentheses (from the first `(` to the last `)`, or to the end of the
+  value) is free text, and is not read for these markers; free text
+  outside one that names a calendar ("St Julian's day 1836") fails the
+  file, which errs on the side of refusing.
 
 Every occurrence of an event, of a DATE, PLAC or CAUS beneath one where
 the adapter reads that tag (a CAUS beneath any event but a death is
@@ -196,6 +209,7 @@ from yizkr.claims import (
     structure_problems,
     validate_against_manifest,
 )
+from yizkr.core.dates import WHY, UnsupportedDate
 from yizkr.pipeline.extract import run_metadata
 from yizkr.pipeline.names import normalize_aliases
 
@@ -393,6 +407,61 @@ def parse_gedcom_date(text: str) -> tuple[dict | None, list[dict]]:
         return None, []
     value = _parse_plain_date(raw)
     return (value, []) if value else (None, [])
+
+
+# a date's markers of an unsupported date (ADR-0034), read case-blind
+# outside its date phrase: an epoch before the common era (GEDCOM 5.5.1's
+# B.C., and BC or BCE, its letters spaced or not), a GEDCOM 5.5.1
+# calendar escape other than the Gregorian's, a GEDCOM 7 calendar other
+# than the Gregorian (its named ones, and an extension calendar, which
+# starts with an underscore), and a year written with a minus or as 0,
+# whether or not the grammar reads the rest. Free text outside a phrase
+# that names a calendar ("St Julian's day 1836") is read as naming it,
+# and fails the file.
+_UNSUPPORTED_DATE = re.compile(
+    r"(?<![A-Z])B\s*\.?\s*C\s*\.?(?:\s*E\s*\.?)?(?![A-Z])"
+    r"|@#\s*D(?!\s*GREGORIAN\s*@)"
+    r"|(?<![A-Z_])(?:JULIAN|HEBREW|FRENCH_R)(?![A-Z_])"
+    r"|(?<![A-Z0-9_])_[A-Z0-9][A-Z0-9_]*"
+    r"|(?<![\w-])-\d"
+    r"|(?<![\w-])0+(?![\w])",
+    re.IGNORECASE,
+)
+# a date phrase: free text, never read for those markers. It runs from the
+# first "(" to the last ")", so a phrase holding parentheses is one
+# phrase, or to the end of the value when it is not closed.
+_DATE_PHRASE = re.compile(r"\((?:.*\)|.*)", re.DOTALL)
+
+
+def refuse_unsupported_dates(roots: Sequence[Record]) -> None:
+    """Raise UnsupportedDate naming every DATE line, anywhere in the file,
+    that states a date before the common era or in a calendar other than
+    the Gregorian (``_UNSUPPORTED_DATE`` outside any date phrase, which
+    covers every year the grammar could read below 1: it is written with
+    a minus or as 0, at either end of a range). The file is refused
+    whole, before any claim is made (ADR-0034)."""
+    found = []
+    stack = list(roots)
+    while stack:
+        record = stack.pop()
+        stack.extend(record.children)
+        if record.tag != "DATE":
+            continue
+        unphrased = _DATE_PHRASE.sub(" ", record.value)
+        if _UNSUPPORTED_DATE.search(unphrased):
+            found.append(record)
+    if found:
+        # the lines by number alone: the error names where, never what a
+        # date says
+        lines = ", ".join(
+            str(record.line_number)
+            for record in sorted(found, key=lambda r: r.line_number)
+        )
+        raise UnsupportedDate(
+            f"the GEDCOM file states a date before the common era or in a "
+            f"calendar other than the Gregorian on DATE line(s) {lines}, so "
+            f"none of it is read; {WHY}"
+        )
 
 
 # The qualifiers that bound each end of a period, as on Wikidata's spouse
@@ -1500,8 +1569,12 @@ def format_unsupported_tags(unsupported: dict[str, int]) -> str:
 def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     """The whole file -> one ClaimBatch with entity manifest, every claim
     citing `artifact`, the export's content key: the SHA-1 of the file's
-    bytes, of which `text` is the decoded form."""
+    bytes, of which `text` is the decoded form. Raises UnsupportedDate,
+    before any claim is made, for a file stating a date before the common
+    era or in a calendar other than the Gregorian
+    (refuse_unsupported_dates)."""
     roots = parse_gedcom(text)
+    refuse_unsupported_dates(roots)
     individuals = {r.xref: r for r in roots if r.tag == "INDI" and r.xref}
     families = {r.xref: r for r in roots if r.tag == "FAM" and r.xref}
     # level-0 records a person/event may point at by xref: SOUR = the

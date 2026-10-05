@@ -383,13 +383,6 @@ def test_a_narrowed_or_widened_date_does_not_keep_its_fingerprint():
         "year": {"type": "time", "year": 1919},
         "the decade's year": {"type": "time", "year": 1910},
         "decade": {"type": "time", "year": 1910, "precision": "decade"},
-        "julian": {
-            "type": "time",
-            "year": 1919,
-            "month": 1,
-            "day": 7,
-            "calendar": "julian",
-        },
     }
     prints = {
         name: print_of(birth_claim(value=value))

@@ -472,14 +472,27 @@ artifact a new QID, changes neither.
 ## Uncertainty and time
 
 - Use Wikibase time precision (year / month / day / decade / century).
+- Only dates of 1 CE or later in the proleptic Gregorian calendar
+  (Wikibase's `Q1985727`) are supported (ADR-0034). A date before the
+  common era or in the Julian or any other calendar is never converted,
+  guessed at or shown: the claim schema refuses one (an extraction reject
+  whose reason begins "unsupported:"; a Julian source date is given as
+  written, with calendar `julian`, so that it is refused rather than
+  read as Gregorian), the GEDCOM adapter fails a file that states one in
+  any calendar but the Gregorian or with an epoch before the common era,
+  naming its DATE lines, the review sheet refuses a correction to one,
+  the writer refuses a batch holding one and writes nothing, and every
+  reader of the graph (the disagreement report, the site, the
+  possibly-living check, the non-privileged export, which checks the
+  whole graph at any rank first, and reconcile's roster) stops with
+  `UnsupportedDate`, naming the item and the statement, if a curator has
+  entered one.
 - Centuries and millennia are counted as Wikibase and Wikidata count
   them, from year 1: the nth century runs from year 100(n−1)+1 to year
   100n, so a date at century precision stored as any year from 1801 to
   1900 is the 19th century, and one stored as 1800 is the 18th. The nth
   millennium runs from year 1000(n−1)+1 to year 1000n (the 2nd
-  millennium is 1001–2000). Before the common era the count runs back
-  from 1 BCE: −1800 to −1701 is the 18th century BCE, which runs from
-  1800 to 1701 BCE.
+  millennium is 1001–2000).
 - A claim gives a century by its first year (the 19th century as 1801),
   as it gives a decade by its first year (the 1890s as 1890), and the
   writer stores that year as it is: the wiki shows it as "19. century". A
@@ -1396,10 +1409,13 @@ not a signal to grow the schema on.
   latest date is read without that latest date, which fails closed. A
   statement allows no latest year, and keeps its person possibly living,
   when a latest date in it cannot be read, or, where no latest date
-  bounds it, when its value is unknown, unreadable (one before the common
-  era included) or coarser than a millennium, or it states only an
-  earliest date. A readable latest date bounds even a birth whose value
-  is unknown, unreadable or coarser than a millennium.
+  bounds it, when its value is unknown, unreadable or coarser than a
+  millennium, or it states only an earliest date. A readable latest date
+  bounds even a birth whose value is unknown, unreadable or coarser than
+  a millennium. A birth before the common era or in a calendar other
+  than the proleptic Gregorian, as the value or a bound, stops the check
+  and with it the export, naming the person and the statement
+  (ADR-0034): it fails closed.
 - The private static site (`yizkr publish-site`) includes everyone but
   badges each subject the export would drop ("possibly living — never
   in the non-privileged export"), using the same runtime call, except a

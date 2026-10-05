@@ -11,6 +11,12 @@ every such claim by its review-sheet id, and comes before `write_batch`
 reads from or writes to the instance, in a dry run too. A batch without
 depicts claims is not affected.
 
+It refuses just as early, with UnsupportedDate, a batch holding a date
+before the common era or in a calendar other than the proleptic Gregorian,
+as a claim's value or a qualifier's (ADR-0034): the claim schema refuses
+one, so only a batch built around it can hold one, and the writer names
+every such claim and writes nothing.
+
 Per batch, the writer:
 
 0. resolves every artifact the batch cites, by the SHA-1 of its media,
@@ -315,6 +321,7 @@ from yizkr.claims import (
     TimeValue,
     VocabRef,
 )
+from yizkr.core.dates import UnsupportedDate
 from yizkr.core.wiki import WikiClient
 from yizkr.model.schema import load_acceptance
 from yizkr.pipeline.review import (
@@ -495,6 +502,26 @@ class UnapprovedDepictsError(ValueError):
             f"this batch, decide these rows by hand, apply-review, and write "
             f"the batch apply-review writes. Nothing was written."
         )
+
+
+def unsupported_dates(batch: ClaimBatch) -> list[str]:
+    """Each date of `batch` the project does not support (ADR-0034), a
+    claim's value or a qualifier's: the claim's id and property, which
+    part holds it (its value, or the qualifier by its property) and the
+    reason (``TimeValue.problem``)."""
+    found = []
+    for claim in batch.claims:
+        parts = [("its value", claim.value)]
+        parts.extend(
+            (f"its {q.property} qualifier", q.value) for q in claim.qualifiers
+        )
+        for part, value in parts:
+            if isinstance(value, TimeValue) and (problem := value.problem()):
+                found.append(
+                    f"claim {claim_id(claim)} ({claim.property}), {part}: "
+                    f"{problem}"
+                )
+    return found
 
 
 class UnregisteredArtifactError(LookupError):
@@ -2423,18 +2450,25 @@ class BatchWriter:
     ) -> WriteResult:
         """Write `batch`. Raises UnapprovedDepictsError, before reading
         from or writing to the instance, when a depicts claim in it lacks
-        its row approval (the module docstring), in a dry run too, and
-        ValueError, then too, when the run item's label or description
-        holds a character Python's Unicode tables do not know
-        (_run_terms). A claim whose own text the instance cannot hold
-        raises nothing: it is refused alone, and the rest of the batch is
-        written (the module docstring); so is an entity that may reuse
-        neither the item under its label nor the one under its tagged
-        label, refused with the claims that name it (step 2 of the module
-        docstring)."""
+        its row approval (the module docstring), in a dry run too,
+        UnsupportedDate, then too, when a claim holds an unsupported date
+        (unsupported_dates), and ValueError, then too, when the run
+        item's label or description holds a character Python's Unicode
+        tables do not know (_run_terms). A claim whose own text the
+        instance cannot hold raises nothing: it is refused alone, and the
+        rest of the batch is written (the module docstring); so is an
+        entity that may reuse neither the item under its label nor the one
+        under its tagged label, refused with the claims that name it (step
+        2 of the module docstring)."""
         unapproved = unapproved_depicts(batch)
         if unapproved:
             raise UnapprovedDepictsError(unapproved)
+        unsupported = unsupported_dates(batch)
+        if unsupported:
+            raise UnsupportedDate(
+                "the batch holds unsupported dates, and nothing was "
+                "written: " + "; ".join(unsupported)
+            )
         # the run item's terms are machine text: one the instance may keep
         # in another form refuses the batch before anything is read or
         # written (_run_terms)
