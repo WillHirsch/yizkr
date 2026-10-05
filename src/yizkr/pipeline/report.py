@@ -1252,10 +1252,10 @@ def _match(subject: str, known: list[str]) -> str | None:
 def build(path: Path | str, *, now: datetime | None = None) -> dict[str, Any]:
     """The report of the run directory at `path`, as report.json holds it:
     the run, its `aggregate` (what report.md shows, but for the documents
-    per language), each document, the
-    documents that failed before their source was read, the corpus stages
-    and the control requests. ReportError when the directory holds no
-    run.json, or its event log cannot be read."""
+    per language), each document, the documents that failed before their
+    source was read, the corpus stages and the control requests.
+    ReportError when the directory holds no run.json, or its event log
+    cannot be read."""
     path = Path(path)
     now = now or datetime.now(UTC)
     if not (path / MANIFEST).is_file():
@@ -3381,9 +3381,9 @@ def _anchor(title: str) -> str:
 def render_html(report: Mapping[str, Any]) -> str:
     """report.html: the aggregates, as report.md shows them and with the
     documents per language, then what only the local report holds: each
-    invocation and control request with its
-    reason, and every document one by one, with its stages, calls, views,
-    alerts, failures and set-asides."""
+    invocation and control request with its reason, and every document one
+    by one, with its stages, calls, views, alerts, failures and
+    set-asides."""
     sections = _sections(report["aggregate"], local=True)
     run = report["run"]
     parts = []
