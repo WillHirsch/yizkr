@@ -13,11 +13,10 @@ from yizkr.claims import (
     ClaimBatch,
     RegionPercent,
     TimeValue,
-    century_of,
-    century_years,
     load_vocabulary,
     validate_against_manifest,
 )
+from yizkr.core.dates import UnsupportedDate
 
 RUN = {
     "model_identifier": "example-vision-model-2026-01",
@@ -260,9 +259,40 @@ class TestTimeValues:
         with pytest.raises(ValidationError):
             TimeValue(year=1920, month=5, precision="decade")
 
-    def test_year_zero_rejected(self):
-        with pytest.raises(ValidationError, match="year zero"):
-            TimeValue(year=0)
+    @pytest.mark.parametrize("year", [0, -1, -1836, -1800])
+    def test_a_year_before_the_common_era_is_unsupported(self, year):
+        # ADR-0034 (#338): refused with its reason, never converted
+        with pytest.raises(
+            ValidationError, match="unsupported: year .* before the common era"
+        ):
+            TimeValue(year=year)
+
+    def test_the_julian_calendar_is_unsupported(self):
+        # Eugen Löbig's birth given (here) as a Julian date: refused with
+        # its reason, never converted to the Gregorian (ADR-0034, #338)
+        with pytest.raises(
+            ValidationError, match="unsupported: calendar 'julian'"
+        ):
+            TimeValue(year=1836, calendar="julian")
+
+    @pytest.mark.parametrize("calendar", ["Gregorian", " gregorian", "hebrew"])
+    def test_a_calendar_the_schema_does_not_name_is_a_schema_error(
+        self, calendar
+    ):
+        # an unknown name is no ADR-0034 refusal: the literal refuses it
+        with pytest.raises(ValidationError) as refused:
+            TimeValue(year=1836, calendar=calendar)
+        assert "unsupported:" not in str(refused.value)
+
+    def test_the_schema_the_model_sees_names_the_julian_calendar(self):
+        # so that a Julian source date is stated as one, and refused
+        schema = TimeValue.model_json_schema()
+        assert schema["properties"]["calendar"]["enum"] == [
+            "gregorian",
+            "julian",
+        ]
+        description = " ".join(schema["description"].split())
+        assert 'with calendar "julian": it is a reported reject' in description
 
     def test_wikibase_serialization(self):
         assert TimeValue(year=1876).to_wikibase() == {
@@ -270,17 +300,26 @@ class TestTimeValues:
             "precision": 9,
             "calendarmodel": "http://www.wikidata.org/entity/Q1985727",
         }
-        julian = TimeValue(
-            year=1752, month=9, day=2, calendar="julian"
-        ).to_wikibase()
-        assert julian["time"] == "+1752-09-02T00:00:00Z"
-        assert julian["precision"] == 11
-        assert julian["calendarmodel"].endswith("Q1985786")
-        assert (
-            TimeValue(year=-44, month=3)
-            .to_wikibase()["time"]
-            .startswith("-0044-03")
-        )
+        assert TimeValue(year=1, calendar="gregorian").to_wikibase() == {
+            "time": "+0001-00-00T00:00:00Z",
+            "precision": 9,
+            "calendarmodel": "http://www.wikidata.org/entity/Q1985727",
+        }
+
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            {"year": -1836, "precision": "year", "calendar": "gregorian"},
+            {"year": 0, "precision": "year", "calendar": "gregorian"},
+            {"year": 1836, "precision": "year", "calendar": "julian"},
+        ],
+    )
+    def test_an_unsupported_date_is_never_serialized(self, fields):
+        # one built around validation is still never stored (#338)
+        value = TimeValue.model_construct(**fields)
+        assert value.problem().startswith("unsupported: ")
+        with pytest.raises(UnsupportedDate):
+            value.to_wikibase()
 
 
 class TestCenturies:
@@ -288,50 +327,18 @@ class TestCenturies:
     gives it by its first year (#241; docs/MODELING.md, "Uncertainty and
     time")."""
 
-    @pytest.mark.parametrize(
-        ("year", "century"),
-        [
-            (1801, 19),  # the 19th century's first year
-            (1900, 19),  # and its last
-            (1800, 18),  # the 18th century's last year
-            (1901, 20),  # the 20th century's first
-            (1, 1),
-            (100, 1),
-            (101, 2),
-            # before the common era the count runs back from 1 BCE
-            (-1, -1),
-            (-100, -1),
-            (-101, -2),
-            (-1701, -18),
-            (-1800, -18),
-            (-1801, -19),
-        ],
-    )
-    def test_a_year_is_in_the_century_wikibase_counts(self, year, century):
-        assert century_of(year) == century
-
-    def test_every_year_is_counted_as_wikibase_formats_it(self):
+    def test_a_century_is_given_by_the_first_year_wikibase_counts(self):
         # MwTimeIsoFormatter names the century of a stored year
-        # ceil(|year| / 100), "BCE" for a negative year
-        for year in range(-2500, 2501):
-            if year:
-                wikibase = math.ceil(abs(year) / 100)
-                assert century_of(year) == math.copysign(wikibase, year)
-
-    @pytest.mark.parametrize(
-        ("century", "years"),
-        [
-            (19, (1801, 1900)),
-            (1, (1, 100)),
-            (-1, (-100, -1)),
-            (-18, (-1800, -1701)),
-        ],
-    )
-    def test_a_century_runs_from_its_first_to_its_last_year(
-        self, century, years
-    ):
-        assert century_years(century) == years
-        assert {century_of(year) for year in years} == {century}
+        # ceil(year / 100): a century precision takes just the first year
+        # of each, 1, 101, ..., 1801
+        for year in range(1, 2501):
+            first = math.ceil(year / 100) * 100 - 99 == year
+            try:
+                TimeValue(year=year, precision="century")
+            except ValidationError:
+                assert not first, year
+            else:
+                assert first, year
 
     def test_the_19th_century_is_written_as_its_first_year(self):
         # Eugen Löbig born (here) in the 19th century
@@ -353,17 +360,6 @@ class TestCenturies:
     def test_a_century_takes_only_its_first_year(self, year):
         with pytest.raises(ValidationError, match="century's first year"):
             TimeValue(year=year, precision="century")
-
-    def test_a_century_before_the_common_era(self):
-        # the 18th century BCE runs from 1800 to 1701 BCE, so its first
-        # year is -1800
-        written = TimeValue(year=-1800, precision="century").to_wikibase()
-        assert (written["time"], written["precision"]) == (
-            "-1800-00-00T00:00:00Z",
-            7,
-        )
-        with pytest.raises(ValidationError, match="century's first year"):
-            TimeValue(year=-1701, precision="century")
 
     def test_a_decade_is_not_held_to_a_centurys_first_year(self):
         # the 1800s as a decade, 1800 to 1809, stored as 1800
@@ -618,3 +614,382 @@ class TestJsonSchemaExport:
         assert artifact == {"$ref": "#/$defs/ArtifactRef"}
         sha1 = schema["$defs"]["ArtifactRef"]["properties"]["sha1"]
         assert sha1["pattern"] == "^[0-9a-f]{40}$"
+
+
+# -- a value is never its own subject; a kind key is no value (#461, #462) ---
+
+# Gustav's birth register extract from Flörburg (docs/EXAMPLES.md): its
+# people and places, by the ids an entity manifest gives them
+ENTITIES = [
+    {"id": "sebastian", "label": "Sebastian Löbig", "kind": "human"},
+    {"id": "eugen", "label": "Eugen Löbig", "kind": "human"},
+    {"id": "gustav", "label": "Gustav Löbig", "kind": "human"},
+    {"id": "floerburg", "label": "Flörburg", "kind": "place"},
+    {"id": "birth", "label": "Gustav's birth", "kind": "birth"},
+]
+
+
+def local_item(local_id: str) -> dict:
+    return {"type": "item", "value": {"kind": "local", "local_id": local_id}}
+
+
+def qid_item(qid: str) -> dict:
+    return {"type": "item", "value": {"kind": "qid", "qid": qid}}
+
+
+def vocab_item(key: str) -> dict:
+    return {"type": "item", "value": {"kind": "vocab", "key": key}}
+
+
+def about(subject: str | dict, prop: str, value: dict, *qualifiers) -> dict:
+    return {
+        "subject": (
+            {"kind": "local", "local_id": subject}
+            if isinstance(subject, str)
+            else subject
+        ),
+        "property": prop,
+        "value": value,
+        "qualifiers": list(qualifiers),
+        "source": source(),
+    }
+
+
+def problems_of(*claims: dict, entities=ENTITIES) -> list[str]:
+    return validate_against_manifest(
+        ClaimBatch.model_validate(
+            {
+                "extraction_run": RUN,
+                "claims": list(claims),
+                "entities": entities,
+            }
+        )
+    )
+
+
+def own_subject(found: list[str]) -> list[str]:
+    return [p for p in found if "never its own subject" in p]
+
+
+class TestAValueIsNeverItsOwnSubject:
+    @pytest.mark.parametrize(
+        "claim",
+        [
+            # Flörburg located in Flörburg; Flörburg its own residence
+            about("floerburg", "location", local_item("floerburg")),
+            about("floerburg", "residence", local_item("floerburg")),
+            # Sebastian his own father, child, sibling or relative
+            about("sebastian", "father", local_item("sebastian")),
+            about("sebastian", "child", local_item("sebastian")),
+            about("sebastian", "sibling", local_item("sebastian")),
+            about("sebastian", "relative", local_item("sebastian")),
+            # the same vocabulary item
+            about(
+                {"kind": "vocab", "key": "photograph"},
+                "subclass_of",
+                vocab_item("photograph"),
+            ),
+        ],
+    )
+    def test_a_claim_naming_its_subject_is_refused(self, claim):
+        found = problems_of(claim)
+        assert own_subject(found), found
+        (problem,) = own_subject(found)
+        assert problem.startswith("claims[0].value: ")
+
+    def test_on_every_item_valued_property(self):
+        """No property of the manifest takes its subject as its value, so
+        the check holds on each one, whatever else refuses the claim."""
+        properties, _ = load_vocabulary()
+        item_valued = sorted(
+            key
+            for key, datatype in properties.items()
+            if datatype == "wikibase-item"
+        )
+        assert len(item_valued) > 20
+        for prop in item_valued:
+            found = problems_of(
+                about("sebastian", prop, local_item("sebastian"))
+            )
+            assert own_subject(found), prop
+
+    def test_the_same_qid_is_the_same_entity(self):
+        sebastian = {"kind": "qid", "qid": "Q71"}
+        found = problems_of(about(sebastian, "father", qid_item("Q71")))
+        assert len(own_subject(found)) == 1
+        assert "qid:Q71" in own_subject(found)[0]
+
+    def test_a_local_ref_resolved_to_the_subjects_qid_is_it(self):
+        # a reviewer matched the document's Sebastian to the existing Q71
+        entities = [
+            dict(entity, qid="Q71") if entity["id"] == "sebastian" else entity
+            for entity in ENTITIES
+        ]
+        sebastian = {"kind": "qid", "qid": "Q71"}
+        found = problems_of(
+            about(sebastian, "father", local_item("sebastian")),
+            entities=entities,
+        )
+        assert len(own_subject(found)) == 1
+        # and the other way round
+        found = problems_of(
+            about("sebastian", "father", qid_item("Q71")), entities=entities
+        )
+        assert len(own_subject(found)) == 1
+
+    def test_a_qualifier_naming_the_subject_is_refused(self):
+        # Sebastian as the ego of a name he is called by
+        claim = about(
+            "sebastian",
+            "referred_to_as",
+            {
+                "type": "monolingual",
+                "value": {"text": "Wastl", "language": "de"},
+            },
+            {"property": "perspective", "value": local_item("sebastian")},
+        )
+        (problem,) = problems_of(claim)
+        assert problem.startswith("claims[0].qualifiers[0].value: ")
+        assert "never its own subject" in problem
+
+    def test_every_qualifier_is_checked(self):
+        # the subject among two perspectives: the second is refused
+        claim = about(
+            "sebastian",
+            "referred_to_as",
+            {
+                "type": "monolingual",
+                "value": {"text": "Wastl", "language": "de"},
+            },
+            {"property": "perspective", "value": local_item("eugen")},
+            {"property": "perspective", "value": local_item("sebastian")},
+        )
+        (problem,) = problems_of(claim)
+        assert problem.startswith("claims[0].qualifiers[1].value: ")
+        assert "never its own subject" in problem
+
+    def test_one_reflexive_qualifier_rejects_the_whole_claim(self):
+        from yizkr.pipeline.extract import salvage_valid_claims
+
+        claim = about(
+            "eugen",
+            "father",
+            local_item("sebastian"),
+            {"property": "perspective", "value": local_item("eugen")},
+        )
+        valid, rejects = salvage_valid_claims([claim], RUN, entities=ENTITIES)
+        assert valid.claims == []
+        (reject,) = rejects
+        assert own_subject(reject["problems"])
+
+    @pytest.mark.parametrize(
+        "claim",
+        [
+            about("eugen", "father", local_item("sebastian")),
+            about("gustav", "residence", local_item("floerburg")),
+            about("gustav", "place_of_birth", local_item("floerburg")),
+            about("eugen", "father", qid_item("Q71")),
+            about(
+                "eugen",
+                "referred_to_as",
+                {
+                    "type": "monolingual",
+                    "value": {"text": "Wastl", "language": "de"},
+                },
+                {"property": "perspective", "value": local_item("sebastian")},
+            ),
+        ],
+    )
+    def test_another_entity_stands(self, claim):
+        assert problems_of(claim) == []
+
+    def test_it_is_a_counted_reject_that_sinks_no_other_claim(self):
+        from yizkr.pipeline.extract import salvage_valid_claims
+
+        valid, rejects = salvage_valid_claims(
+            [
+                about("eugen", "father", local_item("sebastian")),
+                about("sebastian", "father", local_item("sebastian")),
+                about("floerburg", "location", local_item("floerburg")),
+            ],
+            RUN,
+            entities=ENTITIES,
+        )
+        assert len(valid.claims) == 1
+        assert len(rejects) == 2
+        for reject in rejects:
+            assert own_subject(reject["problems"])
+
+    def test_the_chunk_prompt_says_so(self):
+        from yizkr.pipeline.chunking import CHUNK_PROMPT
+
+        prompt = " ".join(CHUNK_PROMPT.split())
+        assert "qualifier's, is never its own subject" in prompt
+        assert (
+            'a kind key ("place", "time_period_class") is a value of '
+            "instance_of or subclass_of alone" in prompt
+        )
+
+
+class TestAKindKeyIsNoValue:
+    @pytest.mark.parametrize(
+        ("claim", "kind"),
+        [
+            # the manifest's kind key for periods, not a period
+            (
+                about("birth", "time_period", vocab_item("time_period_class")),
+                "time_period_class",
+            ),
+            # the class of places, not a country
+            (
+                about("gustav", "country_of_citizenship", vocab_item("place")),
+                "place",
+            ),
+            (about("gustav", "residence", vocab_item("place")), "place"),
+            # the classes of documents, not a document
+            (about("gustav", "image", vocab_item("artifact")), "artifact"),
+            (about("gustav", "image", vocab_item("photograph")), "photograph"),
+            # depicts takes an entity of any kind, never a class
+            (about("gustav", "depicts", vocab_item("human")), "human"),
+            # nor does the subject's own kind take one
+            (
+                about(
+                    "sebastian", "said_to_be_the_same_as", vocab_item("human")
+                ),
+                "human",
+            ),
+        ],
+    )
+    def test_a_kind_key_as_a_value_is_refused(self, claim, kind):
+        (problem,) = problems_of(claim)
+        assert problem.startswith("claims[0].value: ")
+        assert f"{kind!r} is a kind key" in problem
+
+    @pytest.mark.parametrize(
+        "claim",
+        [
+            about("gustav", "instance_of", vocab_item("human")),
+            about("gustav", "instance_of", vocab_item("time_period_class")),
+            about("gustav", "instance_of", vocab_item("photograph")),
+            # an existing class, named by its QID
+            about("gustav", "instance_of", qid_item("Q5")),
+            # an existing period item, named by its QID
+            about("birth", "time_period", qid_item("Q88")),
+            # a vocabulary value the property names
+            about("gustav", "sex_or_gender", vocab_item("male")),
+            about(
+                "birth",
+                "point_in_time",
+                {"type": "time", "year": 1919},
+                {
+                    "property": "sourcing_circumstances",
+                    "value": vocab_item("circa"),
+                },
+            ),
+        ],
+    )
+    def test_a_class_where_a_class_is_taken_and_a_value_where_named(
+        self, claim
+    ):
+        assert problems_of(claim) == []
+
+    def test_a_class_property_takes_no_vocabulary_value(self):
+        (problem,) = problems_of(
+            about("gustav", "instance_of", vocab_item("circa"))
+        )
+        assert "'circa' is a vocabulary value, not a class" in problem
+
+    def test_an_unknown_key_has_one_reason(self):
+        (problem,) = problems_of(
+            about("gustav", "instance_of", vocab_item("hat_maker"))
+        )
+        assert "unknown vocabulary item key 'hat_maker'" in problem
+
+    @pytest.mark.parametrize(
+        "claim",
+        [
+            about("sebastian", "depicts", vocab_item("circa")),
+            about(
+                {"kind": "qid", "qid": "Q71"},
+                "said_to_be_the_same_as",
+                vocab_item("circa"),
+            ),
+        ],
+    )
+    def test_an_entity_property_takes_no_vocabulary_value(self, claim):
+        (problem,) = problems_of(claim)
+        assert problem.startswith("claims[0].value: ")
+        assert "takes an entity, not the vocabulary value 'circa'" in problem
+
+    def test_a_qualifier_is_checked_too(self):
+        claim = about(
+            "gustav",
+            "residence",
+            local_item("floerburg"),
+            {"property": "perspective", "value": vocab_item("family")},
+        )
+        (problem,) = problems_of(claim)
+        assert problem.startswith("claims[0].qualifiers[0].value: ")
+        assert "'family' is a kind key" in problem
+
+    @pytest.mark.parametrize(
+        ("value", "reason"),
+        [
+            (vocab_item("time_period"), "unknown vocabulary item key"),
+            (vocab_item("circa"), "does not accept a 'circa'"),
+            (
+                local_item("the_war_years"),
+                "not in the batch's entity manifest",
+            ),
+        ],
+    )
+    def test_anything_else_is_refused(self, value, reason):
+        found = problems_of(about("birth", "time_period", value))
+        assert any(reason in problem for problem in found), found
+
+    def test_it_is_a_counted_reject_that_sinks_no_other_claim(self):
+        from yizkr.pipeline.extract import salvage_valid_claims
+
+        valid, rejects = salvage_valid_claims(
+            [
+                about("gustav", "residence", local_item("floerburg")),
+                about("birth", "time_period", vocab_item("time_period_class")),
+            ],
+            RUN,
+            entities=ENTITIES,
+        )
+        assert len(valid.claims) == 1
+        (reject,) = rejects
+        assert "is a kind key" in reject["problems"][0]
+
+
+class TestCountryOfCitizenship:
+    """The place model has no country class, so `country_of_citizenship`
+    accepts a place, and the prompt guidance, its manifest description,
+    says it is a country, never a town within one."""
+
+    def test_a_citizenship_of_floerburg_is_a_place_validation_takes(self):
+        # validation cannot tell a town from a country: the guidance does
+        claim = about(
+            "gustav", "country_of_citizenship", local_item("floerburg")
+        )
+        assert problems_of(claim) == []
+
+    def test_it_accepts_places_and_the_escape_hatch(self):
+        from yizkr.model.schema import load_acceptance
+
+        assert load_acceptance().accepts["country_of_citizenship"] == {
+            "place",
+            "unclassified_entity",
+        }
+
+    def test_the_prompt_says_a_country_never_a_town(self):
+        from yizkr.pipeline.extract import vocabulary_prompt_lines
+
+        property_lines, _ = vocabulary_prompt_lines()
+        (line,) = [
+            line
+            for line in property_lines.splitlines()
+            if line.strip().startswith("country_of_citizenship:")
+        ]
+        assert "a country, never a town, city or region within one" in line
