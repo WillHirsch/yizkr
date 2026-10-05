@@ -429,21 +429,13 @@ _UNSUPPORTED_DATE = re.compile(
 _DATE_PHRASE = re.compile(r"\((?:.*\)|.*)", re.DOTALL)
 
 
-def _parsed_years(text: str) -> list[int]:
-    """The years `parse_gedcom_date` reads in a date, its value's and its
-    range's."""
-    value, qualifiers = parse_gedcom_date(text)
-    times = [value, *(q["value"] for q in qualifiers)] if value else []
-    return [time["year"] for time in times if time.get("type") == "time"]
-
-
 def refuse_unsupported_dates(roots: Sequence[Record]) -> None:
     """Raise UnsupportedDate naming every DATE line, anywhere in the file,
     that states a date before the common era or in a calendar other than
-    the Gregorian (``_UNSUPPORTED_DATE`` outside any date phrase, or a
-    year below 1 as the grammar reads it, the second of a range's
-    included). The file is refused whole, before any claim is made
-    (ADR-0034)."""
+    the Gregorian (``_UNSUPPORTED_DATE`` outside any date phrase, which
+    covers every year the grammar could read below 1: it is written with
+    a minus or as 0, at either end of a range). The file is refused
+    whole, before any claim is made (ADR-0034)."""
     found = []
     stack = list(roots)
     while stack:
@@ -452,9 +444,7 @@ def refuse_unsupported_dates(roots: Sequence[Record]) -> None:
         if record.tag != "DATE":
             continue
         unphrased = _DATE_PHRASE.sub(" ", record.value)
-        if _UNSUPPORTED_DATE.search(unphrased) or any(
-            year < 1 for year in _parsed_years(record.value)
-        ):
+        if _UNSUPPORTED_DATE.search(unphrased):
             found.append(record)
     if found:
         # the lines by number alone: the error names where, never what a
