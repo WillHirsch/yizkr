@@ -358,8 +358,13 @@ a label, an excerpt, a quote, or a number a document gives
   in, which the operator keeps private in their anomaly thresholds
   (#458). An alert is counted by its check and stage alone, never by its
   value or limit (a `language-unexpected` alert's value is a language,
-  and its limit the private list itself);
-- a model is shown only as a full model id; the run id, the code's commit
+  and its limit the private list itself). The run diff's postable
+  summary follows the same rules: never counts or deltas per language,
+  nor an alert's value or limit (ADR-0025 §4);
+- a model is shown only as a full model id, exactly as the run's
+  configuration names it: it is the operator's configuration, not corpus
+  content, so an operator who posts `report.md` should not name a model
+  after a corpus language; the run id, the code's commit
   and the configuration hashes only in their own forms; and of the code's
   difference from its commit only that there is one, never its hash,
   which would confirm a guess at a small difference;
