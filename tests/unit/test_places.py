@@ -160,6 +160,34 @@ class TestStatedParentCandidates:
         ]
         assert stated_parent_candidates(found) == []
 
+    def test_a_chain_naming_the_place_itself_skips_that_link(self):
+        # the urban district Rekau's record states "Rekau, Hesse": no
+        # other place is named Rekau, so its nearest container is Hesse
+        found = [
+            PlaceRecord(qid="Q71", label="Rekau", chains=[["Rekau", "Hesse"]]),
+            PlaceRecord(qid="Q7", label="Hesse"),
+        ]
+        (question,) = stated_parent_candidates(found)
+        assert (question.qid_a, question.qid_b) == ("Q71", "Q7")
+        assert question.context.startswith("a record states it within")
+
+    def test_namesake_links_never_ask_a_place_of_itself(self):
+        # "Rekau, Rekau": the town within the urban district, two places
+        # of one name; each is asked within the other, never within itself
+        found = [
+            PlaceRecord(
+                qid="Q60", label="Brunnenring 35", chains=[["Rekau", "Rekau"]]
+            ),
+            PlaceRecord(qid="Q70", label="Rekau"),
+            PlaceRecord(qid="Q71", label="Rekau"),
+        ]
+        assert pairs(stated_parent_candidates(found)) == [
+            ("Q60", "Q70"),
+            ("Q60", "Q71"),
+            ("Q70", "Q71"),
+            ("Q71", "Q70"),
+        ]
+
     def test_each_pair_is_asked_once(self):
         found = [
             PlaceRecord(

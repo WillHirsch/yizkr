@@ -297,14 +297,12 @@ def stated_parent_candidates(places: list[PlaceRecord]) -> list[Question]:
                 by_key.setdefault(key, []).append(place.qid)
 
     def named(container: str, besides: str) -> list[str]:
-        found: list[str] = []
-        for key in sorted(part_keys(container)):
-            found.extend(
-                qid
-                for qid in by_key.get(key, ())
-                if qid != besides and qid not in found
-            )
-        return found
+        return [
+            qid
+            for key in sorted(part_keys(container))
+            for qid in by_key.get(key, ())
+            if qid != besides
+        ]
 
     ancestors = _ancestors(places)
     questions = []
