@@ -822,7 +822,8 @@ def date_findings(
     precision spans, so a year, a decade or a century is never narrowed
     to a day; years alone are compared, so a date in a birth year is
     never before it. Every birth a batch gives someone counts, and none is
-    preferred (ADR-0002): only a date outside all of them is counted."""
+    preferred (ADR-0002): only a date outside all of them is counted, so
+    a birth, which lies within them, never is."""
     settings = config.checks.implausible_date
     if not settings.enabled:
         return []
@@ -835,7 +836,7 @@ def date_findings(
     before = after = 0
     for claim in claims:
         known = births.get(_subject_key(_get(claim, "subject")) or ())
-        if not known or _get(claim, "property") == BIRTH:
+        if not known:
             continue
         earliest = min(first for first, _last in known)
         latest = max(last for _first, last in known)
