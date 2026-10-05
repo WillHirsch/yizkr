@@ -1284,8 +1284,8 @@ by the chunks the cache kept. The excerpts a PDF's placed images may
 become (ADR-0008), which no plan names until the PDF is transcribed, it
 counts from the PDF's own reading of the file, or, for a transcription
 that stands, from the excerpts its directory holds, and gives their
-calls, by the mean for excerpts over the runs measured, as up to so many
-more.
+calls, by the mean for excerpts over the runs measured, else as typical,
+as up to so many more.
 
 ## Checks once per run
 

@@ -70,7 +70,9 @@ fails, is read again and counted. A PDF whose transcription stands
 reads nothing again: its excerpts are those its directory holds, read
 from files as the driver reads them (ScratchDriver._known_excerpts), and
 each counts the stages whose views do not stand, and every stage after
-the first of them. Each excerpt stage's calls are counted by the mean
+the first of them. An image of a PDF whose transcription is made again
+counts every excerpt stage, though an excerpt the run holds for it may
+have views that stand. Each excerpt stage's calls are counted by the mean
 for excerpts over every run in the runs directory that measured the
 stage for one, older runs, on other prompts or models, among them, else
 as typical (llm.estimate_calls), rounded up, and given as up to so many
@@ -293,15 +295,16 @@ class StageCalls:
 @dataclass
 class ExcerptCalls:
     """The excerpts the planned run may make: the images, the PDFs that
-    place them, the calls per excerpt stage, and per stage how many
-    excerpts the runs measured it for (0 when none did and the count is
-    typical), all of them up to so many (the module docstring says
-    why)."""
+    place them, and per excerpt stage the calls, how many of the images
+    it counts (`stale`), and how many excerpts the runs measured it for
+    (0 when none did and the count is typical), all of them up to so many
+    (the module docstring says why)."""
 
     images: int = 0
     pdfs: int = 0
     calls: dict[str, int] = field(default_factory=dict)
     measured_stages: dict[str, int] = field(default_factory=dict)
+    stale: dict[str, int] = field(default_factory=dict)
 
     @property
     def total(self) -> int:
@@ -1011,6 +1014,7 @@ class Estimator(ScratchDriver):
                 calls = stale * typical[stage].calls
             excerpts.calls[stage] = calls
             excerpts.measured_stages[stage] = len(counts)
+            excerpts.stale[stage] = stale
         return excerpts
 
     def _stale_stages(
@@ -1072,7 +1076,14 @@ def _finished(rundir: RunDir) -> dict[tuple[str, str], int]:
     refresh's say, leaves the measure whole."""
     invocations: dict[Any, list[dict]] = {}
     for event in rundir.events():
-        invocations.setdefault(event.get("invocation"), []).append(event)
+        invocation, subject = event.get("invocation"), event.get("subject")
+        # a line no writer makes (an invocation or subject that is a list
+        # or an object) is passed over, as a torn one is
+        if not isinstance(invocation, str | int | None) or not isinstance(
+            subject, str | None
+        ):
+            continue
+        invocations.setdefault(invocation, []).append(event)
     finished: dict[tuple[str, str], int] = {}
     for events in invocations.values():
         done = {
@@ -1272,6 +1283,8 @@ def _excerpt_line(excerpts: ExcerptCalls) -> str:
     )
     stages = []
     for stage, count in excerpts.calls.items():
+        if not excerpts.stale.get(stage):
+            continue
         measured = excerpts.measured_stages.get(stage, 0)
         if measured:
             how = (
@@ -1283,9 +1296,10 @@ def _excerpt_line(excerpts: ExcerptCalls) -> str:
         stages.append(f"{count} {stage}, {how}")
     return (
         f"- Up to {excerpts.total} more for excerpts: {placed} may each "
-        "be an excerpt, a document of its own (ADR-0008), found as its "
-        "PDF is transcribed or held from an earlier invocation, with views "
-        "to make. Their calls: "
+        "be an excerpt, a document of its own (ADR-0008): every stage of "
+        "one whose PDF this invocation transcribes, though views held for "
+        "it may stand, and of one held from an earlier invocation, the "
+        "stages whose views do not stand. Their calls: "
         + "; ".join(stages)
         + ". Up to, since an image the engine reads blank or as no document "
         "page makes no excerpt, and the cache may answer an excerpt's calls."

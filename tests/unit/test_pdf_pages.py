@@ -973,12 +973,20 @@ class TestTheCallEstimateCountsExcerpts:
         ) in excerpt_line(counted)
         assert engine.calls == []
 
+    @pytest.mark.parametrize("held", [False, True], ids=["new", "held"])
     def test_an_image_a_corpus_document_has_is_no_excerpt(
         self,
         tmp_path,
         engine,  # noqa: F811
+        held,
     ):
+        """Whether the compilations are transcribed in this invocation, or
+        an earlier one stopped after the transcription and holds the
+        letter's excerpt: the corpus document is the witness (ADR-0010)."""
         corpus = compilations(tmp_path)
+        if held:
+            run_scratch(tmp_path, corpus, engine, until="transcription")
+            assert len(list(runs_dir(tmp_path).glob("*/excerpts/*"))) == 3
         (corpus.folder / "letter.png").write_bytes(
             png(300, 120, 1, LETTER_IMAGE.data)
         )
@@ -1093,6 +1101,10 @@ class TestTheCallEstimateCountsExcerpts:
         counted = estimate_of(tmp_path, compilations(tmp_path), engine)
         assert counted.excerpts.calls["extraction"] == 5
         assert counted.excerpts.measured_stages["extraction"] == 2
+        assert (
+            "5 extraction, by the mean over 2 excerpts the runs measured"
+            in excerpt_line(counted)
+        )
         measures[("c" * 40, "extraction")] = 2
         (tmp_path / "corpus" / "album.pdf").unlink()
         counted = estimate_of(tmp_path, the_booklet(tmp_path), engine)
@@ -1183,6 +1195,35 @@ class TestTheCallEstimateCountsExcerpts:
             [{"sha1": [sha1], "kind": "excerpt"}, "an entry", None],
             finishing(sha1, "extraction", 9, "i1"),
         )
+        listed = made_run(
+            runs,
+            "f-a-list",
+            [],
+            finishing(sha1, "extraction", 9, "i1"),
+        )
+        (listed / "run.json").write_text(json.dumps([an_excerpt(sha1)]))
+        assert measures_in(tmp_path) == {(sha1, "extraction"): 4}
+
+    def test_an_event_line_no_writer_makes_is_passed_over(self, tmp_path):
+        """An invocation or a subject that is a list or an object, in
+        another run's events, neither stops the estimate nor counts."""
+        runs = runs_dir(tmp_path)
+        sha1 = gray_sha1(1)
+        odd = [
+            {**event, "invocation": ["i1"]}
+            for event in finishing(sha1, "extraction", 9, "i1")
+        ] + [
+            {**event, "subject": {"sha1": sha1}}
+            for event in finishing(sha1, "extraction", 9, "i2")
+        ]
+        made_run(
+            runs,
+            "a-measured",
+            [an_excerpt(sha1)],
+            finishing(sha1, "extraction", 4, "i1"),
+        )
+        made_run(runs, "b-odd-events", [an_excerpt(sha1)], odd)
+        assert estimate._finished(RunDir(runs / "b-odd-events")) == {}
         assert measures_in(tmp_path) == {(sha1, "extraction"): 4}
 
     def test_up_to_more_for_excerpts_alone(self, tmp_path):
@@ -1305,7 +1346,10 @@ class TestTheCallEstimateCountsExcerpts:
         engine,  # noqa: F811
     ):
         """A held excerpt whose transcription view is gone makes it again,
-        and every stage after it, though their views stand."""
+        and every stage after it, though their views stand, each by the
+        resumed run's own measure: eleven people make the extraction an
+        entity manifest and two chunks, where typical is one chunk."""
+        engine.people = 11
         corpus = the_booklet(tmp_path)
         run_scratch(tmp_path, corpus, engine)
         (excerpt,) = (runs_dir(tmp_path)).glob("*/excerpts/*")
@@ -1315,7 +1359,79 @@ class TestTheCallEstimateCountsExcerpts:
         counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
         assert counted.stages["transcription"].reused == 1
         assert counted.excerpts.images == 1
-        # by the run's own measure: an entity manifest and one chunk
+        assert counted.excerpts.calls == {
+            "transcription": 0,
+            "extraction": 3,
+            "critique": 1,
+        }
+        assert counted.excerpts.measured_stages["extraction"] == 1
+
+    @pytest.mark.parametrize("measured", [True, False])
+    def test_a_held_excerpt_counts_only_the_stages_left(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+        monkeypatch,
+        measured,
+    ):
+        """A full run made every view of the letter's excerpt, and its
+        critique is lost: the next invocation makes the critique alone,
+        by the run's measure or as typical, both one call; the line names
+        that stage alone."""
+        corpus = the_booklet(tmp_path)
+        run_scratch(tmp_path, corpus, engine)
+        (excerpt,) = runs_dir(tmp_path).glob("*/excerpts/*")
+        lost = list(excerpt.glob("critique*"))
+        assert lost
+        for path in lost:
+            path.unlink()
+        if not measured:
+            monkeypatch.setattr(Estimator, "_excerpt_measures", lambda s: {})
+        counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
+        assert counted.excerpts.calls == {
+            "transcription": 0,
+            "extraction": 0,
+            "critique": 1,
+        }
+        how = (
+            "by the mean over 1 excerpt the runs measured"
+            if measured
+            else "as typical, no run having measured it"
+        )
+        assert f"Their calls: 1 critique, {how}. Up to" in (
+            excerpt_line(counted)
+        )
+
+    def test_held_excerpts_whose_extraction_stands(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        """After a run that stopped after the extraction, each of the
+        three held excerpts has its critique left to make."""
+        corpus = compilations(tmp_path)
+        run_scratch(tmp_path, corpus, engine, until="extraction")
+        counted = estimate_of(tmp_path, corpus, engine)
+        assert counted.resumed
+        assert counted.excerpts.calls == {
+            "transcription": 0,
+            "extraction": 0,
+            "critique": 3,
+        }
+
+    def test_a_held_excerpt_the_driver_sets_aside_counts_every_stage(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        """The excerpt's state is lost while its views remain: the driver
+        sets its directory aside and makes every view again."""
+        corpus = the_booklet(tmp_path)
+        run_scratch(tmp_path, corpus, engine)
+        (excerpt,) = runs_dir(tmp_path).glob("*/excerpts/*")
+        (excerpt / "state.json").unlink()
+        assert (excerpt / "derivations.json").is_file()
+        counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
         assert counted.excerpts.calls == {
             "transcription": 0,
             "extraction": 2,
