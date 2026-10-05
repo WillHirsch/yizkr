@@ -294,6 +294,21 @@ class TestTwoRuns:
             runs = rundiff.build(first, second)["aggregate"]["runs"]
             assert runs["same_cache"] is same
 
+    def test_the_local_diff_names_the_settings_diff_md_only_counts(
+        self, tmp_path, engine, monkeypatch
+    ):
+        first, second = two_runs(tmp_path, engine, monkeypatch)
+        manifest = json.loads((second / "run.json").read_text())
+        manifest["config"]["language"] = "es-419"
+        (second / "run.json").write_text(json.dumps(manifest))
+        written = rundiff.write_diff(first, second)
+        diff = json.loads(written[rundiff.JSON_FILE].read_text())
+        assert diff["detail"]["settings_not_shown"] == ["config.language"]
+        assert diff["aggregate"]["settings"]["other"] == 1
+        summary = written[rundiff.MARKDOWN_FILE].read_text()
+        assert "es-419" not in summary and "config.language" not in summary
+        assert "Other settings that differ, not shown: 1." in summary
+
     def test_without_the_cache_a_recompute_is_not_attributed(
         self, tmp_path, engine, monkeypatch
     ):
@@ -507,6 +522,36 @@ class TestBaseline:
             rundiff.baseline_run(runs, latest, refs=("origin/nowhere",))
         # a commit that is no SHA-1 is never given to git
         assert asked and not [a for a in asked if "--help" in a]
+        # the run as "." from inside it, or through a link of another
+        # name, is the run all the same
+        monkeypatch.chdir(run(9))
+        assert rundiff.baseline_run(runs, Path(".")) == run(2)
+        for name in ("latest-run", "0-copy"):
+            link = tmp_path / name
+            link.symlink_to(latest)
+            assert rundiff.baseline_run(runs, link) == run(9)
+        # code with no flag for its difference is not clean, nor is a
+        # past-barrier code that is no mapping
+        others = tmp_path / "others"
+        a_manifest(others / "20261001T090000Z-000001", older)
+        a_manifest(others / "20261002T090000Z-000002", newer)
+        (
+            json_path := others / "20261002T090000Z-000002" / "run.json"
+        ).write_text(
+            json.dumps(
+                json.loads(json_path.read_text())
+                | {"code": {"version": "0.1.0", "commit": newer}}
+            )
+        )
+        a_manifest(others / "20261003T090000Z-000003", newer)
+        manifest = others / "20261003T090000Z-000003" / "run.json"
+        changed = json.loads(manifest.read_text())
+        changed["scratch"]["code"] = "Klurnau"
+        manifest.write_text(json.dumps(changed))
+        a_manifest(others / "20261004T090000Z-000004", branch)
+        assert rundiff.baseline_run(
+            others, others / "20261004T090000Z-000004"
+        ) == (others / "20261001T090000Z-000001")
 
 
 # -- attributing a recompute --------------------------------------------------
@@ -956,6 +1001,94 @@ class TestDocuments:
         assert found[BIRTH].stages == {}
 
 
+def an_aggregate(**sections) -> dict:
+    """A diff's aggregates with nothing in them, but `sections`."""
+    empty_run = rundiff._run_record(Path("/nonexistent"), {}, "built")
+    return {
+        "generated_at": "2026-10-05T09:00:00+00:00",
+        "runs": {
+            "baseline": empty_run,
+            "run": empty_run,
+            "same_cache": True,
+            "components": "read",
+        },
+        "settings": {"shown": [], "other": 0},
+        "stages": {},
+        "claims": {
+            "baseline": 0,
+            "run": 0,
+            "matched": 0,
+            "added": 0,
+            "removed": 0,
+            "changed": 0,
+            "excerpt_changed": 0,
+            "documents": {},
+            "changed_parts": {},
+            "by_property": {},
+        },
+        "mentions": {
+            "baseline": 0,
+            "run": 0,
+            "added": 0,
+            "removed": 0,
+            "added_by_kind": {},
+            "removed_by_kind": {},
+        },
+        "clusters": {"status": NOT_AVAILABLE, "why": "none"},
+        "anomalies": {"status": NOT_AVAILABLE, "why": "none"},
+        "failures": {
+            "baseline": 0,
+            "run": 0,
+            "new": 0,
+            "resolved": 0,
+            "in_both": 0,
+            "new_by_kind": {},
+            "new_by_label": {},
+            "resolved_by_kind": {},
+            "resolved_by_label": {},
+        },
+        "flags": {"status": NOT_AVAILABLE, "why": "none"},
+        "contradictions": {"status": NOT_AVAILABLE, "why": "none"},
+        "figures": [],
+    } | sections
+
+
+def test_the_runs_table_shows_the_past_barrier_code_as_report_md_would(
+    tmp_path,
+):
+    """The code an invocation took a run past its barrier on: its commit
+    by its first 12 hex digits, and whether it differed from it only as a
+    flag."""
+    run = rundiff._run_record(
+        tmp_path,
+        {"scratch": {"code": {"commit": "b" * 40, "dirty": "Klurnau"}}},
+        "built",
+    )
+    assert (run["past_barrier_commit"], run["past_barrier_dirty"]) == (
+        "b" * 12,
+        None,
+    )
+    clean = rundiff._run_record(
+        tmp_path,
+        {"scratch": {"code": {"commit": "c" * 40, "dirty": False}}},
+        "built",
+    )
+    summary = rundiff.render_markdown(
+        an_aggregate(
+            runs={
+                "baseline": clean,
+                "run": run,
+                "same_cache": True,
+                "components": "read",
+            }
+        )
+    )
+    assert "past the barrier on" in summary
+    assert "| " + "c" * 12 + " | no |" in summary
+    assert "b" * 12 in summary and "b" * 13 not in summary
+    assert "lurnau" not in summary
+
+
 def test_names_the_vocabulary_lacks_are_other_everywhere(tmp_path):
     """Out-of-vocabulary names in every input the aggregates fold (a
     stage, its status and reuse reason, a key component, a finding's
@@ -1026,45 +1159,31 @@ def test_names_the_vocabulary_lacks_are_other_everywhere(tmp_path):
     assert failures["baseline"] == ABSENT
     run = rundiff._run_record(tmp_path, {"run_id": "Klurnau-1836"}, "built")
     assert run["run_id"] == "other"
-    aggregate = {
-        "generated_at": "2026-10-05T09:00:00+00:00",
-        "runs": {
+    aggregate = an_aggregate(
+        runs={
             "baseline": run,
             "run": run,
             "same_cache": None,
             "components": "read",
         },
-        "settings": {"shown": [], "other": 0},
-        "stages": stages,
-        "claims": {
-            "baseline": 0,
-            "run": 0,
-            "matched": 0,
-            "added": 0,
-            "removed": 0,
-            "changed": 0,
-            "excerpt_changed": 0,
-            "documents": {},
-            "changed_parts": {},
-            "by_property": {},
-        },
-        "mentions": {
-            "baseline": 0,
-            "run": 0,
-            "added": 0,
-            "removed": 0,
-            "added_by_kind": {},
-            "removed_by_kind": {},
-        },
-        "clusters": clusters,
-        "anomalies": findings_of,
-        "failures": failures,
-        "flags": {"status": NOT_AVAILABLE, "why": "none"},
-        "contradictions": {"status": NOT_AVAILABLE, "why": "none"},
-        "figures": [],
-    }
-    shown = strings(aggregate) + [rundiff.render_markdown(aggregate)]
+        settings={"shown": [], "other": 2},
+        stages=stages,
+        clusters=clusters,
+        anomalies=findings_of,
+        failures=failures,
+    )
+    summary = rundiff.render_markdown(aggregate)
+    shown = strings(aggregate) + [summary]
     assert not [text for text in shown if "lurnau" in text]
+    # diff.md opens as report.md does, and gives the breakdowns the
+    # checklist reads
+    assert summary.startswith("# Run diff\n\nAggregates only:")
+    assert "2026-10-05T09:00:00+00:00" in summary
+    assert "New by stage: other 1. Resolved by stage: none." in summary
+    assert "Newly failing by kind: other 1." in summary
+    # with no setting shown, the count stands in the table's place
+    settings = summary.split("## Settings that differ\n\n")[1]
+    assert settings.startswith("Other settings that differ, not shown: 2.\n")
 
 
 def test_a_mention_without_a_cluster_is_left_out_of_merges_and_splits():
@@ -1249,7 +1368,8 @@ def test_settings_show_only_what_may_be_posted():
                 "effort": "low",
                 "epoch": 0,
                 "client": {"config_hash": None},
-            }
+            },
+            "critique": {"model": "claude-opus-5-5", "epoch": 0},
         },
         "code": {"commit": "a" * 40, "diff_sha256": None, "dirty": False},
         "config": {
@@ -1260,7 +1380,7 @@ def test_settings_show_only_what_may_be_posted():
         "corpus": {"folder": "/archive/Flörburg"},
     }
     run = {
-        "engine": {"name": "claude-code", "cli_version": "brief-1836"},
+        "engine": {"name": ["claude-code"], "cli_version": "brief-1836"},
         "roles": {
             "extract": {
                 "model": "claude-sonnet-5-5",
@@ -1269,8 +1389,10 @@ def test_settings_show_only_what_may_be_posted():
                 "client": {
                     "config_hash": config_hash,
                     "model": "Brief an Klara",
+                    "effort": ["high"],
                 },
-            }
+            },
+            "critique": {"model": None, "epoch": -1},
         },
         "code": {"commit": "b" * 40, "diff_sha256": diff_hash, "dirty": True},
         "config": {
@@ -1278,6 +1400,7 @@ def test_settings_show_only_what_may_be_posted():
             "note": "brief-1836-loebig",
             "chunk_concurrency": 2,
             "epochs": {"extract": 1},
+            "extract_effort": ["low", "Löbig"],
             "refresh": ["extract", "brief-1836-loebig"],
         },
         "corpus": {"folder": "/archive/Peiltal"},
@@ -1296,6 +1419,12 @@ def test_settings_show_only_what_may_be_posted():
         "engine.cli_version": ("2.1.288", "other"),
         "roles.extract.effort": ("low", "other"),
         "roles.extract.epoch": (0, "other"),
+        # a list where a name is, and a second role
+        "engine.name": ("claude-code", "other"),
+        "roles.extract.client.effort": (None, "other"),
+        "config.extract_effort": (None, "other"),
+        "roles.critique.model": ("claude-opus-5-5", None),
+        "roles.critique.epoch": (0, "other"),
     }
     # the code's difference, the language, the note and the refresh are
     # counted, never shown; the corpus and an unknown section are not
@@ -1311,6 +1440,36 @@ def test_settings_show_only_what_may_be_posted():
         "lurnau",
     ):
         assert hidden not in shown
+
+
+MARKER = "Brief 1836 an Klara Löbig"
+
+
+@pytest.mark.parametrize("path", sorted(rundiff._SHOWN))
+@pytest.mark.parametrize(
+    "value",
+    [MARKER, [MARKER], {"Klara": MARKER}, "yes"],
+    ids=["text", "list", "mapping", "yes"],
+)
+def test_each_shown_setting_shows_only_a_value_of_its_kind(path, value):
+    """Each path SHOWN_SETTINGS names refuses a value of no kind it
+    takes: free text with a digit, a list, a mapping, or "yes" for a
+    flag. Its row reads other, or the setting is not shown at all, and
+    the value reaches neither the aggregates nor diff.md."""
+    run: dict = {}
+    *parents, last = path.split(".")
+    node = run
+    for part in parents:
+        node = node.setdefault(part, {})
+    node[last] = value
+    found = rundiff.settings({}, run)
+    rows = {r["setting"]: r["run"] for r in found["shown"]}
+    if path in rows:
+        assert rows[path] == "other"
+    summary = rundiff.render_markdown(an_aggregate(settings=found))
+    for text in (json.dumps(found, ensure_ascii=False), summary):
+        assert "Klara" not in text and "1836" not in text
+    assert '"yes"' not in json.dumps(found)
 
 
 # -- the command --------------------------------------------------------------

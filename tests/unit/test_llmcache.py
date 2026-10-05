@@ -1204,6 +1204,32 @@ class TestRejection:
         ]
         assert miss["key"] == response.key
 
+    def test_asides_gives_the_entries_moved_aside_under_a_key(self, tmp_path):
+        """`asides` gives each entry moved aside under a key, and nothing
+        else filed beside it: not the live entry, a folder, a file that
+        holds no object, nor another key's entry. It writes nothing."""
+        caching = client(tmp_path, Engine())
+        response = caching.complete("Read it.")
+        llm.reject_response(caching, response, "failed the check")
+        caching.complete("Read it.")
+        key = response.key
+        folder = entry_path(tmp_path, key).parent
+        (folder / f"{key}.replaced-a.json").mkdir()
+        (folder / f"{key}.replaced-b.json").write_text('["Flörburg"]')
+        other = json.loads(caching.cache.rejected(key)[0].read_text())
+        (folder / f"{key}.replaced-c.json").write_text(
+            json.dumps(other | {"key": "f" * 64})
+        )
+        before = {path: path.stat().st_mtime_ns for path in folder.iterdir()}
+        view = llm.read_cache(tmp_path / "cache")
+        (aside,) = view.asides(key)
+        assert aside["response"] == "Read it."[::-1]
+        assert aside["rejected"]["reason"] == "failed the check"
+        assert view.asides("e" * 64) == []
+        assert {
+            path: path.stat().st_mtime_ns for path in folder.iterdir()
+        } == before
+
     def test_a_rejection_says_whether_the_cache_gave_the_answer(
         self, tmp_path
     ):

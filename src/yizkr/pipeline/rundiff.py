@@ -407,14 +407,18 @@ def baseline_run(
     clean code of a commit on main (on_main). DiffError when there is
     none, or when git knows none of `refs`."""
     ref = main_ref(refs)
+    # the run's own name, however its path was given (".", a link)
+    name = Path(run).resolve().name
     for candidate in reversed(runs_in(runs)):
-        if candidate.name >= Path(run).name:
+        if os.path.realpath(candidate) == os.path.realpath(run):
+            continue
+        if candidate.resolve().name >= name:
             continue
         if is_complete(candidate) and on_main(candidate, ref):
             return candidate
     raise DiffError(
-        f"no completed run on {ref} older than {Path(run).name} in {runs} "
-        "to diff with: name the baseline run"
+        f"no completed run on {ref} older than {name} in {runs} to diff "
+        "with: name the baseline run"
     )
 
 
@@ -467,7 +471,9 @@ def _model(value: Any) -> Any:
 
 
 def _effort(value: Any) -> Any:
-    return value if value in report.EFFORTS else OTHER
+    if isinstance(value, str) and value in report.EFFORTS:
+        return value
+    return OTHER
 
 
 def _epoch(value: Any) -> Any:
@@ -477,7 +483,9 @@ def _epoch(value: Any) -> Any:
 
 
 def _engine(value: Any) -> Any:
-    return value if value in report.ENGINES else OTHER
+    if isinstance(value, str) and value in report.ENGINES:
+        return value
+    return OTHER
 
 
 def _code_version(value: Any) -> Any:
@@ -521,23 +529,32 @@ _SHOWN = {
 }
 
 
-def settings(baseline: Mapping[str, Any], run: Mapping[str, Any]) -> dict:
-    """The settings the two run manifests record differently: those
-    SHOWN_SETTINGS names, each with its two values as diff.md may show
-    them (None for a value a manifest does not record), and how many
-    others differ."""
+def _differing(
+    baseline: Mapping[str, Any], run: Mapping[str, Any]
+) -> list[tuple[str, Any, Any]]:
+    """(path, baseline's value, run's value) of each setting the two run
+    manifests record differently, by path."""
     found: dict[str, list] = {}
     for side, manifest in enumerate((baseline, run)):
         for section in SETTING_SECTIONS:
             for name, value in _leaves(manifest.get(section), section):
                 found.setdefault(name, [None, None])[side] = value
+    return [
+        (name, before, after)
+        for name, (before, after) in sorted(found.items())
+        if json.dumps(before, sort_keys=True, default=str)
+        != json.dumps(after, sort_keys=True, default=str)
+    ]
+
+
+def settings(baseline: Mapping[str, Any], run: Mapping[str, Any]) -> dict:
+    """The settings the two run manifests record differently: those
+    SHOWN_SETTINGS names, each with its two values as diff.md may show
+    them (None for a value a manifest does not record), and how many
+    others differ."""
     rows = []
     others = 0
-    for name, (before, after) in sorted(found.items()):
-        if json.dumps(before, sort_keys=True, default=str) == json.dumps(
-            after, sort_keys=True, default=str
-        ):
-            continue
+    for name, before, after in _differing(baseline, run):
         shown = _SHOWN.get(name)
         if shown is None:
             others += 1
@@ -1384,6 +1401,11 @@ def build(
         "baseline": str(paths[0]),
         "run": str(paths[1]),
         "cache": str(folder) if folder is not None else None,
+        # the settings that differ and diff.md only counts, by name: their
+        # values are in the two run.json files
+        "settings_not_shown": [
+            name for name, _, _ in _differing(*manifests) if name not in _SHOWN
+        ],
         "documents": {
             sha1: {
                 "files": (
@@ -1704,19 +1726,17 @@ def render_markdown(aggregate: Mapping[str, Any]) -> str:
         "## Settings that differ",
         "",
     ]
-    lines += _table(
-        ("setting", "baseline", "run"),
-        [
-            (r["setting"], r["baseline"], r["run"])
-            for r in aggregate["settings"]["shown"]
-        ],
+    shown, others = (
+        aggregate["settings"]["shown"],
+        aggregate["settings"]["other"],
     )
-    if aggregate["settings"]["other"]:
-        lines += [
-            f"Other settings that differ, not shown: "
-            f"{aggregate['settings']['other']}.",
-            "",
-        ]
+    if shown or not others:
+        lines += _table(
+            ("setting", "baseline", "run"),
+            [(r["setting"], r["baseline"], r["run"]) for r in shown],
+        )
+    if others:
+        lines += [f"Other settings that differ, not shown: {others}.", ""]
     lines += ["## Stages", ""]
     lines += _table(
         ("stage", "documents", "baseline", "run", "recomputed by", "views"),

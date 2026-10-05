@@ -27,7 +27,8 @@ uv run yizkr scratch diff [<baseline>] [<run>] [--runs DIR] [--main REF]
   a run directory's path.
 - **The baseline**, unless named, is the latest completed run on main
   older than the diffed run: the latest run of the runs directory whose
-  id sorts before the run's (run ids sort in the order runs start in),
+  id sorts before the run's (the run's own directory name, however its
+  path is given: `.`, or a link of another name) (run ids sort in the order runs start in),
   whose latest invocation went through every stage (`scratch.complete`),
   run on clean code (`code.dirty` false) of a commit git holds in the
   history of `origin/main`, else `main` (`--main REF`, repeatable, picks
@@ -53,7 +54,7 @@ writes its own, and prints where:
 | File | Holds | Leaves the machine |
 |---|---|---|
 | `diff.md` | the aggregates alone: counts, rates and the pipeline's own names | yes: it is the diff summary that is posted |
-| `diff.json` | the aggregates, and per document every change: its SHA-1 and file names, each claim added, removed or changed with its values, each mention with its label, each anomaly and failure, and each merge and split with its members | never |
+| `diff.json` | the aggregates, the names of the settings that differ but `diff.md` only counts, and per document every change: its SHA-1 and file names, each claim added, removed or changed with its values, each mention with its label, each anomaly and failure, and each merge and split with its members | never |
 
 Run again, it replaces each file whole.
 
@@ -114,9 +115,16 @@ name and CLI version, and the code's commit and whether it differed from
 it. Each shows its value only when it is of its kind (a model id, an
 effort, an epoch, an engine, a version, a flag), else `other`; a commit
 and a configuration hash show their first 12 hex digits, as `report.md`
-does. Every other setting that differs (a language, the hash of the
-code's difference from its commit, any free text) is only counted, its
-name and values never shown.
+does. A model id and a version follow `report.md`'s rule (a value of a
+model id's or a version's form is shown as it is): these fields are
+written by the operator's configuration and the engine, never by the
+corpus, so an operator who posts `diff.md` should not name a model after
+anything in the corpus. Every other setting that differs (a language,
+the hash of the code's difference from its commit, any free text) is
+only counted in `diff.md` ("Other settings that differ, not shown"), its
+name and values never shown there; `diff.json` lists their names
+(`detail.settings_not_shown`), and their values are in the two
+`run.json` files, both local.
 
 **Stages.** Per stage, how each document's stage came about in each run
 (`computed`, `reused: <reasons>`, `needs attention`, `failed`, ...), as
@@ -272,7 +280,10 @@ change does what its PR says and nothing it does not.
   stages say nothing of reuse.
 - The settings that differ are the PR's, and only the PR's: a model,
   effort or epoch change the PR does not make, or a CLI version that
-  moved, accounts for recomputes the PR does not cause.
+  moved, accounts for recomputes the PR does not cause. Where `diff.md`
+  counts other settings that differ and does not show them, a cloud
+  reviewer asks a local session which they are (`diff.json`'s
+  `settings_not_shown`, and the two `run.json` files).
 
 **2. Did only the stages the change touches recompute, for the reason
 it gives?**

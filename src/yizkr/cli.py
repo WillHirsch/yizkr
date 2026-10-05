@@ -1906,7 +1906,8 @@ def _scratch_parsers(sub, effort_choices) -> None:
         "(docs/RUN_DIFF.md)",
         description="Diffs a run (the latest by default) against a "
         "baseline (by default the latest completed run on main in the "
-        "runs directory, run on clean code). Name one run to diff it with "
+        "runs directory that is older than the run, run on clean code). "
+        "Name one run to diff it with "
         "that baseline, or two: the baseline, then the run. It reads the "
         "two run directories, and of the LLM cache only the components of "
         "the keys their events name; never the wiki, the engine or the "
