@@ -15,8 +15,11 @@ from yizkr.claims import ClaimBatch, validate_against_manifest
 from yizkr.core.privacy import PERSON_SUBJECT_PROPERTIES
 from yizkr.model.schema import load_manifest
 from yizkr.pipeline.chunking import CHUNK_PROMPT
-from yizkr.pipeline.extract import vocabulary_prompt_lines
-from yizkr.pipeline.report import build, render_markdown
+from yizkr.pipeline.extract import (
+    salvage_valid_claims,
+    vocabulary_prompt_lines,
+)
+from yizkr.pipeline.report import OTHER, build, render_markdown
 
 RUN = {
     "model_identifier": "claude-code/2.1.237:claude-sonnet-5",
@@ -32,6 +35,16 @@ def test_the_manifest_has_a_generic_name_property():
     assert spec.datatype == "monolingualtext"
     assert spec.wikidata == "P2561"
     assert not spec.reference
+    # what the model and a curator read: of no stated type, verbatim,
+    # never the label and never a typed form
+    description = " ".join(spec.description.split())
+    for words in (
+        "without stating its type",
+        "as the source writes it",
+        "never the person's label",
+        "never a form the source types",
+    ):
+        assert words in description
 
 
 def test_the_extraction_prompt_offers_it():
@@ -40,13 +53,25 @@ def test_the_extraction_prompt_offers_it():
         line.lstrip("- ").startswith("name:")
         for line in properties.splitlines()
     )
-    # the rule: a form of no marked type beside the label's, never the
-    # label's own form or a form the model types
-    assert "may be given as\n  `name`, verbatim" in CHUNK_PROMPT
-    assert "Never give the label's own form as\n  `name`" in CHUNK_PROMPT
+    # the rule: a distinct name of open kind beside the label's; never a
+    # short form or an unmarked nickname use, the label's own form or a
+    # form the model types
+    prompt = " ".join(CHUNK_PROMPT.split())
+    for words in (
+        "A distinct name the source gives a person beside the label's, "
+        "whose kind the source leaves open",
+        "is given as `name`, verbatim (ADR-0011), and is an alias too",
+        "A shortening, an initial, a spelling variant or a part of the "
+        "label is an alias alone, never `name`",
+        "a nickname the source uses without marking it follows the "
+        "nickname and referred_to_as rules below, never `name`",
+        "Never give the label's own form as `name`",
+        "and never a form you type",
+    ):
+        assert words in prompt, words
 
 
-def ida_named(text: str) -> ClaimBatch:
+def ida_named(text: str, kind: str = "human") -> ClaimBatch:
     """Ida's batch, her bracketed name given as `name`."""
     return ClaimBatch.model_validate(
         {
@@ -56,7 +81,7 @@ def ida_named(text: str) -> ClaimBatch:
                     "id": "e1",
                     "label": "Ida Sörne",
                     "aliases": ["Peppi"],
-                    "kind": "human",
+                    "kind": kind,
                 }
             ],
             "claims": [
@@ -82,6 +107,33 @@ def ida_named(text: str) -> ClaimBatch:
 
 def test_validation_accepts_it_for_a_person():
     assert validate_against_manifest(ida_named("Peppi")) == []
+
+
+@pytest.mark.parametrize("kind", ["place", "organization"])
+def test_validation_refuses_it_for_anything_but_a_person(kind):
+    (problem,) = validate_against_manifest(ida_named("Peppi", kind))
+    assert "property 'name' is a person's" in problem
+
+
+@pytest.mark.parametrize(
+    "text", ["Ida Sörne", "IDA SÖRNE", "Ida  Sörne", "Ida So\u0308rne"]
+)
+def test_validation_refuses_the_subjects_label(text):
+    (problem,) = validate_against_manifest(ida_named(text))
+    assert "never restates its subject's label" in problem
+
+
+def test_validation_keeps_a_spelling_variant_of_the_label():
+    assert validate_against_manifest(ida_named("Ida Sorne")) == []
+
+
+def test_salvage_counts_a_refused_name_as_a_reject():
+    batch = ida_named("Ida Sörne").model_dump(mode="json")
+    kept, rejects = salvage_valid_claims(
+        batch["claims"], RUN, entities=batch["entities"]
+    )
+    assert kept.claims == []
+    assert len(rejects) == 1
 
 
 def test_it_is_person_evidence_as_a_nickname_is():
@@ -126,6 +178,17 @@ def test_the_report_counts_them_by_source_kind(named_run):
         "Name forms of no stated type (`name`) by source kind: gedcom 2, "
         "media 1." in render_markdown(made["aggregate"])
     )
+
+
+def test_the_report_folds_an_unknown_kind(named_run, tmp_path):
+    plan = run_report.manifest()
+    for document in plan["documents"]:
+        if document["sha1"] == run_report.TREE:
+            document["kind"] = "hologram"
+    path = run_report.record(tmp_path / "unknown-kind", plan=plan)
+    made = build(path, now=run_report.NOW)
+    claims = made["aggregate"]["content"]["claims"]
+    assert claims["untyped_names_by_kind"] == {OTHER: 2, "media": 1}
 
 
 def test_the_report_counts_none_where_no_batch_gives_one(tmp_path):

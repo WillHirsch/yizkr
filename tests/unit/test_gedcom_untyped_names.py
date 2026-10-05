@@ -7,6 +7,7 @@ to its NAME, beside its alias. Every name is from the example universe
 (docs/EXAMPLES.md).
 """
 
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -178,6 +179,81 @@ class TestUntypedNames:
         assert texts(text) == []
         assert texts(text, "married_name") == ["Ida Löbig"]
 
+    @pytest.mark.parametrize(
+        "typing, further",
+        [
+            # a typed NAME with no slashes: no typed claim is made of it
+            (("1 NAME Peppi", "2 TYPE aka"), "Peppi"),
+            (("1 NAME Hilde Löbig", "2 TYPE married"), "Hilde Löbig"),
+            # a `_MARNM` with no slashes: no married-name claim either
+            (("1 _MARNM Ida Löbig",), "Ida Löbig"),
+        ],
+        ids=["aka-unsplit", "married-unsplit", "marnm-unsplit"],
+    )
+    def test_a_form_the_export_types_without_a_claim_is_no_name(
+        self, typing, further
+    ):
+        # the source types the form, though the adapter makes no typed
+        # claim of it, so a further untyped NAME giving it gives no name
+        text = person("Ida /Sörne/", *typing, f"1 NAME {further}")
+        assert texts(text) == []
+
+    def test_a_bracket_the_export_types_without_a_claim_is_no_name(self):
+        text = person("Ida (Peppi) /Sörne/", "1 NAME Peppi", "2 TYPE aka")
+        assert texts(text) == []
+
+    def test_a_typed_names_form_is_no_name_elsewhere(self):
+        text = person(
+            "Ida /Sörne/",
+            "1 NAME Ida /Löbig/",
+            "2 TYPE married",
+            "1 NAME Ida /Löbig/",
+        )
+        assert texts(text) == []
+        assert texts(text, "married_name") == ["Ida Löbig"]
+
+    def test_an_akas_whole_form_is_no_name_elsewhere(self):
+        text = person(
+            "Ida /Sörne/",
+            "1 NAME Peppi /Sörne/",
+            "2 TYPE aka",
+            "1 NAME Peppi /Sörne/",
+        )
+        assert texts(text) == []
+        assert texts(text, "nickname") == ["Peppi Sörne"]
+
+    def test_a_givns_quoted_part_is_no_name_elsewhere(self):
+        text = person(
+            "Ida /Sörne/",
+            "2 GIVN Ida 'Peppi'",
+            "1 NAME Ida (Peppi) /Löbig/",
+        )
+        assert texts(text) == ["Ida Löbig"]
+        assert texts(text, "nickname") == ["Peppi"]
+
+    def test_the_label_is_compared_in_nfc_whitespace_and_case_aside(self):
+        decomposed = unicodedata.normalize("NFD", "Ida /Sörne/")
+        assert decomposed != "Ida /Sörne/"
+        for further in (decomposed, "Ida  /Sörne/", "IDA /SÖRNE/"):
+            assert texts(person("Ida /Sörne/", f"1 NAME {further}")) == []
+        # accents are kept: a spelling variant is a name of its own
+        assert texts(person("Ida /Sörne/", "1 NAME Ida /Sorne/")) == [
+            "Ida Sorne"
+        ]
+
+    def test_a_typed_form_is_compared_in_nfc(self):
+        bracket = unicodedata.normalize("NFD", "Hilde Löbig")
+        text = person(f"Hildegard ({bracket}) /Laudler/", "2 NICK Hilde Löbig")
+        assert texts(text) == []
+        assert texts(text, "nickname") == ["Hilde Löbig"]
+
+    def test_a_bracket_holding_a_cue_is_a_name_verbatim(self):
+        # code never types a name from its wording (ADR-0035): "geb." is
+        # no stated type here, and a curator may type it later
+        text = person("Hildegard (geb. Laudler) /Löbig/")
+        assert texts(text) == ["geb. Laudler"]
+        assert texts(text, "birth_name") == []
+
     def test_a_name_two_names_give_is_a_claim_of_each(self):
         # each NAME cites a source of its own, so neither citation is lost
         text = person(
@@ -206,6 +282,24 @@ class TestPlaceholders:
         text = person("Ida (Peppi ?) /Sörne/")
         assert texts(text) == []
         assert adapted(text).outcomes["untyped name form with a placeholder"]
+        text = person("Ida /Sörne/", "2 GIVN Ida (Peppi ?)")
+        assert texts(text) == []
+        assert adapted(text).outcomes["untyped name form with a placeholder"]
+
+    def test_a_complete_bracket_of_an_unsure_name_is_a_name(self):
+        # the unsure display form 'Ida' gives none; the bracket is whole
+        text = person("Ida /Sörne/", "1 NAME Ida (Peppi) /?/")
+        assert texts(text) == ["Peppi"]
+        assert (
+            adapted(text).outcomes["untyped name form with a placeholder"] == 1
+        )
+
+    def test_a_typed_name_with_a_placeholder_counts_no_untyped_form(self):
+        text = person("Ida /Sörne/", "1 NAME Ida /?/", "2 TYPE married")
+        assert texts(text) == []
+        outcomes = adapted(text).outcomes
+        assert outcomes["typed NAME with a placeholder"] == 1
+        assert "untyped name form with a placeholder" not in outcomes
 
     def test_a_nicks_placeholder_blocks_nothing(self):
         text = person("Ida (Peppi) /Sörne/", "2 NICK ?")

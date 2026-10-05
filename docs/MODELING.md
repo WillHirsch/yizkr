@@ -706,7 +706,14 @@ Names are modelled in **two layers**:
   source gives a person a name form without stating its type, beside the
   label's, it becomes a referenced `name` (P2561) statement, verbatim,
   as well as an alias. It is never made for the label's own form or for
-  a form the source types; a curator who identifies the type later adds
+  a form the source types, both compared in NFC with whitespace
+  collapsed and letter case ignored, and validation refuses one that
+  restates its subject's label or whose subject is no person. In a
+  document it is only for a distinct name whose kind the source leaves
+  open, never a shortening, an initial, a spelling variant, a part of
+  the label or an unmarked nickname use. A bracket holding a cue or a
+  note ("(geb. Laudler)") gives its text verbatim: code never types a
+  name from its wording. A curator who identifies the type later adds
   the typed statement citing the same source, beside it, and may lower
   its rank.
 - So each kind of name form goes here: the label's own form, to the
@@ -725,8 +732,10 @@ Names are modelled in **two layers**:
   a `name` statement, and the label leaves it out; a further NAME with
   no TYPE, or a TYPE the adapter does not recognise, is a `name`
   statement too, unless it is the label's form; no `name` statement
-  comes of a form the person's record types or of a NAME that held a
-  placeholder; a NAME
+  comes of a form the person's record types (a recognised TYPE or a
+  `_MARNM`, whether or not a typed claim is made of it), of the display
+  form of a NAME that held a placeholder, or of a bracket that held one
+  (a complete bracket of such a NAME still gives one); a NAME
   without slashes, whose parts no GIVN or SURN gives, is an unsplit form
   too, and its TYPE gives no claim, and one with only a GIVN or only a
   SURN keeps its whole value as an unsplit form beside that part. A
@@ -1073,7 +1082,9 @@ not a signal to grow the schema on.
 - Every ingested document contributes its name variants as item
   **aliases** (append-only); matching quality compounds per document.
   Where a source *types* a name (birth, married, nickname, official),
-  it is additionally recorded as a referenced statement — see "Names".
+  it is additionally recorded as a referenced statement; a further name
+  form whose type the source leaves open is recorded as a referenced
+  `name` statement — see "Names".
 - A scratch run clusters every document's mentions across the corpus
   before any write (the clustering stage, `pipeline/clustering.py`,
   ADR-0025). It keys and judges on each mention's record, never on a

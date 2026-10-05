@@ -802,7 +802,11 @@ def validate_against_manifest(
     * a claim whose subject is a document (an artifact reference) names
       its own source, by a property the manifest marks
       `document_subject`, and a claim of such a property has that
-      subject and no other (ADR-0035 §3.4).
+      subject and no other (ADR-0035 §3.4);
+    * a `name` claim, a name form of no stated type, is a person's, and
+      never restates its subject's label (ADR-0011): both are compared
+      by `name_form_key`, and a subject of unknown kind or label is not
+      checked.
     """
     properties, items = (
         vocabulary
@@ -819,6 +823,9 @@ def validate_against_manifest(
     entity_ids: set[str] = {entity.id for entity in batch.entities}
     entity_kinds: dict[str, str] = {
         entity.id: entity.kind for entity in batch.entities
+    }
+    entity_labels: dict[str, str] = {
+        entity.id: entity.label for entity in batch.entities
     }
     seen_entity_ids: set[str] = set()
     for e_index, entity in enumerate(batch.entities):
@@ -930,6 +937,26 @@ def validate_against_manifest(
                 f"as its subject (ADR-0035 §3.4)"
             )
         check_property_value(claim.property, claim.value, where, subject_kind)
+        if claim.property == "name" and isinstance(
+            claim.value, MonolingualValue
+        ):
+            if subject_kind is not None and subject_kind != "human":
+                errors.append(
+                    f"{where}.subject: property 'name' is a person's, not "
+                    f"a {subject_kind!r}'s (ADR-0011)"
+                )
+            label = (
+                entity_labels.get(claim.subject.local_id)
+                if isinstance(claim.subject, LocalRef)
+                else None
+            )
+            if label is not None and name_form_key(
+                claim.value.value.text
+            ) == name_form_key(label):
+                errors.append(
+                    f"{where}.value: a 'name' claim never restates its "
+                    f"subject's label {label!r} (ADR-0011)"
+                )
         for q_index, qualifier in enumerate(claim.qualifiers):
             check_property_value(
                 qualifier.property,
@@ -959,6 +986,13 @@ def validate_against_manifest(
                 )
 
     return errors
+
+
+def name_form_key(text: str) -> str:
+    """A name form as compared with another (ADR-0011): in NFC, its
+    whitespace collapsed and its letter case ignored, as alias hygiene
+    ignores case; accents are kept, so a spelling variant stays apart."""
+    return " ".join(unicodedata.normalize("NFC", text).split()).casefold()
 
 
 # ---------------------------------------------------------------------------

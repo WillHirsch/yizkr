@@ -225,11 +225,14 @@ Rules — these mirror the archive's non-negotiable conventions:
   "née", a married-name cue such as "по мужу", a stated legal or
   immigration change), not only an explicit tag. Type only what a source
   marks (ADR-0022).
-  A name form the source gives a person beside the label's, without
-  marking its type, so that you cannot tell which kind of name it is
-  (a bracketed name in a register: "Ida (Peppi) Sörne"), may be given as
-  `name`, verbatim (ADR-0011). Never give the label's own form as
-  `name`, and never a form you type.
+  A distinct name the source gives a person beside the label's, whose
+  kind the source leaves open (a bracketed name in a register entry:
+  "Ida (Peppi) Sörne"), is given as `name`, verbatim (ADR-0011), and
+  is an alias too. A shortening, an initial, a spelling variant or a
+  part of the label is an alias alone, never `name`; a nickname the
+  source uses without marking it follows the nickname and
+  referred_to_as rules below, never `name`. Never give the label's own
+  form as `name`, and never a form you type.
 - A word that states a fact rather than naming someone is a claim, never
   part of a name (ADR-0035 §3.1):
   * a widow's or widower's marker ("Wwe.", "вдова", "widdo"): the

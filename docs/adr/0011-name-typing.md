@@ -93,14 +93,34 @@ aliases stay the match index.
   whose type the source does not mark, such as a bracketed name in a
   register the model cannot place.
 - **Where it never goes.** Never for a form the source types (birth,
-  married, nickname, official), anywhere in the person's record; never
-  for the label's own form; and, in a GEDCOM export, never from a NAME
-  that held a placeholder ("Eugen /?/"), whose form would read as the
-  whole of a name the source is unsure of (counted, `untyped name form
-  with a placeholder`). A NAME whose TYPE the adapter recognises but
-  makes no typed claim of (a NAME without slashes, a typed NAME with a
-  placeholder) is typed by its source, so it gives none either.
-  "Primary name as a referenced statement" (#171) stays deferred.
+  married, nickname, official), anywhere in the person's record, whether
+  or not a typed claim is made of it: a NAME whose TYPE the adapter
+  recognises but makes no typed claim of (a NAME without slashes, a
+  typed NAME with a placeholder) and a `_MARNM` without slashes are
+  typed by their source. Never for the label's own form. The label and
+  the typed forms are compared in NFC, whitespace collapsed and letter
+  case ignored, as alias hygiene ignores case ("IDA SÖRNE" is the label
+  "Ida Sörne"); accents are kept, so a spelling variant is a name of its
+  own (orchestrator decision BO, 2026-10-04). In a GEDCOM export, never
+  for a form the source is unsure of (counted, `untyped name form with a
+  placeholder`): the display form of a NAME that held a placeholder
+  ("Eugen /?/"), which would read as the whole of the name, or a bracket
+  that held one. A complete bracket of such a NAME still gives its
+  `name` ("Ida (Peppi) /?/" gives "Peppi"; decision BP). In a document,
+  only a distinct name whose kind the source leaves open: a shortening,
+  an initial, a spelling variant or a part of the label is an alias
+  alone, and an unmarked nickname use follows the nickname and
+  `referred_to_as` rules (decision BQ). "Primary name as a referenced
+  statement" (#171) stays deferred.
+- **A cue is no type.** A bracket holding a cue or a note ("(geb.
+  Laudler)", "(died young)") gives a `name` with its text verbatim: code
+  never types a name from its wording (ADR-0035), so "geb." is no stated
+  type here; a curator may add the typed statement beside it (decision
+  BN).
+- **Validation** refuses a `name` claim whose subject is no person, and
+  one that restates its subject's label (on the same comparison), as
+  counted rejects (decision BR). A subject whose kind or label the batch
+  does not give is not checked.
 - **Curation.** A curator who identifies the type later adds the typed
   statement (e.g. `nickname`) citing the same source, beside the untyped
   one, which stays (rule 3). A curator may lower its rank.

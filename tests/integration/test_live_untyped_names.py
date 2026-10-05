@@ -6,8 +6,9 @@ text) once. A GEDCOM export's bracketed part, a further NAME with no
 TYPE and a NAME with a TYPE the adapter does not recognise are each
 written as a `name` statement on the person, beside their alias, with the
 `stated in` reference to the export and the extraction-run reference; a
-form the export types, the label's own form and a NAME that held a
-placeholder give none. A re-run writes nothing.
+form the export types (here a `_MARNM` without slashes, which gives no
+typed claim), the label's own form and a NAME that held a placeholder
+give none. A re-run writes nothing.
 
 The names are the example universe's (docs/EXAMPLES.md), with a surname
 of the tests' own so that the label finds no other test's item.
@@ -38,15 +39,18 @@ GEDCOM = """\
 1 NAME Ida /Untypedcheck-Löbig/
 2 TYPE married
 1 NAME Eugen /?/
+1 NAME Ida Löbig
+1 _MARNM Ida Löbig
 1 BIRT
 2 DATE 1881
 0 TRLR
 """
 
 
-def statements(client, qid: str, prop_key: str) -> dict[str, tuple]:
-    """{text -> (language, stated-in QIDs, whether a run reference is
-    among the references)} of `qid`'s `prop_key` statements."""
+def statements(client, qid: str, prop_key: str) -> list[tuple]:
+    """`qid`'s `prop_key` statements, sorted, each as (text, language,
+    stated-in QIDs, excerpt texts, whether a run reference is among the
+    references), so that a duplicated statement shows as two."""
     properties, _ = client.vocabulary()
     data = client.api_get(
         {
@@ -56,20 +60,34 @@ def statements(client, qid: str, prop_key: str) -> dict[str, tuple]:
         }
     )
     run_pid = properties["inferred_from_extraction_run"]
-    found: dict[str, tuple] = {}
+    found: list[tuple] = []
     for claim in (c for cs in data["claims"].values() for c in cs):
         value = claim["mainsnak"]["datavalue"]["value"]
         references = [ref["snaks"] for ref in claim.get("references", [])]
-        found[value["text"]] = (
-            value["language"],
-            {
-                snak["datavalue"]["value"]["id"]
-                for snaks in references
-                for snak in snaks.get(properties["stated_in"], [])
-            },
-            any(run_pid in snaks for snaks in references),
+        found.append(
+            (
+                value["text"],
+                value["language"],
+                tuple(
+                    sorted(
+                        snak["datavalue"]["value"]["id"]
+                        for snaks in references
+                        for snak in snaks.get(properties["stated_in"], [])
+                    )
+                ),
+                tuple(
+                    sorted(
+                        snak["datavalue"]["value"]["text"]
+                        for snaks in references
+                        for snak in snaks.get(
+                            properties["transcription_excerpt"], []
+                        )
+                    )
+                ),
+                any(run_pid in snaks for snaks in references),
+            )
         )
-    return found
+    return sorted(found)
 
 
 def test_the_bootstrap_creates_the_name_property_once(client):
@@ -102,20 +120,40 @@ def test_untyped_name_forms_are_referenced_statements(client, tmp_path):
     qid = BatchWriter(client).write_batch(result.batch).created_items["i1"]
 
     names = statements(client, qid, "name")
-    mine = {
-        text: (language, has_run)
-        for text, (language, cited, has_run) in names.items()
-        if artifact_qid in cited
-    }
-    # each with the export's language and both references; neither the
-    # label's form, the typed married name nor the placeholder's NAME
-    assert mine == {
-        "Peppi": ("de", True),
-        "Hilde Untypedcheck": ("de", True),
-        "Agnes Untypedcheck": ("de", True),
-    }
+    mine = [entry for entry in names if artifact_qid in entry[2]]
+    # one statement each, with the export's language, its `stated in`
+    # reference whose excerpt is the NAME it cites, and the run
+    # reference; neither the label's form, the typed married name, the
+    # form the `_MARNM` types nor the placeholder's NAME
+    assert mine == sorted(
+        [
+            (
+                "Peppi",
+                "de",
+                (artifact_qid,),
+                ("1 NAME Ida (Peppi) /Untypedcheck/",),
+                True,
+            ),
+            (
+                "Hilde Untypedcheck",
+                "de",
+                (artifact_qid,),
+                ("1 NAME Hilde /Untypedcheck/",),
+                True,
+            ),
+            (
+                "Agnes Untypedcheck",
+                "de",
+                (artifact_qid,),
+                ("1 NAME Agnes /Untypedcheck/ | 2 TYPE stage",),
+                True,
+            ),
+        ]
+    )
     married = statements(client, qid, "married_name")
-    assert artifact_qid in married["Ida Untypedcheck-Löbig"][1]
+    assert [entry[0] for entry in married if artifact_qid in entry[2]] == [
+        "Ida Untypedcheck-Löbig"
+    ]
     # beside the alias, not instead of it
     item = client.wbi.item.get(qid)
     assert "Peppi" in {str(a) for a in item.aliases.get("en") or []}

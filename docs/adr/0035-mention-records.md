@@ -367,6 +367,17 @@ is the label's own form, a form the person's record types, or from a
 NAME that held a placeholder (counted, `untyped name form with a
 placeholder`). The extraction prompt offers `name` for a name form whose
 type the source does not mark, other than the label's.
+Amended by #435, orchestrator decisions BN to BQ (2026-10-04; the owner
+may override at merge): a form a recognised TYPE or a `_MARNM` gives is
+typed whether or not a typed claim is made of it; the label and the
+typed forms are compared in NFC, whitespace collapsed, case ignored; a
+placeholder blocks only the form it is unsure of, the NAME's display
+form or the bracket that held it, so "Ida (Peppi) /?/" still gives
+`name` "Peppi"; a bracket holding a cue or a note ("(geb. Laudler)")
+gives its text verbatim, never read as a type; and in a document only a
+distinct name of open kind is a `name`. A lettered stand-in ("N.N.")
+holds letters, so the adapter reads it as a name; it is no placeholder
+here, as §6 reads none by its wording.
 
 **Decided by the owner (2026-09-29):**
 
@@ -1075,7 +1086,7 @@ and brackets in a NAME value, which §10 names.
 | GIVN; SURN with SPFX | given names; surnames, each whole with its particle |
 | NPFX; NSFX | titles; suffixes |
 | NICK, or a quoted part ("Cäcilie 'Cilli' Tarle") | nicknames |
-| a bracketed part ("Ida (Peppi) Sörne", "(geb. Laudler)") | an alias and an `unsplit` form, with no typed-name claim, counted, and a `name` claim of no type (ADR-0011) |
+| a bracketed part ("Ida (Peppi) Sörne", "(geb. Laudler)") | an alias and an `unsplit` form, with no typed-name claim, counted, and a `name` claim of no type with its text verbatim, cue or note included (ADR-0011) |
 | TYPE birth or maiden | the NAME's surname `birth`, and its `birth_name` claim (ADR-0011) |
 | TYPE married or marriage | `married`, and its `married_name` claim |
 | TYPE aka, nick or nickname | the NAME's given names are nicknames, and its `nickname` claim |
