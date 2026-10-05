@@ -1123,12 +1123,13 @@ class TestTheCallEstimateCountsExcerpts:
         (_baseline); and of two invocations of one run that both finished
         the stage, the later's."""
         runs = runs_dir(tmp_path)
-        sha1 = gray_sha1(1)
+        sha1, other = gray_sha1(1), gray_sha1(2)
         made_run(
             runs,
             "a-older",
-            [an_excerpt(sha1)],
-            finishing(sha1, "extraction", 5, "i1"),
+            [an_excerpt(sha1), an_excerpt(other)],
+            finishing(sha1, "extraction", 5, "i1")
+            + finishing(other, "extraction", 4, "i1"),
         )
         made_run(
             runs,
@@ -1137,13 +1138,21 @@ class TestTheCallEstimateCountsExcerpts:
             finishing(sha1, "extraction", 2, "i1")
             + finishing(sha1, "extraction", 3, "i2"),
         )
-        assert measures_in(tmp_path) == {(sha1, "extraction"): 3}
-        estimator = Quiet(tmp_path / "corpus", runs / "zz-new")
-        assert estimator._baseline({(sha1, "extraction")}) == {
-            (sha1, "extraction"): 3
+        assert measures_in(tmp_path) == {
+            (sha1, "extraction"): 3,
+            (other, "extraction"): 4,
         }
-        assert estimate._finished(RunDir(runs / "a-older")) == {
-            (sha1, "extraction"): 5
+        # the baseline reads back to the older run for the other excerpt,
+        # and keeps the newer's measure of this one
+        estimator = Quiet(tmp_path / "corpus", runs / "zz-new")
+        needed = {(sha1, "extraction"), (other, "extraction")}
+        assert estimator._baseline(needed) == {
+            (sha1, "extraction"): 3,
+            (other, "extraction"): 4,
+        }
+        # of the newer run's two invocations, the later's
+        assert estimate._finished(RunDir(runs / "b-newer")) == {
+            (sha1, "extraction"): 3
         }
 
     def test_a_damaged_manifest_in_another_run_is_passed_over(self, tmp_path):
@@ -1161,9 +1170,16 @@ class TestTheCallEstimateCountsExcerpts:
             {sha1: an_excerpt(sha1)},
             finishing(sha1, "extraction", 9, "i1"),
         )
+        for name, documents in (("c-a-number", 7), ("d-none", None)):
+            made_run(
+                runs,
+                name,
+                documents,
+                finishing(sha1, "extraction", 9, "i1"),
+            )
         made_run(
             runs,
-            "c-sha1-not-a-string",
+            "e-sha1-not-a-string",
             [{"sha1": [sha1], "kind": "excerpt"}, "an entry", None],
             finishing(sha1, "extraction", 9, "i1"),
         )
