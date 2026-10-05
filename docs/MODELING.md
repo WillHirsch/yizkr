@@ -199,12 +199,12 @@ Every statement carries at least one reference with:
   `printed_page` column beside `page`, empty where the reference has
   none; like the other locators it is shown for checking and never read
   back, so a curator's edit to it is ignored (#449). A source that gives
-  a printed page number gives
-  its page number too: validation refuses one without the other, in a
-  prepared claims file as in an extractor's batch. An excerpt's claims
-  read the excerpt's own transcription, so they never take the printed
-  number of the page that places it, and its `part of` the container
-  keeps the container's physical page (ADR-0008)
+  a printed page number gives its page number too: validation refuses
+  one without the other, in a prepared claims file as in an extractor's
+  batch. An excerpt's claims read the excerpt's own transcription, so
+  they never take the printed number of the page that places it, and
+  its `part of` the container keeps the container's physical page
+  (ADR-0008)
 - optional short transcription excerpt supporting human verification,
   tagged with the language it is written in (BCP-47). `yizkr ingest run`
   takes each document's language from its transcription by default

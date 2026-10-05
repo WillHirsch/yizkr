@@ -17,10 +17,10 @@ The locators are the cited page (`page`, the physical page), the number
 printed on that page where the transcription record gives one
 (`printed_page`, empty otherwise; ADR-0037), the image region and the
 excerpt. They are shown for checking and never read back: `apply_review`
-matches rows by `claim_id`, reads only the curator's columns, and takes
-each claim's source from the batch. An edited `page` or `printed_page`
-cell is ignored, and the approved claim keeps the page and printed page
-number its batch gives.
+matches rows by `claim_id`, reads only their `decision` and `correction`,
+and takes each claim's source from the batch. An edited `page` or
+`printed_page` cell is ignored, and the approved claim keeps the page and
+printed page number its batch gives.
 
 The `critique_notes` column carries the extraction critic's concerns
 (ADR-0013) — flagged mistypes, misapplied properties, role-aliases — so

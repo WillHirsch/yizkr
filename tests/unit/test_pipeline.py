@@ -1085,7 +1085,7 @@ class TestReviewRoundTrip:
                 writer.writerow({**row, "decision": "approve"})
         approved, warnings = apply_review(source, csv_path)
         assert warnings == []
-        assert approved.claims[0].source.printed_page_number == "4"
+        assert approved.claims == source.claims
 
     def test_a_corrected_claim_keeps_its_printed_page(self, tmp_path):
         source = self.booklet_batch()
@@ -1097,6 +1097,8 @@ class TestReviewRoundTrip:
                 row["decision"] = "approve"
                 row["printed_page"] = ""  # cleared by the curator
             rows[1]["correction"] = "1914-05-29"
+            rows[1]["page"] = "5"  # and edits the corrected row's locators
+            rows[1]["printed_page"] = "17"
             return rows
 
         self.edit_csv(csv_path, correct_the_booklet_row)
@@ -1156,6 +1158,24 @@ class TestAcceptAll:
         approved, warnings = apply_review(source, reviewed_csv)
         assert len(approved.claims) == len(source.claims)
         assert warnings == []
+
+    def test_keeps_every_cell_but_the_decision(self, tmp_path):
+        source = TestReviewRoundTrip.booklet_batch()
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(source, review_csv)
+        reviewed_csv = tmp_path / "review.reviewed.csv"
+        accept_all(review_csv, reviewed_csv)
+
+        def without_decisions(path):
+            with open(path, newline="") as f:
+                return [
+                    {k: v for k, v in row.items() if k != "decision"}
+                    for row in csv.DictReader(f)
+                ]
+
+        exported = without_decisions(review_csv)
+        assert [row["printed_page"] for row in exported] == ["4", "4", "", ""]
+        assert without_decisions(reviewed_csv) == exported
 
     def test_equivalences_ratifies_verdicts_not_blanket_approve(
         self, tmp_path
