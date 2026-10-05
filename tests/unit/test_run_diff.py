@@ -1074,6 +1074,7 @@ def test_a_mention_without_a_cluster_is_left_out_of_merges_and_splits():
             "m1": {"cluster": "c1"},
             "m2": {"cluster": "c1"},
             "m3": {"cluster": None, "method": "unclustered"},
+            "m4": {"cluster": None, "method": "unclustered"},
         },
         "clusters": {"c1": {"kind": "human", "members": ["m1", "m2"]}},
     }
@@ -1082,22 +1083,29 @@ def test_a_mention_without_a_cluster_is_left_out_of_merges_and_splits():
             "m1": {"cluster": "c1"},
             "m2": {"cluster": "c1"},
             "m3": {"cluster": "c9"},
+            "m4": {"cluster": "c8"},
         },
         "clusters": {
             "c1": {"kind": "human", "members": ["m1", "m2"]},
+            "c8": {"kind": "human", "members": ["m4"]},
             "c9": {"kind": "human", "members": ["m3"]},
         },
     }
     found, _ = rundiff.compare_clusters(baseline, run, names)
     assert (found["merges"], found["splits"]) == (0, 0)
     assert found["clusters"]["unchanged"] == 1
-    assert found["mentions"]["both"] == 3
+    assert found["mentions"]["both"] == 4
 
 
 def test_the_cache_view_gives_entries_moved_aside(tmp_path):
     cache = tmp_path / "cache"
     key = an_entry(cache, components(), aside=True)
     (cache / key[:2] / f"{key}.replaced-x.json").write_text("Peiltal")
+    # an entry of another key, filed under this one, is none of its
+    kept = cache / key[:2] / f"{key}.replaced-20261001T090000Z-ab.json"
+    (cache / key[:2] / f"{key}.replaced-y.json").write_text(
+        json.dumps(json.loads(kept.read_text()) | {"key": "f" * 64})
+    )
     (asided,) = llm.read_cache(cache).asides(key)
     assert asided["components"] == components()
     assert llm.read_cache(cache).asides("f" * 64) == []
@@ -1258,7 +1266,10 @@ def test_settings_show_only_what_may_be_posted():
                 "model": "claude-sonnet-5-5",
                 "effort": "Löbig",
                 "epoch": True,
-                "client": {"config_hash": config_hash},
+                "client": {
+                    "config_hash": config_hash,
+                    "model": "Brief an Klara",
+                },
             }
         },
         "code": {"commit": "b" * 40, "diff_sha256": diff_hash, "dirty": True},
@@ -1281,6 +1292,7 @@ def test_settings_show_only_what_may_be_posted():
         # the 12 hex digits report.md shows
         "roles.extract.client.config_hash": (None, "c0ffee12ab34"),
         "roles.extract.model": ("claude-opus-5-5", "claude-sonnet-5-5"),
+        "roles.extract.client.model": (None, "other"),
         "engine.cli_version": ("2.1.288", "other"),
         "roles.extract.effort": ("low", "other"),
         "roles.extract.epoch": (0, "other"),
