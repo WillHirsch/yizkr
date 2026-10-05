@@ -18,12 +18,14 @@ deadline, a real timer started with a wait other than 0, a clock function
 reached by its name as a string (`getattr(time, "sleep")`,
 `time.__dict__["sleep"]`, `vars(time)["sleep"]`, `getattr(datetime, "now")`),
 an `os.utime` that sets a file's times to the current time (given no times),
-and a file's time read (`.st_mtime`, `.st_mtime_ns`, `.st_ctime`, `.st_atime`
-and their `_ns` forms, `getmtime`, `getctime`, `getatime`) in a function or
-module that also touches a file (`.touch()`), which stamps it with the current
-time. Uses inside the classes and functions named as exempt (the fakes, say),
-by qualified name (`TestX.test_y`) or by bare name wherever they sit, are left
-out.
+a ZIP archive's `.writestr` given its member's name rather than a `ZipInfo`
+(a `ZipInfo(...)` call, or a name the module assigns one to), which stamps the
+member with the current time, and a file's time read (`.st_mtime`,
+`.st_mtime_ns`, `.st_ctime`, `.st_atime` and their `_ns` forms, `getmtime`,
+`getctime`, `getatime`) in a function or module that also touches a file
+(`.touch()`), which stamps it with the current time. Uses inside the classes
+and functions named as exempt (the fakes, say), by qualified name
+(`TestX.test_y`) or by bare name wherever they sit, are left out.
 
 A `.join`'s, a `.poll`'s or a selector's `.select`'s lone positional argument
 counts as a timeout when it gives a time: a number or a named hang guard,
@@ -48,6 +50,9 @@ after `from datetime import datetime as dt`), or through a default in `src/`, a
 wait reached through another name (`s.select` after `import select as s`, `sl`
 after `from select import select as sl`, `B` after `from threading import
 Barrier as B`), and a child's script held in a string.
+
+A `ZipInfo` given to `.writestr` by any other route (a function's argument, an
+attribute) is found as a name: the finder errs towards finding it.
 """
 
 from __future__ import annotations
@@ -341,6 +346,34 @@ def _time_modules(tree: ast.Module) -> set[str]:
     }
 
 
+def _zip_infos(tree: ast.Module) -> set[str]:
+    """The names the module assigns a `ZipInfo(...)` call to."""
+    return {
+        target.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Call)
+        and _final_name(node.value.func) == "ZipInfo"
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+
+
+def _stamps_the_time(call: ast.Call, zip_infos: set[str]) -> bool:
+    """Whether a `.writestr` call gives its member as a name, which
+    zipfile stamps with the current time, rather than as a `ZipInfo`,
+    which carries its own."""
+    member = call.args[0] if call.args else None
+    for keyword in call.keywords:
+        if keyword.arg == "zinfo_or_arcname":
+            member = keyword.value
+    if member is None:
+        return False
+    if isinstance(member, ast.Call):
+        return _final_name(member.func) != "ZipInfo"
+    return not (isinstance(member, ast.Name) and member.id in zip_infos)
+
+
 def real_time_uses(
     source: str,
     *,
@@ -368,6 +401,7 @@ def real_time_uses(
     time_modules = _time_modules(tree)
     aliases = _clock_aliases(tree)
     touching = _touching_scopes(tree)
+    zip_infos = _zip_infos(tree)
     called = {
         id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)
     }
@@ -473,6 +507,13 @@ def real_time_uses(
             and node.args[1].value is None
         ):
             found.append(f"line {node.lineno}: utime( to the current time")
+            continue
+        if (
+            name == "writestr"
+            and isinstance(node.func, ast.Attribute)
+            and _stamps_the_time(node, zip_infos)
+        ):
+            found.append(f"line {node.lineno}: writestr( given a name")
             continue
         reads_the_time = (
             name in CURRENT_TIME
