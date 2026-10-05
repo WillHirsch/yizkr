@@ -580,6 +580,8 @@ class TestUnsupportedModel:
         assert "2.1.280 or newer" in paused.value.reason
         assert "claude-opus-5-5" in str(paused.value)
         assert "2.1.280 or newer" in str(paused.value)
+        # either remedy changes a scratch run's recorded settings
+        assert "`yizkr scratch run --new`" in str(paused.value)
         # never asked again, and never waited for
         assert len(cli.calls) == 1
         assert clock.slept == []
