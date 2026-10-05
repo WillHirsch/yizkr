@@ -8,7 +8,13 @@ word order or token shape. It keeps an entity's alias bag to forms that
 add something, in their order and verbatim spelling:
 
 * every entity: blanks, the label itself and case-insensitive duplicates
-  are dropped;
+  are dropped, each compared in the form the instance keeps a term in
+  (`stored_term` in yizkr.pipeline.writer: each run of control
+  characters and line or paragraph separators made one space, trimmed,
+  cleaned up as Wikibase cleans a term up, then in Unicode NFC), so an
+  alias that differs from the label or another alias only in that form,
+  such as NFD against NFC or a line break against a space, is the same
+  alias;
 * an entity whose record stands (`claims.structure_problems` finds
   nothing): an alias's parts are the record's name parts that occur in
   it, folded, as whole words (the no-addition test of ADR-0035 §5):
@@ -135,19 +141,19 @@ def normalize_aliases(
 ) -> list[str]:
     """One entity's alias bag, cleaned (the module docstring says how)
     by its record, or by none for an entity without one."""
+    from yizkr.pipeline.writer import stored_term
+
     parts = _parts(record)
     in_label = _given(label, parts)
     spelled_in_label = _spelled_given(label, parts)
-    label_key = label.strip().lower()
+    label_key = stored_term(label).lower()
     seen: set[str] = set()
     # each distinct alias, and whether the rules keep it
     found: list[tuple[str, bool]] = []
     for raw in aliases:
         alias = raw.strip()
-        if not alias:
-            continue
-        key = alias.lower()
-        if key == label_key or key in seen:
+        key = stored_term(alias).lower()
+        if not key or key == label_key or key in seen:
             continue
         seen.add(key)
         keep = True

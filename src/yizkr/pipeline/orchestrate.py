@@ -2842,9 +2842,9 @@ class Orchestrator:
             list(pool.map(extract_one, docs))
 
     def _entity_keys(self, doc: DocumentRun) -> set[str]:
-        """Name-token keys of a document's extractable entities, for the
-        overlap sequencer — the same signal reconcile blocks on."""
-        from yizkr.pipeline.reconcile import _name_tokens
+        """Name keys of a document's extractable entities, for the overlap
+        sequencer — the same whole name forms reconcile blocks on."""
+        from yizkr.pipeline.reconcile import entity_name_keys
 
         if not doc.batch.exists():
             return set()
@@ -2852,7 +2852,7 @@ class Orchestrator:
         keys: set[str] = set()
         for entity in batch.entities:
             if entity.extract:
-                keys |= _name_tokens(entity.label, *entity.aliases)
+                keys |= entity_name_keys(entity)
         return keys
 
 

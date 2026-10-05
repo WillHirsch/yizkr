@@ -85,13 +85,11 @@ itself in its own `--help`.
   to 600 seconds, or that a class or function binds again, so a hang
   guard is never a time a test waits out, nor so long that a missed
   event holds CI for hours. Each entry names the module, the use as the
-  finder words it (or `*` for a whole module held until another pull
-  request merges), optionally the test it is limited to (by its
+  finder words it, optionally the test it is limited to (by its
   qualified name, `TestX.test_y`, or by its own name when that names
   only one class or function), and its reason. An entry that no longer
-  matches a use, a held module in which the finder sees no use, an entry
-  limited to a name that names more than one class or function, and an
-  entry naming a module that does not exist all fail, so an entry can
+  matches a use, an entry limited to a name that names more than one
+  class or function, and an entry naming a module that does not exist all fail, so an entry can
   only be removed, never kept past its use, and a new use always needs a
   new entry with its reason. The finder reads only the module's own
   code, and finds exactly the spellings its docstring lists: a clock
@@ -103,21 +101,34 @@ itself in its own `--help`.
   import Timer as T`); a clock function of the time module, a datetime
   or a date taken uncalled; a `time.localtime()`-style read of the
   current time; any `from time import`; a timed wait (`.wait`, `.join`,
-  `.wait_for`, `.acquire`, `.get`, `.put`, `threading.Barrier`,
-  `.settimeout`, `select.select`, a selector's `.select`) whose timeout
-  is not `HANG_GUARD`, None or 0; and a real timer started by anomalies'
-  timer starter with a wait other than 0. A `.join`'s or a selector's
+  `.wait_for`, `.acquire`, `.get`, `.put`, `.result`, `.exception`,
+  `.poll`, `threading.Barrier`, `.settimeout`, `select.select`, a
+  selector's `.select`, `asyncio.timeout`) whose timeout is not
+  `HANG_GUARD`, None or 0, and any `asyncio.timeout_at` given a
+  deadline; a clock function named by a string (`getattr(time,
+  "sleep")`, `time.__dict__["sleep"]`, `vars(time)["sleep"]`); an
+  `os.utime` given no times, which sets the current time; a file's time
+  (`st_mtime` and the rest, `getmtime`) read in a function that also
+  touches a file; and a real timer started by anomalies' timer starter
+  with a wait other than 0. A `.join`'s, a `.poll`'s or a selector's
   `.select`'s lone positional argument is its timeout when it gives a
   time: a number or `HANG_GUARD`, arithmetic on one with no sequence or
   string beside it (`HANG_GUARD / 10`, but not `[name] * 4`), a
   conditional giving one, or a call that makes a number (`float("0.5")`,
   `min(HANG_GUARD, 5)`). Left to review are:
-  - a `.join` or a selector's `.select` given its timeout by another
-    name, or by any other expression (a str.join's iterable looks the
-    same);
-  - a timeout given positionally to `.wait_for`, `.acquire`, `.get` or
-    `.put`, and a timeout given to any other call (`subprocess.run`,
-    `communicate`, `urlopen`, ...);
+  - a `.join`, a `.poll` or a selector's `.select` given its timeout by
+    another name, or by any other expression (a str.join's iterable
+    looks the same);
+  - a timeout given positionally to `.wait_for`, `.acquire`, `.get`,
+    `.put`, `.result` or `.exception`, and a timeout given to any other
+    call (`subprocess.run`, `communicate`, `urlopen`, ...);
+  - `asyncio.timeout` or `timeout_at` reached through another name
+    (`from asyncio import timeout`);
+  - a clock function's name given to `getattr` or a subscript as
+    anything but a string literal, or read through `__dict__.get`;
+  - a file's time compared with the clock after any other write that
+    stamps it (`write_text`, `open`), or in another function than the
+    touch;
   - a clock reached through another name (`T = threading.Timer`, or
     `dt.now` taken uncalled after `from datetime import datetime as dt`)
     or through a default in `src/`;
@@ -156,7 +167,8 @@ itself in its own `--help`.
   `make test-live`, which is `uv run pytest -m live tests/integration -v`.
   They skip, saying why, when there is no connection configuration
   (`deploy/.env`) or the stack is unreachable. They write fictional
-  fixture data under deterministic labels, so a re-run reuses its
+  fixture data under labels that carry the session's marker (The
+  mutation harness, below), so a re-run within the session reuses its
   entities, and that reuse is part of what they check. They run on the
   one instance that scratch runs reset, and take turns on it through the
   live-stack lock (below). Since the scratch write stage does not make
@@ -314,6 +326,32 @@ tests = ["tests/unit/test_example.py::test_blank_names_are_dropped"]
   timeout: a harness killed outright (SIGKILL), as a tool's timeout may
   kill it, leaves the mutant in place and its run holding the lock
   (below).
+- **A live test's fixture is the session's own** (#430). A live mutant's
+  run writes what the mutant wrote onto the one instance, statements are
+  never removed, and the instance is reset only per scratch run. So a
+  live test's assertions must hold on an instance that earlier sessions,
+  and earlier live mutant runs, have written to. Every item a live test
+  writes carries the session's marker, `fixture_mark` in
+  `tests/integration/conftest.py`, in its label, title, file name or
+  media bytes: eight hex digits of a hash over a sentence saying what the
+  fixture is, over the source of the code under test and over eight
+  random bytes drawn once a session. Each session, and each mutant's
+  run, which is a session of its own, then meets its fixture as a first
+  write, and asserts it exactly; a rewrite within the session finds its
+  own items again. A test reads only what its session wrote, so it writes
+  what it reads even when run alone, never counting on another test's or
+  an earlier session's writes. The checks over the whole instance are
+  the exceptions, as they read what every session wrote:
+  `test_live_queries.py`'s unreferenced-statements invariant;
+  `test_live_backup.py`'s privacy and excerpt invariants over the
+  non-privileged export; `test_live_nonprivileged_export.py`'s munge
+  and block checks over the full dump and the export; and
+  `WikiClient.label_index`, which the writer and resolve read, and which
+  raises on any two entities that share an English label. A live mutant
+  that breaks one of these (one that drops a reference, mints a
+  duplicate label, or leaves an entity the munger drops) breaks every
+  later session until the next scratch reset, which is the remedy; the
+  fixture's marker cannot help.
 - **Stop what a test detaches.** Each pytest run has a process group of
   its own, killed when the run ends or outlives `--timeout` (default
   300 s). A process that leaves the group escapes, and can hold a lock or

@@ -214,7 +214,11 @@ in `docker-compose.https.yml` to avoid rate limits.
 ### Backups and the non-privileged export
 
 `yizkr backup` (run from the repo root, stack up) writes a timestamped
-directory under `var/backups/` containing:
+directory under `var/backups/`, named by the UTC second the run starts.
+When that name would not sort after every run already there (a second
+run within one second, or a clock set back), the run takes the second
+after the latest one instead, so `--keep N` never prunes the run just
+made. The directory holds:
 
 - `database.sql.gz` — mariadb dump. **The authoritative backup**:
   items, statements, full edit history, users.

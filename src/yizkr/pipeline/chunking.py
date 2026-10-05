@@ -216,15 +216,25 @@ Rules — these mirror the archive's non-negotiable conventions:
   site and a relation of agency the institution.
 - A person's ordinary name lives in their entity-manifest label and
   aliases, and which part of it is which lives in the manifest's record;
-  do NOT restate either as a claim. Use the typed name properties only
-  when the source marks a name's TYPE: birth_name (a name/maiden name
-  given at birth), married_name (taken on marriage), nickname (a name
-  marked as what the person is called, such as an "aka"), official_name
-  (a formal or legal change).
+  do NOT restate either as a claim, beyond `name` (below). Use the typed
+  name properties only when the source marks a name's TYPE: birth_name
+  (a name/maiden name given at birth), married_name (taken on marriage),
+  nickname (a name marked as what the person is called, such as an
+  "aka"), official_name (a formal or legal change).
   The marker may be CONTEXTUAL (a maiden-name cue such as "geb." or
   "née", a married-name cue such as "по мужу", a stated legal or
   immigration change), not only an explicit tag. Type only what a source
   marks (ADR-0022).
+  A distinct name the source gives a person beside the label's, whose
+  kind the source leaves open (a bracketed name in a register entry:
+  "Ida Sörne (Löbig)"), is given as `name`, verbatim (ADR-0011), and
+  is an alias too. A form the source sets apart without saying its
+  kind is `name` even where it reads like a nickname; a nickname with
+  no `name` is one used in running text or a greeting, and follows the
+  nickname and referred_to_as rules below. A shortening, an initial, a
+  spelling variant or a part of the label is an alias alone, never
+  `name`, and so is a stand-in for an unknown name ("N.N."). Never
+  give the label's own form as `name`, and never a form you type.
 - A word that states a fact rather than naming someone is a claim, never
   part of a name (ADR-0035 §3.1):
   * a widow's or widower's marker ("Wwe.", "вдова", "widdo"): the
@@ -275,7 +285,8 @@ Rules — these mirror the archive's non-negotiable conventions:
   person through a relation but is no literal kinship term ("Bubele",
   "Nana Maisie", "Рудольфиха"), is `referred_to_as`: never an alias and
   never a record nickname. A name a writer simply uses for someone, in a
-  greeting ("Liebes Pünktchen!") or a mention, is their name.
+  greeting ("Liebes Pünktchen!") or a mention, is their name form (label
+  or alias).
 - Relational / perspectival appellations (ADR-0018): a reference like
   "our great grandmother", "meine Oma", "Aunt Pünktchen", "Mem" is NOT a
   name and never an alias. Two cases:

@@ -20,10 +20,18 @@ ingest paths just before the writer. This proves what lands in the graph:
   structured NAME TYPE / NICK / _MARNM tags become typed name statements.
 
 Every document is registered with media of its own, which its claims cite
-by SHA-1 (#102). Every name here is fictional.
+by SHA-1 (#102). Every name here is fictional. Each person's label, and
+each document's title, carries the session's marker (conftest.fixture_mark):
+the LLM path's label as a parenthesised word the cleanup takes no name part
+from, the GEDCOM path's as a word after the surname, which the adapter
+keeps in the label and the birth name. So each session writes items of its
+own, and aliases, which are append-only, and statements that an earlier
+session wrote, a live mutant's run included, never meet it.
 """
 
 from __future__ import annotations
+
+import json
 
 import pytest
 
@@ -43,23 +51,40 @@ from tests.fixtures.live_names import (
     entity_manifest,
 )
 from yizkr.claims import ArtifactRef
+from yizkr.pipeline import chunking, gedcom, names, writer
 from yizkr.pipeline.chunking import ChunkedClaimExtractor
 from yizkr.pipeline.gedcom import adapt_gedcom
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.writer import BatchWriter
 
-from .conftest import Registered, register_fictional
+from .conftest import Registered, fixture_mark, register_fictional
 
 pytestmark = pytest.mark.live
 
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "ADR-0022: Ida Livecheck in a register and a letter, through the "
+    "extractor; Hildegard Rahel Namecheck in a GEDCOM export"
+)
+MARK = fixture_mark(FIXTURE, writer, names, chunking, gedcom)
+# the LLM path's label, as the scripted engine gives it
+MARKED_LABEL = f"{LABEL} ({MARK})"
+
+
+def marked(response: str) -> str:
+    """A scripted response with the person's label marked."""
+    return response.replace(json.dumps(LABEL), json.dumps(MARKED_LABEL))
+
 
 def fixture_artifact(client, title: str) -> Registered:
-    return register_fictional(client, title, "letter")
+    return register_fictional(client, f"{title} {MARK}", "letter")
 
 
 def extract(tmp_path, artifact: Registered, document, manifest, claims):
-    engine = ScriptedEngine([manifest, chunk_response(artifact.ref, claims)])
+    engine = ScriptedEngine(
+        [marked(manifest), marked(chunk_response(artifact.ref, claims))]
+    )
     extractor = ChunkedClaimExtractor(
         engine, state_dir=tmp_path, budget=10_000
     )
@@ -103,14 +128,6 @@ def typed_names(client, qid: str, prop_key: str) -> dict[str, set[str]]:
     return found
 
 
-def stated_in(names: dict[str, set[str]], artifact_qid: str) -> set[str]:
-    """The name texts of `names` whose statements `artifact_qid` states.
-    An earlier run's export, registered as an artifact of its own when
-    its text differed, may state the same name on the same item: the
-    two sources' statements stand side by side."""
-    return {text for text, cited in names.items() if artifact_qid in cited}
-
-
 @pytest.fixture(scope="module")
 def llm_path_person(client, tmp_path_factory):
     """Two fictional documents about one person, written through the real
@@ -129,7 +146,7 @@ def llm_path_person(client, tmp_path_factory):
     # Checked BEFORE writing: aliases are append-only, so a validator
     # regression must fail here rather than leave the fixture item dirty.
     (entity,) = first.entities
-    assert entity.label == LABEL
+    assert entity.label == MARKED_LABEL
     assert entity.structure is not None  # the record stood (ADR-0035 §5)
     assert set(entity.aliases) == EXPECTED_ALIASES - {"Ida Testerhof"}
     written = BatchWriter(client).write_batch(first)
@@ -153,7 +170,7 @@ def llm_path_person(client, tmp_path_factory):
 def test_llm_path_alias_bag_is_hygiened_in_the_graph(client, llm_path_person):
     qid, _, _ = llm_path_person
     item = client.wbi.item.get(qid)
-    assert str(item.labels.get("en")) == LABEL
+    assert str(item.labels.get("en")) == MARKED_LABEL
     # exactly the forms that add a part to the label, each whole; nothing
     # derivable leaked in, and no compound was split into particle tokens
     assert aliases_on(client, qid) == EXPECTED_ALIASES
@@ -188,11 +205,11 @@ def test_llm_path_rewrite_changes_nothing(client, llm_path_person, tmp_path):
     assert aliases_on(client, qid) == EXPECTED_ALIASES
 
 
-GEDCOM = """\
+GEDCOM = f"""\
 0 HEAD
 1 CHAR UTF-8
 0 @I1@ INDI
-1 NAME Hildegard Rahel /Namecheck/
+1 NAME Hildegard Rahel /Namecheck/ {MARK}
 2 TYPE birth
 2 NICK Hilde
 1 NAME Hildegard /Namecheck/
@@ -211,14 +228,14 @@ def test_gedcom_path_alias_bag_and_typed_names(client, tmp_path):
     'Hildegard Namecheck' is dropped, the compound forms land whole, a
     NICK and a `_MARNM` are name forms too (ADR-0035 §6, #408), and the
     structured tags become typed, referenced name statements."""
-    export = tmp_path / "integration-names-tree.ged"
+    export = tmp_path / f"integration-names-tree-{MARK}.ged"
     export.write_text(GEDCOM)
     exported = ArtifactRef.from_path(export)
     artifact_qid = register_artifact(
         client,
         media_path=export,
         artifact_type="genealogical_report",
-        title="Integration names GEDCOM tree",
+        title=f"Integration names GEDCOM tree {MARK}",
         description="written by tests/integration; safe to delete",
     ).artifact_qid
     expected_aliases = {
@@ -235,17 +252,15 @@ def test_gedcom_path_alias_bag_and_typed_names(client, tmp_path):
     qid = BatchWriter(client).write_batch(result.batch).created_items["i1"]
 
     item = client.wbi.item.get(qid)
-    assert str(item.labels.get("en")) == "Hildegard Rahel Namecheck"
+    label = f"Hildegard Rahel Namecheck {MARK}"
+    assert str(item.labels.get("en")) == label
     assert aliases_on(client, qid) == expected_aliases
-    assert stated_in(typed_names(client, qid, "birth_name"), artifact_qid) == {
-        "Hildegard Rahel Namecheck"
+    assert typed_names(client, qid, "birth_name") == {label: {artifact_qid}}
+    assert typed_names(client, qid, "nickname") == {"Hilde": {artifact_qid}}
+    assert typed_names(client, qid, "married_name") == {
+        "Hildegard Probewald-Namecheck": {artifact_qid},
+        "Hildegard Probewald": {artifact_qid},
     }
-    assert stated_in(typed_names(client, qid, "nickname"), artifact_qid) == {
-        "Hilde"
-    }
-    assert stated_in(
-        typed_names(client, qid, "married_name"), artifact_qid
-    ) == {"Hildegard Probewald-Namecheck", "Hildegard Probewald"}
 
     rerun = BatchWriter(client).write_batch(
         adapt_gedcom(GEDCOM, artifact=exported).batch

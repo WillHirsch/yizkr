@@ -20,22 +20,23 @@ characters Wikibase takes.
 
 Fictional synthetic media only (docs/EXAMPLES.md). The deck's title and
 file name, and the bytes of its image and of the other file, carry a
-marker: eight hex digits of a hash over the fixture and over the source
-of the code that names the files and writes the description (the
-registrar, the wiki client and the orchestrator). So each version of the
-fixture and of that code uploads and registers the fixture as a first
-write does: a mutant of the harness cannot pass by finding what an
-earlier version uploaded. A re-run of one version finds its own files
-and items in place, and writes nothing. Like every live test it writes
-fictional data to the one instance, so the session that runs it ends by
-clearing the recorded instance-contents key (docs/AGENT_PROTOCOL.md §5).
+marker: eight hex digits of a hash over the fixture, over the source of the
+code that names the files and writes the description (the registrar, the
+wiki client and the orchestrator) and over eight random bytes drawn once a
+session (conftest.fixture_mark). So each session, and each version of the
+fixture and of that code, uploads and registers the fixture as a first
+write does: a mutant of the harness cannot pass by finding what an earlier
+session uploaded, and what a live mutant's run wrote never meets a later
+session. A re-run within the session finds its own files and items in
+place, and writes nothing. Like every live test it writes fictional data to
+the one instance, so the session that runs it ends by clearing the recorded
+instance-contents key (docs/AGENT_PROTOCOL.md §5).
 """
 
 from __future__ import annotations
 
 import hashlib
 import zipfile
-from pathlib import Path
 
 import pytest
 
@@ -57,7 +58,7 @@ from yizkr.pipeline import orchestrate, registrar
 from yizkr.pipeline.orchestrate import Orchestrator
 from yizkr.pipeline.registrar import _upload_name
 
-from .conftest import fictional_png
+from .conftest import fictional_png, fixture_mark
 
 pytestmark = pytest.mark.live
 
@@ -67,12 +68,7 @@ FIXTURE = (
     "Russian that holds sequences a title refuses, and the shop front it "
     "shows"
 )
-MARK = hashlib.sha256(
-    FIXTURE.encode()
-    + Path(registrar.__file__).read_bytes()
-    + Path(wiki.__file__).read_bytes()
-    + Path(orchestrate.__file__).read_bytes()
-).hexdigest()[:8]
+MARK = fixture_mark(FIXTURE, registrar, wiki, orchestrate)
 
 # the deck's title, its marker and the sequences MediaWiki refuses
 # first, so that both cuts leave them: of 235 characters, within the 250

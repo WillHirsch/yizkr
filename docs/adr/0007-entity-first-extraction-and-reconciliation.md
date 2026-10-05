@@ -23,6 +23,26 @@ Amended by [ADR-0035](0035-mention-records.md) (owner decision
 family gains a `structure`, what its names are made of, which is input to
 identity and never written, and any record may carry a judgement note
 (ADR-0035 §2, §4).
+Amended by #388 (2026-10-04; the record's typed parts decided by the
+orchestrator 2026-10-05, the owner may override): candidate blocking
+(step 2) keys on whole name forms, folded for case and accents with
+umlauts also written out (ADR-0035 §7), never on name tokens or
+prefixes. A manifest entity keys through its mention record: a person
+only when its status is `name`, by its label, aliases, unsplit forms and
+nicknames, and by the whole forms its typed parts make, each given name
+(as written and as its standard form) and each nickname before each
+surname and patronymic, a pair whose parts fold alike making none
+("Gustl" read as Gustav with the surname Löbig keys "Gustav Löbig";
+"Agnes Löbig geb. Nertler" keys "Agnes Löbig" and "Agnes Nertler"); a
+place only when it is a `toponym`, by its record's own names and
+address, less a short form that is another name's toponym; any other
+entity by its label and aliases. A graph item keys by its label,
+aliases and the values of its birth, nickname and official name
+statements; a married name, a family name alone, never stands for a
+whole name. A shared surname or a clipped form ("Gus" against "Gustave
+Lobig") no longer blocks a pair. The roster maps an item's kind to its
+manifest key by the kind item's QID, so occupations and time periods
+block like any other kind.
 Amended by #407 (2026-09-29): the entity-manifest prompt asks for each
 record and note; one that fails validation is set aside, never repaired,
 and never refuses the manifest, and `coverage.json` counts the records
@@ -228,7 +248,8 @@ A separate pipeline step between extract and resolve:
    labels, parent labels) via one SPARQL query. Cached to a file;
    small graph, single prompt.
 2. **Candidate blocking** (deterministic): for each manifest entity,
-   graph candidates sharing kind and any name token with any alias.
+   graph candidates sharing kind and any name token with any alias
+   (a whole name form since #388, above).
    Keeps the LLM prompt small and the pipeline auditable — the LLM
    never free-searches the graph.
 3. **LLM adjudication** (one call, or few): for each manifest entity

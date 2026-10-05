@@ -8,10 +8,11 @@ artifacts' matches are high-confidence rather than name-only guesses.
 
 This is a sequencing hint only: it changes the ORDER artifacts are
 processed, never what is written. A poor ranking costs a little review
-ease, never correctness. The overlap signal is name-token similarity —
-the same signal candidate blocking uses (`reconcile._name_tokens`) — so
-"share an entity" here means "share a name key", a cheap proxy computed
-offline from the extraction manifests, no model calls.
+ease, never correctness. The overlap signal is a shared whole name form
+read through each entity's mention record — the same signal candidate
+blocking uses (`reconcile.entity_name_keys`) — so "share an entity" here
+means "share a name key", a cheap proxy computed offline from the
+extraction manifests, no model calls.
 """
 
 from __future__ import annotations

@@ -64,7 +64,6 @@ the recorded instance-contents key (docs/AGENT_PROTOCOL.md §5).
 from __future__ import annotations
 
 import hashlib
-import os
 from pathlib import Path
 
 import pytest
@@ -78,7 +77,7 @@ from yizkr.pipeline.resolve import resolvable_labels
 from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import ENTITY_TAG, BatchWriter, media_object_label
 
-from .conftest import fictional_png
+from .conftest import fictional_png, fixture_mark
 
 pytestmark = pytest.mark.live
 
@@ -99,14 +98,7 @@ FIXTURE = (
     "kind naming Sebastian after the scan under his name, the one tag "
     '" [not an artifact]" for every kind'
 )
-MARK = hashlib.sha256(
-    FIXTURE.encode()
-    + b"".join(
-        Path(module.__file__).read_bytes()
-        for module in (registrar, writer, resolve, gedcom, wiki)
-    )
-    + os.urandom(8)
-).hexdigest()[:8]
+MARK = fixture_mark(FIXTURE, registrar, writer, resolve, gedcom, wiki)
 
 # the export, with {order} and the marker in each label it gives an item
 TEMPLATE = (

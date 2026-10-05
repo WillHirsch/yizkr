@@ -3,9 +3,10 @@
 The extended roster query (kinship QIDs, last activity) and the
 place-containment closure are what let blocking prune pairs the graph
 already forbids. This exercises both against a real stack: write a
-kinship edge and a containment edge with deterministic labels, then
-assert `fetch_roster` / `fetch_place_containment` round-trip them and
-`impossible_pair` rules the same-name pairs out.
+kinship edge and a containment edge under labels carrying the session's
+marker (conftest.fixture_mark), so each session meets them as a first
+write, then assert `fetch_roster` / `fetch_place_containment` round-trip
+them and `impossible_pair` rules the same-name pairs out.
 """
 
 from __future__ import annotations
@@ -14,7 +15,9 @@ from datetime import UTC, datetime
 
 import pytest
 
+from tests.integration.conftest import fixture_mark, wait_for_query_service
 from yizkr.claims import ArtifactRef, ClaimBatch
+from yizkr.pipeline import reconcile, writer
 from yizkr.pipeline.reconcile import (
     _roster_pair_facts,
     fetch_place_containment,
@@ -26,10 +29,16 @@ from yizkr.pipeline.writer import BatchWriter
 
 pytestmark = pytest.mark.live
 
-ELDER = "Yizkr Reconcile-Test Elder"
-YOUNGER = "Yizkr Reconcile-Test Younger"
-COUNTRY = "Yizkr Reconcile-Test Country"
-TOWN = "Yizkr Reconcile-Test Town"
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "ADR-0017: an elder, the younger whose father he is, and a town part "
+    "of a country, in one letter"
+)
+MARK = fixture_mark(FIXTURE, reconcile, writer)
+ELDER = f"Yizkr Reconcile-Test Elder {MARK}"
+YOUNGER = f"Yizkr Reconcile-Test Younger {MARK}"
+COUNTRY = f"Yizkr Reconcile-Test Country {MARK}"
+TOWN = f"Yizkr Reconcile-Test Town {MARK}"
 
 
 def _local(local_id: str, label: str, kind: str) -> dict:
@@ -88,23 +97,31 @@ def _relations_batch(artifact: ArtifactRef) -> ClaimBatch:
 
 
 @pytest.fixture(scope="module")
-def written(client, tmp_path_factory):
-    """Write the kinship + containment edges once (deterministic labels ->
-    re-runs reuse the same items, per the live-test idempotency contract).
-    Returns the label->qid map from the roster after the write."""
-    media = tmp_path_factory.mktemp("media") / "reconcile-fixture.txt"
-    media.write_text("reconcile-test fixture; safe to delete")
+def written(client, config, tmp_path_factory):
+    """Write the kinship + containment edges once a session, and wait
+    until the query service holds every item the write made. Returns the
+    source's item."""
+    media = tmp_path_factory.mktemp("media") / f"reconcile-fixture-{MARK}.txt"
+    media.write_text(f"reconcile-test fixture {MARK}; safe to delete")
     artifact = register_artifact(
         client,
         media_path=media,
         artifact_type="letter",
-        title="Reconcile-Test Source",
+        title=f"Reconcile-Test Source {MARK}",
         description="written by tests/integration; safe to delete",
         pages=1,
     )
     # the claims cite the source by the SHA-1 of its media (#102)
-    BatchWriter(client).write_batch(
-        _relations_batch(ArtifactRef.from_path(media))
+    batch = _relations_batch(ArtifactRef.from_path(media))
+    result = BatchWriter(client).write_batch(batch)
+    # written again, the batch finds every item and statement
+    again = BatchWriter(client).write_batch(batch)
+    assert (again.written, again.referenced) == (0, 0)
+    assert again.created_items == result.created_items
+    wait_for_query_service(
+        config,
+        client,
+        [*result.created_items.values(), artifact.artifact_qid],
     )
     return artifact.artifact_qid
 
@@ -122,6 +139,10 @@ def test_roster_exposes_kinship_qids(client, config, written):
     # the father edge round-trips as a raw QID the filter can read
     assert elder.qid in younger.father_qids
     assert elder.qid in younger.kin_qids
+    # each kind maps back to its manifest key by the kind item's QID
+    # (#388)
+    assert younger.kind == elder.kind == "human"
+    assert _by_label(roster, TOWN).kind == "place"
 
 
 def test_kinship_edge_makes_the_pair_impossible(client, config, written):
@@ -138,7 +159,7 @@ def test_place_containment_closure_round_trips(client, config, written):
     containment = fetch_place_containment(client, config)
     # the town is transitively contained in the country
     assert containment.contains(country.qid, town.qid)
-    assert country.label in containment.container_labels(town.qid)
+    assert country.qid in containment.containers(town.qid)
     # ... so the same-name pair is ruled out before adjudication
     assert (
         impossible_pair(

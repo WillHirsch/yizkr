@@ -139,6 +139,15 @@ properties:
     datatype: monolingualtext
     wikidata: P1810
 
+  name:
+    label: name
+    description: >-
+      a name form a source gives a person without stating its type (birth,
+      married, nickname or official), as the source writes it; never the
+      person's label, and never a form the source types (ADR-0011)
+    datatype: monolingualtext
+    wikidata: P2561
+
   # --- persons and family relations ---
 
   date_of_birth:

@@ -104,10 +104,9 @@ from yizkr.pipeline.reconcile import (
     RosterEntity,
     _batch_candidates,
     _batch_pair_facts,
-    _name_tokens,
-    _tokens_overlap,
     block_candidates,
     entity_facts,
+    entity_name_keys,
     impossible_pair,
 )
 from yizkr.pipeline.sequencing import sequence_documents
@@ -599,8 +598,30 @@ def label_keys(mention: Mention) -> set[str]:
     )
 
 
+def _name_tokens(*names: str) -> set[str]:
+    """The label-token rule reconcile.py blocked on before ADR-0035's
+    records (#388), kept here as a calibration baseline: whitespace tokens
+    of three letters or more."""
+    return {
+        token.strip(".,;:()\"'").lower()
+        for name in names
+        for token in name.split()
+        if len(token.strip(".,;:()\"'")) >= 3
+    }
+
+
+def _tokens_overlap(first: set[str], second: set[str]) -> bool:
+    """The baseline's prefix-aware token match ("Hilde" against
+    "Hildegard")."""
+    if first & second:
+        return True
+    return any(
+        a.startswith(b) or b.startswith(a) for a in first for b in second
+    )
+
+
 def token_keys(mention: Mention) -> set[str]:
-    """reconcile.py's blocking tokens (label + aliases)."""
+    """The baseline's blocking tokens (label + aliases)."""
     return _cached(
         mention, "tokens", lambda m: _name_tokens(m.label, *m.aliases)
     )
@@ -631,7 +652,7 @@ def _by_kind(mentions: list[Mention]) -> dict[str, list[Mention]]:
 
 
 def block_one_token(mentions: list[Mention]) -> set[Pair]:
-    """The current rule (reconcile.py): same kind + a shared name token,
+    """The baseline token rule: same kind + a shared name token,
     prefix-aware, over label + aliases."""
     pairs: set[Pair] = set()
     for group in _by_kind(mentions).values():
@@ -808,7 +829,6 @@ def lifted_facts(mention: Mention) -> PairFacts:
     mention uid stands in for a QID on both sides of every edge."""
     return PairFacts(
         kind=mention.kind,
-        label=mention.label,
         qid=mention.uid,
         kin_qids=mention.kin_uids,
     )
@@ -831,8 +851,7 @@ def lifted_containment(mentions: list[Mention]) -> PlaceContainment:
             if uid in index:
                 stack.extend(index[uid].containers)
         ancestors[mention.uid] = seen
-    labels = {m.uid: m.label for m in mentions if m.kind == PLACE_KIND}
-    return PlaceContainment(ancestors, labels)
+    return PlaceContainment(ancestors)
 
 
 @dataclass
@@ -1158,11 +1177,7 @@ def simulate_serial(
         (
             m.sha1,
             set().union(
-                *(
-                    _name_tokens(e.label, *e.aliases)
-                    for e in m.batch.entities
-                    if e.extract
-                )
+                *(entity_name_keys(e) for e in m.batch.entities if e.extract)
             ),
         )
         for m in manifests

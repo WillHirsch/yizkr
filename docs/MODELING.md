@@ -29,7 +29,10 @@
   either end dropped, and finds an item by its label in it,
   so a label given in another form finds its item again; the registrar
   compares and sets an artifact's title by the same rule, which it takes
-  from the writer (#369, #403). A term still over 250 characters in that
+  from the writer (#369, #403), and so do the resolve step, matching a
+  ref's label, the place-hierarchy pass, finding its run item, and alias
+  hygiene, comparing an alias with the label and the other aliases
+  (#370). A term still over 250 characters in that
   form is cut as a long locator is (below), with the digest of the whole,
   so whitespace around a term never counts towards the limit, two labels
   that agree up to the cut stay two items' labels, and the run item's
@@ -715,16 +718,42 @@ Names are modelled in **two layers**:
     calls another, or a name that names the person through a relation
     but is no literal kinship term, is `referred_to_as` instead (below);
   - `official name` (P1448) — a formally adopted or legally changed name.
-- An *ordinary* untyped name is NOT restated as a claim — it lives in
-  the label/aliases only. Typing adds structure where a source marks it;
-  it never narrows or infers (a maiden name is recorded only when the
-  source says so, never derived from gender + marriage).
+- **A name form of no stated type** (ADR-0011, amended by #435): where a
+  source gives a person a name form without stating its type, beside the
+  label's, it becomes a referenced `name` (P2561) statement, verbatim,
+  as well as an alias. It is never made for the label's own form or for
+  a form the source types, both compared in NFC with whitespace
+  collapsed and lower-cased (a sharp s kept apart from "ss"), and
+  validation refuses one that restates its subject's label or whose
+  subject is no person (an unclassified entity takes one). In a
+  document it is only for a distinct name whose kind the source leaves
+  open, never a shortening, an initial, a spelling variant, a part of
+  the label or an unmarked nickname use. A bracket holding a cue or a
+  note ("(geb. Laudler)") gives its text verbatim: code never types a
+  name from its wording. A curator who identifies the type later adds
+  the typed statement citing the same source, beside it, and may lower
+  its rank.
+- So each kind of name form goes here: the label's own form, to the
+  label alone; a form the source types, to an alias and its typed
+  statement; a further form of no stated type, to an alias and a `name`
+  statement; and a relational appellation, to `referred_to_as` alone
+  (below).
+- Typing adds structure where a source marks it; it never narrows or
+  infers (a maiden name is recorded only when the source says so, never
+  derived from gender + marriage).
 - The GEDCOM adapter emits these from NAME TYPE, the NICK and `_MARNM`
   tags, and the inline convention that a quoted part is a nickname
   ("Cäcilie 'Cilli' Tarle"). A bracketed part ("Ida (Peppi) Sörne") may
   hold a nickname, a maiden name or a note, so it is an alias and an
   unsplit form of the mention record, typed as nothing and counted, and
-  the label leaves it out; a NAME
+  a `name` statement, and the label leaves it out; a further NAME with
+  no TYPE, or a TYPE the adapter does not recognise, is a `name`
+  statement too, unless it is the label's form; no `name` statement
+  comes of a form the person's record types (a recognised TYPE or a
+  `_MARNM`, whether or not a typed claim is made of it), of the display
+  form of a NAME that held a placeholder anywhere, or of a bracket that
+  held one (a complete bracket of such a NAME still gives one); a
+  lettered stand-in ("N.N.") holds letters and stays a `name`; a NAME
   without slashes, whose parts no GIVN or SURN gives, is an unsplit form
   too, and its TYPE gives no claim, and one with only a GIVN or only a
   SURN keeps its whole value as an unsplit form beside that part. A
@@ -1071,7 +1100,9 @@ not a signal to grow the schema on.
 - Every ingested document contributes its name variants as item
   **aliases** (append-only); matching quality compounds per document.
   Where a source *types* a name (birth, married, nickname, official),
-  it is additionally recorded as a referenced statement — see "Names".
+  it is additionally recorded as a referenced statement; a further name
+  form whose type the source leaves open is recorded as a referenced
+  `name` statement — see "Names".
 - A scratch run clusters every document's mentions across the corpus
   before any write (the clustering stage, `pipeline/clustering.py`,
   ADR-0025). It keys and judges on each mention's record, never on a
@@ -1143,7 +1174,8 @@ not a signal to grow the schema on.
   differ only in letter case (a sharp s written SS among them) or
   language tag are one value, listed once with the sources of all of
   them. Properties that legitimately accumulate values over a life —
-  spouse, residence, married names, nicknames, official names — are
+  spouse, residence, married names, nicknames, official names, names
+  of no stated type — are
   multi-valued by nature: two spouses asserted by one source are
   remarriages, not a contradiction (their start/end qualifiers tell them
   apart). For one residence place or one spouse (through merge
@@ -1242,7 +1274,8 @@ not a signal to grow the schema on.
   An item is a person when it has any person evidence, read at every
   rank, deprecated included: a `human` type; a statement of a property
   only a person has (a birth, a death or a burial, kinship, a birth or
-  married name, a nickname, what they are referred to as, a sex or
+  married name, a nickname, a name of no stated type, what they are
+  referred to as, a sex or
   gender, a number of children, an occupation, an employer, a school, a
   citizenship or a residence); being the value of a kinship property or
   of `gave refuge to`, in a statement or a qualifier; or taking part in a

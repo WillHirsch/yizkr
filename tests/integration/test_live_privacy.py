@@ -45,12 +45,21 @@ from wikibaseintegrator.wbi_enums import WikibaseRank
 
 from yizkr.backup import exclusion_report
 from yizkr.claims import ArtifactRef, ClaimBatch
+from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.staticsite import PEOPLE_QUERY, SiteBuilder
 
-from .conftest import register_fictional, wait_for_query_service
+from .conftest import fixture_mark, register_fictional, wait_for_query_service
 
 pytestmark = pytest.mark.live
+
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "#334: people whose births take each shape the exclusion check reads, "
+    "curator ranks on three births, and a birth of unknown value beside "
+    "an 1850 one"
+)
+MARK = fixture_mark(FIXTURE, writer)
 
 CUTOFF = 1903
 
@@ -122,15 +131,19 @@ def born(role: str, value: dict, artifact: ArtifactRef, *qualifiers) -> dict:
 
 
 def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
-    """Write the fixture's claims under item labels that carry a marker:
-    six hex digits of a hash over the claims, each cited SHA-1 replaced by
-    its artifact's letter in `artifacts`, as test_live_period_dates.py's
-    write_fixture marks its own. The writer finds a local item by its
-    label, so a version of the fixture with other claims would otherwise
-    write onto an earlier version's items and see their statements beside
-    its own. With the marker each version writes items of its own, and a
-    re-run of one version finds its own items again. The curator ranks set
-    afterwards are not in the marker. Returns the write's result."""
+    """Write the fixture's claims under item labels that carry a marker: six
+    hex digits of a hash over the claims, each cited SHA-1 replaced by its
+    artifact's letter in `artifacts`, as test_live_period_dates.py's
+    write_fixture marks its own. The writer finds a local item by its label, so
+    a version of the fixture with other claims would otherwise write onto an
+    earlier version's items and see their statements beside its own. With the
+    marker each version writes items of its own, and a re-run of one version
+    finds its own items again. The hash also covers the module's marker
+    (conftest.fixture_mark: the writer's source and the session's random
+    bytes), so each session writes items of its own: what an earlier session
+    wrote, a live mutant's run included, never meets it, and a re-run within
+    the session finds its own items again. The curator ranks set afterwards are
+    not in the marker. Returns the write's result."""
     content = [
         {
             **claim,
@@ -145,7 +158,7 @@ def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
         for claim in claims
     ]
     marker = hashlib.sha256(
-        json.dumps(content, sort_keys=True).encode()
+        json.dumps(content, sort_keys=True).encode() + MARK.encode()
     ).hexdigest()[:6]
 
     def marked(value):
@@ -220,13 +233,13 @@ def add_unknown_birth(client, subject: str, artifact_qid: str) -> None:
 
 @pytest.fixture(scope="module")
 def fixture_graph(client, config):
-    """Write the fixture under its marked labels (write_fixture;
-    idempotent: re-runs reuse and skip everything), set the curator ranks,
-    add the birth of unknown value, and wait until the query service holds
-    every fixture person's latest revision. Returns the QIDs by role."""
+    """Write the fixture under its marked labels (write_fixture), set the
+    curator ranks, add the birth of unknown value, and wait until the query
+    service holds every fixture person's latest revision. Returns the QIDs
+    by role."""
     registered = {
         letter: register_fictional(
-            client, f"Privacy fixture source {letter}", "certificate"
+            client, f"Privacy fixture source {letter} {MARK}", "certificate"
         )
         for letter in "AB"
     }

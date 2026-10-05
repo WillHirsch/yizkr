@@ -12,11 +12,12 @@ deck's derived media, each found or made by the SHA-1 of its media.
   the record the stages before the write keep of it; a second write
   registers nothing new.
 
-Fictional synthetic media only (docs/EXAMPLES.md). Every title, file name
-and deck carries the SHA-1 prefix of the fixture's bytes, content-marked
-as test_live_registrar.py marks its files: a fixture with other bytes
-makes items of its own, and a re-run of one finds its own items again,
-so a re-run against a non-empty graph writes nothing. Like every live
+Fictional synthetic media only (docs/EXAMPLES.md). The fixture's bytes
+carry a marker of the session's own (conftest.fixture_mark), and every
+title, file name and deck the SHA-1 prefix of those bytes: each session
+makes items of its own, so what an earlier session wrote, a live
+mutant's run included, never meets it, and a re-run within the session
+finds its own items again and writes nothing. Like every live
 test it writes fictional data to the one instance, so the session that
 runs it ends by clearing the recorded instance-contents key
 (docs/AGENT_PROTOCOL.md §5).
@@ -37,21 +38,29 @@ from tests.unit.test_presentation import (
     slide_xml,
 )
 from yizkr.core.corpus import ExclusionList
+from yizkr.pipeline import orchestrate, registrar
 from yizkr.pipeline.orchestrate import Orchestrator
 from yizkr.pipeline.registrar import Registrar
 
-from .conftest import fictional_png
+from .conftest import fictional_png, fixture_mark
 
 pytestmark = pytest.mark.live
 
 DESCRIPTION = "written by tests/integration; safe to delete"
+# what the fixture is; a change to it gives the fixture new bytes
+FIXTURE = (
+    "#103: two copies of Gustav's birth register extract under one title "
+    "and file name, two pages each; the family firm's deck of three "
+    "slides, the shop front on the first two"
+)
+SESSION = fixture_mark(FIXTURE, registrar, orchestrate)
 
 # two copies of Gustav's birth register extract, scanned into two folders
 # under one file name: two artifacts that share a title
-FIRST = fictional_png("yizkr live test #103: the birth extract, first copy")
-SECOND = fictional_png("yizkr live test #103: the birth extract, 2nd copy")
+FIRST = fictional_png(f"yizkr live test #103: the extract, first {SESSION}")
+SECOND = fictional_png(f"yizkr live test #103: the extract, 2nd {SESSION}")
 # the shop front at Brunnenring 35, on two slides of the family firm's deck
-SHOP_FRONT = fictional_png("yizkr live test #103: the shop front")
+SHOP_FRONT = fictional_png(f"yizkr live test #103: the shop front {SESSION}")
 FIXED_TIME = (2020, 1, 1, 0, 0, 0)  # deterministic ZIP bytes across runs
 
 
@@ -76,7 +85,7 @@ def write(tmp_path, folder: str, name: str, data: bytes):
 
 def build_deck(path):
     """The family firm's deck: three slides, the shop front on the first
-    two. The same bytes on every run."""
+    two. The same bytes throughout the session."""
     presentation = (
         "<p:presentation"
         ' xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"'

@@ -55,6 +55,17 @@ record, so its English signatures only flag one; the answer is the text
 after the last tool result; and detection reads a text outside its
 editorial marks.
 
+Amended by #370 (2026-10-04): alias hygiene (§8) compares an alias with
+the label and with the aliases before it in the form the instance keeps
+a term in (the writer's `stored_term`: each run of control characters
+and line or paragraph separators made one space, trimmed, cleaned up as
+Wikibase cleans a term up, then NFC), so an alias that differs from the
+label only in that form, such as NFD against NFC or a line break
+against a space, is dropped as the label is,
+and two forms of one alias are kept once, the first as given. An alias
+the instance would keep nothing of, such as control characters alone,
+is blank and dropped.
+
 Amended by #434 (2026-10-02): a record nickname is a name the source
 gives as what the person is called, by anyone, and so also an alias; a
 name the source gives as what one person calls another, or that names
@@ -213,6 +224,64 @@ never narrow or guess.
   "Eugen /Löbig/") is that form whole, the name not written twice.
 - **Language.** A HEAD.LANG of `und` is taken as it is, uncounted.
 
+Amended by #388 (2026-10-04; the typed parts, whole birth names, chain
+links and known limits below decided by the orchestrator 2026-10-05,
+the owner may override): this settles where the first four
+readers after write that §10 lists find structure.
+
+- **Reconcile's blocking and the ADR-0019 sequencer** key on whole name
+  forms, folded as §7 folds a part (`part_keys`), never on name tokens or
+  prefixes. A manifest entity keys through its record:
+  - a person only with the status `name`, by its label, aliases,
+    unsplit forms and nicknames, and by the whole forms its typed parts
+    make: each given name, as written and as its standard form, and
+    each nickname, before each surname and patronymic, a pair whose two
+    parts fold alike making none. The postcard's "Gustl", read as
+    Gustav, keys "Gustav Löbig"; "Agnes Löbig geb. Nertler" keys "Agnes
+    Löbig" and "Agnes Nertler", whatever marker her label holds;
+  - a place only as a `toponym`, by its record's own names and address,
+    less a short form that is another name's toponym, so the camp never
+    meets its town;
+  - any other entity, or one without a record, by its label and aliases.
+
+  A graph item has no record, so it keys by its label, aliases and the
+  values of its typed name statements (`birth_name`, `nickname`,
+  `official_name`), each whole; a `married_name` is a family name alone
+  and keys nothing. The roster maps an item's kind to its manifest key
+  by the kind item's QID.
+- **The place hierarchy's parents** come from the chains of containers
+  a place's records state (`within`, §2.2), read from the batch views of
+  the run that wrote the graph and joined to the written item by the QID
+  reconcile resolved, else the item the writer used for its local id,
+  found under its label or minted (`write.json`'s `created_items`). A
+  chain is asked link by link: the place within the nearest
+  container that names an existing place, and each such container
+  within the next, every place of that name each a question for a human
+  (ADR-0009, as amended).
+- **The impossibility filter** reads containment by QID only, and in
+  clustering by the mention id that stands in for one; a name shared
+  with a container never prunes a pair (ADR-0017, as amended).
+- **The disagreement report** keeps comparing whole names, as §10
+  allows: a birth name is the graph's own typed name statement, kept in
+  the source's wording, and "Sörne" beside "Ida Sörne" are two values,
+  listed with their sources (ADR-0002).
+- The static site skips `instance of` by its property id, not its
+  English label, and no longer skips a "living person" label, a
+  property the manifest does not hold (§10's operator-side list).
+
+Known limits, to revisit with the readers' next round: a place
+whose record gives only an address ("8 Hawthorn Road, Stupfield,
+Victoria") keys only on the address, so its town never links it; and an
+event, which has no record (§2.5), keys on its label as a whole string,
+not on its participants; and a derivable alias the cleanup drops (§8,
+ADR-0022 §4) is composed again from the record's typed parts only for
+its own batch's blocking, so a later document giving only that form
+("Ida Löbig" against an item labelled "Ida Sörne Löbig") does not block
+against the written item.
+
+`kinship.rq`'s term table and the possibly-living readers stay with
+their own issues.
+
 Amended by #409 (2026-09-29): clustering keys on the records as §7 says,
 and settles what §7 leaves open. A person's kin agree only on a key a
 record gives (never on a recordless kin's name), and the couple of a
@@ -358,6 +427,31 @@ the label or another kept alias holds it, it still goes. Of several
 holders, one that also gives a name part is kept before a role phrase
 ("Frau Mutter") or a bare title. This is an in-place narrowing of §8's
 example, for the owner to confirm at merge, as decision 9 is.
+
+Amended by #435 (2026-10-02, the owner's decision on the bracket
+question): §6's bracketed part, a NAME with no TYPE and one with a TYPE
+the adapter does not recognise each also give a `name` claim of no type
+(ADR-0011, "Name forms of no stated type"), cited to its NAME, unless it
+is the label's own form, a form the person's record types, or from a
+NAME that held a placeholder (counted, `untyped name form with a
+placeholder`). The extraction prompt offers `name` for a name form whose
+type the source does not mark, other than the label's.
+Amended by #435, orchestrator decisions BN to BQ (2026-10-04; the owner
+may override at merge): a form a recognised TYPE or a `_MARNM` gives is
+typed whether or not a typed claim is made of it; the label and the
+typed forms are compared in NFC, whitespace collapsed, lower-cased (a
+sharp s kept apart from "ss"; decision CD); a placeholder anywhere in a
+NAME (its value, a bracket, a quote or a part) blocks its display form,
+one in a bracket blocks that bracket too, and a complete bracket of
+such a NAME still gives its name, so "Ida (Peppi) /?/" gives `name`
+"Peppi" (decision CE keeps this, as decided on 2026-10-02); a bracket
+holding a cue or a note ("(geb. Laudler)") gives its text verbatim,
+never read as a type; and in a document only a distinct name of open
+kind is a `name`. Decision BS, that a lettered stand-in ("N.N.",
+"[unknown]") in an export gives no `name`, is withdrawn: such a stand-in
+holds letters, and no word list may decide it (§6 reads no word by its
+meaning), so it stays a `name` statement. The extraction prompt, whose
+model reads meaning, tells it a stand-in is never `name`.
 
 **Decided by the owner (2026-09-29):**
 
@@ -1066,12 +1160,12 @@ and brackets in a NAME value, which §10 names.
 | GIVN; SURN with SPFX | given names; surnames, each whole with its particle |
 | NPFX; NSFX | titles; suffixes |
 | NICK, or a quoted part ("Cäcilie 'Cilli' Tarle") | nicknames |
-| a bracketed part ("Ida (Peppi) Sörne", "(geb. Laudler)") | an alias and an `unsplit` form, with no typed-name claim, counted |
+| a bracketed part ("Ida (Peppi) Sörne", "(geb. Laudler)") | an alias and an `unsplit` form, with no typed-name claim, counted, and a `name` claim of no type with its text verbatim, cue or note included (ADR-0011) |
 | TYPE birth or maiden | the NAME's surname `birth`, and its `birth_name` claim (ADR-0011) |
 | TYPE married or marriage | `married`, and its `married_name` claim |
 | TYPE aka, nick or nickname | the NAME's given names are nicknames, and its `nickname` claim |
 | TYPE official, legal, change, immigrant or adopted | `other`, and its `official_name` claim |
-| any other TYPE, or none | `other`, with no typed-name claim |
+| any other TYPE, or none | `other`, with no typed-name claim; the NAME's form, unless it is the label's, a `name` claim of no type (ADR-0011) |
 | `_MARNM` | a `married` surname: the part between its slashes; a value without them is `unsplit` |
 | PLAC | its first non-empty component is the place's name and the rest are `within`, each as written, with no head or toponym split: GEDCOM lists jurisdictions from the lowest |
 | HEAD.LANG | GEDCOM 5.5.1's language name, mapped to a BCP 47 code, sets the language of the adapter's texts instead of a fixed `en` (`GEDCOM_LANGUAGES`, `UNDETERMINED` in `pipeline/gedcom.py`); an absent or unknown one gives undetermined (`und`), counted |
@@ -1318,10 +1412,10 @@ into "fix first, and measure in run 1": under the pre-baseline exception
   words (`pipeline/review.py:101-102`), the monitor's command grammar
   (`pipeline/monitor.py:183-218`), the model-alias check
   (`pipeline/rundir.py:369-385`) and the site's skip of a "living person"
-  label (`staticsite.py:541`).
+  label (`staticsite.py:541`; gone since #388, amended above).
 
 **Readers after write, moved in a follow-up issue.** Scratch run 1 writes
-nothing, so these wait:
+nothing, so these wait (the first four settled by #388, amended above):
 
 - reconcile's name tokens and prefix overlap
   (`pipeline/reconcile.py:256-273`), in the per-document reconcile

@@ -33,13 +33,27 @@ import pytest
 
 from yizkr.claims import ArtifactRef, ClaimBatch, TimeValue
 from yizkr.disagreement import disagreements
+from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.queries.publish import prefix_block
 from yizkr.staticsite import format_time
 
-from .conftest import register_fictional, run_sparql, wait_for_query_service
+from .conftest import (
+    fixture_mark,
+    register_fictional,
+    run_sparql,
+    wait_for_query_service,
+)
 
 pytestmark = pytest.mark.live
+
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "#241: one person's birth as three sources date it, in the 19th "
+    "century, in 1900 and in 1800, and an event in the 18th century BCE "
+    "and in 1701 BCE"
+)
+MARK = fixture_mark(FIXTURE, writer)
 
 
 def local(local_id: str, label: str, kind: str) -> dict:
@@ -90,8 +104,11 @@ def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
     writer's time conversion starts from, so a to_wikibase that gives
     another time (a mutant of the harness, say) writes items of its own
     too, and never leaves a second value on these. A change inside
-    BatchWriter._to_wbi_claim is not hashed. Returns the write's result
-    and the marker."""
+    BatchWriter._to_wbi_claim is not hashed, but the writer's source is,
+    through the module's marker (conftest.fixture_mark), with the session's
+    random bytes: each session writes items of its own, so what an earlier
+    session wrote, a live mutant's run included, never meets it. Returns
+    the write's result and the marker."""
     stored = [
         TimeValue.model_validate(claim["value"]).to_wikibase()
         for claim in claims
@@ -110,7 +127,7 @@ def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
         for claim in claims
     ]
     marker = hashlib.sha256(
-        json.dumps([content, stored], sort_keys=True).encode()
+        json.dumps([content, stored], sort_keys=True).encode() + MARK.encode()
     ).hexdigest()[:6]
 
     def marked(value):
@@ -141,28 +158,30 @@ def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
 @pytest.fixture(scope="module")
 def fixture_graph(client, config):
     """Write the fixture under its marked labels (write_fixture;
-    idempotent: re-runs reuse and skip everything) and wait until the
-    query service holds each subject's latest revision. Returns (QIDs by
-    role, source QIDs by letter)."""
+    idempotent: a re-run within the session reuses and skips everything)
+    and wait until the query service holds each subject's latest revision.
+    Returns (QIDs by role, source QIDs by letter)."""
     registered = {
         letter: register_fictional(
-            client, f"Century fixture source {letter}", "certificate"
+            client, f"Century fixture source {letter} {MARK}", "certificate"
         )
         for letter in "ABC"
     }
     source = {letter: registered[letter].ref for letter in "ABC"}
-    written, _ = write_fixture(
-        client,
-        {ref.sha1: letter for letter, ref in source.items()},
-        [
-            # per A: born in the 19th century, given by its first year
-            claim(PERSON, "date_of_birth", date(1801, "century"), source["A"]),
-            # per B: in 1900, the 19th century's last year
-            claim(PERSON, "date_of_birth", date(1900), source["B"]),
-            # per C: in 1800, the 18th century's last year
-            claim(PERSON, "date_of_birth", date(1800), source["C"]),
-        ],
-    )
+    letters = {ref.sha1: letter for letter, ref in source.items()}
+    claims = [
+        # per A: born in the 19th century, given by its first year
+        claim(PERSON, "date_of_birth", date(1801, "century"), source["A"]),
+        # per B: in 1900, the 19th century's last year
+        claim(PERSON, "date_of_birth", date(1900), source["B"]),
+        # per C: in 1800, the 18th century's last year
+        claim(PERSON, "date_of_birth", date(1800), source["C"]),
+    ]
+    written, _ = write_fixture(client, letters, claims)
+    # written again, the fixture finds every item and statement
+    again, _ = write_fixture(client, letters, claims)
+    assert (again.written, again.referenced) == (0, 0)
+    assert again.created_items == written.created_items
     qids = {"person": written.created_items[PERSON["local_id"]]}
     wait_for_query_service(config, client, list(qids.values()))
     return qids, {letter: registered[letter].qid for letter in "ABC"}

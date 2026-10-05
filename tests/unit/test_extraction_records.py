@@ -380,9 +380,11 @@ APPELLATION_RULE = (
     '("Bubele", "Nana Maisie", "Рудольфиха"), is `referred_to_as`: '
     "never an alias and never a record nickname."
 )
+# the chunk prompt goes on "is their name form (label or alias)", which
+# keeps the rule apart from its `name` property (#435)
 GREETING_RULE = (
     "A name a writer simply uses for someone, in a greeting "
-    '("Liebes Pünktchen!") or a mention, is their name.'
+    '("Liebes Pünktchen!") or a mention, is their name'
 )
 _MANIFEST_ALIASES, _RECORD = flat(ENTITY_MANIFEST_PROMPT).split(
     "The mention record (ADR-0035)"

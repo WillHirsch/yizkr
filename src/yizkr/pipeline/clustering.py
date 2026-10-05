@@ -1404,9 +1404,7 @@ def _facts(node: _Node) -> PairFacts:
     """The impossibility filter's input, lifted: the mention's fingerprint
     stands in for a QID, and its kin are the mentions its manifest relates
     it to."""
-    return PairFacts(
-        kind=node.kind, label=node.label, qid=node.id, kin_qids=node.kin_ids
-    )
+    return PairFacts(kind=node.kind, qid=node.id, kin_qids=node.kin_ids)
 
 
 def _containment(nodes: Sequence[_Node]) -> PlaceContainment:
@@ -1427,8 +1425,7 @@ def _containment(nodes: Sequence[_Node]) -> PlaceContainment:
             if other in index:
                 stack.extend(index[other].containers)
         ancestors[node.id] = seen
-    labels = {node.id: node.label for node in nodes if node.kind == PLACE_KIND}
-    return PlaceContainment(ancestors, labels)
+    return PlaceContainment(ancestors)
 
 
 def _apart(first: _Node, second: _Node) -> bool:
@@ -1960,22 +1957,13 @@ class _Conflicts:
     def find(self, members: Sequence[str]) -> tuple[str, Pair] | None:
         """(hard or soft, the pair that makes it so) for a conflicting
         cluster, None otherwise: hard when the impossibility filter rules
-        two members out (a kin edge, or a member named like a place
-        containing another), soft when they are only two ids of one
-        manifest."""
+        two members out (a kin edge, or a member place containing
+        another), soft when they are only two ids of one manifest."""
         inside = set(members)
         nodes = [self._nodes[member] for member in sorted(members)]
-        places: dict[str, list[str]] = defaultdict(list)
-        for node in nodes:
-            if node.kind == PLACE_KIND:
-                places[node.label].append(node.id)
         for node in nodes:
             related = node.kin_ids & inside
-            related.update(
-                other
-                for label in self._containment.container_labels(node.id)
-                for other in places.get(label, ())
-            )
+            related |= self._containment.containers(node.id) & inside
             for other_id in sorted(related - {node.id}):
                 if self._impossible(node, self._nodes[other_id]):
                     return HARD, _pair(node.id, other_id)

@@ -11,10 +11,10 @@ writes nothing.
 
 The engine is scripted: it reads the image as the top of Sebastian's 1939
 letter (`letter-excerpt-1939`) and names one person in each document.
-Fictional data only (docs/EXAMPLES.md). The PDF's image and its title
-carry a mark of their own, from the SHA-1 of the fixture's image, so a
-fixture with other bytes makes items of its own and a re-run against a
-non-empty graph finds its own items again. Like every live test it writes
+Fictional data only (docs/EXAMPLES.md). The PDF's image carries the
+session's marker (conftest.fixture_mark), and its title a mark from the
+SHA-1 of that image, so each session makes items of its own, and a re-run
+within the session finds its own items again. Like every live test it writes
 fictional data to the one instance, so the session that runs it ends by
 clearing the recorded instance-contents key (docs/AGENT_PROTOCOL.md §5).
 """
@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 
 import pytest
@@ -31,6 +30,7 @@ import pytest
 from tests.fixtures import example_universe as u
 from tests.fixtures import pdfs
 from tests.fixtures.records import record_answer
+from tests.integration.conftest import fixture_mark
 from tests.integration.test_live_write_time_registration import (
     cited,
     entities,
@@ -39,7 +39,7 @@ from tests.integration.test_live_write_time_registration import (
     value,
 )
 from yizkr.core.corpus import ExclusionList
-from yizkr.pipeline import transcribe
+from yizkr.pipeline import orchestrate, transcribe, writer
 from yizkr.pipeline.orchestrate import EXCERPT, WRITTEN, Orchestrator
 from yizkr.pipeline.review import accept_all
 from yizkr.pipeline.textlayer import png
@@ -55,13 +55,19 @@ TRANSLATION = (
     "Rahel now lives at Angerring 71."
 )
 WIDTH, HEIGHT = 300, 120
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "#397: the booklet, its page 6 holding the top of Sebastian's 1939 "
+    "letter above its translation, each naming one person"
+)
 # the letter's image: grey pixels of this test session's own. A live
 # mutant run writes what the mutant wrote onto the items of the bytes it
 # read, and statements are never removed, so each session reads new bytes;
 # the test's second ingest is the re-run that must change nothing
+SESSION = fixture_mark(FIXTURE, orchestrate, transcribe, writer)
 PIXELS = (
     hashlib.sha256(
-        b"yizkr live test #397: the letter's top " + os.urandom(16)
+        f"yizkr live test #397: the letter's top {SESSION}".encode()
     ).digest()
     * (WIDTH * HEIGHT // 32 + 1)
 )[: WIDTH * HEIGHT]

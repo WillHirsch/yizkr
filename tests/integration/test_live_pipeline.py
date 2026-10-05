@@ -5,12 +5,16 @@ item's type statements, which the reappraisal queue and the unreferenced
 report must count correctly (#88), and a later source's kind for an item
 that already exists, which the queue must reflect (#233). Every claim
 cites its artifact by the SHA-1 of the artifact's media (#102), which the
-writer resolves to the registered item."""
+writer resolves to the registered item.
+
+Every label, title and image carries the session's marker
+(conftest.fixture_mark), so each session meets the fixture as a first
+write: what an earlier session wrote, a live mutant's run included, never
+stands on its items. Within the session a re-run finds its own items
+again."""
 
 from __future__ import annotations
 
-import struct
-import zlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -18,52 +22,48 @@ import pytest
 
 from tests.fixtures import example_universe as u
 from yizkr.claims import ArtifactRef, ClaimBatch, QidRef
+from yizkr.pipeline import reconcile, registrar, resolve, writer
 from yizkr.pipeline.reconcile import apply_equivalences
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.resolve import resolve_batch
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.queries.publish import load_templates, render_for_instance
 
-from .conftest import register_fictional, run_sparql, wait_for_query_service
+from .conftest import (
+    fictional_png,
+    fixture_mark,
+    register_fictional,
+    run_sparql,
+    wait_for_query_service,
+)
 
 pytestmark = pytest.mark.live
 
-ARTIFACT_TITLE = "Integration-test certificate"
-PERSON_LABEL = "Integration Test Person"
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "#88, #102, #233: a certificate and its test person, coexisting and "
+    "agreeing births, the family firm as the 2002 interview and the 1912 "
+    "directory give it, and Sebastian Löbig in the 1905 marriage "
+    "certificate"
+)
+MARK = fixture_mark(FIXTURE, writer, registrar, resolve, reconcile)
+ARTIFACT_TITLE = f"Integration-test certificate {MARK}"
+PERSON_LABEL = f"Integration Test Person {MARK}"
 # the example universe's family firm, under this file's label prefix
-FIRM_LABEL = "Integration Test Hutmacherei zum Blauen Hut"
-
-
-def png_bytes(fill: bytes = b"\x32\x32\xc8") -> bytes:
-    """A minimal valid 4x4 PNG; varying `fill` (an RGB triple) varies the
-    content hash, so callers can make identical or distinct images."""
-
-    def chunk(tag, data):
-        payload = tag + data
-        return (
-            struct.pack(">I", len(data))
-            + payload
-            + struct.pack(">I", zlib.crc32(payload))
-        )
-
-    raw = b"".join(b"\x00" + fill * 4 for _ in range(4))
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 4, 8, 2, 0, 0, 0))
-        + chunk(b"IDAT", zlib.compress(raw))
-        + chunk(b"IEND", b"")
-    )
+FIRM_LABEL = f"Integration Test Hutmacherei zum Blauen Hut {MARK}"
+# the certificate's media: bytes of the session's own
+CERTIFICATE_BYTES = fictional_png(f"yizkr live test: certificate {MARK}")
 
 
 def tiny_png(tmp_path):
-    path = tmp_path / "integration-test-certificate.png"
-    path.write_bytes(png_bytes())
+    path = tmp_path / f"integration-test-certificate-{MARK}.png"
+    path.write_bytes(CERTIFICATE_BYTES)
     return path
 
 
 # the certificate the `artifact` fixture registers, by the SHA-1 of its
 # media: the key its claims cite
-CERTIFICATE = ArtifactRef.from_bytes(png_bytes())
+CERTIFICATE = ArtifactRef.from_bytes(CERTIFICATE_BYTES)
 
 
 def birth_batch(artifact: ArtifactRef, year: int) -> ClaimBatch:
@@ -122,7 +122,7 @@ def test_register_is_idempotent(client, artifact, tmp_path):
     # read from another file, are the one artifact, with the one page
     # fragment
     media = tmp_path / "integration-test-certificate-again.png"
-    media.write_bytes(png_bytes())
+    media.write_bytes(CERTIFICATE_BYTES)
     again = register_artifact(
         client,
         media_path=media,
@@ -155,14 +155,14 @@ def test_identical_bytes_new_name_reuse_one_artifact(client, tmp_path):
     """ADR-0010: the same bytes under a different filename resolve to the
     one artifact item (keyed on content hash, not the title), and the new
     filename is kept as an alias — no duplicate item sharing a blob."""
-    content = png_bytes(fill=b"\x11\x77\x22")
+    content = fictional_png(f"yizkr live test: hash key {MARK}")
     first_path = tmp_path / "hash-key-original.png"
     first_path.write_bytes(content)
     first = register_artifact(
         client,
         media_path=first_path,
         artifact_type="photograph",
-        title="Hash Key Original",
+        title=f"Hash Key Original {MARK}",
     )
 
     second_path = tmp_path / "hash-key-copy.png"  # identical bytes, new name
@@ -171,7 +171,7 @@ def test_identical_bytes_new_name_reuse_one_artifact(client, tmp_path):
         client,
         media_path=second_path,
         artifact_type="photograph",
-        title="Hash Key Copy",
+        title=f"Hash Key Copy {MARK}",
     )
 
     assert second.artifact_qid == first.artifact_qid  # one artifact, not two
@@ -181,7 +181,7 @@ def test_identical_bytes_new_name_reuse_one_artifact(client, tmp_path):
     # the alternate filename-title became an alias
     item = client.wbi.item.get(first.artifact_qid)
     aliases = {str(alias) for alias in (item.aliases.get("en") or [])}
-    assert "Hash Key Copy" in aliases
+    assert f"Hash Key Copy {MARK}" in aliases
 
 
 def test_same_title_different_content_stays_distinct(client, tmp_path):
@@ -190,28 +190,28 @@ def test_same_title_different_content_stays_distinct(client, tmp_path):
     a content-tag suffix, and the two remain separate artifacts for the
     near-duplicate pass to relate later."""
     path_a = tmp_path / "collide-a.png"
-    path_a.write_bytes(png_bytes(fill=b"\x01\x02\x03"))
+    path_a.write_bytes(fictional_png(f"yizkr live test: collision a {MARK}"))
     a = register_artifact(
         client,
         media_path=path_a,
         artifact_type="photograph",
-        title="Collision Title",
+        title=f"Collision Title {MARK}",
     )
 
     path_b = tmp_path / "collide-b.png"  # DIFFERENT bytes, same intended title
-    path_b.write_bytes(png_bytes(fill=b"\xaa\xbb\xcc"))
+    path_b.write_bytes(fictional_png(f"yizkr live test: collision b {MARK}"))
     b = register_artifact(
         client,
         media_path=path_b,
         artifact_type="photograph",
-        title="Collision Title",
+        title=f"Collision Title {MARK}",
     )
 
     assert b.artifact_qid != a.artifact_qid
     label_a = str(client.wbi.item.get(a.artifact_qid).labels.get("en"))
     label_b = str(client.wbi.item.get(b.artifact_qid).labels.get("en"))
-    assert label_a == "Collision Title"
-    assert label_b.startswith("Collision Title [")  # disambiguated
+    assert label_a == f"Collision Title {MARK}"
+    assert label_b.startswith(f"Collision Title {MARK} [")  # disambiguated
 
 
 def birth_years_on(client, qid: str) -> set[str]:
@@ -249,6 +249,8 @@ def test_conflicting_values_coexist(client, artifact):
 
 
 def test_write_is_idempotent_and_dual_referenced(client, artifact):
+    # written here, or found as the coexistence test wrote it
+    BatchWriter(client).write_batch(birth_batch(CERTIFICATE, 1901))
     writer = BatchWriter(client)
     result = writer.write_batch(birth_batch(CERTIFICATE, 1901))
     assert result.written == 0
@@ -311,18 +313,21 @@ def test_agreeing_second_source_appends_reference(client, artifact):
     second = register_fictional(
         client, f"{ARTIFACT_TITLE} (second source)", "certificate"
     )
+    # the first source's statement: written here, or found as the
+    # coexistence test wrote it
+    BatchWriter(client).write_batch(birth_batch(CERTIFICATE, 1901))
     writer = BatchWriter(client)
     result = writer.write_batch(birth_batch(second.ref, 1901))
     assert result.written == 0
-    # first suite run appends the reference; later runs find it present
-    assert (result.referenced, result.skipped) in ((1, 0), (0, 1))
+    # the session's first write of the second source appends its reference
+    assert (result.referenced, result.skipped) == (1, 0)
     person_qid = result.created_items["person-1"]
 
     count, sources = stated_in_values(
         client, person_qid, "+1901-00-00T00:00:00Z"
     )
     assert count == 1  # still one statement, not a duplicate
-    assert {artifact.artifact_qid, second.qid} <= sources
+    assert sources == {artifact.artifact_qid, second.qid}
 
     # re-running the same batch is a no-op (reference already present)
     rerun = BatchWriter(client).write_batch(birth_batch(second.ref, 1901))
@@ -471,7 +476,7 @@ def vocabulary_batch(artifact: ArtifactRef) -> ClaimBatch:
                         "value": {
                             "kind": "local",
                             "local_id": "occ-1",
-                            "label": "Integration test occupation",
+                            "label": f"Integration test occupation {MARK}",
                             "instance_of": "occupation_class",
                         },
                     },
@@ -485,7 +490,7 @@ def vocabulary_batch(artifact: ArtifactRef) -> ClaimBatch:
                         "value": {
                             "kind": "local",
                             "local_id": "pl-1",
-                            "label": "Integration Test Cemetery",
+                            "label": f"Integration Test Cemetery {MARK}",
                             "instance_of": "place",
                         },
                     },
@@ -682,7 +687,7 @@ def harness_batch(artifact: ArtifactRef) -> ClaimBatch:
                     "subject": {
                         "kind": "local",
                         "local_id": "ship-1",
-                        "label": "SS Integration",
+                        "label": f"SS Integration {MARK}",
                         "instance_of": "unclassified_entity",
                     },  # fmt: skip
                     "property": "point_in_time",
@@ -699,7 +704,7 @@ def harness_batch(artifact: ArtifactRef) -> ClaimBatch:
                 },  # fmt: skip
                 {
                     "id": "ship-1",
-                    "label": "SS Integration",
+                    "label": f"SS Integration {MARK}",
                     "kind": "unclassified_entity",
                     "type_hint": "ocean liner",
                 },  # fmt: skip
@@ -756,7 +761,8 @@ def kinship_batch(artifact: ArtifactRef) -> ClaimBatch:
     }
     person = {"kind": "local", "local_id": "person-1", "label": PERSON_LABEL,
               "instance_of": "human"}  # fmt: skip
-    aunt = {"kind": "local", "local_id": "aunt-1", "label": "Integration Aunt",
+    aunt_label = f"Integration Aunt {MARK}"
+    aunt = {"kind": "local", "local_id": "aunt-1", "label": aunt_label,
             "instance_of": "human"}  # fmt: skip
     return ClaimBatch.model_validate(
         {
@@ -794,7 +800,7 @@ def kinship_batch(artifact: ArtifactRef) -> ClaimBatch:
                     "subject": {
                         "kind": "local",
                         "local_id": "event-1",
-                        "label": "Deportation of Integration Test Person",
+                        "label": f"Deportation of {PERSON_LABEL}",
                         "instance_of": "deportation",
                     },
                     "property": "participant",
@@ -810,10 +816,10 @@ def kinship_batch(artifact: ArtifactRef) -> ClaimBatch:
             ],
             "entities": [
                 {"id": "person-1", "label": PERSON_LABEL, "kind": "human"},
-                {"id": "aunt-1", "label": "Integration Aunt", "kind": "human"},
+                {"id": "aunt-1", "label": aunt_label, "kind": "human"},
                 {
                     "id": "event-1",
-                    "label": "Deportation of Integration Test Person",
+                    "label": f"Deportation of {PERSON_LABEL}",
                     "kind": "deportation",
                 },  # fmt: skip
             ],
@@ -874,20 +880,19 @@ def test_adr0014_vocabulary_writes(client, artifact):
 # firm an organization, with an `instance of` claim of its own. The first
 # batch mints the item, so the writer writes its kind and type hint.
 #
-# Every label carries a marker, so the fixture never reuses an item that
-# another test or run wrote, and a re-run reuses and skips everything. It
-# is not the marker the slice had when its claims cited their sources by
-# QID (#102): those batches, and so their run items, were others.
+# Every label carries a marker, with the module's (MARK), so the fixture
+# never reuses an item that another test or an earlier session wrote, and
+# a re-run within the session reuses and skips everything.
 
 UNIVERSE = u.by_key()
 INTERVIEW = "interview-2002"
 DIRECTORY = "directory-1912"
-TYPE_MARK = "(type-statement test, content-keyed)"
+TYPE_MARK = f"(type-statement test {MARK})"
 TYPE_HINT = "hat shop"  # the interview's own word for the firm
 # the directory's entry: a firm, its founding year and its owner
 FIRM_ENTRY = "Hutmacherei zum Blauen Hut, gegr. 1863, Inh. Sebastian Löbig"
-# fixed, so a re-run's batches keep their fingerprints and reuse their
-# extraction-run items
+# fixed, so a re-run's batches within the session keep their fingerprints
+# and reuse their extraction-run items
 TYPE_RUN = {
     "model_identifier": "integration-test",
     "pipeline_version": "0.0.0",
@@ -897,7 +902,7 @@ TYPE_RUN = {
 
 def type_marked(key: str) -> str:
     """The universe's label (or title) for `key`, with this section's
-    marker: a label no other test or run writes."""
+    marker: a label no other test or session writes."""
     entry = UNIVERSE[key]
     return f"{getattr(entry, 'title', None) or entry.label} {TYPE_MARK}"
 
@@ -991,8 +996,8 @@ class TypedFirm:
 @pytest.fixture(scope="module")
 def typed_firm(client, config) -> TypedFirm:
     """Write the slice, the interview's batch first (idempotent: a re-run
-    reuses and skips everything), and wait until the query service holds
-    it."""
+    within the session reuses and skips everything), and wait until the
+    query service holds it."""
     # quoted, never paraphrased
     assert TYPE_HINT in UNIVERSE[INTERVIEW].text
     assert FIRM_ENTRY in UNIVERSE[DIRECTORY].text
@@ -1162,12 +1167,12 @@ def test_rewriting_the_slice_writes_nothing(client, typed_firm):
 # resolve step matches Sebastian by exact label, so its claims name both
 # by QID (ADR-0007).
 #
-# The marker keeps this slice apart from every other test's items, and the
-# fixed run metadata keeps each batch's fingerprint, so a re-run reuses
-# the items and run items and writes nothing. It is not the marker the
-# slice had when its claims cited their sources by QID (#102).
+# The marker, with the module's (MARK), keeps this slice apart from every
+# other test's items and every earlier session's, and the fixed run
+# metadata keeps each batch's fingerprint, so a re-run within the session
+# reuses the items and run items and writes nothing.
 
-WITNESS_MARK = "(kind-witness test, content-keyed)"
+WITNESS_MARK = f"(kind-witness test {MARK})"
 MARRIAGE = "marriage-cert-1905"
 WITNESS_RUN = {
     "model_identifier": "integration-test",
@@ -1324,7 +1329,8 @@ class WitnessedSlice:
 def witnessed(client, config) -> WitnessedSlice:
     """Write the slice in source order, the directory's batch after the
     equivalence and resolve steps, and wait until the query service holds
-    it. Idempotent: a re-run reuses and skips everything."""
+    it. Idempotent: a re-run within the session reuses and skips
+    everything."""
     for key, quoted in (
         (MARRIAGE, "der Hutmacher Sebastian Löbig"),
         (INTERVIEW, "The hat shop, the Blue Hat"),

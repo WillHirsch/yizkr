@@ -1,12 +1,16 @@
 """Place hierarchy pass (ADR-0009).
 
 Demand-driven containment: the worklist is derived from the
-inconsistency report's own unresolved place pairs plus deterministic
-comma-parent candidates ("Flörburg, Hesse, Germany" comma-suffixes
-onto "Hesse, Germany" / "Germany" when those places exist).
-Questions are ordered spine-first (fewer commas ≈ larger scale) and
-each `--apply` round re-derives the worklist through the graph's
-`(location|part_of)+` closure — transitive elimination between rounds.
+inconsistency report's own unresolved place pairs plus stated-parent
+candidates: the chain of containers a place's mention record states
+(ADR-0035 §2.2: "Fläckfeld, Kreis Mockburg, Hesse" is Fläckfeld within
+Kreis Mockburg within Hesse), asked link by link against every existing
+place of each name. A label's punctuation never says what contains
+what. Questions are ordered spine-first by the
+graph's own containment (a place the graph puts more places inside is
+of larger scale) and each `--apply` round re-derives the worklist
+through the graph's `(location|part_of)+` closure — transitive
+elimination between rounds.
 
 Verdicts extend ADR-0007: same | a_within_b | b_within_a | distinct |
 uncertain. Only human-approved containment rows are ever written
@@ -17,6 +21,7 @@ existing curator-executed identity flow and are never applied here.
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import hashlib
 import json
@@ -26,6 +31,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from yizkr.claims import ClaimBatch, PlaceStructure
 from yizkr.core.config import Config
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.extract import scan_json_objects
@@ -54,15 +60,15 @@ class PlaceRecord:
     label: str
     aliases: list[str] = field(default_factory=list)
     parents: list[str] = field(default_factory=list)  # existing containment
-
-    @property
-    def comma_depth(self) -> int:
-        return self.label.count(",")
+    # each of its mention records' chains of containers, as written,
+    # nearest first, in the source's order (ADR-0035 §2.2); never
+    # written to the graph
+    chains: list[list[str]] = field(default_factory=list)
 
 
 @dataclass
 class Question:
-    kind: str  # "competing" (report pair) | "parent" (comma candidate)
+    kind: str  # "competing" (report pair) | "parent" (stated container)
     qid_a: str
     qid_b: str
     context: str = ""  # human-readable why-this-is-asked
@@ -181,56 +187,204 @@ def fetch_competing_pairs(
     return questions
 
 
-def comma_parent_candidates(places: list[PlaceRecord]) -> list[Question]:
-    """Deterministic parent candidates from hierarchical labels.
+# a run directory's document views, newest first: the batch the writer
+# wrote, the one reconcile resolved, and the extraction's own
+_BATCH_VIEWS = ("batch.approved.json", "batch.resolved.json", "batch.json")
 
-    'A, B, C' proposes the nearest existing place whose label or alias
-    equals a comma-suffix ('B, C' preferred over 'C'). Structure never
-    rides the generative path: these arrive pre-evidenced.
-    """
-    by_name: dict[str, str] = {}
+
+def _document_dirs(run_dir: Path) -> list[Path]:
+    """Each directory of a run directory, an excerpt's too; one that
+    holds no write.json is passed over by the caller."""
+    from yizkr.pipeline.orchestrate import EXCERPTS_DIR
+
+    try:
+        entries = sorted(run_dir.iterdir())
+    except OSError:
+        return []
+    with contextlib.suppress(OSError):
+        entries += sorted((run_dir / EXCERPTS_DIR).iterdir())
+    return [
+        entry
+        for entry in entries
+        if entry.is_dir()
+        and not entry.name.startswith(".")
+        and entry.name != EXCERPTS_DIR
+    ]
+
+
+def record_containers(run_dir: Path) -> dict[str, list[list[str]]]:
+    """QID -> the chains of containers the mention records of a written
+    place state, from the run directory that wrote the graph.
+
+    A document's place reaches its QID through the batch it was written
+    from: the QID reconcile resolved it to, else the item the writer used
+    for its local id, found under its label or minted (`write.json`'s
+    `created_items`). A place with no such QID, or whose record states no
+    container, is left out; a directory set aside (a dot name), or one
+    whose write.json is missing or no object, is passed over."""
+    found: dict[str, list[list[str]]] = {}
+    for directory in _document_dirs(run_dir):
+        try:
+            written = json.loads((directory / "write.json").read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(written, dict):
+            continue
+        created = written.get("created_items")
+        if not isinstance(created, dict):
+            created = {}
+        batch = None
+        for name in _BATCH_VIEWS:
+            try:
+                batch = ClaimBatch.model_validate_json(
+                    (directory / name).read_text()
+                )
+            except (OSError, ValueError):
+                continue
+            break
+        if batch is None:
+            continue
+        for entity in batch.entities:
+            record = entity.structure
+            if not isinstance(record, PlaceStructure) or not record.within:
+                continue
+            qid = entity.qid or created.get(entity.id)
+            if not isinstance(qid, str) or not qid:
+                continue
+            chains = found.setdefault(qid, [])
+            if record.within not in chains:
+                chains.append(list(record.within))
+    return found
+
+
+def _ancestors(places: list[PlaceRecord]) -> dict[str, set[str]]:
+    """QID -> every place the graph transitively puts it in."""
+    parents = {place.qid: set(place.parents) for place in places}
+    closure: dict[str, set[str]] = {}
+    for qid in parents:
+        seen: set[str] = set()
+        stack = sorted(parents[qid])
+        while stack:
+            parent = stack.pop()
+            if parent in seen or parent == qid:
+                continue
+            seen.add(parent)
+            stack.extend(sorted(parents.get(parent, ())))
+        closure[qid] = seen
+    return closure
+
+
+def stated_parent_candidates(places: list[PlaceRecord]) -> list[Question]:
+    """Parent candidates from the chains of containers a place's records
+    state, link by link: the place within the nearest container of its
+    chain that names an existing place, and each such container within
+    the next. A chain's farther containers are never asked of the place
+    itself, so an approved chain writes no shortcut edge; its links
+    still place a nearest container that states no parent of its own.
+
+    A container names every existing place whose label or an alias is
+    that name, folded for case and accents and with umlauts written out
+    (ADR-0035 §7); namesakes are each asked, never one guessed. A pair
+    whose parent the graph already puts the child in, or that it puts
+    inside the child, is not asked. Structure never rides the generative
+    path: these arrive pre-evidenced."""
+    from yizkr.pipeline.clustering import part_keys
+
+    by_key: dict[str, list[str]] = {}
     for place in places:
         for name in (place.label, *place.aliases):
-            by_name.setdefault(name.strip().casefold(), place.qid)
+            for key in part_keys(name):
+                by_key.setdefault(key, []).append(place.qid)
+
+    def named(container: str, besides: str) -> list[str]:
+        return [
+            qid
+            for key in sorted(part_keys(container))
+            for qid in by_key.get(key, ())
+            if qid != besides
+        ]
+
+    ancestors = _ancestors(places)
     questions = []
-    for place in places:
-        parts = [part.strip() for part in place.label.split(",")]
-        for start in range(1, len(parts)):
-            suffix = ", ".join(parts[start:]).casefold()
-            parent = by_name.get(suffix)
-            if parent and parent != place.qid:
-                if parent not in place.parents:
-                    questions.append(
-                        Question(
-                            kind="parent",
-                            qid_a=place.qid,
-                            qid_b=parent,
-                            context=(
-                                f"label comma-suffix "
-                                f"{', '.join(parts[start:])!r} "
-                                f"names an existing place"
-                            ),
-                        )
+    asked: set[tuple[str, str]] = set()
+
+    def ask(children: list[str], parents: list[str], context: str) -> None:
+        for child in children:
+            for parent in parents:
+                if (
+                    parent == child
+                    or (child, parent) in asked
+                    or parent in ancestors.get(child, ())
+                    or child in ancestors.get(parent, ())
+                ):
+                    continue
+                asked.add((child, parent))
+                questions.append(
+                    Question(
+                        kind="parent",
+                        qid_a=child,
+                        qid_b=parent,
+                        context=context,
                     )
-                break  # nearest suffix only
+                )
+
+    for place in places:
+        for chain in place.chains:
+            links = [
+                (container, found)
+                for container in chain
+                if (found := named(container, place.qid))
+            ]
+            if not links:
+                continue
+            nearest, parents = links[0]
+            ask(
+                [place.qid],
+                parents,
+                f"a record states it within {nearest!r}, which names an "
+                f"existing place",
+            )
+            for (inner, children), (outer, parents) in zip(
+                links, links[1:], strict=False
+            ):
+                ask(
+                    children,
+                    parents,
+                    f"a record states {inner!r} within {outer!r}, each "
+                    f"naming an existing place",
+                )
     return questions
 
 
 def build_worklist(
-    places: list[PlaceRecord], competing: list[Question], comma: list[Question]
+    places: list[PlaceRecord],
+    competing: list[Question],
+    stated: list[Question],
 ) -> list[Question]:
-    """Deduplicated, spine-first (larger scale ≈ fewer commas first)."""
-    depth = {place.qid: place.comma_depth for place in places}
+    """Deduplicated, spine-first: a question whose places the graph puts
+    more places inside comes first (larger scale), then one whose places
+    it puts in fewer."""
+    ancestors = _ancestors(places)
+    inside: dict[str, int] = dict.fromkeys(ancestors, 0)
+    for found in ancestors.values():
+        for qid in found:
+            inside[qid] = inside.get(qid, 0) + 1
     seen: set[frozenset] = set()
     worklist: list[Question] = []
-    for question in [*comma, *competing]:
+    for question in [*stated, *competing]:
         key = frozenset((question.qid_a, question.qid_b))
         if key in seen:
             continue
         seen.add(key)
         worklist.append(question)
     worklist.sort(
-        key=lambda q: min(depth.get(q.qid_a, 9), depth.get(q.qid_b, 9))
+        key=lambda q: (
+            -max(inside.get(q.qid_a, 0), inside.get(q.qid_b, 0)),
+            min(
+                len(ancestors.get(q.qid_a, ())),
+                len(ancestors.get(q.qid_b, ())),
+            ),
+        )
     )
     return worklist
 
@@ -458,9 +612,17 @@ def ensure_places_run_item(
     characters, before anything is read when the label holds a character
     Python's Unicode tables do not know (writer.unknown_characters): the
     instance may keep it in another form, and the next pass would not
-    find the item by it and would make another."""
+    find the item by it and would make another. The label is looked for
+    and sent in the form the instance keeps a label in, as the writer
+    sends one (writer._term_text: trimmed, one line, in Unicode NFC, cut
+    to the characters the instance holds), so a model identifier given
+    in another form, such as NFD, finds the item made for it."""
     from yizkr.pipeline.registrar import ensure_self_typed
-    from yizkr.pipeline.writer import _unknown_fault, unknown_characters
+    from yizkr.pipeline.writer import (
+        _term_text,
+        _unknown_fault,
+        unknown_characters,
+    )
 
     label = f"place-hierarchy run {model} {fingerprint}"
     unknown = unknown_characters(label)
@@ -469,6 +631,7 @@ def ensure_places_run_item(
             f"the place-hierarchy run's label {_unknown_fault(unknown)}: "
             f"give the model identifier without it. Nothing was written"
         )
+    label = _term_text(label)
     qid = client.find_item_by_label(label)
     if qid is None:
         item = client.wbi.item.new()

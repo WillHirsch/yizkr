@@ -1,5 +1,7 @@
 """Offline tests for greedy-overlap artifact sequencing (ADR-0019)."""
 
+import json
+
 from yizkr.pipeline.sequencing import sequence_documents
 
 
@@ -66,3 +68,64 @@ class TestSequenceDocuments:
             ("solo", set()),
         ]
         assert set(sequence_documents(items)) == {"hub", "z1", "z2", "solo"}
+
+
+class TestEntityKeys:
+    """The serial sequencer keys a document by the whole name forms of its
+    extractable entities, read through their mention records, as
+    reconcile blocks (#388): a shared surname alone connects nothing."""
+
+    def keys(self, tmp_path, entities):
+        from types import SimpleNamespace
+
+        from yizkr.pipeline.orchestrate import Orchestrator
+
+        path = tmp_path / "batch.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "extraction_run": {
+                        "model_identifier": "fake-model",
+                        "pipeline_version": "0.1.0",
+                        "started_at": "2026-07-13T09:00:00Z",
+                    },
+                    "claims": [],
+                    "entities": entities,
+                }
+            )
+        )
+        return Orchestrator._entity_keys(None, SimpleNamespace(batch=path))
+
+    def test_whole_forms_of_extractable_entities(self, tmp_path):
+        keys = self.keys(
+            tmp_path,
+            [
+                {
+                    "id": "e1",
+                    "label": "Gustav Löbig",
+                    "aliases": ["Gustl"],
+                    "kind": "human",
+                },
+                {
+                    "id": "e2",
+                    "label": "Standesamt Flörburg",
+                    "kind": "organization",
+                    "extract": False,
+                },
+                {
+                    "id": "e3",
+                    "label": "Dein Vater",
+                    "kind": "human",
+                    "structure": {"kind": "human", "status": "kinship"},
+                },
+            ],
+        )
+        assert keys == {"gustav lobig", "gustav loebig", "gustl"}
+
+    def test_no_batch_no_keys(self, tmp_path):
+        from types import SimpleNamespace
+
+        from yizkr.pipeline.orchestrate import Orchestrator
+
+        missing = SimpleNamespace(batch=tmp_path / "batch.json")
+        assert Orchestrator._entity_keys(None, missing) == set()

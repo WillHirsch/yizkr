@@ -47,11 +47,24 @@ from wikibaseintegrator.wbi_enums import WikibaseRank
 
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.disagreement import Disagreement, disagreements
+from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
 
-from .conftest import register_fictional, run_sparql, wait_for_query_service
+from .conftest import (
+    fixture_mark,
+    register_fictional,
+    run_sparql,
+    wait_for_query_service,
+)
 
 pytestmark = pytest.mark.live
+
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "ADR-0002, ADR-0023 §4: every clause of the disagreement report's "
+    "contract, in fixture subjects whose values sources A to D state"
+)
+MARK = fixture_mark(FIXTURE, writer)
 
 
 def local(local_id: str, label: str, kind: str) -> dict:
@@ -207,19 +220,21 @@ def write_fixture(
     batches: tuple[list[dict], ...],
     artifact_qids: dict[str, str] | None = None,
 ) -> list:
-    """Write the fixture's claim batches in order, under item labels that
-    carry a marker: six hex digits of a hash over the fixture's cases and
-    values (every claim, each artifact named by its letter in `artifacts`,
-    which maps the SHA-1 a claim cites to the letter). The writer finds a
-    local item by its label, so a version of the fixture with other values
-    would otherwise write onto an earlier version's items and see its old
-    values beside the new ones. With the marker it writes items of its
-    own, and a re-run of one version finds its own items again. The
-    curator ranks the test sets afterwards are not in the marker, so an
-    edit that moves only a rank must change a claim too, or it reuses the
-    earlier version's items. `artifact_qids` is handed to each batch's
-    writer: the item of each key no media carries (BatchWriter). Returns
-    each batch's result."""
+    """Write the fixture's claim batches in order, under item labels that carry
+    a marker: six hex digits of a hash over the fixture's cases and values
+    (every claim, each artifact named by its letter in `artifacts`, which maps
+    the SHA-1 a claim cites to the letter). The writer finds a local item by
+    its label, so a version of the fixture with other values would otherwise
+    write onto an earlier version's items and see its old values beside the new
+    ones. With the marker it writes items of its own, and a re-run of one
+    version finds its own items again. The hash also covers the module's marker
+    (conftest.fixture_mark: the writer's source and the session's random
+    bytes), so each session writes items of its own: what an earlier session
+    wrote, a live mutant's run included, never meets it, and a re-run within
+    the session finds its own items again. The curator ranks the test sets
+    afterwards are not in the hash: the session's marker gives them items of
+    their own. `artifact_qids` is handed to each batch's writer: the item of
+    each key no media carries (BatchWriter). Returns each batch's result."""
     content = [
         [
             {
@@ -234,7 +249,7 @@ def write_fixture(
         for claims in batches
     ]
     marker = hashlib.sha256(
-        json.dumps(content, sort_keys=True).encode()
+        json.dumps(content, sort_keys=True).encode() + MARK.encode()
     ).hexdigest()[:6]
 
     def marked(value):
@@ -257,14 +272,14 @@ def write_fixture(
 
 @pytest.fixture(scope="module")
 def fixture_graph(client, config):
-    """Write the fixture under its marked labels (write_fixture;
-    idempotent: re-runs reuse and skip everything), apply the curator
-    ranks, and wait until the query service holds the subjects' latest
-    revisions. Returns (QIDs by role, source QIDs by letter)."""
+    """Write the fixture under its marked labels (write_fixture), apply the
+    curator ranks, and wait until the query service holds every fixture
+    item's latest revision. Returns (QIDs by role, source QIDs by
+    letter)."""
     registered = {
         letter: register_fictional(
             client,
-            f"Disagreement fixture source {letter}",
+            f"Disagreement fixture source {letter} {MARK}",
             "certificate",
             pages=1 if letter == "A" else 0,
         )
@@ -477,7 +492,8 @@ def fixture_graph(client, config):
         lambda value: value["time"] == "+1919-01-07T00:00:00Z",
         WikibaseRank.PREFERRED,
     )
-    wait_for_query_service(config, client, [qids[role] for role in SUBJECTS])
+    # every item the report's rows name is the session's own
+    wait_for_query_service(config, client, list(qids.values()))
     return qids, {letter: registered[letter].qid for letter in "ABC"}
 
 

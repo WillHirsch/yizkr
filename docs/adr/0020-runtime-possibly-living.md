@@ -98,6 +98,8 @@ its members' own, so a group taking part takes it with it even when the
 check released every member, the group itself included (R, corrected
 the same day: such a group is not a person the check never assessed,
 as first written, as the check can release it) (§4).
+Amended by #435 (2026-10-02): a `name` statement, a name form of no
+stated type (ADR-0011), is person evidence, as a nickname is (§4).
 Amended by #364, orchestrator decisions U and V (2026-10-02, privacy
 first): a group with a `participant` statement of unknown value counts
 as not confirmed released, so it takes events with it and is never a
@@ -175,6 +177,15 @@ the end of the first kept block that names it (a value node that only a
 reference names goes with the reference). Unit tests check every
 export they write against an offline mirror of the munger's blocks, and
 so does the live test, before the munger runs.
+
+Amended by #437 (2026-10-05): the check's cutoff year, and the backup
+run's directory name, are read from one clock (`now`, the system's UTC
+clock by default), which tests set. A clock that gives a time with no
+time zone is refused. A run's directory is named by the UTC second it
+starts, or, when that would not sort after every run already there (a
+second run in one second, or a clock set back), by the second after the
+latest. So two runs never share a directory, and `--keep N` never
+prunes the run just made.
 
 ## Context
 
@@ -322,7 +333,8 @@ from the database while the check reads the query service. Now:
   - the subject of a property only a person has: date or place of birth,
     date or place of death, place of burial, cause of death, father,
     mother, spouse, child, sibling, relative, birth name, married name,
-    nickname, referred to as (ADR-0011, ADR-0018), sex or gender, number
+    nickname, name (a form of no stated type), referred to as (ADR-0011,
+    ADR-0018), sex or gender, number
     of children, occupation, employer, educated at, country of
     citizenship, residence;
   - the value of father, mother, spouse, child, sibling, relative or gave

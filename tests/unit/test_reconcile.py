@@ -1,6 +1,7 @@
 """Offline tests for entity reconciliation (ADR-0007). No instance, no LLM."""
 
 import json
+import urllib.parse
 
 import pytest
 
@@ -57,13 +58,17 @@ def roster() -> list[RosterEntity]:
         RosterEntity(
             qid="Q40",
             label="Hildegard Laudler",
+            # an earlier document's form of her name, kept as an alias
+            aliases=["Hildegard Löbig"],
             kind="human",
             birth="1876-03-19",
             spouses=["Sebastian Löbig"],
         ),
-        # a different person who shares only the surname
-        RosterEntity(qid="Q77", label="Ursula Löbig", kind="human"),
-        RosterEntity(qid="Q90", label="Flörburg, Germany", kind="place"),
+        # a different person whose nickname the batch also gives
+        RosterEntity(
+            qid="Q77", label="Ursula Löbig", nicknames=["Hilde"], kind="human"
+        ),
+        RosterEntity(qid="Q90", label="FLÖRBURG", kind="place"),
         RosterEntity(qid="Q99", label="Unrelated Person", kind="human"),
     ]
 
@@ -165,8 +170,10 @@ class TestTypedNameEvidence:
 
 
 class TestBlocking:
-    def test_kind_and_token_overlap(self):
+    def test_kind_and_a_shared_whole_name(self):
         candidates = block_candidates(entities(), roster())
+        # Q40 by an alias, Q77 by a nickname statement, Q90 by its label
+        # in capitals; Q99 shares nothing
         assert [c.qid for c in candidates["e1"]] == ["Q40", "Q77"]
         assert [c.qid for c in candidates["e2"]] == ["Q90"]
 
@@ -174,25 +181,342 @@ class TestBlocking:
         lone = [EntityRecord(id="e9", label="Zzyzx Qwx", kind="human")]
         assert block_candidates(lone, roster()) == {}
 
-    def test_prefix_forms_block(self):
-        """'Gus' must reach the adjudicator against 'Gustave …' —
-        clipped forms are how family documents refer to people."""
-        gus = [EntityRecord(id="e5", label="Gus", kind="human")]
-        extended = roster() + [
-            RosterEntity(qid="Q124", label="Gustave Lobig", kind="human")
+    def test_a_shared_word_alone_never_blocks(self):
+        """A surname, or a clipped form, that two names share is no shared
+        name: "Gus" never reaches "Gustave Lobig", and "Ursula Löbig"
+        never "Gustav Löbig"."""
+        found = [
+            EntityRecord(id="e5", label="Gus", kind="human"),
+            EntityRecord(id="e6", label="Gustav Löbig", kind="human"),
         ]
-        assert [c.qid for c in block_candidates(gus, extended)["e5"]] == [
-            "Q124"
+        extended = [
+            RosterEntity(qid="Q124", label="Gustave Lobig", kind="human"),
+            RosterEntity(qid="Q77", label="Ursula Löbig", kind="human"),
+        ]
+        assert block_candidates(found, extended) == {}
+
+    def test_case_and_umlauts_fold(self):
+        """A whole name keys folded, and with its umlauts written out
+        (ADR-0035 §7): "LÖBIG, Ida" never meets "Ida Löbig" (another
+        order), but "IDA LOEBIG" does."""
+        ida = [EntityRecord(id="e1", label="IDA LOEBIG", kind="human")]
+        graph = [
+            RosterEntity(qid="Q41", label="Ida Löbig", kind="human"),
+            RosterEntity(qid="Q42", label="LÖBIG, Ida", kind="human"),
+        ]
+        assert [c.qid for c in block_candidates(ida, graph)["e1"]] == ["Q41"]
+
+    def test_typed_name_statements_key_whole(self):
+        """The graph's birth, nickname and official name statements key
+        as whole names; a married name, a family name alone, never does."""
+        graph = [
+            RosterEntity(
+                qid="Q41",
+                label="Ida Löbig",
+                birth_names=["Ida Sörne"],
+                kind="human",
+            ),
+            RosterEntity(
+                qid="Q124",
+                label="Gustav Löbig",
+                official_names=["Gustave Lobig"],
+                kind="human",
+            ),
+            RosterEntity(
+                qid="Q43",
+                label="Cäcilie Löbig",
+                married_names=["Tarle"],
+                kind="human",
+            ),
+        ]
+        found = [
+            EntityRecord(id="e1", label="Ida Sörne", kind="human"),
+            EntityRecord(id="e2", label="Gustave Lobig", kind="human"),
+            EntityRecord(id="e3", label="Tarle", kind="human"),
+        ]
+        candidates = block_candidates(found, graph)
+        assert {
+            key: [c.qid for c in found] for key, found in candidates.items()
+        } == {
+            "e1": ["Q41"],
+            "e2": ["Q124"],
+        }
+
+    def test_a_record_that_names_no_one_keys_nothing(self):
+        """A person whose label is a kinship term (ADR-0035 §2.1) or a
+        place whose label is deictic names no one, whatever the graph
+        holds under those words."""
+        found = [
+            EntityRecord(
+                id="e1",
+                label="Dein Vater",
+                kind="human",
+                structure={"kind": "human", "status": "kinship"},
+            ),
+            EntityRecord(
+                id="e2",
+                label="dort",
+                kind="place",
+                structure={"kind": "place", "status": "deictic"},
+            ),
+        ]
+        graph = [
+            RosterEntity(qid="Q50", label="Dein Vater", kind="human"),
+            RosterEntity(qid="Q51", label="dort", kind="place"),
+        ]
+        assert block_candidates(found, graph) == {}
+
+    def test_a_person_record_adds_its_unsplit_forms_and_nicknames(self):
+        found = [
+            EntityRecord(
+                id="e1",
+                label="Sebastian Löbig",
+                kind="human",
+                structure={
+                    "kind": "human",
+                    "given": [{"written": "Sebastian"}],
+                    "surnames": [{"written": "Löbig"}],
+                    "nicknames": ["Wastl"],
+                    "unsplit": ["Löbig Sebastian"],
+                },
+            )
+        ]
+        graph = [
+            RosterEntity(qid="Q60", label="Wastl", kind="human"),
+            RosterEntity(qid="Q61", label="Löbig Sebastian", kind="human"),
+            # a given name alone is no whole name of his
+            RosterEntity(qid="Q62", label="Sebastian", kind="human"),
+        ]
+        assert [c.qid for c in block_candidates(found, graph)["e1"]] == [
+            "Q60",
+            "Q61",
         ]
 
-    def test_graph_pair_blocking_is_also_prefix_aware(self):
-        """Same rule for roster x roster pairs: 'Gus' vs 'Gustave …'
-        must be adjudicated, not silently unblocked."""
+    def test_a_given_name_s_standard_form_keys_with_the_surname(self):
+        """The postcard's "Gustl", read as Gustav, keys "Gustav Löbig"
+        with his surname, and meets the graph's Gustav."""
+        gustl = EntityRecord(
+            id="e1",
+            label="Gustl",
+            kind="human",
+            structure={
+                "kind": "human",
+                "given": [{"written": "Gustl", "standard": "Gustav"}],
+                "surnames": [{"written": "Löbig"}],
+            },
+        )
+        graph = [
+            RosterEntity(qid="Q31", label="Gustav Löbig", kind="human"),
+            RosterEntity(qid="Q32", label="Gustl Löbig", kind="human"),
+            RosterEntity(qid="Q33", label="Gustav", kind="human"),
+        ]
+        assert [c.qid for c in block_candidates([gustl], graph)["e1"]] == [
+            "Q31",
+            "Q32",
+        ]
+
+    def test_each_typed_surname_keys_with_the_given_name(self):
+        """ "Agnes Löbig geb. Nertler" keys "Agnes Löbig" and "Agnes
+        Nertler" from her record, whatever marker her label holds."""
+        agnes = EntityRecord(
+            id="e1",
+            label="Agnes Löbig geb. Nertler",
+            kind="human",
+            structure={
+                "kind": "human",
+                "given": [{"written": "Agnes"}],
+                "surnames": [
+                    {"written": "Löbig"},
+                    {"written": "Nertler", "type": "birth"},
+                ],
+            },
+        )
+        graph = [
+            RosterEntity(qid="Q40", label="Agnes Nertler", kind="human"),
+            RosterEntity(
+                qid="Q41",
+                label="Agnes Löbig",
+                birth_names=["Agnes Nertler"],
+                kind="human",
+            ),
+            RosterEntity(qid="Q42", label="Löbig Agnes", kind="human"),
+        ]
+        assert [c.qid for c in block_candidates([agnes], graph)["e1"]] == [
+            "Q40",
+            "Q41",
+        ]
+
+    def test_nicknames_and_patronymics_compose(self):
+        found = [
+            EntityRecord(
+                id="e1",
+                label="Лёбиг Рудольф Феликсович",
+                kind="human",
+                structure={
+                    "kind": "human",
+                    "given": [{"written": "Рудольф"}],
+                    "surnames": [{"written": "Лёбиг"}],
+                    "patronymics": ["Феликсович"],
+                    "nicknames": ["Rudi"],
+                },
+            )
+        ]
+        graph = [
+            RosterEntity(qid="Q50", label="Рудольф Феликсович", kind="human"),
+            RosterEntity(qid="Q51", label="Rudi Лёбиг", kind="human"),
+            RosterEntity(qid="Q52", label="Рудольф Лёбиг", kind="human"),
+        ]
+        assert [c.qid for c in block_candidates(found, graph)["e1"]] == [
+            "Q50",
+            "Q51",
+            "Q52",
+        ]
+
+    @pytest.mark.parametrize("misread", ["LÖBIG", "Lobig", "Loebig"])
+    def test_a_given_name_that_folds_like_the_surname_composes_nothing(
+        self, misread
+    ):
+        """A register's "Löbig" read as a given name beside the surname
+        Löbig makes no "Löbig Löbig" (the guard of #361)."""
+        from yizkr.pipeline.reconcile import entity_name_keys
+
+        misread = EntityRecord(
+            id="e1",
+            label="Ursula",
+            kind="human",
+            structure={
+                "kind": "human",
+                "given": [
+                    {"written": misread},
+                    {"written": "Ursula", "standard": "Ursula"},
+                ],
+                "surnames": [{"written": "Löbig"}],
+            },
+        )
+        assert entity_name_keys(misread) == {
+            "ursula",
+            "ursula lobig",
+            "ursula loebig",
+        }
+
+    def test_a_person_keys_by_its_label_and_its_aliases(self):
+        found = [
+            EntityRecord(
+                id="e1",
+                label="Klara Löbig",
+                aliases=["Pünktchen"],
+                kind="human",
+                structure={"kind": "human"},
+            )
+        ]
+        assert [
+            c.qid
+            for c in block_candidates(
+                found,
+                [RosterEntity(qid="Q60", label="KLARA LÖBIG", kind="human")],
+            )["e1"]
+        ] == ["Q60"]
+        assert [
+            c.qid
+            for c in block_candidates(
+                found,
+                [RosterEntity(qid="Q61", label="Pünktchen", kind="human")],
+            )["e1"]
+        ] == ["Q61"]
+
+    def test_a_place_keys_by_its_record_not_its_short_form(self):
+        """The camp's alias "Klurnau", its name's toponym, keys nothing
+        (ADR-0035 §2.2): the camp never meets the town."""
+        camp = EntityRecord(
+            id="e1",
+            label="Lager Klurnau",
+            aliases=["Klurnau"],
+            kind="place",
+            structure={
+                "kind": "place",
+                "names": [
+                    {
+                        "written": "Lager Klurnau",
+                        "head": "Lager",
+                        "toponym": "Klurnau",
+                    },
+                    {"written": "Klurnau"},
+                ],
+                "address": {"written": "8 Hawthorn Road"},
+            },
+        )
+        graph = [
+            RosterEntity(qid="Q70", label="Klurnau", kind="place"),
+            RosterEntity(qid="Q71", label="LAGER KLURNAU", kind="place"),
+            RosterEntity(qid="Q72", label="8 hawthorn road", kind="place"),
+        ]
+        assert [c.qid for c in block_candidates([camp], graph)["e1"]] == [
+            "Q71",
+            "Q72",
+        ]
+
+    def test_a_toponym_written_as_its_name_keys(self):
+        """A name whose toponym is the name itself is no short form of
+        another: "Flörburg" keys."""
+        town = EntityRecord(
+            id="e1",
+            label="Flörburg, Hesse",
+            kind="place",
+            structure={
+                "kind": "place",
+                "names": [{"written": "Flörburg", "toponym": "Flörburg"}],
+                "within": ["Hesse"],
+            },
+        )
+        graph = [RosterEntity(qid="Q90", label="Flörburg", kind="place")]
+        assert [c.qid for c in block_candidates([town], graph)["e1"]] == [
+            "Q90"
+        ]
+
+    def test_graph_pairs_need_one_kind(self):
+        """A vessel and a place that share a name never pair."""
+        from yizkr.pipeline.reconcile import propose_graph_pairs
+
+        unlike = [
+            RosterEntity(qid="Q80", label="RMS Flund", kind="vessel"),
+            RosterEntity(qid="Q81", label="RMS Flund", kind="place"),
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        assert propose_graph_pairs(llm, unlike) == []
+        assert llm.prompts == []
+
+    def test_a_place_record_without_names_keys_by_its_label(self):
+        town = EntityRecord(
+            id="e1",
+            label="Flörburg",
+            kind="place",
+            structure={"kind": "place", "within": ["Hesse"]},
+        )
+        graph = [
+            RosterEntity(qid="Q90", label="Flörburg", kind="place"),
+            RosterEntity(qid="Q91", label="Hesse", kind="place"),
+        ]
+        assert [c.qid for c in block_candidates([town], graph)["e1"]] == [
+            "Q90"
+        ]
+
+    def test_graph_pairs_block_on_a_shared_whole_name(self):
+        """Same rule for roster x roster pairs: two items pair on a shared
+        name form, here an alias against a nickname statement, and never
+        on a clipped form."""
         from yizkr.pipeline.reconcile import propose_graph_pairs
 
         pair_roster = [
-            RosterEntity(qid="Q170", label="Gus", kind="human"),
-            RosterEntity(qid="Q124", label="Gustave Lobig", kind="human"),
+            RosterEntity(
+                qid="Q170", label="Gustl", aliases=["Gus"], kind="human"
+            ),
+            RosterEntity(
+                qid="Q124",
+                label="Gustave Lobig",
+                nicknames=["Gus"],
+                kind="human",
+            ),
+            RosterEntity(qid="Q125", label="Gustav", kind="human"),
         ]
         response = "\n".join(
             [
@@ -202,7 +526,7 @@ class TestBlocking:
                         "qid": "Q124",
                         "verdict": "uncertain",
                         "confidence": 0.5,
-                        "evidence": "clipped form",
+                        "evidence": "one nickname",
                     }
                 ),
                 json.dumps({"done": True, "proposals_emitted": 1}),
@@ -211,7 +535,9 @@ class TestBlocking:
         llm = ScriptedLlm(response)
         proposals = propose_graph_pairs(llm, pair_roster)
         assert [(p.entity_id, p.qid) for p in proposals] == [("Q170", "Q124")]
+        assert len(llm.prompts) == 1
         assert "Gustave Lobig" in llm.prompts[0]
+        assert "Q125" not in llm.prompts[0]
 
 
 class TestAdjudication:
@@ -354,7 +680,9 @@ class Stopping(ScriptedLlm):
 # two roster items whose names block them into a pair for adjudication
 NAMESAKES = [
     RosterEntity(qid="Q170", label="Gus", kind="human"),
-    RosterEntity(qid="Q124", label="Gustave Lobig", kind="human"),
+    RosterEntity(
+        qid="Q124", label="Gustave Lobig", nicknames=["Gus"], kind="human"
+    ),
 ]
 
 
@@ -582,7 +910,7 @@ class TestImpossiblePair:
 
     def test_place_containment_by_qid(self):
         # Q66 (a prison) is transitively inside Q10 (Germany)
-        containment = PlaceContainment({"Q66": {"Q10"}}, {"Q10": "Germany"})
+        containment = PlaceContainment({"Q66": {"Q10"}})
         prison = rf(qid="Q66", label="Peiltal court prison", kind="place")
         germany = rf(qid="Q10", label="Germany", kind="place")
         assert (
@@ -600,22 +928,26 @@ class TestImpossiblePair:
             is None
         )
 
-    def test_place_containment_by_label_for_unwritten_batch_entity(self):
+    def test_a_place_without_a_qid_is_never_pruned_by_its_name(self):
         # a new "Germany" (no QID) vs the graph's Peiltal court prison,
-        # which the graph already places inside a "Germany".
-        containment = PlaceContainment({"Q66": {"Q10"}}, {"Q10": "Germany"})
+        # which the graph places inside a "Germany": places share names,
+        # so the name never stands in for the container (ADR-0017)
+        containment = PlaceContainment({"Q66": {"Q10"}})
         batch_germany = _batch_pair_facts(
             EntityRecord(id="e1", label="Germany", kind="place"), None
         )
         prison = _facts(
-            rf(qid="Q66", label="Peiltal court prison, Germany", kind="place")
+            rf(qid="Q66", label="Peiltal court prison", kind="place")
         )
-        assert impossible_pair(
-            batch_germany, prison, containment=containment
-        ) == ("place-containment")
+        assert (
+            impossible_pair(batch_germany, prison, containment=containment)
+            is None
+        )
+        assert containment.containers("Q66") == {"Q10"}
+        assert containment.containers("Q10") == set()
 
     def test_containment_only_applies_between_places(self):
-        containment = PlaceContainment({"Q66": {"Q10"}}, {"Q10": "Germany"})
+        containment = PlaceContainment({"Q66": {"Q10"}})
         a = rf(qid="Q66", label="X", kind="human")
         b = rf(qid="Q10", label="X", kind="human")
         # same closure, but humans — never a containment prune
@@ -624,17 +956,22 @@ class TestImpossiblePair:
             is None
         )
 
-    def test_equal_labels_are_never_pruned_by_containment(self):
-        # eponymous nesting: the town Rekau sits inside the urban district
-        # Rekau. A batch "Rekau" vs a graph "Rekau" that happens to be
-        # contained in a same-named place may be the SAME place — never prune.
-        containment = PlaceContainment({"Q70": {"Q71"}}, {"Q71": "Rekau"})
-        batch_rekau = _batch_pair_facts(
-            EntityRecord(id="e1", label="Rekau", kind="place"), None
+    def test_eponymous_nesting_prunes_by_qid(self):
+        # the town Rekau sits inside the urban district Rekau: a batch
+        # entity already resolved to the district is never the town
+        containment = PlaceContainment({"Q70": {"Q71"}})
+        district = _batch_pair_facts(
+            EntityRecord(id="e1", label="Rekau", kind="place", qid="Q71"),
+            None,
         )
         town = _facts(rf(qid="Q70", label="Rekau", kind="place"))
         assert (
-            impossible_pair(batch_rekau, town, containment=containment) is None
+            impossible_pair(district, town, containment=containment)
+            == "place-containment"
+        )
+        assert (
+            impossible_pair(town, district, containment=containment)
+            == "place-containment"
         )
 
     def test_date_disagreement_is_never_impossible(self):
@@ -659,26 +996,25 @@ class TestImpossiblePair:
 
 
 # A son and his father whose names block each other: one name for both (a
-# "Jr." case, with tokens long enough to block), and the universe's Gustav
-# and his father Sebastian, who share only the surname.
+# "Jr." case), written alike or in capitals.
 FATHER_AND_SON = pytest.mark.parametrize(
     ("son", "father"),
-    [("Xxx Yyy", "Xxx Yyy"), ("Gustav Löbig", "Sebastian Löbig")],
-    ids=["same-name", "shared-surname"],
+    [("Xxx Yyy", "Xxx Yyy"), ("Sebastian Löbig", "SEBASTIAN LÖBIG")],
+    ids=["same-name", "case-folded"],
 )
 
 
 class TestBlockingWithImpossibility:
     def test_containment_candidate_is_pruned_from_blocking(self):
-        places = [EntityRecord(id="e1", label="Germany", kind="place")]
-        roster_places = [
-            RosterEntity(
-                qid="Q66", label="Peiltal court prison, Germany", kind="place"
-            )
+        # a batch place resolved to the urban district Rekau shares its
+        # name with the town inside it
+        places = [
+            EntityRecord(id="e1", label="Rekau", kind="place", qid="Q71")
         ]
-        containment = PlaceContainment({"Q66": {"Q10"}}, {"Q10": "Germany"})
-        # without the closure the tenuous "Germany" token still blocks it
-        assert block_candidates(places, roster_places)["e1"][0].qid == "Q66"
+        roster_places = [RosterEntity(qid="Q70", label="Rekau", kind="place")]
+        containment = PlaceContainment({"Q70": {"Q71"}})
+        # without the closure the shared name blocks it
+        assert block_candidates(places, roster_places)["e1"][0].qid == "Q70"
         # with it, the impossible pair is pruned -> e1 has no candidates
         assert (
             block_candidates(places, roster_places, containment=containment)
@@ -711,8 +1047,8 @@ class TestBlockingWithImpossibility:
 
     @FATHER_AND_SON
     def test_graph_pair_pruning_drops_impossible_pairs(self, son, father):
-        # roster x roster: a father edge between two same-name items (or two
-        # that share only a surname) means the graph-dedup pass never even
+        # roster x roster: a father edge between two same-name items means
+        # the graph-dedup pass never even
         # asks the model about them.
         from yizkr.pipeline.reconcile import propose_graph_pairs
 
@@ -888,3 +1224,121 @@ class TestRatifyEquivalenceVerdicts:
         assert [r["decision"] for r in rows] == ["", "", "approve"]
         assert counts["conflicted"] == 2
         assert counts["approved"] == 1
+
+
+class TestRosterKinds:
+    """fetch_roster maps each item's kind back to its manifest key by the
+    kind item's QID, never by its label (#388)."""
+
+    class Vocabulary:
+        def vocabulary(self):
+            properties = {
+                key: f"P{n}"
+                for n, key in enumerate(
+                    (
+                        "instance_of",
+                        "date_of_birth",
+                        "date_of_death",
+                        "spouse",
+                        "father",
+                        "mother",
+                        "child",
+                        "sibling",
+                        "participant",
+                        "point_in_time",
+                        "birth_name",
+                        "married_name",
+                        "nickname",
+                        "official_name",
+                    ),
+                    1,
+                )
+            }
+            items = {
+                "human": "Q5",
+                "birth": "Q20",
+                "death": "Q21",
+                # the label "occupation" and "time period" never spell
+                # these keys
+                "occupation_class": "Q30",
+                "time_period_class": "Q31",
+            }
+            return properties, items
+
+    def test_kinds_map_by_qid(self, monkeypatch):
+        import io
+
+        from yizkr.core.config import Config
+        from yizkr.pipeline import reconcile
+
+        def binding(qid, label, kind, kind_label="x"):
+            return {
+                "item": {"value": f"http://wikibase.example/entity/{qid}"},
+                "itemLabel": {"value": label},
+                "kind": {"value": f"http://wikibase.example/entity/{kind}"},
+                "kindLabel": {"value": kind_label},
+            }
+
+        rows = [
+            binding("Q100", "Gustav Löbig", "Q5"),
+            binding("Q101", "Hutmachermeister", "Q30"),
+            binding("Q102", "Xxx", "Q31"),
+            binding("Q103", "Yyy", "Q999", "military unit"),
+        ]
+        queries = []
+
+        def urlopen(url, timeout):
+            queries.append(urllib.parse.unquote_plus(url))
+            body = json.dumps({"results": {"bindings": rows}})
+            return io.BytesIO(body.encode())
+
+        monkeypatch.setattr(reconcile.urllib.request, "urlopen", urlopen)
+        # a graph check run before the roster where one is, read here as
+        # finding nothing
+        monkeypatch.setattr(
+            reconcile,
+            "unsupported_in_graph",
+            lambda *args, **kwargs: None,
+            raising=False,
+        )
+        config = Config(
+            wikibase_url="http://wikibase.example",
+            concept_uri="http://wikibase.example",
+            wdqs_url="http://query.example",
+            sparql_url="http://query.example/sparql",
+            admin_name="x",
+            admin_pass="x",
+            env_file=None,
+        )
+        roster = reconcile.fetch_roster(self.Vocabulary(), config)
+        assert [(r.qid, r.kind) for r in roster] == [
+            ("Q100", "human"),
+            ("Q101", "occupation_class"),
+            ("Q102", "time_period_class"),
+            # a kind the manifest lacks keeps its QID
+            ("Q103", "Q999"),
+        ]
+        # whose label is shown, and only its, beside it to the adjudicator
+        assert [r.kind_label for r in roster] == ["", "", "", "military unit"]
+        assert "kind: Q999 (military unit)" in roster[3].facts()
+        assert roster[0].facts().endswith("kind: human")
+        (query,) = queries
+        # the kind's QID is selected; its label only rides along
+        assert "SELECT ?item ?itemLabel ?kind ?kindLabel" in query
+        assert "GROUP BY ?item ?itemLabel ?kind ?kindLabel\n" in query
+
+    def test_an_occupation_blocks_against_an_occupation(self):
+        found = [
+            EntityRecord(
+                id="e1", label="Hutmachermeister", kind="occupation_class"
+            )
+        ]
+        graph = [
+            RosterEntity(
+                qid="Q101", label="Hutmachermeister", kind="occupation_class"
+            ),
+            RosterEntity(qid="Q102", label="Hutmachermeister", kind="human"),
+        ]
+        assert [c.qid for c in block_candidates(found, graph)["e1"]] == [
+            "Q101"
+        ]

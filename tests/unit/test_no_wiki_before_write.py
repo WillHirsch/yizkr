@@ -580,6 +580,7 @@ def test_adjudication_given_a_roster_asks_nothing_of_the_wiki(refusals):
         RosterEntity(
             qid="Q31",
             label="Gustav Löbig",
+            aliases=["Gustl Löbig"],
             kind="human",
             birth="1919-01-07",
             fathers=["Sebastian Löbig (Q30)"],

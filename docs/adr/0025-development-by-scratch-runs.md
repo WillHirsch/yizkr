@@ -94,6 +94,33 @@ utilization reported past a warning threshold, and the #101 amendment's
 limits on it stand; pacing from `unifiedWindows` is not part of this
 change.
 
+Amended by #197 (2026-10-04): §4's claim fingerprints are defined in
+`pipeline/fingerprints.py`, beside the mention fingerprints and cluster
+ids. A claim's fingerprint hashes:
+
+- its subject (for a local ref, the fingerprint of its mention, never a
+  cluster id) and its property;
+- its value: a date's year, month, day, precision and calendar as
+  stated; string, external-id and monolingual text in NFC only, as the
+  instance keeps it, so values that differ only in whitespace are
+  different claims;
+- its qualifiers, sorted, the earliest and latest bounds among them;
+- its artifact's SHA-1 and its locator: the page and printed page put on
+  one line as the writer stores them, and the region.
+
+The excerpt is not part of it (ADR-0003 counts the excerpt as support,
+not a locator). The run diff may report an excerpt change as a detail of
+a matched claim. Confidence, the judgement note, the curated flag and a
+row approval are left out too, and two identical claims of one batch
+share a fingerprint, counted as a multiset. Cluster membership is not
+part of it, so the diff compares membership apart, as merges and
+splits. Known limit: a claim fingerprint is as stable as its mentions'.
+In a batch without an entity manifest, a mention's stand-in label is
+the first one a ref gives, so reordering the claims or relabelling a
+ref in an earlier claim can change it; and two mentions equal in every
+other component swap fingerprints when their manifest lists them in the
+other order.
+
 ## Context
 
 ADR-0024 §7 set up a *development stage*: until the owner declares a

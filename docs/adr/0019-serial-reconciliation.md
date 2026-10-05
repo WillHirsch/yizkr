@@ -15,6 +15,11 @@ the mode as designed: a serial run now takes about one re-run per
 artifact rather than two, and `reconcile-graph` is again the way to
 consolidate an entity that two artifacts name differently. #119 removes
 the mode.
+Amended by #388 (2026-10-04): the sequencer's overlap signal is
+the whole name forms reconcile blocks on (`reconcile.entity_name_keys`,
+ADR-0007 as amended by #388), read through each entity's mention
+record, not name tokens: two documents connect on a name they share, never on a surname
+or a prefix alone.
 
 ## Context
 

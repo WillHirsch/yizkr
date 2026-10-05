@@ -13,12 +13,14 @@ label. The 1912 directory's batch is one the line-range tier made
 (ADR-0006): no manifest, so its local refs type the firm an organization
 and Sebastian a human, and the writer finds both by label.
 
-The marker keeps the slice apart from every other test's items, and the
-fixed run metadata keeps each batch's fingerprint, so a re-run reuses the
-items and run items and writes nothing. Each source is registered with
-media of its own, which its claims cite by SHA-1 (#102); the marker is
-not the one the slice had when its claims cited their sources by QID,
-whose batches, and so run items, were others.
+The marker, eight hex digits of a hash over the fixture, over the
+writer's and the resolve step's source and over eight random bytes drawn
+once a session (conftest.fixture_mark), keeps the slice apart from every
+other test's items and from every earlier session's, a live mutant's run
+included, so each session meets it as a first write. The fixed run
+metadata keeps each batch's fingerprint, so a re-run within the session
+reuses the items and run items and writes nothing. Each source is
+registered with media of its own, which its claims cite by SHA-1 (#102).
 """
 
 from __future__ import annotations
@@ -29,15 +31,22 @@ import pytest
 
 from tests.fixtures import example_universe as u
 from yizkr.claims import ArtifactRef, ClaimBatch, QidRef
+from yizkr.pipeline import resolve, writer
 from yizkr.pipeline.resolve import resolve_batch
 from yizkr.pipeline.writer import BatchWriter
 
-from .conftest import register_fictional
+from .conftest import fixture_mark, register_fictional
 
 pytestmark = pytest.mark.live
 
 UNIVERSE = u.by_key()
-MARK = "(found-item test, content-keyed)"
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "#240: Sebastian Löbig and the family firm, from the 1905 marriage "
+    "certificate, the 2002 interview, the 1984 family tree and the 1912 "
+    "directory"
+)
+MARK = f"(found-item test {fixture_mark(FIXTURE, writer, resolve)})"
 MARRIAGE = "marriage-cert-1905"
 DIRECTORY = "directory-1912"
 TREE = "family-tree-1984"
@@ -212,7 +221,8 @@ class FoundSlice:
 @pytest.fixture(scope="module")
 def found(client) -> FoundSlice:
     """Write the slice in source order, the tree's batch after the resolve
-    step. Idempotent: a re-run reuses and skips everything."""
+    step. Idempotent: a re-run within the session reuses and skips
+    everything."""
     for key, quoted in (
         (TREE, "Sebastian 'Wastl' 1862"),
         (INTERVIEW, "The hat shop, the Blue Hat"),
