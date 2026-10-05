@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from tests.integration.conftest import fixture_mark
+from tests.integration.conftest import fixture_mark, wait_for_query_service
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import reconcile, writer
 from yizkr.pipeline.reconcile import (
@@ -97,8 +97,9 @@ def _relations_batch(artifact: ArtifactRef) -> ClaimBatch:
 
 
 @pytest.fixture(scope="module")
-def written(client, tmp_path_factory):
-    """Write the kinship + containment edges once a session. Returns the
+def written(client, config, tmp_path_factory):
+    """Write the kinship + containment edges once a session, and wait
+    until the query service holds every item the write made. Returns the
     source's item."""
     media = tmp_path_factory.mktemp("media") / f"reconcile-fixture-{MARK}.txt"
     media.write_text(f"reconcile-test fixture {MARK}; safe to delete")
@@ -111,8 +112,16 @@ def written(client, tmp_path_factory):
         pages=1,
     )
     # the claims cite the source by the SHA-1 of its media (#102)
-    BatchWriter(client).write_batch(
-        _relations_batch(ArtifactRef.from_path(media))
+    batch = _relations_batch(ArtifactRef.from_path(media))
+    result = BatchWriter(client).write_batch(batch)
+    # written again, the batch finds every item and statement
+    again = BatchWriter(client).write_batch(batch)
+    assert (again.written, again.referenced) == (0, 0)
+    assert again.created_items == result.created_items
+    wait_for_query_service(
+        config,
+        client,
+        [*result.created_items.values(), artifact.artifact_qid],
     )
     return artifact.artifact_qid
 

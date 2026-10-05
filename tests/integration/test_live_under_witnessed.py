@@ -130,29 +130,31 @@ def fixture_graph(client, config):
     )
     source_a, source_b = registered_a.ref, registered_b.ref
     town = {"type": "item", "value": TOWN}
-    first = BatchWriter(client).write_batch(
-        batch(
-            [
-                claim("date_of_birth", year(1911), source_a),
-                claim("date_of_death", year(1970), source_a),
-                claim("nickname", text("Fixie"), source_a),
-                claim("married_name", text("Queue Fixture Wedded"), source_a),
-                # same value, different qualifier: two distinct assertions
-                claim(
-                    "residence",
-                    town,
-                    source_a,
-                    ({"property": "start_time", "value": year(1930)},),
-                ),
-                claim(
-                    "residence",
-                    town,
-                    source_a,
-                    ({"property": "start_time", "value": year(1940)},),
-                ),
-            ]
-        )
+    first_batch = batch(
+        [
+            claim("date_of_birth", year(1911), source_a),
+            claim("date_of_death", year(1970), source_a),
+            claim("nickname", text("Fixie"), source_a),
+            claim("married_name", text("Queue Fixture Wedded"), source_a),
+            # same value, different qualifier: two distinct assertions
+            claim(
+                "residence",
+                town,
+                source_a,
+                ({"property": "start_time", "value": year(1930)},),
+            ),
+            claim(
+                "residence",
+                town,
+                source_a,
+                ({"property": "start_time", "value": year(1940)},),
+            ),
+        ]
     )
+    first = BatchWriter(client).write_batch(first_batch)
+    # written again, source A's batch finds every statement
+    again = BatchWriter(client).write_batch(first_batch)
+    assert (again.written, again.referenced) == (0, 0)
     # source B's batch: its refs to the subject also give the subject's
     # kind, which the writer records beside source A's (#240)
     BatchWriter(client).write_batch(

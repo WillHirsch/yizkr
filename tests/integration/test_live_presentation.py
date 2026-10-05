@@ -202,8 +202,8 @@ def test_deck_and_derived_media_provenance(client, tmp_path):
     ]
     (sha1,) = statements("media_sha1")
     assert sha1["mainsnak"]["datavalue"]["value"] == image_sha1
-    assert both <= cited(instance, stated_in)
-    assert both <= cited(sha1, stated_in)
+    assert cited(instance, stated_in) == both
+    assert cited(sha1, stated_in) == both
     # the media file both decks cite is the one holding the image's bytes
     shared_files = {
         claim["mainsnak"]["datavalue"]["value"].removeprefix("File:")
@@ -211,7 +211,7 @@ def test_deck_and_derived_media_provenance(client, tmp_path):
         if both <= cited(claim, stated_in)
     }
     assert shared_files
-    assert {name.replace(" ", "_") for name in shared_files} <= blobs
+    assert {name.replace(" ", "_") for name in shared_files} == blobs
 
     # idempotent: same decks, same bytes -> same items, and nothing is
     # written at all (the media item's revision does not move)

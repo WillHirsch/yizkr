@@ -188,6 +188,21 @@ def depicts_statements(client, qid: str) -> dict[str, dict]:
     }
 
 
+def depicts_ids(client, qid: str) -> list[str]:
+    """The ids of the item's depicts statements, one for each."""
+    properties, _ = client.vocabulary()
+    data = client.api_get(
+        {
+            "action": "wbgetclaims",
+            "entity": qid,
+            "property": properties["depicts"],
+        }
+    )
+    return [
+        claim["id"] for claims in data["claims"].values() for claim in claims
+    ]
+
+
 def test_batch_decided_row_by_row_is_written(
     client, portrait, raw_faces, tmp_path
 ):
@@ -232,3 +247,20 @@ def test_batch_decided_row_by_row_is_written(
         assert properties["inferred_from_extraction_run"] in {
             pid for pid, _ in cited
         }
+
+    # written again, the reviewed batch finds both sitters and both
+    # statements, and adds nothing: no sitter minted again, no statement
+    # duplicated (the statements are counted, not keyed by sitter)
+    before = depicts_statements(client, portrait.artifact_qid)
+    count = len(depicts_ids(client, portrait.artifact_qid))
+    again = BatchWriter(client).write_batch(approved)
+    assert (again.written, again.skipped) == (0, 2)
+    assert {
+        f"face-person-{index}": again.created_items[f"face-person-{index}"]
+        for index in range(len(REGIONS))
+    } == {
+        f"face-person-{index}": result.created_items[f"face-person-{index}"]
+        for index in range(len(REGIONS))
+    }
+    assert depicts_statements(client, portrait.artifact_qid) == before
+    assert len(depicts_ids(client, portrait.artifact_qid)) == count == 2

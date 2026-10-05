@@ -327,7 +327,7 @@ def test_agreeing_second_source_appends_reference(client, artifact):
         client, person_qid, "+1901-00-00T00:00:00Z"
     )
     assert count == 1  # still one statement, not a duplicate
-    assert {artifact.artifact_qid, second.qid} <= sources
+    assert sources == {artifact.artifact_qid, second.qid}
 
     # re-running the same batch is a no-op (reference already present)
     rerun = BatchWriter(client).write_batch(birth_batch(second.ref, 1901))

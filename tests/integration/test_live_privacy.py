@@ -235,11 +235,10 @@ def add_unknown_birth(client, subject: str, artifact_qid: str) -> None:
 
 @pytest.fixture(scope="module")
 def fixture_graph(client, config):
-    """Write the fixture under its marked labels (write_fixture;
-    idempotent: a re-run within the session reuses and skips everything),
-    set the curator ranks, add the birth of unknown value, and wait until
-    the query service holds every fixture person's latest revision. Returns
-    the QIDs by role."""
+    """Write the fixture under its marked labels (write_fixture), set the
+    curator ranks, add the birth of unknown value, and wait until the query
+    service holds every fixture person's latest revision. Returns the QIDs
+    by role."""
     registered = {
         letter: register_fictional(
             client, f"Privacy fixture source {letter} {MARK}", "certificate"

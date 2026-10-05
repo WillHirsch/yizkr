@@ -17,18 +17,18 @@ mint reaches it, then runs again:
   itself, and writes the batch's claim citing it. A further re-run writes
   nothing to it.
 
-Fictional synthetic media and claims only (docs/EXAMPLES.md): Gustav's birth
-register extract of 1938, and his birth as it gives it. Every title, file name
-and label carries a marker, eight hex digits of a hash over the fixture, over
-the registrar's and the writer's source and over eight random bytes drawn once
-a session (conftest.fixture_mark), so each session, and each version of the
-fixture and of that code, meets the fixture as a first mint does: a mutant of
-the harness cannot pass by finding what an earlier session made, and what a
-live mutant's run wrote never meets a later session. A re-run within the
-session finds its own items typed, and passes without cutting anything. Like
-every live test it writes fictional data to the one instance, so the session
-that runs it ends by clearing the recorded instance-contents key
-(docs/AGENT_PROTOCOL.md §5).
+Fictional synthetic media and claims only (docs/EXAMPLES.md): Gustav's
+birth register extract of 1938, and his birth as it gives it. Every title,
+file name and label carries a marker, eight hex digits of a hash over the
+fixture, over the registrar's and the writer's source and over eight random
+bytes drawn once a session (conftest.fixture_mark), so each session, and
+each version of the fixture and of that code, meets the fixture as a first
+mint does: a mutant of the harness cannot pass by finding what an earlier
+session made, and what a live mutant's run wrote never meets a later
+session. Each test asserts that it meets its fixture as a first mint, so it
+always cuts. Like every live test it writes fictional data to the one
+instance, so the session that runs it ends by clearing the recorded
+instance-contents key (docs/AGENT_PROTOCOL.md §5).
 """
 
 from __future__ import annotations
@@ -168,24 +168,20 @@ def test_a_fragment_mint_cut_short_leaves_every_fragment_typed(
     path.write_bytes(EXTRACT)
     sha1 = hashlib.sha1(EXTRACT).hexdigest()
     page_two = f"{TITLE}, page 2"
-    fresh = sha1 not in client.string_statement_index(properties["media_sha1"])
+    # the session's marker gives the extract bytes no session registered
+    assert sha1 not in client.string_statement_index(properties["media_sha1"])
 
-    if fresh:
-        with monkeypatch.context() as patch:
-            lose_after_first_write(
-                patch, "ingest: register fragment", page_two
-            )
-            with pytest.raises(ConnectionLost):
-                register_extract(client, path)
-        artifact = client.string_statement_index(properties["media_sha1"])[
-            sha1
-        ]
-        # the write that reached the wiki made page 2's fragment whole
-        left = client.find_item_by_label(page_two)
-        assert left is not None
-        assert kinds(client, left) == [
-            (items["artifact_fragment"], "normal", [artifact])
-        ]
+    with monkeypatch.context() as patch:
+        lose_after_first_write(patch, "ingest: register fragment", page_two)
+        with pytest.raises(ConnectionLost):
+            register_extract(client, path)
+    artifact = client.string_statement_index(properties["media_sha1"])[sha1]
+    # the write that reached the wiki made page 2's fragment whole
+    left = client.find_item_by_label(page_two)
+    assert left is not None
+    assert kinds(client, left) == [
+        (items["artifact_fragment"], "normal", [artifact])
+    ]
 
     result = register_extract(client, path)
 
@@ -198,8 +194,7 @@ def test_a_fragment_mint_cut_short_leaves_every_fragment_typed(
             (items["artifact_fragment"], "normal", [artifact])
         ]
         assert parts(client, qid) == {(artifact, str(page)): [artifact]}
-    if fresh:
-        assert result.fragment_qids[2] == left
+    assert result.fragment_qids[2] == left
 
 
 def fixture_batch(source: ArtifactRef) -> ClaimBatch:
@@ -238,25 +233,24 @@ def test_a_run_item_mint_cut_short_is_typed_by_the_rerun(client, monkeypatch):
     batch = fixture_batch(source.ref)
     fingerprint = batch_fingerprint(batch)
     label = f"extraction run 2026-09-29 integration-test {fingerprint}"
-    fresh = client.find_item_by_label(label) is None
+    # the session's marker gives the batch a run item no session made
+    assert client.find_item_by_label(label) is None
 
-    if fresh:
-        with monkeypatch.context() as patch:
-            lose_after_first_write(patch, "ingest: extraction run", label)
-            with pytest.raises(ConnectionLost):
-                BatchWriter(client).write_batch(batch)
-        # the run item, labelled and untyped: nothing else of the batch
-        # was written
-        left = client.find_item_by_label(label)
-        assert left is not None
-        assert kinds(client, left) == []
-        assert client.find_item_by_label(PERSON["label"]) is None
+    with monkeypatch.context() as patch:
+        lose_after_first_write(patch, "ingest: extraction run", label)
+        with pytest.raises(ConnectionLost):
+            BatchWriter(client).write_batch(batch)
+    # the run item, labelled and untyped: nothing else of the batch was
+    # written
+    left = client.find_item_by_label(label)
+    assert left is not None
+    assert kinds(client, left) == []
+    assert client.find_item_by_label(PERSON["label"]) is None
 
     written = BatchWriter(client).write_batch(batch)
 
     run = written.run_qid
-    if fresh:
-        assert run == left
+    assert run == left
     assert client.find_item_by_label(label) == run
     assert kinds(client, run) == [(items["extraction_run"], "normal", [run])]
     # the batch's claim cites the run item

@@ -169,11 +169,9 @@ def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
 
 @pytest.fixture(scope="module")
 def fixture_graph(client, config):
-    """Write the fixture under its marked labels (write_fixture;
-    idempotent: a re-run within the session reuses and skips everything)
-    and wait until the query service holds the person's latest revision.
-    Returns (QIDs by role, source QIDs by letter, the marked labels by
-    role)."""
+    """Write the fixture under its marked labels (write_fixture) and wait
+    until the query service holds every item it made. Returns (QIDs by
+    role, source QIDs by letter, the marked labels by role)."""
     registered = {
         letter: register_fictional(
             client, f"Period fixture source {letter} {MARK}", "certificate"
@@ -231,7 +229,10 @@ def fixture_graph(client, config):
         role: f"{ref['label']} ({marker})"
         for role, ref in (("spouse", SPOUSE), ("town", TOWN))
     }
-    wait_for_query_service(config, client, [qids["person"]])
+    # every item the timeline names is the session's own, the town too
+    wait_for_query_service(
+        config, client, list(written.created_items.values())
+    )
     return qids, {letter: registered[letter].qid for letter in "ABC"}, labels
 
 

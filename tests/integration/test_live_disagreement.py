@@ -272,10 +272,9 @@ def write_fixture(
 
 @pytest.fixture(scope="module")
 def fixture_graph(client, config):
-    """Write the fixture under its marked labels (write_fixture;
-    idempotent: a re-run within the session reuses and skips everything),
-    apply the curator ranks, and wait until the query service holds the
-    subjects' latest revisions. Returns (QIDs by role, source QIDs by
+    """Write the fixture under its marked labels (write_fixture), apply the
+    curator ranks, and wait until the query service holds every fixture
+    item's latest revision. Returns (QIDs by role, source QIDs by
     letter)."""
     registered = {
         letter: register_fictional(
@@ -493,7 +492,8 @@ def fixture_graph(client, config):
         lambda value: value["time"] == "+1919-01-07T00:00:00Z",
         WikibaseRank.PREFERRED,
     )
-    wait_for_query_service(config, client, [qids[role] for role in SUBJECTS])
+    # every item the report's rows name is the session's own
+    wait_for_query_service(config, client, list(qids.values()))
     return qids, {letter: registered[letter].qid for letter in "ABC"}
 
 

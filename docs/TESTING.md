@@ -317,9 +317,17 @@ tests = ["tests/unit/test_example.py::test_blank_names_are_dropped"]
   write, and asserts it exactly; a rewrite within the session finds its
   own items again. A test reads only what its session wrote, so it writes
   what it reads even when run alone, never counting on another test's or
-  an earlier session's writes. A check over the whole instance, such as
-  the unreferenced-statements invariant, reads what every session wrote,
-  and is the one exception.
+  an earlier session's writes. The checks over the whole instance are
+  the exceptions, as they read what every session wrote:
+  `test_live_queries.py`'s unreferenced-statements invariant;
+  `test_live_backup.py`'s privacy and excerpt invariants over the
+  non-privileged export; `test_live_nonprivileged_export.py`'s munge
+  and block checks over the full dump and the export; and
+  `WikiClient.label_index`, which the writer and resolve read, and which
+  raises on any two entities that share an English label. A live mutant that breaks one of these (one that drops a
+  reference, mints a duplicate label, or leaves an entity the munger
+  drops) breaks every later session until the next scratch reset, which
+  is the remedy; the fixture's marker cannot help.
 - **Stop what a test detaches.** Each pytest run has a process group of
   its own, killed when the run ends or outlives `--timeout` (default
   300 s). A process that leaves the group escapes, and can hold a lock or

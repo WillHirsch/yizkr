@@ -21,15 +21,12 @@ the timeline a date with a range its source states, open at one end
 Every label, title and image carries a marker, eight hex digits of a hash
 over the fixture, over the writer's and the site generator's source and
 over eight random bytes drawn once a session (conftest.fixture_mark), so
-the fixture never reuses an item that another test or an earlier
-session, a live mutant's run included, wrote, and a re-run within the
-session reuses and skips everything. Rahel's label also carries a hash
-of her claim, so a later version of the claim writes a Rahel of its own
-(RAHEL).
-Pages that list the whole instance are read only for the fixture's own
-entries, so other data on the instance neither breaks an assertion nor
-appears in a failure report, and the generated site is deleted after the
-module.
+the fixture never reuses an item that another test or an earlier session, a
+live mutant's run included, wrote. Rahel's label also carries a hash of her
+claim (RAHEL). Pages that list the whole instance are read only for the
+fixture's own entries, so other data on the instance neither breaks an
+assertion nor appears in a failure report, and the generated site is
+deleted after the module.
 """
 
 from __future__ import annotations
@@ -187,9 +184,9 @@ RAHEL_DEATH = {
 # Her label carries six hex digits of a hash over that claim, as
 # write_fixture marks its items in test_live_disagreement.py. The writer
 # finds her by her label, and keeps a claim with her value but other
-# qualifiers as a statement of its own: under the module's marker alone,
-# a later version of the claim within the session would add a second
-# death beside this one, where with the hash it writes a Rahel of its own.
+# qualifiers as a statement of its own, so each version of the claim
+# writes a Rahel of its own. The session's marker already does that
+# across sessions; the hash keeps it so for the claim's own versions.
 RAHEL = "{} ({})".format(
     marked("rahel-loebig"),
     hashlib.sha256(

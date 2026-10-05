@@ -173,22 +173,24 @@ def fixture_graph(client, config):
         for letter in "ABC"
     }
     source = {letter: registered[letter].ref for letter in "ABC"}
-    written, _ = write_fixture(
-        client,
-        {ref.sha1: letter for letter, ref in source.items()},
-        [
-            # per A: born in the 19th century, given by its first year
-            claim(PERSON, "date_of_birth", date(1801, "century"), source["A"]),
-            # per B: in 1900, the 19th century's last year
-            claim(PERSON, "date_of_birth", date(1900), source["B"]),
-            # per C: in 1800, the 18th century's last year
-            claim(PERSON, "date_of_birth", date(1800), source["C"]),
-            # per A: the event in the 18th century BCE, 1800 to 1701 BCE
-            claim(EVENT, "point_in_time", date(-1800, "century"), source["A"]),
-            # per B: in 1701 BCE, the 18th century BCE's last year
-            claim(EVENT, "point_in_time", date(-1701), source["B"]),
-        ],
-    )
+    letters = {ref.sha1: letter for letter, ref in source.items()}
+    claims = [
+        # per A: born in the 19th century, given by its first year
+        claim(PERSON, "date_of_birth", date(1801, "century"), source["A"]),
+        # per B: in 1900, the 19th century's last year
+        claim(PERSON, "date_of_birth", date(1900), source["B"]),
+        # per C: in 1800, the 18th century's last year
+        claim(PERSON, "date_of_birth", date(1800), source["C"]),
+        # per A: the event in the 18th century BCE, 1800 to 1701 BCE
+        claim(EVENT, "point_in_time", date(-1800, "century"), source["A"]),
+        # per B: in 1701 BCE, the 18th century BCE's last year
+        claim(EVENT, "point_in_time", date(-1701), source["B"]),
+    ]
+    written, _ = write_fixture(client, letters, claims)
+    # written again, the fixture finds every item and statement
+    again, _ = write_fixture(client, letters, claims)
+    assert (again.written, again.referenced) == (0, 0)
+    assert again.created_items == written.created_items
     qids = {
         role: written.created_items[ref["local_id"]]
         for role, ref in (("person", PERSON), ("event", EVENT))

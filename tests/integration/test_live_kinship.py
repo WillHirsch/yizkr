@@ -281,6 +281,10 @@ def fixture_graph(client, config) -> dict[str, str]:
         }
     )
     written = BatchWriter(client).write_batch(batch)
+    # written again, the batch finds every person and statement
+    again = BatchWriter(client).write_batch(batch)
+    assert (again.written, again.referenced) == (0, 0)
+    assert again.created_items == written.created_items
     qids = {key: written.created_items[f"kinship-{key}"] for key in PEOPLE}
     for (subject, prop, value), rank in RANKS.items():
         set_rank(client, qids[subject], prop, qids[value], rank)

@@ -205,7 +205,8 @@ def test_the_printed_page_stands_beside_the_physical_one(
     client, fixture_graph
 ):
     registered, written = fixture_graph
-    assert (written.written, written.skipped) in ((2, 0), (0, 2))
+    # the session's first write writes both claims
+    assert (written.written, written.skipped) == (2, 0)
     (sibling,) = statements(
         client, written.created_items["printed-gustl"], "sibling"
     )
