@@ -5,7 +5,11 @@ name them (#364), while every text about what it keeps stays (#363;
 ADR-0020; docs/MODELING.md, "Living persons and privacy").
 
 A fictional fixture writes, under labels that carry a marker of the
-fixture's content (test_live_privacy.py's write_fixture):
+fixture's content and of the session (test_live_privacy.py's
+write_fixture), and with "Named In Text", the item with a label only, the
+duplicate and the sources carrying the session's marker of this module
+(conftest.fixture_mark), so that what an earlier session wrote, a live
+mutant's run included, never meets the session's fixture:
 
 * one person typed human, a type a curator then deprecated;
 * one typed human, a type a curator then outranked with a preferred
@@ -126,6 +130,7 @@ import pytest
 from wikibaseintegrator.wbi_enums import WikibaseRank
 
 from tests.munger_blocks import misplaced_in
+from yizkr import backup
 from yizkr.backup import (
     FAMILY,
     LINKED_LEFT_OUT,
@@ -135,22 +140,31 @@ from yizkr.backup import (
     dump_rdf,
     export_nonprivileged,
 )
+from yizkr.pipeline import writer
 from yizkr.staticsite import PEOPLE_QUERY, SiteBuilder
 
-from .conftest import register_fictional, wait_for_query_service
+from .conftest import fixture_mark, register_fictional, wait_for_query_service
 from .test_live_privacy import write_fixture
 
 pytestmark = pytest.mark.live
+
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "#344, #363, #364: people of every type the export reads, events, a "
+    "family, a merge, a label-only item, and Named In Text in texts on "
+    "other items"
+)
+MARK = fixture_mark(FIXTURE, writer, backup)
 
 DEPLOY = Path("deploy")
 QID_TOKEN = re.compile(r"Q[1-9]\d*\b")
 # a reference or value node, as the dump names one
 PROVENANCE = re.compile(r"<[^<>]*/(?:reference|value)/[0-9a-f]+>")
-LABEL_ONLY = "Export Fixture Label Only"
-MERGED_AWAY = "Export Fixture Merged Away"
+LABEL_ONLY = f"Export Fixture Label Only {MARK}"
+MERGED_AWAY = f"Export Fixture Merged Away {MARK}"
 # the person whom texts on other items name, the export leaves out (born
 # in 1990)
-NAMED = "Export Fixture Named In Text"
+NAMED = f"Export Fixture Named In Text {MARK}"
 LETTER = f"Export fixture letter to {NAMED}"
 # the predicates of an entity's terms: its label, under each of the three
 # names dumpRdf.php gives one, its description and its aliases
@@ -444,7 +458,7 @@ def label_only(client) -> str:
     """An item with a label and nothing else: it states no type. Written
     through WikibaseIntegrator, as the writer writes no item without a
     claim; a label is no statement, so it needs no reference. Idempotent:
-    re-runs find it by its label."""
+    a re-run within the session finds it by its label."""
     existing = client.find_item_by_label(LABEL_ONLY)
     if existing:
         return existing
@@ -455,12 +469,14 @@ def label_only(client) -> str:
 
 @pytest.fixture(scope="module")
 def fixture_graph(client, config):
-    """Write the fixture under its marked labels (idempotent: re-runs
-    reuse and skip everything), set the curators' types, merge the
-    duplicate, write the item with a label only, and wait until the query
-    service holds every fixture item's latest revision. Returns the QIDs
-    by role."""
-    source = register_fictional(client, "Export fixture source", "certificate")
+    """Write the fixture under its marked labels (idempotent: a re-run
+    within the session reuses and skips everything), set the curators'
+    types, merge the duplicate, write the item with a label only, and wait
+    until the query service holds every fixture item's latest revision.
+    Returns the QIDs by role."""
+    source = register_fictional(
+        client, f"Export fixture source {MARK}", "certificate"
+    )
     letter = register_fictional(client, LETTER, "letter", pages=1)
     written = write_fixture(
         client,

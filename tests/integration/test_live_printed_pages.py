@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 
 import pytest
 
@@ -37,9 +36,16 @@ from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
 
-from .conftest import register_fictional
+from .conftest import fixture_mark, register_fictional
 
 pytestmark = pytest.mark.live
+
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "#424: the booklet's printed page naming Gustl, Ursula and Nicholas, "
+    "its page numbered in print"
+)
+MARK = fixture_mark(FIXTURE, writer)
 
 # the booklet's commentary on page 6: Gustl was Ursula's younger brother
 GUSTL = {
@@ -100,12 +106,15 @@ def claims(artifact: ArtifactRef) -> list[dict]:
 def fixture_batch(artifact: ArtifactRef) -> ClaimBatch:
     """The fixture's batch, under labels that carry a marker: six hex
     digits of a hash over the claims, the cited SHA-1 replaced by "A",
-    and over the writer's source, as test_live_locators.py marks its
-    labels. The writer finds a local item by its label, so each version
-    of the fixture and of the writer meets the fixture as a first write
-    does: one that drops the printed page's snak (a mutant of the
-    harness, say) cannot pass by finding the block an earlier version
-    wrote. A re-run of one version finds its own items again."""
+    and over the module's marker (conftest.fixture_mark: the writer's
+    source and the session's random bytes), as test_live_locators.py
+    marks its labels. The writer finds a local item by its label, so each
+    session, and each version of the fixture and of the writer, meets the
+    fixture as a first write does: one that drops the printed page's snak
+    (a mutant of the harness, say) cannot pass by finding the block an
+    earlier session wrote, and what a live mutant's run wrote never meets
+    a later session. A re-run within the session finds its own items
+    again."""
     given = claims(artifact)
     content = [
         {
@@ -118,8 +127,7 @@ def fixture_batch(artifact: ArtifactRef) -> ClaimBatch:
         for each in given
     ]
     marker = hashlib.sha256(
-        json.dumps(content, sort_keys=True).encode()
-        + Path(writer.__file__).read_bytes()
+        json.dumps(content, sort_keys=True).encode() + MARK.encode()
     ).hexdigest()[:6]
 
     def mark(ref: dict) -> dict:
@@ -145,11 +153,11 @@ def fixture_batch(artifact: ArtifactRef) -> ClaimBatch:
 
 @pytest.fixture(scope="module")
 def fixture_graph(client):
-    """Write the fixture's batch (idempotent: a re-run of this version
+    """Write the fixture's batch (idempotent: a re-run within the session
     reuses and skips everything). Returns the booklet's registration and
     the write's result."""
     registered = register_fictional(
-        client, "Our Family from Germany", "artifact"
+        client, f"Our Family from Germany {MARK}", "artifact"
     )
     written = BatchWriter(client).write_batch(fixture_batch(registered.ref))
     return registered, written
@@ -197,7 +205,8 @@ def test_the_printed_page_stands_beside_the_physical_one(
     client, fixture_graph
 ):
     registered, written = fixture_graph
-    assert (written.written, written.skipped) in ((2, 0), (0, 2))
+    # the session's first write writes both claims
+    assert (written.written, written.skipped) == (2, 0)
     (sibling,) = statements(
         client, written.created_items["printed-gustl"], "sibling"
     )

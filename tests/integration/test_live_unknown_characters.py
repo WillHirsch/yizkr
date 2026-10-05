@@ -41,13 +41,16 @@ over the registrar's source too, so each version of the registrar meets
 them as a first registration does.
 
 Every entity's label carries a marker: six hex digits of a hash over the
-fixture, its cited SHA-1 replaced by "A", and over the writer's source, as
-test_live_stored_terms.py's labels do, so each version of the fixture and
-of the writer meets the fixture as a first write does. The source is
-registered with a fictional PNG of its own (register_fictional), which the
-claims cite by SHA-1 (#102). Like every live test it writes fictional data
-to the one instance, so the session that runs it ends by clearing the
-recorded instance-contents key (docs/AGENT_PROTOCOL.md §5).
+fixture, its cited SHA-1 replaced by "A", and over the module's marker
+(conftest.fixture_mark: the writer's source and the session's random
+bytes), as test_live_stored_terms.py's labels do, so each session, and each
+version of the fixture and of the writer, meets the fixture as a first
+write does: what an earlier session wrote, a live mutant's run included,
+never meets it. The source is registered with a fictional PNG of its own
+(register_fictional), which the claims cite by SHA-1 (#102). Like every
+live test it writes fictional data to the one instance, so the session that
+runs it ends by clearing the recorded instance-contents key
+(docs/AGENT_PROTOCOL.md §5).
 """
 
 from __future__ import annotations
@@ -66,9 +69,17 @@ from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import BatchWriter
 
-from .conftest import fictional_png, register_fictional
+from .conftest import fictional_png, fixture_mark, register_fictional
 
 pytestmark = pytest.mark.live
+
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "#431: Nina Sartina, her alias marked with a character the "
+    "instance's Unicode tables do not know, and two same-named copies of "
+    "her letter"
+)
+SESSION_MARK = fixture_mark(FIXTURE, writer)
 
 MARK = "\U0001e08f"
 DOT_BELOW = "\u0323"
@@ -162,7 +173,7 @@ def fixture_marker() -> str:
     """The marker (the module docstring)."""
     return hashlib.sha256(
         json.dumps(batch_content("A", ""), sort_keys=True).encode()
-        + Path(writer.__file__).read_bytes()
+        + SESSION_MARK.encode()
     ).hexdigest()[:6]
 
 
@@ -174,11 +185,11 @@ def prefix_of(marker: str) -> str:
 
 @pytest.fixture(scope="module")
 def fixture_graph(client):
-    """Write the fixture's batch (idempotent: a re-run of this version
+    """Write the fixture's batch (idempotent: a re-run within the session
     finds and skips everything it writes, and refuses and leaves out the
     same). Returns the source's item, the batch and the write's result."""
     registered = register_fictional(
-        client, "Unknown character fixture source", "artifact"
+        client, f"Unknown character fixture source {SESSION_MARK}", "artifact"
     )
     batch = ClaimBatch.model_validate(
         batch_content(registered.ref.sha1, prefix_of(fixture_marker()))
@@ -224,12 +235,8 @@ def cited(client, statement: dict, key: str) -> list[str]:
 @knows_the_mark
 def test_what_holds_the_mark_is_refused_or_left_out(client, fixture_graph):
     source, batch, written = fixture_graph
-    # the first write of this version writes the married name; a later
-    # session's finds it
-    assert (written.written, written.referenced, written.skipped) in (
-        (1, 0, 0),
-        (0, 0, 1),
-    )
+    # the session's first write writes the married name
+    assert (written.written, written.referenced, written.skipped) == (1, 0, 0)
     refused = claim_id(batch.claims[1])
     assert written.refused == [refused]
     assert written.refused_terms == ["nina: description", "nina: alias"]
@@ -286,7 +293,7 @@ def test_a_rewrite_sends_no_edit(client, fixture_graph, monkeypatch):
 
 @knows_the_mark
 def test_the_instance_keeps_the_mark_in_another_order(client):
-    # an item of its own, made once per version of the fixture with the
+    # an item of its own, made once a session with the
     # marked alias in the same write, never edited again; its description
     # keeps its label and description apart from any other item's
     label = f"{prefix_of(fixture_marker())}direct write"
@@ -358,8 +365,7 @@ def test_same_named_copies_under_a_marked_title_both_register(
             for path in paths
         ]
 
-    # the first registration of this version makes both; a later
-    # session's finds them
+    # the session's first registration makes both
     first = register_both()
 
     qids = [result.artifact_qid for result in first]

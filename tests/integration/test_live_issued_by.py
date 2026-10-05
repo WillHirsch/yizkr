@@ -7,8 +7,10 @@ artifact item the registrar keyed on that hash and writes the statement
 there, with both references (ADR-0003), and a re-run adds nothing. A
 document subject naming another document is refused before the first
 write, so neither artifact item gains a statement. The tests write
-fictional fixture data only (the universe's Standesamt
-Flörburg, under a test label), so re-runs reuse their entities.
+fictional fixture data only (the universe's Standesamt Flörburg, under a
+test label). Every title and label carries the session's marker
+(conftest.fixture_mark), so each session meets the fixture as a first
+write and a re-run within it reuses its entities.
 """
 
 from __future__ import annotations
@@ -17,18 +19,25 @@ from datetime import UTC, datetime
 
 import pytest
 
-from tests.integration.conftest import register_fictional
+from tests.integration.conftest import fixture_mark, register_fictional
 from yizkr.claims import ClaimBatch, validate_against_manifest
+from yizkr.pipeline import registrar, writer
 from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import BatchWriter
 
 pytestmark = pytest.mark.live
 
-TITLE = "Yizkr Issued-By Test Birth Register Extract"
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "#407: a birth register extract issued by the Standesamt Flörburg, "
+    "and an extract whose claim names a death certificate as its subject"
+)
+MARK = fixture_mark(FIXTURE, registrar, writer)
+TITLE = f"Yizkr Issued-By Test Birth Register Extract {MARK}"
 # the refusal test's pair: a source and the other document its claim names
-SOURCE_TITLE = "Yizkr Issued-By Refusal Test Birth Register Extract"
-OTHER_TITLE = "Yizkr Issued-By Refusal Test Death Certificate"
-OFFICE = "Yizkr Issued-By Test Standesamt Flörburg"
+SOURCE_TITLE = f"Yizkr Issued-By Refusal Test Birth Register Extract {MARK}"
+OTHER_TITLE = f"Yizkr Issued-By Refusal Test Death Certificate {MARK}"
+OFFICE = f"Yizkr Issued-By Test Standesamt Flörburg {MARK}"
 
 
 def _batch(sha1: str, subject_sha1: str | None = None) -> ClaimBatch:
@@ -98,17 +107,14 @@ def test_a_document_subject_is_written_on_its_artifact_item(client):
     batch = _batch(extract.ref.sha1)
     assert validate_against_manifest(batch) == []
     result = BatchWriter(client).write_batch(batch)
-    # written, or found written by an earlier session on this instance
-    assert result.written + result.skipped == 1
+    assert (result.written, result.skipped) == (1, 0)
     office = result.created_items["e1"]
     (statement,) = _issued_by(client, extract.qid)
     assert statement["mainsnak"]["datavalue"]["value"]["id"] == office
     assert statement["rank"] == "normal"
     assert _cited(client, statement, "stated_in") == {extract.qid}
     runs = _cited(client, statement, "inferred_from_extraction_run")
-    assert runs
-    if result.written:
-        assert runs == {result.run_qid}
+    assert runs == {result.run_qid}
     # the statement is the document's, never the office's
     assert _issued_by(client, office) == []
 

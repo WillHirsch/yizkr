@@ -34,20 +34,22 @@ them, and reads them back through the API:
   claims.
 
 Every entity's label carries a marker: six hex digits of a hash over the
-fixture, its cited SHA-1 replaced by "A", and over the writer's source, as
-test_live_text_shapes.py's labels do, so each version of the fixture and
-of the writer meets the fixture as a first write does. The source is
-registered with a fictional PNG of its own (register_fictional), which the
-claims cite by SHA-1 (#102). Like every live test it writes fictional data
-to the one instance, so the session that runs it ends by clearing the
-recorded instance-contents key (docs/AGENT_PROTOCOL.md §5).
+fixture, its cited SHA-1 replaced by "A", and over the module's marker
+(conftest.fixture_mark: the writer's source and the session's random
+bytes), as test_live_text_shapes.py's labels do, so each session, and each
+version of the fixture and of the writer, meets the fixture as a first
+write does: what an earlier session wrote, a live mutant's run included,
+never meets it. The source is registered with a fictional PNG of its own
+(register_fictional), which the claims cite by SHA-1 (#102). Like every
+live test it writes fictional data to the one instance, so the session that
+runs it ends by clearing the recorded instance-contents key
+(docs/AGENT_PROTOCOL.md §5).
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 
 import pytest
 from wikibaseintegrator.entities.baseentity import BaseEntity
@@ -57,9 +59,17 @@ from yizkr.pipeline import writer
 from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import BatchWriter
 
-from .conftest import register_fictional
+from .conftest import fixture_mark, register_fictional
 
 pytestmark = pytest.mark.live
+
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "#369, #403: five claims about Eugen Löbig, his daughter-in-law "
+    "Hildegard and the family's firm, from the 1909 burial register and "
+    "a scan's text layer"
+)
+MARK = fixture_mark(FIXTURE, writer)
 
 REPLACEMENT = "\N{REPLACEMENT CHARACTER}"
 # the page and excerpt of Eugen's date of death, and the firm's type hint,
@@ -176,7 +186,7 @@ def fixture_marker() -> str:
     plain = {entity["id"]: entity["label"] for entity in ENTITIES}
     return hashlib.sha256(
         json.dumps(batch_content("A", plain), sort_keys=True).encode()
-        + Path(writer.__file__).read_bytes()
+        + MARK.encode()
     ).hexdigest()[:6]
 
 
@@ -204,11 +214,11 @@ def labels_kept(marker: str) -> dict[str, str]:
 
 @pytest.fixture(scope="module")
 def fixture_graph(client):
-    """Write the fixture's batch (idempotent: a re-run of this version
+    """Write the fixture's batch (idempotent: a re-run within the session
     finds and skips everything it writes, and refuses the same claims).
     Returns the source's item, the batch and the write's result."""
     registered = register_fictional(
-        client, "Stored term fixture source", "artifact"
+        client, f"Stored term fixture source {MARK}", "artifact"
     )
     batch = ClaimBatch.model_validate(
         batch_content(registered.ref.sha1, labels_of(fixture_marker()))
@@ -261,10 +271,9 @@ def labels(client, qids: list[str]) -> dict[str, str | None]:
 
 def test_terms_and_text_as_the_instance_keeps_them(client, fixture_graph):
     source, batch, written = fixture_graph
-    # the first write of this version writes the date of death, the
-    # kinship and the firm's founding; a later session's finds all three
-    first = (written.written, written.referenced, written.skipped)
-    assert first in ((3, 0, 0), (0, 0, 3))
+    # the session's first write writes the date of death, the kinship and
+    # the firm's founding
+    assert (written.written, written.referenced, written.skipped) == (3, 0, 0)
     refused = [claim_id(batch.claims[index]) for index in (3, 4)]
     assert written.refused == refused
     for warning, cid, key in zip(

@@ -5,18 +5,17 @@ registered from the record the stages before the write keep of them
 (ADR-0010, #50), and idempotent re-registration. No LLM involved — the
 adapter is deterministic; claim extraction is covered elsewhere.
 
-Re-runnable against a non-empty graph: the synthetic decks are built
-byte-for-byte identically on every run (fixed ZIP timestamps), so re-runs
-reuse the same deck and media items, and the assertions only require
-what this run's decks assert — statements that earlier runs or other
-decks left on the shared image item are expected."""
+Re-runnable against a non-empty graph: the decks' titles and image carry
+the session's marker (conftest.fixture_mark), so each session registers
+decks and an image of its own, and what an earlier session wrote, a live
+mutant's run included, never meets it. Within the session the decks are
+built byte-for-byte identically (fixed ZIP timestamps), so a re-run
+reuses the same deck and media items."""
 
 from __future__ import annotations
 
 import hashlib
-import struct
 import zipfile
-import zlib
 
 import pytest
 
@@ -26,32 +25,24 @@ from tests.unit.test_presentation import (
     rels_xml,
     slide_xml,
 )
+from yizkr.pipeline import presentation, registrar
 from yizkr.pipeline.presentation import record_derived_media, unpack_pptx
 from yizkr.pipeline.registrar import Registrar
 
+from .conftest import fictional_png, fixture_mark
+
 pytestmark = pytest.mark.live
 
-DECK_TITLE = "Integration-test presentation"
-SECOND_DECK_TITLE = "Integration-test presentation, second deck"
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "ADR-0008: a deck with one slide and an image on it, and a second deck "
+    "of two slides with the same image on its second"
+)
+MARK = fixture_mark(FIXTURE, presentation, registrar)
+DECK_TITLE = f"Integration-test presentation {MARK}"
+SECOND_DECK_TITLE = f"Integration-test presentation, second deck {MARK}"
 FIXED_TIME = (2020, 1, 1, 0, 0, 0)  # deterministic ZIP bytes across runs
-
-
-def tiny_png_bytes() -> bytes:
-    def chunk(tag, data):
-        payload = tag + data
-        return (
-            struct.pack(">I", len(data))
-            + payload
-            + struct.pack(">I", zlib.crc32(payload))
-        )
-
-    raw = b"".join(b"\x00" + b"\x64\x64\x64" * 4 for _ in range(4))
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 4, 8, 2, 0, 0, 0))
-        + chunk(b"IDAT", zlib.compress(raw))
-        + chunk(b"IEND", b"")
-    )
+IMAGE = fictional_png(f"yizkr live test: the decks' image {MARK}")
 
 
 def build_live_deck(path, image_slide: int = 1, slides: int = 1):
@@ -101,7 +92,7 @@ def build_live_deck(path, image_slide: int = 1, slides: int = 1):
             write(
                 archive, f"ppt/slides/_rels/slide{n}.xml.rels", rels_xml(links)
             )
-        write(archive, "ppt/media/testimage1.png", tiny_png_bytes())
+        write(archive, "ppt/media/testimage1.png", IMAGE)
     return path
 
 
@@ -154,7 +145,7 @@ def files_with_bytes(client, content_sha1: str) -> set[str]:
 def test_deck_and_derived_media_provenance(client, tmp_path):
     properties, items = client.vocabulary()
     stated_in = properties["stated_in"]
-    image_sha1 = hashlib.sha1(tiny_png_bytes()).hexdigest()
+    image_sha1 = hashlib.sha1(IMAGE).hexdigest()
 
     deck, derived = register_deck(client, tmp_path, DECK_TITLE)
     assert deck.fragment_qids[1].startswith("Q")  # slide fragment exists
@@ -183,7 +174,7 @@ def test_deck_and_derived_media_provenance(client, tmp_path):
             assert cited(claim, stated_in), claim
 
     # part of EACH deck with its own slide qualifier, each statement
-    # stated in -> that deck (ADR-0008); earlier runs' decks may add more
+    # stated in -> that deck (ADR-0008), and of nothing else
     parts = {}
     for claim in claims[properties["part_of"]]:
         target = claim["mainsnak"]["datavalue"]["value"]["id"]
@@ -195,8 +186,7 @@ def test_deck_and_derived_media_provenance(client, tmp_path):
         ]
         assert target in cited(claim, stated_in)  # a deck asserts itself
         parts.setdefault(target, []).append(slides)
-    assert parts[deck.artifact_qid] == [["1"]]
-    assert parts[second.artifact_qid] == [["2"]]
+    assert parts == {deck.artifact_qid: [["1"]], second.artifact_qid: [["2"]]}
 
     # the deck-independent statements are single and cited by both decks
     # (an agreeing second deck adds its reference, not a duplicate)
@@ -212,8 +202,8 @@ def test_deck_and_derived_media_provenance(client, tmp_path):
     ]
     (sha1,) = statements("media_sha1")
     assert sha1["mainsnak"]["datavalue"]["value"] == image_sha1
-    assert both <= cited(instance, stated_in)
-    assert both <= cited(sha1, stated_in)
+    assert cited(instance, stated_in) == both
+    assert cited(sha1, stated_in) == both
     # the media file both decks cite is the one holding the image's bytes
     shared_files = {
         claim["mainsnak"]["datavalue"]["value"].removeprefix("File:")
@@ -221,7 +211,7 @@ def test_deck_and_derived_media_provenance(client, tmp_path):
         if both <= cited(claim, stated_in)
     }
     assert shared_files
-    assert {name.replace(" ", "_") for name in shared_files} <= blobs
+    assert {name.replace(" ", "_") for name in shared_files} == blobs
 
     # idempotent: same decks, same bytes -> same items, and nothing is
     # written at all (the media item's revision does not move)

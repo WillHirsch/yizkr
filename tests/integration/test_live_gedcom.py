@@ -36,6 +36,7 @@ import json
 import pytest
 
 from yizkr.claims import ArtifactRef
+from yizkr.pipeline import gedcom, writer
 from yizkr.pipeline.gedcom import (
     GEDCOM_LANGUAGES,
     UNDETERMINED,
@@ -44,7 +45,16 @@ from yizkr.pipeline.gedcom import (
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.writer import BatchWriter
 
+from .conftest import fixture_mark
+
 pytestmark = pytest.mark.live
+
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "ADR-0021: a GEDCOM export's person with a cited birth, a portrait, a "
+    "residence period, repeated events, an undated death and two families"
+)
+MARK = fixture_mark(FIXTURE, writer, gedcom)
 
 # The export's text, with {marker} in each label it gives an item: the
 # people's (and so the death event's), the media object's and the place's
@@ -116,14 +126,18 @@ def _marker() -> str:
     of the fixture, or of the adapter, that gives other statements for
     the export would otherwise write onto the items an earlier version
     wrote, and see their statements beside its own. With the marker each
-    version writes items of its own, and a re-run of one version finds
-    its own items again. The batch is made under a fixed artifact key,
+    version writes items of its own. The hash also covers the module's
+    marker (conftest.fixture_mark: the writer's and the adapter's source
+    and the session's random bytes), so each session writes items of its
+    own: what an earlier session wrote, a live mutant's run included,
+    never meets it, and a re-run within the session finds its own items
+    again. The batch is made under a fixed artifact key,
     since the export's own key is a hash of the marked text, and is
     hashed without its run details, which differ from run to run."""
     made = adapt_gedcom(TEMPLATE, artifact=ArtifactRef.from_bytes(b"")).batch
     content = made.model_dump(mode="json", exclude={"extraction_run"})
     return hashlib.sha256(
-        (TEMPLATE + json.dumps(content, sort_keys=True)).encode()
+        (TEMPLATE + json.dumps(content, sort_keys=True) + MARK).encode()
     ).hexdigest()[:6]
 
 
@@ -133,13 +147,13 @@ GEDCOM = TEMPLATE.replace("{marker}", _marker())
 @pytest.fixture(scope="module")
 def gedcom_artifact(client, tmp_path_factory):
     """(the export's item, the key its claims cite it by)."""
-    path = tmp_path_factory.mktemp("gedcom") / "integration-tree.ged"
+    path = tmp_path_factory.mktemp("gedcom") / f"integration-tree-{MARK}.ged"
     path.write_text(GEDCOM)
     registered = register_artifact(
         client,
         media_path=path,
         artifact_type="genealogical_report",
-        title="Integration GEDCOM tree",
+        title=f"Integration GEDCOM tree {MARK}",
         description="written by tests/integration; safe to delete",
     )
     return registered.artifact_qid, ArtifactRef.from_path(path)

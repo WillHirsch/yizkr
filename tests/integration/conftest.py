@@ -1,9 +1,15 @@
 """Fixtures for live integration tests (pytest -m live / make test-live).
 
 These tests need the deploy/ stack running and deploy/.env present;
-they skip with an explanation otherwise. They write to the instance
-using the same deterministic labels on every run, so re-runs reuse
-their entities — that reuse IS part of what they verify.
+they skip with an explanation otherwise.
+
+The instance is reset only per scratch run, and statements are never
+removed, so a live test meets whatever earlier sessions wrote, a live
+mutant's run included (#430). Every item a test writes carries a
+marker of its session's own (`fixture_mark`) in its label, title, file
+name or media bytes, so each session meets its fixture as a first
+write, and a rewrite within the session finds its own items again: that
+reuse IS part of what they verify.
 
 A session that uses the stack holds the live-stack lock (live_lock.py)
 from its first stack test to its end, so live sessions take turns on
@@ -17,11 +23,14 @@ the next scratch run resets the instance first (#199).
 A claim cites its artifact by the SHA-1 of the artifact's media (#102),
 so every artifact a test's claims cite is registered with media of its
 own: `register_fictional` gives it a small PNG whose bytes its title
-decides, so a re-run registers the same bytes as the same artifact.
+decides, so a re-run registers the same bytes as the same artifact, and
+a title carrying the session's marker gives the session bytes of its own.
 """
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 import struct
 import tempfile
@@ -29,6 +38,7 @@ import time
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 import requests
@@ -44,6 +54,27 @@ from .live_lock import hold_for_session
 
 # who a live session's clearing of the instance-contents record names
 LIVE_TESTS = "live tests"
+
+# eight random bytes drawn once a session: a mutation harness's run of a
+# mutant is a session of its own, so it never writes onto the items a
+# later session reads
+SESSION_BYTES = os.urandom(8)
+
+
+def fixture_mark(fixture: str, *modules: ModuleType) -> str:
+    """Eight hex digits of a hash over `fixture`, a sentence saying what a
+    test's fixture is, over the source of `modules`, the code under test,
+    and over this session's random bytes. A test puts it in every label,
+    title, file name and media byte its items are found by, so each
+    session, and each version of the fixture and of that code, meets the
+    fixture as a first write: what an earlier session wrote, a live
+    mutant's run included, stays on items no later session finds. Within
+    the session a rewrite finds its own items again."""
+    return hashlib.sha256(
+        fixture.encode()
+        + b"".join(Path(module.__file__).read_bytes() for module in modules)
+        + SESSION_BYTES
+    ).hexdigest()[:8]
 
 
 @pytest.fixture(scope="session")

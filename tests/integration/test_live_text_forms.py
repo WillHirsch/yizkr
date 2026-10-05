@@ -22,10 +22,11 @@ item is named by. It is written, and read back:
   adds nothing to them.
 
 The source is registered with a fictional PNG of its own
-(register_fictional), which the claims cite by SHA-1 (#102). Like every
-live test it writes fictional data to the one instance, so the session
-that runs it ends by clearing the recorded instance-contents key
-(docs/AGENT_PROTOCOL.md §5).
+(register_fictional), which the claims cite by SHA-1 (#102). Its title and
+the labels carry the session's marker (conftest.fixture_mark), so each
+session meets the fixture as a first write. Like every live test it writes
+fictional data to the one instance, so the session that runs it ends by
+clearing the recorded instance-contents key (docs/AGENT_PROTOCOL.md §5).
 """
 
 from __future__ import annotations
@@ -33,7 +34,6 @@ from __future__ import annotations
 import hashlib
 import json
 import unicodedata
-from pathlib import Path
 
 import pytest
 import requests
@@ -44,9 +44,16 @@ from yizkr.core.config import USER_AGENT
 from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
 
-from .conftest import register_fictional
+from .conftest import fixture_mark, register_fictional
 
 pytestmark = pytest.mark.live
+
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "#349: Ida, her sister-in-law Hildegard and Flörburg, every text of "
+    "the batch given decomposed, then composed"
+)
+MARK = fixture_mark(FIXTURE, writer)
 
 # the fixture's entities as its source names them, before the marker: Ida,
 # by her married name with her birth name as an alias (ADR-0011), and
@@ -166,17 +173,19 @@ def fixture_batch(artifact: ArtifactRef, form: str) -> ClaimBatch:
     """The fixture's batch with every text in the normalization form
     `form`, under labels that carry a marker: six hex digits of a hash
     over the fixture in NFC, its cited SHA-1 replaced by "A", and over the
-    writer's source, as test_live_locators.py's fixture_batch marks its
-    person's label. The writer finds a local item by its label, so each
-    version of the fixture, and of the writer, meets the fixture as a
-    first write does: one that finds no item by a label given in NFD (a
-    mutant of the harness, say) cannot pass by finding an item an earlier
-    version wrote. A re-run of one version, in either form, finds its own
-    items again."""
+    module's marker (conftest.fixture_mark: the writer's source and the
+    session's random bytes), as test_live_locators.py's fixture_batch
+    marks its person's label. The writer finds a local item by its label,
+    so each session, and each version of the fixture and of the writer,
+    meets the fixture as a first write does: one that finds no item by a
+    label given in NFD (a mutant of the harness, say) cannot pass by
+    finding an item an earlier session wrote, and what a live mutant's run
+    wrote never meets a later session. A re-run within the session, in
+    either form, finds its own items again."""
     plain = {entity["id"]: entity["label"] for entity in ENTITIES}
     marker = hashlib.sha256(
         json.dumps(batch_content("A", plain), sort_keys=True).encode()
-        + Path(writer.__file__).read_bytes()
+        + MARK.encode()
     ).hexdigest()[:6]
     labels = {key: f"{label} ({marker})" for key, label in plain.items()}
     return ClaimBatch.model_validate(
@@ -186,11 +195,11 @@ def fixture_batch(artifact: ArtifactRef, form: str) -> ClaimBatch:
 
 @pytest.fixture(scope="module")
 def fixture_graph(client):
-    """Write the fixture's batch, its text in NFD (idempotent: a re-run of
-    this version finds and skips everything). Returns the source's
+    """Write the fixture's batch, its text in NFD (idempotent: a re-run
+    within the session finds and skips everything). Returns the source's
     registration and the write's result."""
     registered = register_fictional(
-        client, "Text form fixture source", "certificate"
+        client, f"Text form fixture source {MARK}", "certificate"
     )
     batch = fixture_batch(registered.ref, "NFD")
     assert fixture_batch(registered.ref, "NFC") != batch
@@ -214,12 +223,8 @@ def items(client, written) -> dict[str, dict]:
 
 def test_the_fixture_is_kept_in_nfc(client, config, fixture_graph):
     registered, written = fixture_graph
-    # the first write of this version writes the three claims; a later
-    # session's write finds them there
-    assert (written.written, written.referenced, written.skipped) in (
-        (3, 0, 0),
-        (0, 0, 3),
-    )
+    # the session's first write writes the three claims
+    assert (written.written, written.referenced, written.skipped) == (3, 0, 0)
     properties, _ = client.vocabulary()
     found = items(client, written)
     for record in fixture_batch(registered.ref, "NFC").entities:

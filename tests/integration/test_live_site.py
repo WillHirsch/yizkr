@@ -18,14 +18,15 @@ Rahel Löbig's death, which the family tree gives as "after 1945", gives
 the timeline a date with a range its source states, open at one end
 (#309).
 
-Every label carries a marker, so the fixture never reuses an item that
-another test or run wrote, and a re-run reuses and skips everything.
-Rahel's label also carries a hash of her claim, so a later version of the
-claim writes a Rahel of its own (RAHEL).
-Pages that list the whole instance are read only for the fixture's own
-entries, so other data on the instance neither breaks an assertion nor
-appears in a failure report, and the generated site is deleted after the
-module.
+Every label, title and image carries a marker, eight hex digits of a hash
+over the fixture, over the writer's and the site generator's source and
+over eight random bytes drawn once a session (conftest.fixture_mark), so
+the fixture never reuses an item that another test or an earlier session, a
+live mutant's run included, wrote. Rahel's label also carries a hash of her
+claim (RAHEL). Pages that list the whole instance are read only for the
+fixture's own entries, so other data on the instance neither breaks an
+assertion nor appears in a failure report, and the generated site is
+deleted after the module.
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import example_universe as u
+from yizkr import staticsite
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.disagreement import (
     CONTAINMENT,
@@ -54,12 +56,13 @@ from yizkr.disagreement import (
     read_containment,
     read_statements,
 )
+from yizkr.pipeline import writer
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.queries.publish import load_templates, render_for_instance
 from yizkr.staticsite import publish_site
 
-from .conftest import run_sparql, wait_for_query_service
+from .conftest import fixture_mark, run_sparql, wait_for_query_service
 
 pytestmark = pytest.mark.live
 
@@ -68,12 +71,18 @@ EXTRACT = "birth-extract-1938"
 NATURALISATION = "naturalisation-1952"
 PHOTO = "gravestone-photo-1956"
 TREE = "family-tree-1984"
-MARK = "(site test)"
+# what the fixture is; a change to it gives the fixture new items
+FIXTURE = (
+    "Gustav Löbig's birth as the 1938 extract and the 1952 naturalisation "
+    "give it, the family gravestone's photograph, and Rahel's death after "
+    "1945 as the 1984 family tree gives it"
+)
+MARK = f"(site test {fixture_mark(FIXTURE, writer, staticsite)})"
 
 
 def marked(key: str) -> str:
     """The universe's label (or title) for `key`, with this module's
-    marker: a label no other test or run writes."""
+    marker: a label no other test or session writes."""
     entry = UNIVERSE[key]
     return f"{getattr(entry, 'title', None) or entry.label} {MARK}"
 
@@ -175,9 +184,9 @@ RAHEL_DEATH = {
 # Her label carries six hex digits of a hash over that claim, as
 # write_fixture marks its items in test_live_disagreement.py. The writer
 # finds her by her label, and keeps a claim with her value but other
-# qualifiers as a statement of its own: under the module's fixed marker
-# alone, a later version of the claim would add a second death beside this
-# one, where with the hash it writes a Rahel of its own.
+# qualifiers as a statement of its own, so each version of the claim
+# writes a Rahel of its own. The session's marker already does that
+# across sessions; the hash keeps it so for the claim's own versions.
 RAHEL = "{} ({})".format(
     marked("rahel-loebig"),
     hashlib.sha256(
@@ -278,7 +287,7 @@ def site(client, config, tmp_path_factory):
         (TREE, UNIVERSE[TREE].artifact_class),
     ):
         path = media / f"site-test-{key}.png"
-        path.write_bytes(png(f"yizkr live site test: {key}"))
+        path.write_bytes(png(f"yizkr live site test: {key} {MARK}"))
         cited[key] = ArtifactRef.from_path(path)
         registered[key] = register_artifact(
             client,
@@ -372,11 +381,9 @@ def test_gallery_and_timeline_render(site):
     assert '<img src="' in figure and image in figure
 
     # each dated assertion is its own entry, under its own source, and a
-    # date its source states no range for shows alone. The fixed marker
-    # makes this safe only because no version of this module has given a
-    # birth of Gustav's a range: one that does must mark his labels by
-    # content, as Rahel's are, or it will find this version's births
-    # beside its own.
+    # date its source states no range for shows alone. The session's
+    # marker gives Gustav an item of his own, so no earlier session's
+    # birth stands beside these.
     person = f'href="people/{site.person}.html"'
     timeline = re.findall(
         r'<div class="entry">(.*?)</div>', site.read("timeline.html")

@@ -167,7 +167,8 @@ itself in its own `--help`.
   `make test-live`, which is `uv run pytest -m live tests/integration -v`.
   They skip, saying why, when there is no connection configuration
   (`deploy/.env`) or the stack is unreachable. They write fictional
-  fixture data under deterministic labels, so a re-run reuses its
+  fixture data under labels that carry the session's marker (The
+  mutation harness, below), so a re-run within the session reuses its
   entities, and that reuse is part of what they check. They run on the
   one instance that scratch runs reset, and take turns on it through the
   live-stack lock (below). Since the scratch write stage does not make
@@ -313,6 +314,32 @@ tests = ["tests/unit/test_example.py::test_blank_names_are_dropped"]
   timeout: a harness killed outright (SIGKILL), as a tool's timeout may
   kill it, leaves the mutant in place and its run holding the lock
   (below).
+- **A live test's fixture is the session's own** (#430). A live mutant's
+  run writes what the mutant wrote onto the one instance, statements are
+  never removed, and the instance is reset only per scratch run. So a
+  live test's assertions must hold on an instance that earlier sessions,
+  and earlier live mutant runs, have written to. Every item a live test
+  writes carries the session's marker, `fixture_mark` in
+  `tests/integration/conftest.py`, in its label, title, file name or
+  media bytes: eight hex digits of a hash over a sentence saying what the
+  fixture is, over the source of the code under test and over eight
+  random bytes drawn once a session. Each session, and each mutant's
+  run, which is a session of its own, then meets its fixture as a first
+  write, and asserts it exactly; a rewrite within the session finds its
+  own items again. A test reads only what its session wrote, so it writes
+  what it reads even when run alone, never counting on another test's or
+  an earlier session's writes. The checks over the whole instance are
+  the exceptions, as they read what every session wrote:
+  `test_live_queries.py`'s unreferenced-statements invariant;
+  `test_live_backup.py`'s privacy and excerpt invariants over the
+  non-privileged export; `test_live_nonprivileged_export.py`'s munge
+  and block checks over the full dump and the export; and
+  `WikiClient.label_index`, which the writer and resolve read, and which
+  raises on any two entities that share an English label. A live mutant
+  that breaks one of these (one that drops a reference, mints a
+  duplicate label, or leaves an entity the munger drops) breaks every
+  later session until the next scratch reset, which is the remedy; the
+  fixture's marker cannot help.
 - **Stop what a test detaches.** Each pytest run has a process group of
   its own, killed when the run ends or outlives `--timeout` (default
   300 s). A process that leaves the group escapes, and can hold a lock or
