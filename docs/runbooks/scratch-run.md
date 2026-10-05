@@ -117,6 +117,26 @@ and `yizkr.reset` for the reset.
     their number can change. These are estimates, not ceilings: the
     chunks an entity manifest makes follow its entities, which a text's
     length only approaches, so a dense document can take more;
+  - **up to more for excerpts**: an image a PDF places within a
+    text-layer page, read on its own, becomes a document of its own, an
+    excerpt (ADR-0008), found only as its PDF is transcribed. The PDF's
+    transcription stage, which the estimate takes through the pipeline's
+    own code, reads the PDF page by page from the file itself (pypdfium2,
+    no model call), so the estimate knows each image it places: once
+    however many PDFs place it, and none that the never-ingest list
+    names or whose bytes a document of the corpus has. An image whose
+    reading the cache answers as the run would make no excerpt of (one
+    the check fails, or one that calls every page blank or not a
+    document page) is left out. Each image left counts the calls of an
+    excerpt's transcription, extraction and critique (as `--until`
+    plans them), each by the mean for excerpts over the runs in the runs
+    directory that measured any, else as typical (none, an entity
+    manifest and a chunk, one), and the line says which. They are given
+    as up to so many: an image the engine reads blank, or as no document
+    page, makes no excerpt, and the cache may answer an excerpt's calls.
+    Only the images of a PDF whose transcription the run makes are
+    counted: the excerpts a run invoked again found earlier, from a
+    transcription that stands, are not;
   - **not counted**: calls asked again after an engine error or a chunk
     answer cut off (up to 2 for a chunk), and waits for the
     subscription, which make no call. A slice the anomaly checks pause

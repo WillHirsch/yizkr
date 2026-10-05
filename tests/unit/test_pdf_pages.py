@@ -33,7 +33,9 @@ from tests.unit.test_llmcache import (
 from tests.unit.test_orchestrate import ScriptedOrchestrator, quiet, this_run
 from tests.unit.test_scratch import Corpus, a_run, fakes  # noqa: F401
 from tests.unit.test_scratch_estimate import (  # noqa: F401
+    answer_with,
     engine,
+    entries,
     estimate_of,
     per_stage,
     runs_dir,
@@ -41,7 +43,7 @@ from tests.unit.test_scratch_estimate import (  # noqa: F401
 from tests.unit.test_scratch_estimate import run as run_scratch
 from yizkr.claims import ClaimBatch
 from yizkr.core.corpus import ExclusionList
-from yizkr.pipeline import llm, transcribe, transcription_check
+from yizkr.pipeline import estimate, llm, transcribe, transcription_check
 from yizkr.pipeline.language import detect_language
 from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
@@ -825,6 +827,211 @@ class TestAScratchRun:
         assert per_stage(counted, "hits")["transcription"] == 1
         assert len(made) == 1
         assert not list(scratch.glob("yizkr-pdf-*"))
+
+
+def album() -> bytes:
+    """A second compilation: a typed title page, and a page that places
+    the letter's top, as the booklet does, beside two other images."""
+    page = pdfs.Page().image(LETTER_IMAGE, 72, 600, 200, 80)
+    for shade, x in ((1, 300), (2, 72)):
+        page.image(pdfs.gray(300, 120, shade=shade), x, 480, 200, 80)
+    page.text(pdfs.lines(CAPTION, TRANSLATION), y=400)
+    return pdfs.pdf([typed(TITLE), page])
+
+
+def gray_sha1(shade: int) -> str:
+    return hashlib.sha1(
+        png(300, 120, 1, pdfs.gray(300, 120, shade=shade).data)
+    ).hexdigest()
+
+
+def compilations(tmp_path: Path) -> Corpus:
+    """The booklet and the album, the engine reading each image as the
+    letter excerpt and each compilation as its translation."""
+    corpus = Corpus(tmp_path / "corpus")
+    (corpus.folder / "booklet.pdf").write_bytes(booklet())
+    (corpus.folder / "album.pdf").write_bytes(album())
+    corpus.texts["booklet.pdf"] = "\n".join(
+        pdfs.lines(CAPTION, TRANSLATION, COMMENT)
+    )
+    corpus.texts["album.pdf"] = "\n".join(pdfs.lines(TITLE))
+    for sha1 in (LETTER_SHA1, gray_sha1(1), gray_sha1(2)):
+        corpus.texts[f"{sha1}.png"] = EXCERPT
+    return corpus
+
+
+class TestTheCallEstimateCountsExcerpts:
+    """The images a PDF places within its text-layer pages become
+    excerpts only as its transcription reads them (#466): the estimate
+    counts them from the file, as the transcription stage reads them, and
+    gives their calls as up to so many more."""
+
+    def test_each_image_once_from_the_file(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        """No run measured an excerpt: each image's calls are typical, a
+        transcription that reuses the PDF's reading (none), an entity
+        manifest and a chunk, and a critique. The letter's top, which both
+        compilations place, is one image."""
+        counted = estimate_of(tmp_path, compilations(tmp_path), engine)
+        excerpts = counted.excerpts
+        assert (excerpts.images, excerpts.pdfs) == (3, 2)
+        assert excerpts.measured == 0
+        assert excerpts.calls == {
+            "transcription": 0,
+            "extraction": 6,
+            "critique": 3,
+        }
+        assert excerpts.total == 9
+        # given apart from the documents' own calls, as up to so many
+        assert sum(per_stage(counted, "engine_calls").values()) == (
+            counted.total().engine_calls
+        )
+        lines = estimate.describe(counted)
+        more = counted.total().more + 9
+        assert any(f", and up to {more} more." in line for line in lines)
+        (line,) = [line for line in lines if "for excerpts" in line]
+        assert line.startswith(
+            "- Up to 9 more for excerpts: 3 images that 2 PDFs place"
+        )
+        assert "as typical" in line
+        assert engine.calls == []
+
+    def test_an_image_a_corpus_document_has_is_no_excerpt(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        corpus = compilations(tmp_path)
+        (corpus.folder / "letter.png").write_bytes(
+            png(300, 120, 1, LETTER_IMAGE.data)
+        )
+        corpus.texts["letter.png"] = EXCERPT
+        excerpts = estimate_of(tmp_path, corpus, engine).excerpts
+        # the booklet places the letter's top alone, so only the album
+        # places an image that may become an excerpt
+        assert (excerpts.images, excerpts.pdfs) == (2, 1)
+
+    def test_an_image_the_never_ingest_list_names_is_no_excerpt(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        excerpts = estimate_of(
+            tmp_path,
+            compilations(tmp_path),
+            engine,
+            exclusions=ExclusionList.parse(f"{gray_sha1(1)}\n"),
+        ).excerpts
+        assert (excerpts.images, excerpts.pdfs) == (2, 2)
+
+    def test_the_mean_for_excerpts_over_the_runs_measured(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        """A run measured the letter's excerpt: eleven people make its
+        extraction an entity manifest and two chunks. The next run's
+        excerpts are counted by that mean, not as typical, and the
+        compilations, measured too, count for none of it."""
+        engine.people = 11
+        corpus = Corpus(tmp_path / "corpus")
+        (corpus.folder / "booklet.pdf").write_bytes(booklet())
+        corpus.texts["booklet.pdf"] = "\n".join(
+            pdfs.lines(CAPTION, TRANSLATION, COMMENT)
+        )
+        corpus.texts[f"{LETTER_SHA1}.png"] = EXCERPT
+        before = len(engine.calls)
+        run_scratch(tmp_path, corpus, engine)
+        read = [
+            what
+            for what, name in engine.calls[before:]
+            if name == f"{LETTER_SHA1}.png" and what != "vision"
+        ]
+        assert len(read) == 3
+        excerpts = estimate_of(tmp_path, corpus, engine, new=True).excerpts
+        assert (excerpts.images, excerpts.measured) == (1, 1)
+        assert excerpts.calls == {
+            "transcription": 0,
+            "extraction": 3,
+            "critique": 1,
+        }
+        (line,) = [
+            line
+            for line in estimate.describe(
+                estimate_of(tmp_path, corpus, engine, new=True)
+            )
+            if "for excerpts" in line
+        ]
+        assert line.startswith(
+            "- Up to 4 more for excerpts: 1 image that 1 PDF places within "
+            "text-layer pages"
+        )
+        assert line.endswith(
+            "by the mean for excerpts over the runs measured (1 excerpt): "
+            "0 transcription, 3 extraction, 1 critique. Up to, since an "
+            "image the engine reads blank or as no document page makes no "
+            "excerpt, and the cache may answer an excerpt's calls."
+        )
+
+    def test_an_image_the_cache_reads_blank_is_no_excerpt(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        """Its reading, which the cache answers, calls its page blank: the
+        run makes no excerpt of it, and the estimate counts none."""
+        corpus = Corpus(tmp_path / "corpus")
+        (corpus.folder / "booklet.pdf").write_bytes(booklet())
+        corpus.texts["booklet.pdf"] = "\n".join(
+            pdfs.lines(CAPTION, TRANSLATION, COMMENT)
+        )
+        corpus.texts[f"{LETTER_SHA1}.png"] = EXCERPT
+        run_scratch(tmp_path, corpus, engine, until="transcription")
+        (entry,) = entries(tmp_path / "cache", role="transcribe")
+        answer_with(entry, record_answer(""))
+        excerpts = estimate_of(tmp_path, corpus, engine, new=True).excerpts
+        assert (excerpts.images, excerpts.total) == (0, 0)
+        # read as the letter, it may be one
+        answer_with(entry, record_answer(EXCERPT))
+        excerpts = estimate_of(tmp_path, corpus, engine, new=True).excerpts
+        assert excerpts.images == 1
+
+    def test_until_counts_the_excerpt_stages_up_to_it(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        counted = estimate_of(
+            tmp_path, compilations(tmp_path), engine, until="transcription"
+        )
+        assert counted.excerpts.images == 3
+        assert counted.excerpts.calls == {"transcription": 0}
+        assert not any(
+            "for excerpts" in line for line in estimate.describe(counted)
+        )
+
+    def test_a_transcription_that_stands_finds_none(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        """Invoked again, the run reuses the booklet's transcription, and
+        the excerpt it found stays the run's: the estimate counts it no
+        more."""
+        corpus = Corpus(tmp_path / "corpus")
+        (corpus.folder / "booklet.pdf").write_bytes(booklet())
+        corpus.texts["booklet.pdf"] = "\n".join(
+            pdfs.lines(CAPTION, TRANSLATION, COMMENT)
+        )
+        corpus.texts[f"{LETTER_SHA1}.png"] = EXCERPT
+        run_scratch(tmp_path, corpus, engine, until="transcription")
+        counted = estimate_of(tmp_path, corpus, engine)
+        assert counted.resumed
+        assert counted.stages["transcription"].reused == 1
+        assert counted.excerpts.images == 0
 
 
 def stricter_check(monkeypatch, phrase: str) -> None:

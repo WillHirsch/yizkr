@@ -54,6 +54,26 @@ subscription, which are no calls. Nor is a slice the anomaly checks
 pause as the run unfolds (docs/ANOMALIES.md): it makes fewer calls than
 counted.
 
+**Excerpts.** An image a PDF places within a text-layer page, read on
+its own, becomes a document of its own, an excerpt (ADR-0008), found only
+as its PDF is transcribed, so no plan names it beforehand. The PDF's
+transcription stage, taken through the pipeline's own code, reads the
+PDF page by page as the run does (yizkr.pipeline.textlayer, with
+pypdfium2 and no model call), so the estimate knows each image it places
+from the file itself: by the SHA-1 of its bytes, once however many PDFs
+place it, and none that the never-ingest list names or whose bytes a
+document of the corpus has. An image whose reading the cache answers,
+and which the run would not make an excerpt (its reading fails the check,
+or calls every page blank or not a document page), is left out. The
+calls of each image left, in each excerpt stage the invocation plans,
+are counted by the mean for excerpts over the runs measured, else as
+typical (llm.estimate_calls), and given as up to so many more: an image
+the engine reads blank, or as no document page, makes no excerpt, and
+the cache may answer an excerpt's calls. Only the images of a PDF whose
+transcription the planned run makes are counted: the excerpts a run
+invoked again found in an earlier invocation, from a transcription that
+stands, are not.
+
 **Nothing written, held or asked.** The estimate reads the corpus, the
 runs directory and the cache (llm.read_cache), and writes none of them;
 it refuses a runs directory the run refuses (scratch.runs_refusal).
@@ -85,6 +105,7 @@ from yizkr.pipeline.critique import run_critique
 from yizkr.pipeline.orchestrate import (
     BATCH_VOLATILE,
     DOCUMENT_STAGES,
+    EXCERPT,
     TRANSCRIPTION_VOLATILE,
     DocumentRun,
     _findings,
@@ -108,7 +129,8 @@ from yizkr.pipeline.scratch import (
     runs_refusal,
 )
 from yizkr.pipeline.stages import content_hash
-from yizkr.pipeline.transcribe import Transcription
+from yizkr.pipeline.transcribe import ImageReading, Transcription
+from yizkr.pipeline.transcription_record import BLANK, NOT_A_DOCUMENT_PAGE
 
 # the LLM cache's events the estimate counts (rundir.CACHE_EVENTS): an
 # answer it gives, a call it cannot answer, and the replay of an opening
@@ -226,6 +248,9 @@ class _Made:
     # CRITIQUE), and the length of the text an extraction reads
     estimated: str | None = None
     size: int | None = None
+    # the SHA-1s of the images a PDF's transcription read on its own that
+    # may each become an excerpt (_may_be_excerpt)
+    images: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -262,6 +287,24 @@ class StageCalls:
 
 
 @dataclass
+class ExcerptCalls:
+    """The excerpts the planned run may find as it transcribes its PDFs,
+    and the calls they may make: the images, the PDFs that place them,
+    the calls per excerpt stage, by the mean for excerpts over the runs
+    measured (`measured` excerpts, 0 when none was and the count is
+    typical), all of them up to so many (the module docstring says why)."""
+
+    images: int = 0
+    pdfs: int = 0
+    calls: dict[str, int] = field(default_factory=dict)
+    measured: int = 0
+
+    @property
+    def total(self) -> int:
+        return sum(self.calls.values())
+
+
+@dataclass
 class Estimate:
     """The calls of one planned invocation of a scratch run, per stage."""
 
@@ -283,6 +326,7 @@ class Estimate:
     # what the run's preflight would refuse now, beyond what the estimate
     # refuses itself
     preflight: list[str] = field(default_factory=list)
+    excerpts: ExcerptCalls = field(default_factory=ExcerptCalls)
 
     def total(self) -> StageCalls:
         total = StageCalls()
@@ -549,6 +593,9 @@ class Estimator(ScratchDriver):
             for stage, outcome in stages.items():
                 self._add(estimate, stage, outcome)
         self._estimate_extractions(estimate, made)
+        estimate.excerpts = self._excerpts_found(
+            made, {doc.sha1 for doc in docs}
+        )
         estimate.stages = dict(
             sorted(estimate.stages.items(), key=lambda item: PHASES[item[0]])
         )
@@ -721,8 +768,13 @@ class Estimator(ScratchDriver):
             if paged:
                 keyed.reading_pages = False
         # a PDF read page by page keeps its images in a scratch folder,
-        # which the estimate keeps nothing of
+        # which the estimate keeps nothing of but their SHA-1s
         if transcription.reading is not None:
+            made.images = [
+                image.sha1
+                for image in transcription.reading.images
+                if _may_be_excerpt(image)
+            ]
             transcription.reading.close()
             transcription.forget_reading()
         if paged and keyed.stood_in:
@@ -894,34 +946,119 @@ class Estimator(ScratchDriver):
 
     def _baseline(self, needed: set[tuple[str, str]]) -> dict:
         """(document SHA-1, stage) -> the calls the latest invocation to
-        finish the stage made for it (llm.run_calls, over that
-        invocation's events), from the newest run in the runs directory
-        back, until every pair in `needed` has its count. A stage counts
-        only as an invocation that finished it made it, so a later
-        invocation cut short in it, a refresh's say, leaves the measure
-        whole."""
+        finish the stage made for it (_finished), from the newest run in
+        the runs directory back, until every pair in `needed` has its
+        count."""
         measured: dict[tuple[str, str], int] = {}
         for run in reversed(runs_in(self.state_dir.parent)):
             if needed <= measured.keys():
                 break
-            invocations: dict[Any, list[dict]] = {}
-            for event in RunDir(run).events():
-                invocations.setdefault(event.get("invocation"), []).append(
-                    event
-                )
-            finished: dict[tuple[str, str], int] = {}
-            for events in invocations.values():
-                done = {
-                    (event.get("subject"), event.get("stage"))
-                    for event in events
-                    if event.get("event") == "done"
-                }
-                for pair, count in llm.run_calls(events).items():
-                    if pair in done:
-                        finished[pair] = count
-            for pair, count in finished.items():
+            for pair, count in _finished(RunDir(run)).items():
                 measured.setdefault(pair, count)
         return measured
+
+    def _excerpts_found(
+        self, made: dict[DocumentRun, dict[str, _Made]], corpus: set[str]
+    ) -> ExcerptCalls:
+        """The excerpts the planned run may find as its PDFs'
+        transcriptions read them, and their calls (the module docstring
+        says how): each image once, however many PDFs place it, and none
+        whose bytes a document of the corpus has (`corpus`, their
+        SHA-1s), as the driver takes them (Orchestrator._excerpts_of)."""
+        images: set[str] = set()
+        pdfs = 0
+        for stages in made.values():
+            transcription = stages.get("transcription")
+            found = {
+                sha1
+                for sha1 in (transcription.images if transcription else ())
+                if sha1 not in corpus
+            }
+            pdfs += bool(found)
+            images |= found
+        excerpts = ExcerptCalls(images=len(images), pdfs=pdfs)
+        planned = [s for s in DOCUMENT_STAGES[EXCERPT] if self._within(s)]
+        if not images or not planned:
+            return excerpts
+        measures = self._excerpt_measures()
+        typical = llm.estimate_calls(
+            [{"sha1": "", "kind": EXCERPT, "stages": planned}]
+        )
+        for stage in planned:
+            counts = [
+                count for (_, of), count in measures.items() if of == stage
+            ]
+            if counts:
+                calls = round(len(images) * sum(counts) / len(counts))
+            else:
+                calls = len(images) * typical[stage].calls
+            excerpts.calls[stage] = calls
+        excerpts.measured = len({sha1 for sha1, _stage in measures})
+        return excerpts
+
+    def _excerpt_measures(self) -> dict[tuple[str, str], int]:
+        """(excerpt SHA-1, stage) -> the calls the latest invocation to
+        finish the stage made for it (_finished), over every run in the
+        runs directory, newest first: the excerpts each run's plan names
+        (its manifest's documents of kind EXCERPT)."""
+        measured: dict[tuple[str, str], int] = {}
+        for run in reversed(runs_in(self.state_dir.parent)):
+            rundir = RunDir(run)
+            manifest = rundir.manifest()
+            planned = (
+                manifest.get("documents")
+                if isinstance(manifest, dict)
+                else None
+            )
+            excerpts = {
+                entry.get("sha1")
+                for entry in planned or ()
+                if isinstance(entry, dict) and entry.get("kind") == EXCERPT
+            }
+            if not excerpts:
+                continue
+            for pair, count in _finished(rundir).items():
+                if pair[0] in excerpts:
+                    measured.setdefault(pair, count)
+        return measured
+
+
+def _finished(rundir: RunDir) -> dict[tuple[str, str], int]:
+    """(document SHA-1, stage) -> the calls the latest invocation of the
+    run to finish the stage made for it (llm.run_calls, over that
+    invocation's events). A stage counts only as an invocation that
+    finished it made it, so a later invocation cut short in it, a
+    refresh's say, leaves the measure whole."""
+    invocations: dict[Any, list[dict]] = {}
+    for event in rundir.events():
+        invocations.setdefault(event.get("invocation"), []).append(event)
+    finished: dict[tuple[str, str], int] = {}
+    for events in invocations.values():
+        done = {
+            (event.get("subject"), event.get("stage"))
+            for event in events
+            if event.get("event") == "done"
+        }
+        for pair, count in llm.run_calls(events).items():
+            if pair in done:
+                finished[pair] = count
+    return finished
+
+
+def _may_be_excerpt(image: ImageReading) -> bool:
+    """Whether the run may make an excerpt of an image a PDF's
+    transcription read on its own, as the driver judges the reading it
+    keeps (Orchestrator._excerpts_of): one that passes the check, and
+    whose record calls some page transcribed or illegible, not every page
+    blank or not a document page. A reading that stands in for the
+    engine's calls its page illegible, so its image may be one."""
+    if image.transcription is None:
+        return False
+    record = image.transcription.record()
+    return record is None or not set(record.statuses()) <= {
+        BLANK,
+        NOT_A_DOCUMENT_PAGE,
+    }
 
 
 def _holders(runs: Path, cache: Path) -> list[str]:
@@ -1001,12 +1138,13 @@ def describe(estimate: Estimate) -> list[str]:
             f"{calls.engine_calls:>12} {calls.estimated:>9}"
         )
     total = estimate.total()
+    excerpts = estimate.excerpts
     summary = (
         f"Engine calls: {total.engine_calls}, {total.known} known and "
         f"{total.estimated} estimated"
     )
-    if total.more:
-        summary += f", and up to {total.more} more"
+    if total.more + excerpts.total:
+        summary += f", and up to {total.more + excerpts.total} more"
     lines += ["", summary + "."]
     lines.append(
         "- Known: keyed as the run keys them, from the same prompts, "
@@ -1033,6 +1171,8 @@ def describe(estimate: Estimate) -> list[str]:
             "approaches, so a dense document can take more still: an "
             "estimate, not a ceiling."
         )
+    if excerpts.total:
+        lines.append(_excerpt_line(excerpts))
     lines.append(
         "- Not counted: calls asked again after an engine error or after a "
         "chunk answer cut off (at most 2 for a chunk), and the waits for "
@@ -1079,6 +1219,36 @@ def _estimated(estimate: Estimate) -> list[str]:
     if critique.estimated:
         parts.append(f"{_plural(critique.estimated, 'critique')}, one each")
     return parts
+
+
+def _excerpt_line(excerpts: ExcerptCalls) -> str:
+    """What the excerpts the run may find come to, and how their calls
+    are counted."""
+    placed = (
+        f"{_plural(excerpts.images, 'image')} that "
+        f"{_plural(excerpts.pdfs, 'PDF')} "
+        f"{'places' if excerpts.pdfs == 1 else 'place'} within text-layer "
+        "pages, "
+        "each read on its own,"
+    )
+    if excerpts.measured:
+        how = (
+            "by the mean for excerpts over the runs measured "
+            f"({_plural(excerpts.measured, 'excerpt')})"
+        )
+    else:
+        how = "as typical, with no run that measured an excerpt"
+    calls = ", ".join(
+        f"{count} {stage}" for stage, count in excerpts.calls.items()
+    )
+    return (
+        f"- Up to {excerpts.total} more for excerpts: {placed} may each "
+        "become an excerpt, a document of its own (ADR-0008), found as its "
+        f"PDF is transcribed. Their calls are counted {how}"
+        + (f": {calls}" if calls else "")
+        + ". Up to, since an image the engine reads blank or as no document "
+        "page makes no excerpt, and the cache may answer an excerpt's calls."
+    )
 
 
 def _notes(estimate: Estimate) -> list[str]:
