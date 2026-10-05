@@ -2089,7 +2089,11 @@ class TestPreflightCalls:
         client refuses the CLI as another setting, as without a preflight
         (ES)."""
         corpus = small(tmp_path)
-        assert command(tmp_path, corpus, fakes, until="transcription") == 0
+        sonnet = {"extract_model": "claude-sonnet-5"}
+        assert (
+            command(tmp_path, corpus, fakes, until="transcription", **sonnet)
+            == 0
+        )
         (run,) = scratch.runs_in(runs_dir(tmp_path))
         fakes.preflights.clear()
         asked = len(fakes.calls)
@@ -2101,9 +2105,11 @@ class TestPreflightCalls:
                 corpus,
                 fakes,
                 until="extraction",
+                **sonnet,
                 log=lambda line, *a, **k: lines.append(str(line)),
             )
         assert fakes.preflights == [] and len(fakes.calls) == asked
+        # one line, for both pairs
         (skipped,) = [line for line in lines if line.startswith("preflight:")]
         assert "9.9.10, not the run's 9.9.9, so no model is checked" in skipped
         assert outcome(run) == ("refused", "RunSettingsConflict")
