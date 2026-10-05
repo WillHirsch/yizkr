@@ -121,3 +121,7 @@ future run. Review noise becomes hierarchy signal.
 - The impossibility rules are structural facts, not heuristics, so they
   compose with (do not replace) the string blocking key, which stays
   deliberately loose to preserve recall on clipped/maiden/nickname forms.
+  (Amended by #388: the key is a whole name form, read through the
+  mention record; maiden and nickname forms reach it through the
+  record's typed parts and the graph's typed name statements, clipped
+  forms only through the aliases a document adds.)

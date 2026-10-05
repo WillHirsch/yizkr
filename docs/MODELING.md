@@ -1140,10 +1140,9 @@ not a signal to grow the schema on.
   start-time disagreement. A point in time on a residence or spouse
   statement dates an observation, not the residence or the marriage
   ("Marriages, residences and other periods"), and is not compared.
-- A date whose span lies inside another's, a place the graph records
-  inside the other, and a birth name whose every word the other also
-  writes, in any order ("Sörne" beside "Ida Sörne"), differ in
-  resolution, not substance, and are not reported. A date's span is the whole period its precision names (a
+- A date whose span lies inside another's and a place the graph records
+  inside the other differ in resolution, not substance, and are not
+  reported. A date's span is the whole period its precision names (a
   month, a year, a decade, or a century as Wikibase counts it, which
   holds 1900 in the 19th century and 1800 in the 18th: "Uncertainty and
   time"), or the range its source states with `earliest date` and

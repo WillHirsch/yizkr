@@ -14,12 +14,6 @@ Amended by #241 (2026-09-28): the open question of which century a
 century-precision date names is settled (MODELING.md, "Uncertainty and
 time"): centuries are counted as Wikibase counts them, so `century` gives
 the 19th century the span 1801 to 1900 (§2).
-Amended by #388 (2026-10-04): a birth name whose every word the
-other also writes, in any order and letter case and edge punctuation aside, states
-less of the name, not another one, so the pair differs in resolution
-and is not listed: "Sörne" beside "Ida Sörne", or "SÖRNE, Ida" beside
-"Ida Sörne" (`name_within`). A word the other lacks makes another
-name, listed as before.
 
 ## Context
 
@@ -100,7 +94,6 @@ tests on the fictional universe (`tests/unit/test_disagreement.py`):
 | a precision coarser than a century names no span; a span inside the other's differs in resolution | `named`, `spans_nest` |
 | two dates stored alike are compared through their stated ranges | `stored_alike_order`, `paired` |
 | a place recorded inside the other differs in resolution | `place_within` |
-| a birth name whose every word the other also writes, in any order, differs in resolution (amended by #388) | `name_within` |
 | two readings of one artifact are not two sources, nor are two readings of one statement's value, however many artifacts it cites | `from_different_artifacts`, `one_claim` |
 
 The two open questions each touch one function, and neither is decided

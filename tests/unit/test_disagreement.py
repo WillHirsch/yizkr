@@ -33,7 +33,6 @@ from yizkr.disagreement import (
     century,
     compare,
     counts_by_property,
-    name_within,
     read_containment,
     read_statements,
 )
@@ -1389,10 +1388,11 @@ class TestPlaces:
 
 
 class TestNames:
-    """name_within: a birth name whose every word the other also writes
-    states less of the name, not another one (#388)."""
+    """A birth name compares as a whole name: one that writes fewer of
+    the other's words is another value, listed beside it (ADR-0002;
+    ADR-0035 §10 leaves this reader comparing whole names)."""
 
-    def test_a_surname_alone_beside_the_full_name_is_not_listed(self):
+    def test_a_surname_alone_beside_the_full_name_is_listed(self):
         # the card gives only her birth surname; the compensation file the
         # full name
         statements = (
@@ -1404,52 +1404,9 @@ class TestNames:
                 COMPENSATION,
             ),
         )
-        assert listed(*statements) == []
-        assert listed(*reversed(statements)) == []
-
-    def test_the_order_and_edge_punctuation_of_the_words_aside(self):
-        statements = (
-            said("ida-loebig", "birth_name", text("SÖRNE, Ida", "en"), CARD),
-            said(
-                "ida-loebig",
-                "birth_name",
-                text("Ida Sörne", "de"),
-                COMPENSATION,
-            ),
-        )
-        assert listed(*statements) == []
-
-    def test_a_word_the_other_lacks_is_another_name(self):
-        # the tree gives her married name as her birth name
-        statements = (
-            said("ida-loebig", "birth_name", text("Sörne", "de"), CARD),
-            said("ida-loebig", "birth_name", text("Ida Löbig", "en"), TREE),
-        )
         assert [row[4:] for row in listed(*statements)] == [
-            ("Ida Löbig", "Sörne")
+            ("Ida Sörne", "SÖRNE")
         ]
-
-    def test_a_shared_prefix_is_no_shared_word(self):
-        statements = (
-            said("ida-loebig", "birth_name", text("Sör", "de"), CARD),
-            said("ida-loebig", "birth_name", text("Ida Sörne", "de"), TREE),
-        )
-        assert len(listed(*statements)) == 1
-
-    def test_accents_are_not_folded(self):
-        # two spellings of the surname are two values, as before
-        statements = (
-            said("ida-loebig", "birth_name", text("Sorne", "de"), CARD),
-            said("ida-loebig", "birth_name", text("Ida Sörne", "de"), TREE),
-        )
-        assert len(listed(*statements)) == 1
-
-    def test_name_within(self):
-        assert name_within("Sörne", "Ida Sörne")
-        assert name_within("(Ida) Sörne.", "SÖRNE Ida")
-        assert not name_within("Ida Sörne", "Sörne")
-        assert not name_within("", "Ida Sörne")
-        assert not name_within("...", "Ida Sörne")
 
 
 class TestDifferentArtifacts:

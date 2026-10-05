@@ -829,7 +829,6 @@ def lifted_facts(mention: Mention) -> PairFacts:
     mention uid stands in for a QID on both sides of every edge."""
     return PairFacts(
         kind=mention.kind,
-        label=mention.label,
         qid=mention.uid,
         kin_qids=mention.kin_uids,
     )

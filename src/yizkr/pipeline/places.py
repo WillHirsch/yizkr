@@ -2,10 +2,11 @@
 
 Demand-driven containment: the worklist is derived from the
 inconsistency report's own unresolved place pairs plus stated-parent
-candidates: the containers a place's mention records state (ADR-0035
-§2.2: "Fläckfeld, Kreis Mockburg" is Fläckfeld within Kreis Mockburg),
-each against every existing place of that name. A label's punctuation
-never says what contains what. Questions are ordered spine-first by the
+candidates: the chain of containers a place's mention record states
+(ADR-0035 §2.2: "Fläckfeld, Kreis Mockburg, Hesse" is Fläckfeld within
+Kreis Mockburg within Hesse), asked link by link against every existing
+place of each name. A label's punctuation never says what contains
+what. Questions are ordered spine-first by the
 graph's own containment (a place the graph puts more places inside is
 of larger scale) and each `--apply` round re-derives the worklist
 through the graph's `(location|part_of)+` closure — transitive
@@ -59,9 +60,10 @@ class PlaceRecord:
     label: str
     aliases: list[str] = field(default_factory=list)
     parents: list[str] = field(default_factory=list)  # existing containment
-    # the containers its mention records state, as written, in the order
-    # the records give them (ADR-0035 §2.2); never written to the graph
-    within: list[str] = field(default_factory=list)
+    # each of its mention records' chains of containers, as written,
+    # nearest first, in the source's order (ADR-0035 §2.2); never
+    # written to the graph
+    chains: list[list[str]] = field(default_factory=list)
 
 
 @dataclass
@@ -191,10 +193,9 @@ _BATCH_VIEWS = ("batch.approved.json", "batch.resolved.json", "batch.json")
 
 
 def _document_dirs(run_dir: Path) -> list[Path]:
-    """Each document's directory in a run directory, an excerpt's too;
-    the corpus stages' directory holds no document."""
+    """Each directory of a run directory, an excerpt's too; one that
+    holds no write.json is passed over by the caller."""
     from yizkr.pipeline.orchestrate import EXCERPTS_DIR
-    from yizkr.pipeline.scratch import CORPUS_DIR
 
     try:
         entries = sorted(run_dir.iterdir())
@@ -207,26 +208,31 @@ def _document_dirs(run_dir: Path) -> list[Path]:
         for entry in entries
         if entry.is_dir()
         and not entry.name.startswith(".")
-        and entry.name not in (CORPUS_DIR, EXCERPTS_DIR)
+        and entry.name != EXCERPTS_DIR
     ]
 
 
-def record_containers(run_dir: Path) -> dict[str, list[str]]:
-    """QID -> the containers the mention records of a written place
-    state, from the run directory that wrote the graph.
+def record_containers(run_dir: Path) -> dict[str, list[list[str]]]:
+    """QID -> the chains of containers the mention records of a written
+    place state, from the run directory that wrote the graph.
 
     A document's place reaches its QID through the batch it was written
-    from: the QID reconcile resolved it to, else the item the writer
-    minted for its local id (`write.json`'s `created_items`). A place no
-    write reached, or whose record states no container, is left out; a
-    directory set aside (a dot name) is passed over."""
-    found: dict[str, list[str]] = {}
+    from: the QID reconcile resolved it to, else the item the writer used
+    for its local id, found under its label or minted (`write.json`'s
+    `created_items`). A place with no such QID, or whose record states no
+    container, is left out; a directory set aside (a dot name), or one
+    whose write.json is missing or no object, is passed over."""
+    found: dict[str, list[list[str]]] = {}
     for directory in _document_dirs(run_dir):
         try:
             written = json.loads((directory / "write.json").read_text())
         except (OSError, ValueError):
             continue
-        created = written.get("created_items") or {}
+        if not isinstance(written, dict):
+            continue
+        created = written.get("created_items")
+        if not isinstance(created, dict):
+            created = {}
         batch = None
         for name in _BATCH_VIEWS:
             try:
@@ -243,10 +249,11 @@ def record_containers(run_dir: Path) -> dict[str, list[str]]:
             if not isinstance(record, PlaceStructure) or not record.within:
                 continue
             qid = entity.qid or created.get(entity.id)
-            if not qid:
+            if not isinstance(qid, str) or not qid:
                 continue
-            stated = found.setdefault(qid, [])
-            stated.extend(c for c in record.within if c not in stated)
+            chains = found.setdefault(qid, [])
+            if record.within not in chains:
+                chains.append(list(record.within))
     return found
 
 
@@ -268,14 +275,18 @@ def _ancestors(places: list[PlaceRecord]) -> dict[str, set[str]]:
 
 
 def stated_parent_candidates(places: list[PlaceRecord]) -> list[Question]:
-    """Parent candidates from the containers a place's records state.
+    """Parent candidates from the chains of containers a place's records
+    state, link by link: the place within the nearest container of its
+    chain that names an existing place, and each such container within
+    the next. A chain's farther containers are never asked of the place
+    itself, so an approved chain writes no shortcut edge; its links
+    still place a nearest container that states no parent of its own.
 
-    Each stated container proposes every other existing place whose label
-    or an alias is that container's name, folded for case and accents and
-    with umlauts written out (ADR-0035 §7); namesakes are each asked,
-    never one guessed. A
-    candidate already among the place's containers, or one the graph puts
-    inside the place, is not asked. Structure never rides the generative
+    A container names every existing place whose label or an alias is
+    that name, folded for case and accents and with umlauts written out
+    (ADR-0035 §7); namesakes are each asked, never one guessed. A pair
+    whose parent the graph already puts the child in, or that it puts
+    inside the child, is not asked. Structure never rides the generative
     path: these arrive pre-evidenced."""
     from yizkr.pipeline.clustering import part_keys
 
@@ -284,32 +295,66 @@ def stated_parent_candidates(places: list[PlaceRecord]) -> list[Question]:
         for name in (place.label, *place.aliases):
             for key in part_keys(name):
                 by_key.setdefault(key, []).append(place.qid)
+
+    def named(container: str, besides: str) -> list[str]:
+        found: list[str] = []
+        for key in sorted(part_keys(container)):
+            found.extend(
+                qid
+                for qid in by_key.get(key, ())
+                if qid != besides and qid not in found
+            )
+        return found
+
     ancestors = _ancestors(places)
     questions = []
     asked: set[tuple[str, str]] = set()
-    for place in places:
-        for container in place.within:
-            for key in sorted(part_keys(container)):
-                for parent in by_key.get(key, ()):
-                    if (
-                        parent == place.qid
-                        or (place.qid, parent) in asked
-                        or parent in ancestors.get(place.qid, ())
-                        or place.qid in ancestors.get(parent, ())
-                    ):
-                        continue
-                    asked.add((place.qid, parent))
-                    questions.append(
-                        Question(
-                            kind="parent",
-                            qid_a=place.qid,
-                            qid_b=parent,
-                            context=(
-                                f"a record states it within {container!r}, "
-                                f"which names an existing place"
-                            ),
-                        )
+
+    def ask(children: list[str], parents: list[str], context: str) -> None:
+        for child in children:
+            for parent in parents:
+                if (
+                    parent == child
+                    or (child, parent) in asked
+                    or parent in ancestors.get(child, ())
+                    or child in ancestors.get(parent, ())
+                ):
+                    continue
+                asked.add((child, parent))
+                questions.append(
+                    Question(
+                        kind="parent",
+                        qid_a=child,
+                        qid_b=parent,
+                        context=context,
                     )
+                )
+
+    for place in places:
+        for chain in place.chains:
+            links = [
+                (container, found)
+                for container in chain
+                if (found := named(container, place.qid))
+            ]
+            if not links:
+                continue
+            nearest, parents = links[0]
+            ask(
+                [place.qid],
+                parents,
+                f"a record states it within {nearest!r}, which names an "
+                f"existing place",
+            )
+            for (inner, children), (outer, parents) in zip(
+                links, links[1:], strict=False
+            ):
+                ask(
+                    children,
+                    parents,
+                    f"a record states {inner!r} within {outer!r}, each "
+                    f"naming an existing place",
+                )
     return questions
 
 

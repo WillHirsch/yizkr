@@ -292,6 +292,137 @@ class TestBlocking:
             "Q61",
         ]
 
+    def test_a_given_name_s_standard_form_keys_with_the_surname(self):
+        """The postcard's "Gustl", read as Gustav, keys "Gustav Löbig"
+        with his surname, and meets the graph's Gustav."""
+        gustl = EntityRecord(
+            id="e1",
+            label="Gustl",
+            kind="human",
+            structure={
+                "kind": "human",
+                "given": [{"written": "Gustl", "standard": "Gustav"}],
+                "surnames": [{"written": "Löbig"}],
+            },
+        )
+        graph = [
+            RosterEntity(qid="Q31", label="Gustav Löbig", kind="human"),
+            RosterEntity(qid="Q32", label="Gustl Löbig", kind="human"),
+            RosterEntity(qid="Q33", label="Gustav", kind="human"),
+        ]
+        assert [c.qid for c in block_candidates([gustl], graph)["e1"]] == [
+            "Q31",
+            "Q32",
+        ]
+
+    def test_each_typed_surname_keys_with_the_given_name(self):
+        """ "Agnes Löbig geb. Nertler" keys "Agnes Löbig" and "Agnes
+        Nertler" from her record, whatever marker her label holds."""
+        agnes = EntityRecord(
+            id="e1",
+            label="Agnes Löbig geb. Nertler",
+            kind="human",
+            structure={
+                "kind": "human",
+                "given": [{"written": "Agnes"}],
+                "surnames": [
+                    {"written": "Löbig"},
+                    {"written": "Nertler", "type": "birth"},
+                ],
+            },
+        )
+        graph = [
+            RosterEntity(qid="Q40", label="Agnes Nertler", kind="human"),
+            RosterEntity(
+                qid="Q41",
+                label="Agnes Löbig",
+                birth_names=["Agnes Nertler"],
+                kind="human",
+            ),
+            RosterEntity(qid="Q42", label="Löbig Agnes", kind="human"),
+        ]
+        assert [c.qid for c in block_candidates([agnes], graph)["e1"]] == [
+            "Q40",
+            "Q41",
+        ]
+
+    def test_nicknames_and_patronymics_compose(self):
+        found = [
+            EntityRecord(
+                id="e1",
+                label="Лёбиг Рудольф Феликсович",
+                kind="human",
+                structure={
+                    "kind": "human",
+                    "given": [{"written": "Рудольф"}],
+                    "surnames": [{"written": "Лёбиг"}],
+                    "patronymics": ["Феликсович"],
+                    "nicknames": ["Rudi"],
+                },
+            )
+        ]
+        graph = [
+            RosterEntity(qid="Q50", label="Рудольф Феликсович", kind="human"),
+            RosterEntity(qid="Q51", label="Rudi Лёбиг", kind="human"),
+            RosterEntity(qid="Q52", label="Рудольф Лёбиг", kind="human"),
+        ]
+        assert [c.qid for c in block_candidates(found, graph)["e1"]] == [
+            "Q50",
+            "Q51",
+            "Q52",
+        ]
+
+    def test_a_given_name_that_folds_like_the_surname_composes_nothing(
+        self,
+    ):
+        """A register's "Löbig" read as a given name beside the surname
+        Löbig makes no "Löbig Löbig" (the guard of #361)."""
+        from yizkr.pipeline.reconcile import entity_name_keys
+
+        misread = EntityRecord(
+            id="e1",
+            label="Ursula",
+            kind="human",
+            structure={
+                "kind": "human",
+                "given": [
+                    {"written": "LÖBIG"},
+                    {"written": "Ursula", "standard": "Ursula"},
+                ],
+                "surnames": [{"written": "Löbig"}],
+            },
+        )
+        assert entity_name_keys(misread) == {
+            "ursula",
+            "ursula lobig",
+            "ursula loebig",
+        }
+
+    def test_a_person_keys_by_its_label_and_its_aliases(self):
+        found = [
+            EntityRecord(
+                id="e1",
+                label="Klara Löbig",
+                aliases=["Pünktchen"],
+                kind="human",
+                structure={"kind": "human"},
+            )
+        ]
+        assert [
+            c.qid
+            for c in block_candidates(
+                found,
+                [RosterEntity(qid="Q60", label="KLARA LÖBIG", kind="human")],
+            )["e1"]
+        ] == ["Q60"]
+        assert [
+            c.qid
+            for c in block_candidates(
+                found,
+                [RosterEntity(qid="Q61", label="Pünktchen", kind="human")],
+            )["e1"]
+        ] == ["Q61"]
+
     def test_a_place_keys_by_its_record_not_its_short_form(self):
         """The camp's alias "Klurnau", its name's toponym, keys nothing
         (ADR-0035 §2.2): the camp never meets the town."""
@@ -322,6 +453,36 @@ class TestBlocking:
             "Q71",
             "Q72",
         ]
+
+    def test_a_toponym_written_as_its_name_keys(self):
+        """A name whose toponym is the name itself is no short form of
+        another: "Flörburg" keys."""
+        town = EntityRecord(
+            id="e1",
+            label="Flörburg, Hesse",
+            kind="place",
+            structure={
+                "kind": "place",
+                "names": [{"written": "Flörburg", "toponym": "Flörburg"}],
+                "within": ["Hesse"],
+            },
+        )
+        graph = [RosterEntity(qid="Q90", label="Flörburg", kind="place")]
+        assert [c.qid for c in block_candidates([town], graph)["e1"]] == [
+            "Q90"
+        ]
+
+    def test_graph_pairs_need_one_kind(self):
+        """A vessel and a place that share a name never pair."""
+        from yizkr.pipeline.reconcile import propose_graph_pairs
+
+        unlike = [
+            RosterEntity(qid="Q80", label="RMS Flund", kind="vessel"),
+            RosterEntity(qid="Q81", label="RMS Flund", kind="place"),
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        assert propose_graph_pairs(llm, unlike) == []
+        assert llm.prompts == []
 
     def test_a_place_record_without_names_keys_by_its_label(self):
         town = EntityRecord(
@@ -1109,18 +1270,19 @@ class TestRosterKinds:
         from yizkr.core.config import Config
         from yizkr.pipeline import reconcile
 
-        def binding(qid, label, kind):
+        def binding(qid, label, kind, kind_label="x"):
             return {
                 "item": {"value": f"http://wikibase.example/entity/{qid}"},
                 "itemLabel": {"value": label},
                 "kind": {"value": f"http://wikibase.example/entity/{kind}"},
+                "kindLabel": {"value": kind_label},
             }
 
         rows = [
             binding("Q100", "Gustav Löbig", "Q5"),
             binding("Q101", "Hutmachermeister", "Q30"),
             binding("Q102", "Xxx", "Q31"),
-            binding("Q103", "Yyy", "Q999"),
+            binding("Q103", "Yyy", "Q999", "military unit"),
         ]
         queries = []
 
@@ -1130,6 +1292,14 @@ class TestRosterKinds:
             return io.BytesIO(body.encode())
 
         monkeypatch.setattr(reconcile.urllib.request, "urlopen", urlopen)
+        # a graph check run before the roster where one is, read here as
+        # finding nothing
+        monkeypatch.setattr(
+            reconcile,
+            "unsupported_in_graph",
+            lambda *args, **kwargs: None,
+            raising=False,
+        )
         config = Config(
             wikibase_url="http://wikibase.example",
             concept_uri="http://wikibase.example",
@@ -1147,9 +1317,14 @@ class TestRosterKinds:
             # a kind the manifest lacks keeps its QID
             ("Q103", "Q999"),
         ]
+        # whose label is shown, and only its, beside it to the adjudicator
+        assert [r.kind_label for r in roster] == ["", "", "", "military unit"]
+        assert "kind: Q999 (military unit)" in roster[3].facts()
+        assert roster[0].facts().endswith("kind: human")
         (query,) = queries
-        assert "?kindLabel" not in query
-        assert "GROUP BY ?item ?itemLabel ?kind\n" in query
+        # the kind's QID is selected; its label only rides along
+        assert "SELECT ?item ?itemLabel ?kind ?kindLabel" in query
+        assert "GROUP BY ?item ?itemLabel ?kind ?kindLabel\n" in query
 
     def test_an_occupation_blocks_against_an_occupation(self):
         found = [

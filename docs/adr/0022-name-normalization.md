@@ -18,13 +18,19 @@ the given name and which the surname, read from the document's own
 conventions, and never writes that reading; the graph still has no
 name-part property (Rulings 1 and 2, §3). §4's alias cleanup works on
 those parts rather than on token shapes (ADR-0035 §2.6, §8).
+Amended by #388 (2026-10-04): reconcile's blocking keys on whole name forms
+read through the mention record (ADR-0007, as amended by #388), not on
+`_name_tokens`/`_tokens_overlap`, which are gone. Dropping a derivable
+alias (§4) is recall-safe only where the record's typed parts compose
+the dropped form again ("Ida Löbig" from the given name Ida and the
+surname Löbig); a dropped form they do not compose no longer keys.
 
 ## Context
 
 Names live in two layers (ADR-0011): (1) the **alias bag** — the entity's
 MediaWiki label + altLabels: flat, untyped, append-only, **unreferenced**; it is
 the reconciliation blocking substrate (token overlap via `_name_tokens`,
-`block_candidates`) and the label-lookup key; and (2) **typed name statements** —
+`block_candidates`; whole forms since #388, above) and the label-lookup key; and (2) **typed name statements** —
 `birth_name`, `married_name`, `nickname`, `official_name`: ordinary referenced
 monolingual-text claims, used only where a source marks a name's *type*. ADR-0011
 deliberately **deferred** structured given/family components (P734/P735 name
@@ -130,7 +136,8 @@ mechanical invariants, it does no multilingual semantics:
 
 - Drop an alias whose stripped ≥3-char token set is a strict subset of the
   label's tokens (bare givens, initialisms) — recall-safe by the semantics of
-  `_name_tokens` / `_tokens_overlap`; keep genuinely non-derivable forms
+  `_name_tokens` / `_tokens_overlap` (gone since #388; see its amendment
+  above); keep genuinely non-derivable forms
   (`Gustl`).
 - Keep hyphenated **and** space-separated compound / nobiliary-particle surnames
   whole as single alias units (`A-B`, `de la Cruz`, `van der Berg`,

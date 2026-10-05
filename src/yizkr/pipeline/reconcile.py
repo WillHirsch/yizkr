@@ -65,6 +65,9 @@ class RosterEntity(BaseModel):
     label: str
     aliases: list[str] = []
     kind: str = ""  # manifest item key when recognized, else the kind's QID
+    # an unrecognized kind's label, shown beside its QID to the
+    # adjudicator and never read
+    kind_label: str = ""
     birth: str = ""
     death: str = ""
     spouses: list[str] = []
@@ -102,7 +105,8 @@ class RosterEntity(BaseModel):
         if self.aliases:
             parts.append(f"aliases: {', '.join(self.aliases)}")
         if self.kind:
-            parts.append(f"kind: {self.kind}")
+            shown = f" ({self.kind_label})" if self.kind_label else ""
+            parts.append(f"kind: {self.kind}{shown}")
         if self.birth_names:
             parts.append(f"birth name: {', '.join(self.birth_names)}")
         if self.married_names:
@@ -125,7 +129,7 @@ class RosterEntity(BaseModel):
 
 
 ROSTER_QUERY = """\
-SELECT ?item ?itemLabel ?kind
+SELECT ?item ?itemLabel ?kind ?kindLabel
        (GROUP_CONCAT(DISTINCT ?alias; separator="|") AS ?aliases)
        (SAMPLE(?birthDate) AS ?birth) (SAMPLE(?deathDate) AS ?death)
        (SAMPLE(?birthEventDate) AS ?eventBirth)
@@ -188,7 +192,7 @@ WHERE {{
   OPTIONAL {{ ?item wdt:{sibling} ?siblingItem . }}
   SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en" . }}
 }}
-GROUP BY ?item ?itemLabel ?kind
+GROUP BY ?item ?itemLabel ?kind ?kindLabel
 """
 
 
@@ -239,6 +243,9 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
                 label=field(binding, "itemLabel"),
                 aliases=split(binding, "aliases"),
                 kind=kind_key.get(kind_qid, kind_qid),
+                kind_label=(
+                    "" if kind_qid in kind_key else field(binding, "kindLabel")
+                ),
                 # direct statements win; event-derived dates fill gaps
                 birth=(
                     field(binding, "birth") or field(binding, "eventBirth")
@@ -271,6 +278,31 @@ def _keys(names: Iterable[str]) -> set[str]:
     return {key for name in names for key in part_keys(name)}
 
 
+def _composed(record: PersonStructure) -> list[str]:
+    """The whole forms a person's typed parts make, in the order the
+    writer's labels give a name: each given name, as written and as its
+    standard form, and each nickname, before each surname and
+    patronymic. A pair whose two parts fold alike makes none, as a given
+    name that repeats the surname is no name of two parts."""
+    from yizkr.pipeline.clustering import part_keys
+
+    firsts = [
+        form
+        for name in record.given
+        for form in (name.written, name.standard)
+        if form
+    ] + list(record.nicknames)
+    lasts = [name.written for name in record.surnames] + list(
+        record.patronymics
+    )
+    return [
+        f"{first} {last}"
+        for first in firsts
+        for last in lasts
+        if not part_keys(first) & part_keys(last)
+    ]
+
+
 def entity_name_keys(entity: EntityRecord) -> set[str]:
     """What a manifest entity blocks on: its whole name forms, read
     through its mention record (ADR-0035 §2), never split into words.
@@ -279,17 +311,26 @@ def entity_name_keys(entity: EntityRecord) -> set[str]:
     when it is `toponym`: a role, a kinship term, a courtesy appellation,
     a placeholder, a composed description, a deictic or a generic head
     names no one, so it keys nothing. A person keys by its label, its
-    aliases, and its record's unsplit forms and nicknames; a place by its
-    record's own names and address, a short form that is another of its
-    names' toponym left out (so a camp never meets its town), or by its
-    label where the record names none. Every other entity, and one
-    without a record, keys by its label and aliases as written."""
+    aliases, its record's unsplit forms and nicknames, and the whole
+    forms its typed parts make (``_composed``: "Gustl", read as Gustav,
+    with the surname Löbig makes "Gustl Löbig" and "Gustav Löbig"); a
+    place by its record's own names and address, a short form that is
+    another of its names' toponym left out (so a camp never meets its
+    town), or by its label where the record names none. Every other
+    entity, and one without a record, keys by its label and aliases as
+    written."""
     record = entity.structure
     if isinstance(record, PersonStructure):
         if record.status != "name":
             return set()
         return _keys(
-            [entity.label, *entity.aliases, *record.unsplit, *record.nicknames]
+            [
+                entity.label,
+                *entity.aliases,
+                *record.unsplit,
+                *record.nicknames,
+                *_composed(record),
+            ]
         )
     if isinstance(record, PlaceStructure):
         if record.status != "toponym":
@@ -313,8 +354,11 @@ def entity_name_keys(entity: EntityRecord) -> set[str]:
 def roster_name_keys(roster_entity: RosterEntity) -> set[str]:
     """What a graph item blocks on: its label and aliases, and the values
     of its typed name statements (birth, nickname, official name), each
-    whole. A married name is a family name alone, so it never stands for
-    a whole name."""
+    whole. A married name is a family name alone by its property, so it
+    never stands for a whole name. A birth name is a full name by its
+    property; one a source gave as a surname alone keys as that surname,
+    which meets only an entity named by it whole, since telling the two
+    apart would read the value's words."""
     return _keys(
         [
             roster_entity.label,
@@ -417,7 +461,6 @@ class PairFacts:
     """
 
     kind: str
-    label: str
     qid: str | None = None
     kin_qids: set[str] = field(default_factory=set)
 
@@ -425,7 +468,6 @@ class PairFacts:
 def _roster_pair_facts(roster_entity: RosterEntity) -> PairFacts:
     return PairFacts(
         kind=roster_entity.kind,
-        label=roster_entity.label,
         qid=roster_entity.qid,
         kin_qids=roster_entity.kin_qids,
     )
@@ -439,7 +481,7 @@ def _batch_pair_facts(
     A batch entity references others by local id; only relations to items
     ALREADY in the graph (a QidRef) contribute kin_qids — those are the
     only ones the graph-side candidate can be compared against."""
-    facts = PairFacts(kind=entity.kind, label=entity.label, qid=entity.qid)
+    facts = PairFacts(kind=entity.kind, qid=entity.qid)
     if batch is None:
         return facts
     for claim in batch.claims:

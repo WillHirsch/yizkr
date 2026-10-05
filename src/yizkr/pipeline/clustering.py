@@ -1404,9 +1404,7 @@ def _facts(node: _Node) -> PairFacts:
     """The impossibility filter's input, lifted: the mention's fingerprint
     stands in for a QID, and its kin are the mentions its manifest relates
     it to."""
-    return PairFacts(
-        kind=node.kind, label=node.label, qid=node.id, kin_qids=node.kin_ids
-    )
+    return PairFacts(kind=node.kind, qid=node.id, kin_qids=node.kin_ids)
 
 
 def _containment(nodes: Sequence[_Node]) -> PlaceContainment:

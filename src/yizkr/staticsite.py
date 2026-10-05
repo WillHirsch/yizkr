@@ -535,11 +535,8 @@ class SiteBuilder:
         for row in statements:
             prop = cell(row, "propLabel")
             # `instance of` is the subtitle, known by its id on the
-            # instance. No "living person" flag is written (ADR-0020); skip
-            # any such statement in the graph so it doesn't render as data.
+            # instance
             if qid_of(row, "prop") == self.properties.get("instance_of"):
-                continue
-            if prop == "living person":
                 continue
             grouped[prop].append(row)
         body.append('<dl class="statements">')

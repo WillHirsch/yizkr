@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 import csv
 import json
+from pathlib import Path
 
 import pytest
 
@@ -26,16 +27,18 @@ from yizkr.pipeline.places import (
 def places() -> list[PlaceRecord]:
     return [
         PlaceRecord(qid="Q1", label="Germany"),
-        PlaceRecord(qid="Q2", label="Flörburg", within=["Hesse", "Germany"]),
         PlaceRecord(
-            qid="Q3", label="Brunnenring 35, Flörburg", within=["Flörburg"]
+            qid="Q2", label="Flörburg", chains=[["Kreis Peiltal", "Germany"]]
+        ),
+        PlaceRecord(
+            qid="Q3", label="Brunnenring 35, Flörburg", chains=[["Flörburg"]]
         ),
         PlaceRecord(qid="Q4", label="Klurnau"),
         PlaceRecord(qid="Q5", label="Bad Flörburg", aliases=["Flörburg"]),
         PlaceRecord(
-            qid="Q6", label="Rekau", parents=["Q1"], within=["Germany"]
+            qid="Q6", label="Rekau", parents=["Q1"], chains=[["Germany"]]
         ),
-        PlaceRecord(qid="Q7", label="Hesse", parents=["Q1"]),
+        PlaceRecord(qid="Q7", label="Kreis Peiltal"),
     ]
 
 
@@ -44,19 +47,57 @@ def pairs(questions) -> list[tuple[str, str]]:
 
 
 class TestStatedParentCandidates:
-    def test_each_stated_container_proposes_the_places_of_its_name(self):
+    def test_a_chain_is_asked_link_by_link(self):
         questions = stated_parent_candidates(places())
-        # Flörburg is stated within Hesse and within Germany, each asked;
-        # Brunnenring 35 within Flörburg, which two places are named
-        # (namesakes are each asked, never one guessed), but never itself
+        # Flörburg within its nearest container, Kreis Peiltal, and Kreis
+        # Peiltal within Germany: never the shortcut Flörburg within
+        # Germany. Brunnenring 35 within Flörburg, which two places are
+        # named (namesakes are each asked, never one guessed)
         assert pairs(questions) == [
             ("Q2", "Q7"),
-            ("Q2", "Q1"),
+            ("Q7", "Q1"),
             ("Q3", "Q2"),
             ("Q3", "Q5"),
         ]
         assert questions[0].kind == "parent"
-        assert "'Hesse'" in questions[0].context
+        assert "'Kreis Peiltal'" in questions[0].context
+        assert "'Kreis Peiltal' within 'Germany'" in questions[1].context
+
+    def test_a_link_skips_a_container_no_place_is_named(self):
+        # no place is named Hesse: Fläckfeld's nearest existing container
+        # is Kreis Mockburg, and Kreis Mockburg's next is Germany
+        found = [
+            PlaceRecord(
+                qid="Q20",
+                label="Fläckfeld",
+                chains=[
+                    ["Hesse-Nassau", "Kreis Mockburg", "Hesse", "Germany"]
+                ],
+            ),
+            PlaceRecord(qid="Q21", label="Kreis Mockburg"),
+            PlaceRecord(qid="Q1", label="Germany"),
+        ]
+        assert pairs(stated_parent_candidates(found)) == [
+            ("Q20", "Q21"),
+            ("Q21", "Q1"),
+        ]
+
+    def test_each_record_s_chain_is_its_own(self):
+        # two records: Kreis Mockburg alone, and Hesse alone; neither is
+        # put within the other
+        found = [
+            PlaceRecord(
+                qid="Q20",
+                label="Fläckfeld",
+                chains=[["Kreis Mockburg"], ["Hesse"]],
+            ),
+            PlaceRecord(qid="Q21", label="Kreis Mockburg"),
+            PlaceRecord(qid="Q22", label="Hesse"),
+        ]
+        assert pairs(stated_parent_candidates(found)) == [
+            ("Q20", "Q21"),
+            ("Q20", "Q22"),
+        ]
 
     def test_a_label_s_commas_propose_nothing(self):
         # "Brunnenring 35, Flörburg" states no container: only a record
@@ -69,7 +110,9 @@ class TestStatedParentCandidates:
 
     def test_names_fold_case_and_accents(self):
         found = [
-            PlaceRecord(qid="Q3", label="Brunnenring 35", within=["FLORBURG"]),
+            PlaceRecord(
+                qid="Q3", label="Brunnenring 35", chains=[["FLORBURG"]]
+            ),
             PlaceRecord(qid="Q2", label="Flörburg"),
             PlaceRecord(qid="Q8", label="Floerburg"),
         ]
@@ -77,10 +120,17 @@ class TestStatedParentCandidates:
 
     def test_umlauts_written_out_meet(self):
         found = [
-            PlaceRecord(qid="Q3", label="Brunnenring 35", within=["Flörburg"]),
+            PlaceRecord(
+                qid="Q3", label="Brunnenring 35", chains=[["Flörburg"]]
+            ),
             PlaceRecord(qid="Q8", label="Floerburg"),
+            PlaceRecord(qid="Q9", label="Florburg"),
         ]
-        assert pairs(stated_parent_candidates(found)) == [("Q3", "Q8")]
+        # "Flörburg" keys both ways, so each spelling is asked once
+        assert pairs(stated_parent_candidates(found)) == [
+            ("Q3", "Q8"),
+            ("Q3", "Q9"),
+        ]
 
     def test_a_known_container_is_not_re_asked(self):
         # Rekau is in Germany already; Klurnau states nothing
@@ -92,24 +142,30 @@ class TestStatedParentCandidates:
             PlaceRecord(qid="Q1", label="Germany"),
             PlaceRecord(qid="Q7", label="Hesse", parents=["Q1"]),
             PlaceRecord(
-                qid="Q2", label="Flörburg", parents=["Q7"], within=["Germany"]
+                qid="Q2",
+                label="Flörburg",
+                parents=["Q7"],
+                chains=[["Germany"]],
             ),
         ]
         assert stated_parent_candidates(found) == []
 
     def test_a_place_the_graph_puts_inside_is_never_its_container(self):
-        # the town Rekau inside the urban district Rekau: the district's
-        # record naming "Rekau" never proposes the town as its container
+        # the urban district Rekau, whose record names the town Rekau
+        # inside it as its container: the town is never asked, nor is the
+        # district itself
         found = [
             PlaceRecord(qid="Q70", label="Rekau", parents=["Q71"]),
-            PlaceRecord(qid="Q71", label="Rekau", within=["Rekau"]),
+            PlaceRecord(qid="Q71", label="Rekau", chains=[["Rekau"]]),
         ]
         assert stated_parent_candidates(found) == []
 
     def test_each_pair_is_asked_once(self):
         found = [
-            PlaceRecord(qid="Q2", label="Flörburg", within=["Hesse", "HESSE"]),
-            PlaceRecord(qid="Q7", label="Hesse", aliases=["Hessen"]),
+            PlaceRecord(
+                qid="Q2", label="Flörburg", chains=[["Hesse"], ["HESSE"]]
+            ),
+            PlaceRecord(qid="Q7", label="Hesse", aliases=["HESSE"]),
         ]
         assert pairs(stated_parent_candidates(found)) == [("Q2", "Q7")]
 
@@ -174,9 +230,30 @@ class TestRecordContainers:
         (tmp_path / "letter").mkdir()
         (tmp_path / "letter" / "batch.json").write_text("{}")
         assert record_containers(tmp_path) == {
-            "Q20": ["Kreis Mockburg", "Germany"],
-            "Q6": ["Hesse"],
+            "Q20": [["Kreis Mockburg"], ["Kreis Mockburg", "Germany"]],
+            "Q6": [["Hesse"]],
         }
+
+    def test_one_chain_twice_is_kept_once(self, tmp_path):
+        for name in ("card", "letter"):
+            _written(
+                tmp_path / name,
+                [_place("e1", "Fläckfeld", ["Kreis Mockburg", "Hesse"])],
+                {"e1": "Q20"},
+            )
+        assert record_containers(tmp_path) == {
+            "Q20": [["Kreis Mockburg", "Hesse"]]
+        }
+
+    def test_a_place_the_writer_found_by_its_label_is_joined(self, tmp_path):
+        # the writer found the existing Klurnau (Q4) under its label and
+        # records it in created_items as it does a minted item
+        _written(
+            tmp_path / "card",
+            [_place("e2", "Klurnau", ["Kreis Peiltal"])],
+            {"e2": "Q4"},
+        )
+        assert record_containers(tmp_path) == {"Q4": [["Kreis Peiltal"]]}
 
     def test_the_written_batch_wins_over_earlier_views(self, tmp_path):
         directory = tmp_path / "card"
@@ -198,10 +275,10 @@ class TestRecordContainers:
                 (tmp_path / "other" / "batch.json").read_text()
             )
         (tmp_path / "other" / "write.json").unlink()
-        assert record_containers(tmp_path) == {"Q20": ["Kreis Peiltal"]}
+        assert record_containers(tmp_path) == {"Q20": [["Kreis Peiltal"]]}
         (directory / "batch.approved.json").write_text("not json")
         (directory / "batch.resolved.json").write_text("not json")
-        assert record_containers(tmp_path) == {"Q20": ["Kreis Mockburg"]}
+        assert record_containers(tmp_path) == {"Q20": [["Kreis Mockburg"]]}
 
     def test_a_document_no_write_reached_states_nothing(self, tmp_path):
         # reconcile resolved its place, but the document was never written
@@ -224,6 +301,23 @@ class TestRecordContainers:
         )
         assert record_containers(tmp_path) == {}
 
+    @pytest.mark.parametrize(
+        "written",
+        ["[]", '"x"', "3", '{"created_items": []}', '{"created_items": 3}'],
+    )
+    def test_a_write_json_of_another_shape_is_no_join(self, tmp_path, written):
+        _written(
+            tmp_path / "card",
+            [
+                _place("e1", "Fläckfeld", ["Hesse"]),
+                _place("e2", "Rekau", ["Hesse"], qid="Q6"),
+            ],
+            {},
+        )
+        (tmp_path / "card" / "write.json").write_text(written)
+        expected = {"Q6": [["Hesse"]]} if written.startswith("{") else {}
+        assert record_containers(tmp_path) == expected
+
     def test_a_missing_run_directory_holds_nothing(self, tmp_path):
         assert record_containers(tmp_path / "absent") == {}
 
@@ -235,21 +329,40 @@ class TestWorklist:
                 kind="competing", qid_a="Q3", qid_b="Q4", context="pob of X"
             ),
             Question(
-                kind="competing", qid_a="Q2", qid_b="Q1", context="pod of Y"
+                kind="competing", qid_a="Q7", qid_b="Q1", context="pod of Y"
             ),
         ]
         stated = stated_parent_candidates(places())
         worklist = build_worklist(places(), competing, stated)
         keys = [frozenset((q.qid_a, q.qid_b)) for q in worklist]
         assert len(keys) == len(set(keys))  # deduplicated across sources
-        # the questions with Germany (the graph puts two places in it)
-        # precede those with Hesse (one), and the unplaced places last
+        # the questions with Germany (the graph puts a place in it) come
+        # first, and the places it puts nothing in after
         assert keys == [
-            frozenset(("Q2", "Q1")),
+            frozenset(("Q7", "Q1")),
             frozenset(("Q2", "Q7")),
             frozenset(("Q3", "Q2")),
             frozenset(("Q3", "Q5")),
             frozenset(("Q3", "Q4")),
+        ]
+
+    def test_a_place_holding_more_places_comes_first(self):
+        # Germany holds two places, Kreis Peiltal one; both sit at the
+        # same depth among their pair's places
+        found = [
+            PlaceRecord(qid="Q1", label="Germany"),
+            PlaceRecord(qid="Q6", label="Rekau", parents=["Q1"]),
+            PlaceRecord(qid="Q10", label="Hesse", parents=["Q1"]),
+            PlaceRecord(qid="Q7", label="Kreis Peiltal"),
+            PlaceRecord(qid="Q2", label="Flörburg", parents=["Q7"]),
+            PlaceRecord(qid="Q4", label="Klurnau"),
+            PlaceRecord(qid="Q9", label="Lager Klurnau"),
+        ]
+        smaller = Question(kind="competing", qid_a="Q7", qid_b="Q9")
+        larger = Question(kind="competing", qid_a="Q1", qid_b="Q4")
+        assert build_worklist(found, [smaller, larger], []) == [
+            larger,
+            smaller,
         ]
 
     def test_among_equals_a_place_placed_less_deep_comes_first(self):
@@ -570,7 +683,10 @@ class TestCommand:
 
         def adjudicate(client, worklist, found):
             asked.extend((q.qid_a, q.qid_b) for q in worklist)
-            assert found[0].within == ["Kreis Mockburg", "Hesse"]
+            assert found[0].chains == [
+                ["Kreis Mockburg"],
+                ["Kreis Mockburg", "Hesse"],
+            ]
             return []
 
         monkeypatch.setattr(cli.Config, "load", lambda env_file: None)
@@ -587,7 +703,15 @@ class TestCommand:
             run=[tmp_path / "run1", tmp_path / "run2"],
         )
         assert cli.cmd_reconcile_places(args) == 0
-        assert asked == [("Q20", "Q21"), ("Q20", "Q7")]
+        assert asked == [("Q20", "Q21"), ("Q21", "Q7")]
+
+    def test_run_takes_several_directories(self):
+        from yizkr import cli
+
+        args = cli.build_parser().parse_args(
+            ["reconcile-places", "--run", "a", "--run", "b"]
+        )
+        assert args.run == [Path("a"), Path("b")]
 
     def test_without_a_run_nothing_is_stated(self, tmp_path, monkeypatch):
         import argparse

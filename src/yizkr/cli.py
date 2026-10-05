@@ -241,8 +241,8 @@ def cmd_reconcile_places(args) -> int:
     for run_dir in args.run or ():
         stated = record_containers(run_dir)
         for place in places:
-            place.within.extend(
-                c for c in stated.get(place.qid, ()) if c not in place.within
+            place.chains.extend(
+                c for c in stated.get(place.qid, ()) if c not in place.chains
             )
     competing = fetch_competing_pairs(client, config)
     parents = stated_parent_candidates(places)

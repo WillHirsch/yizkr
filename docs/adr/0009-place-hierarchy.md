@@ -6,19 +6,25 @@ Amended by [ADR-0031](0031-the-relation-decides-the-kind.md) (#202,
 something happened is a place, inside its town or region, so it joins
 this hierarchy; an organisation stays outside it, linked to a place by
 `location` (ADR-0012, Fork F).
-Amended by #388 (2026-10-04): the comma-parent candidates are gone. A label's
-commas never say what contains what (ADR-0035 §1). A place's parent
-candidates are the containers its mention records state (`within`,
+Amended by #388 (2026-10-04; decision BZ of 2026-10-05): the comma-parent
+candidates are gone. A label's commas never say what contains what
+(ADR-0035 §1). A place's parent candidates come from the chain of
+containers each of its mention records states (`within`, nearest first,
 ADR-0035 §2.2), read from the run directories that wrote the graph
-(`reconcile-places --run DIR`): each written place reaches its QID
-through its batch (its resolved QID, else the item `write.json` says the
-writer minted), and each stated container proposes every other place
-whose label or alias is that name, folded as ADR-0035 §7 folds a
-part; namesakes
-are each asked, and a place the graph already puts the place in, or
-puts inside it, is not. Questions are ordered spine-first by the
-graph's own containment: a question whose places hold more places comes
-first, then one whose places sit less deep.
+(`reconcile-places --run DIR`). Each written place reaches its QID
+through its batch: the QID reconcile resolved, else the item the writer
+used for its local id, found under its label or minted (`write.json`'s
+`created_items`). A chain is asked link by link: the place within the
+nearest of its containers that names an existing place, and each such
+container within the next, so an approved chain writes no shortcut edge
+("Fläckfeld part_of Germany" beside "Fläckfeld part_of Kreis
+Mockburg"), and a nearest container that states no parent of its own is
+still placed. A container names every place whose label or alias is
+that name, folded as ADR-0035 §7 folds a part; namesakes are each
+asked, and a pair the graph already nests either way is not. Questions
+are ordered spine-first by the graph's own containment: a question
+whose places hold more places comes first, then one whose places sit
+less deep.
 
 ## Context
 
@@ -66,7 +72,8 @@ One SPARQL round-trip yields, in order of preference:
    the generative path (ADR-0006): these arrive pre-evidenced, the
    adjudicator (and reviewer) merely confirms.
 
-Questions are ordered spine-first: fewer commas ≈ larger scale, so
+Questions are ordered spine-first: fewer commas ≈ larger scale (by the
+graph's own containment since #388, above), so
 container-side questions come before the places that attach to them,
 and each apply round re-derives the worklist through the closure —
 transitive elimination between rounds. Convergence is typically two
@@ -102,7 +109,8 @@ reference does not apply as-is; this ADR extends the convention:
 containment statements carry `inferred from extraction run` → the
 reconcile-places run item (which records method and pipeline
 version). When a document's own hierarchical label evidences the
-edge (comma-parse), the proposal's evidence records it; when
+edge (comma-parse; a record's stated container since #388, above), the
+proposal's evidence records it; when
 GeoNames supplies the edge (below), a `stated in` → GeoNames dataset
 item is added. The unreferenced-statements QC treats any reference
 as satisfying; these statements are never bare.
