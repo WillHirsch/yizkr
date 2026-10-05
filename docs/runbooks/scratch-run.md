@@ -77,6 +77,64 @@ and `yizkr.reset` for the reset.
   answer and the instance must carry no kept-state marker. No such stage
   is registered yet (below), so a run needs no stack. A refusal lists
   every problem it found.
+
+  Once those checks pass, and once the settings are checked against
+  those a resumed run recorded (other settings are refused as
+  `RunSettingsConflict` before any call), and still before any document
+  is dispatched or anything written, the driver makes **one trivial
+  call per distinct (model, effort) pair** that the roles of the
+  invocation's range run, through the engine as the run calls it: the
+  same engine, model and effort as the first role that runs the pair,
+  and the claude CLI it would use, but not through the LLM cache, so
+  the call reaches the engine. The roles are those of the per-document
+  stages within `--until` (`transcribe` for transcription, `extract`
+  for extraction and GEDCOM, `critique`), and every role when a corpus
+  stage in range may call the engine. Two roles on one model at one
+  effort make one call; at two efforts, two. The preflight reads no run
+  state: **a resume makes these calls even when it will reuse every
+  view**, a few trivial calls accepted as the cost of a check that
+  never predicts what the run will reuse. An invocation past the
+  barrier only, whose corpus stages call no engine (clustering), makes
+  none. Every invocation whose range holds a per-document stage, or a
+  corpus stage that may call the engine, makes them, the driver's own
+  after a subscription limit included, unless the installed claude CLI
+  is not the run's (below).
+
+  When the installed claude CLI is not the one the run recorded, the
+  preflight checks no model, refuses nothing, and says so in one line.
+  The refusal stays with the run's own engine client, as for any other
+  setting: a resume with a stage left to make is refused as
+  `RunSettingsConflict` when that stage starts the engine, and one with
+  nothing left for the engine goes on.
+
+  A call that fails with an error that is not a subscription limit or
+  an overload refuses the run, naming the model, the role, the effort
+  and the engine's reason: a claude CLI too old for the model (an API
+  400 that names the dotted version the model requires, or has the CLI
+  as the subject of "requires a newer" or "does not support"), or any
+  other API error. The pairs after an unsupported one are listed as not
+  tried. For the claude-code engine, a limit or an overload is the
+  engine's to wait out; a limit it would wait longer for pauses the run
+  as a document's call would, and the driver waits it out before it
+  writes anything. Such a wait shows **only in the driver's output**:
+  on a new run nothing has started yet, so `yizkr scratch watch` and
+  the status page show no run, `yizkr scratch abort` cannot reach it,
+  and only Ctrl-C stops the wait (the driver says so). Every wait, and
+  every invocation after one, honours the pauses and aborts asked since
+  this invocation of `scratch run` began, never those of an earlier
+  one. For the anthropic engine, a 429 or 529 its own retries did not
+  get past refuses the run, to be tried again later.
+- **A model the CLI stops supporting mid-run.** Should the API refuse a
+  call in the middle of a run because the CLI does not support its
+  model (a model changed under a pinned CLI), the engine takes it as a
+  pause of the pass, never a document's failure: the invocation ends
+  `paused` (reason `ModelUnsupported`), the driver exits with status 2
+  without waiting, since nothing says when it clears, and the message
+  names the model and the CLI's reason. `yizkr scratch watch` shows it
+  as `paused   ModelUnsupported; no time to go on`. No document fails
+  for it and no further call is made. Both remedies, a CLI that runs
+  the model or another model, change the settings the run recorded, so
+  start a new run (`yizkr scratch run --new`).
 - **The kept-state marker** is the page `Project:Kept state` on the
   instance and the file `kept.json` in the record of the instance:
   keeper mode (#118) writes both, and `yizkr scratch reset` refuses while
@@ -143,10 +201,14 @@ and `yizkr.reset` for the reset.
     engine reads blank, or as no document page, makes no excerpt, and
     the cache may answer an excerpt's calls;
   - **not counted**: calls asked again after an engine error or a chunk
-    answer cut off (up to 2 for a chunk), and waits for the
-    subscription, which make no call. A slice the anomaly checks pause
-    as the run unfolds (docs/ANOMALIES.md) makes fewer calls than
-    counted.
+    answer cut off (up to 2 for a chunk), the preflight's one trivial
+    call per (model, effort) pair of the roles within the invocation's
+    `--until` range, which every invocation whose range holds a stage
+    that may call the engine makes, a resume that reuses every view
+    included, unless the installed claude CLI is not the run's; and
+    waits for the subscription, which make no call. A slice the anomaly
+    checks pause as the run unfolds (docs/ANOMALIES.md) makes fewer
+    calls than counted.
 
   It writes nothing, and takes no lock: it runs beside a running driver,
   counting what the run and the cache hold as it reads them, and names
