@@ -105,6 +105,16 @@ class ManifestItem(BaseModel):
     # never types a *document-mentioned* entity as. The manifest is the
     # one place this set is declared — the prompt renders it from here.
     entity_kind: bool = False
+    # A class of entities that is no entity kind: an artifact type, a
+    # time period, an infrastructure class. With the entity kinds, these
+    # are the manifest's kind keys: named by its key, such an item is the
+    # class itself, so only a property that accepts a class takes it as a
+    # value (ADR-0035 §3.5). An item in the subclass hierarchy is one or
+    # the other. Outside the hierarchy nothing in the manifest tells a
+    # class (`time_period_class`) from a controlled-vocabulary value
+    # (`circa`): each may be the one item a property accepts. The mark is
+    # what tells them apart, so the loader cannot check it there.
+    entity_class: bool = False
 
 
 class Manifest(BaseModel):
@@ -152,8 +162,32 @@ class Manifest(BaseModel):
                         f"idempotency key and must be unique)"
                     )
                 seen[entry.label] = key
+        self._check_classes()
         self._check_accepts()
         return self
+
+    def _check_classes(self) -> None:
+        """Fail closed on the kind keys: an item in the subclass
+        hierarchy, a subclass or a superclass, is a class, so it is an
+        entity kind or marked `entity_class`; and an entity kind is never
+        also marked one."""
+        superclasses = {
+            item.subclass_of
+            for item in self.items.values()
+            if item.subclass_of is not None
+        }
+        for key, item in self.items.items():
+            if item.entity_kind and item.entity_class:
+                raise ValueError(
+                    f"items.{key} is an entity kind, which is a class "
+                    f"already: it is not also marked entity_class"
+                )
+            in_hierarchy = item.subclass_of is not None or key in superclasses
+            if in_hierarchy and not (item.entity_kind or item.entity_class):
+                raise ValueError(
+                    f"items.{key} is in the subclass hierarchy, so it is a "
+                    f"class: mark it entity_kind or entity_class"
+                )
 
     def _check_accepts(self) -> None:
         """Fail closed on the kinds each property accepts (ADR-0035
@@ -224,11 +258,20 @@ class Acceptance:
     # the items an entity may be typed as: named by its key, such an item
     # is a class, never an entity of that kind
     entity_kinds: frozenset[str] = frozenset()
+    # the other classes of entities (`entity_class`): with the entity
+    # kinds, the kind keys
+    entity_classes: frozenset[str] = frozenset()
     # the properties written only in references
     references: frozenset[str] = frozenset()
     # the properties whose claims take their source document, and only it,
     # as subject
     document_subjects: frozenset[str] = frozenset()
+
+    @property
+    def kind_keys(self) -> frozenset[str]:
+        """The items that name a class of entities: the entity kinds and
+        the other entity classes."""
+        return self.entity_kinds | self.entity_classes
 
     def refusal(
         self,
@@ -240,15 +283,42 @@ class Acceptance:
         """Why `prop` refuses a value of `kind`, or None when it takes it.
 
         `kind` is the value's entity kind, or, for a manifest item named
-        by its key (`vocabulary`), that key. A value whose kind is unknown
-        (an existing item named by its QID) is refused only by a retired
-        property, since nothing else can be checked of it."""
+        by its key (`vocabulary`), that key. A kind key named so is a
+        class: only a property that accepts a class takes it, and such a
+        property takes no other vocabulary item. A property that accepts
+        any kind, or the subject's own, takes an entity and so no
+        vocabulary item at all. A value whose kind is
+        unknown (an existing item named by its QID) is refused only by a
+        retired property, since nothing else can be checked of it."""
         if prop in self.retired:
             return (
                 f"property {prop!r} is retired and accepts no claim (ADR-0036)"
             )
         accepts = self.accepts.get(prop)
-        if accepts is None or kind is None or accepts == "any":
+        if accepts is None:
+            return None
+        if accepts == "class":
+            if vocabulary:
+                if kind in self.kind_keys:
+                    return None
+                return (
+                    f"property {prop!r} accepts a class, and {kind!r} is a "
+                    f"vocabulary value, not a class"
+                )
+            if kind is None:
+                return None
+            return f"property {prop!r} accepts a class, not a {kind!r} entity"
+        if vocabulary and kind in self.kind_keys:
+            return (
+                f"property {prop!r} accepts an entity of kind {kind!r}, not "
+                f"the class itself: {kind!r} is a kind key"
+            )
+        if vocabulary and accepts in ("any", "subject"):
+            return (
+                f"property {prop!r} takes an entity, not the vocabulary "
+                f"value {kind!r}"
+            )
+        if kind is None or accepts == "any":
             return None
         if accepts == "subject":
             if subject_kind is None or kind == subject_kind:
@@ -256,15 +326,6 @@ class Acceptance:
             return (
                 f"property {prop!r} accepts only the subject's own kind "
                 f"{subject_kind!r}, not a {kind!r}"
-            )
-        if accepts == "class":
-            if vocabulary:
-                return None
-            return f"property {prop!r} accepts a class, not a {kind!r} entity"
-        if vocabulary and kind in self.entity_kinds:
-            return (
-                f"property {prop!r} accepts an entity of kind {kind!r}, "
-                f"not the class itself"
             )
         if kind in accepts:
             return None
@@ -300,6 +361,9 @@ def _acceptance(text: str) -> Acceptance:
         ),
         entity_kinds=frozenset(
             key for key, item in manifest.items.items() if item.entity_kind
+        ),
+        entity_classes=frozenset(
+            key for key, item in manifest.items.items() if item.entity_class
         ),
         references=frozenset(
             key for key, spec in manifest.properties.items() if spec.reference

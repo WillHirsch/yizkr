@@ -30,7 +30,6 @@ from yizkr.disagreement import (
     Statement,
     Term,
     Time,
-    century,
     compare,
     counts_by_property,
     read_containment,
@@ -692,29 +691,29 @@ class TestSpans:
         assert listed(portrait, within) == []
         assert len(listed(portrait, after)) == 1
 
-    def test_a_century_is_counted_as_wikibase_counts_it(self):
+    @pytest.mark.parametrize(
+        ("year", "years"),
+        [
+            (1801, (1801, 1900)),
+            (1836, (1801, 1900)),
+            (1900, (1801, 1900)),
+            # 1800 is the 18th century's last year, 1901 the 20th's first
+            (1800, (1701, 1800)),
+            (1901, (1901, 2000)),
+            (1, (1, 100)),
+            (100, (1, 100)),
+        ],
+    )
+    def test_a_century_is_counted_as_wikibase_counts_it(self, year, years):
         # the 19th century runs from 1801 to 1900 whichever year in it is
         # stored: claims.py writes its first year, and Wikibase stores its
         # last for a curator who types "19. century" (#241)
-        assert century(1801) == (1801, 1900)
-        assert century(1836) == (1801, 1900)
-        assert century(1900) == (1801, 1900)
-        # 1800 is the 18th century's last year, 1901 the 20th's first
-        assert century(1800) == (1701, 1800)
-        assert century(1901) == (1901, 2000)
-
-    def test_a_century_before_the_common_era_is_counted_back(self):
-        # the query service gives a century's year as stored, and a year,
-        # month or day before the common era one year on, in XSD 1.1's
-        # count where 1 BCE is year 0: the 18th century BCE, stored as
-        # -1800 to -1701, spans -1799 to -1700 in the count its years
-        # arrive in
-        assert century(-1800) == (-1799, -1700)
-        assert century(-1701) == (-1799, -1700)
-        assert century(-1700) == (-1699, -1600)
-        # the 1st century BCE ends with 1 BCE, XSD 1.1's year 0
-        assert century(-1) == (-99, 0)
-        assert century(-100) == (-99, 0)
+        first, last = years
+        stamp = f"{year:04d}-01-01T00:00:00Z"
+        assert disagreement.period(Time(stamp, CENTURY)) == (
+            first * 10000,
+            last * 10000 + 9999,
+        )
 
     def test_a_century_names_a_hundred_years(self):
         # Eugen born in the 19th century (here), stored as its first year,
@@ -790,42 +789,6 @@ class TestSpans:
             ),
         )
         assert listed(*statements) == []
-
-    @pytest.mark.parametrize(
-        ("stamp", "inside"),
-        [
-            # a year before the common era as the query service gives it,
-            # one on: 1800 BCE as -1799 and 1701 BCE as -1700 lie inside
-            # the 18th century BCE, and 1801 BCE as -1800 and 1700 BCE as
-            # -1699 do not
-            ("-1799-01-01T00:00:00Z", True),
-            ("-1700-01-01T00:00:00Z", True),
-            ("-1800-01-01T00:00:00Z", False),
-            ("-1699-01-01T00:00:00Z", False),
-        ],
-    )
-    def test_a_century_before_the_common_era_holds_its_years(
-        self, stamp, inside
-    ):
-        # Eugen born (here) in the 18th century BCE, stored as its first
-        # year, -1800, and in one year
-        statements = (
-            said(
-                "eugen-loebig",
-                "date_of_birth",
-                Term("literal", "-1800-01-01T00:00:00Z", XSD_DATETIME),
-                TREE,
-                precision=CENTURY,
-            ),
-            said(
-                "eugen-loebig",
-                "date_of_birth",
-                Term("literal", stamp, XSD_DATETIME),
-                GRAVESTONE,
-                precision=PRECISION["year"],
-            ),
-        )
-        assert (listed(*statements) == []) is inside
 
     def test_a_precision_coarser_than_a_century_names_no_span(self):
         # Eugen's birth given (here) only to the millennium, stored as 1801,

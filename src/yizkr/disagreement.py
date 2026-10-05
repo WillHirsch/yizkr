@@ -28,7 +28,7 @@ Each rule of MODELING.md "Contradictions" is one function here:
   tag aside, and an item through its merge redirect;
 * ``span``: the period a date names, which is the range its source states
   or else the period its precision names (``period``, with centuries
-  counted as Wikibase counts them in ``century``); ``named`` and
+  counted as Wikibase counts them); ``named`` and
   ``spans_nest`` then set aside a date whose span lies inside the other's;
 * ``stored_alike_order``: two dates stored alike are compared through the
   ranges their statements state;
@@ -38,6 +38,12 @@ Each rule of MODELING.md "Contradictions" is one function here:
   sources, and a page fragment counts as its artifact; ``one_claim``: nor
   are two readings of one statement's value, however many artifacts
   it cites.
+
+Every time the fetch lists, a statement's value or a qualifier's, is read
+with the calendar model its value node states, and one before the common
+era or in a calendar other than the proleptic Gregorian stops the report
+with ``UnsupportedDate``, naming the entity and the statement (ADR-0034):
+such a date is never compared.
 """
 
 from __future__ import annotations
@@ -52,7 +58,7 @@ from itertools import permutations, product
 
 import yaml
 
-from yizkr.claims import century_of, century_years
+from yizkr.core.dates import check_time
 from yizkr.model.schema import read_manifest_data
 from yizkr.queries.publish import load_templates, render_for_instance
 
@@ -235,12 +241,23 @@ def _cell(row: Mapping[str, dict], name: str) -> str:
     return row.get(name, {}).get("value", "")
 
 
-def _time(row: Mapping[str, dict], name: str) -> Time | None:
+def _time(row: Mapping[str, dict], name: str, where: str) -> Time | None:
+    """The time a column holds, with its precision, or None. One that is
+    unsupported, by its year or by the calendar model the column's
+    ``Calendar`` cell states, raises UnsupportedDate naming `where`."""
     value = _cell(row, name)
     precision = _cell(row, f"{name}Precision")
     if not value or not precision:
         return None
+    check_time(value, _cell(row, f"{name}Calendar") or None, where)
     return Time(value, int(precision))
+
+
+def _where(row: Mapping[str, dict]) -> str:
+    """The entity and the statement a fetch row is about, by their ids."""
+    entity = row["entity"]["value"].rsplit("/", 1)[-1]
+    statement = row["statement"]["value"].rsplit("/", 1)[-1]
+    return f"{entity} statement {statement}"
 
 
 # the fetch's time columns, by the Statement field each fills
@@ -260,13 +277,20 @@ def read_statements(
 ) -> list[Statement]:
     """The fetch's rows as statements. The fetch lists a statement once per
     stated-in source (and per further value of a qualifier it carries
-    twice); `properties` maps the manifest keys to the instance's ids."""
+    twice); `properties` maps the manifest keys to the instance's ids.
+    A time before the common era or in a calendar other than the
+    proleptic Gregorian, as the value or a qualifier, raises
+    UnsupportedDate naming the entity and the statement (ADR-0034)."""
     key_of = {pid: key for key, pid in properties.items()}
     found: dict[str, dict] = {}
     for row in rows:
         iri = row["statement"]["value"]
+        where = _where(row)
         entry = found.get(iri)
         if entry is None:
+            value = Term.of(row["value"])
+            if value.is_time:
+                check_time(value.value, _cell(row, "calendar") or None, where)
             precision = _cell(row, "precision")
             entry = found[iri] = {
                 "iri": iri,
@@ -276,14 +300,14 @@ def read_statements(
                     row["property"]["value"].rsplit("/", 1)[-1]
                 ],
                 "rank": row["rank"]["value"],
-                "value": Term.of(row["value"]),
+                "value": value,
                 "value_label": _cell(row, "valueLabel"),
                 "precision": int(precision) if precision else None,
                 "sources": set(),
                 **{name: set() for name in TIME_COLUMNS},
             }
         for name, column in TIME_COLUMNS.items():
-            time = _time(row, column)
+            time = _time(row, column, where)
             if time is not None:
                 entry[name].add(time)
         if "source" in row:
@@ -480,33 +504,23 @@ def comparison_key(value: Value, containment: Containment) -> str:
     return term.value
 
 
-def century(year: int) -> tuple[int, int]:
-    """The first and last year of the century a century-precision date
-    names, counted as Wikibase counts centuries (``claims.century_of``): a
-    date stored as any year from 1801 to 1900 names the 19th century, 1801
-    to 1900, whichever year a writer chose for it. The query service gives
-    a century's year as stored, but a year, a month or a day before the
-    common era one year on, in XSD 1.1's count, where 1 BCE is year 0. So
-    a century before the common era is given in that count, to compare
-    with them: the 18th century BCE, stored as -1800 to -1701, spans -1799
-    to -1700."""
-    first, last = century_years(century_of(year))
-    if year < 0:
-        return first + 1, last + 1
-    return first, last
-
-
 _DATE = re.compile(r"^([+-]?\d+)-(\d{2})-(\d{2})")
 
 
 def period(time: Time) -> Span:
     """The days a time's precision names, as yyyymmdd numbers: its day,
-    month, year, decade or century (``century``). A precision coarser than
-    a century is given its century too, which only orders two dates stored
-    alike, since it names no span (``named``)."""
+    month, year, decade or century. A century is counted as Wikibase counts
+    it, from year 1: a date stored as any year from 1801 to 1900 names the
+    19th century, 1801 to 1900, whichever year a writer chose for it. A
+    precision coarser than a century is given its century too, which only
+    orders two dates stored alike, since it names no span (``named``). A
+    time before the common era raises UnsupportedDate (ADR-0034); this is
+    a backstop, as ``read_statements`` has already refused one, naming its
+    entity and statement."""
     match = _DATE.match(time.value)
     if match is None:
         raise ValueError(f"not an xsd:dateTime: {time.value!r}")
+    check_time(time.value, None, "a compared date")
     year, month, day = (int(part) for part in match.groups())
     if time.precision >= DAY:
         first = last = year * 10000 + month * 100 + day
@@ -520,8 +534,8 @@ def period(time: Time) -> Span:
         first = year // 10 * 10 * 10000
         last = first + 99999
     else:
-        first_year, last_year = century(year)
-        first, last = first_year * 10000, last_year * 10000 + 9999
+        first_year = (year - 1) // 100 * 100 + 1
+        first, last = first_year * 10000, (first_year + 99) * 10000 + 9999
     return first, last
 
 

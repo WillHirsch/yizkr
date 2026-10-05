@@ -59,8 +59,12 @@ write's first step, just before the claims that cite the document
   An `equivalences.csv` with rows from an earlier run is still reviewed
   here.
 - **Gate 2 — claims** (`awaiting claim review`): *are these extracted facts
-  correct?* Fill `<doc>/review.csv` and save as `review.reviewed.csv`. The
-  `critique_notes` column surfaces the extraction critic's concerns
+  correct?* Fill `<doc>/review.csv` and save as `review.reviewed.csv`. Each
+  row shows the claim's locators: `page` (the physical page),
+  `printed_page` (the number printed on that page, from the transcription
+  record, empty where there is none; ADR-0037), `region` and `excerpt`.
+  They are for checking only: an edit to them is ignored, never written.
+  The `critique_notes` column surfaces the extraction critic's concerns
   (ADR-0013), each on exactly one row, tagged with its axis and category
   (ADR-0023 §3). There is no living-status decision: privacy is a runtime
   determination, never curation (ADR-0020).

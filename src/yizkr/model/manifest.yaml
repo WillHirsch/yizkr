@@ -332,7 +332,9 @@ properties:
 
   country_of_citizenship:
     label: country of citizenship
-    description: the country (a place) whose citizen the subject is, as asserted by a source
+    description: >-
+      the country (a place) whose citizen the subject is, as asserted by
+      a source; a country, never a town, city or region within one
     datatype: wikibase-item
     accepts: [place, unclassified_entity]
     wikidata: P27
@@ -700,6 +702,11 @@ properties:
 # this file stays the single place the offerable kinds are declared.
 # Artifact types, controlled-vocabulary values, and infrastructure
 # classes are real classes but are not entity kinds.
+# `entity_class: true` marks every other class of entities (an artifact
+# type, a time period, an infrastructure class). With the entity kinds,
+# these are the kind keys: named by its key, such an item is the class
+# itself, so only `instance_of` and `subclass_of` take it as a value
+# (ADR-0035 §3.5). A controlled-vocabulary value is neither.
 items:
   # --- core classes (docs/MODELING.md) ---
 
@@ -765,6 +772,7 @@ items:
   time_period_class:
     label: time period
     description: named span of time, linked to PeriodO definitions where applicable
+    entity_class: true
 
   event:
     label: event
@@ -774,16 +782,19 @@ items:
   artifact:
     label: artifact
     description: digitised source document or object that asserts knowledge, e.g. a photograph or certificate
+    entity_class: true
 
   artifact_fragment:
     label: artifact fragment
     description: page, crop, or region of an artifact that a reference can point into
     aliases:
       - fragment
+    entity_class: true
 
   extraction_run:
     label: extraction run
     description: one execution of the ingestion pipeline; process-provenance target for machine-written statements
+    entity_class: true
 
   occupation_class:
     label: occupation
@@ -914,44 +925,52 @@ items:
     description: photographic artifact
     subclass_of: artifact
     wikidata: Q125191
+    entity_class: true
 
   certificate:
     label: certificate
     description: official certificate artifact, e.g. birth, marriage, or death certificate
     subclass_of: artifact
+    entity_class: true
 
   letter:
     label: letter
     description: written correspondence artifact
     subclass_of: artifact
     wikidata: Q133492
+    entity_class: true
 
   census_page:
     label: census page
     description: page from a census return
     subclass_of: artifact
+    entity_class: true
 
   newspaper_clipping:
     label: newspaper clipping
     description: clipping from a newspaper
     subclass_of: artifact
+    entity_class: true
 
   presentation:
     label: presentation
     description: slide-deck artifact; a compound container whose slides are fragments and whose embedded media are derived artifacts (ADR-0008)
     subclass_of: artifact
     wikidata: Q604733
+    entity_class: true
 
   genealogical_report:
     label: genealogical report
     description: structured genealogical report or database export, e.g. a GEDCOM family-tree export or a generated descendants report
     subclass_of: artifact
+    entity_class: true
 
   address_book:
     label: address book
     description: address book or directory artifact listing people with addresses and contact details
     subclass_of: artifact
     wikidata: Q367035
+    entity_class: true
 
   # --- controlled vocabulary values ---
 
