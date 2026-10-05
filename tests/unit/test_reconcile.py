@@ -473,6 +473,120 @@ class TestBlocking:
             "Q90"
         ]
 
+    def test_names_key_in_the_instances_form(self):
+        """A name blocks in the form the instance keeps a term in
+        (writer.stored_term): a control character inside a name keys as
+        the space the instance keeps it as, so "Cäcilie\\x08Löbig" meets
+        the graph's "Cäcilie Löbig" (#477). The decomposed rows are
+        regression guards: folding already took NFD and NFC alike."""
+        from unicodedata import normalize
+
+        found = [
+            EntityRecord(
+                id="e1", label=normalize("NFD", "Flörburg"), kind="place"
+            ),
+            EntityRecord(
+                id="e2", label=normalize("NFD", "Ida Sörne"), kind="human"
+            ),
+            EntityRecord(id="e3", label="Gustav Löbig", kind="human"),
+            EntityRecord(id="e4", label="Cäcilie\x08Löbig", kind="human"),
+        ]
+        graph = [
+            RosterEntity(qid="Q90", label="Flörburg", kind="place"),
+            RosterEntity(
+                qid="Q41",
+                label="Ida Löbig",
+                birth_names=["Ida Sörne"],
+                kind="human",
+            ),
+            RosterEntity(
+                qid="Q124",
+                label="Gustave Lobig",
+                aliases=[normalize("NFD", "Gustav Löbig")],
+                kind="human",
+            ),
+            RosterEntity(qid="Q43", label="Cäcilie Löbig", kind="human"),
+        ]
+        candidates = block_candidates(found, graph)
+        assert {
+            key: [c.qid for c in found] for key, found in candidates.items()
+        } == {"e1": ["Q90"], "e2": ["Q41"], "e3": ["Q124"], "e4": ["Q43"]}
+
+    def test_records_key_in_the_instances_form(self):
+        """A person's record nickname, the whole form its typed parts
+        make and a place's record name each key in the stored form: a
+        control character for a space meets the graph's name written
+        with one (#477)."""
+        found = [
+            EntityRecord(
+                id="e1",
+                label="Gustl",
+                kind="human",
+                structure={
+                    "kind": "human",
+                    "nicknames": ["Gustl\x08Löbig"],
+                },
+            ),
+            EntityRecord(
+                id="e2",
+                label="Gustav",
+                kind="human",
+                structure={
+                    "kind": "human",
+                    "given": [{"written": "Gustav\x08"}],
+                    "surnames": [{"written": "Löbig"}],
+                },
+            ),
+            EntityRecord(
+                id="e3",
+                label="Mockburg",
+                kind="place",
+                structure={
+                    "kind": "place",
+                    "names": [{"written": "Kreis\x08Mockburg"}],
+                },
+            ),
+        ]
+        graph = [
+            RosterEntity(qid="Q170", label="Gustl Löbig", kind="human"),
+            RosterEntity(qid="Q124", label="Gustav Löbig", kind="human"),
+            RosterEntity(qid="Q95", label="Kreis Mockburg", kind="place"),
+        ]
+        candidates = block_candidates(found, graph)
+        assert {
+            key: [c.qid for c in found] for key, found in candidates.items()
+        } == {"e1": ["Q170"], "e2": ["Q124"], "e3": ["Q95"]}
+
+    def test_graph_pairs_key_in_the_instances_form(self):
+        """Two items pair on a name the one gives with a control
+        character for a space; the decomposed birth name is a regression
+        guard."""
+        from unicodedata import normalize
+
+        from yizkr.pipeline.reconcile import propose_graph_pairs
+
+        pair_roster = [
+            RosterEntity(qid="Q41", label="Ida Sörne", kind="human"),
+            RosterEntity(
+                qid="Q42",
+                label="Ida Löbig",
+                birth_names=[normalize("NFD", "Ida Sörne")],
+                kind="human",
+            ),
+            RosterEntity(qid="Q43", label="Cäcilie Löbig", kind="human"),
+            RosterEntity(
+                qid="Q44",
+                label="Cäcilie Tarle",
+                official_names=["Cäcilie\x08Löbig"],
+                kind="human",
+            ),
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        propose_graph_pairs(llm, pair_roster, batch_pairs=1)
+        assert len(llm.prompts) == 2
+        assert "Q41" in llm.prompts[0] and "Q42" in llm.prompts[0]
+        assert "Q43" in llm.prompts[1] and "Q44" in llm.prompts[1]
+
     def test_graph_pairs_need_one_kind(self):
         """A vessel and a place that share a name never pair."""
         from yizkr.pipeline.reconcile import propose_graph_pairs

@@ -1985,6 +1985,198 @@ class TestRecordless:
 # -- blocking -----------------------------------------------------------------
 
 
+class TestInstanceForm:
+    """A mention's aliases leave out each alias the instance would keep
+    as its label (writer.stored_term), and every name and record part
+    keys in that form (#477). NFD against NFC is a regression guard:
+    folding already took the two alike. What the stored form changes is
+    a control character, made a space, and the edge characters it
+    trims."""
+
+    @staticmethod
+    def nfd(text: str) -> str:
+        return unicodedata.normalize("NFD", text)
+
+    def aliases(self, doc: Doc) -> list[list[str]]:
+        return [node.aliases for node in clustering._nodes(doc.manifest, 0)]
+
+    def test_an_alias_the_label_in_another_form_is_the_label(self):
+        decomposed = self.nfd("Ida Sörne")
+        assert decomposed != "Ida Sörne"
+        doc = register(
+            "a register of Ida",
+            [
+                human(
+                    "e1",
+                    "Ida Sörne",
+                    aliases=[decomposed, "Sörne"],
+                    givens=["Ida"],
+                    surnames=["Sörne"],
+                ),
+                human(
+                    "e2",
+                    decomposed,
+                    aliases=["Ida Sörne", "Sörne"],
+                    givens=["Ida"],
+                    surnames=["Sörne"],
+                ),
+            ],
+            [],
+            {"e1": "ida", "e2": "ida"},
+        )
+        assert self.aliases(doc) == [["Sörne"], ["Sörne"]]
+
+    def test_an_alias_the_instance_keeps_as_the_label_is_the_label(self):
+        """A control character the instance keeps as a space, and a
+        space at either end it drops, in the alias or in the label."""
+        doc = register(
+            "a register of Gustav",
+            [
+                human(
+                    "e1",
+                    "Gustav Löbig",
+                    aliases=["Gustav\x08Löbig", " Gustav Löbig\u3000"],
+                ),
+                human(
+                    "e2",
+                    "Gustav\x08Löbig",
+                    aliases=["Gustav Löbig", "Gustl"],
+                    givens=["Gustav"],
+                    surnames=["Löbig"],
+                ),
+            ],
+            [],
+            {"e1": "gustav", "e2": "gustav"},
+        )
+        assert self.aliases(doc) == [[], ["Gustl"]]
+
+    def test_a_batch_without_entities_gives_a_label_once(self):
+        """Without a manifest, a local id's aliases are the labels its
+        refs give it, each once in the instance's form, the mention's
+        own label left out."""
+        sha1 = sha1_text("a register of Ida")
+        labels = (
+            "Ida Löbig",
+            self.nfd("Ida Löbig"),
+            self.nfd("Ida Sörne"),
+            "Ida Sörne",
+            "Ida\x08Sörne",
+        )
+        batch = ClaimBatch.model_validate(
+            {
+                "extraction_run": RUN,
+                "claims": [
+                    {
+                        "subject": {
+                            "kind": "local",
+                            "local_id": "e1",
+                            "label": label,
+                        },
+                        "property": "date_of_birth",
+                        "value": day(1890),
+                        "source": {
+                            "artifact": {"kind": "artifact", "sha1": sha1}
+                        },
+                    }
+                    for label in labels
+                ],
+            }
+        )
+        (node,) = clustering._nodes(Manifest(sha1, batch), 0)
+        assert node.label == "Ida Löbig"
+        # the first form as given, the others the same once stored
+        assert node.aliases == [self.nfd("Ida Sörne")]
+
+    @staticmethod
+    def manifestless(name: str, *labels: str) -> Doc:
+        """A batch without a manifest whose refs give e1 these labels."""
+        sha1 = sha1_text(name)
+        batch = ClaimBatch.model_validate(
+            {
+                "extraction_run": RUN,
+                "claims": [
+                    {
+                        "subject": {
+                            "kind": "local",
+                            "local_id": "e1",
+                            "label": label,
+                        },
+                        "property": "date_of_birth",
+                        "value": day(1876),
+                        "source": {
+                            "artifact": {"kind": "artifact", "sha1": sha1}
+                        },
+                    }
+                    for label in labels
+                ],
+            }
+        )
+        return Doc("a register", Manifest(sha1, batch), {"e1": "hildegard"})
+
+    def test_a_recordless_name_keys_as_the_instance_keeps_it(self):
+        """A recordless mention whose label holds a control character
+        for a space, its alias the label as the instance keeps it, still
+        blocks with a recordless "Hildegard Löbig": its names key in the
+        stored form, as its aliases are compared in it. So, with a
+        batch without a manifest naming "Hildegard Löbig", does one
+        giving the two forms."""
+
+        def recordless(name: str, label: str, aliases=()) -> Doc:
+            return register(
+                name,
+                [entity("e1", label, aliases=aliases)],
+                [("e1", "date_of_birth", day(1876))],
+                {"e1": "hildegard-loebig"},
+            )
+
+        plain = recordless("plain", "Hildegard Löbig")
+        control = recordless(
+            "control", "Hildegard\x08Löbig", aliases=["Hildegard Löbig"]
+        )
+        bare = self.manifestless(
+            "bare", "Hildegard\x08Löbig", "Hildegard Löbig"
+        )
+        (node,) = clustering._nodes(control.manifest, 0)
+        assert node.aliases == []
+        pairs = blocked_pairs([plain.manifest, control.manifest])
+        assert pairs == {pair(plain, "e1", control, "e1")}
+        named = self.manifestless("named", "Hildegard Löbig")
+        pairs = blocked_pairs([named.manifest, bare.manifest])
+        assert pairs == {pair(named, "e1", bare, "e1")}
+
+    def test_a_record_keys_as_the_instance_keeps_it(self):
+        """A record's parts key in the stored form too: an unsplit form
+        and a place's name with a control character for a space meet the
+        same names written with one."""
+        unsplit = register(
+            "unsplit",
+            [human("e1", "Löbig Ursula", unsplit=["Löbig\x08Ursula"])],
+            [],
+            {"e1": "ursula"},
+        )
+        typed = register(
+            "typed", [human("e1", "Ursula Löbig")], [], {"e1": "ursula"}
+        )
+        assert blocked_pairs([unsplit.manifest, typed.manifest]) == {
+            pair(unsplit, "e1", typed, "e1")
+        }
+        district = register(
+            "district",
+            [place("p1", "Kreis Mockburg", names=["Kreis\x08Mockburg"])],
+            [],
+            {"p1": "mockburg"},
+        )
+        written = register(
+            "written",
+            [place("p1", "Kreis Mockburg")],
+            [],
+            {"p1": "mockburg"},
+        )
+        assert blocked_pairs([district.manifest, written.manifest]) == {
+            pair(district, "p1", written, "p1")
+        }
+
+
 class TestBlocking:
     def test_gedcom_anchored_mentions_pair_with_their_anchors_only(self):
         ged, extract, papers = gedcom(), birth_extract(), naturalisation()
@@ -5709,12 +5901,14 @@ class TestTheStage:
     def test_the_code_digest_reads_each_module_it_names(
         self, tmp_path, monkeypatch
     ):
-        """The digest is of the bytes of clustering.py, fingerprints.py
-        and reconcile.py: a byte changed in any of them changes it."""
+        """The digest is of the bytes of clustering.py, fingerprints.py,
+        reconcile.py and writer.py: a byte changed in any of them changes
+        it."""
         assert clustering.CODE == (
             "clustering.py",
             "fingerprints.py",
             "reconcile.py",
+            "writer.py",
         )
         before = code_digest()
         for name in clustering.CODE:

@@ -15,6 +15,9 @@ from yizkr.pipeline.presentation import (
 )
 
 CT = "[Content_Types].xml"
+# every member of a built deck carries this one timestamp, so the same
+# arguments make the same bytes whenever the deck is built (#479)
+DECK_TIME = (2020, 1, 1, 0, 0, 0)
 
 
 def slide_xml(*paragraphs: str) -> str:
@@ -72,18 +75,25 @@ def build_deck(path, reorder=False):
         )
         + "</p:sldIdLst></p:presentation>"
     )
+
+    def put(archive, name, data):
+        archive.writestr(zipfile.ZipInfo(name, date_time=DECK_TIME), data)
+
     with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr(CT, "<Types/>")
-        archive.writestr("ppt/presentation.xml", presentation)
-        archive.writestr(
+        put(archive, CT, "<Types/>")
+        put(archive, "ppt/presentation.xml", presentation)
+        put(
+            archive,
             "ppt/_rels/presentation.xml.rels",
             rels_xml([(rid, SLIDE_REL, target) for rid, target in order]),
         )
-        archive.writestr(
+        put(
+            archive,
             "ppt/slides/slide1.xml",
             slide_xml(["The Löbig family", " in Flörburg"], ["Married 1905"]),
         )
-        archive.writestr(
+        put(
+            archive,
             "ppt/slides/_rels/slide1.xml.rels",
             rels_xml(
                 [
@@ -92,10 +102,13 @@ def build_deck(path, reorder=False):
                 ]
             ),
         )
-        archive.writestr(
-            "ppt/slides/slide2.xml", slide_xml(["Gustav's certificate"])
+        put(
+            archive,
+            "ppt/slides/slide2.xml",
+            slide_xml(["Gustav's certificate"]),
         )
-        archive.writestr(
+        put(
+            archive,
             "ppt/slides/_rels/slide2.xml.rels",
             rels_xml(
                 [
@@ -104,12 +117,13 @@ def build_deck(path, reorder=False):
                 ]
             ),
         )
-        archive.writestr(
+        put(
+            archive,
             "ppt/notesSlides/notesSlide1.xml",
             slide_xml(["Scanned from the family album"]),
         )
-        archive.writestr("ppt/media/image1.jpeg", b"\xff\xd8fakejpeg")
-        archive.writestr("ppt/media/clip1.mp4", b"fakemp4")
+        put(archive, "ppt/media/image1.jpeg", b"\xff\xd8fakejpeg")
+        put(archive, "ppt/media/clip1.mp4", b"fakemp4")
     return path
 
 
@@ -146,7 +160,9 @@ class TestUnpack:
     def test_non_pptx_raises(self, tmp_path):
         bogus = tmp_path / "bogus.pptx"
         with zipfile.ZipFile(bogus, "w") as archive:
-            archive.writestr("hello.txt", "not a deck")
+            archive.writestr(
+                zipfile.ZipInfo("hello.txt", date_time=DECK_TIME), "not a deck"
+            )
         with pytest.raises(ValueError, match="not a PPTX"):
             unpack_pptx(bogus)
 
