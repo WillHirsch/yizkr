@@ -2006,14 +2006,14 @@ class TestInstanceForm:
                 human(
                     "e1",
                     "Ida Sörne",
-                    aliases=[decomposed, "Frau Sörne"],
+                    aliases=[decomposed, "Sörne"],
                     givens=["Ida"],
                     surnames=["Sörne"],
                 ),
                 human(
                     "e2",
                     decomposed,
-                    aliases=["Ida Sörne", "Frau Sörne"],
+                    aliases=["Ida Sörne", "Sörne"],
                     givens=["Ida"],
                     surnames=["Sörne"],
                 ),
@@ -2021,7 +2021,7 @@ class TestInstanceForm:
             [],
             {"e1": "ida", "e2": "ida"},
         )
-        assert self.aliases(doc) == [["Frau Sörne"], ["Frau Sörne"]]
+        assert self.aliases(doc) == [["Sörne"], ["Sörne"]]
 
     def test_an_alias_the_instance_keeps_as_the_label_is_the_label(self):
         """A control character the instance keeps as a space, and a
