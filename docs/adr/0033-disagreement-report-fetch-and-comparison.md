@@ -134,6 +134,15 @@ on, in XSD 1.1's count where 1 BCE is year 0, but a century's year as
 stored, so a century before the common era is given its span in the
 count of the dates it is compared with.
 
+Amended by #338 (2026-10-04): dates before the common era and in the
+Julian calendar are unsupported (ADR-0034). The fetch now gives each
+time the calendar model its value node states, `read_statements` stops
+with `UnsupportedDate`, naming the entity and the statement, at a time
+before the common era or in a calendar other than the proleptic
+Gregorian, and `century`, with its one-year shift for a century before
+the common era, is gone: `period` counts a century of the common era as
+above.
+
 ### 3. The published query page lists attributed values
 
 The query page on the wiki (the exploration tier, ADR-0004) now shows the
