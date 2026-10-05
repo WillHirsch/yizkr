@@ -1278,6 +1278,22 @@ class TestImplausibleDate:
 
         assert counted(rahel_in(1991)) is None
         assert counted(rahel_in(1992)) == (0, 1)
+        # a range within a decade lowers and raises nothing: a birth in
+        # the 1910s, "between 1915 and 1916", may still lie in 1912
+        narrower = a_dated_claim(
+            "ursula",
+            "date_of_birth",
+            a_time(1910, "decade"),
+            [("earliest_date", a_time(1915)), ("latest_date", a_time(1916))],
+        )
+        assert (
+            counted(
+                a_dated_batch(
+                    narrower, lived("ursula", ("start_time", a_time(1912)))
+                )
+            )
+            is None
+        )
 
     def test_a_lone_bound_opens_its_side(self):
         """Eugen's birth read as the 18th century, and his death "before
