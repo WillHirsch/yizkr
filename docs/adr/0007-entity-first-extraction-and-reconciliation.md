@@ -200,7 +200,10 @@ and local refs.
   a record the writer matches or an approved equivalence names already
   does. The resolve step leaves the record without a `qid`, so the writer
   pairs it with a QID that one of the batch's claims mentions, by that
-  item's label; a record no claim mentions adds no alias.
+  item's label; a record no claim mentions adds no alias. The label is
+  the record's, or its tagged label where the writer would place the
+  record under it (ADR-0010), its own label then an alias, with the
+  record's aliases (amended by #476, 2026-10-05).
 - **Kinds without a manifest.** A batch without an entity manifest, such
   as the line-range tier of ADR-0006 produces, states each entity's kind
   only on its local refs' `instance_of`. When the writer matches such a
@@ -231,7 +234,20 @@ and local refs.
   bring it. A manifest record's kind still arrives, through the resolve
   step's label match (see the #233 amendment). Nor does a later ref to a
   local id an earlier ref named bring a kind, since the first ref to
-  each local id gives it. #109, whose identity map is to replace
+  each local id gives it. The one exception (amended by #476,
+  2026-10-05): a ref without a record that the resolve step resolves to
+  the item under its tagged label (ADR-0010) is given a manifest record of
+  its first ref's label and kind in the resolved batch, so its kind and
+  its label, as an alias, reach that item as the unresolved write gives
+  them. One with no kind stays local, for the writer to find that item
+  itself, and so does one of a batch whose written claims cite more than
+  one artifact, as a record's kind cites the artifact of the first claim
+  that mentions the item alone, where a ref's kind cites the artifact of
+  the first claim of each local id. Resolve reads the entity past
+  every claim the writer refuses before its plan (the writer's
+  `pre_plan_refusals`), so a made record's label and kind never come from
+  such a claim; only the claims the writer refuses while it plans are
+  unseen by it, and there a first ref may give the label and kind. #109, whose identity map is to replace
   exact-label resolution, takes on carrying every ref's kind to its
   item.
 - The orchestrator's write summary (`write.json`) and its log line count
