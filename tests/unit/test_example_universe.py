@@ -556,6 +556,36 @@ class TestEventsAndDates:
                     for path in paths
                 )
 
+    @pytest.mark.parametrize(("subject", "prop"), u.REFINEMENTS)
+    def test_a_refinement_is_narrower_than_what_it_refines(
+        self, subject, prop
+    ):
+        """Some source states a value strictly inside another source's: a
+        date whose earliest and latest days lie within the other's, and
+        are not both the same, or a place that lies inside the other."""
+
+        def narrower(fine, coarse):
+            if isinstance(fine.value, u.Date):
+                (low, high), (low_c, high_c) = (
+                    bounds(fine.value),
+                    bounds(coarse.value),
+                )
+                return low_c <= low <= high <= high_c and (low, high) != (
+                    low_c,
+                    high_c,
+                )
+            return fine.value != coarse.value and any(
+                coarse.value in path
+                for path in u.containment_paths(fine.value)
+            )
+
+        assertions = u.about(subject, prop)
+        assert any(
+            fine.source != coarse.source and narrower(fine, coarse)
+            for fine in assertions
+            for coarse in assertions
+        )
+
     def test_uncertain_dates_cover_every_form(self):
         found = dates()
         assert {d.qualifier for d in found} >= {

@@ -152,7 +152,7 @@ comment above it.
 | Kinship terms with a side and a degree | *дядя по отцу*, "uncle on the father's side" (Sebastian), and *двоюродная сестра*, "first cousin" (Klara), with Rudolf as the ego (the 1958 letter); *oerbeppe*, "great-grandmother" (Sipkje's mother), with Nicholas as the ego (the 1952 letter). Each is `relative` + `kinship_type`, worded as the source words it, and each follows from the parent edges |
 | An institution named by its kind and its place | *Калдовское районное бюро ЗАГС*, the civil registry of Kaldovsky District, whose name it takes as an adjective (the certificate); *it tichelwurk fan Snylsjum*, "the Snylsjum brickworks" (the 1952 letter) |
 | A place named with its containers | *д. Кошновка Калдовского района Чадской области*, "Koshnovka village, Kaldovsky district, Chadsk oblast", its district and oblast in the genitive (the 1958 letter), and the certificate's form, a field each; *Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân*, the 1952 letter's sender. Each container is a `part_of` claim |
-| A kin under another's name (ADR-0017) | Florence's 1963 death certificate names her mother *Florence Faxridge*, Florence's own birth name, as its informant gave it, where the 1952 letter names her Sipkje: two sources, two mothers by name. The certificate's two mentions both answer to Florence Faxridge, and one is the other's mother, so the impossibility filter keeps them apart (the fixture corpus's hard conflict) |
+| A kin under another's name (ADR-0017) | Florence's 1963 death certificate names her mother *Florence Faxridge*, Florence's own birth name, as its informant gave it, where the 1952 letter names her Sipkje: two sources, two mothers by name. The certificate's two mentions both answer to Florence Faxridge, and one is the other's mother, so the impossibility filter classes their cluster's conflict hard (the fixture corpus's hard conflict) |
 | Homonyms (ADR-0017) | two Ursula Löbigs: Sebastian's daughter, born 1911, and a widow in the 1912 directory; a one-year-old cannot be that widow. The 2008 family history names both, one line apart |
 | Mirrored kinship | Sebastian and Hildegard's children, stated from both ends: the parents' `child` claims in the 2008 family history and the 2018 talk; the children's `father` and `mother` elsewhere (the tree, the GEDCOM rendering), and the postcard's *Dein Vater* |
 | Two-digit years | *I was born in '50* (the interview, the 2008 family history) and *Dad died in '96*: the century is the reader's to supply, which the fixture corpus's recorded model gets wrong once (below) |
@@ -207,7 +207,7 @@ nothing the sources do not.
 ## The fixture corpus
 
 `tests/fixtures/corpus/` (#76) holds six documents of the universe for
-offline end-to-end tests, of each kind the scratch driver plans, in
+offline end-to-end tests, at least one of each kind the scratch driver plans, in
 `documents/`:
 
 | Document | What | Kind |
@@ -241,7 +241,7 @@ each trap, with no gold set. Past the driver it holds the run report
 (`yizkr scratch report`) and the clustering stage's identity map to the
 corpus too (#380): the report's aggregates for the corpus, with no
 universe name, file name or SHA-1 in report.md, and each trap's
-clustering outcome, the two the whole-cluster merge rule cannot meet
+clustering outcome, the three the whole-cluster merge rule cannot meet
 (#361) included, each recorded as expected with its reason.
 
 `TRAPS`, in `tests/fixtures/corpus/__init__.py`, names the seven traps the

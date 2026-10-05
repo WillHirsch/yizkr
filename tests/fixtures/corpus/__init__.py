@@ -228,7 +228,8 @@ TRAPS = (
         "mother never shares a cluster with any mention of Florence. Under "
         "the whole-cluster merge rule (#361) Florence's own mentions, whose "
         "links to the export are confident, stay apart with the rest of "
-        "the conflicting cluster.",
+        "the conflicting cluster. That is expected under the rule, not a "
+        "split to mend here (#380).",
     ),
 )
 

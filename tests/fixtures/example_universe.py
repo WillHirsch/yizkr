@@ -59,7 +59,7 @@ Ursula Löbigs and give his birth and his father's death in two-digit years
 ('50, '96), and gave a library talk from three slides in 2018. With the
 naturalisation certificate, the 1938 postcard, Florence's 1963 death
 certificate and a GEDCOM export of the Lobig line they make the fixture
-corpus (tests/fixtures/corpus, #76).  The death certificate's informant
+corpus (tests/fixtures/corpus, #76). The death certificate's informant
 gave Florence's own birth name as her mother's, so it names her mother
 "Florence Faxridge" where the 1952 letter names Sipkje: a mother whose
 name is her daughter's, which only kinship tells apart (#425).

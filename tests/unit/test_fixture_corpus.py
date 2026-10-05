@@ -21,7 +21,7 @@ corpus's stages, how each came about, the clean corpus's anomalies (none)
 and the clusters, and report.md must say none of it by a universe name, a
 file name or a document's SHA-1. The clustering stage's identity map
 (TestTheTrapsInTheIdentityMap) must meet each trap TRAPS sets for it,
-read in the universe's terms; the two merges clustering withholds are
+read in the universe's terms; the three merges clustering withholds are
 recorded as expected, each with its reason, by a strict xfail that asserts
 the merge, so it turns when clustering makes it. The corpus's recorded
 answers carry mention records (#407), and the export the records its
@@ -752,12 +752,31 @@ class TestTheTraps:
         assert values(certificate, "florence-lobig", "birth_name") == {
             "Florence Faxridge"
         }
+        # the date refines the tree's 1963 (u.REFINEMENTS)
+        assert values(certificate, "florence-lobig", "date_of_death") == {
+            u.Date(1963, 7, 3)
+        }
         (mother,) = batches.entities(fc.DEATH_CERTIFICATE, "Florence Faxridge")
         (florence,) = batches.entities(fc.DEATH_CERTIFICATE, "Florence Lobig")
+        surnames = {
+            mother.id: {"Faxridge"},
+            florence.id: {"Lobig", "Faxridge"},
+        }
         for record in (mother, florence):
             assert record.structure.status == "name"
             assert [n.written for n in record.structure.given] == ["Florence"]
-            assert "Faxridge" in {s.written for s in record.structure.surnames}
+            assert {s.written for s in record.structure.surnames} == surnames[
+                record.id
+            ]
+        # each is mentioned on its own line of the certificate: the mother
+        # on the line of her field
+        recorded = answers.RECORDED[fc.DEATH_CERTIFICATE]
+        lines = recorded.text.splitlines()
+        by_truth = {e.truth: e for e in recorded.entities}
+        (line,) = answers.mention_lines(recorded, by_truth["sipkje-faxridge"])
+        assert lines[line - 1].startswith("Mother: ")
+        (line,) = answers.mention_lines(recorded, by_truth["florence-lobig"])
+        assert lines[line - 1].startswith("Name: ")
         export = batches.said(fc.EXPORT)
         assert values(export, "florence-lobig", "mother") == set()
         assert values(export, "florence-lobig", "birth_name") == {
@@ -1035,6 +1054,8 @@ HELD_APART = {
     "with the mentions that carry his death",
     "mirrored-kinship": "the talk's and the export's mentions of Klara, "
     "whose kin agree, merge",
+    "kin-edge": "the family history's, the talk's and the export's "
+    "mentions of Florence, whose links are confident, merge",
 }
 
 
@@ -1301,9 +1322,11 @@ class TestTheTrapsInTheIdentityMap:
 
     def test_a_kin_edge_makes_the_cluster_conflict_hard(self, identity):
         """The death certificate's Florence and the mother it names by
-        Florence's own birth name both key on (Florence, Faxridge), and the
-        export anchors that key, so each pairs with the export's Florence
-        alone and never with the other: blocking is not transitive. The
+        Florence's own birth name both key on (Florence, Faxridge), and on
+        (Florence, Lobig) through the surname of the kin the certificate
+        names; the export's Florence has both names, so it anchors each
+        route, and each mention pairs with the export's Florence alone and
+        never with the other: blocking is not transitive. The
         closure joins them all the same, with the family history's and
         the talk's mentions of her, and the impossibility filter refuses
         the candidate cluster, since the certificate makes one of its
@@ -1355,7 +1378,12 @@ class TestTheTrapsInTheIdentityMap:
         assert identity.cluster(mother) not in apart
         # the corpus's one hard conflict
         assert identity.map["summary"]["conflicting_hard"] == 1
-        assert "conflicts hard" in trap("kin-edge").expected
+        kin_edge = trap("kin-edge")
+        assert "conflicts hard" in kin_edge.expected
+        assert set(kin_edge.documents) == set(florence)
+        assert set(kin_edge.people) == {"florence-lobig", "sipkje-faxridge"}
+        # and no trap says the corpus lacks one
+        assert not any("no hard" in entry.expected for entry in fc.TRAPS)
 
     def test_the_traps_the_merge_rule_cannot_meet_are_recorded(self):
         """Each trap the rule cannot meet says so where the corpus
@@ -1368,6 +1396,7 @@ class TestTheTrapsInTheIdentityMap:
         } == set(HELD_APART)
         assert "no such merge happens" in trap("merge-carrying-death").expected
         assert "stay unmerged" in trap("mirrored-kinship").expected
+        assert "stay apart" in trap("kin-edge").expected
         marks = [
             mark
             for name, member in vars(type(self)).items()
@@ -1444,6 +1473,44 @@ class TestTheTrapsInTheIdentityMap:
         )
         assert identity.cluster(klara[fc.DECK]) == identity.cluster(
             klara[fc.EXPORT]
+        )
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason=HELD_APART["kin-edge"]
+        + ": the death certificate's mention of her mother, named by "
+        "Florence's own birth name, joins her candidate cluster through "
+        "the export's Florence and is her kin, so the cluster conflicts "
+        "(hard), and the whole-cluster merge rule (#361) leaves every "
+        "member of a conflicting cluster apart, the confident links among "
+        "them included. A rule that merged over the confident links alone "
+        "(#66) would merge these three, and the certificate's own mention "
+        "of her with them; the mother's mention would stay apart either "
+        "way, since its one link is ambiguous.",
+    )
+    def test_florences_mentions_merge(self, identity):
+        florence = identity.of("florence-lobig")
+        mother = identity.of("sipkje-faxridge")[fc.DEATH_CERTIFICATE]
+        entry = identity.candidate(florence[fc.EXPORT])
+        _premise(
+            all(
+                identity.pair(entry, florence[name], florence[fc.EXPORT])[0]
+                == clustering.CONFIDENT
+                for name in (fc.NARRATIVE, fc.DECK)
+            ),
+            "the family history's and the talk's mentions link confidently "
+            "to the export's",
+        )
+        _premise(
+            identity.pair(entry, mother, florence[fc.EXPORT])[0]
+            == clustering.AMBIGUOUS,
+            "the mother's mention links to the export ambiguously",
+        )
+        assert (
+            identity.cluster(florence[fc.NARRATIVE])
+            == identity.cluster(florence[fc.DECK])
+            == identity.cluster(florence[fc.EXPORT])
         )
 
 
