@@ -43,34 +43,43 @@ uv run python -m yizkr.pipeline.monitor pause|resume|abort <run dir> [--stage NA
 press `q` or Ctrl-C; quitting the monitor never stops the run. `--once`
 prints one view and exits. `--no-page` leaves the status page unwritten.
 `--serve` serves the page (Serving the page, below). Off a terminal
-(output piped or redirected) the view is printed afresh each time the run
-changes, without colour, and no keys are read. Lines stop one column
-short of the terminal's width, which some terminals would wrap, counted
-in the columns a terminal gives them: an East Asian wide or fullwidth
-character takes two, a combining mark none, so every line fits one row.
+(output piped or redirected, or input that is not a terminal) the view is
+printed afresh each time the run changes, without colour, and no keys are
+read. Its lines stop one column short of the width the environment gives
+(`COLUMNS`, or 100), counted in characters. A terminal that cannot move
+its cursor (terminfo has no `cup` for it, as for `TERM=dumb`) is printed
+to the same way.
 
-On a terminal the view stays on screen and each refresh writes only the
-lines that changed: the cursor moves to each one's row and clears it to
-its end, and whatever the last view drew below the new one's end is
-cleared. A refresh in which nothing changed writes nothing. Lines
-compare with their colours, so a line that only changes colour is
-written again. The footer (the status page's note, the served address,
-a command's answer, the help and the key hint) keeps the terminal's last
-rows when the window has room for it, so a longer or shorter view above
-it does not move it; the row below it is left free for the cursor and
-the command line. The whole view is drawn again on the first refresh,
-when the terminal's size changes, and after the command line or a
-confirmation has written over it. Press Ctrl-L to draw the whole view
-again, as in other terminal programs, if something else has written
-over it; resuming the monitor after Ctrl-Z (`fg`) does the same at the
-next refresh. The served page writes nothing to the terminal, neither
-its requests nor the errors of a client that drops the connection. So
-the served address reaches the terminal once at the start and again
-only on a whole redraw: editors that forward ports they find in a
-terminal's output (VS Code's port auto-forwarding, set to read output)
-are not told of a new server every refresh.
+On a terminal the view is drawn through the standard library's `curses`
+(ncursesw on Linux), which ends when the monitor quits, however it quits,
+and leaves the terminal as it found it. The view fills the window; the
+footer (the status page's note, the served address, a command's answer,
+the help and the key hint) keeps the window's bottom rows when there is
+room for it, so a longer or shorter view above it does not move it. The
+title and the section heads are bold, the dim rows dim, and the states
+coloured from colour pairs: green, yellow and red on the terminal's own
+background (black where it has none). `NO_COLOR` turns every style off.
+Each refresh draws the whole view, and `curses` sends the terminal only
+the cells that changed: a refresh in which nothing changed sends nothing.
+`curses` takes each character's width from the C library (the locale's
+character type is set from the environment while the view is open, so
+wide characters draw correctly) and clips each line at the window's
+edge; nothing wraps. Keys are read as they are typed, waiting
+`--interval` seconds for one before the next refresh. A resize draws the
+view at the new size at once. Press Ctrl-L to send the whole screen
+again, as in other terminal programs, if something else has written over
+it; after Ctrl-Z and `fg`, `curses` puts the view back as it was. The
+served page writes nothing to the terminal, neither its requests nor the
+errors of a client that drops the connection. So the served address
+reaches the terminal once at the start and again only when the whole
+screen is sent (Ctrl-L, a resize, or its row moving when the footer
+changes): editors that forward ports they find in a terminal's output
+(VS Code's port auto-forwarding, set to read output) are not told of a
+new server every refresh.
 
-**Commands.** Press `:` or Enter in the view to type one:
+**Commands.** Press `:` or Enter in the view to type one on the command
+line, which opens on the window's bottom row (Backspace edits it, Enter
+carries it out, and an empty line types nothing):
 
 ```
 pause|resume|abort [run | stage NAME | kind NAME] [reason]
@@ -91,8 +100,8 @@ resumes it (docs/LLM_CACHE.md, `control.jsonl`). Neither loses a
 completed output: in-flight calls finish, and every completed call is in
 the cache.
 
-- In the view, an abort asks for confirmation (`y`); the module's
-  `abort` command line does not.
+- In the view, an abort asks for confirmation (`y`), on the command
+  line; the module's `abort` command line does not.
 - A resume of an aborted slice is not written, since it would change
   nothing; the view says to invoke the run again.
 - A stage or kind the run knows of no document in, from its plan or its

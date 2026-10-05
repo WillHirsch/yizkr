@@ -16,7 +16,6 @@ from __future__ import annotations
 import contextlib
 import errno
 import hashlib
-import inspect
 import io
 import json
 import os
@@ -25,9 +24,9 @@ import re
 import shutil
 import socket
 import struct
+import subprocess
+import sys
 import threading
-import time
-import unicodedata
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime, timedelta
@@ -41,17 +40,11 @@ from yizkr.pipeline import monitor
 from yizkr.pipeline.monitor import (
     ABORTED,
     ACTIVE,
-    CLEAR_BELOW,
-    CLEAR_LINE,
-    CLEAR_SCREEN,
     GRAMMAR,
     HELP,
-    HIDE_CURSOR,
-    HOME,
     LATEST_ALERTS,
     OTHER,
     PAUSED,
-    SHOW_CURSOR,
     STATUS_DIR,
     STATUS_PAGE,
     UNKNOWN,
@@ -64,6 +57,7 @@ from yizkr.pipeline.monitor import (
     reason_label,
     render_html,
     render_lines,
+    render_rows,
     render_terminal,
     request,
     state_now,
@@ -1796,13 +1790,13 @@ class TestLogsThatCannotBeRead:
         assert f'<li class="muted">{note}</li>' in render_html(summary)
 
     def test_every_unknown_line_is_a_warning(self, run):
-        """On a terminal with colour, each line that says what cannot be
-        told is in the warning style, the control file's as the logs'."""
+        """On a terminal, each line that says what cannot be told is in
+        the warning style, the control file's as the logs'."""
         with contextlib.ExitStack() as stack:
             for name in ("events.jsonl", "alerts.jsonl", "control.jsonl"):
                 stack.enter_context(unreadable_file(run, name, "its mode"))
             summary = summarise_run(run, NOW)
-        lines = render_lines(summary, width=200, color=True)
+        rows = render_rows(summary)
         for start in (
             "stages     counts unknown: events.jsonl",
             "calls      unknown: events.jsonl",
@@ -1810,8 +1804,8 @@ class TestLogsThatCannotBeRead:
             "slices     state unknown: the control file",
             "alerts     unknown: alerts.jsonl",
         ):
-            (line,) = [line for line in lines if start in line]
-            assert line.startswith(monitor._STYLES["warn"] + start)
+            (style,) = [style for text, style in rows if start in text]
+            assert style == "warn"
 
     @pytest.mark.parametrize("by", UNREADABLE_BY)
     @pytest.mark.parametrize("name", ["events.jsonl", "alerts.jsonl"])
@@ -2311,7 +2305,7 @@ class TestMalformedLines:
 
     def views(self, path: Path) -> monitor.Summary:
         summary = summarise_run(path, NOW)
-        render_lines(summary, width=120, height=50, color=True)
+        render_rows(summary, height=50)
         render_terminal(summary)
         render_html(summary)
         return summary
@@ -2518,8 +2512,33 @@ class TestTerminalView:
         assert all(len(line) <= 60 for line in lines)
         assert not any("\x1b" in line for line in lines)
 
-    def test_with_colour_it_uses_ansi_styles(self, summary):
-        assert "\x1b[31m" in render_terminal(summary, color=True)
+    def test_its_rows_carry_their_styles(self, summary):
+        """A screen colours each row by its style; the plain lines are the
+        rows' text, cut to the width."""
+        rows = render_rows(summary)
+        assert rows[0][0].startswith("yizkr run 20260927T100000Z-4f2a9c")
+        assert rows[0][1] == "title"
+        assert any(
+            text.startswith("  kind:gedcom") and style == "bad"
+            for text, style in rows
+        )
+        assert any(
+            text.startswith("  stage:extraction") and style == "warn"
+            for text, style in rows
+        )
+        assert {style for _, style in rows} <= {
+            "title",
+            "head",
+            "good",
+            "warn",
+            "bad",
+            "dim",
+            "",
+        }
+        assert render_lines(summary, width=1000) == [text for text, _ in rows]
+        # no row is cut: the screen clips at its edge
+        assert max(len(text) for text, _ in rows) > 60
+        assert render_rows(summary) == render_rows(summary, height=None)
 
     def test_it_fits_the_height_dropping_details_before_sections(
         self, summary
@@ -2575,23 +2594,18 @@ class TestTerminalView:
             ("Peiltal", 1, "P"),
             ("Калдовское", 10, "Калдовское"),
             ("Калдовское", 6, "Кал..."),
-            # fullwidth characters take two columns each
-            ("Ｐｅｉｌｔａｌ", 14, "Ｐｅｉｌｔａｌ"),
-            ("Ｐｅｉｌｔａｌ", 13, "Ｐｅｉｌｔ..."),
-            ("Ｐｅｉｌｔａｌ", 8, "Ｐｅ..."),
-            ("Ｐｅｉｌｔａｌ", 3, "Ｐ"),
-            ("Ｐｅｉｌｔａｌ", 1, ""),
-            # a combining mark takes none, and stays with its letter
-            ("Lo\u0308big", 5, "Lo\u0308big"),
-            ("Lo\u0308bigsen", 6, "Lo\u0308b..."),
-            ("Lo\u0308bigsen", 2, "Lo\u0308"),
+            # characters are counted, whatever a terminal's columns: off a
+            # terminal the width is the environment's guess
+            ("Ｐｅｉｌｔａｌ", 7, "Ｐｅｉｌｔａｌ"),
+            ("Ｐｅｉｌｔａｌ", 6, "Ｐｅｉ..."),
+            ("Lo\u0308bigsen", 6, "Lo\u0308..."),
         ],
     )
-    def test_lines_are_cut_to_terminal_columns(self, text, width, clipped):
+    def test_plain_lines_are_cut_to_the_width(self, text, width, clipped):
         assert monitor._clip(text, width) == clipped
-        assert sum(_cells(char) for char in clipped) <= width
+        assert len(clipped) <= width
 
-    def test_a_fullwidth_reason_fits_one_row(self, run):
+    def test_a_fullwidth_reason_is_clipped_by_the_screen(self, run):
         append(
             run,
             [
@@ -2603,14 +2617,18 @@ class TestTerminalView:
                 )
             ],
         )
-        # the reason is cut inside its fullwidth words
-        lines = render_lines(summarise_run(run, NOW), width=79)
-        assert any("Ｐｅｉｌｔａｌ" in line for line in lines)
+        # the reason reaches a screen whole, for it to clip at its edge;
+        # a plain line is cut inside its fullwidth words
+        summary = summarise_run(run, NOW)
+        assert any(
+            text.endswith("Ｋｒｅｄｆｅｌｄ ｌｅｔｔｅｒｓ")
+            for text, _ in render_rows(summary)
+        )
+        lines = render_lines(summary, width=79)
         assert any(
             "Ｐｅｉｌｔａｌ" in line and line.endswith("...") for line in lines
         )
-        for line in lines:
-            assert sum(_cells(char) for char in line) <= 79
+        assert all(len(line) <= 79 for line in lines)
 
     def test_it_shows_what_the_run_is_doing(self, summary):
         view = render_terminal(summary, width=200)
@@ -2927,25 +2945,20 @@ class TestServing:
         assert status == 404 and b"own" not in body
 
     def test_watch_serves_while_it_runs_and_stops(self, run):
-        out = io.StringIO()
         seen = []
 
         def between():
-            (url,) = set(
-                re.findall(r"http://127\.0\.0\.1:\d+/", out.getvalue())
-            )
+            shown = "\n".join(text for text, _ in screen.frames[-1][1])
+            (url,) = set(re.findall(r"http://127\.0\.0\.1:\d+/", shown))
             seen.append((url, self.fetch(url)[0]))
 
-        keys = ScriptedKeys([None, "q"], between=between)
+        screen = FakeScreen([None, "q"], between=between)
         watch(
             run,
             interval=0,
             serve="127.0.0.1:0",
-            out=out,
-            keys=keys,
+            screen=screen,
             clock=lambda: NOW,
-            size=lambda: (120, 60),
-            terminal=True,
         )
         assert [status for _, status in seen] == [200, 200]
         with pytest.raises(OSError):
@@ -3046,8 +3059,9 @@ class TestCommands:
 
     def test_the_help_and_the_hint_give_the_grammar(self, run):
         assert GRAMMAR in HELP[0]
-        _, output = _watch(run, ScriptedKeys(["q"]))
-        assert f"':' or Enter: {GRAMMAR}" in output
+        screen = FakeScreen(["q"])
+        _watch(run, screen)
+        assert f"':' or Enter: {GRAMMAR}" in screen.shown()[-1]
 
     def test_a_command_writes_its_request(self, run, summary):
         result = handle_command(
@@ -3177,6 +3191,7 @@ class ScriptedKeys:
         self.lines = list(lines)
         self.between = between
         self.prompts = []
+        self.waits = []
         self.entered = self.exited = False
 
     def __enter__(self):
@@ -3187,6 +3202,7 @@ class ScriptedKeys:
         self.exited = True
 
     def wait(self, timeout):
+        self.waits.append(timeout)
         if self.between is not None:
             self.between()
         key = self.keys.pop(0)
@@ -3199,16 +3215,47 @@ class ScriptedKeys:
         return self.lines.pop(0) if self.lines else None
 
 
-def _watch(run, keys, *, terminal=True, out=None, **options):
+class FakeScreen(ScriptedKeys):
+    """A terminal for the watch loop (monitor.Screen): keys and typed
+    lines from a script, as ScriptedKeys gives them, and each frame drawn,
+    as the window's size then and its rows. `window` (columns, rows) is
+    the size the window has; a test changes it, with a RESIZE key, to
+    resize the window. A repaint is kept among the frames as "repaint"."""
+
+    def __init__(self, keys, lines=(), between=None, window=(120, 60)):
+        super().__init__(keys, lines, between)
+        self.window = window
+        self.frames = []
+
+    def size(self):
+        return self.window
+
+    def draw(self, rows):
+        assert self.entered and not self.exited
+        self.frames.append((self.window, list(rows)))
+
+    def repaint(self):
+        self.frames.append("repaint")
+
+    def shown(self, frame=-1):
+        """The text of a frame's rows."""
+        return [text for text, _ in self.frames[frame][1]]
+
+
+def _watch(run, keys, *, out=None, **options):
+    """watch with `keys`: drawn on `keys` when it is a FakeScreen, and
+    printed to `out` otherwise."""
     out = out or io.StringIO()
+    if isinstance(keys, FakeScreen):
+        options["screen"] = keys
+    else:
+        options["keys"] = keys
+    options.setdefault("interval", 0)
     code = watch(
         run,
-        interval=0,
         out=out,
-        keys=keys,
         clock=lambda: NOW,
         size=lambda: (120, 60),
-        terminal=terminal,
         **options,
     )
     return code, out.getvalue()
@@ -3232,61 +3279,125 @@ class TestWatch:
         assert "waiting for" in out.getvalue()
         assert list(tmp_path.iterdir()) == []
 
-    def test_on_a_terminal_it_draws_in_place_until_q(self, run):
-        keys = ScriptedKeys([None, None, "q"])
-        code, output = _watch(run, keys)
-        assert code == 0 and keys.entered and keys.exited
-        # one whole view: the refreshes in which nothing changed write
-        # nothing
-        assert output.count(HOME) == 1
-        assert output.count(CLEAR_BELOW) == 1
-        assert output.endswith(SHOW_CURSOR + "\n")
+    def test_on_a_terminal_it_draws_each_refresh_until_q(self, run):
+        screen = FakeScreen([None, None, "q"])
+        code, output = _watch(run, screen, interval=2.5)
+        assert code == 0 and screen.entered and screen.exited
+        # each refresh draws the whole view; the screen sends what changed
+        assert len(screen.frames) == 3
+        assert screen.shown(0)[0] == (
+            "yizkr run 20260927T100000Z-4f2a9c  (ingest run, development "
+            "stage)"
+        )
+        # nothing is written to the output but through the screen
+        assert output == ""
+        # keys are waited for for the interval
+        assert screen.waits == [2.5] * 3
 
-    def test_lines_stop_short_of_the_last_column(self, run):
-        _, output = _watch(run, ScriptedKeys(["q"]))
-        lines = [
-            re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", line)
-            for line in output.split("\n")
-        ]
-        assert max(len(line) for line in lines) == 119
+    def test_the_view_fills_the_window_and_the_footer_keeps_the_bottom(
+        self, tmp_path
+    ):
+        """The view takes every row, however the run changes, the key hint
+        the bottom one and the served address the one above; nothing is
+        cut to a width, since the screen clips at its edge."""
+        run = record(tmp_path / "run")
+        documents = [CERT, POSTCARD, DIRECTORY, CARD]
+
+        def between():
+            if len(screen.frames) <= len(documents):
+                subject = documents[len(screen.frames) - 1]
+                append(run, [stage("started", 590, subject, "critique")])
+
+        keys = [None] * len(documents) + ["q"]
+        for window in [(30, 6), (120, 60)]:
+            screen = FakeScreen(keys, between=between, window=window)
+            _watch(run, screen, serve="127.0.0.1:0")
+            assert len(screen.frames) == len(documents) + 1
+            for size, rows in screen.frames:
+                assert len(rows) == size[1]
+                assert rows[-1][0].startswith("':' or Enter: pause")
+                assert rows[-2][0].startswith("serving the status page at")
+                assert rows[-3][0].startswith("status page: ")
+            assert max(len(text) for text, _ in rows) > 30
+        # the documents started show as they start
+        assert f"  {POSTCARD[:10]}" in "\n".join(screen.shown(2))
 
     def test_a_typed_command_goes_to_the_control_file(self, run):
-        keys = ScriptedKeys([":", "q"], lines=["pause stage critique slow"])
-        code, output = _watch(run, keys)
+        screen = FakeScreen([":", "q"], lines=["pause stage critique slow"])
+        code, _ = _watch(run, screen)
         assert code == 0
-        assert keys.prompts == ["command> "]
+        assert screen.prompts == ["command> "]
         requested = RunDir(run).control()
         assert requested.stopped(stage="critique") == "stage:critique paused"
-        # the next frame shows the request
-        assert "pause requested for stage:critique: now paused" in output
+        # the next frame shows the request, at once
+        assert len(screen.frames) == 2
+        assert screen.shown()[-2] == (
+            "pause requested for stage:critique: now paused"
+        )
+
+    def test_enter_opens_the_command_line_too(self, run):
+        for key in ("\n", "\r"):
+            screen = FakeScreen([key, "q"], lines=["help"])
+            _watch(run, screen)
+            assert screen.prompts == ["command> "]
+            assert screen.shown()[-2].startswith("commands: pause")
 
     def test_an_abort_typed_in_the_view_is_confirmed(self, run):
-        keys = ScriptedKeys(
+        screen = FakeScreen(
             [":", ":", "q"], lines=["abort", "n", "abort", "y"]
         )
-        _watch(run, keys)
+        _watch(run, screen)
         assert RunDir(run).control().stopped() == "run aborted"
-        assert len(keys.prompts) == 4 and "[y/N]" in keys.prompts[1]
+        assert len(screen.prompts) == 4 and "[y/N]" in screen.prompts[1]
+        # asked on the screen's command line, as the command was
+        assert screen.prompts[3] == screen.prompts[1]
 
     def test_ctrl_c_leaves_the_terminal_as_it_was(self, run):
-        keys = ScriptedKeys([KeyboardInterrupt()])
-        code, output = _watch(run, keys)
-        assert code == 0 and keys.exited
-        assert output.endswith(SHOW_CURSOR + "\n")
+        screen = FakeScreen([KeyboardInterrupt()])
+        code, _ = _watch(run, screen)
+        assert code == 0 and screen.exited
 
-    def test_the_hint_names_only_keys_that_work(self, run):
-        _, interactive = _watch(run, ScriptedKeys(["q"]))
-        assert "':' or Enter: pause|resume|abort" in interactive
+    def test_ctrl_l_repaints_the_whole_screen(self, run):
+        screen = FakeScreen([monitor.REPAINT, None, "q"])
+        _watch(run, screen)
+        assert monitor.REPAINT == "\x0c"
+        # the repaint comes before the next frame, which then sends it all
+        assert [frame == "repaint" for frame in screen.frames] == [
+            False,
+            True,
+            False,
+            False,
+        ]
 
-        class Unread(monitor.NoKeys):
-            """A terminal to draw on, but no keys to read."""
+    def test_a_resize_draws_the_view_at_the_new_size_at_once(self, run):
+        def between():
+            if len(screen.waits) == 2:
+                screen.window = (90, 20)
 
-            def wait(self, timeout):
-                raise KeyboardInterrupt
+        screen = FakeScreen(
+            [None, monitor.RESIZE, "q"], between=between, window=(120, 60)
+        )
+        _watch(run, screen, interval=30)
+        assert [size for size, _ in screen.frames] == [
+            (120, 60),
+            (120, 60),
+            (90, 20),
+        ]
+        rows = screen.frames[-1][1]
+        assert len(rows) == 20 and rows[-1][0].startswith("':' or Enter")
+        # the short window shows the short view
+        assert not any("reused     transcription" in text for text, _ in rows)
 
-        _, drawn = _watch(run, Unread())
-        assert "Ctrl-C: quit" in drawn
-        assert "':' or Enter" not in drawn
+    def test_the_hint_names_the_keys(self, run):
+        screen = FakeScreen(["q"])
+        _watch(run, screen)
+        assert screen.shown()[-1] == f"':' or Enter: {GRAMMAR}   q: quit"
+        assert screen.frames[0][1][-1][1] == "dim"
+
+    def test_the_help_is_the_footer_message(self, run):
+        screen = FakeScreen(["?", "q"])
+        _watch(run, screen)
+        assert screen.shown()[-2].startswith("commands: pause|resume|abort")
 
     def test_off_a_terminal_it_prints_only_when_the_run_changes(self, run):
         waits = []
@@ -3297,7 +3408,7 @@ class TestWatch:
                 append(run, [stage("done", 500, POSTCARD, "critique")])
 
         keys = ScriptedKeys([None, None, None, "q"], between=between)
-        _, output = _watch(run, keys, terminal=False)
+        _, output = _watch(run, keys)
         assert "\x1b" not in output
         # the first view, and one after the run changed; no reprint for
         # the waits in which nothing happened
@@ -3357,438 +3468,596 @@ class TestWatch:
         assert "status page not written" in out.getvalue()
 
 
-class Writes(io.StringIO):
-    """An output that keeps each write apart: one per frame drawn."""
+class FakeWindow:
+    """A curses window as _CursesScreen uses it: each call kept, in order,
+    in its FakeCurses's `calls`, and keys from a script. A key of None is
+    no key before the timeout (curses.error, as get_wch raises it)."""
 
-    def __init__(self):
-        super().__init__()
-        self.writes = []
+    def __init__(self, curses, keys, size):
+        self.curses = curses
+        self.keys = list(keys)
+        self.rows, self.columns = size
 
-    def write(self, text):
-        self.writes.append(text)
-        return super().write(text)
+    def __getattr__(self, name):
+        def call(*args):
+            self.curses.calls.append((name, *args))
 
+        return call
 
-_SEQUENCE = re.compile(r"\x1b\[([0-9;?]*)([A-Za-z])")
+    def getmaxyx(self):
+        return self.rows, self.columns
 
+    def insstr(self, *args):
+        self.curses.calls.append(("insstr", *args))
+        if self.curses.refuse_text:
+            raise self.curses.error("the text does not fit")
 
-def _cells(char):
-    """The cells a terminal gives `char`: 2 for an East Asian wide or
-    fullwidth character, 0 for a combining mark, 1 for any other."""
-    if unicodedata.category(char) in ("Mn", "Me"):
-        return 0
-    return 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
-
-
-class FakeTerminal:
-    """The screen a terminal of `columns` by `rows` shows for what is
-    written to it: the cursor moves (clamped to the screen), line and
-    screen clears, and text the view writes; styles (and showing or
-    hiding the cursor) change nothing on it. Text wraps as a terminal's
-    does: a character written in the last column leaves the cursor there,
-    and the next character starts the next row. A wide character takes
-    two cells, and moves to the next row when only one is left; a
-    combining mark joins the character before it. A newline moves to the
-    start of the next row, as a terminal's output processing makes it do,
-    and on the bottom row scrolls the screen up a row."""
-
-    def __init__(self, rows, columns=40):
-        self.rows, self.columns = rows, columns
-        self.grid = [self._blank() for _ in range(rows)]
-        self.row = self.column = 0
-        self.scrolled = 0
-
-    def _blank(self):
-        return [" "] * self.columns
-
-    def _down(self):
-        if self.row == self.rows - 1:
-            self.grid = [*self.grid[1:], self._blank()]
-            self.scrolled += 1
-        else:
-            self.row += 1
-
-    def feed(self, text):
-        position = 0
-        while position < len(text):
-            found = _SEQUENCE.match(text, position)
-            if found:
-                self._control(*found.groups())
-                position = found.end()
-                continue
-            char = text[position]
-            position += 1
-            if char == "\n":
-                self._down()
-                self.column = 0
-            elif char == "\r":
-                self.column = 0
-            else:
-                self._put(char)
-
-    def _put(self, char):
-        cells = _cells(char)
-        if cells == 0:
-            # on the cell before the cursor's
-            row, column = self.row, max(0, self.column - 1)
-            while column > 0 and self.grid[row][column] == "":
-                column -= 1
-            self.grid[row][column] += char
-            return
-        if self.column + cells > self.columns:
-            self._down()
-            self.column = 0
-        line = self.grid[self.row]
-        line[self.column] = char
-        if cells == 2:
-            line[self.column + 1] = ""
-        self.column += cells
-
-    def _control(self, arguments, final):
-        # a cursor waiting past the last column clears from that column
-        column = min(self.column, self.columns - 1)
-        if final == "H":
-            row, _, at = arguments.partition(";")
-            self.row = min(max(int(row or 1), 1), self.rows) - 1
-            self.column = min(max(int(at or 1), 1), self.columns) - 1
-        elif final == "K":
-            line = self.grid[self.row]
-            line[column:] = [" "] * (self.columns - column)
-        elif final == "J" and arguments == "2":
-            self.grid = [self._blank() for _ in self.grid]
-        elif final == "J":
-            line = self.grid[self.row]
-            line[column:] = [" "] * (self.columns - column)
-            for below in range(self.row + 1, self.rows):
-                self.grid[below] = self._blank()
-
-    def text(self):
-        lines = ["".join(line).rstrip() for line in self.grid]
-        while lines and not lines[-1]:
-            lines.pop()
-        return lines
+    def get_wch(self):
+        self.curses.calls.append(("get_wch",))
+        key = self.keys.pop(0) if self.keys else None
+        if key is None:
+            raise self.curses.error("no input")
+        if isinstance(key, BaseException):
+            raise key
+        return key
 
 
-def _plain(lines):
-    return [re.sub(r"\x1b\[[0-9;]*m", "", line).rstrip() for line in lines]
+class FakeCurses:
+    """The curses module as _CursesScreen and _curses_styles use it."""
 
+    class error(Exception):  # noqa: N801 - curses' own name
+        pass
 
-class TestDifferentialRedraw:
-    """On a terminal, a refresh writes only the lines that changed."""
+    KEY_RESIZE, KEY_ENTER, KEY_BACKSPACE, KEY_UP = 410, 343, 263, 259
+    A_BOLD, A_DIM = 1 << 21, 1 << 20
+    COLOR_BLACK, COLOR_RED, COLOR_GREEN, COLOR_YELLOW = 0, 1, 2, 3
 
-    SIZE = (40, 20)
+    def __init__(
+        self,
+        keys=(),
+        *,
+        size=(24, 80),
+        colors=True,
+        default_colors=True,
+        fail=None,
+    ):
+        self.calls = []
+        self.window = FakeWindow(self, keys, size)
+        self.colors = colors
+        self.default_colors = default_colors
+        self.fail = fail
+        self.refuse_text = False
+        self.cup = b"\x1b[%i%p1%d;%p2%dH"
 
-    def test_the_first_frame_is_drawn_whole(self):
-        screen = monitor._Screen()
-        lines = ["Sebastian Löbig", "", "Hildegard Laudler"]
-        assert screen.frame(lines, self.SIZE) == monitor._frame(lines, True)
+    def _call(self, name, *args):
+        self.calls.append((name, *args))
+        if name == self.fail:
+            raise self.error(f"{name} failed")
 
-    def test_an_unchanged_frame_writes_nothing(self):
-        screen = monitor._Screen()
-        screen.frame(["Sebastian Löbig", "Hildegard Laudler"], self.SIZE)
-        assert (
-            screen.frame(["Sebastian Löbig", "Hildegard Laudler"], self.SIZE)
-            == ""
+    def initscr(self):
+        self._call("initscr")
+        return self.window
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return lambda *args, **keywords: self._call(
+            name, *args, *keywords.items()
         )
 
-    def test_a_changed_line_is_written_at_its_row(self):
-        screen = monitor._Screen()
-        screen.frame(["calls: 3", "Peiltal", "done: 1"], self.SIZE)
-        drawn = screen.frame(["calls: 4", "Peiltal", "done: 2"], self.SIZE)
-        assert drawn == (
-            "\x1b[1;1Hcalls: 4\x1b[K"
-            "\x1b[3;1Hdone: 2\x1b[K"
-            # the cursor waits below the view, where a prompt opens
-            "\x1b[4;1H"
-        )
+    def has_colors(self):
+        return self.colors
 
-    def test_a_style_change_is_a_change(self):
-        screen = monitor._Screen()
-        screen.frame(["\x1b[33mKredfeld\x1b[0m"], self.SIZE)
-        drawn = screen.frame(["\x1b[31mKredfeld\x1b[0m"], self.SIZE)
-        assert drawn == "\x1b[1;1H\x1b[31mKredfeld\x1b[0m\x1b[K\x1b[2;1H"
+    def use_default_colors(self):
+        self._call("use_default_colors")
+        if not self.default_colors:
+            raise self.error("no default colours")
 
-    def test_a_shrinking_frame_clears_its_old_tail(self):
-        screen = monitor._Screen()
-        screen.frame(
-            ["Flörburg", "Brunnenring", "Wasserallee", "Angerring"], self.SIZE
-        )
-        drawn = screen.frame(["Flörburg", "Stupfield"], self.SIZE)
-        assert drawn == "\x1b[2;1HStupfield\x1b[K\x1b[3;1H" + CLEAR_BELOW
-        # only the tail changed: it is cleared all the same
-        assert screen.frame(["Flörburg"], self.SIZE) == (
-            "\x1b[2;1H" + CLEAR_BELOW
-        )
+    def color_pair(self, number):
+        return number << 8
 
-    def test_a_growing_frame_writes_its_new_lines(self):
-        screen = monitor._Screen()
-        screen.frame(["Flörburg"], self.SIZE)
-        drawn = screen.frame(["Flörburg", "Brunnenring"], self.SIZE)
-        assert drawn == "\x1b[2;1HBrunnenring\x1b[K\x1b[3;1H"
+    def tigetstr(self, name):
+        return self.cup if name == "cup" else None
 
-    def test_a_resize_draws_the_whole_frame(self):
-        screen = monitor._Screen()
-        lines = ["Sebastian Löbig", "Hildegard Laudler"]
-        screen.frame(lines, self.SIZE)
-        assert screen.frame(lines, (60, 20)) == monitor._frame(lines, False)
-        assert screen.frame(lines, (60, 20)) == ""
-        assert screen.frame(lines, (60, 30)) == monitor._frame(lines, False)
+    def names(self):
+        return [call[0] for call in self.calls]
 
-    def test_forgetting_the_screen_draws_the_whole_frame(self):
-        screen = monitor._Screen()
-        lines = ["Sebastian Löbig", "Hildegard Laudler"]
-        screen.frame(lines, self.SIZE)
-        screen.forget()
-        assert screen.frame(lines, self.SIZE) == monitor._frame(lines, False)
-        assert screen.frame(lines, self.SIZE) == ""
 
-    @pytest.mark.parametrize("size", [(40, 20), (12, 6)])
-    def test_the_screen_always_shows_the_latest_frame(self, size):
-        """Whatever frames follow each other, the terminal ends up showing
-        the latest, as a whole redraw of it would, with the cursor below
-        it: with frames as tall as the view gets (a row short of the
-        window) and lines as wide (a column short of it), wide and
-        combining characters among them."""
-        columns, rows = size
-        words = [
-            "Peiltal",
-            "Kredfeld",
-            "Rekau",
-            "Koshnovka",
-            "",
-            "Калдовское",
-            "Snylsjum",
-            # fullwidth forms, two columns each
-            "Ｐｅｉｌｔａｌ",
-            "Ｋｒｅｄｆｅｌｄ",
-            # a combining diaeresis
-            "Lo\u0308big",
+@pytest.fixture
+def fake_locale(monkeypatch):
+    """locale.setlocale as the monitor calls it: each call kept, the
+    environment's character type "C.UTF-8", the one before "C"."""
+    calls = []
+
+    def setlocale(category, value=None):
+        calls.append((category, value))
+        return "C" if value is None else "C.UTF-8"
+
+    monkeypatch.setattr(monitor.locale, "setlocale", setlocale)
+    return calls
+
+
+class TestCursesScreen:
+    """_CursesScreen, on a fake curses module: what it asks of curses."""
+
+    def test_it_opens_and_closes_the_screen(self, fake_locale):
+        curses = FakeCurses()
+        screen = monitor._CursesScreen(False, curses=curses)
+        with screen as entered:
+            assert entered is screen and screen.window is curses.window
+            assert curses.calls == [
+                ("initscr",),
+                ("noecho",),
+                ("cbreak",),
+                ("keypad", True),
+                ("curs_set", 0),
+            ]
+            # the environment's character type, for wide characters
+            assert fake_locale == [
+                (monitor.locale.LC_CTYPE, None),
+                (monitor.locale.LC_CTYPE, ""),
+            ]
+            del curses.calls[:]
+        assert curses.calls == [
+            ("keypad", False),
+            ("nocbreak",),
+            ("echo",),
+            ("curs_set", 1),
+            ("endwin",),
         ]
-        chooser = random.Random(1863)
-        screen = monitor._Screen()
-        terminal = FakeTerminal(rows=rows, columns=columns)
+        # the one before, put back
+        assert fake_locale[-1] == (monitor.locale.LC_CTYPE, "C")
+        assert screen.window is None
 
-        def line():
-            # a word, or as long as the view's widest line; each cut to
-            # the view's width, as render_lines cuts it
-            many = 1 if chooser.random() < 0.5 else columns
-            text = " ".join(chooser.choice(words) for _ in range(many))
-            return monitor._clip(text, columns - 1)
+    def test_the_screen_closes_however_the_loop_ends(self, fake_locale):
+        curses = FakeCurses()
+        with (
+            pytest.raises(KeyboardInterrupt),
+            monitor._CursesScreen(False, curses=curses),
+        ):
+            raise KeyboardInterrupt
+        assert curses.names()[-1] == "endwin"
+        assert fake_locale[-1] == (monitor.locale.LC_CTYPE, "C")
 
-        for _ in range(300):
-            count = (
-                rows - 1 if chooser.random() < 0.3 else chooser.randint(1, 12)
+    @pytest.mark.parametrize("fail", ["cbreak", "start_color"])
+    def test_a_screen_that_fails_to_open_is_closed(self, fake_locale, fail):
+        curses = FakeCurses(fail=fail)
+        with pytest.raises(curses.error):
+            monitor._CursesScreen(True, curses=curses).__enter__()
+        assert curses.names()[-1] == "endwin"
+        assert fake_locale[-1] == (monitor.locale.LC_CTYPE, "C")
+
+    def test_a_terminal_curses_cannot_start_on_is_left_alone(
+        self, fake_locale
+    ):
+        curses = FakeCurses(fail="initscr")
+        with pytest.raises(curses.error):
+            monitor._CursesScreen(True, curses=curses).__enter__()
+        assert curses.names() == ["initscr"]
+        assert fake_locale[-1] == (monitor.locale.LC_CTYPE, "C")
+
+    def test_rows_are_drawn_from_the_top_with_their_styles(self, fake_locale):
+        curses = FakeCurses(size=(3, 40))
+        with monitor._CursesScreen(True, curses=curses) as screen:
+            del curses.calls[:]
+            screen.draw(
+                [
+                    ("yizkr run", "title"),
+                    ("", ""),
+                    ("kind:gedcom ABORTED", "bad"),
+                    # below the window: not drawn
+                    ("':' or Enter", "dim"),
+                ]
             )
-            lines = [line() for _ in range(min(count, rows - 1))]
-            terminal.feed(screen.frame(lines, size))
-            whole = FakeTerminal(rows=rows, columns=columns)
-            whole.feed(monitor._frame(lines, True))
-            shown = _plain(lines)
-            while shown and not shown[-1]:
-                shown.pop()
-            assert terminal.text() == whole.text() == shown
-            assert terminal.grid == whole.grid
-            assert (terminal.row, terminal.column) == (len(lines), 0)
-            assert terminal.scrolled == 0
+        assert curses.calls[:4] == [
+            ("erase",),
+            ("insstr", 0, 0, "yizkr run", curses.A_BOLD),
+            ("insstr", 2, 0, "kind:gedcom ABORTED", 3 << 8),
+            ("refresh",),
+        ]
 
-    def _watched(self, run, keys, size=lambda: (120, 60), **options):
-        out = Writes()
-        watch(
-            run,
-            interval=0,
-            out=out,
-            keys=keys,
-            clock=lambda: NOW,
-            size=size,
-            terminal=True,
-            **options,
+    def test_a_row_curses_refuses_is_left_out(self, fake_locale):
+        curses = FakeCurses()
+        with monitor._CursesScreen(False, curses=curses) as screen:
+            curses.refuse_text = True
+            screen.draw([("Ｐｅｉｌｔａｌ", ""), ("Kredfeld", "")])
+            assert ("insstr", 1, 0, "Kredfeld", 0) in curses.calls
+            assert curses.calls[-1] == ("refresh",)
+
+    def test_ctrl_l_repaints_the_whole_screen(self, fake_locale):
+        curses = FakeCurses()
+        with monitor._CursesScreen(False, curses=curses) as screen:
+            screen.repaint()
+            assert curses.calls[-1] == ("clearok", True)
+
+    def test_its_size_is_the_window_s(self, fake_locale):
+        with monitor._CursesScreen(
+            False, curses=FakeCurses(size=(30, 100))
+        ) as screen:
+            assert screen.size() == (100, 30)
+
+    def test_keys_are_waited_for_for_the_interval(self, fake_locale):
+        keys = [
+            "q",
+            None,
+            FakeCurses.KEY_RESIZE,
+            FakeCurses.KEY_ENTER,
+            "\x0c",
+            FakeCurses.KEY_UP,
+            "П",
+        ]
+        curses = FakeCurses(keys)
+        with monitor._CursesScreen(False, curses=curses) as screen:
+            got = [screen.wait(timeout) for timeout in (2.5, 0.05, 0, 2, 2)]
+            got += [screen.wait(2), screen.wait(2)]
+        assert got == ["q", None, monitor.RESIZE, "\n", "\x0c", None, "П"]
+        timeouts = [call[1] for call in curses.calls if call[0] == "timeout"]
+        assert timeouts == [2500, 50, 0, 2000, 2000, 2000, 2000]
+
+    def test_a_command_is_typed_on_the_bottom_row(self, fake_locale):
+        keys = [
+            *"pausx",
+            FakeCurses.KEY_BACKSPACE,
+            "e",
+            FakeCurses.KEY_RESIZE,
+            "\x1b",
+            *" stage critique",
+            "\x7f",
+            "e",
+            "\n",
+        ]
+        curses = FakeCurses(keys, size=(24, 80))
+        with monitor._CursesScreen(False, curses=curses) as screen:
+            del curses.calls[:]
+            assert screen.prompt("command> ") == "pause stage critique"
+        # blocking, with the cursor shown, then hidden again
+        assert curses.calls[:2] == [("timeout", -1), ("curs_set", 1)]
+        assert ("curs_set", 0) in curses.calls
+        rows = [call[1:] for call in curses.calls if call[0] == "addstr"]
+        assert rows[0] == (23, 0, "command> ")
+        assert rows[5] == (23, 0, "command> pausx")
+        assert rows[6] == (23, 0, "command> paus")
+        assert rows[-1] == (23, 0, "command> pause stage critique")
+        assert ("clrtoeol",) in curses.calls
+
+    def test_a_long_command_line_shows_its_end(self, fake_locale):
+        keys = [*("Koshnovka " * 3), "\r"]
+        curses = FakeCurses(keys, size=(24, 20))
+        with monitor._CursesScreen(False, curses=curses) as screen:
+            assert (
+                screen.prompt("command> ") == "Koshnovka Koshnovka Koshnovka"
+            )
+        rows = [call[3] for call in curses.calls if call[0] == "addstr"]
+        # a column short of the window's width, for the cursor
+        assert rows[-1] == ("command> " + "Koshnovka " * 3)[-19:]
+        assert all(len(row) <= 19 for row in rows)
+
+    def test_an_empty_line_or_a_closed_input_types_nothing(self, fake_locale):
+        curses = FakeCurses(["\n", " ", " ", "\n", "a"])
+        with monitor._CursesScreen(False, curses=curses) as screen:
+            assert screen.prompt("command> ") is None
+            assert screen.prompt("command> ") is None
+            # the input ends mid-line
+            assert screen.prompt("command> ") is None
+        assert curses.calls.count(("curs_set", 0)) == 4
+
+    def test_a_command_line_is_cut_at_its_limit(
+        self, fake_locale, monkeypatch
+    ):
+        monkeypatch.setattr(monitor, "PROMPT_LIMIT", 5)
+        curses = FakeCurses([*"Kredfeld", "\n"])
+        with monitor._CursesScreen(False, curses=curses) as screen:
+            assert screen.prompt("command> ") == "Kredf"
+
+
+class TestCursesStyles:
+    def test_colours_come_from_colour_pairs(self):
+        curses = FakeCurses()
+        styles = monitor._curses_styles(curses, True)
+        assert styles == {
+            "title": curses.A_BOLD,
+            "head": curses.A_BOLD,
+            "dim": curses.A_DIM,
+            "good": 1 << 8,
+            "warn": 2 << 8,
+            "bad": 3 << 8,
+        }
+        # on the terminal's own background
+        assert [call for call in curses.calls if call[0] == "init_pair"] == [
+            ("init_pair", 1, curses.COLOR_GREEN, -1),
+            ("init_pair", 2, curses.COLOR_YELLOW, -1),
+            ("init_pair", 3, curses.COLOR_RED, -1),
+        ]
+
+    def test_without_default_colours_the_background_is_black(self):
+        curses = FakeCurses(default_colors=False)
+        monitor._curses_styles(curses, True)
+        assert ("init_pair", 3, curses.COLOR_RED, curses.COLOR_BLACK) in (
+            curses.calls
         )
-        return out
 
-    def test_the_served_address_is_written_once(self, tmp_path):
-        run = record(tmp_path / "run")
-        documents = [CERT, POSTCARD, DIRECTORY, CARD]
-        refreshes = []
+    def test_a_terminal_without_colours_gets_none(self):
+        curses = FakeCurses(colors=False)
+        assert monitor._curses_styles(curses, True) == {
+            "title": curses.A_BOLD,
+            "head": curses.A_BOLD,
+            "dim": curses.A_DIM,
+        }
+        assert curses.calls == []
 
-        def between():
-            refreshes.append(None)
-            if len(refreshes) <= len(documents):
-                subject = documents[len(refreshes) - 1]
-                append(run, [stage("done", 590, subject, "critique")])
-
-        keys = ScriptedKeys([None] * len(documents) + ["q"], between=between)
-        out = self._watched(run, keys, serve="127.0.0.1:0")
-        frames = out.writes[:-1]  # the last write leaves the view
-        assert len(frames) == len(documents) + 1
-        assert HOME in frames[0]
-        # each refresh after the first writes only what changed: no
-        # whole view, and never the address
-        for frame in frames[1:]:
-            assert HOME not in frame and "yizkr run" not in frame
-        assert (
-            len(re.findall(r"http://127\.0\.0\.1:\d+/", out.getvalue())) == 1
-        )
-
-    def test_a_prompt_brings_a_whole_redraw(self, run):
-        keys = ScriptedKeys([":", None, "q"], lines=[None])
-        out = self._watched(run, keys)
-        assert keys.prompts == ["command> "]
-        # the first view, the view after the prompt, and nothing after
-        assert [frame.count(HOME) for frame in out.writes[:-1]] == [1, 1]
-
-    def test_a_confirmed_command_brings_a_whole_redraw(self, run):
-        keys = ScriptedKeys([":", None, "q"], lines=["abort", "n"])
-        out = self._watched(run, keys)
-        assert len(keys.prompts) == 2
-        assert [frame.count(HOME) for frame in out.writes[:-1]] == [1, 1]
-
-    def test_the_help_line_is_written_in_the_footer(self, run):
-        """The help is the footer's message line: it writes over nothing,
-        so it brings no whole redraw."""
-        keys = ScriptedKeys(["?", None, "q"])
-        out = self._watched(run, keys)
-        frames = out.writes[:-1]
-        assert [frame.count(HOME) for frame in frames] == [1, 0]
-        assert "commands: pause|resume|abort" in frames[1]
-
-    def test_ctrl_l_brings_a_whole_redraw(self, run):
-        keys = ScriptedKeys([monitor.REPAINT, None, "q"])
-        out = self._watched(run, keys)
-        assert monitor.REPAINT == "\x0c"
-        assert [frame.count(HOME) for frame in out.writes[:-1]] == [1, 1]
-
-    def test_continuing_after_a_stop_brings_a_whole_redraw(self, run):
-        """After Ctrl-Z the shell writes over the view; `fg` sends SIGCONT,
-        and the next refresh draws the whole view."""
-        signal = pytest.importorskip("signal")
-        if not hasattr(signal, "SIGCONT"):
-            pytest.skip("no SIGCONT here")
-        before = signal.getsignal(signal.SIGCONT)
-        waits = []
-
-        def between():
-            waits.append(None)
-            if len(waits) == 2:
-                os.kill(os.getpid(), signal.SIGCONT)
-
-        keys = ScriptedKeys([None, None, "q"], between=between)
-        out = self._watched(run, keys)
-        # the first view; nothing at the unchanged refresh; the whole view
-        # after the signal
-        assert [frame.count(HOME) for frame in out.writes[:-1]] == [1, 1]
-        # the handler before the monitor's is back
-        assert signal.getsignal(signal.SIGCONT) == before
-
-    def test_the_view_is_a_row_short_of_the_window(self, tmp_path):
-        """The view takes every row but the last, which the cursor waits
-        on: the screen never scrolls, and the key hint keeps the row above
-        the last however the run changes."""
-        run = record(tmp_path / "run")
-        documents = [CERT, POSTCARD, DIRECTORY, CARD]
-        refreshes = []
-
-        def between():
-            refreshes.append(None)
-            if len(refreshes) <= len(documents):
-                subject = documents[len(refreshes) - 1]
-                append(run, [stage("done", 590, subject, "critique")])
-
-        columns, rows = 30, 6
-        keys = ScriptedKeys([None] * len(documents) + ["q"], between=between)
-        out = self._watched(
-            run, keys, size=lambda: (columns, rows), serve="127.0.0.1:0"
-        )
-        frames = out.writes[:-1]
-        assert frames[0].startswith(HIDE_CURSOR + CLEAR_SCREEN + HOME)
-        assert frames[0].count("\n") == rows - 1
-        terminal = FakeTerminal(rows=rows, columns=columns)
-        for frame in frames:
-            terminal.feed(frame)
-            assert terminal.scrolled == 0
-            assert (terminal.row, terminal.column) == (rows - 1, 0)
-            shown = ["".join(line).rstrip() for line in terminal.grid]
-            assert shown[rows - 2].startswith("':' or Enter")
-            assert shown[rows - 3].startswith("serving the status")
-            assert shown[rows - 1] == ""
-
-    def test_a_resize_brings_a_whole_redraw(self, run):
-        sizes = iter([(120, 60), (120, 60), (90, 60), (90, 60)])
-        keys = ScriptedKeys([None, None, None, "q"])
-        out = self._watched(run, keys, size=lambda: next(sizes))
-        assert [frame.count(HOME) for frame in out.writes[:-1]] == [1, 1]
+    def test_no_colour_asked_for_is_no_style(self):
+        curses = FakeCurses()
+        assert monitor._curses_styles(curses, False) == {}
+        assert curses.calls == []
 
 
-class TestTerminalKeys:
-    """On a pseudo-terminal: no real terminal is needed."""
+class Tty(io.StringIO):
+    """A stream that says it is a terminal."""
 
-    def test_keys_are_read_without_enter_and_the_terminal_restored(self):
+    def isatty(self):
+        return True
+
+    def fileno(self):
+        return 1
+
+
+class TestDefaultScreen:
+    """Which output gets curses: the standard output, when it and the
+    standard input are a terminal that can move its cursor."""
+
+    @pytest.fixture
+    def terminal(self, monkeypatch):
+        """A fake curses, and terminals for the standard input and output:
+        set in the test's call, since pytest's capture sets the standard
+        streams again between a test's setup and its call."""
+        curses = FakeCurses()
+        monkeypatch.setitem(sys.modules, "curses", curses)
+        monkeypatch.delenv("NO_COLOR", raising=False)
+
+        def ttys():
+            monkeypatch.setattr(sys, "stdin", Tty())
+            monkeypatch.setattr(sys, "stdout", Tty())
+            return curses
+
+        return ttys
+
+    def test_a_terminal_gets_curses(self, terminal):
+        terminal = terminal()
+        screen = monitor._default_screen(sys.stdout)
+        assert isinstance(screen, monitor._CursesScreen)
+        assert screen.curses is terminal and screen.color
+        assert ("setupterm",) in [call[:1] for call in terminal.calls]
+
+    def test_no_color_asks_for_no_colours(self, terminal, monkeypatch):
+        terminal()
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert not monitor._default_screen(sys.stdout).color
+
+    def test_another_output_gets_none(self, terminal, monkeypatch):
+        terminal()
+        assert monitor._default_screen(sys.stdout) is not None
+        assert monitor._default_screen(Tty()) is None
+        monkeypatch.setattr(sys, "stdout", io.StringIO())
+        assert monitor._default_screen(sys.stdout) is None
+        monkeypatch.setattr(sys, "stdout", Tty())
+        monkeypatch.setattr(sys, "stdin", io.StringIO())
+        assert monitor._default_screen(sys.stdout) is None
+
+    def test_a_terminal_that_cannot_move_its_cursor_gets_none(self, terminal):
+        terminal = terminal()
+        assert monitor._default_screen(sys.stdout) is not None
+        terminal.cup = None
+        assert monitor._default_screen(sys.stdout) is None
+
+    def test_a_terminal_curses_does_not_know_gets_none(self, terminal):
+        terminal = terminal()
+        assert monitor._default_screen(sys.stdout) is not None
+        terminal.fail = "setupterm"
+        assert monitor._default_screen(sys.stdout) is None
+
+    def test_without_curses_there_is_none(self, terminal, monkeypatch):
+        terminal()
+        assert monitor._default_screen(sys.stdout) is not None
+        monkeypatch.setitem(sys.modules, "curses", None)
+        assert monitor._default_screen(sys.stdout) is None
+
+    def test_watch_draws_on_it_unless_once(self, terminal, run, monkeypatch):
+        opened = []
+
+        class Opened(FakeScreen):
+            def __init__(self, color):
+                super().__init__(["q"])
+                opened.append(self)
+
+        monkeypatch.setattr(monitor, "_CursesScreen", Opened)
+        terminal()
+        # a screen, or the loop below would never read its 'q'
+        assert isinstance(monitor._default_screen(sys.stdout), Opened)
+        del opened[:]
+        assert watch(run, interval=0, clock=lambda: NOW) == 0
+        (screen,) = opened
+        assert screen.frames and screen.exited
+        watch(run, once=True, clock=lambda: NOW)
+        assert len(opened) == 1
+        # what --once printed
+        assert sys.stdout.getvalue().startswith("yizkr run")
+
+
+# what the child process runs: watch on the pseudo-terminal it is given as
+# its standard input and output, which it takes as its controlling
+# terminal, so that a resize signals it as a terminal does
+CHILD = """
+import fcntl, sys, termios
+fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+from yizkr.pipeline.monitor import main
+sys.exit(main(sys.argv[1:]))
+"""
+
+
+class PseudoTerminal:
+    """A child running `watch` on a pseudo-terminal of `columns` by
+    `rows`, and the bytes it writes there, read as they come."""
+
+    def __init__(self, run, *args, term="xterm", columns=100, rows=30):
         pty = pytest.importorskip("pty")
-        termios = pytest.importorskip("termios")
-        leader, follower = pty.openpty()
-        try:
-            with open(follower, closefd=False) as stream:
-                before = termios.tcgetattr(follower)
-                out = io.StringIO()
-                with monitor.TerminalKeys(stream, out) as keys:
-                    # a key arrives without Enter: the line is not buffered;
-                    # it is written before the wait, so the wait returns at
-                    # once
-                    os.write(leader, b"q")
-                    assert keys.wait(HANG_GUARD) == "q"
-                    # a prompt takes a whole line, and returns to single keys
-                    os.write(leader, b"pause stage critique\n")
-                    assert keys.prompt("command> ") == "pause stage critique"
-                    # on the row the cursor waits on, below the view: no
-                    # newline scrolls the view's top line away
-                    assert out.getvalue() == (
-                        SHOW_CURSOR
-                        + "\r"
-                        + CLEAR_LINE
-                        + "command> "
-                        + HIDE_CURSOR
-                    )
-                    os.write(leader, b":")
-                    assert keys.wait(HANG_GUARD) == ":"
-                assert termios.tcgetattr(follower) == before
-        finally:
-            os.close(leader)
-            os.close(follower)
+        self.termios = pytest.importorskip("termios")
+        self.fcntl = pytest.importorskip("fcntl")
+        self.leader, self.follower = pty.openpty()
+        self.resize(columns, rows)
+        self.before = self.termios.tcgetattr(self.follower)
+        self.data = b""
+        self.changed = threading.Condition()
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("LC_") and key != "NO_COLOR"
+        }
+        env.update(TERM=term, LANG="C.UTF-8")
+        self.child = subprocess.Popen(
+            [sys.executable, "-c", CHILD, "watch", str(run), *args],
+            stdin=self.follower,
+            stdout=self.follower,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+            env=env,
+        )
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.reader.start()
 
-    def test_no_key_is_read_before_one_is_typed(self):
-        """A wait of 0 is a poll: with nothing typed it returns at once,
-        with no key."""
-        pty = pytest.importorskip("pty")
-        leader, follower = pty.openpty()
-        try:
-            with (
-                open(follower, closefd=False) as stream,
-                monitor.TerminalKeys(stream, io.StringIO()) as keys,
-            ):
-                assert keys.wait(0) is None
-        finally:
-            os.close(leader)
-            os.close(follower)
+    def _read(self):
+        while True:
+            try:
+                chunk = os.read(self.leader, 65536)
+            except OSError:
+                chunk = b""
+            with self.changed:
+                self.data += chunk
+                self.changed.notify_all()
+            if not chunk:
+                return
 
-    def test_a_closed_input_waits_out_the_interval(self):
-        """At the end of its input there is no key to wait for: the
-        interval is slept instead, on the sleep it is given, so the loop
-        does not spin."""
-        reading, writing = os.pipe()
-        os.close(writing)
-        slept = []
-        try:
-            with open(reading, closefd=False) as stream:
-                keys = monitor.TerminalKeys(
-                    stream, io.StringIO(), sleep=slept.append
-                )
-                assert keys.wait(HANG_GUARD) is None
-        finally:
-            os.close(reading)
-        assert slept == [HANG_GUARD]
+    def resize(self, columns, rows):
+        size = struct.pack("HHHH", rows, columns, 0, 0)
+        self.fcntl.ioctl(self.leader, self.termios.TIOCSWINSZ, size)
 
-    def test_the_interval_is_slept_on_the_real_clock_by_default(self):
-        sleep = inspect.signature(monitor.TerminalKeys).parameters["sleep"]
-        assert sleep.default is time.sleep
+    def type(self, keys: bytes):
+        os.write(self.leader, keys)
+
+    def until(self, predicate):
+        """Wait until what the child has written meets `predicate`; how
+        much it had written then."""
+        with self.changed:
+            met = self.changed.wait_for(
+                lambda: predicate(self.data), timeout=HANG_GUARD
+            )
+            assert met, self.data[-2000:]
+            return len(self.data)
+
+    def count(self, text: bytes, since=0):
+        return self.data[since:].count(text)
+
+    def close(self):
+        """Wait for the child to end, and read what it wrote last; its
+        exit code and standard error."""
+        try:
+            code = self.child.wait(timeout=HANG_GUARD)
+            errors = self.child.stderr.read()
+        finally:
+            if self.child.poll() is None:
+                self.child.kill()
+            self.child.stderr.close()
+            self.after = self.termios.tcgetattr(self.follower)
+            os.close(self.follower)
+            self.reader.join(HANG_GUARD)
+            os.close(self.leader)
+        assert not self.reader.is_alive()
+        return code, errors
+
+
+TITLE = f"yizkr run {RUN_ID}".encode()
+HINT = b"':' or Enter: pause"
+URL = re.compile(rb"http://127\.0\.0\.1:\d+/")
+
+
+class TestRealTerminal:
+    """`watch` through the real curses, on a pseudo-terminal: no real
+    terminal is needed. Each step waits on what the child writes."""
+
+    def test_a_watch_on_a_terminal(self, tmp_path):
+        run = record(tmp_path / "run")
+        terminal = PseudoTerminal(
+            run, "--interval", "0.05", "--serve", "127.0.0.1:0"
+        )
+        try:
+            terminal.until(lambda data: TITLE in data and HINT in data)
+            # the counters change: documents start, one at a time, and
+            # each shows in flight as it does
+            for subject in (CERT, POSTCARD, DIRECTORY, CARD):
+                append(run, [stage("started", 590, subject, "critique")])
+                terminal.until(lambda data, s=subject: s[:10].encode() in data)
+            # the served address reached the terminal once, the view once
+            assert len(URL.findall(terminal.data)) == 1
+            assert terminal.count(TITLE) == 1
+            # a resize draws the view at the new size: the footer moves to
+            # the new bottom rows
+            mark = len(terminal.data)
+            terminal.resize(80, 24)
+            terminal.until(lambda data: HINT in data[mark:])
+            # Ctrl-L sends the whole screen again
+            mark = len(terminal.data)
+            terminal.type(b"\x0c")
+            terminal.until(lambda data: TITLE in data[mark:])
+            # a command, typed on the command line
+            mark = len(terminal.data)
+            terminal.type(b":")
+            terminal.until(lambda data: b"command>" in data[mark:])
+            terminal.type(b"pause stage critique checking\r")
+            terminal.until(lambda data: b"now paused" in data[mark:])
+            requested = RunDir(run).control()
+            assert requested.stopped(stage="critique") == (
+                "stage:critique paused"
+            )
+            terminal.type(b"q")
+        finally:
+            code, errors = terminal.close()
+        assert (code, errors) == (0, b"")
+        # the terminal as the monitor found it
+        assert terminal.after == terminal.before
+
+    def test_an_abort_is_confirmed_on_the_command_line(self, tmp_path):
+        run = record(tmp_path / "run")
+        terminal = PseudoTerminal(run, "--interval", "0.05", "--no-page")
+        try:
+            terminal.until(lambda data: HINT in data)
+            mark = len(terminal.data)
+            terminal.type(b"\rabort kind media\r")
+            terminal.until(lambda data: b"[y/N]" in data[mark:])
+            terminal.type(b"y\r")
+            terminal.until(lambda data: b"ABORTED" in data[mark:])
+            assert RunDir(run).control().stopped(kind="media") == (
+                "kind:media aborted"
+            )
+            terminal.type(b"q")
+        finally:
+            code, errors = terminal.close()
+        assert (code, errors) == (0, b"")
+        assert terminal.after == terminal.before
+
+    def test_a_terminal_that_cannot_move_its_cursor_is_printed_to(
+        self, tmp_path
+    ):
+        """On a terminal without cursor addressing the view is printed
+        plain, as off a terminal; Ctrl-C quits."""
+        run = record(tmp_path / "run")
+        terminal = PseudoTerminal(run, "--interval", "0.05", term="dumb")
+        try:
+            terminal.until(lambda data: TITLE in data)
+            terminal.type(b"\x03")
+        finally:
+            code, errors = terminal.close()
+        assert (code, errors) == (0, b"")
+        assert b"\x1b" not in terminal.data
+        assert terminal.after == terminal.before
 
 
 def test_main_requests_and_watches_once(run, capsys):
