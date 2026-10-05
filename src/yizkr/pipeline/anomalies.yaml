@@ -112,9 +112,11 @@ checks:
     min-count: 4
 
   # A batch's claims about someone it gives a date of birth for that are
-  # dated wholly before the earliest birth year it gives them, or wholly
-  # more than `max-years-after-birth` years after the latest, at the years
-  # each date's precision spans. Alert only: no claim is changed.
+  # dated wholly before the earliest year a birth it gives them may lie
+  # in, or wholly more than `max-years-after-birth` years after the
+  # latest. Every date is read through the span its source states: its
+  # precision, its earliest and latest bounds, and circa, which leaves it
+  # open. Alert only: no claim is changed.
   implausible-date:
     enabled: true
     max-years-after-birth: 120

@@ -208,20 +208,31 @@ share of one. Value: the share; `count`, `of`.
 
 **`implausible-date`**: a batch's claims dated before the birth of the
 person they are about, or more than `max-years-after-birth` years (120
-by default) after it: a misread century or a day padded from a year
-shows here. Only someone the batch itself gives a date of birth for
-(`date_of_birth`, about the same entity) is judged. A claim is dated by
-its own time value and by its `point_in_time`, `start_time` and
-`end_time` qualifiers; the bounds of a range (`earliest_date` and the
-like) say where a date may lie, not where it is, and are left out. Each
-date stands for the years its precision spans (a decade's ten, a
-century's hundred), so a coarse date is never narrowed, and years alone
-are compared: a date in the birth year is never before it. Every birth
-the batch gives the person counts and none is preferred (ADR-0002): a
-claim is counted only when a date of it lies wholly before the earliest
-of them, or wholly more than the threshold after the latest. Alert only:
-the claims go on as they are. Value: the claims counted; `before_birth`,
-`after_birth`.
+by default) after it: a misread century shows here. Only someone the
+batch itself gives a date of birth for (`date_of_birth`, about the same
+entity) is judged, and only in an extraction's batch: a GEDCOM date is
+the source's own reading. A claim is dated by its own time value and by
+its `point_in_time`, `start_time` and `end_time` qualifiers. Every date,
+a birth's included, is judged through the span its source states: the
+years its precision names, counted as Wikibase counts them (a decade
+from a year ending in 0, a century from a year ending in 01, whichever
+of its years is stored), its first year lowered by its earliest bound
+and its last raised by its latest one, a start between `earliest_date`
+and `latest_start_date` and an end between `earliest_end_date` and
+`latest_date`. A lone bound leaves its other side open ("after 1890"
+runs on from 1890), and a claim the source gives as circa
+(`sourcing_circumstances` → `circa`) is open on both sides, so neither
+is judged. So no date is narrowed, and years alone are compared: a date
+in a birth year is never before it. Every birth the batch gives the
+person counts and none is preferred (ADR-0002): a claim is counted only
+when a date of it lies wholly before the earliest year any of them may
+lie in, or wholly more than the threshold after the latest, and once,
+before the birth if a date of it is, else after it. No property is
+exempt: a memorial or a reburial long after a life is a true positive, a
+prompt to look. Alert only: the claims go on as they are. Value: the
+claims counted; `before_birth`, `after_birth`, and
+`max_years_after_birth`, the threshold in years (the alert has no
+`limit`, since its value is a count of claims).
 
 ### Distributions
 

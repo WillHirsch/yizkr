@@ -111,7 +111,6 @@ from pydantic import (
     model_validator,
 )
 
-from yizkr.claims import century_of, century_years
 from yizkr.pipeline.rundir import (
     ABORT,
     ALERTS,
@@ -775,29 +774,104 @@ def batch_findings(
     return found
 
 
-# the properties that date a person's birth, and the qualifiers that date
-# the claim they qualify; the bounds of a range (earliest_date and the
-# like) say where a date may lie, not where it is, and are left out
+# the property that dates a person's birth; the qualifiers that date the
+# claim they qualify, each with the qualifiers that bound it
+# (docs/MODELING.md, "Uncertainty and time"): a claim's time value and its
+# point in time run from its earliest date to its latest date, a start
+# from its earliest date to its latest start date, and an end from its
+# earliest end date to its latest date
 BIRTH = "date_of_birth"
+BOUNDS = {
+    "value": ("earliest_date", "latest_date"),
+    "point_in_time": ("earliest_date", "latest_date"),
+    "start_time": ("earliest_date", "latest_start_date"),
+    "end_time": ("earliest_end_date", "latest_date"),
+}
 DATING_QUALIFIERS = ("point_in_time", "start_time", "end_time")
+# the sourcing circumstance that makes a claim's dates approximate
+CIRCA = "circa"
+_OPEN = float("inf")
 
 
 def _years(value: Any) -> tuple[int, int] | None:
-    """The first and last year a time value may stand for, at its
-    precision: a decade's ten years, a century's hundred as century_years
-    counts them, and otherwise its one year; None for a value that is no
-    time value."""
+    """The first and last year a time value names at its precision, as
+    Wikibase counts them (ADR-0034): a decade's ten years from a year
+    ending in 0, a century's hundred from a year ending in 01, and
+    otherwise its one year; None for a value that is no time value, or
+    whose precision is unknown."""
     if _get(value, "type") != "time":
         return None
     year = _get(value, "year")
     if isinstance(year, bool) or not isinstance(year, int) or not year:
         return None
     precision = _get(value, "precision")
+    if precision is None:
+        precision = "year"
     if precision == "century":
-        return century_years(century_of(year))
+        first = (year - 1) // 100 * 100 + 1
+        return first, first + 99
     if precision == "decade":
-        return year, year + 9
-    return year, year
+        first = year // 10 * 10
+        return first, first + 9
+    if precision in ("year", "month", "day"):
+        return year, year
+    return None
+
+
+def _circa(claim: Any) -> bool:
+    return any(
+        _get(qualifier, "property") == "sourcing_circumstances"
+        and _get(_get(_get(qualifier, "value"), "value"), "key") == CIRCA
+        for qualifier in _get(claim, "qualifiers") or ()
+    )
+
+
+def _bounds(qualifiers: Sequence[Any], name: str) -> list[tuple[int, int]]:
+    """The years of each `name` qualifier's time value."""
+    found = []
+    for qualifier in qualifiers:
+        if _get(qualifier, "property") == name:
+            years = _years(_get(qualifier, "value"))
+            if years is not None:
+                found.append(years)
+    return found
+
+
+def _stated_spans(claim: Any) -> list[tuple[float, float]]:
+    """The years each date of a claim may lie in, as its source states
+    them: its time value and its dating qualifiers (DATING_QUALIFIERS),
+    each at the years its precision names, its first year lowered by its
+    earliest bound and its last raised by its latest one (BOUNDS), and
+    open on the side a lone bound leaves open ("after 1890" runs on from
+    1890). A claim its source gives as circa says nothing certain of
+    either side, and each of its dates is open on both. Never narrower
+    than the source."""
+    qualifiers = list(_get(claim, "qualifiers") or ())
+    circa = _circa(claim)
+    dates = [("value", _get(claim, "value"))] + [
+        (_get(qualifier, "property"), _get(qualifier, "value"))
+        for qualifier in qualifiers
+        if _get(qualifier, "property") in DATING_QUALIFIERS
+    ]
+    spans: list[tuple[float, float]] = []
+    for name, value in dates:
+        years = _years(value)
+        if years is None:
+            continue
+        if circa:
+            spans.append((-_OPEN, _OPEN))
+            continue
+        lower, upper = BOUNDS[name]
+        earliest = [bound[0] for bound in _bounds(qualifiers, lower)]
+        latest = [bound[1] for bound in _bounds(qualifiers, upper)]
+        first: float = min([years[0], *earliest])
+        last: float = max([years[1], *latest])
+        if earliest and not latest:
+            last = _OPEN
+        if latest and not earliest:
+            first = -_OPEN
+        spans.append((first, last))
+    return spans
 
 
 def _subject_key(subject: Any) -> tuple | None:
@@ -816,36 +890,32 @@ def date_findings(
 ) -> list[Finding]:
     """The implausible-date finding on one batch: its claims about someone
     it gives a date of birth for that are dated wholly before the earliest
-    birth year it gives them, or wholly more than `max-years-after-birth`
-    years after the latest. A claim is dated by its own time value and by
-    its dating qualifiers (DATING_QUALIFIERS), each at the years its
-    precision spans, so a year, a decade or a century is never narrowed
-    to a day; years alone are compared, so a date in a birth year is
+    year any of those births may lie in, or wholly more than
+    `max-years-after-birth` years after the latest. Every date, a birth's
+    included, is judged through the span its source states
+    (_stated_spans), so a year, a decade, a century or a range is never
+    narrowed, and years alone are compared, so a date in a birth year is
     never before it. Every birth a batch gives someone counts, and none is
-    preferred (ADR-0002): only a date outside all of them is counted, so
-    a birth, which lies within them, never is."""
+    preferred (ADR-0002): only a date outside all of them is counted, so a
+    birth, which lies within them, never is. A claim is counted once,
+    before the birth if any of its dates is, else after it."""
     settings = config.checks.implausible_date
     if not settings.enabled:
         return []
-    births: dict[tuple, list[tuple[int, int]]] = {}
+    births: dict[tuple, list[tuple[float, float]]] = {}
     for claim in claims:
         key = _subject_key(_get(claim, "subject"))
-        years = _years(_get(claim, "value"))
-        if key is not None and years and _get(claim, "property") == BIRTH:
-            births.setdefault(key, []).append(years)
+        if key is not None and _get(claim, "property") == BIRTH:
+            births.setdefault(key, []).extend(_stated_spans(claim))
     before = after = 0
     for claim in claims:
-        known = births.get(_subject_key(_get(claim, "subject")) or ())
+        key = _subject_key(_get(claim, "subject"))
+        known = births.get(key) if key is not None else None
         if not known:
             continue
         earliest = min(first for first, _last in known)
         latest = max(last for _first, last in known)
-        dates = [_years(_get(claim, "value"))] + [
-            _years(_get(qualifier, "value"))
-            for qualifier in _get(claim, "qualifiers") or ()
-            if _get(qualifier, "property") in DATING_QUALIFIERS
-        ]
-        dates = [years for years in dates if years]
+        dates = _stated_spans(claim)
         if any(last < earliest for _first, last in dates):
             before += 1
         elif any(
@@ -859,8 +929,12 @@ def date_findings(
         Finding(
             "implausible-date",
             before + after,
-            settings.max_years_after_birth,
-            {"before_birth": before, "after_birth": after},
+            None,
+            {
+                "before_birth": before,
+                "after_birth": after,
+                "max_years_after_birth": settings.max_years_after_birth,
+            },
         )
     ]
 
