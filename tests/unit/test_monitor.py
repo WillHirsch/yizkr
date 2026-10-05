@@ -3869,14 +3869,18 @@ class TestCursesScreen:
 
     def test_escape_cancels_the_command_line_and_its_burst(self, fake_locale):
         """An Escape cancels; what comes with it (an arrow key curses did
-        not read as one) is dropped, never typed into a command; keys
-        typed later are read as keys."""
-        curses = FakeCurses(["p", "a", "\x1b", "[", "A", None, "q"])
+        not read as one, and an Enter after it) is dropped, never typed
+        into a command; keys typed later are read as keys."""
+        curses = FakeCurses(["p", "a", "\x1b", "[", "A", "\n"])
         with monitor._CursesScreen(False, curses=curses) as screen:
             assert screen.prompt("command> ") is None
+            # the burst read without waiting, all of it
+            assert ("timeout", 0) in curses.calls
+            assert curses.window.keys == []
+            rows = [call[3] for call in curses.calls if call[0] == "addstr"]
+            assert rows[-1] == "command> pa"
+            curses.window.keys = ["q"]
             assert screen.wait(0) == "q"
-        # the burst read without waiting
-        assert ("timeout", 0) in curses.calls
 
     def test_an_escape_burst_in_the_view_is_no_key(self, fake_locale):
         curses = FakeCurses(["\x1b", "[", "q", None, "q"])
