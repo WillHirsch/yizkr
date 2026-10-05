@@ -6807,6 +6807,7 @@ class TestTheGregorianCalendar:
             "ABT GREGORIAN @#DGREGORIAN@ 1836",
             "GREGORIANX 1836",
             "XGREGORIAN 1836",
+            "GREGORIAN1836",
         ],
     )
     def test_no_date_is_read_where_the_grammar_reads_none(self, date):
