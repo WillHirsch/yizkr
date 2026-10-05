@@ -370,14 +370,19 @@ type the source does not mark, other than the label's.
 Amended by #435, orchestrator decisions BN to BQ (2026-10-04; the owner
 may override at merge): a form a recognised TYPE or a `_MARNM` gives is
 typed whether or not a typed claim is made of it; the label and the
-typed forms are compared in NFC, whitespace collapsed, case ignored; a
-placeholder blocks only the form it is unsure of, the NAME's display
-form or the bracket that held it, so "Ida (Peppi) /?/" still gives
-`name` "Peppi"; a bracket holding a cue or a note ("(geb. Laudler)")
-gives its text verbatim, never read as a type; and in a document only a
-distinct name of open kind is a `name`. A lettered stand-in ("N.N.")
-holds letters, so the adapter reads it as a name; it is no placeholder
-here, as §6 reads none by its wording.
+typed forms are compared in NFC, whitespace collapsed, lower-cased (a
+sharp s kept apart from "ss"; decision CD); a placeholder anywhere in a
+NAME (its value, a bracket, a quote or a part) blocks its display form,
+one in a bracket blocks that bracket too, and a complete bracket of
+such a NAME still gives its name, so "Ida (Peppi) /?/" gives `name`
+"Peppi" (decision CE keeps this, as decided on 2026-10-02); a bracket
+holding a cue or a note ("(geb. Laudler)") gives its text verbatim,
+never read as a type; and in a document only a distinct name of open
+kind is a `name`. Decision BS, that a lettered stand-in ("N.N.",
+"[unknown]") in an export gives no `name`, is withdrawn: such a stand-in
+holds letters, and no word list may decide it (§6 reads no word by its
+meaning), so it stays a `name` statement. The extraction prompt, whose
+model reads meaning, tells it a stand-in is never `name`.
 
 **Decided by the owner (2026-09-29):**
 

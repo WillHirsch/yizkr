@@ -707,8 +707,9 @@ Names are modelled in **two layers**:
   label's, it becomes a referenced `name` (P2561) statement, verbatim,
   as well as an alias. It is never made for the label's own form or for
   a form the source types, both compared in NFC with whitespace
-  collapsed and letter case ignored, and validation refuses one that
-  restates its subject's label or whose subject is no person. In a
+  collapsed and lower-cased (a sharp s kept apart from "ss"), and
+  validation refuses one that restates its subject's label or whose
+  subject is no person (an unclassified entity takes one). In a
   document it is only for a distinct name whose kind the source leaves
   open, never a shortening, an initial, a spelling variant, a part of
   the label or an unmarked nickname use. A bracket holding a cue or a
@@ -734,8 +735,9 @@ Names are modelled in **two layers**:
   statement too, unless it is the label's form; no `name` statement
   comes of a form the person's record types (a recognised TYPE or a
   `_MARNM`, whether or not a typed claim is made of it), of the display
-  form of a NAME that held a placeholder, or of a bracket that held one
-  (a complete bracket of such a NAME still gives one); a NAME
+  form of a NAME that held a placeholder anywhere, or of a bracket that
+  held one (a complete bracket of such a NAME still gives one); a
+  lettered stand-in ("N.N.") holds letters and stays a `name`; a NAME
   without slashes, whose parts no GIVN or SURN gives, is an unsplit form
   too, and its TYPE gives no claim, and one with only a GIVN or only a
   SURN keeps its whole value as an unsplit form beside that part. A

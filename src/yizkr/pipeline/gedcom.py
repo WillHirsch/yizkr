@@ -860,8 +860,11 @@ class NameReading:
     # whether a TYPE of the NAME is one the adapter recognises
     # (_NAME_TYPE_PROPERTY): the source types the NAME
     stated_type: bool = False
-    # whether a placeholder was left out of the value, its brackets and
-    # quotes or its parts: the source is unsure of the name it displays
+    # whether a placeholder was left out anywhere in the NAME, its value,
+    # brackets, quotes or parts: the source is unsure of the name it
+    # displays, whose display form gives no `name` claim; a bracket that
+    # held one gives none either (unsure_brackets), and a complete
+    # bracket still gives its claim
     placeholder: bool = False
     counts: list[str] = field(default_factory=list)
 
@@ -2156,14 +2159,17 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         with a TYPE the adapter recognises, a `_MARNM`), whether or not a
         typed claim is made of it; both are compared by `name_form_key`.
         Nor is one made of a form the source is unsure of (counted): the
-        display form of a NAME that held a placeholder, which would read
-        as the whole of the name, or a bracket that held one. A complete
-        bracket of such a NAME still gives its claim.
+        display form of a NAME that held a placeholder anywhere (its value,
+        a bracket, a quote or a part), which would read as the whole of
+        the name, or a bracket that held one; the display form is counted
+        only where it is not the label's. A complete bracket of such a
+        NAME still gives its claim.
         """
         # the keys of the forms the person's record types, and the forms
         # of no stated type, each with its NAME, in the record's order
         typed_texts: set[str] = set()
         untyped: list[tuple[str, Record]] = []
+        label = name_form_key(names_of[xref][0])
 
         def typed_claim(prop: str, text: str, source: Record) -> None:
             if text:
@@ -2204,7 +2210,8 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             forms = list(reading.bracketed)
             if cleaned and not reading.stated_type:
                 if reading.placeholder:
-                    outcome("untyped name form with a placeholder")
+                    if name_form_key(cleaned) != label:
+                        outcome("untyped name form with a placeholder")
                 else:
                     forms.insert(0, cleaned)
             for _ in range(reading.unsure_brackets):
@@ -2218,7 +2225,6 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                 typed_texts.add(name_form_key(married.display))
             if married.display and married.typed:
                 typed_claim("married_name", married.display, marnm)
-        label = name_form_key(names_of[xref][0])
         for text, name_record in untyped:
             key = name_form_key(text)
             if key != label and key not in typed_texts:

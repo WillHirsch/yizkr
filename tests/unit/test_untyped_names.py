@@ -11,7 +11,11 @@ from __future__ import annotations
 import pytest
 
 import tests.unit.test_run_report as run_report
-from yizkr.claims import ClaimBatch, validate_against_manifest
+from yizkr.claims import (
+    ClaimBatch,
+    name_form_key,
+    validate_against_manifest,
+)
 from yizkr.core.privacy import PERSON_SUBJECT_PROPERTIES
 from yizkr.model.schema import load_manifest
 from yizkr.pipeline.chunking import CHUNK_PROMPT
@@ -53,20 +57,26 @@ def test_the_extraction_prompt_offers_it():
         line.lstrip("- ").startswith("name:")
         for line in properties.splitlines()
     )
-    # the rule: a distinct name of open kind beside the label's; never a
-    # short form or an unmarked nickname use, the label's own form or a
-    # form the model types
+    # the rule: a distinct name of open kind beside the label's, a form
+    # set apart winning the tie with a nickname; never a short form, a
+    # stand-in, the label's own form or a form the model types
     prompt = " ".join(CHUNK_PROMPT.split())
     for words in (
         "A distinct name the source gives a person beside the label's, "
-        "whose kind the source leaves open",
+        "whose kind the source leaves open (a bracketed name in a register "
+        'entry: "Ida Sörne (Löbig)")',
         "is given as `name`, verbatim (ADR-0011), and is an alias too",
+        "A form the source sets apart without saying its kind is `name` "
+        "even where it reads like a nickname; a nickname with no `name` is "
+        "one used in running text or a greeting, and follows the nickname "
+        "and referred_to_as rules below",
         "A shortening, an initial, a spelling variant or a part of the "
-        "label is an alias alone, never `name`",
-        "a nickname the source uses without marking it follows the "
-        "nickname and referred_to_as rules below, never `name`",
+        "label is an alias alone, never `name`, and so is a stand-in for "
+        'an unknown name ("N.N.")',
         "Never give the label's own form as `name`",
         "and never a form you type",
+        # a name a writer uses is a name form, not the `name` property
+        "is their name form (label or alias)",
     ):
         assert words in prompt, words
 
@@ -109,10 +119,39 @@ def test_validation_accepts_it_for_a_person():
     assert validate_against_manifest(ida_named("Peppi")) == []
 
 
-@pytest.mark.parametrize("kind", ["place", "organization"])
+@pytest.mark.parametrize(
+    "kind", ["place", "organization", "family", "vessel", "military_unit"]
+)
 def test_validation_refuses_it_for_anything_but_a_person(kind):
     (problem,) = validate_against_manifest(ida_named("Peppi", kind))
     assert "property 'name' is a person's" in problem
+
+
+def test_validation_accepts_it_on_an_unclassified_entity():
+    # where a mistyped person lands (ADR-0020), as a nickname is accepted
+    batch = ida_named("Peppi", "unclassified_entity")
+    assert validate_against_manifest(batch) == []
+
+
+def with_subject(subject: dict) -> ClaimBatch:
+    """A batch whose one `name` claim has `subject`, and no entities."""
+    claim = ida_named("Peppi").model_dump(mode="json")["claims"][0]
+    return ClaimBatch.model_validate(
+        {"extraction_run": RUN, "claims": [{**claim, "subject": subject}]}
+    )
+
+
+def test_validation_leaves_an_existing_items_name_unchecked():
+    # an existing item named by its QID has no kind or label here
+    batch = with_subject({"kind": "qid", "qid": "Q7"})
+    assert validate_against_manifest(batch) == []
+
+
+def test_validation_refuses_it_on_a_vocabulary_item():
+    (problem,) = validate_against_manifest(
+        with_subject({"kind": "vocab", "key": "human"})
+    )
+    assert "not a vocabulary item's" in problem
 
 
 @pytest.mark.parametrize(
@@ -125,6 +164,14 @@ def test_validation_refuses_the_subjects_label(text):
 
 def test_validation_keeps_a_spelling_variant_of_the_label():
     assert validate_against_manifest(ida_named("Ida Sorne")) == []
+
+
+def test_the_key_lower_cases_and_keeps_a_sharp_s():
+    # letter case goes, as alias hygiene's does; a sharp s stays apart
+    # from "ss" (the universe's "Eheschließung", a word, stands in for a
+    # name spelled with one)
+    assert name_form_key("EHESCHLIESSUNG") == name_form_key("Eheschliessung")
+    assert name_form_key("Eheschließung") != name_form_key("Eheschliessung")
 
 
 def test_salvage_counts_a_refused_name_as_a_reject():

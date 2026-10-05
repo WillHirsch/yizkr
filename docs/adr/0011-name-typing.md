@@ -98,19 +98,25 @@ aliases stay the match index.
   recognises but makes no typed claim of (a NAME without slashes, a
   typed NAME with a placeholder) and a `_MARNM` without slashes are
   typed by their source. Never for the label's own form. The label and
-  the typed forms are compared in NFC, whitespace collapsed and letter
-  case ignored, as alias hygiene ignores case ("IDA SÖRNE" is the label
-  "Ida Sörne"); accents are kept, so a spelling variant is a name of its
-  own (orchestrator decision BO, 2026-10-04). In a GEDCOM export, never
+  the typed forms are compared in NFC, whitespace collapsed and
+  lower-cased, as alias hygiene compares aliases ("IDA SÖRNE" is the
+  label "Ida Sörne"); accents and a sharp s are kept, so a spelling
+  variant ("Sorne", "ss" beside "ß") is a name of its own (orchestrator
+  decisions BO, 2026-10-04, and CD, 2026-10-05). In a GEDCOM export, never
   for a form the source is unsure of (counted, `untyped name form with a
-  placeholder`): the display form of a NAME that held a placeholder
-  ("Eugen /?/"), which would read as the whole of the name, or a bracket
-  that held one. A complete bracket of such a NAME still gives its
+  placeholder`, where the form is not the label's): the display form of
+  a NAME that held a placeholder anywhere, in its value, a bracket, a
+  quote or a part ("Eugen /?/", "Ida (Peppi ?) /Löbig/"), which would
+  read as the whole of the name, or a bracket that held one (decision
+  CE). A complete bracket of such a NAME still gives its
   `name` ("Ida (Peppi) /?/" gives "Peppi"; decision BP). In a document,
   only a distinct name whose kind the source leaves open: a shortening,
   an initial, a spelling variant or a part of the label is an alias
-  alone, and an unmarked nickname use follows the nickname and
-  `referred_to_as` rules (decision BQ). "Primary name as a referenced
+  alone, and so is a stand-in for an unknown name ("N.N."); a form the
+  source sets apart without saying its kind is `name` even where it
+  reads like a nickname, and a nickname used in running text or a
+  greeting follows the nickname and `referred_to_as` rules (decision
+  BQ). "Primary name as a referenced
   statement" (#171) stays deferred.
 - **A cue is no type.** A bracket holding a cue or a note ("(geb.
   Laudler)", "(died young)") gives a `name` with its text verbatim: code
@@ -119,8 +125,11 @@ aliases stay the match index.
   BN).
 - **Validation** refuses a `name` claim whose subject is no person, and
   one that restates its subject's label (on the same comparison), as
-  counted rejects (decision BR). A subject whose kind or label the batch
-  does not give is not checked.
+  counted rejects (decision BR). An unclassified entity, where a
+  mistyped person lands (ADR-0020), takes a `name` as it takes a
+  nickname (decision CF); a vocabulary item never does. A subject whose
+  kind or label the batch does not give (an existing item named by its
+  QID) is not checked.
 - **Curation.** A curator who identifies the type later adds the typed
   statement (e.g. `nickname`) citing the same source, beside the untyped
   one, which stays (rule 3). A curator may lower its rank.

@@ -803,9 +803,10 @@ def validate_against_manifest(
       its own source, by a property the manifest marks
       `document_subject`, and a claim of such a property has that
       subject and no other (ADR-0035 §3.4);
-    * a `name` claim, a name form of no stated type, is a person's, and
-      never restates its subject's label (ADR-0011): both are compared
-      by `name_form_key`, and a subject of unknown kind or label is not
+    * a `name` claim, a name form of no stated type, is a person's or an
+      unclassified entity's, never a vocabulary item's, and never
+      restates its subject's label (ADR-0011): both are compared by
+      `name_form_key`, and a subject of unknown kind or label is not
       checked.
     """
     properties, items = (
@@ -940,7 +941,15 @@ def validate_against_manifest(
         if claim.property == "name" and isinstance(
             claim.value, MonolingualValue
         ):
-            if subject_kind is not None and subject_kind != "human":
+            if isinstance(claim.subject, VocabRef):
+                errors.append(
+                    f"{where}.subject: property 'name' is a person's, not "
+                    f"a vocabulary item's (ADR-0011)"
+                )
+            elif subject_kind is not None and subject_kind not in {
+                "human",
+                "unclassified_entity",
+            }:
                 errors.append(
                     f"{where}.subject: property 'name' is a person's, not "
                     f"a {subject_kind!r}'s (ADR-0011)"
@@ -990,9 +999,10 @@ def validate_against_manifest(
 
 def name_form_key(text: str) -> str:
     """A name form as compared with another (ADR-0011): in NFC, its
-    whitespace collapsed and its letter case ignored, as alias hygiene
-    ignores case; accents are kept, so a spelling variant stays apart."""
-    return " ".join(unicodedata.normalize("NFC", text).split()).casefold()
+    whitespace collapsed and lower-cased, as alias hygiene compares
+    aliases; accents and a sharp s are kept, so a spelling variant
+    ('ss' beside 'ß') stays apart."""
+    return " ".join(unicodedata.normalize("NFC", text).split()).lower()
 
 
 # ---------------------------------------------------------------------------

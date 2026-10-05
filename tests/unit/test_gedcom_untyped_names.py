@@ -48,6 +48,13 @@ def names(text: str, prop: str = "name") -> list[tuple[str, str]]:
     ]
 
 
+def unsure(text: str) -> int:
+    """How many untyped name forms of the batch a placeholder blocked."""
+    return adapted(text).outcomes.get(
+        "untyped name form with a placeholder", 0
+    )
+
+
 def texts(text: str, prop: str = "name") -> list[str]:
     return [found for found, _line in names(text, prop)]
 
@@ -187,8 +194,15 @@ class TestUntypedNames:
             (("1 NAME Hilde Löbig", "2 TYPE married"), "Hilde Löbig"),
             # a `_MARNM` with no slashes: no married-name claim either
             (("1 _MARNM Ida Löbig",), "Ida Löbig"),
+            # a typed NAME with a placeholder: no typed claim either
+            (("1 NAME Eugen /?/", "2 TYPE aka"), "Eugen"),
         ],
-        ids=["aka-unsplit", "married-unsplit", "marnm-unsplit"],
+        ids=[
+            "aka-unsplit",
+            "married-unsplit",
+            "marnm-unsplit",
+            "aka-placeholder",
+        ],
     )
     def test_a_form_the_export_types_without_a_claim_is_no_name(
         self, typing, further
@@ -254,6 +268,10 @@ class TestUntypedNames:
         assert texts(text) == ["geb. Laudler"]
         assert texts(text, "birth_name") == []
 
+    def test_a_names_display_form_comes_before_its_brackets(self):
+        text = person("Ida /Sörne/", "1 NAME Ida (Peppi) /Löbig/")
+        assert texts(text) == ["Ida Löbig", "Peppi"]
+
     def test_a_name_two_names_give_is_a_claim_of_each(self):
         # each NAME cites a source of its own, so neither citation is lost
         text = person(
@@ -286,12 +304,34 @@ class TestPlaceholders:
         assert texts(text) == []
         assert adapted(text).outcomes["untyped name form with a placeholder"]
         # in a typed NAME, whose display form gives no `name`, only the
-        # unsure bracket is counted
+        # unsure brackets are counted, each once, a GIVN's among them
         text = person("Ida (Peppi ?) /Sörne/", "2 TYPE birth")
         assert texts(text) == []
-        assert (
-            adapted(text).outcomes["untyped name form with a placeholder"] == 1
+        assert unsure(text) == 1
+        text = person("Ida (Peppi ?) (Hilde ?) /Sörne/", "2 TYPE birth")
+        assert texts(text) == []
+        assert unsure(text) == 2
+        text = person(
+            "Ida /Sörne/",
+            "1 NAME Ida /Löbig/",
+            "2 TYPE married",
+            "2 GIVN Ida 'Pünktchen' (Peppi ?)",
         )
+        assert texts(text) == []
+        assert unsure(text) == 1
+
+    def test_a_placeholder_anywhere_blocks_the_display_form(self):
+        # the display form 'Ida Löbig' holds no placeholder, but its NAME
+        # does, in a bracket: both go, each counted
+        text = person("Ida /Sörne/", "1 NAME Ida (Peppi ?) /Löbig/")
+        assert texts(text) == []
+        assert unsure(text) == 2
+
+    def test_the_labels_unsure_form_is_not_counted(self):
+        # the label never gives a `name`, so its placeholder blocks none
+        text = person("Eugen /?/")
+        assert texts(text) == []
+        assert unsure(text) == 0
 
     def test_a_complete_bracket_of_an_unsure_name_is_a_name(self):
         # the unsure display form 'Ida' gives none; the bracket is whole

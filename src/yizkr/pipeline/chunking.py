@@ -227,12 +227,14 @@ Rules — these mirror the archive's non-negotiable conventions:
   marks (ADR-0022).
   A distinct name the source gives a person beside the label's, whose
   kind the source leaves open (a bracketed name in a register entry:
-  "Ida (Peppi) Sörne"), is given as `name`, verbatim (ADR-0011), and
-  is an alias too. A shortening, an initial, a spelling variant or a
-  part of the label is an alias alone, never `name`; a nickname the
-  source uses without marking it follows the nickname and
-  referred_to_as rules below, never `name`. Never give the label's own
-  form as `name`, and never a form you type.
+  "Ida Sörne (Löbig)"), is given as `name`, verbatim (ADR-0011), and
+  is an alias too. A form the source sets apart without saying its
+  kind is `name` even where it reads like a nickname; a nickname with
+  no `name` is one used in running text or a greeting, and follows the
+  nickname and referred_to_as rules below. A shortening, an initial, a
+  spelling variant or a part of the label is an alias alone, never
+  `name`, and so is a stand-in for an unknown name ("N.N."). Never
+  give the label's own form as `name`, and never a form you type.
 - A word that states a fact rather than naming someone is a claim, never
   part of a name (ADR-0035 §3.1):
   * a widow's or widower's marker ("Wwe.", "вдова", "widdo"): the
@@ -283,7 +285,8 @@ Rules — these mirror the archive's non-negotiable conventions:
   person through a relation but is no literal kinship term ("Bubele",
   "Nana Maisie", "Рудольфиха"), is `referred_to_as`: never an alias and
   never a record nickname. A name a writer simply uses for someone, in a
-  greeting ("Liebes Pünktchen!") or a mention, is their name.
+  greeting ("Liebes Pünktchen!") or a mention, is their name form (label
+  or alias).
 - Relational / perspectival appellations (ADR-0018): a reference like
   "our great grandmother", "meine Oma", "Aunt Pünktchen", "Mem" is NOT a
   name and never an alias. Two cases:
