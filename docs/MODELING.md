@@ -512,8 +512,10 @@ artifact a new QID, changes neither.
   written, with calendar `julian`, so that it is refused rather than
   read as Gregorian), the GEDCOM adapter fails a file that states one in
   any calendar but the Gregorian or with an epoch before the common era,
-  naming its DATE lines, the review sheet refuses a correction to one,
-  the writer refuses a batch holding one and writes nothing, and every
+  naming its DATE lines (a date it names as Gregorian, `@#DGREGORIAN@`
+  or GEDCOM 7's `GREGORIAN`, reads as the date without it), the review
+  sheet refuses a correction to one, the writer refuses a batch holding
+  one and writes nothing, and every
   reader of the graph (the disagreement report, the site, the
   possibly-living check, the non-privileged export, which checks the
   whole graph at any rank first, and reconcile's roster) stops with

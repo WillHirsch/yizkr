@@ -45,7 +45,11 @@ Source-first conventions carry over unchanged:
   period dates its wedding by the FROM and an end of unstated kind by
   the TO.
   A date the grammar cannot parse yields NO date claim and a warning —
-  never a guess.
+  never a guess. The Gregorian calendar named before a date
+  (`@#DGREGORIAN@`, or GEDCOM 7's `GREGORIAN`), the one calendar the
+  archive supports, changes nothing: the date gives the claim it gives
+  written without it, whether it stands alone or is one date of an
+  approximation, a range or a period.
 * A date before the common era (a `B.C.`, `BC` or `BCE` epoch, spaced
   or not, or a year below 1) or in any calendar but the Gregorian (a
   calendar escape other than `@#DGREGORIAN@`, such as `@#DJULIAN@`,
@@ -315,13 +319,39 @@ def parse_gedcom(text: str) -> list[Record]:
 # ---------------------------------------------------------------------------
 
 
+# the Gregorian calendar named before a date: GEDCOM 5.5.1's escape
+# (spaced as refuse_unsupported_dates lets it pass) or GEDCOM 7's keyword.
+# It names the one supported calendar (ADR-0034), so the date it precedes
+# reads as the same date written without it.
+_GREGORIAN = re.compile(
+    r"(?:@#\s*D\s*GREGORIAN\s*@\s*|GREGORIAN\s+)(?=\S)", re.IGNORECASE
+)
+
+
+def _without_gregorian(text: str) -> str:
+    """`text`, stripped, without the Gregorian calendar named before it:
+    the date as written without the calendar, which it states as the one
+    the archive supports. Any other calendar never reaches the grammar
+    (refuse_unsupported_dates). A date names one calendar, so one named
+    twice in a row is left in place, and the grammar reads no date."""
+    text = text.strip()
+    calendar = _GREGORIAN.match(text)
+    if calendar is None or _GREGORIAN.match(text, calendar.end()):
+        return text
+    return text[calendar.end() :]
+
+
 def _parse_plain_date(text: str) -> dict | None:
     """'7 JAN 1919' / 'JAN 1919' / '1919' -> flat time value dict.
 
     Month-first order ('January 7 1919') is accepted too: the month is
-    named, not numbered, so there is nothing ambiguous to guess.
+    named, not numbered, so there is nothing ambiguous to guess. The
+    Gregorian calendar may precede the date (`@#DGREGORIAN@ 7 JAN 1919`,
+    GEDCOM 7's `GREGORIAN 7 JAN 1919`), as it may each date of an
+    approximation, a range or a period, and the date reads as written
+    without it.
     """
-    parts = text.strip().upper().split()
+    parts = _without_gregorian(text).upper().split()
     try:
         if len(parts) == 3:
             if parts[0] in MONTHS:
@@ -357,9 +387,11 @@ def parse_gedcom_date(text: str) -> tuple[dict | None, list[dict]]:
     """(time value, qualifiers) per the archive's uncertainty rules.
 
     Returns (None, []) when the grammar doesn't cover the input —
-    the caller records a warning; nothing is guessed.
+    the caller records a warning; nothing is guessed. The Gregorian
+    calendar may precede the whole date (`@#DGREGORIAN@ ABT 1836`) or
+    each date within it (`ABT @#DGREGORIAN@ 1836`), and changes nothing.
     """
-    raw = text.strip()
+    raw = _without_gregorian(text)
     upper = raw.upper()
     circa = [
         {
@@ -502,9 +534,11 @@ def split_gedcom_period(text: str) -> tuple[str | None, str | None] | None:
     date of its own, which may itself be approximate or a range; it is
     empty when the period names an end but gives it no date. A "to"
     inside a parenthesised date phrase ("(Aug to Sep)") is the phrase's
-    own word, not the period's TO.
+    own word, not the period's TO. The Gregorian calendar may precede
+    the whole period (`@#DGREGORIAN@ FROM 1939 TO 1952`) as it may each
+    of its dates.
     """
-    words = text.split()
+    words = _without_gregorian(text).split()
     keys = [word.upper() for word in words]
     if not keys or keys[0] not in ("FROM", "TO"):
         return None

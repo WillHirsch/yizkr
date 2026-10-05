@@ -6672,3 +6672,147 @@ class TestRound6:
         )
         assert eugen.label == "Eugen Löbig 'Muckel'"
         assert outcomes["NAME part without a word"] == 1
+
+
+# each form of date the grammar reads, written without a calendar and with
+# `{cal}` where the Gregorian calendar may stand before one of its dates
+GREGORIAN_FORMS = [
+    # exact dates, at each precision
+    "{cal}12 MAR 1836",
+    "{cal}MAR 1836",
+    "{cal}1836",
+    "{cal}March 12 1836",
+    # approximations
+    "ABT {cal}1836",
+    "CAL {cal}MAR 1836",
+    "EST {cal}12 MAR 1836",
+    # ranges
+    "BEF {cal}12 MAR 1836",
+    "AFT {cal}1836",
+    "BET {cal}1836 AND {cal}1840",
+    # a period, which a birth reads as a range
+    "FROM {cal}1836 TO {cal}1840",
+]
+# GEDCOM 5.5.1's escape, spaced as the refusal lets it pass, and GEDCOM
+# 7's keyword, in either case
+GREGORIAN_CALENDARS = [
+    "@#DGREGORIAN@ ",
+    "@#D GREGORIAN @ ",
+    "@#dgregorian@ ",
+    "GREGORIAN ",
+    "gregorian ",
+]
+
+
+def with_gregorian(form: str, calendar: str) -> list[str]:
+    """`form` with `calendar` before one or each of its dates, and before
+    the whole date."""
+    plain = form.format(cal="")
+    each = form.format(cal=calendar)
+    first = form.replace("{cal}", calendar, 1).format(cal="")
+    return list(dict.fromkeys([each, first, calendar + plain]))
+
+
+class TestTheGregorianCalendar:
+    """The Gregorian calendar named before a date (`@#DGREGORIAN@`, or
+    GEDCOM 7's `GREGORIAN`) is the one calendar the archive supports
+    (ADR-0034), so the date gives exactly the claim it gives written
+    without it (#478)."""
+
+    @pytest.mark.parametrize("calendar", GREGORIAN_CALENDARS)
+    @pytest.mark.parametrize("form", GREGORIAN_FORMS)
+    def test_a_date_reads_as_without_the_calendar(self, form, calendar):
+        plain = parse_gedcom_date(form.format(cal=""))
+        assert plain[0] is not None
+        for date in with_gregorian(form, calendar):
+            assert parse_gedcom_date(date) == plain, date
+
+    @pytest.mark.parametrize("calendar", ["@#DGREGORIAN@ ", "GREGORIAN "])
+    @pytest.mark.parametrize("form", GREGORIAN_FORMS)
+    def test_a_birth_gives_the_same_claim(self, form, calendar):
+        def birth(date: str):
+            result = adapt_gedcom(
+                eugen("1 BIRT", f"2 DATE {date}"), artifact=EXPORT
+            )
+            return on(result.batch, "i1", "date_of_birth"), result.warnings
+
+        claims, warnings = birth(form.format(cal=""))
+        assert claims and not warnings
+        for date in with_gregorian(form, calendar):
+            assert birth(date) == (claims, warnings), date
+
+    def test_eugens_birth_with_the_escape(self):
+        # 2 DATE @#DGREGORIAN@ 12 MAR 1836: a day-precision birth, as
+        # without the escape
+        batch = adapt_gedcom(
+            eugen("1 BIRT", "2 DATE @#DGREGORIAN@ 12 MAR 1836"),
+            artifact=EXPORT,
+        ).batch
+        assert on(batch, "i1", "date_of_birth") == [
+            ("date_of_birth", (1836, 3, 12, "day"), [])
+        ]
+
+    @pytest.mark.parametrize("tag", ["RESI", "OCCU"])
+    @pytest.mark.parametrize(
+        ("date", "plain"),
+        [
+            ("FROM @#DGREGORIAN@ 1939 TO @#DGREGORIAN@ 1952",
+             "FROM 1939 TO 1952"),
+            ("@#DGREGORIAN@ FROM 1939 TO 1952", "FROM 1939 TO 1952"),
+            ("GREGORIAN FROM 1939", "FROM 1939"),
+            ("TO GREGORIAN 1952", "TO 1952"),
+            ("@#DGREGORIAN@ TO 1952", "TO 1952"),
+            ("FROM ABT @#DGREGORIAN@ 1939 TO BEF GREGORIAN 1952",
+             "FROM ABT 1939 TO BEF 1952"),
+            ("FROM BET GREGORIAN 1938 AND GREGORIAN 1939 TO 1952",
+             "FROM BET 1938 AND 1939 TO 1952"),
+        ],
+    )  # fmt: skip
+    def test_a_period_is_the_same_start_and_end(self, tag, date, plain):
+        expected = held_qualifiers(tag, plain)
+        assert {prop for prop, _ in expected} & {"start_time", "end_time"}
+        assert held_qualifiers(tag, date) == expected
+
+    @pytest.mark.parametrize(
+        ("date", "plain"),
+        [
+            ("@#DGREGORIAN@ FROM 1947 TO 1957", "FROM 1947 TO 1957"),
+            ("FROM GREGORIAN 1947 TO @#DGREGORIAN@ 1957",
+             "FROM 1947 TO 1957"),
+            ("ABT @#DGREGORIAN@ 8 FEB 1947", "ABT 8 FEB 1947"),
+        ],
+    )  # fmt: skip
+    def test_a_marriage_and_a_divorce_give_the_same_dates(self, date, plain):
+        expected = dates(couple(marriage=plain), "f5-wedding")
+        assert expected
+        assert dates(couple(marriage=date), "f5-wedding") == expected
+        expected = dates(couple(divorce=plain), "f5-divorce")
+        assert expected
+        assert dates(couple(divorce=date), "f5-divorce") == expected
+
+    @pytest.mark.parametrize(
+        "date",
+        [
+            # a date phrase is free text, the calendar in it or before it
+            "(@#DGREGORIAN@ 12 MAR 1836)",
+            "(GREGORIAN 12 MAR 1836)",
+            "@#DGREGORIAN@ (Lady Day 1836)",
+            "GREGORIAN (Lady Day 1836)",
+            # the calendar alone, twice before one date, or as part of
+            # another word
+            "@#DGREGORIAN@",
+            "GREGORIAN",
+            "GREGORIAN GREGORIAN 1836",
+            "@#DGREGORIAN@ GREGORIAN 1836",
+            "ABT GREGORIAN @#DGREGORIAN@ 1836",
+            "GREGORIANX 1836",
+            "XGREGORIAN 1836",
+        ],
+    )
+    def test_no_date_is_read_where_the_grammar_reads_none(self, date):
+        assert parse_gedcom_date(date) == (None, [])
+        result = adapt_gedcom(
+            eugen("1 BIRT", f"2 DATE {date}"), artifact=EXPORT
+        )
+        assert on(result.batch, "i1", "date_of_birth") == []
+        assert any("unparsed date" in w for w in result.warnings)
