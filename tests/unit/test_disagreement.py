@@ -281,8 +281,8 @@ class TestTheUniverse:
         }
         # the refinements of a compared property: Eugen's death, Cäcilie's
         # birth, Klara's emigration, the arrest, Leopold's and Agnes's
-        # births, and Rudolf's death
-        assert len(refined) == 7
+        # births, and Rudolf's and Florence's deaths
+        assert len(refined) == 8
         assert not {(row.entity, row.property) for row in rows} & refined
 
 
