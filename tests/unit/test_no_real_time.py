@@ -105,11 +105,10 @@ ALLOWED = (
     ),
     Allowed(
         "test_monitor.py",
-        "sleep uncalled",
-        "checks that TerminalKeys' sleep defaults to time.sleep by"
-        " identity, and calls it never",
-        inside="TestTerminalKeys.test_the_interval_is_slept_on_the_real_clock"
-        "_by_default",
+        "wait( with a timeout",
+        "calls the curses screen's wait on a fake curses window, which"
+        " never waits, to check the timeout it sets on the window",
+        inside="TestCursesScreen.test_keys_are_waited_for_for_the_interval",
     ),
 )
 

@@ -30,7 +30,7 @@ From them it builds a summary (RunMonitor.summary):
   while control.jsonl cannot be read.
 
 It shows the summary in two views: a terminal view refreshed in place,
-in plain ANSI (`watch`), and a status page, index.html in the `status`
+drawn through curses (`watch`), and a status page, index.html in the `status`
 directory of the run directory: one self-contained HTML file, with no
 external assets, that reloads itself and is written again as events
 arrive. `watch` can serve that page, and nothing else, over HTTP
@@ -77,12 +77,11 @@ import contextlib
 import html
 import http.server
 import json
+import locale
 import math
 import os
 import re
-import select
 import shutil
-import signal
 import socket
 import socketserver
 import stat
@@ -242,29 +241,12 @@ def _clean(text: str) -> str:
     return " ".join(_safe(text).split())
 
 
-def _columns(char: str) -> int:
-    """The terminal columns `char` takes: 2 for an East Asian wide or
-    fullwidth character, 0 for a combining mark, 1 for any other."""
-    if unicodedata.category(char) in ("Mn", "Me"):
-        return 0
-    return 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
-
-
 def _clip(text: str, width: int) -> str:
-    """`text` cut to `width` terminal columns (_columns), "..." ending
-    what is cut when there is room for it, so a line never wraps."""
-    if text.isascii():
-        if len(text) <= width:
-            return text
-        return text[:width] if width < 4 else text[: width - 3] + "..."
-    if sum(map(_columns, text)) <= width:
+    """`text` cut to `width` characters, "..." ending what is cut when
+    there is room for it."""
+    if len(text) <= width:
         return text
-    room = width if width < 4 else width - 3
-    end = used = 0
-    while end < len(text) and used + _columns(text[end]) <= room:
-        used += _columns(text[end])
-        end += 1
-    return text[:end] if width < 4 else text[:end] + "..."
+    return text[:width] if width < 4 else text[: width - 3] + "..."
 
 
 def _token(value: Any, width: int = 40) -> str:
@@ -1632,23 +1614,11 @@ def summarise_run(path: Path | str, now: datetime | None = None) -> Summary:
 
 # -- the terminal view --------------------------------------------------------
 
-_STYLES = {
-    "title": "\x1b[1m",
-    "head": "\x1b[1m",
-    "good": "\x1b[32m",
-    "warn": "\x1b[33m",
-    "bad": "\x1b[31m",
-    "dim": "\x1b[2m",
-}
-_RESET = "\x1b[0m"
-HOME = "\x1b[H"
-CLEAR_SCREEN = "\x1b[2J"
-CLEAR_LINE = "\x1b[K"
-CLEAR_BELOW = "\x1b[J"
-HIDE_CURSOR = "\x1b[?25l"
 # Ctrl-L, the key that asks a terminal program to repaint its screen
 REPAINT = "\x0c"
-SHOW_CURSOR = "\x1b[?25h"
+# what Screen.wait gives when the terminal's window has changed size
+RESIZE = "resize"
+ESCAPE = "\x1b"
 
 _COLUMNS = (
     ("pending", 8),
@@ -1660,6 +1630,9 @@ _COLUMNS = (
     ("engine", 8),
     ("cached", 8),
 )
+
+# the key hint of a view printed to a terminal without its keys read
+PLAIN_HINT = "Ctrl-C: quit (keys are read only from a terminal)"
 
 HELP = (
     f"commands: {GRAMMAR}",
@@ -2014,23 +1987,21 @@ def _body(summary: Summary, full: bool) -> list[tuple[str, str]]:
     return body
 
 
-def render_lines(
+def render_rows(
     summary: Summary,
     *,
-    width: int = 100,
     height: int | None = None,
-    color: bool = False,
     footer: Sequence[str] = (),
     fill: bool = False,
-) -> list[str]:
-    """The terminal view as lines, each at most `width` characters wide
-    (ANSI styles aside, with `color`), and at most `height` of them, the
-    `footer` lines last. To fit, the view drops its details and shortens
-    its lists (_body), and then is cut short above the footer. With
-    `fill` and a `height`, blank lines above the footer make the view
-    `height` lines long, so the footer keeps its rows however long the
-    body grows. No line holds a control character but the view's own
-    styles."""
+) -> list[tuple[str, str]]:
+    """The terminal view as rows of (text, style), at most `height` of
+    them, the `footer` lines last; a style is one of "title", "head",
+    "good", "warn", "bad", "dim" or "" (none). To fit, the view drops its
+    details and shortens its lists (_body), and then is cut short above
+    the footer. With `fill` and a `height`, blank rows above the footer
+    make the view `height` rows long, so the footer keeps the bottom rows
+    however long the body grows. No row is cut to a width, and none holds
+    a control character (_safe)."""
     tail = [("", ""), *((line, "dim") for line in footer)] if footer else []
     room = None if height is None else max(1, height - len(tail))
     if not summary.found:
@@ -2049,16 +2020,29 @@ def render_lines(
         body = body[:room]
         if fill:
             body = body + [("", "")] * (room - len(body))
-    plain = body + tail
+    rows = body + tail
     if height is not None:
-        plain = plain[: max(1, height)]
-    lines = []
-    for text, style in plain:
-        text = _clip(_safe(text), max(1, width))
-        if color and style in _STYLES and text:
-            text = f"{_STYLES[style]}{text}{_RESET}"
-        lines.append(text)
-    return lines
+        rows = rows[: max(1, height)]
+    return [(_safe(text), style) for text, style in rows]
+
+
+def render_lines(
+    summary: Summary,
+    *,
+    width: int = 100,
+    height: int | None = None,
+    footer: Sequence[str] = (),
+    fill: bool = False,
+) -> list[str]:
+    """The terminal view as plain lines (render_rows without the styles),
+    each cut to at most `width` characters (_clip), for an output that is
+    not a terminal."""
+    return [
+        _clip(text, max(1, width))
+        for text, _ in render_rows(
+            summary, height=height, footer=footer, fill=fill
+        )
+    ]
 
 
 def render_terminal(
@@ -2066,14 +2050,11 @@ def render_terminal(
     *,
     width: int = 100,
     height: int | None = None,
-    color: bool = False,
     footer: Sequence[str] = (),
 ) -> str:
     """The terminal view as text: render_lines, one per line."""
     return "\n".join(
-        render_lines(
-            summary, width=width, height=height, color=color, footer=footer
-        )
+        render_lines(summary, width=width, height=height, footer=footer)
     )
 
 
@@ -2700,10 +2681,28 @@ class Keys(Protocol):
     def __exit__(self, *exc: object) -> None: ...
 
     def wait(self, timeout: float) -> str | None:
-        """A key pressed within `timeout` seconds, or None."""
+        """A key pressed within `timeout` seconds (REPAINT for Ctrl-L,
+        RESIZE when the window has changed size), or None."""
 
     def prompt(self, text: str) -> str | None:
         """A line typed after `text`, or None."""
+
+
+class Screen(Keys, Protocol):
+    """A terminal the watch loop draws its view on, besides reading its
+    keys: _CursesScreen on a real one, a fake in tests."""
+
+    def size(self) -> tuple[int, int]:
+        """The window's size: (columns, rows)."""
+
+    def draw(self, rows: Sequence[tuple[str, str]]) -> None:
+        """Show `rows` (text, style; render_rows) from the top of the
+        window down, each clipped at the window's right edge, and nothing
+        else."""
+
+    def repaint(self) -> None:
+        """Have the next draw send the whole screen again, not only what
+        changed."""
 
 
 class NoKeys:
@@ -2726,65 +2725,256 @@ class NoKeys:
         return None
 
 
-class TerminalKeys:
-    """Key presses from a terminal as they are typed (cbreak mode), and a
-    line typed at a prompt, with echo; the terminal's settings are put
-    back on the way out, however the loop ends."""
+# the longest command line the prompt takes, in characters
+PROMPT_LIMIT = 500
 
-    def __init__(
-        self,
-        stream: TextIO,
-        out: TextIO,
-        sleep: Callable[[float], None] = time.sleep,
-    ) -> None:
-        self.fd = stream.fileno()
-        self.out = out
-        self._sleep = sleep
-        self._saved: list | None = None
 
-    def __enter__(self) -> TerminalKeys:
-        import termios
-        import tty
+def _curses_styles(curses: Any, color: bool) -> dict[str, int]:
+    """The curses attributes for render_rows' styles: bold for the title
+    and the heads, dim for the dim rows, and colour pairs (green, yellow,
+    red on the terminal's own background) for good, warn and bad. None
+    without `color`, and no colours where the terminal has none. Called
+    once curses has started."""
+    if not color:
+        return {}
+    styles = {
+        "title": curses.A_BOLD,
+        "head": curses.A_BOLD,
+        "dim": curses.A_DIM,
+    }
+    if not curses.has_colors():
+        return styles
+    curses.start_color()
+    background = -1
+    try:
+        curses.use_default_colors()
+    except curses.error:
+        background = curses.COLOR_BLACK
+    colours = (
+        ("good", curses.COLOR_GREEN),
+        ("warn", curses.COLOR_YELLOW),
+        ("bad", curses.COLOR_RED),
+    )
+    for number, (style, colour) in enumerate(colours, 1):
+        curses.init_pair(number, colour, background)
+        styles[style] = curses.color_pair(number)
+    return styles
 
-        self._saved = termios.tcgetattr(self.fd)
-        tty.setcbreak(self.fd)
+
+# how long curses waits, in milliseconds, after an Escape for the rest of
+# a key's sequence (an arrow key's, say) before taking it as Escape alone
+ESCAPE_DELAY = 25
+# the most keys of a control sequence's parameters an Escape's burst drops
+SEQUENCE_LIMIT = 32
+# the environment variables that would fix curses' idea of the window's
+# size: while the view is open they are set aside, so that it follows
+# the window as it is resized
+_SIZE_VARIABLES = ("LINES", "COLUMNS")
+
+
+class _CursesScreen:
+    """The terminal on the standard input and output, through curses.
+
+    curses sends only the cells that changed since the last refresh,
+    takes each character's width in columns from the C library (so the
+    locale's character type is set from the environment while the screen
+    is open), clips text at the window's edge, reports a change of the
+    window's size as a key, and puts the screen back after Ctrl-Z and
+    `fg`. Its size is always the window's: LINES and COLUMNS are set
+    aside while the screen is open. Keys are read as they are typed
+    (cbreak, no echo), Ctrl-C included as an interrupt; an Escape, with
+    whatever follows it at once (the rest of a key's sequence curses did
+    not read as a key), is no key. A prompt opens on the bottom row, with
+    the cursor shown; Escape cancels it. The terminal's settings, the
+    locale and the environment are put back on the way out, however the
+    loop ends. `curses` stands in for the module in tests."""
+
+    def __init__(self, color: bool, curses: Any = None) -> None:
+        if curses is None:
+            import curses
+        self.curses = curses
+        self.color = color
+        self.window: Any = None
+        self.styles: dict[str, int] = {}
+        self._locale: str | None = None
+        self._environment: dict[str, str] = {}
+        self._rows: list[tuple[str, str]] = []
+
+    def __enter__(self) -> _CursesScreen:
+        curses = self.curses
+        with contextlib.suppress(locale.Error):
+            self._locale = locale.setlocale(locale.LC_CTYPE)
+            locale.setlocale(locale.LC_CTYPE, "")
+        self._environment = {
+            name: os.environ.pop(name)
+            for name in _SIZE_VARIABLES
+            if name in os.environ
+        }
+        try:
+            window = curses.initscr()
+        except BaseException:
+            self._put_back()
+            raise
+        try:
+            curses.noecho()
+            curses.cbreak()
+            window.keypad(True)
+            with contextlib.suppress(AttributeError, curses.error):
+                curses.set_escdelay(ESCAPE_DELAY)
+            self._cursor(0)
+            self.styles = _curses_styles(curses, self.color)
+        except BaseException:
+            self._close()
+            raise
+        self.window = window
         return self
 
     def __exit__(self, *exc: object) -> None:
-        self._restore()
+        if self.window is not None:
+            with contextlib.suppress(self.curses.error):
+                self.window.keypad(False)
+            self.window = None
+        self._close()
 
-    def _restore(self) -> None:
-        import termios
+    def _close(self) -> None:
+        curses = self.curses
+        try:
+            with contextlib.suppress(curses.error):
+                curses.nocbreak()
+                curses.echo()
+            self._cursor(1)
+        finally:
+            try:
+                curses.endwin()
+            finally:
+                self._put_back()
 
-        if self._saved is not None:
-            termios.tcsetattr(self.fd, termios.TCSADRAIN, self._saved)
+    def _put_back(self) -> None:
+        """The locale's character type and the size variables as they
+        were before the screen opened."""
+        os.environ.update(self._environment)
+        self._environment = {}
+        if self._locale is not None:
+            with contextlib.suppress(locale.Error):
+                locale.setlocale(locale.LC_CTYPE, self._locale)
+            self._locale = None
+
+    def _cursor(self, visibility: int) -> None:
+        # a terminal that cannot hide its cursor leaves it shown
+        with contextlib.suppress(self.curses.error):
+            self.curses.curs_set(visibility)
+
+    def size(self) -> tuple[int, int]:
+        rows, columns = self.window.getmaxyx()
+        return columns, rows
+
+    def draw(self, rows: Sequence[tuple[str, str]]) -> None:
+        window = self.window
+        self._rows = list(rows)
+        window.erase()
+        height, _ = window.getmaxyx()
+        for row, (text, style) in enumerate(self._rows[:height]):
+            if text:
+                # inserted into an empty row, text that does not fit is
+                # dropped at the right edge, and nothing wraps or scrolls,
+                # the bottom-right cell included
+                with contextlib.suppress(self.curses.error):
+                    window.insstr(row, 0, text, self.styles.get(style, 0))
+        window.refresh()
+
+    def repaint(self) -> None:
+        self.window.clearok(True)
+
+    def _key(self) -> str | None:
+        """The next key as wait gives it; curses.error once the timeout
+        set on the window has passed with none."""
+        curses = self.curses
+        key = self.window.get_wch()
+        if key == curses.KEY_RESIZE:
+            return RESIZE
+        if key == curses.KEY_ENTER:
+            return "\n"
+        if key == curses.KEY_BACKSPACE:
+            return "\x7f"
+        return key if isinstance(key, str) else None
+
+    def _drop_burst(self) -> None:
+        """Read and drop, of the keys already waiting, the rest of one
+        sequence that began with Escape (a key curses did not read as
+        one): after `[`, up to its final byte (0x40 to 0x7E, at most
+        SEQUENCE_LIMIT keys); after `O`, one key; otherwise the one key
+        (Alt and a key). Keys typed after the sequence are left to be
+        read. An Escape followed by a key already waiting cannot be told
+        from Alt and that key, so that key is dropped."""
+        window = self.window
+        window.timeout(0)
+        with contextlib.suppress(self.curses.error):
+            first = window.get_wch()
+            if first == "O":
+                window.get_wch()
+            elif first == "[":
+                for _ in range(SEQUENCE_LIMIT):
+                    key = window.get_wch()
+                    if isinstance(key, str) and "\x40" <= key <= "\x7e":
+                        break
 
     def wait(self, timeout: float) -> str | None:
-        ready, _, _ = select.select([self.fd], [], [], max(0.0, timeout))
-        if not ready:
+        self.window.timeout(max(0, round(timeout * 1000)))
+        try:
+            key = self._key()
+        except self.curses.error:
             return None
-        data = os.read(self.fd, 64)
-        if not data:
-            # the input has closed: wait out the interval instead
-            self._sleep(max(0.0, timeout))
+        if key == ESCAPE:
+            self._drop_burst()
             return None
-        return data.decode("utf-8", errors="replace")[:1]
+        return key
 
     def prompt(self, text: str) -> str | None:
-        import tty
-
-        self._restore()
-        # the cursor rests on the free row below the view: the prompt
-        # opens there, so opening it scrolls nothing away
-        self.out.write(f"{SHOW_CURSOR}\r{CLEAR_LINE}{text}")
-        self.out.flush()
+        typed: list[str] = []
+        self._cursor(1)
         try:
-            data = os.read(self.fd, 4096)
+            while True:
+                self._prompt_row(text + "".join(typed))
+                self.window.timeout(-1)
+                try:
+                    key = self._key()
+                except self.curses.error:
+                    return None
+                if key in ("\n", "\r"):
+                    break
+                if key == ESCAPE:
+                    self._drop_burst()
+                    return None
+                if key == RESIZE:
+                    # the view as it was, at the new size, under the prompt
+                    self.draw(self._rows)
+                elif key in ("\x7f", "\x08"):
+                    if typed:
+                        typed.pop()
+                elif key and key.isprintable() and len(typed) < PROMPT_LIMIT:
+                    typed.append(key)
         finally:
-            tty.setcbreak(self.fd)
-            self.out.write(HIDE_CURSOR)
-            self.out.flush()
-        return data.decode("utf-8", errors="replace").strip() or None
+            self._cursor(0)
+        return "".join(typed).strip() or None
+
+    def _prompt_row(self, line: str) -> None:
+        """`line` on the bottom row, as much of its end as fits, curses
+        measuring each character's width, and the cursor after it."""
+        window = self.window
+        rows, columns = window.getmaxyx()
+        tail = _safe(line)[-max(1, columns - 1) :]
+        while True:
+            window.move(rows - 1, 0)
+            window.clrtoeol()
+            try:
+                window.addstr(rows - 1, 0, tail)
+            except self.curses.error:
+                # past the last column: a character less, from the start
+                if len(tail) > 1:
+                    tail = tail[1:]
+                    continue
+            break
+        window.refresh()
 
 
 def _is_tty(stream: Any) -> bool:
@@ -2794,15 +2984,26 @@ def _is_tty(stream: Any) -> bool:
         return False
 
 
-def _default_keys(out: TextIO) -> Keys:
-    stdin = sys.stdin
-    if _is_tty(stdin) and _is_tty(out):
-        try:
-            import termios  # noqa: F401
-        except ImportError:
-            return NoKeys()
-        return TerminalKeys(stdin, out)
-    return NoKeys()
+def _default_screen(out: TextIO) -> Screen | None:
+    """The terminal, through curses, when the standard input and output
+    are both one, `out` is the standard output, and the terminal can move
+    its cursor (terminfo's `cup`); None otherwise."""
+    if out is not sys.stdout or not (_is_tty(sys.stdin) and _is_tty(out)):
+        return None
+    try:
+        import curses
+    except ImportError:
+        return None
+    try:
+        curses.setupterm(fd=out.fileno())
+        addressable = curses.tigetstr("cup") is not None
+    except (curses.error, OSError, ValueError):
+        return None
+    if not addressable:
+        return None
+    # NO_COLOR turns colour off when it is set and not empty
+    color = not os.environ.get("NO_COLOR")
+    return _CursesScreen(color)
 
 
 def _write(out: TextIO, text: str) -> None:
@@ -2851,77 +3052,6 @@ class _StatusPage:
         self._version, self._written = version, self._clock()
 
 
-def _frame(lines: list[str], first: bool) -> str:
-    """A view drawn over the whole screen: from the top left, each line
-    cleared to its end, and the screen cleared below the last."""
-    start = (HIDE_CURSOR + CLEAR_SCREEN if first else "") + HOME
-    body = "".join(line + CLEAR_LINE + "\n" for line in lines)
-    return start + body + CLEAR_BELOW
-
-
-def _row(row: int) -> str:
-    """The cursor moved to the start of `row`, counted from 1."""
-    return f"\x1b[{row};1H"
-
-
-class _Screen:
-    """What the view has drawn on a terminal, so that a refresh writes
-    only the lines that changed. Lines compare as render_lines gives them,
-    styles included, so a line whose colour changes is drawn again; each
-    is cut to the terminal's width in columns (_clip counts a wide
-    character as 2 and a combining mark as 0), so it fills one row. A
-    frame leaves the cursor at the start of the row below its last line,
-    where a prompt opens. The whole view is drawn again on the first
-    frame, when the terminal's size changes, and after `forget`
-    (something else has written over the screen, or the operator asks
-    for a repaint)."""
-
-    def __init__(self) -> None:
-        self._lines: list[str] | None = None
-        self._size: tuple[int, int] | None = None
-
-    def forget(self) -> None:
-        self._lines = None
-
-    def frame(self, lines: list[str], size: tuple[int, int]) -> str:
-        """What to write to show `lines` on a terminal of `size`
-        (columns, rows): nothing when the screen already shows them."""
-        old, first = self._lines, self._size is None
-        if size != self._size:
-            old = None
-        self._lines, self._size = list(lines), size
-        if old is None:
-            return _frame(lines, first)
-        changed = [
-            _row(row) + line + CLEAR_LINE
-            for row, line in enumerate(lines, 1)
-            if row > len(old) or old[row - 1] != line
-        ]
-        end = _row(len(lines) + 1)
-        if len(old) > len(lines):
-            # the old frame's tail, below the new frame's last line
-            return "".join(changed) + end + CLEAR_BELOW
-        return "".join(changed) + end if changed else ""
-
-
-def _on_continue(action: Callable[[], None]) -> Callable[[], None]:
-    """Call `action` each time the process is continued after a stop
-    (SIGCONT, as the shell's `fg` sends after Ctrl-Z), until the function
-    returned is called, which puts the earlier handler back. Nothing is
-    done where there is no SIGCONT or off the main thread, where no
-    handler can be set."""
-    number = getattr(signal, "SIGCONT", None)
-    if (
-        number is None
-        or threading.current_thread() is not threading.main_thread()
-    ):
-        return lambda: None
-    previous = signal.signal(number, lambda *_: action())
-    if previous is None:
-        previous = signal.SIG_DFL
-    return lambda: signal.signal(number, previous)
-
-
 def _typed_command(
     keys: Keys, path: Path, summary: Summary
 ) -> CommandResult | None:
@@ -2947,43 +3077,52 @@ def watch(
     serve: str | None = None,
     out: TextIO | None = None,
     keys: Keys | None = None,
+    screen: Screen | None = None,
     clock: Callable[[], datetime] | None = None,
     size: Callable[[], tuple[int, int]] | None = None,
-    terminal: bool | None = None,
 ) -> int:
     """Follow a run directory until the operator quits (`q`, or Ctrl-C):
-    refresh every `interval` seconds, draw the terminal view in place, and
-    write the status page into the run directory (`page`; _StatusPage says
+    refresh every `interval` seconds, draw the terminal view, and write
+    the status page into the run directory (`page`; _StatusPage says
     when). The run goes on whatever the monitor does.
 
     `serve` ('ADDRESS:PORT') serves the page, and nothing else, for as
     long as the monitor runs (serve_status); it needs `page`, and is off
-    by default. ':' or Enter opens a command line (handle_command): pause,
-    resume or abort the run or a slice. Ctrl-L draws the whole view
-    again, and so does the next refresh after the process is continued
-    from a stop (_on_continue). On an output that is not a
-    terminal the view is printed afresh whenever the run changes, without
-    styles, and commands are not read. `once` prints one view, writes the
-    page and returns. `keys`, `clock`, `size` (columns, rows) and
-    `terminal` (whether `out` is one) stand in for the terminal in tests."""
+    by default.
+
+    On a terminal (_default_screen, or `screen`) the view fills the
+    window, its footer on the bottom rows, and is drawn again at each
+    refresh, the screen sending only what changed; keys are waited for
+    for `interval` seconds. ':' or Enter opens a command line
+    (handle_command): pause, resume or abort the run or a slice. Ctrl-L
+    sends the whole screen again; a resize draws the view at the new
+    size at once. Otherwise the view is printed afresh whenever the run
+    changes, without styles, its lines cut to the width `size` gives
+    (columns, rows; the terminal's or the environment's by default), and
+    keys come only from `keys` (none by default; then, on a terminal,
+    the footer says Ctrl-C quits: PLAIN_HINT). `once` prints one
+    view, writes the page and returns. `keys`, `screen`, `clock` and
+    `size` stand in for the terminal in tests."""
     path = Path(path)
     out = out or sys.stdout
     clock = clock or (lambda: datetime.now(UTC))
-    terminal = _is_tty(out) if terminal is None else terminal
-    color = (
-        terminal
-        and not os.environ.get("NO_COLOR")
-        and os.environ.get("TERM") != "dumb"
-    )
     if serve is not None and not page:
         raise ValueError("serving the status page needs the page written")
     address = parse_address(serve) if serve is not None and not once else None
-    if keys is None:
-        keys = NoKeys() if once else _default_keys(out)
-    hint = (
-        "Ctrl-C: quit (keys are read only from a terminal)"
-        if isinstance(keys, NoKeys)
-        else f"':' or Enter: {GRAMMAR}   q: quit"
+    if once:
+        screen = None
+    elif screen is None and keys is None:
+        screen = _default_screen(out)
+    source: Keys = screen or keys or NoKeys()
+    hint = f"':' or Enter: {GRAMMAR}   q: quit"
+    # printed to a terminal curses does not draw on, where no key is read
+    plain_hint = (
+        PLAIN_HINT
+        if screen is None
+        and not once
+        and isinstance(source, NoKeys)
+        and _is_tty(out)
+        else ""
     )
     monitor = RunMonitor(path)
     status_page = _StatusPage(path) if page else None
@@ -2995,15 +3134,8 @@ def watch(
     )
     message = ""
     shown = None
-    screen = _Screen()
-    # the shell may draw over the view while the monitor is stopped
-    restore = (
-        _on_continue(screen.forget)
-        if terminal and not once
-        else (lambda: None)
-    )
     try:
-        with keys:
+        with source:
             while True:
                 monitor.refresh()
                 summary = monitor.summary(clock())
@@ -3015,38 +3147,39 @@ def watch(
                     message,
                 )
                 footer = [note for note in notes if note]
-                columns, rows = (
-                    size() if size else shutil.get_terminal_size((100, 40))
-                )
-                # a line as wide as the terminal would wrap on some
-                width = max(1, columns - 1)
-                if once:
-                    view = render_terminal(summary, width=width, footer=footer)
-                    _write(out, view + "\n")
-                    return 0
-                if terminal:
-                    lines = render_lines(
-                        summary,
-                        width=width,
-                        height=max(1, rows - 1),
-                        color=color,
-                        footer=[*footer, hint],
-                        fill=True,
+                if screen is not None:
+                    _, rows = screen.size()
+                    screen.draw(
+                        render_rows(
+                            summary,
+                            height=max(1, rows),
+                            footer=[*footer, hint],
+                            fill=True,
+                        )
                     )
-                    drawn = screen.frame(lines, (columns, rows))
-                    if drawn:
-                        _write(out, drawn)
-                elif monitor.version != shown:
-                    view = render_terminal(summary, width=width, footer=footer)
-                    _write(out, view + "\n\n")
+                else:
+                    columns, _ = (
+                        size() if size else shutil.get_terminal_size((100, 40))
+                    )
+                    # a line as wide as the terminal would wrap on some
+                    width = max(1, columns - 1)
+                    if once or monitor.version != shown:
+                        view = render_terminal(
+                            summary,
+                            width=width,
+                            footer=[*footer, plain_hint]
+                            if plain_hint
+                            else footer,
+                        )
+                        _write(out, view + ("\n" if once else "\n\n"))
+                    if once:
+                        return 0
                 shown = monitor.version
-                key = keys.wait(interval)
+                key = source.wait(interval)
                 if key in ("q", "Q"):
                     return 0
                 if key in (":", "\r", "\n"):
-                    # the prompt and its echo write over the view
-                    screen.forget()
-                    result = _typed_command(keys, path, summary)
+                    result = _typed_command(source, path, summary)
                     if result is None:
                         continue
                     if result.quit:
@@ -3056,17 +3189,14 @@ def watch(
                 elif key in ("?", "h"):
                     message = " | ".join(line.strip() for line in HELP)
                     shown = None
-                elif key == REPAINT:
-                    screen.forget()
+                elif key == REPAINT and screen is not None:
+                    screen.repaint()
     except KeyboardInterrupt:
         return 0
     finally:
-        restore()
         if server is not None:
             server.shutdown()
             server.server_close()
-        if terminal and not once:
-            _write(out, SHOW_CURSOR + "\n")
 
 
 # -- a command line -----------------------------------------------------------
