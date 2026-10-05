@@ -66,12 +66,24 @@ class TestKinshipWordsAreNoNames:
         ) in MANIFEST
 
     def test_the_manifest_gives_a_kinship_term_with_a_name(self):
+        """The name beside the kinship word follows the label and alias
+        rules: "Aunt Pünktchen" gives Klara's nickname as an alias, and the
+        1958 letter's "дядя Себастьян", his only name there, his label."""
         assert (
             'a kinship term with a name ("Aunt Pünktchen", "Tante Rahel", '
-            '"дядя Себастьян"): the name alone is the alias ("Pünktchen", '
-            '"Rahel", "Себастьян"), never the whole phrase and never the '
-            "kinship word"
+            '"дядя Себастьян"): never the whole phrase and never the kinship '
+            "word; the name follows the label and alias rules below: a "
+            'nickname is an alias ("Pünktchen"), and a given name that is the '
+            'person\'s only name in the document is the label ("Себастьян");'
         ) in MANIFEST
+
+    def test_the_manifest_lists_no_sole_given_name_as_an_alias(self):
+        """A bare given name is never an alias (the name-composition
+        rule), so no example may make one."""
+        assert '"Rahel", "Себастьян"), never the whole phrase' not in MANIFEST
+        assert 'the name alone is the alias ("Pünktchen", "Rahel"' not in (
+            MANIFEST
+        )
 
     def test_the_manifest_gives_a_writers_your_father(self):
         assert (
@@ -92,13 +104,27 @@ class TestKinshipWordsAreNoNames:
             "A kinship word is never the label or an alias of a person the "
             "document names: take the name, never the kinship word."
         ) in CHUNK
+
+    def test_the_chunk_gives_a_kinship_term_alone_and_with_a_name(self):
         assert (
-            'with a name ("Aunt Pünktchen", "Tante Rahel", "дядя '
-            'Себастьян") only the name is an alias ("Pünktchen")'
+            'A kinship term alone ("Oma", "Mum", "Grandma", "Mem") is no '
+            'alias; with a name ("Aunt Pünktchen", "Tante Rahel", "дядя '
+            'Себастьян") only the name counts, by the label and alias rules: '
+            'a nickname is an alias ("Pünktchen"), and a given name that is '
+            "the person's only name in the document is the label "
+            '("Себастьян");'
         ) in CHUNK
+
+    def test_the_chunk_gives_a_writers_your_father(self):
         assert (
             'a writer\'s "your father" ("Dein Vater", "Ваш отец") for a '
             "person named elsewhere leaves that name the label"
+        ) in CHUNK
+
+    def test_the_chunk_labels_only_an_unnamed_person_by_kinship_words(self):
+        assert (
+            "Only a person the document never names is labelled with its "
+            "kinship words."
         ) in CHUNK
 
     def test_the_line_assignment_label_is_no_kinship_word(self):
@@ -112,6 +138,25 @@ class TestKinshipWordsAreNoNames:
             "names: take the name, never the kinship word."
         ) in SINGLE
 
+    def test_the_single_call_gives_its_examples(self):
+        assert (
+            '"Aunt Pünktchen" is labelled "Pünktchen", or a fuller name the '
+            'document gives her, and a writer\'s "Dein Vater" ("your '
+            "father\") takes the father's name where the document gives it."
+        ) in SINGLE
+
+    def test_the_single_call_labels_only_an_unnamed_person_by_kinship(self):
+        assert (
+            "Only a person the document never names is labelled with its "
+            'kinship words ("Mem").'
+        ) in SINGLE
+
+    def test_the_critic_flags_a_kinship_label_too(self):
+        assert flat(critique.CATEGORIES["kinship_term_alias"]).startswith(
+            "a kinship term or other relational appellation recorded as an "
+            "alias, or as the label of a person the document names"
+        )
+
 
 # -- unclassified_entity only where no kind fits (#460, ADR-0013) -------------
 
@@ -122,15 +167,24 @@ class TestTheEscapeHatch:
             "This is a LAST resort, right only where nothing in the list fits"
         ) in MANIFEST
 
+    def test_the_manifest_leads_into_the_cases_with_a_kind(self):
+        assert (
+            "These always have a real kind, the one the relation calls for "
+            "(above):"
+        ) in MANIFEST
+
     @pytest.mark.parametrize(
         "case",
         [
             "an agency, a ministry, an office, a chancellery, a registry or "
             "a firm's department is an `organization` (the "
-            "Wiedergutmachungsamt Peiltal, the Standesamt Flörburg)",
+            "Wiedergutmachungsamt Peiltal, the Standesamt Flörburg), or a "
+            "`place` where the source names it only as where something "
+            "happened;",
             "a cemetery, a building, an address or another site is a "
-            "`place` (the Friedhof Flörburg, Brunnenring 35)",
-            "a named ship or aircraft is a `vessel` (the RMS Flund)",
+            "`place` (the Friedhof Flörburg, Brunnenring 35), unless the "
+            "source shows it acting (above);",
+            "a named ship is a `vessel` (the RMS Flund);",
             "a law, a decree, a gazette or a register the source cites is a "
             "`legal_instrument`",
         ],
@@ -145,8 +199,24 @@ class TestTheEscapeHatch:
             "A letter or a certificate the source mentions, other than the "
             "document you are reading, has no kind in the list: it is "
             '`unclassified_entity` with its type_hint ("letter", "death '
-            'certificate")'
+            "certificate\"), as the 1958 letter's enclosed certificate of "
+            "Rudolf's death is."
         ) in MANIFEST
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [MANIFEST, LINES, SINGLE],
+        ids=["manifest", "lines", "single"],
+    )
+    def test_an_aircraft_is_no_vessel(self, prompt):
+        """The manifest's vessel is a ship or boat (Q11446): a named
+        aircraft keeps the escape hatch."""
+        assert "aircraft is a `vessel`" not in prompt
+        assert "ship or aircraft" not in prompt
+        assert (
+            "aircraft is no vessel: it is `unclassified_entity` with the "
+            'type_hint "aircraft".'
+        ) in prompt.replace("no `vessel` either", "no vessel")
 
     def test_no_example_of_the_hatch_has_a_kind(self):
         """A regiment is a military_unit and a building a place: neither
@@ -154,29 +224,42 @@ class TestTheEscapeHatch:
         assert '"military regiment"' not in MANIFEST
         assert "a building that is not a settlement" not in MANIFEST
 
-    @pytest.mark.parametrize(
-        "prompt", [LINES, SINGLE], ids=["lines", "single"]
-    )
-    def test_the_other_prompts_name_the_cases_too(self, prompt):
+    def test_the_line_assignment_names_the_cases_too(self):
         assert (
             "`unclassified_entity` is right only where no kind fits: an "
             "agency, an office or a firm's department is an organization; a "
-            "cemetery or a building a place; a named ship or aircraft a "
-            "vessel."
-        ) in prompt
+            "cemetery or a building a place; a named ship a vessel."
+        ) in LINES
+
+    def test_the_single_call_names_the_cases_with_the_place_exception(self):
+        """The single call has no relation-decides-the-kind rule of its
+        own, so its agency case carries the exception itself."""
+        assert (
+            "`unclassified_entity` is right only where no kind fits: an "
+            "agency, an office or a firm's department is an organization, "
+            "unless the source names it only as where something happened, "
+            "which makes it a place; a cemetery or a building is a place; a "
+            "named ship a vessel."
+        ) in SINGLE
 
     def test_the_critic_names_the_cases_and_spares_a_mentioned_document(self):
         assert (
             "an agency, office or firm's department is an `organization`; a "
-            "cemetery or a building a `place`; a named ship or aircraft a "
-            "`vessel`."
+            "cemetery or a building a `place`; a named ship a `vessel`."
         ) in ESCAPE_HATCH
         assert (
-            "A letter or a certificate a source mentions rightly takes it"
+            "A named aircraft rightly takes it, as does a letter or a "
+            "certificate a source mentions, since an artifact kind is no kind "
+            "of entity"
         ) in ESCAPE_HATCH
 
 
 # -- a group is no human, a date no event (#464) ------------------------------
+
+CHILD_COUNT = (
+    "A count of children the source states is the parent's "
+    "`number_of_children`, whether or not it names them."
+)
 
 
 class TestGroupsAndDates:
@@ -188,10 +271,14 @@ class TestGroupsAndDates:
             "source names is a `human` of their own (Ursula, Klara, Gustav)"
         ) in MANIFEST
 
-    def test_unnamed_members_are_a_count(self):
+    def test_unnamed_members_are_no_entity_and_a_count_is_kept(self):
+        """A stated count is kept beside named children too: the universe
+        records Eugen's three children both ways."""
         assert (
             'where it names none ("drei Kinder"), the group is no entity at '
-            "all, and their count is the parent's `number_of_children` claim"
+            "all. A count of children the source states is the parent's "
+            "`number_of_children` claim at extraction, whether or not it "
+            "names them;"
         ) in MANIFEST
 
     def test_the_manifest_never_makes_a_date_an_entity(self):
@@ -203,11 +290,38 @@ class TestGroupsAndDates:
         ) in MANIFEST
 
     @pytest.mark.parametrize(
+        "prompt", [CHUNK, SINGLE], ids=["chunk", "single"]
+    )
+    def test_a_stated_child_count_is_kept(self, prompt):
+        """The entity path's chunk prompt claims the count the manifest
+        leaves to extraction."""
+        assert CHILD_COUNT in prompt
+
+    def test_the_line_assignment_family_clause(self):
+        assert (
+            "A group of people is never one human: it is a family where the "
+            "source presents a family or household, else each member it "
+            "names."
+        ) in LINES
+
+    def test_the_line_assignment_counts_only_children(self):
+        """ "Sebastian hatte drei Brüder" gives no number_of_children."""
+        assert (
+            "Where it names none of a person's children, their count is that "
+            "person's `number_of_children`."
+        ) in LINES
+
+    def test_the_single_call_family_clause(self):
+        assert (
+            '"The Löbig children" is a family where the source presents a '
+            "family or household, else each child it names."
+        ) in SINGLE
+
+    @pytest.mark.parametrize(
         "prompt", [LINES, SINGLE], ids=["lines", "single"]
     )
     def test_the_other_prompts_say_it_too(self, prompt):
         assert "group of people is never one human" in prompt
-        assert "their count is the parent's `number_of_children`" in prompt
         assert (
             "A year or a date alone is no entity and no event: it dates the "
             "event it belongs to."
@@ -230,8 +344,19 @@ class TestDatePrecision:
             'A century or a decade the source implies ("in the thirties", '
             '"в тридцатые годы") is read in the document\'s own context (the '
             '1930s, in a letter of 1958), never as a literal "1st century" or '
-            "the year 30."
+            "the year 30"
         ) in prompt
+
+
+def test_the_chunk_gives_a_month_its_precision():
+    assert '"im Mai 1938" is month precision.' in CHUNK
+
+
+def test_the_chunk_notes_an_implied_century():
+    assert (
+        'never as a literal "1st century" or the year 30, with a '
+        "date_reading note."
+    ) in CHUNK
 
 
 # -- containment only where the source states it (#465, ADR-0009) ------------
@@ -241,8 +366,25 @@ class TestContainmentInThePrompts:
     def test_the_chunk_gives_containment_only_where_stated(self):
         assert (
             "Give a place's containment (`part_of`, its country among them) "
-            "only where the source states it for THAT place, in the place's "
-            'own mention ("Fläckfeld, Kreis Mockburg";'
+            "only where the source states it: in the place's mention "
+            '("Fläckfeld, Kreis Mockburg"), in the fields a form gives that '
+            "place (a certificate's village, district and oblast fields), or "
+            "in a chain of containers, which states each link"
+        ) in CHUNK
+
+    @pytest.mark.parametrize(
+        "prompt", [CHUNK, SINGLE], ids=["chunk", "single"]
+    )
+    def test_a_chain_states_each_link(self, prompt):
+        assert (
+            '("Snylsjum, gemeente Drakeradiel, Fryslân" also puts gemeente '
+            "Drakeradiel in Fryslân)"
+        ) in prompt
+
+    def test_the_chunk_says_why(self):
+        assert (
+            "Containment the source does not state is world knowledge, "
+            "proposed later by the place pass (ADR-0009)"
         ) in CHUNK
 
     def test_the_chunk_never_infers_or_carries_it_over(self):
@@ -259,7 +401,9 @@ class TestContainmentInThePrompts:
     def test_the_single_call_says_it_too(self):
         assert (
             "Give a place's containment (`part_of`, its country among them) "
-            "only where the source states it for that place"
+            "only where the source states it: in the place's mention "
+            '("Fläckfeld, Kreis Mockburg"), in the fields a form gives that '
+            "place, or in a chain of containers, which states each link"
         ) in SINGLE
         assert (
             "Never infer it from what you know of a place, and never carry it "
@@ -347,11 +491,20 @@ class TestTheCriticChecksContainment:
     def test_the_category_names_the_check(self):
         assert CONTAINMENT_CATEGORY.startswith(
             "a place's `part_of` claim (its container, or its country) that "
-            "its excerpt does not state for that place"
+            "its excerpt does not state, neither in the place's mention, nor "
+            "in the fields a form gives that place, nor as a link of a chain "
+            "of containers"
+        )
+        assert "inferred from what is known of the place" in (
+            CONTAINMENT_CATEGORY
         )
         assert "carried over from another place's container" in (
             CONTAINMENT_CATEGORY
         )
+        assert (
+            '(Fläckfeld put in Kreis Peiltal on an excerpt that reads only "'
+            'Fläckfeld")'
+        ) in CONTAINMENT_CATEGORY
         assert "(ADR-0009): suggest drop" in CONTAINMENT_CATEGORY
 
     def test_the_prompt_lists_the_category_and_asks_for_the_check(self):
@@ -359,7 +512,9 @@ class TestTheCriticChecksContainment:
         assert "- unsupported_containment: a place's `part_of` claim" in prompt
         assert (
             "Check each against its excerpt: a containment the excerpt does "
-            "not state for that place is a concern (unsupported_containment)."
+            "not state (in the place's mention, in the fields a form gives "
+            "that place, or as a link of a chain of containers) is a concern "
+            "(unsupported_containment)."
         ) in flat(prompt)
 
     def test_each_part_of_claim_is_shown_with_its_excerpt(self):
@@ -419,3 +574,57 @@ class TestTheCriticChecksContainment:
         }
         checked = critique.check(finding, batch_, load_vocabulary())
         assert isinstance(checked, critique.Finding)
+
+    @pytest.mark.parametrize(
+        "brk", ["\r", "\x0b", "\x0c", "\x1c", "\x85", "\u2028", "\u2029"]
+    )
+    def test_no_line_break_splits_a_containment_line(self, brk):
+        """JSON leaves U+2028, U+2029 and NEL raw, and splitlines() breaks
+        at each: every break is escaped, so the line stays whole."""
+        prompt = critic_prompt(
+            containment_batch(("e01", "e02", f"Fläckfeld,{brk}Kreis Mockburg"))
+        )
+        (line,) = [
+            line
+            for line in prompt.splitlines()
+            if line.startswith("- e01 part_of e02: ")
+        ]
+        assert line.endswith('Kreis Mockburg"')
+
+
+@pytest.mark.parametrize(
+    "brk", ["\r", "\x0b", "\x0c", "\x1c", "\x85", "\u2028", "\u2029"]
+)
+def test_no_line_break_splits_a_listed_claim(brk):
+    """A text value listed in the claims block stays on its line too."""
+    batch_ = ClaimBatch.model_validate(
+        {
+            "extraction_run": RUN,
+            "entities": [
+                {"id": "e01", "label": "Sebastian Löbig", "kind": "human"}
+            ],
+            "claims": [
+                {
+                    "subject": {"kind": "local", "local_id": "e01"},
+                    "property": "occupation",
+                    "value": {
+                        "type": "string",
+                        "value": f"Hutmacher{brk}Meister",
+                    },
+                    "source": {"artifact": SCAN.model_dump(mode="json")},
+                }
+            ],
+        }
+    )
+    (listing,) = critique.listings(batch_)
+    assert (
+        listing[2]
+        == "Hutmacher"
+        + brk.encode("unicode_escape").decode("ascii")
+        + "Meister"
+    )
+    assert any(
+        line.startswith("e01 | occupation | Hutmacher")
+        and line.endswith("Meister")
+        for line in critic_prompt(batch_).splitlines()
+    )

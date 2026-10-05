@@ -9,8 +9,9 @@ with an axis and a category, not a `target` string (§C, ADR-0023 §3).
 Amended by #460 (2026-10-05): the entity-manifest prompt says the escape
 hatch is right only where no kind in the list fits, and names the cases
 that have one (an agency, office or department is an organization; a
-cemetery or building a place; a named ship or aircraft a vessel). A
-letter or certificate a source mentions keeps it, since artifact kinds
+cemetery or building a place; a named ship a vessel). A named aircraft
+keeps it (type hint "aircraft"), since a vessel is a ship or boat, and
+so does a letter or certificate a source mentions, since artifact kinds
 are no entity kinds; the critic's `escape_hatch_misused` says the same.
 
 Amended by [ADR-0035](0035-mention-records.md) (owner decision

@@ -197,7 +197,7 @@ Rules — these mirror the archive's non-negotiable conventions:
   precision. A century or a decade the source implies ("in the
   thirties", "в тридцатые годы") is read in the document's own context
   (the 1930s, in a letter of 1958), never as a literal "1st century" or
-  the year 30.
+  the year 30, with a date_reading note.
 - Every claim MUST include the source reference: the artifact
   {{"kind": "artifact", "sha1": "{artifact_sha1}"}}, plus page number and a
   short verbatim transcription excerpt supporting it. The page number is
@@ -309,10 +309,14 @@ Rules — these mirror the archive's non-negotiable conventions:
   A kinship word is never the label or an alias of a person the document
   names: take the name, never the kinship word. A kinship term alone
   ("Oma", "Mum", "Grandma", "Mem") is no alias; with a name ("Aunt
-  Pünktchen", "Tante Rahel", "дядя Себастьян") only the name is an alias
-  ("Pünktchen"); a writer's "your father" ("Dein Vater", "Ваш отец") for
+  Pünktchen", "Tante Rahel", "дядя Себастьян") only the name counts, by
+  the label and alias rules: a nickname is an alias ("Pünktchen"), and a
+  given name that is the person's only name in the document is the label
+  ("Себастьян"); a writer's "your father" ("Dein Vater", "Ваш отец") for
   a person named elsewhere leaves that name the label. Only a person the
   document never names is labelled with its kinship words.
+- A count of children the source states is the parent's
+  `number_of_children`, whether or not it names them.
 - Events and their participants (ADR-0035 §3.2): a `participant` claim
   has the EVENT as subject and the person as value, with an
   `object_has_role` qualifier saying how they took part: `principal` (in
@@ -371,12 +375,15 @@ Rules — these mirror the archive's non-negotiable conventions:
   `end_time` claim (a firm's founding, a detention's start) is a date
   value that `earliest_date` and `latest_date` bound.
 - Give a place's containment (`part_of`, its country among them) only
-  where the source states it for THAT place, in the place's own mention
-  ("Fläckfeld, Kreis Mockburg"; "Snylsjum, gemeente Drakeradiel,
-  Fryslân, Nederlân"). Containment the source does not state is world
-  knowledge, proposed later by the place pass (ADR-0009): never infer it
-  from what you know of a place (that Flörburg lies in Kreis Peiltal, in
-  Hesse), and never carry it over from another place the document names.
+  where the source states it: in the place's mention ("Fläckfeld, Kreis
+  Mockburg"), in the fields a form gives that place (a certificate's
+  village, district and oblast fields), or in a chain of containers,
+  which states each link ("Snylsjum, gemeente Drakeradiel, Fryslân" also
+  puts gemeente Drakeradiel in Fryslân). Containment the source does not
+  state is world knowledge, proposed later by the place pass (ADR-0009):
+  never infer it from what you know of a place (that Flörburg lies in
+  Kreis Peiltal, in Hesse), and never carry it over from another place
+  the document names.
   Where a source writes "Flörburg, Kreis Peiltal" and, elsewhere, a bare
   "Fläckfeld", Fläckfeld takes no `part_of` at all.
 - Persecution and displacement are EVENTS, not relations and not
@@ -431,12 +438,14 @@ response, label as written — prefer the fullest name the document gives
 for a person anywhere, never a kinship word where the document names the
 person, instance_of from: {kinds}).
 A group of people is never one human: it is a family where the source
-presents a family or household, else each member it names; where it
-names none, their count is the parent's `number_of_children`. A year or
-a date alone is no entity and no event: it dates the event it belongs
-to. `unclassified_entity` is right only where no kind fits: an agency,
-an office or a firm's department is an organization; a cemetery or a
-building a place; a named ship or aircraft a vessel.
+presents a family or household, else each member it names. Where it
+names none of a person's children, their count is that person's
+`number_of_children`. A year or a date alone is no entity and no event:
+it dates the event it belongs to. `unclassified_entity` is right only
+where no kind fits: an agency, an office or a firm's department is an
+organization; a cemetery or a building a place; a named ship a vessel.
+A named aircraft is no vessel: it is `unclassified_entity` with the
+type_hint "aircraft".
 The relation decides the kind: an institution named only as where
 something happened is a place; one the source shows acting (issuing,
 employing, educating, carrying out an event) is an organization.
@@ -517,8 +526,9 @@ Also:
   "Sebastian's children" is a `family` where the source presents them as
   a family or household; else each child the source names is a `human`
   of their own (Ursula, Klara, Gustav); where it names none ("drei
-  Kinder"), the group is no entity at all, and their count is the
-  parent's `number_of_children` claim at extraction;
+  Kinder"), the group is no entity at all. A count of children the
+  source states is the parent's `number_of_children` claim at
+  extraction, whether or not it names them;
 - a year or a date alone ("1938", "im Jahre 1905") is never an entity,
   and never an `event`: it is a time value (`point_in_time`,
   `start_time`, `end_time`) on the event it dates, given at extraction;
@@ -572,8 +582,10 @@ names: the label and aliases take the name, never the kinship word
   an alias; it is a label only for a person the document never names
   (below);
 - a kinship term with a name ("Aunt Pünktchen", "Tante Rahel", "дядя
-  Себастьян"): the name alone is the alias ("Pünktchen", "Rahel",
-  "Себастьян"), never the whole phrase and never the kinship word;
+  Себастьян"): never the whole phrase and never the kinship word; the
+  name follows the label and alias rules below: a nickname is an alias
+  ("Pünktchen"), and a given name that is the person's only name in the
+  document is the label ("Себастьян");
 - a writer's "your father" ("Dein Vater", "Ваш отец", "your aunt") for a
   person the document names elsewhere: the label is that name, and the
   phrase is neither label nor alias.
@@ -714,13 +726,15 @@ Rules:
   * a cemetery, a building, an address or another site is a `place`
     (the Friedhof Flörburg, Brunnenring 35), unless the source shows it
     acting (above);
-  * a named ship or aircraft is a `vessel` (the RMS Flund);
+  * a named ship is a `vessel` (the RMS Flund);
   * a law, a decree, a gazette or a register the source cites is a
     `legal_instrument` (above).
   A letter or a certificate the source mentions, other than the document
   you are reading, has no kind in the list: it is `unclassified_entity`
   with its type_hint ("letter", "death certificate"), as the 1958
-  letter's enclosed certificate of Rudolf's death is.
+  letter's enclosed certificate of Rudolf's death is. A named aircraft
+  is no `vessel` either: it is `unclassified_entity` with the type_hint
+  "aircraft".
 - Prefer completeness: an entity mentioned once still gets an entry.
 - extract=false for entities that appear ONLY in non-assertive context:
   travel or event logistics (schedules, bookings, contact lists), people

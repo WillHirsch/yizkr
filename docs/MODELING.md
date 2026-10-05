@@ -554,8 +554,10 @@ artifact a new QID, changes neither.
   pairs connected by a `(location|part_of)+` path — differences of
   resolution, not contradictions.
 - Extraction gives a place's `part_of` only where the source states it
-  for that place ("Fläckfeld, Kreis Mockburg"), never from what is known
-  of the place or from another place's container; the extraction critic
+  (in the place's mention, "Fläckfeld, Kreis Mockburg"; in the fields a
+  form gives that place; or as a link of a chain of containers), never
+  from what is known of the place or from another place's container; the
+  extraction critic
   flags a `part_of` claim its excerpt does not state
   (`unsupported_containment`, ADR-0023).
 

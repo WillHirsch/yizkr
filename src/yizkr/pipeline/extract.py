@@ -83,16 +83,22 @@ Rules — these mirror the archive's non-negotiable conventions:
   names is labelled with its kinship words ("Mem").
 - Kinds: a group of people is never one human. "The Löbig children" is
   a family where the source presents a family or household, else each
-  child it names; where it names none, their count is the parent's
-  `number_of_children`. A year or a date alone is no entity and no event:
-  it dates the event it belongs to. `unclassified_entity` is right only
-  where no kind fits: an agency, an office or a firm's department is an
-  organization; a cemetery or a building a place; a named ship or
-  aircraft a vessel.
+  child it names. A count of children the source states is the parent's
+  `number_of_children`, whether or not it names them. A year or a date
+  alone is no entity and no event: it dates the event it belongs to.
+  `unclassified_entity` is right only where no kind fits: an agency, an
+  office or a firm's department is an organization, unless the source
+  names it only as where something happened, which makes it a place; a
+  cemetery or a building is a place; a named ship a vessel. A named
+  aircraft is no vessel: it is `unclassified_entity` with the type_hint
+  "aircraft".
 - Give a place's containment (`part_of`, its country among them) only
-  where the source states it for that place ("Fläckfeld, Kreis
-  Mockburg"). Never infer it from what you know of a place, and never
-  carry it over from another place the document names.
+  where the source states it: in the place's mention ("Fläckfeld, Kreis
+  Mockburg"), in the fields a form gives that place, or in a chain of
+  containers, which states each link ("Snylsjum, gemeente Drakeradiel,
+  Fryslân" also puts gemeente Drakeradiel in Fryslân). Never infer it
+  from what you know of a place, and never carry it over from another
+  place the document names.
 - Use ONLY these property keys (property key: datatype — what it means),
   for claims and qualifiers alike — a claim naming any other key is
   discarded. The description is authoritative: it says what the VALUE
