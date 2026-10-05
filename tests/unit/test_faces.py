@@ -938,6 +938,28 @@ class TestRowApprovalRecord:
         ]
         assert unapproved_depicts(approved) == []
 
+    def test_edited_locator_cells_leave_approved_claims_as_batched(
+        self, tmp_path
+    ):
+        faces = portrait_faces()
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(faces, review_csv)
+        edit_rows(
+            review_csv,
+            lambda row: {
+                **row,
+                "page": "5",
+                "printed_page": "17",
+                "region": "1%,2%,3%,4%",
+                "decision": "approve",
+            },
+        )
+        approved, warnings = apply_review(faces, review_csv)
+        assert warnings == []
+        assert approved.claims == [
+            approved_on_its_row(claim, faces) for claim in faces.claims
+        ]
+
     def test_record_is_not_content(self):
         faces = portrait_faces()
         claim = faces.claims[0]

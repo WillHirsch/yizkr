@@ -25,6 +25,11 @@ Design constraints:
   on the same host.
 * Pure functions over query results: the SPARQL runner is injectable,
   so rendering is unit-testable offline.
+* Only supported dates are shown (ADR-0034): the build first asks the
+  graph for any date before the common era or in a calendar other than
+  the proleptic Gregorian, as a value, a qualifier or in a reference, and
+  stops with UnsupportedDate naming each item and statement that holds
+  one; ``format_time`` refuses a date before the common era too.
 """
 
 from __future__ import annotations
@@ -40,9 +45,9 @@ from functools import cached_property
 from pathlib import Path
 
 from yizkr import disagreement
-from yizkr.claims import century_of
 from yizkr.core import sparql
 from yizkr.core.config import Config
+from yizkr.core.dates import check_time, unsupported_in_graph
 from yizkr.core.privacy import (
     BIRTHS_QUERY,
     DEFAULT_CUTOFF_YEARS,
@@ -294,30 +299,36 @@ def page(title: str, body: str, root: str = "") -> str:
     )
 
 
-def format_time(value: str, precision: str) -> str:
+def format_time(
+    value: str, precision: str, where: str = "a date the site shows"
+) -> str:
     """Wikibase dateTime + precision -> what the source actually said. A
-    century is the one Wikibase counts for the stored year (century_of):
-    at century precision, 1801 to 1900 are each the 19th century. The
-    query service gives a century's year as stored, so a century before
-    the common era counts back the same way: -1800 is the 18th."""
-    date = value[1:] if value.startswith(("+", "-")) else value
+    century is the one Wikibase counts for the stored year, from year 1:
+    at century precision, 1801 to 1900 are each the 19th century. A date
+    before the common era raises UnsupportedDate naming `where`
+    (ADR-0034): it is never shown. This is a backstop: the build has
+    already refused a graph holding one, naming its item and statement."""
+    check_time(value, None, where)
+    date = value[1:] if value.startswith("+") else value
     date = date.split("T")[0]
     year, _, rest = date.partition("-")
     month = rest.split("-")[0] if rest else ""
-    sign = "−" if value.startswith("-") else ""
     p = int(precision) if precision else 11
     if p <= 7:
-        return f"{sign}{century_of(int(year))}th century"
+        return f"{(int(year) + 99) // 100}th century"
     if p == 8:
-        return f"{sign}{int(year) // 10 * 10}s"
+        return f"{int(year) // 10 * 10}s"
     if p == 9:
-        return f"{sign}{int(year)}"
+        return f"{int(year)}"
     if p == 10:
-        return f"{sign}{int(year)}-{month}"
-    return f"{sign}{date}"
+        return f"{int(year)}-{month}"
+    return date
 
 
-def range_text(bounds: Iterable[tuple[str, str, str]]) -> str:
+def range_text(
+    bounds: Iterable[tuple[str, str, str]],
+    where: str = "a date the site shows",
+) -> str:
     """The range a source states for a date, as text to show beside it.
     Each bound is (the label of the qualifier that states it, its
     xsd:dateTime, its precision) and shows at its own precision, in the
@@ -326,7 +337,7 @@ def range_text(bounds: Iterable[tuple[str, str, str]]) -> str:
     source gives, so a range open at one end names the one bound it has
     ("earliest date: 1945"), never a closed range or a bare date."""
     return "; ".join(
-        f"{label}: {format_time(value, precision)}"
+        f"{label}: {format_time(value, precision, where)}"
         for label, value, precision in bounds
     )
 
@@ -430,11 +441,16 @@ class SiteBuilder:
             bounds.append(
                 (label, cell(row, bound), cell(row, f"{bound}Precision"))
             )
-        return range_text(bounds)
+        return range_text(bounds, f"{qid_of(row, 'person')} timeline date")
 
     # -- sections -----------------------------------------------------------
 
     def build(self) -> dict:
+        """Write the site. A graph holding a date before the common era or
+        in a calendar other than the proleptic Gregorian, anywhere, raises
+        UnsupportedDate naming its items and statements, before anything
+        is written (ADR-0034)."""
+        unsupported_in_graph(self.run, prefix_block(self.config.concept_uri))
         self.out.mkdir(parents=True, exist_ok=True)
         self._write("style.css", CSS)
         people = self.run(self._instance_query(PEOPLE_QUERY))
@@ -560,7 +576,8 @@ class SiteBuilder:
             text = cell(row, "valueLabel") or target
             rendered = f'<a href="{esc(target)}.html">{esc(text)}</a>'
         elif value.get("datatype", "").endswith("dateTime"):
-            rendered = esc(format_time(raw, cell(row, "precision")))
+            where = f"{qid_of(row, 'person')} statement {qid_of(row, 'st')}"
+            rendered = esc(format_time(raw, cell(row, "precision"), where))
         else:
             rendered = esc(cell(row, "valueLabel") or raw)
         qualifiers = [q for q in cell(row, "qualifierTexts").split("|") if q]
@@ -615,7 +632,13 @@ class SiteBuilder:
                 value = row.get("value", {})
                 raw = value.get("value", "")
                 if value.get("datatype", "").endswith("dateTime"):
-                    shown = esc(format_time(raw, cell(row, "precision")))
+                    where = (
+                        f"{subject_qid} as {qid_of(artifact, 'artifact')} "
+                        "asserts it"
+                    )
+                    shown = esc(
+                        format_time(raw, cell(row, "precision"), where)
+                    )
                 else:
                     shown = esc(
                         cell(row, "valueLabel")
@@ -694,6 +717,7 @@ class SiteBuilder:
                 current_year = year
                 body.append(f'<div class="year">{esc(year)}</div>')
             person = qid_of(row, "person")
+            where = f"{person} timeline date"
             source_qid = qid_of(row, "source")
             source_label = cell(row, "sourceLabel")
             source = (
@@ -705,7 +729,7 @@ class SiteBuilder:
             )
             body.append(
                 '<div class="entry">'
-                f"{esc(format_time(date, cell(row, 'precision')))}"
+                f"{esc(format_time(date, cell(row, 'precision'), where))}"
                 f"{qualifier_span(self.timeline_range(row))} — "
                 f'<a href="people/{esc(person)}.html">'
                 f"{esc(cell(row, 'personLabel'))}</a>, "
@@ -721,12 +745,14 @@ class SiteBuilder:
         a range for carries a display_date, the date with its range as the
         timeline page shows them; TimelineJS shows any other date from its
         year, and from its month and day when its precision reaches
-        them."""
+        them. A date before the common era raises UnsupportedDate, naming
+        its person (ADR-0034), as on the timeline page."""
         events = []
         for row in rows:
             date = cell(row, "date")
             if not date:
                 continue
+            check_time(date, None, f"{qid_of(row, 'person')} timeline date")
             clean = date.lstrip("+").split("T")[0]
             parts = clean.split("-")
             precision = int(cell(row, "precision") or 11)
@@ -737,7 +763,11 @@ class SiteBuilder:
                 start["day"] = parts[2]
             stated = self.timeline_range(row)
             if stated:
-                shown = format_time(date, cell(row, "precision"))
+                shown = format_time(
+                    date,
+                    cell(row, "precision"),
+                    f"{qid_of(row, 'person')} timeline date",
+                )
                 start["display_date"] = esc(f"{shown} ({stated})")
             events.append(
                 {
@@ -918,12 +948,15 @@ class SiteBuilder:
             low, high = disagreement.BOUNDS[row.qualifier]
             return qualifier_span(
                 range_text(
-                    (labels[key], time.value, str(time.precision))
-                    for key, time in (
-                        (low, side.value.earliest),
-                        (high, side.value.latest),
-                    )
-                    if time is not None
+                    (
+                        (labels[key], time.value, str(time.precision))
+                        for key, time in (
+                            (low, side.value.earliest),
+                            (high, side.value.latest),
+                        )
+                        if time is not None
+                    ),
+                    f"{row.entity_qid} {row.property}",
                 )
             )
 
@@ -931,7 +964,11 @@ class SiteBuilder:
             value = side.value
             if value.term.is_time:
                 precision = "" if value.precision is None else value.precision
-                shown = format_time(value.term.value, str(precision))
+                shown = format_time(
+                    value.term.value,
+                    str(precision),
+                    f"{row.entity_qid} {row.property}",
+                )
                 return esc(shown) + stated_range(row, side)
             if value.term.kind == "uri":
                 return esc(value.label or value.term.value.rsplit("/", 1)[-1])
