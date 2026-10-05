@@ -32,7 +32,9 @@ The checks, which docs/ANOMALIES.md describes one by one:
 * extraction: no entities or no claims from a non-trivial transcription,
   a fallback manifest or segmentation, and per document the shares of
   its chunk calls that failed, of its chunk answers cut off and of the
-  claims it was given that were rejected or unread;
+  claims it was given that were rejected or unread, and claims dated
+  before the birth the batch gives their subject or implausibly long
+  after it;
 * distributions: entities and claims per page, and critic findings per
   item reviewed, far from the median of the run's documents of the class
   (`document_class`);
@@ -109,6 +111,7 @@ from pydantic import (
     model_validator,
 )
 
+from yizkr.claims import century_of, century_years
 from yizkr.pipeline.rundir import (
     ABORT,
     ALERTS,
@@ -210,6 +213,10 @@ class Expected(Check):
     expected: list[str]
 
 
+class Lifespan(Check):
+    max_years_after_birth: int = Field(ge=0)
+
+
 class Confidence(Check):
     min_confidence: float = Field(ge=0, le=1)
 
@@ -272,6 +279,7 @@ class Checks(_Settings):
     chunk_failures: Share
     truncations: Share
     schema_rejects: Share
+    implausible_date: Lifespan
     entity_yield: Outlier
     claim_yield: Outlier
     critic_rate: Outlier
@@ -765,6 +773,95 @@ def batch_findings(
                 )
             )
     return found
+
+
+# the properties that date a person's birth, and the qualifiers that date
+# the claim they qualify; the bounds of a range (earliest_date and the
+# like) say where a date may lie, not where it is, and are left out
+BIRTH = "date_of_birth"
+DATING_QUALIFIERS = ("point_in_time", "start_time", "end_time")
+
+
+def _years(value: Any) -> tuple[int, int] | None:
+    """The first and last year a time value may stand for, at its
+    precision: a decade's ten years, a century's hundred as century_years
+    counts them, and otherwise its one year; None for a value that is no
+    time value."""
+    if _get(value, "type") != "time":
+        return None
+    year = _get(value, "year")
+    if isinstance(year, bool) or not isinstance(year, int) or not year:
+        return None
+    precision = _get(value, "precision")
+    if precision == "century":
+        return century_years(century_of(year))
+    if precision == "decade":
+        return year, year + 9
+    return year, year
+
+
+def _subject_key(subject: Any) -> tuple | None:
+    """Who a claim is about, as the batch names it: a local id, a QID or
+    a vocabulary key."""
+    kind = _get(subject, "kind")
+    name = {"local": "local_id", "qid": "qid", "vocab": "key"}.get(kind)
+    if name is None:
+        return None
+    identity = _get(subject, name)
+    return (kind, identity) if isinstance(identity, str) else None
+
+
+def date_findings(
+    config: AnomalyConfig, claims: Sequence[Any]
+) -> list[Finding]:
+    """The implausible-date finding on one batch: its claims about someone
+    it gives a date of birth for that are dated wholly before the earliest
+    birth year it gives them, or wholly more than `max-years-after-birth`
+    years after the latest. A claim is dated by its own time value and by
+    its dating qualifiers (DATING_QUALIFIERS), each at the years its
+    precision spans, so a year, a decade or a century is never narrowed
+    to a day; years alone are compared, so a date in a birth year is
+    never before it. Every birth a batch gives someone counts, and none is
+    preferred (ADR-0002): only a date outside all of them is counted."""
+    settings = config.checks.implausible_date
+    if not settings.enabled:
+        return []
+    births: dict[tuple, list[tuple[int, int]]] = {}
+    for claim in claims:
+        key = _subject_key(_get(claim, "subject"))
+        years = _years(_get(claim, "value"))
+        if key is not None and years and _get(claim, "property") == BIRTH:
+            births.setdefault(key, []).append(years)
+    before = after = 0
+    for claim in claims:
+        known = births.get(_subject_key(_get(claim, "subject")) or ())
+        if not known or _get(claim, "property") == BIRTH:
+            continue
+        earliest = min(first for first, _last in known)
+        latest = max(last for _first, last in known)
+        dates = [_years(_get(claim, "value"))] + [
+            _years(_get(qualifier, "value"))
+            for qualifier in _get(claim, "qualifiers") or ()
+            if _get(qualifier, "property") in DATING_QUALIFIERS
+        ]
+        dates = [years for years in dates if years]
+        if any(last < earliest for _first, last in dates):
+            before += 1
+        elif any(
+            first - latest > settings.max_years_after_birth
+            for first, _last in dates
+        ):
+            after += 1
+    if not before and not after:
+        return []
+    return [
+        Finding(
+            "implausible-date",
+            before + after,
+            settings.max_years_after_birth,
+            {"before_birth": before, "after_birth": after},
+        )
+    ]
 
 
 def outlier(
@@ -1448,7 +1545,7 @@ class AnomalyChecks:
             language=facts.language,
             letters=facts.letters,
             coverage=_read_json(Path(doc.extraction) / "coverage.json"),
-        )
+        ) + date_findings(self.config, claims)
 
     def _critique(
         self, doc: Any, facts: _Facts, findings: Any
@@ -2055,29 +2152,50 @@ class _Recorded:
     extraction: Path
 
 
+def _document_dirs(state_dir: Path) -> Iterator[tuple[Path, str | None]]:
+    """Each directory of a state directory that may hold a document, with
+    the kind its place gives it: the top-level directories, whose kind
+    their source gives (None), then the excerpts' directories, in
+    EXCERPTS_DIR, each of kind EXCERPT. A directory set aside (a
+    dot-prefixed name) is skipped."""
+    from yizkr.pipeline.orchestrate import EXCERPT, EXCERPTS_DIR
+
+    for parent, kind in (
+        (state_dir, None),
+        (state_dir / EXCERPTS_DIR, EXCERPT),
+    ):
+        try:
+            directories = sorted(parent.iterdir())
+        except OSError:
+            continue
+        for directory in directories:
+            if not directory.name.startswith(".") and directory.is_dir():
+                yield directory, kind
+
+
 def _recorded(state_dir: Path) -> Iterator[_Recorded]:
-    """The document directories of a state directory whose state.json
-    names a source and the SHA-1 it was last processed at; a directory
-    set aside, and anything else, is skipped."""
+    """The document directories of a state directory, the excerpts'
+    included (_document_dirs), whose state.json names a source and the
+    SHA-1 it was last processed at; anything else is skipped."""
     from yizkr.pipeline.orchestrate import DocumentRun
 
-    for directory in sorted(state_dir.iterdir()):
-        if directory.name.startswith(".") or not directory.is_dir():
-            continue
+    for directory, placed in _document_dirs(state_dir):
         state = _read_json(directory / "state.json")
         if not isinstance(state, dict) or not isinstance(
             state.get("file"), str
         ):
             continue
         doc = DocumentRun(
-            Path(state["file"]), state_dir, dirname=directory.name
+            Path(state["file"]),
+            state_dir,
+            dirname=directory.relative_to(state_dir).as_posix(),
         )
         sha1 = doc.state.content_sha1
         if doc.unreadable is not None or not sha1:
             continue
         yield _Recorded(
             sha1=sha1,
-            kind=doc.kind,
+            kind=placed or doc.kind,
             source=doc.source,
             state=doc.state,
             transcription=doc.transcription,
@@ -2153,11 +2271,12 @@ def recheck(
     *,
     page_count: Callable[[Path], int | None] | None = None,
 ) -> list[dict]:
-    """Check the outputs stored in a run directory's document directories
-    again, with `config` (load_config's thresholds by default), without
-    dispatching anything or recomputing any stage, and append the alerts
-    to the run's alerts, all `carried`, under an invocation of their own
-    that an `anomaly-recheck` event opens. Returns them.
+    """Check the outputs stored in a run directory's document directories,
+    the excerpts' included, again, with `config` (load_config's
+    thresholds by default), without dispatching anything or recomputing
+    any stage, and append the alerts to the run's alerts, all `carried`,
+    under an invocation of their own that an `anomaly-recheck` event
+    opens, with the number of documents read. Returns them.
 
     Each stored transcription meets the transcription check as it is now,
     as a run's reuse of it would (only on the routes the check judges),

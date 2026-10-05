@@ -1053,6 +1053,235 @@ class TestExtraction:
         assert run.alerts() == []
 
 
+# -- implausible dates --------------------------------------------------------
+
+
+def a_time(year, precision=None, month=None, day=None) -> dict:
+    value = {"type": "time", "year": year}
+    for name, given in (
+        ("precision", precision),
+        ("month", month),
+        ("day", day),
+    ):
+        if given is not None:
+            value[name] = given
+    return value
+
+
+def a_dated_claim(who: str, prop: str, value: dict, qualifiers=()) -> dict:
+    """A claim about the entity `who`, with `qualifiers` given as
+    (property, time value) pairs."""
+    claim = {
+        "subject": {"kind": "local", "local_id": who},
+        "property": prop,
+        "value": value,
+        "source": {"artifact": {"kind": "artifact", "sha1": "a" * 40}},
+    }
+    if qualifiers:
+        claim["qualifiers"] = [
+            {"property": name, "value": time} for name, time in qualifiers
+        ]
+    return claim
+
+
+def a_dated_batch(*claims: dict) -> ClaimBatch:
+    names = {
+        "ursula": "Ursula Löbig",
+        "gustav": "Gustav Löbig",
+        "nicholas": "Nicholas Löbig",
+        "flörburg": "Flörburg",
+    }
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": RUN_META,
+            "claims": list(claims),
+            "entities": [
+                {
+                    "id": key,
+                    "label": label,
+                    "kind": "place" if key == "flörburg" else "human",
+                }
+                for key, label in names.items()
+            ],
+        }
+    )
+
+
+FLÖRBURG = {"type": "item", "value": {"kind": "local", "local_id": "flörburg"}}
+URSULA_BORN = a_dated_claim("ursula", "date_of_birth", a_time(1911))
+# the family history's "I was born in '50", read in the wrong century
+NICHOLAS_BORN = a_dated_claim("nicholas", "date_of_birth", a_time(1850))
+
+
+def dates_found(batch: ClaimBatch, overrides=None) -> list:
+    return anomalies.date_findings(
+        load_config(overrides=overrides), batch.claims
+    )
+
+
+class TestImplausibleDate:
+    def test_a_claim_dated_before_the_birth_is_counted(self):
+        """A 1930s residence read as the 1st century lies wholly before
+        Ursula's birth in 1911."""
+        batch = a_dated_batch(
+            URSULA_BORN,
+            a_dated_claim(
+                "ursula",
+                "residence",
+                FLÖRBURG,
+                [("point_in_time", a_time(1, "century"))],
+            ),
+        )
+        (finding,) = dates_found(batch)
+        assert (finding.check, finding.value, finding.limit) == (
+            "implausible-date",
+            1,
+            120,
+        )
+        assert finding.fields == {"before_birth": 1, "after_birth": 0}
+
+    def test_a_claim_dated_too_long_after_the_birth_is_counted(self):
+        """Nicholas's birth read as 1850 puts his 2008 family history 158
+        years after it."""
+        batch = a_dated_batch(
+            NICHOLAS_BORN,
+            a_dated_claim(
+                "nicholas",
+                "residence",
+                FLÖRBURG,
+                [("start_time", a_time(2008))],
+            ),
+        )
+        (finding,) = dates_found(batch)
+        assert finding.fields == {"before_birth": 0, "after_birth": 1}
+
+    def test_the_threshold_is_the_last_plausible_year(self):
+        def after(years: int) -> ClaimBatch:
+            return a_dated_batch(
+                URSULA_BORN,
+                a_dated_claim("ursula", "date_of_death", a_time(1911 + years)),
+            )
+
+        assert dates_found(after(120)) == []
+        assert dates_found(after(121))[0].value == 1
+        assert (
+            dates_found(
+                after(121),
+                {
+                    "checks": {
+                        "implausible-date": {"max-years-after-birth": 130}
+                    }
+                },
+            )
+            == []
+        )
+
+    def test_a_date_s_precision_is_never_narrowed(self):
+        """The 1910s and the 20th century both hold 1911, and a date in
+        the birth year is never before it, whatever its day."""
+        batch = a_dated_batch(
+            a_dated_claim(
+                "gustav",
+                "date_of_birth",
+                a_time(1919, month=7, day=1),
+            ),
+            a_dated_claim(
+                "gustav",
+                "residence",
+                FLÖRBURG,
+                [("start_time", a_time(1919, month=1, day=7))],
+            ),
+            URSULA_BORN,
+            a_dated_claim(
+                "ursula",
+                "residence",
+                FLÖRBURG,
+                [("point_in_time", a_time(1910, "decade"))],
+            ),
+            a_dated_claim(
+                "ursula",
+                "residence",
+                FLÖRBURG,
+                [("point_in_time", a_time(1901, "century"))],
+            ),
+        )
+        assert dates_found(batch) == []
+
+    def test_every_birth_counts_and_none_is_preferred(self):
+        """Two contradictory births coexist (ADR-0002): a date between
+        them is plausible for one, and is not counted."""
+        batch = a_dated_batch(
+            URSULA_BORN,
+            a_dated_claim("ursula", "date_of_birth", a_time(1921)),
+            a_dated_claim(
+                "ursula",
+                "residence",
+                FLÖRBURG,
+                [("start_time", a_time(1915))],
+            ),
+            a_dated_claim("ursula", "date_of_death", a_time(2035)),
+        )
+        assert dates_found(batch) == []
+
+    def test_range_bounds_and_undated_people_are_not_judged(self):
+        batch = a_dated_batch(
+            URSULA_BORN,
+            # a range's bound says where a date may lie, not where it is
+            a_dated_claim(
+                "ursula",
+                "residence",
+                FLÖRBURG,
+                [("earliest_date", a_time(1890))],
+            ),
+            # the batch gives Gustav no birth
+            a_dated_claim("gustav", "date_of_death", a_time(1066)),
+            # a birth is not judged against itself
+            a_dated_claim("ursula", "date_of_birth", a_time(1, "century")),
+        )
+        assert dates_found(batch) == []
+
+    def test_disabled_it_finds_nothing(self):
+        batch = a_dated_batch(
+            URSULA_BORN,
+            a_dated_claim("ursula", "date_of_death", a_time(1801)),
+        )
+        assert dates_found(batch)
+        off = {"checks": {"implausible-date": {"enabled": False}}}
+        assert dates_found(batch, off) == []
+
+    def test_a_stored_batch_raises_one_alert_and_is_left_as_it_is(
+        self, tmp_path
+    ):
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "history.txt", text=NATURALISATION)
+        checks.stored(doc, "transcription", vision(NATURALISATION, "en"))
+        batch = a_dated_batch(
+            URSULA_BORN,
+            NICHOLAS_BORN,
+            a_dated_claim("ursula", "date_of_death", a_time(1801)),
+            # within 120 years of the misread birth, so not counted
+            a_dated_claim(
+                "nicholas",
+                "residence",
+                FLÖRBURG,
+                [("start_time", a_time(1950))],
+            ),
+            a_dated_claim(
+                "nicholas",
+                "residence",
+                FLÖRBURG,
+                [("end_time", a_time(2008))],
+            ),
+        )
+        before = batch.model_dump_json()
+        checks.stored(doc, "extraction", batch)
+        alert = only(run, "implausible-date")
+        assert (alert["value"], alert["limit"]) == (2, 120)
+        assert (alert["before_birth"], alert["after_birth"]) == (1, 1)
+        assert alert["stage"] == "extraction"
+        assert batch.model_dump_json() == before
+
+
 # -- distributions ------------------------------------------------------------
 
 
@@ -2924,11 +3153,18 @@ def a_recorded_document(
     claims=0,
     record=True,
     document_class="letter",
+    excerpt=False,
 ):
     """A document directory as a run leaves it: its state, and its
     transcription and batch views. A vision transcription is made from
-    the record of one page holding `text`, unless `record` is False."""
-    directory = state_dir / name.split(".")[0]
+    the record of one page holding `text`, unless `record` is False. An
+    `excerpt`'s directory is named by its SHA-1, in the excerpts'
+    directory."""
+    directory = (
+        state_dir / "excerpts" / sha1_of(name)
+        if excerpt
+        else state_dir / name.split(".")[0]
+    )
     directory.mkdir(parents=True)
     resolution = resolve_language(text, "auto")
     (directory / "state.json").write_text(
@@ -3187,6 +3423,101 @@ class TestRecheck:
             if event["event"] == "anomaly-error"
         ]
         assert errors == [("TypeError", "recheck")]
+
+    def test_an_excerpt_is_rechecked_as_a_document_of_its_own(self, tmp_path):
+        """The image of Sebastian's 1939 letter that the 2011 booklet
+        places is an excerpt (ADR-0008): its transcription, batch and
+        critique are checked again as the booklet's are, under its own
+        kind."""
+        state = tmp_path / "state"
+        a_recorded_document(
+            state,
+            "family-booklet-2011.pdf",
+            text=NATURALISATION,
+            engine="llm-vision:fake-model",
+            claims=1,
+        )
+        excerpt = a_recorded_document(
+            state,
+            "letter-excerpt-1939.png",
+            text=MARRIAGE,
+            engine="llm-vision:fake-model",
+            excerpt=True,
+        )
+        (excerpt / "batch.json").write_text(
+            a_dated_batch(
+                URSULA_BORN,
+                a_dated_claim("ursula", "date_of_death", a_time(1801)),
+            ).model_dump_json()
+        )
+        (excerpt / "critique.json").write_text("[]")
+        events = len(RunDir(state).events())
+        alerts = recheck(
+            state,
+            load_config(
+                overrides={
+                    "checks": {
+                        "language-unexpected": {"expected": ["en"]},
+                    }
+                }
+            ),
+        )
+        subject = sha1_of("letter-excerpt-1939.png")[:12]
+        assert sorted(
+            (a["check"], a["stage"], a["kind"])
+            for a in alerts
+            if a["subject"] == subject
+        ) == [
+            ("implausible-date", "extraction", "excerpt"),
+            ("language-unexpected", "transcription", "excerpt"),
+        ]
+        (opened,) = [
+            event
+            for event in RunDir(state).events()[events:]
+            if event["event"] == "anomaly-recheck"
+        ]
+        assert opened["documents"] == 2
+
+    def test_excerpts_meet_the_distributions(self, tmp_path):
+        """Four excerpts of one class: the one with twelve times the
+        claims, and the one whose critique finds twenty times as much,
+        are each outliers among the four."""
+        state = tmp_path / "state"
+        for n, claims in enumerate([60, 5, 5, 5]):
+            directory = a_recorded_document(
+                state,
+                f"excerpt{n}.png",
+                text=NATURALISATION,
+                engine="llm-vision:fake-model",
+                claims=claims,
+                document_class="photograph",
+                excerpt=True,
+            )
+            findings = 20 if n == 1 else 1
+            (directory / "critique.json").write_text(
+                json.dumps([{"note": "x"}] * findings)
+            )
+        alerts = recheck(
+            state,
+            load_config(
+                overrides={
+                    "checks": {
+                        "claim-yield": {"min-samples": 3},
+                        "critic-rate": {"min-samples": 3},
+                    }
+                }
+            ),
+        )
+        assert sorted(
+            (a["check"], a["subject"], a["kind"])
+            for a in alerts
+            if a["check"] in ("claim-yield", "critic-rate")
+        ) == sorted(
+            [
+                ("claim-yield", sha1_of("excerpt0.png")[:12], "excerpt"),
+                ("critic-rate", sha1_of("excerpt1.png")[:12], "excerpt"),
+            ]
+        )
 
     def test_the_module_s_command(self, tmp_path, capsys):
         folder = a_folder(tmp_path, brief_txt=MARRIAGE)

@@ -74,7 +74,7 @@ Each alert is a line of `alerts.jsonl` in the run directory
 | `subject` | the document: the first 12 hex digits of its SHA-1 (empty for `anomaly-config`) |
 | `value` | the measured value: a number, a language code (`language-unexpected`), a model id (`model-mismatch`), or `true` for a check that measures a presence |
 | `status` | `new` or `carried` |
-| `kind` | the document's kind: `text`, `media`, `presentation` or `gedcom` |
+| `kind` | the document's kind: `text`, `media`, `presentation`, `gedcom`, or `excerpt` (an image a PDF read page by page places, a document of its own: ADR-0008) |
 | `limit` | the threshold the value crossed |
 | `config` | the first 12 hex digits of the SHA-256 of the thresholds in force, so alerts raised under other thresholds tell apart |
 
@@ -205,6 +205,23 @@ was given rejected by validation or unread by the parser, over at least
 because it could use none of them, from the reason its failure gives
 (every claim rejected, or objects the parser could not read), which is a
 share of one. Value: the share; `count`, `of`.
+
+**`implausible-date`**: a batch's claims dated before the birth of the
+person they are about, or more than `max-years-after-birth` years (120
+by default) after it: a misread century or a day padded from a year
+shows here. Only someone the batch itself gives a date of birth for
+(`date_of_birth`, about the same entity) is judged. A claim is dated by
+its own time value and by its `point_in_time`, `start_time` and
+`end_time` qualifiers; the bounds of a range (`earliest_date` and the
+like) say where a date may lie, not where it is, and are left out. Each
+date stands for the years its precision spans (a decade's ten, a
+century's hundred), so a coarse date is never narrowed, and years alone
+are compared: a date in the birth year is never before it. Every birth
+the batch gives the person counts and none is preferred (ADR-0002): a
+claim is counted only when a date of it lies wholly before the earliest
+of them, or wholly more than the threshold after the latest. Alert only:
+the claims go on as they are. Value: the claims counted; `before_birth`,
+`after_birth`.
 
 ### Distributions
 
@@ -563,20 +580,25 @@ uv run python -m yizkr.pipeline.anomalies recheck <run dir> [--config FILE]
 ```
 
 checks the outputs stored in a run directory's document directories
-again, under the thresholds as they are now (`--config` names a file of
-thresholds in place of the one `$YIZKR_ANOMALIES` names), without
+again, the excerpts' directories (`excerpts/<sha1>/`, ADR-0008)
+included, under the thresholds as they are now (`--config` names a file
+of thresholds in place of the one `$YIZKR_ANOMALIES` names), without
 dispatching anything or recomputing any stage (`anomalies.recheck`).
 Each stored vision or text-file transcription meets the transcription
 check as it is now, as a run's reuse of it would, and each stored
 transcription, a PDF read page by page's included, carries the flag the
-check raises now, not the one stored with it; and every output meets
-the per-output checks and the distributions over the whole run. The rate
+check raises now, not the one stored with it; and every output meets the
+per-output checks and the distributions over the whole run. The rate
 checks, which read a run's dispatches and calls rather than its outputs,
 are not checked again. Its alerts, all carried, are appended to the
 run's alerts under an invocation of their own, `recheck-<hex>`, which an
 `anomaly-recheck` event opens with the thresholds' digest and the number
-of documents. A document whose stored outputs the checks cannot read (a
-`batch.json` that does not hold a batch's shape, say) is an
+of documents it read, excerpts included. An excerpt's transcription,
+batch and critique meet the same checks as a top-level document's, and
+its alerts carry the kind `excerpt`, as the run's own do; the
+distributions measure an excerpt within its class, or among the
+unclassified excerpts. A document whose stored outputs the checks cannot
+read (a `batch.json` that does not hold a batch's shape, say) is an
 `anomaly-error` event, and the others are checked. Nothing is written
 into a document's directory. It prints how many alerts it appended, by
 check.
