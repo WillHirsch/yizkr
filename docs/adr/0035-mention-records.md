@@ -359,6 +359,31 @@ holders, one that also gives a name part is kept before a role phrase
 ("Frau Mutter") or a bare title. This is an in-place narrowing of §8's
 example, for the owner to confirm at merge, as decision 9 is.
 
+Amended by #435 (2026-10-02, the owner's decision on the bracket
+question): §6's bracketed part, a NAME with no TYPE and one with a TYPE
+the adapter does not recognise each also give a `name` claim of no type
+(ADR-0011, "Name forms of no stated type"), cited to its NAME, unless it
+is the label's own form, a form the person's record types, or from a
+NAME that held a placeholder (counted, `untyped name form with a
+placeholder`). The extraction prompt offers `name` for a name form whose
+type the source does not mark, other than the label's.
+Amended by #435, orchestrator decisions BN to BQ (2026-10-04; the owner
+may override at merge): a form a recognised TYPE or a `_MARNM` gives is
+typed whether or not a typed claim is made of it; the label and the
+typed forms are compared in NFC, whitespace collapsed, lower-cased (a
+sharp s kept apart from "ss"; decision CD); a placeholder anywhere in a
+NAME (its value, a bracket, a quote or a part) blocks its display form,
+one in a bracket blocks that bracket too, and a complete bracket of
+such a NAME still gives its name, so "Ida (Peppi) /?/" gives `name`
+"Peppi" (decision CE keeps this, as decided on 2026-10-02); a bracket
+holding a cue or a note ("(geb. Laudler)") gives its text verbatim,
+never read as a type; and in a document only a distinct name of open
+kind is a `name`. Decision BS, that a lettered stand-in ("N.N.",
+"[unknown]") in an export gives no `name`, is withdrawn: such a stand-in
+holds letters, and no word list may decide it (§6 reads no word by its
+meaning), so it stays a `name` statement. The extraction prompt, whose
+model reads meaning, tells it a stand-in is never `name`.
+
 **Decided by the owner (2026-09-29):**
 
 - Before scratch run 1 (#145), extraction hands over the structure of
@@ -1066,12 +1091,12 @@ and brackets in a NAME value, which §10 names.
 | GIVN; SURN with SPFX | given names; surnames, each whole with its particle |
 | NPFX; NSFX | titles; suffixes |
 | NICK, or a quoted part ("Cäcilie 'Cilli' Tarle") | nicknames |
-| a bracketed part ("Ida (Peppi) Sörne", "(geb. Laudler)") | an alias and an `unsplit` form, with no typed-name claim, counted |
+| a bracketed part ("Ida (Peppi) Sörne", "(geb. Laudler)") | an alias and an `unsplit` form, with no typed-name claim, counted, and a `name` claim of no type with its text verbatim, cue or note included (ADR-0011) |
 | TYPE birth or maiden | the NAME's surname `birth`, and its `birth_name` claim (ADR-0011) |
 | TYPE married or marriage | `married`, and its `married_name` claim |
 | TYPE aka, nick or nickname | the NAME's given names are nicknames, and its `nickname` claim |
 | TYPE official, legal, change, immigrant or adopted | `other`, and its `official_name` claim |
-| any other TYPE, or none | `other`, with no typed-name claim |
+| any other TYPE, or none | `other`, with no typed-name claim; the NAME's form, unless it is the label's, a `name` claim of no type (ADR-0011) |
 | `_MARNM` | a `married` surname: the part between its slashes; a value without them is `unsplit` |
 | PLAC | its first non-empty component is the place's name and the rest are `within`, each as written, with no head or toponym split: GEDCOM lists jurisdictions from the lowest |
 | HEAD.LANG | GEDCOM 5.5.1's language name, mapped to a BCP 47 code, sets the language of the adapter's texts instead of a fixed `en` (`GEDCOM_LANGUAGES`, `UNDETERMINED` in `pipeline/gedcom.py`); an absent or unknown one gives undetermined (`und`), counted |

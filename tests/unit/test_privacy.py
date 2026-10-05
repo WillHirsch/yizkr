@@ -467,6 +467,7 @@ DOCUMENTED_SUBJECT_EVIDENCE = (
     "birth_name",
     "married_name",
     "nickname",
+    "name",
     "referred_to_as",
     "sex_or_gender",
     "number_of_children",
