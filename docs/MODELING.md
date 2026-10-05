@@ -118,7 +118,16 @@ the prompt renders that set from the manifest rather than restating it.
 Artifact types, controlled-vocabulary values (`circa`, `male`), and
 infrastructure classes (`artifact_fragment`, `extraction_run`) are real
 classes but not entity kinds. A new item is not offered to the
-extractor until it says so.
+extractor until it says so. The classes of entities that are no entity
+kind, `artifact` and the artifact types, `time_period_class` and the
+infrastructure classes, are marked **`entity_class: true`**; with the
+entity kinds they are the manifest's **kind keys**. The manifest does not
+load when an item in the subclass hierarchy is neither, or when an entity
+kind is also marked `entity_class` (amended by #462, 2026-10-05). A
+controlled-vocabulary value is neither. Outside the hierarchy nothing else
+tells a class (`time_period_class`) from a value (`circa`), since each may
+be the one item its property accepts, so the mark there is the manifest
+author's to set, and a test pins the classes it holds.
 
 **Controlled vocabulary values** (items, never entity kinds): `circa`;
 `male` and `female`; the participant roles `principal`, `parent`,
@@ -145,10 +154,29 @@ names `unclassified_entity` (ADR-0013). The manifest does not load when
 an item-valued property declares none. Validation refuses a claim whose
 value is of a kind its property does not accept, and extraction counts it
 among its rejects. An existing item named by its QID has no kind in a
-batch and is not checked. A vocabulary ref to an entity kind (`human`,
-`place`) names the class, not an entity of it, so only `instance_of` and
-`subclass_of` take one. `part_of`'s list is flat for now: it takes a place
-or an artifact whatever its subject, so a place `part_of` an artifact
+batch and is not checked. A vocabulary ref to a kind key (`human`,
+`place`, `time_period_class`, `photograph`) names the class, not an
+entity of it, so only `instance_of` and `subclass_of` take one, and they
+take no controlled-vocabulary value (`circa`); `depicts` (any kind) and
+`said_to_be_the_same_as` (the subject's kind) take no vocabulary item at
+all. An item value is thus an entity of the batch, an existing item named
+by its QID, or a vocabulary item its property names. Nor is an item
+value, a claim's or a qualifier's, ever the claim's own subject (the same
+local id, the same QID, the same vocabulary item, or a local ref resolved
+to the subject's QID): no property of the manifest takes its subject as
+its value, so Flörburg `location` Flörburg and Sebastian his own `father`
+are refused and counted among extraction's rejects. The claim is the unit
+of rejection: a qualifier naming the subject rejects its whole claim. The
+GEDCOM adapter leaves out a family's link that makes a parent their own
+child, and counts it (ADR-0036). (Amended by #461 and #462, 2026-10-05.)
+A `time_period` claim from extraction is, for now, a counted reject:
+`time_period` accepts only a period, an entity of `time_period_class`, no
+entity kind offers one and no QID exists before write.
+`country_of_citizenship` accepts a place, since the place model has no
+country class; its description, which the prompt carries, says the value
+is a country, never a town, city or region within one, and validation
+does not tell them apart. `part_of`'s list is flat for now: it takes a
+place or an artifact whatever its subject, so a place `part_of` an artifact
 passes the check, which reads the value alone.
 
 **Reference properties** (`stated_in`, `inferred_from_extraction_run`,
@@ -196,12 +224,16 @@ Every statement carries at least one reference with:
   ever guessed (#424). It describes the physical page: a page that
   shows a spread with one half numbered keeps that one number for
   every claim read from it, as both ways of reading a PDF give it the
-  same (ADR-0037 §2). A source that gives a printed page number gives
-  its page number too: validation refuses one without the other, in a
-  prepared claims file as in an extractor's batch. An excerpt's claims
-  read the excerpt's own transcription, so they never take the printed
-  number of the page that places it, and its `part of` the container
-  keeps the container's physical page (ADR-0008)
+  same (ADR-0037 §2). The claims review sheet shows it in a
+  `printed_page` column beside `page`, empty where the reference has
+  none; like the other locators it is shown for checking and never read
+  back, so a curator's edit to it is ignored (#449). A source that gives
+  a printed page number gives its page number too: validation refuses
+  one without the other, in a prepared claims file as in an extractor's
+  batch. An excerpt's claims read the excerpt's own transcription, so
+  they never take the printed number of the page that places it, and
+  its `part of` the container keeps the container's physical page
+  (ADR-0008)
 - optional short transcription excerpt supporting human verification,
   tagged with the language it is written in (BCP-47). `yizkr ingest run`
   takes each document's language from its transcription by default
@@ -473,14 +505,27 @@ artifact a new QID, changes neither.
 ## Uncertainty and time
 
 - Use Wikibase time precision (year / month / day / decade / century).
+- Only dates of 1 CE or later in the proleptic Gregorian calendar
+  (Wikibase's `Q1985727`) are supported (ADR-0034). A date before the
+  common era or in the Julian or any other calendar is never converted,
+  guessed at or shown: the claim schema refuses one (an extraction reject
+  whose reason begins "unsupported:"; a Julian source date is given as
+  written, with calendar `julian`, so that it is refused rather than
+  read as Gregorian), the GEDCOM adapter fails a file that states one in
+  any calendar but the Gregorian or with an epoch before the common era,
+  naming its DATE lines, the review sheet refuses a correction to one,
+  the writer refuses a batch holding one and writes nothing, and every
+  reader of the graph (the disagreement report, the site, the
+  possibly-living check, the non-privileged export, which checks the
+  whole graph at any rank first, and reconcile's roster) stops with
+  `UnsupportedDate`, naming the item and the statement, if a curator has
+  entered one.
 - Centuries and millennia are counted as Wikibase and Wikidata count
   them, from year 1: the nth century runs from year 100(n−1)+1 to year
   100n, so a date at century precision stored as any year from 1801 to
   1900 is the 19th century, and one stored as 1800 is the 18th. The nth
   millennium runs from year 1000(n−1)+1 to year 1000n (the 2nd
-  millennium is 1001–2000). Before the common era the count runs back
-  from 1 BCE: −1800 to −1701 is the 18th century BCE, which runs from
-  1800 to 1701 BCE.
+  millennium is 1001–2000).
 - A claim gives a century by its first year (the 19th century as 1801),
   as it gives a decade by its first year (the 1890s as 1890), and the
   writer stores that year as it is: the wiki shows it as "19. century". A
@@ -1397,10 +1442,13 @@ not a signal to grow the schema on.
   latest date is read without that latest date, which fails closed. A
   statement allows no latest year, and keeps its person possibly living,
   when a latest date in it cannot be read, or, where no latest date
-  bounds it, when its value is unknown, unreadable (one before the common
-  era included) or coarser than a millennium, or it states only an
-  earliest date. A readable latest date bounds even a birth whose value
-  is unknown, unreadable or coarser than a millennium.
+  bounds it, when its value is unknown, unreadable or coarser than a
+  millennium, or it states only an earliest date. A readable latest date
+  bounds even a birth whose value is unknown, unreadable or coarser than
+  a millennium. A birth before the common era or in a calendar other
+  than the proleptic Gregorian, as the value or a bound, stops the check
+  and with it the export, naming the person and the statement
+  (ADR-0034): it fails closed.
 - The private static site (`yizkr publish-site`) includes everyone but
   badges each subject the export would drop ("possibly living — never
   in the non-privileged export"), using the same runtime call, except a

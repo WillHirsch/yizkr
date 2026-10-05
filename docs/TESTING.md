@@ -188,6 +188,18 @@ itself in its own `--help`.
   service refuses a GET request line longer than about 8 KB. Long SPARQL
   is POSTed, as the site build and `run_sparql` in
   `tests/integration/conftest.py` do.
+- **Unsupported dates on the instance** (ADR-0034, #338). Every reader
+  of the whole graph (the disagreement report, the site build, the
+  non-privileged export and reconcile's roster) stops with
+  `UnsupportedDate` if the instance holds a date before the common era
+  or in a calendar other than the Gregorian, at any rank. Before #338,
+  the live century and privacy tests wrote such dates, and the shared
+  development instance still holds one (a BCE statement on Q1122) that
+  no live session can remove (rule 3). A scratch reset follows #338's
+  merge, subject to the owner's OK; until then the live tests that read
+  the whole graph fail on that statement, as decided. No live test
+  writes such a date now: `test_live_unsupported_dates.py` checks that
+  the writer refuses one and writes nothing.
 - **The real-model tests** (`tests/integration/test_live_chunked.py`,
   also marked `live`) call the model through the claude CLI: chunked
   extraction end to end, and the exact resumption of a conversation the

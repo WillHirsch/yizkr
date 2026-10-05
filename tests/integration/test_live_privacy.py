@@ -22,8 +22,7 @@ export's exclusions back through the stack, with the cutoff pinned at
   20th-century birth no later than 1902 releases, "after 1850" is open at
   its late end and releases no one, and "between 1850 and 1990" not
   before 1990;
-* a birth before the common era is not read, and a person with no birth
-  is excluded: unknown means excluded;
+* a person with no birth is excluded: unknown means excluded;
 * death evidence releases a person whatever their birth.
 
 The static site's badge marks exactly the fixture people the export
@@ -92,7 +91,6 @@ EXCLUDED = {
     "before": False,
     "after": True,
     "between": True,
-    "before the common era": True,
     "no birth": True,
     "died": False,
 }
@@ -287,7 +285,6 @@ def fixture_graph(client, config):
                 ("earliest_date", date(1850)),
                 ("latest_date", date(1990)),
             ),
-            born("before the common era", date(-1850), a),
             claim(
                 "no birth",
                 "birth_name",
