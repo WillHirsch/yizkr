@@ -121,6 +121,25 @@ ref in an earlier claim can change it; and two mentions equal in every
 other component swap fingerprints when their manifest lists them in the
 other order.
 
+Amended by #198 (2026-10-05): §4's diff is `yizkr scratch diff`
+(`pipeline/rundiff.py`, docs/RUN_DIFF.md, which holds the reviewer
+checklist). It reads the two run directories, their stored run reports
+(built afresh when missing or older than the run's end), and of the LLM
+cache only the components of the keys their events name, never a
+response, and attributes each recompute to the components of its key
+that differ from the closest of the baseline's calls for the same
+document and stage. The baseline defaults to the latest run whose last
+invocation went through every stage, on clean code of a commit on main.
+A figure an older report.json does not hold is absent, never 0. Claims
+are matched by fingerprint as multisets; a removed and an added claim
+sharing subject, property and artifact are paired as changed; an
+excerpt change on a matched claim is counted apart. Clusters are
+compared by membership over the mentions both identity maps hold.
+Flags and different-source contradictions are compared once a report
+counts them, and are not available until then. The detailed
+`diff.json` stays local; `diff.md` is the aggregate summary that may be
+posted, and names no language.
+
 ## Context
 
 ADR-0024 §7 set up a *development stage*: until the owner declares a
