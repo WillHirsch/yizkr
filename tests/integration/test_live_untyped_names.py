@@ -11,13 +11,21 @@ typed claim), the label's own form and a NAME that held a placeholder
 give none. A re-run writes nothing.
 
 The names are the example universe's (docs/EXAMPLES.md), with a surname
-of the tests' own so that the label finds no other test's item.
+of the tests' own that carries a marker of the session's own (#430): the
+label, the export's title and its bytes are new to each session, so the
+person is a first write there, holding no statement an earlier session
+cited, and the re-run within the session finds its own items again.
 """
 
 from __future__ import annotations
 
+import hashlib
+import os
+from pathlib import Path
+
 import pytest
 
+import yizkr.pipeline.gedcom as gedcom_module
 from yizkr.claims import ArtifactRef
 from yizkr.model.bootstrap import bootstrap_instance
 from yizkr.model.schema import load_manifest
@@ -27,16 +35,16 @@ from yizkr.pipeline.writer import BatchWriter
 
 pytestmark = pytest.mark.live
 
-GEDCOM = """\
+FIXTURE = """\
 0 HEAD
 1 CHAR UTF-8
 1 LANG German
 0 @I1@ INDI
-1 NAME Ida (Peppi) /Untypedcheck/
-1 NAME Hilde /Untypedcheck/
-1 NAME Agnes /Untypedcheck/
+1 NAME Ida (Peppi) /{surname}/
+1 NAME Hilde /{surname}/
+1 NAME Agnes /{surname}/
 2 TYPE stage
-1 NAME Ida /Untypedcheck-Löbig/
+1 NAME Ida /{surname}-Löbig/
 2 TYPE married
 1 NAME Eugen /?/
 1 NAME Ida Löbig
@@ -45,6 +53,17 @@ GEDCOM = """\
 2 DATE 1881
 0 TRLR
 """
+# drawn once a session, so each session's fixture is its own; the same
+# pattern as tests/integration/conftest.py's `fixture_mark` once that
+# lands (#430)
+SESSION_BYTES = os.urandom(8)
+MARK = hashlib.sha256(
+    FIXTURE.encode()
+    + Path(gedcom_module.__file__).read_bytes()
+    + SESSION_BYTES
+).hexdigest()[:8]
+SURNAME = f"Untypedcheck{MARK}"
+GEDCOM = FIXTURE.format(surname=SURNAME)
 
 
 def statements(client, qid: str, prop_key: str) -> list[tuple]:
@@ -103,63 +122,66 @@ def test_the_bootstrap_creates_the_name_property_once(client):
 
 
 def test_untyped_name_forms_are_referenced_statements(client, tmp_path):
-    export = tmp_path / "integration-untyped-names-tree.ged"
+    export = tmp_path / f"integration-untyped-names-tree-{MARK}.ged"
     export.write_text(GEDCOM)
     exported = ArtifactRef.from_path(export)
     artifact_qid = register_artifact(
         client,
         media_path=export,
         artifact_type="genealogical_report",
-        title="Integration untyped names GEDCOM tree",
+        title=f"Integration untyped names GEDCOM tree {MARK}",
         description="written by tests/integration; safe to delete",
     ).artifact_qid
     result = adapt_gedcom(GEDCOM, artifact=exported)
     (person,) = [e for e in result.batch.entities if e.id == "i1"]
-    assert person.label == "Ida Untypedcheck"
+    assert person.label == f"Ida {SURNAME}"
     assert "Peppi" in person.aliases
-    qid = BatchWriter(client).write_batch(result.batch).created_items["i1"]
+    written = BatchWriter(client).write_batch(result.batch)
+    qid = written.created_items["i1"]
 
     names = statements(client, qid, "name")
-    mine = [entry for entry in names if artifact_qid in entry[2]]
-    # one statement each, with the export's language, its `stated in`
-    # reference whose excerpt is the NAME it cites, and the run
-    # reference; neither the label's form, the typed married name, the
-    # form the `_MARNM` types nor the placeholder's NAME
-    assert mine == sorted(
+    # the person is the session's own, so these are all its statements:
+    # one each, with the export's language, its `stated in` reference
+    # whose excerpt is the NAME it cites, and the run reference; neither
+    # the label's form, the typed married name, the form the `_MARNM`
+    # types nor the placeholder's NAME
+    assert names == sorted(
         [
             (
                 "Peppi",
                 "de",
                 (artifact_qid,),
-                ("1 NAME Ida (Peppi) /Untypedcheck/",),
+                (f"1 NAME Ida (Peppi) /{SURNAME}/",),
                 True,
             ),
             (
-                "Hilde Untypedcheck",
+                f"Hilde {SURNAME}",
                 "de",
                 (artifact_qid,),
-                ("1 NAME Hilde /Untypedcheck/",),
+                (f"1 NAME Hilde /{SURNAME}/",),
                 True,
             ),
             (
-                "Agnes Untypedcheck",
+                f"Agnes {SURNAME}",
                 "de",
                 (artifact_qid,),
-                ("1 NAME Agnes /Untypedcheck/ | 2 TYPE stage",),
+                (f"1 NAME Agnes /{SURNAME}/ | 2 TYPE stage",),
                 True,
             ),
         ]
     )
     married = statements(client, qid, "married_name")
-    assert [entry[0] for entry in married if artifact_qid in entry[2]] == [
-        "Ida Untypedcheck-Löbig"
+    assert [(entry[0], entry[2]) for entry in married] == [
+        (f"Ida {SURNAME}-Löbig", (artifact_qid,))
     ]
     # beside the alias, not instead of it
     item = client.wbi.item.get(qid)
     assert "Peppi" in {str(a) for a in item.aliases.get("en") or []}
 
+    # within the session the re-run finds its own person and adds nothing
     rerun = BatchWriter(client).write_batch(
         adapt_gedcom(GEDCOM, artifact=exported).batch
     )
     assert rerun.written == 0
+    assert rerun.created_items["i1"] == qid
     assert statements(client, qid, "name") == names
