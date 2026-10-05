@@ -569,11 +569,14 @@ class TestUnsupportedModel:
             "Claude Code doesn't support claude-opus-5-5",
             "The CLI requires newer releases",
             "This model requires a newer CLI",
+            "Claude Code 2.1.237 require a newer release",
+            "This model requires newer Claude Code",
         ],
         ids=["the version required", "the CLI does not support", "the CLI "
              "requires a newer", "a newer CLI required, in mixed case",
              "the CLI and its version", "or later", "doesn't",
-             "requires newer", "a newer CLI"],
+             "requires newer", "a newer CLI", "require",
+             "newer Claude Code, with no article"],
     )  # fmt: skip
     def test_each_wording_tied_to_the_cli_is_one(self, text):
         step = {**UNSUPPORTED, "text": f"API Error: 400 {text}"}
@@ -606,6 +609,7 @@ class TestUnsupportedModel:
             "version 1.2.3 or lower is required",
             "anthropic-version 2023.06.01 or later is required",
             "Claude Code sandbox does not support url sources",
+            "version 3.0.1 or newer gives faster uploads",
         ],
         ids=["a tool", "a feature", "the API's version", "the API", "other",
              "a tool after the CLI's name", "a feature after the CLI's name",
@@ -614,7 +618,8 @@ class TestUnsupportedModel:
              "an SDK's version", "the API's dotted version",
              "a word ending in cli", "a version with no dot",
              "does not have", "or lower", "a dotted API version",
-             "a word between the CLI and its verb"],
+             "a word between the CLI and its verb",
+             "a version or newer, not required"],
     )  # fmt: skip
     def test_a_400_about_anything_but_the_cli_is_not_one(self, text):
         step = {**UNSUPPORTED, "text": f"API Error: 400 {text}"}
