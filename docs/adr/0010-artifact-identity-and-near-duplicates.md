@@ -48,7 +48,13 @@ shows the QID the write reuses, for a GEDCOM person whose name is on its
 record alone and for a person under an artifact's label alike. The
 writer pairs a record with a tagged item resolve gave its refs, its own
 label then an alias, as it does an item it finds there itself ("What is
-still matched by label").
+still matched by label"). A ref without a record that resolves to a
+tagged item is given a record of its first ref's label and kind in the
+resolved batch, so the writer pairs it the same way; one with no kind
+stays local (ADR-0007). Resolve reads an entity's label past the claims
+the writer refuses before its plan for naming an entity whose label
+holds a character Python's Unicode tables do not know, as the writer's
+plan does.
 Amended by #373 (2026-10-02): a file is uploaded under a name in the form
 MediaWiki takes as it is, every letter kept, within MediaWiki's 240-byte
 limit with room for the content tag, and the description registration

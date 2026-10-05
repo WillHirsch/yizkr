@@ -2073,7 +2073,7 @@ class BatchWriter:
         would place the record under the tagged one (reused_item): the match
         the resolve step made. Only in that last case have the record's aliases
         not reached the item yet; under the tagged label, the record's own
-        label goes first among them, as it does on an item the writer finds
+        label goes among them, as it does on an item the writer finds
         there. That match pairs only a record not on the artifact side
         (is_artifact_kind) with an item that is no artifact nor a part of one
         (_artifact_item), as resolve matches (yizkr.pipeline.resolve;

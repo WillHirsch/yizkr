@@ -46,13 +46,37 @@ What resolving a batch reads of the instance: its item labels once
 plain or tagged, of the batch's entities (`fetch_claims`), never every
 item's.
 
+An entity's label and kind are read as the writer's plan reads them,
+past the claims the writer refuses before its plan for naming an entity
+whose label holds such a character. The writer refuses other claims
+before its plan too (for their own text or a misplaced document
+subject), and more while it plans (an entity it may place under neither
+label); resolve does not see those, so where the first ref to a local
+id without a record is in such a claim and a later ref gives another
+label, resolve may read the entity by that first ref's label.
+
+An entity without a manifest record that resolves to the item under its
+tagged label is given a record in the resolved batch, its first ref's
+label and kind (`_tagged_records`): the writer then pairs it with that
+item after the claims, as it pairs any record (yizkr.pipeline.writer,
+step 5), and gives the item its label as an alias and its kind, as the
+local refs would have. One with no kind stays local, for the writer to
+find that item itself, as no record can be made without a kind.
+
 Unresolved local refs are left in place: the writer creates new items
 for them at write time.
 """
 
 from __future__ import annotations
 
-from yizkr.claims import Claim, ClaimBatch, ItemValue, LocalRef, QidRef
+from yizkr.claims import (
+    Claim,
+    ClaimBatch,
+    EntityRecord,
+    ItemValue,
+    LocalRef,
+    QidRef,
+)
 from yizkr.pipeline.review import entity_records
 from yizkr.pipeline.writer import (
     entity_terms,
@@ -69,9 +93,11 @@ def resolvable_labels(client, batch: ClaimBatch) -> dict[str, str]:
     """The item each label of an entity of `batch` resolves to, label ->
     QID, read from the instance `client` reads: for each entity resolved
     by its label (_resolvable), the item the writer would reuse for it
-    (reused_item), under the label or the tagged label. The labels are
-    read once (`label_index`), and the statements of only the items under
-    those labels (`fetch_claims`)."""
+    (reused_item), under the label or the tagged label. An item reused
+    under the tagged label is given under that label too, which names it
+    as the writer finds it there, and tells resolve_batch it is tagged.
+    The labels are read once (`label_index`), and the statements of only
+    the items under those labels (`fetch_claims`)."""
     entities = _resolvable(batch).values()
     _, held = client.label_index()
     found = {
@@ -93,14 +119,18 @@ def resolvable_labels(client, batch: ClaimBatch) -> dict[str, str]:
         qid = reused_item(label, kind, held, artifact_item)
         if qid:
             resolved[label] = qid
+            if held.get(label) != qid:
+                resolved[tagged_label(label, kind)] = qid
     return resolved
 
 
 def _resolvable(batch: ClaimBatch) -> dict[str, tuple[str, str | None]]:
     """The entities of `batch` resolved by their label, local id ->
-    (label, kind), as the writer reads them (entity_terms): all but those
-    on the artifact side and those whose label holds a character Python's
-    Unicode tables do not know (the module docstring)."""
+    (label, kind), as the writer reads them (entity_terms) past the claims
+    it refuses before its plan for naming an entity whose label holds a
+    character Python's Unicode tables do not know: all but those on the
+    artifact side and those whose label holds such a character (the
+    module docstring)."""
     records = entity_records(batch)
     unknown = {
         record.id
@@ -113,11 +143,45 @@ def _resolvable(batch: ClaimBatch) -> dict[str, tuple[str, str | None]]:
         for ref in local_refs(claim)
         if ref.local_id not in records and unknown_characters(ref.label or "")
     )
+    refused = {
+        index
+        for index, claim in enumerate(batch.claims)
+        if any(ref.local_id in unknown for ref in local_refs(claim))
+    }
     return {
         local_id: (label, kind)
-        for local_id, (label, kind) in entity_terms(batch, records).items()
+        for local_id, (label, kind) in entity_terms(
+            batch, records, refused
+        ).items()
         if not is_artifact_kind(kind) and local_id not in unknown
     }
+
+
+def _tagged_records(
+    batch: ClaimBatch, label_to_qid: dict[str, str], entities
+) -> tuple[list[EntityRecord], set[str]]:
+    """For each entity of `entities` (_resolvable) without a manifest
+    record that `label_to_qid` resolves to the item under its tagged label
+    (resolvable_labels gives that label the same item): a record of its
+    label and kind, so the writer pairs it with the item (the module
+    docstring); and the local ids of those with no kind, which stay
+    local."""
+    records = entity_records(batch)
+    made: list[EntityRecord] = []
+    kept: set[str] = set()
+    for local_id, (label, kind) in entities.items():
+        qid = label_to_qid.get(label)
+        if (
+            local_id in records
+            or qid is None
+            or label_to_qid.get(tagged_label(label, kind)) != qid
+        ):
+            continue
+        if kind is None:
+            kept.add(local_id)
+        else:
+            made.append(EntityRecord(id=local_id, label=label, kind=kind))
+    return made, kept
 
 
 def _resolve_ref(ref, label_to_qid: dict[str, str], entities):
@@ -158,12 +222,18 @@ def resolve_batch(
     `label_to_qid` gives that label, as resolvable_labels reads it. It is
     keyed by labels as the instance serves them, and an entity is looked
     up by its label in that form, its record's or its first ref's
-    (entity_terms)."""
+    (entity_terms). An entity without a record resolved to the item under
+    its tagged label gains a record, or stays local when it has no kind
+    (_tagged_records)."""
     entities = _resolvable(batch)
+    made, kept = _tagged_records(batch, label_to_qid, entities)
+    for local_id in kept:
+        del entities[local_id]
     return batch.model_copy(
         update={
             "claims": [
                 _resolve_claim(c, label_to_qid, entities) for c in batch.claims
-            ]
+            ],
+            "entities": [*batch.entities, *made],
         }
     )

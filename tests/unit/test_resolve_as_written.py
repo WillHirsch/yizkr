@@ -23,15 +23,18 @@ from tests.unit.test_registrar import (
 )
 from tests.unit.test_registration_flags import (
     TWO_PEOPLE_GEDCOM,
+    UNKNOWN_MARK,
     CountingWiki,
     WritingWiki,
     family_gedcom,
+    naming,
+    needs_unknown_mark,
 )
-from yizkr.claims import ClaimBatch, LocalRef, QidRef
+from yizkr.claims import ClaimBatch, ItemValue, LocalRef, QidRef
 from yizkr.pipeline.registrar import Registrar
 from yizkr.pipeline.resolve import resolvable_labels, resolve_batch
 from yizkr.pipeline.review import export_review_csv
-from yizkr.pipeline.writer import ENTITY_TAG, BatchWriter
+from yizkr.pipeline.writer import ENTITY_TAG, BatchWriter, _term_text
 
 SEBASTIAN = "Sebastian Löbig"
 HILDEGARD = "Hildegard Löbig"
@@ -51,10 +54,10 @@ def as_resolved(wiki, batch: ClaimBatch) -> dict[str, str]:
     out = resolved(wiki, batch)
     seen: dict[str, str] = {}
     for before, after in zip(batch.claims, out.claims, strict=True):
-        for old, new in (
-            (before.subject, after.subject),
-            (before.value.value, after.value.value),
-        ):
+        pairs = [(before.subject, after.subject)]
+        if isinstance(before.value, ItemValue):
+            pairs.append((before.value.value, after.value.value))
+        for old, new in pairs:
             if isinstance(old, LocalRef):
                 seen.setdefault(
                     old.local_id,
@@ -208,7 +211,10 @@ class TestAPersonUnderAnArtifactsLabel:
         batch = family_gedcom(wiki)
         wiki.forget()
 
-        assert resolvable_labels(wiki, batch) == {SEBASTIAN: tagged}
+        assert resolvable_labels(wiki, batch) == {
+            SEBASTIAN: tagged,
+            SEBASTIAN + ENTITY_TAG: tagged,
+        }
         assert wiki.label_reads == ["label_index"]
         assert wiki.fetches == 1
         assert sorted(wiki.claims_of) == sorted([artifact, tagged])
@@ -260,3 +266,202 @@ class TestAPersonUnderAnArtifactsLabel:
 
         assert wiki.entities[tagged]["aliases"].get("en", []) == []
         assert strings(wiki, tagged, "instance_of") == []
+
+    def test_the_records_alias_and_type_hint_reach_the_tagged_item(
+        self, tmp_path
+    ):
+        """Through the QID resolve gives, the record's own label and its
+        aliases reach the item, as the unresolved write gives them, and its
+        type hint is written."""
+
+        def instance():
+            wiki = WritingWiki()
+            self.artifact(wiki, tmp_path)
+            return wiki, wiki.item(SEBASTIAN + ENTITY_TAG)
+
+        def batch(wiki):
+            given = family_gedcom(wiki).model_dump(mode="json")
+            for record in given["entities"]:
+                if record["id"] == "i1":
+                    record.update(aliases=["S. Löbig"], type_hint="hatter")
+            return ClaimBatch.model_validate(given)
+
+        wiki, tagged = instance()
+        other, same = instance()
+        assert same == tagged
+        BatchWriter(wiki).write_batch(resolved(wiki, batch(wiki)))
+        BatchWriter(other).write_batch(batch(other))
+
+        for written in (wiki, other):
+            aliases = written.entities[tagged]["aliases"].get("en", [])
+            assert sorted(alias["value"] for alias in aliases) == sorted(
+                [SEBASTIAN, "S. Löbig"]
+            )
+            hints = written.entities[tagged]["claims"].get(
+                WritingWiki.PROPERTIES["type_hint"], []
+            )
+            assert [h["mainsnak"]["datavalue"]["value"] for h in hints] == [
+                "hatter"
+            ]
+
+
+def line_range(wiki, *refs: dict):
+    """A batch without a manifest, as the line-range tier gives one: the
+    export's claim once for each of `refs`, as its subject, its export
+    registered on `wiki`."""
+    family_gedcom(wiki)
+    export = wiki.find_item_by_label("family-tree-export.ged")
+    given = naming(*["x"] * len(refs)).model_dump(mode="json")
+    for claim, ref in zip(given["claims"], refs, strict=True):
+        claim.update(
+            subject=ref,
+            property="image",
+            value={"type": "item", "value": {"kind": "qid", "qid": export}},
+            qualifiers=[],
+        )
+    given["entities"] = []
+    return ClaimBatch.model_validate(given)
+
+
+class TestARefWithoutARecordUnderAnArtifactsLabel:
+    """Sebastian named by a ref with no manifest record, his name held by
+    a registered scan and a bare item under his tagged label."""
+
+    def instance(self, tmp_path):
+        wiki = WritingWiki()
+        Registrar(wiki).register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", SEBASTIAN
+        )
+        tagged = wiki.item(SEBASTIAN + ENTITY_TAG)
+        return wiki, tagged
+
+    def test_resolves_and_gives_the_item_what_the_ref_would(self, tmp_path):
+        ref = {
+            "kind": "local",
+            "local_id": "e0",
+            "label": SEBASTIAN,
+            "instance_of": "human",
+        }
+        wiki, tagged = self.instance(tmp_path)
+        other, same = self.instance(tmp_path)
+        assert same == tagged
+        batch = line_range(wiki, ref)
+
+        assert as_resolved(wiki, batch)["e0"] == tagged
+        assert as_written(wiki, batch)["e0"] == tagged
+        BatchWriter(wiki).write_batch(resolved(wiki, batch))
+        BatchWriter(other).write_batch(line_range(other, ref))
+
+        for instance in (wiki, other):
+            aliases = instance.entities[tagged]["aliases"].get("en", [])
+            assert [alias["value"] for alias in aliases] == [SEBASTIAN]
+            assert strings(instance, tagged, "instance_of") == [
+                WritingWiki.ITEMS["human"]
+            ]
+
+    def test_one_with_no_kind_stays_local(self, tmp_path):
+        """No record can be made without a kind: the ref stays local, and
+        the writer finds the tagged item itself."""
+        wiki, tagged = self.instance(tmp_path)
+        batch = line_range(
+            wiki, {"kind": "local", "local_id": "e0", "label": SEBASTIAN}
+        )
+
+        assert as_resolved(wiki, batch)["e0"] == "NEW"
+        assert resolved(wiki, batch).entities == []
+        assert as_written(wiki, batch)["e0"] == tagged
+
+
+class TestAsTheWriterReadsAnEntity:
+    def test_a_ref_in_a_claim_refused_before_the_plan_is_passed_over(self):
+        """p1's first ref is in a claim that also names u, whose label
+        holds a character Python's Unicode tables do not know: the writer
+        refuses that claim before its plan and reads p1 by its next ref,
+        and so does resolve."""
+        wiki = WritingWiki()
+        sebastian = person(wiki, SEBASTIAN)
+        person(wiki, HILDEGARD)
+        family_gedcom(wiki)
+        given = naming("x", "x").model_dump(mode="json")
+        first, second = given["claims"]
+        first["property"] = "relative"
+        first["subject"] = {
+            "kind": "local",
+            "local_id": "u",
+            "label": "Gustav" + UNKNOWN_MARK,
+        }
+        first["value"] = {
+            "type": "item",
+            "value": {"kind": "local", "local_id": "p1", "label": HILDEGARD},
+        }
+        second["subject"] = {
+            "kind": "local",
+            "local_id": "p1",
+            "label": SEBASTIAN,
+        }
+        batch = ClaimBatch.model_validate(given)
+
+        assert resolvable_labels(wiki, batch) == {SEBASTIAN: sebastian}
+        out = resolved(wiki, batch)
+        assert out.claims[1].subject == QidRef(qid=sebastian)
+        assert out.claims[0].value.value == QidRef(qid=sebastian)
+        dry = BatchWriter(wiki, dry_run=True).write_batch(batch)
+        assert dry.created_items["p1"] == sebastian
+
+    @needs_unknown_mark
+    def test_a_record_with_an_unknown_character_stays_new(self):
+        label = SEBASTIAN + UNKNOWN_MARK
+        wiki = WritingWiki()
+        person(wiki, _term_text(label))
+        given = family_gedcom(wiki).model_dump(mode="json")
+        for record in given["entities"]:
+            if record["id"] == "i1":
+                record["label"] = label
+        batch = ClaimBatch.model_validate(given)
+
+        assert as_resolved(wiki, batch)["i1"] == "NEW"
+        assert (
+            "i1"
+            not in BatchWriter(wiki, dry_run=True)
+            .write_batch(batch)
+            .created_items
+        )
+
+    @needs_unknown_mark
+    def test_any_ref_with_an_unknown_character_keeps_the_entity_local(self):
+        wiki = WritingWiki()
+        person(wiki, HILDEGARD)
+        batch = line_range(
+            wiki,
+            {"kind": "local", "local_id": "p1", "label": HILDEGARD},
+            {
+                "kind": "local",
+                "local_id": "p1",
+                "label": "Hildegard" + UNKNOWN_MARK,
+            },
+        )
+
+        out = resolved(wiki, batch)
+        assert all(isinstance(c.subject, LocalRef) for c in out.claims)
+        dry = BatchWriter(wiki, dry_run=True).write_batch(batch)
+        assert "p1" not in dry.created_items
+        assert "p1: label" in dry.refused_terms
+
+    def test_the_records_kind_counts_over_the_refs_own(self):
+        """A photograph's record whose ref says human, under a person's
+        name: on the artifact side by its record, as in the writer, so it
+        never resolves to the person's item."""
+        wiki = WritingWiki()
+        hildegard = person(wiki, HILDEGARD)
+        given = family_gedcom(wiki).model_dump(mode="json")
+        for record in given["entities"]:
+            if record["id"] == "i1":
+                record.update(label=HILDEGARD, kind="photograph")
+        for claim in given["claims"]:
+            if claim["subject"].get("local_id") == "i1":
+                claim["subject"]["instance_of"] = "human"
+        batch = ClaimBatch.model_validate(given)
+
+        assert as_resolved(wiki, batch)["i1"] == "NEW"
+        dry = BatchWriter(wiki, dry_run=True).write_batch(batch)
+        assert dry.created_items.get("i1") != hildegard

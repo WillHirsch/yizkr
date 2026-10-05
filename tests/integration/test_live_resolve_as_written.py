@@ -11,11 +11,11 @@ instance and compares it with a dry run of the unresolved batch:
 * a GEDCOM person, whose refs carry no label of their own and whose name
   is on the record alone: resolve gives the refs the person's item, the
   one the dry run reuses, and the review sheet shows that QID;
-* a person under a scan's label: the writer made the person an item
-  under the tagged label, and resolve gives the refs that item, as the
-  dry run does. The resolved batch, written, gives the item what the
-  local refs would: the person's name first among its aliases, its kind
-  once, and the scan's item gains nothing.
+* a person under a scan's label, with a bare item under the tagged label
+  (no alias, no statement): resolve gives the refs that item, as the dry run
+  does. The resolved batch, written, gives the item what the local refs
+  would: the person's name as its alias and its kind, and the scan's
+  item gains nothing.
 
 Fictional synthetic data only (docs/EXAMPLES.md): Sebastian Löbig and the
 Löbig family's studio portrait of the 1890s. Every title, name and file
@@ -50,8 +50,8 @@ DESCRIPTION = "written by tests/integration; safe to delete"
 FIXTURE = (
     "#476: Sebastian Löbig's export, its media object the 1890s studio "
     "portrait, written, then its batch resolved and dry-run; and a scan "
-    "under Sebastian's name before the export, written, then its batch "
-    "resolved, dry-run and written resolved"
+    "under Sebastian's name and a bare item under his tagged label before "
+    "the export, its batch resolved, dry-run and written resolved"
 )
 MARK = fixture_mark(FIXTURE, registrar, writer, resolve, gedcom, wiki)
 
@@ -169,10 +169,15 @@ def test_a_person_under_a_scans_label_resolves_to_the_tagged_item(
         description=DESCRIPTION,
     )
     artifact = scan.artifact_qid
+    # the tagged item bare, with no alias and no statement, so that only
+    # the write of the resolved batch can give it the alias and the kind
+    bare = client.wbi.item.new()
+    bare.labels.set("en", f"{person(order)}{ENTITY_TAG}")
+    bare.descriptions.set("en", DESCRIPTION)
+    sebastian = bare.write(summary="integration test: bare tagged item").id
+    assert entity(client, sebastian).get("aliases", {}).get("en", []) == []
+    assert values(client, sebastian, "instance_of") == []
     batch, artifacts = exported(client, tmp_path, order)
-    first = BatchWriter(client, artifact_qids=artifacts).write_batch(batch)
-    sebastian = first.created_items["i1"]
-    assert sebastian != artifact
     before = entity(client, artifact)
 
     resolved = resolve_batch(batch, resolvable_labels(client, batch))
