@@ -1956,6 +1956,19 @@ class TestPreflightCalls:
         assert driver.run() == EXIT_OK
         assert fakes.preflights == [(MODEL, "low")]
 
+    def test_a_shared_pair_is_named_by_its_first_role(self, tmp_path, fakes):
+        def preflight(model):
+            raise RuntimeError("API Error: 500")
+
+        fakes.preflight = preflight
+        driver = a_run(tmp_path, small(tmp_path), fakes, review_effort="low")
+        with pytest.raises(PreflightFailed) as refused:
+            driver.run()
+        (problem,) = refused.value.problems
+        assert problem.startswith(
+            f"a trivial call to {MODEL} (transcribe, effort low) failed"
+        )
+
     def test_only_the_roles_within_until(self, tmp_path, fakes):
         """A model only a stage past --until runs is not called, so a CLI
         that cannot run it does not refuse the run."""
