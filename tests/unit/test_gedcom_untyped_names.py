@@ -285,6 +285,13 @@ class TestPlaceholders:
         text = person("Ida /Sörne/", "2 GIVN Ida (Peppi ?)")
         assert texts(text) == []
         assert adapted(text).outcomes["untyped name form with a placeholder"]
+        # in a typed NAME, whose display form gives no `name`, only the
+        # unsure bracket is counted
+        text = person("Ida (Peppi ?) /Sörne/", "2 TYPE birth")
+        assert texts(text) == []
+        assert (
+            adapted(text).outcomes["untyped name form with a placeholder"] == 1
+        )
 
     def test_a_complete_bracket_of_an_unsure_name_is_a_name(self):
         # the unsure display form 'Ida' gives none; the bracket is whole
