@@ -1985,6 +1985,93 @@ class TestRecordless:
 # -- blocking -----------------------------------------------------------------
 
 
+class TestInstanceForm:
+    """A mention's aliases leave out each alias the instance would keep
+    as its label (writer.stored_term), whatever Unicode form the batch
+    gives either in (#477)."""
+
+    @staticmethod
+    def nfd(text: str) -> str:
+        return unicodedata.normalize("NFD", text)
+
+    def aliases(self, doc: Doc) -> list[list[str]]:
+        return [node.aliases for node in clustering._nodes(doc.manifest, 0)]
+
+    def test_an_alias_the_label_in_another_form_is_the_label(self):
+        decomposed = self.nfd("Ida Sörne")
+        assert decomposed != "Ida Sörne"
+        doc = register(
+            "a register of Ida",
+            [
+                human(
+                    "e1",
+                    "Ida Sörne",
+                    aliases=[decomposed, "Frau Sörne"],
+                    givens=["Ida"],
+                    surnames=["Sörne"],
+                ),
+                human(
+                    "e2",
+                    decomposed,
+                    aliases=["Ida Sörne", "Frau Sörne"],
+                    givens=["Ida"],
+                    surnames=["Sörne"],
+                ),
+            ],
+            [],
+            {"e1": "ida", "e2": "ida"},
+        )
+        assert self.aliases(doc) == [["Frau Sörne"], ["Frau Sörne"]]
+
+    def test_an_alias_the_instance_keeps_as_the_label_is_the_label(self):
+        """A control character the instance keeps as a space, and a
+        space at either end it drops."""
+        doc = register(
+            "a register of Gustav",
+            [
+                human(
+                    "e1",
+                    "Gustav Löbig",
+                    aliases=["Gustav\x08Löbig", " Gustav Löbig\u3000"],
+                ),
+            ],
+            [],
+            {"e1": "gustav"},
+        )
+        assert self.aliases(doc) == [[]]
+
+    def test_a_batch_without_entities_gives_a_label_once(self):
+        """Without a manifest, a local id's aliases are the labels its
+        refs give it, each once in the instance's form, the mention's
+        own label left out."""
+        sha1 = sha1_text("a register of Ida")
+        labels = ("Ida Löbig", "Ida Sörne")
+        batch = ClaimBatch.model_validate(
+            {
+                "extraction_run": RUN,
+                "claims": [
+                    {
+                        "subject": {
+                            "kind": "local",
+                            "local_id": "e1",
+                            "label": label,
+                        },
+                        "property": "date_of_birth",
+                        "value": day(1890),
+                        "source": {
+                            "artifact": {"kind": "artifact", "sha1": sha1}
+                        },
+                    }
+                    for name in labels
+                    for label in (name, self.nfd(name))
+                ],
+            }
+        )
+        (node,) = clustering._nodes(Manifest(sha1, batch), 0)
+        assert node.label == "Ida Löbig"
+        assert node.aliases == ["Ida Sörne"]
+
+
 class TestBlocking:
     def test_gedcom_anchored_mentions_pair_with_their_anchors_only(self):
         ged, extract, papers = gedcom(), birth_extract(), naturalisation()
@@ -5709,12 +5796,14 @@ class TestTheStage:
     def test_the_code_digest_reads_each_module_it_names(
         self, tmp_path, monkeypatch
     ):
-        """The digest is of the bytes of clustering.py, fingerprints.py
-        and reconcile.py: a byte changed in any of them changes it."""
+        """The digest is of the bytes of clustering.py, fingerprints.py,
+        reconcile.py and writer.py: a byte changed in any of them changes
+        it."""
         assert clustering.CODE == (
             "clustering.py",
             "fingerprints.py",
             "reconcile.py",
+            "writer.py",
         )
         before = code_digest()
         for name in clustering.CODE:

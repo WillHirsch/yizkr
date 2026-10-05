@@ -272,10 +272,14 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
 
 def _keys(names: Iterable[str]) -> set[str]:
     """Each whole name's keys: its folded words, and its words with any
-    umlaut written out (``clustering.part_keys``, ADR-0035 §7)."""
+    umlaut written out (``clustering.part_keys``, ADR-0035 §7), read in
+    the form the instance keeps a term in (writer.stored_term), so a
+    manifest's name and a graph item's label key alike whatever form the
+    batch gives the name in."""
     from yizkr.pipeline.clustering import part_keys
+    from yizkr.pipeline.writer import stored_term
 
-    return {key for name in names for key in part_keys(name)}
+    return {key for name in names for key in part_keys(stored_term(name))}
 
 
 def _composed(record: PersonStructure) -> list[str]:

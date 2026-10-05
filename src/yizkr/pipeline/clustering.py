@@ -276,6 +276,7 @@ from yizkr.pipeline.stages import (
     content_hash,
     sha256_text,
 )
+from yizkr.pipeline.writer import stored_term
 
 # what cluster_corpus makes of a set of manifests: bumped whenever the same
 # manifests and thresholds would give another identity map, so that a
@@ -292,8 +293,9 @@ DEFAULTS = PACKAGE / "clustering.yaml"
 # made is made again, whatever VERSION says. The other yizkr modules that
 # this one and fingerprints.py import reach the key through the batches'
 # hashes: yizkr.claims parses the batches, orchestrate says what a hash
-# leaves out, and stages makes it.
-CODE = ("clustering.py", "fingerprints.py", "reconcile.py")
+# leaves out, and stages makes it. writer.py gives the form the instance
+# keeps a term in (stored_term), which names are compared in.
+CODE = ("clustering.py", "fingerprints.py", "reconcile.py", "writer.py")
 
 # what a manifest is the extraction of
 DOCUMENT = "document"
@@ -836,7 +838,10 @@ def _vocabulary(value: Any) -> str | None:
 def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
     """One node per mention of the manifest, with its record and the
     relations the manifest states between its local ids lifted into
-    mention space."""
+    mention space. A node's aliases leave out each alias the instance
+    would keep as its label: the two are compared in the form the
+    instance keeps a term in (writer.stored_term), so an alias that
+    differs from the label only in its Unicode form is the label."""
     batch = manifest.batch
     mentions = mentions_of(manifest.sha1, batch)
     # whether a record stands (ADR-0035 §5) is extraction's verdict,
@@ -855,10 +860,14 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
     else:
         aliases = defaultdict(list)
         for ref in local_refs(batch):
-            if ref.label and ref.label not in aliases[ref.local_id]:
+            if ref.label and stored_term(ref.label) not in map(
+                stored_term, aliases[ref.local_id]
+            ):
                 aliases[ref.local_id].append(ref.label)
     by_local: dict[str, _Node] = {}
     for mention in mentions:
+        # an alias the instance would keep as the label is the label
+        label = stored_term(mention.label)
         by_local[mention.local_id] = _Node(
             mention=mention,
             source=manifest.source,
@@ -870,7 +879,7 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
             aliases=[
                 alias
                 for alias in aliases.get(mention.local_id, [])
-                if alias != mention.label
+                if stored_term(alias) != label
             ],
             record=records.get(mention.local_id),
         )

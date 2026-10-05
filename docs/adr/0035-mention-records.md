@@ -66,6 +66,16 @@ and two forms of one alias are kept once, the first as given. An alias
 the instance would keep nothing of, such as control characters alone,
 is blank and dropped.
 
+Amended by #477 (2026-10-05): the other comparisons of names before the
+write take both sides in that same form (`stored_term`): reconcile's
+blocking reads every whole name form, a manifest's and a graph item's,
+through it before folding (`part_keys`), so a decomposed "Flörburg"
+meets the instance's composed item; and clustering leaves out of a
+mention's aliases each one the instance would keep as its label, and,
+for a batch without a manifest, takes each label its refs give once in
+that form. The identity map's code key (`CODE`) holds writer.py, which
+gives the form.
+
 Amended by #434 (2026-10-02): a record nickname is a name the source
 gives as what the person is called, by anyone, and so also an alias; a
 name the source gives as what one person calls another, or that names
