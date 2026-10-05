@@ -501,11 +501,11 @@ def counterparts(extracted: ClaimBatch, rows: ClaimBatch) -> list[int | None]:
     local ref to an approved entity with its QID, and set that entity's
     `qid`, and a claim they make identical to an earlier one is dropped
     (reconcile.apply_equivalences). Then each remaining local ref may be
-    replaced with a QID by its own label, claim for claim, in order
-    (resolve.resolve_batch). The first step is replayed here exactly, from
-    the entities whose `qid` `rows` sets; the second is checked claim by
-    claim, a local ref against the ref at its place, so one local id may
-    become different QIDs in different claims."""
+    replaced with a QID by its entity's label (resolve.resolve_batch).
+    The first step is replayed here exactly, from the entities whose
+    `qid` `rows` sets; the second is checked claim by claim, a local ref
+    against the ref at its place, so rows in which one local id became
+    different QIDs in different claims match too."""
     from yizkr.pipeline.reconcile import apply_equivalences
 
     before = {entity.id: entity.qid for entity in extracted.entities}

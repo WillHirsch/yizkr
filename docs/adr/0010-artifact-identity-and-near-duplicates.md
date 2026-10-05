@@ -38,6 +38,17 @@ around it or longer than the instance holds, not NEW; a label holding a characte
 Python's Unicode tables do not know resolves to nothing, as the writer
 finds no item by it. The place-hierarchy pass finds and labels its run
 item in that form too.
+Amended by #476 (2026-10-05): the resolve step matches an entity by the
+label and the side rules the writer finds its item by, through the
+writer's own helpers (`entity_terms`, `reused_item`): its manifest
+record's label where it has one, otherwise its first ref's, and where an
+artifact or a part of one holds that label, the item under its tagged
+label (`" [not an artifact]"`) when that one is not. So the review sheet
+shows the QID the write reuses, for a GEDCOM person whose name is on its
+record alone and for a person under an artifact's label alike. The
+writer pairs a record with a tagged item resolve gave its refs, its own
+label then an alias, as it does an item it finds there itself ("What is
+still matched by label").
 Amended by #373 (2026-10-02): a file is uploaded under a name in the form
 MediaWiki takes as it is, every letter kept, within MediaWiki's 240-byte
 limit with room for the content tag, and the description registration
@@ -578,16 +589,20 @@ Resolve's exact-label step never resolves a ref on the artifact side
 (of an artifact kind, artifact or a class the manifest makes a
 `subclass_of` it, or of artifact fragment, as in the writer's
 `is_artifact_kind`; amended by #444, 2026-10-03), and
-resolves no ref to an artifact or a part of one: it matches against the
-instance's labels without those items' (`resolvable_labels`). The
+resolves no ref to an artifact or a part of one: it finds an entity's
+item by the label and the side rules the writer does, the item under its
+label, or under its tagged label where an artifact or a part of one
+holds the label (below; `resolvable_labels`, the writer's `reused_item`,
+amended by #476, 2026-10-05). The
 writer, finding the item a manifest record names after resolve replaced
-its refs (its `_found_entities`), pairs a record and an item by label on
-the same terms, a record that no claim names as much as any other: a
+its refs (its `_found_entities`), pairs a record and an item by label,
+or by tagged label where it would place the record there, on the
+same terms, a record that no claim names as much as any other: a
 person's record never names a media object's item, nor a media object's
 record a registered scan (amended by #444, 2026-10-03). What
 the two read stays bounded by the batch (amended by #444, 2026-10-03):
 resolve reads the instance's labels once a batch and the statements of
-only the items its refs' labels name (`WikiClient.fetch_claims`), and a
+only the items its entities' labels, plain or tagged, name (`WikiClient.fetch_claims`), and a
 write reads the labels once, with the vocabulary known (a fresh client
 reads them for the vocabulary too, when the writer is made), for its
 plan, the artifacts registered under a label, looked up in an index of

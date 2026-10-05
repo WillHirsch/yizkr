@@ -194,7 +194,10 @@ and local refs.
   a record the writer matches or an approved equivalence names already
   does. The resolve step leaves the record without a `qid`, so the writer
   pairs it with a QID that one of the batch's claims mentions, by that
-  item's label; a record no claim mentions adds no alias.
+  item's label; a record no claim mentions adds no alias. The label is
+  the record's, or its tagged label where the writer would place the
+  record under it (ADR-0010), its own label then going first among the
+  aliases (amended by #476, 2026-10-05).
 - **Kinds without a manifest.** A batch without an entity manifest, such
   as the line-range tier of ADR-0006 produces, states each entity's kind
   only on its local refs' `instance_of`. When the writer matches such a
