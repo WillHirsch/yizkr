@@ -60,6 +60,7 @@ from tests.unit.test_registrar import (
     strings,
 )
 from tests.unit.test_scratch import (  # noqa: F401
+    MODEL,
     Corpus,
     Recorder,
     a_run,
@@ -92,7 +93,7 @@ from yizkr.pipeline.registrar import ExcludedMedia
 from yizkr.pipeline.report import build, render_markdown
 from yizkr.pipeline.review import accept_all
 from yizkr.pipeline.rundir import RunDir
-from yizkr.pipeline.scratch import EXIT_OK, CorpusStage
+from yizkr.pipeline.scratch import EXIT_FAILED, EXIT_OK, CorpusStage
 from yizkr.pipeline.textlayer import png
 
 # the booklet's own text on page 6, as its text layer gives it
@@ -706,6 +707,29 @@ class TestAScratchRun:
         # the invocation's end counts both documents
         end = events(driver.state_dir, "run-end", invocation=-1)[-1]
         assert sum(end["statuses"].values()) == 2
+
+    def test_an_excerpt_s_failed_extraction_is_preflighted(
+        self,
+        tmp_path,
+        fakes,  # noqa: F811
+    ):
+        """The excerpt's extraction failed: on a resume, the PDF's stages
+        all stand, and the excerpt's extraction and critique are to make,
+        so their pairs are preflighted (#455)."""
+        corpus = self.corpus(tmp_path, **{"a-booklet.pdf": booklet()})
+
+        def hook(what, name):
+            if what == "manifest" and name == f"{LETTER_SHA1}.png":
+                raise RuntimeError("engine down")
+
+        fakes.hook = hook
+        driver = a_run(tmp_path, corpus, fakes, until="critique")
+        assert driver.run() == EXIT_FAILED
+        fakes.hook = None
+        fakes.preflights.clear()
+        again = a_run(tmp_path, corpus, fakes, until="critique")
+        assert again.run() == EXIT_OK
+        assert fakes.preflights == [(MODEL, "low"), (MODEL, "high")]
 
     def test_past_the_barrier_alone_the_excerpt_goes_with_its_pdf(
         self,

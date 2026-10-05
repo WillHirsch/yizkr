@@ -1107,6 +1107,11 @@ class TestCallEvents:
         assert "paused   ModelUnsupported; no time to go on" in view
         assert "paused   for the subscription" not in view
 
+    def test_a_pause_the_event_does_not_name_is_the_subscriptions(self, run):
+        append(run, self.paused(held="usage limit"))
+        view = render_terminal(summarise_run(run, NOW), width=200)
+        assert "paused   for the subscription (usage limit)" in view
+
     def test_a_subscription_pause_that_names_only_a_window(self, run):
         append(run, self.paused(window="seven_day", error="UsageLimitReached"))
         view = render_terminal(summarise_run(run, NOW), width=200)

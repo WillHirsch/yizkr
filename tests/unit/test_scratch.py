@@ -337,6 +337,23 @@ def command(tmp_path, corpus, fakes, **kwargs) -> int:
     )
 
 
+def estimate_now(tmp_path, corpus, fakes, **kwargs):
+    """`yizkr scratch estimate`, as the command counts it, over the
+    corpus, with the test driver's defaults."""
+    from yizkr.pipeline import estimate
+
+    fakes.corpus = corpus
+    kwargs.setdefault("cache_dir", tmp_path / "cache")
+    return estimate.scratch_estimate(
+        corpus.folder,
+        runs=runs_dir(tmp_path),
+        exclusions=ExclusionList(),
+        log=quiet,
+        min_free=0,
+        **kwargs,
+    )
+
+
 def events(run, *names: str, invocation: int | None = None) -> list[dict]:
     """The run's events, those named when names are given, of its
     `invocation`-th invocation (0 the first, -1 the latest) when given."""
@@ -2394,6 +2411,267 @@ class TestPreflightCalls:
         )
         assert resumed == EXIT_OK
         assert fakes.preflights == expected
+
+    def test_a_refresh_upstream_makes_the_stages_after_it_to_make(
+        self, tmp_path, fakes
+    ):
+        """--refresh transcribe makes every reading again, and with it
+        each document's stages after it: the extraction model, another
+        than the reading's, is preflighted, and refuses the run when the
+        CLI cannot run it (EH)."""
+        corpus = small(tmp_path)
+        options = {"until": "critique", "extract_model": "claude-sonnet-5"}
+        assert command(tmp_path, corpus, fakes, **options) == EXIT_OK
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        # the engine reads the photograph otherwise now
+        corpus.texts[PHOTO] = SOURCES["letter-to-sipkje-1952"].text
+
+        def preflight(model):
+            if model == "claude-sonnet-5":
+                raise llm.ModelUnsupported("paused", model=model, reason="x")
+
+        fakes.preflight = preflight
+        fakes.preflights.clear()
+        with pytest.raises(PreflightFailed, match="claude-sonnet-5 .extract"):
+            command(
+                tmp_path,
+                corpus,
+                fakes,
+                resume=run.name,
+                refresh=["transcribe"],
+                **options,
+            )
+        assert ("claude-sonnet-5", "low") in fakes.preflights
+
+    def test_a_correction_makes_the_stages_after_it_to_make(
+        self, tmp_path, fakes, monkeypatch
+    ):
+        """A curator's correction added once the stages have ended: the
+        transcription is made from it, with no call, and the extraction
+        and critique after it are to make; on another CLI the run is
+        refused before it starts."""
+        corpus = small(tmp_path)
+        options = {"until": "critique", "extract_model": "claude-sonnet-5"}
+        assert command(tmp_path, corpus, fakes, **options) == EXIT_OK
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        correction = run / Path(PHOTO).stem / "transcription.corrected.txt"
+        assert correction.parent.is_dir()
+        correction.write_text(SOURCES["studio-photo-1890s"].text)
+        fakes.preflights.clear()
+        assert command(
+            tmp_path, corpus, fakes, resume=run.name, **options
+        ) == EXIT_OK  # fmt: skip
+        assert fakes.preflights == [
+            ("claude-sonnet-5", "low"),
+            (MODEL, "high"),
+        ]
+
+        correction.write_text(SOURCES["postcard-1938"].text)
+        before = (run / "run.json").read_bytes()
+        fakes.preflights.clear()
+        monkeypatch.setattr(sys.modules[__name__], "CLI", "9.9.10")
+        # the estimate refuses it up front too
+        with pytest.raises(RunSettingsConflict, match="cli_version"):
+            estimate_now(tmp_path, corpus, fakes, resume=run.name, **options)
+        with pytest.raises(RunSettingsConflict, match="cli_version"):
+            command(tmp_path, corpus, fakes, resume=run.name, **options)
+        assert fakes.preflights == []
+        assert (run / "run.json").read_bytes() == before
+
+    def test_a_held_stage_whose_view_stands_is_not_to_make(
+        self, tmp_path, fakes, monkeypatch
+    ):
+        """A done stage that a later invocation held reads as pending, yet
+        its view stands: a resume on another CLI with nothing else left
+        goes on, with no preflight call (EH)."""
+        corpus = small(tmp_path)
+        assert command(tmp_path, corpus, fakes, until="critique") == EXIT_OK
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        corpus.text("e-letter-1952.txt", "letter-to-sipkje-1952")
+
+        def hook(what, name):
+            if name == "e-letter-1952.txt" and what == "manifest":
+                request(run, "abort", kind="media", reason="blurred")
+
+        fakes.hook = hook
+        held = command(
+            tmp_path, corpus, fakes, resume=run.name, until="critique"
+        )
+        assert held == EXIT_STOPPED
+        assert "pending" in statuses(run)
+        fakes.hook = None
+        fakes.preflights.clear()
+        asked = len(fakes.calls)
+        monkeypatch.setattr(sys.modules[__name__], "CLI", "9.9.10")
+        # the estimate accepts it, and counts no call
+        counted = estimate_now(
+            tmp_path, corpus, fakes, resume=run.name, until="critique"
+        )
+        assert counted.total().engine_calls == 0
+        resumed = command(
+            tmp_path, corpus, fakes, resume=run.name, until="critique"
+        )
+        assert resumed == EXIT_OK
+        assert fakes.preflights == [] and len(fakes.calls) == asked
+
+    def test_a_stage_needing_attention_is_not_to_make(
+        self, tmp_path, fakes, monkeypatch
+    ):
+        """A critique the engine gave up on at its output limit needs
+        attention: dispatch reuses it, and so the preflight calls nothing
+        for it (EK)."""
+        corpus = small(tmp_path)
+
+        def hook(what, name):
+            if what == "critique":
+                raise llm.OutputLimitReached()
+
+        fakes.hook = hook
+        assert command(tmp_path, corpus, fakes, until="critique") == EXIT_OK
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        assert "needs attention" in statuses(run)
+        fakes.hook = None
+        fakes.preflights.clear()
+        monkeypatch.setattr(sys.modules[__name__], "CLI", "9.9.10")
+        resumed = command(
+            tmp_path, corpus, fakes, resume=run.name, until="critique"
+        )
+        assert resumed == EXIT_OK
+        assert fakes.preflights == []
+
+    def test_a_gedcom_only_corpus_calls_nothing(self, tmp_path, fakes):
+        """The GEDCOM adapter makes no call: a corpus of GEDCOM files
+        alone preflights no pair."""
+        corpus = Corpus(tmp_path / "corpus")
+        corpus.gedcom("a-tree.ged")
+        driver = a_run(tmp_path, corpus, fakes, until="critique")
+        assert driver.run() == EXIT_OK
+        assert fakes.preflights == []
+
+    def test_a_reading_the_check_now_fails_is_to_make(
+        self, tmp_path, fakes, monkeypatch
+    ):
+        """The transcription check, stricter since, fails a reading that
+        stands otherwise: the driver reads the scan again, so the
+        preflight calls its pair."""
+        corpus = small(tmp_path)
+        assert command(tmp_path, corpus, fakes, until="transcription") == 0
+        fakes.preflights.clear()
+        monkeypatch.setattr(
+            scratch.ScratchDriver,
+            "_transcription_failure",
+            lambda self, doc, transcription: (
+                "stricter" if doc.source.name == PHOTO else None
+            ),
+        )
+        assert command(tmp_path, corpus, fakes, until="transcription") == 0
+        assert fakes.preflights == [(MODEL, "low")]
+
+    def test_a_control_file_shorter_than_counted_is_read_whole(
+        self, tmp_path, fakes
+    ):
+        """The count of requests the driver began with stands for a file
+        that only grows: one replaced since, holding fewer, is read
+        whole."""
+        corpus = small(tmp_path)
+        assert command(tmp_path, corpus, fakes, until="transcription") == 0
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        driver = Driver(corpus.folder, run)
+        driver._asked_since = len(read_jsonl(run / CONTROL)) + 5
+        request(run, "abort", reason="enough")
+        assert driver._asked()[-1]["action"] == "abort"
+
+    def test_two_preflight_limits_keep_an_abort_asked_during_the_first(
+        self, tmp_path, fakes
+    ):
+        """An abort of the photographs asked during the first wait is
+        honoured by the second, and carried into the invocation after it
+        (EI)."""
+        corpus = small(tmp_path)
+        assert command(tmp_path, corpus, fakes, until="transcription") == 0
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        waits = Waits(
+            lambda: request(run, "abort", kind="media", reason="blurred"),
+            *[None] * 8,
+        )
+        limited: list[int] = []
+
+        def preflight(model):
+            if len(limited) < 2:
+                limited.append(1)
+                raise usage_limit(waits, minutes=1)
+
+        fakes.preflight = preflight
+        resumed = command(
+            tmp_path, corpus, fakes, resume=run.name, waits=waits, poll=60
+        )
+        assert resumed == EXIT_STOPPED
+        assert len(limited) == 2
+        assert outcome(run) == ("stopped", "kind:media aborted")
+
+    def test_a_mid_run_limit_then_a_preflight_limit_keep_an_abort(
+        self, tmp_path, fakes
+    ):
+        corpus = small(tmp_path)
+        waits = Waits(*[None] * 10)
+        limited: list[int] = []
+
+        def hook(what, name):
+            if what == "chunk" and name == LETTER and not limited:
+                limited.append(1)
+                request(
+                    driver.state_dir, "abort", kind="media", reason="blurred"
+                )
+                raise usage_limit(waits, minutes=1)
+
+        def preflight(model):
+            if len(limited) == 1:
+                limited.append(2)
+                raise usage_limit(waits, minutes=1)
+
+        fakes.hook = hook
+        fakes.preflight = preflight
+        driver = a_run(tmp_path, corpus, fakes, waits=waits, poll=60)
+        assert driver.run() == EXIT_STOPPED
+        assert limited == [1, 2]
+        assert outcome(driver.state_dir) == ("stopped", "kind:media aborted")
+
+    def test_a_pause_asked_during_a_preflight_wait_is_carried(
+        self, tmp_path, fakes
+    ):
+        corpus = small(tmp_path)
+        assert command(tmp_path, corpus, fakes, until="transcription") == 0
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        asked: list[str] = []
+
+        def step():
+            """Pause the critiques during the wait; once the pause is
+            carried into the next invocation, resume them."""
+            if not asked:
+                asked.append("pause")
+                request(run, "pause", stage="critique", reason="later")
+            elif asked == ["pause"] and any(
+                entry.get("carried")
+                for entry in read_jsonl(run / CONTROL)
+                if entry.get("action") == "pause"
+            ):
+                asked.append("resume")
+                request(run, "resume", stage="critique")
+
+        waits = Waits(*[step] * 10)
+        limited: list[int] = []
+
+        def preflight(model):
+            if not limited:
+                limited.append(1)
+                raise usage_limit(waits, minutes=1)
+
+        fakes.preflight = preflight
+        resumed = command(
+            tmp_path, corpus, fakes, resume=run.name, waits=waits, poll=60
+        )
+        assert resumed == EXIT_OK
+        assert asked == ["pause", "resume"]
 
     @pytest.mark.parametrize(
         ("status", "words"), [(429, "rate-limited"), (529, "overloaded")]

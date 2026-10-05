@@ -51,8 +51,9 @@ a text's length only approaches, so a dense document can take more. Not
 counted at all: a call asked again after an engine error, or after a
 chunk answer cut off (up to 2 a chunk), the preflight's one trivial call
 per distinct (model, effort) pair the invocation's roles run, which
-every invocation of the run makes (scratch.PREFLIGHT_PROMPT), and the
-waits for the subscription, which are no calls. Nor is a slice the
+every invocation of the run that calls the engine makes
+(scratch.PREFLIGHT_PROMPT), and the waits for the subscription, which
+are no calls. Nor is a slice the
 anomaly checks pause as the run unfolds (docs/ANOMALIES.md): it makes
 fewer calls than counted.
 
@@ -100,7 +101,7 @@ import functools
 import json
 import math
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -672,39 +673,6 @@ class Estimator(ScratchDriver):
 
     # -- one document ---------------------------------------------------------
 
-    def _fresh(self, doc: DocumentRun) -> bool:
-        """Whether every view of the document is made afresh: it has no
-        directory yet, or the driver sets its directory aside (_prepare)."""
-        if not doc.dir.is_dir():
-            return True
-        if doc.state.content_sha1 and doc.state.content_sha1 != doc.sha1:
-            return True
-        return doc.unrecorded
-
-    def _stands(
-        self,
-        doc: DocumentRun,
-        view: Path,
-        load: Callable[[str], Any],
-        recheck: Callable[[Any], str | None] | None = None,
-    ) -> Any:
-        """The view, loaded, when the driver would reuse it
-        (_reused_view), without a word of it said: current, not refreshed
-        in this invocation unless a refresh made it in the run already,
-        and passing `recheck`. None when the view is to be made."""
-        role, stage = doc.views[view]
-        if role in self.refresh and (doc.sha1, stage) not in self._refreshed:
-            return None
-        if not doc.derivations.current(view):
-            return None
-        try:
-            loaded = load(view.read_text())
-        except (OSError, ValueError):
-            return None
-        if recheck is not None and recheck(loaded) is not None:
-            return None
-        return loaded
-
     def _count(self, doc: DocumentRun) -> dict[str, _Made]:
         """What each stage the invocation plans for the document comes to,
         in order, up to one that fails in the run."""
@@ -1230,7 +1198,8 @@ def describe(estimate: Estimate) -> list[str]:
         "- Not counted: calls asked again after an engine error or after a "
         "chunk answer cut off (at most 2 for a chunk), the preflight's one "
         "trivial call per (model, effort) pair the invocation's roles run, "
-        "which every invocation makes, and the waits for the subscription, "
+        "which every invocation that calls the engine makes, and the waits "
+        "for the subscription, "
         "which are no calls. A slice the anomaly checks pause makes fewer "
         "calls than counted."
     )

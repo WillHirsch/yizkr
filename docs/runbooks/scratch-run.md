@@ -86,21 +86,30 @@ and `yizkr.reset` for the reset.
   invocation will call run, through the engine as the run calls it:
   the same engine, model and effort as the first role that runs the
   pair, and the pinned claude CLI, but not through the LLM cache, so
-  the call reaches the engine. A role counts when some document still
-  has a stage of it within `--until` to make (`transcribe` for
-  transcription, `extract` for extraction and GEDCOM, `critique`): one
-  not done or needing attention yet (a failed stage is made again), or
-  one `--refresh` of the role makes again. Every role counts when a
-  corpus stage in range may call the engine. So a resume with nothing
-  left for the engine, such as one past the barrier only, or one whose
-  per-document stages have all ended with only the barrier and
-  clustering to go, makes no call. Two roles on one model at one effort
-  make one call; at two efforts, two. Every invocation that calls the
-  engine makes them, the driver's own after a subscription limit
-  included. A pair's client on another claude CLI than the run recorded
-  refuses the run as `RunSettingsConflict` before its call, as the
-  run's own client would when it starts; a resume with nothing left for
-  the engine goes on, on whatever CLI is installed.
+  the call reaches the engine. Which stages call the engine is decided
+  exactly as the driver decides what to reuse, and as `yizkr scratch
+  estimate` does: within `--until`, a document's stages are made from
+  the first whose view does not stand (there is none yet, it is not
+  current, `--refresh` names its role and has not made it in this run
+  yet, or a transcription the check now fails), and every one after it;
+  a document set aside, or new to the run, makes every stage. A stage
+  whose view stands is reused, whatever its latest status says (a
+  stage held by an abort, or needing attention). A role counts when one
+  of the stages to make calls it: a transcription the vision engine
+  makes (`transcribe`), an extraction (`extract`), a critique
+  (`critique`); never the GEDCOM adapter, nor a transcription read from
+  a text, a slide deck, a correction or an excerpt's reading. Every role
+  counts when a corpus stage in range may call the engine. So a resume
+  with nothing left for the engine, such as one past the barrier only,
+  or one whose views all stand with only the barrier and clustering to
+  go, makes no call. Two roles on one model at one effort make one
+  call; at two efforts, two. Every invocation that calls the engine
+  makes them, the driver's own after a subscription limit included. A
+  pair's client on another claude CLI than the run recorded refuses the
+  run as `RunSettingsConflict` before its call, as the run's own client
+  would when it starts; a resume with nothing left for the engine goes
+  on, on whatever CLI is installed, as `RunDir.start` and the estimate
+  let it.
 
   A call that fails with an error that is not a subscription limit or
   an overload refuses the run, naming the model, the role, the effort
@@ -114,11 +123,11 @@ and `yizkr.reset` for the reset.
   writes anything. Such a wait shows **only in the driver's output**:
   on a new run nothing has started yet, so `yizkr scratch watch` and
   the status page show no run, `yizkr scratch abort` cannot reach it,
-  and only Ctrl-C stops the wait (the driver says so). On a resume, the
-  wait and the invocation after it honour only the pauses and aborts
-  asked since the wait began, never those of an earlier invocation. For
-  the anthropic engine, a 429 or 529 its own retries did not get past
-  refuses the run, to be tried again later.
+  and only Ctrl-C stops the wait (the driver says so). Every wait, and
+  every invocation after one, honours the pauses and aborts asked since
+  this invocation of `scratch run` began, never those of an earlier
+  one. For the anthropic engine, a 429 or 529 its own retries did not
+  get past refuses the run, to be tried again later.
 - **A model the CLI stops supporting mid-run.** Should the API refuse a
   call in the middle of a run because the CLI does not support its
   model (a model changed under a pinned CLI), the engine takes it as a
@@ -198,9 +207,10 @@ and `yizkr.reset` for the reset.
   - **not counted**: calls asked again after an engine error or a chunk
     answer cut off (up to 2 for a chunk), the preflight's one trivial
     call per (model, effort) pair the invocation's roles run, which
-    every invocation makes, and waits for the subscription, which make
-    no call. A slice the anomaly checks pause as the run unfolds
-    (docs/ANOMALIES.md) makes fewer calls than counted.
+    every invocation that calls the engine makes, and waits for the
+    subscription, which make no call. A slice the anomaly checks pause
+    as the run unfolds (docs/ANOMALIES.md) makes fewer calls than
+    counted.
 
   It writes nothing, and takes no lock: it runs beside a running driver,
   counting what the run and the cache hold as it reads them, and names
