@@ -42,13 +42,22 @@ uv run python -m yizkr.pipeline.monitor pause|resume|abort <run dir> [--stage NA
 `watch` redraws the view in place every `--interval` seconds, until you
 press `q` or Ctrl-C; quitting the monitor never stops the run. `--once`
 prints one view and exits. `--no-page` leaves the status page unwritten.
-`--serve` serves the page (Serving the page, below). Off a terminal
-(output piped or redirected, or input that is not a terminal) the view is
-printed afresh each time the run changes, without colour, and no keys are
-read. Its lines stop one column short of the width the environment gives
-(`COLUMNS`, or 100), counted in characters. A terminal that cannot move
-its cursor (terminfo has no `cup` for it, as for `TERM=dumb`) is printed
-to the same way.
+`--serve` serves the page (Serving the page, below).
+
+The view is drawn through `curses` (below) only when the standard input
+and output are both a terminal and terminfo knows how to move that
+terminal's cursor (`cup`). Otherwise the view is printed afresh each
+time the run changes, without colour, and no keys are read: when the
+output is piped or redirected, when the input is (`watch < /dev/null`;
+Python's `curses` can only read keys from a terminal on the standard
+input), or when the terminal is `TERM=dumb` or one terminfo does not
+know. Printed to a terminal, its footer then ends with `Ctrl-C: quit
+(keys are read only from a terminal)`. A printed line, like each line of
+`--once`, stops one column short of a width (`COLUMNS` first, else the
+terminal's own width, else 100), counted in characters, not in the
+columns a terminal gives them: a line of wide characters may be wider
+than that, and wrap. Display widths are left to `curses`, which has
+them from the C library; the monitor keeps no width table of its own.
 
 On a terminal the view is drawn through the standard library's `curses`
 (ncursesw on Linux), which ends when the monitor quits, however it quits,
@@ -58,28 +67,36 @@ the help and the key hint) keeps the window's bottom rows when there is
 room for it, so a longer or shorter view above it does not move it. The
 title and the section heads are bold, the dim rows dim, and the states
 coloured from colour pairs: green, yellow and red on the terminal's own
-background (black where it has none). `NO_COLOR` turns every style off.
-Each refresh draws the whole view, and `curses` sends the terminal only
-the cells that changed: a refresh in which nothing changed sends nothing.
-`curses` takes each character's width from the C library (the locale's
-character type is set from the environment while the view is open, so
-wide characters draw correctly) and clips each line at the window's
-edge; nothing wraps. Keys are read as they are typed, waiting
-`--interval` seconds for one before the next refresh. A resize draws the
-view at the new size at once. Press Ctrl-L to send the whole screen
-again, as in other terminal programs, if something else has written over
-it; after Ctrl-Z and `fg`, `curses` puts the view back as it was. The
-served page writes nothing to the terminal, neither its requests nor the
-errors of a client that drops the connection. So the served address
-reaches the terminal once at the start and again only when the whole
-screen is sent (Ctrl-L, a resize, or its row moving when the footer
-changes): editors that forward ports they find in a terminal's output
-(VS Code's port auto-forwarding, set to read output) are not told of a
-new server every refresh.
+background (black where it has none). `NO_COLOR`, set and not empty,
+turns every style off. Each refresh draws the whole view, and `curses`
+sends the terminal only the cells that changed: a refresh in which
+nothing changed sends nothing. `curses` takes each character's width
+from the C library (the locale's character type is set from the
+environment while the view is open, so wide characters draw correctly)
+and clips each line at the window's edge, with no `...`; nothing wraps.
+The view's size is always the window's: exported `LINES` and `COLUMNS`
+are set aside while it is open and put back when it closes. Keys are
+read as they are typed, waiting `--interval` seconds for one before the
+next refresh; an Escape, and whatever comes with it (the rest of a key
+`curses` does not know), is no key. A resize draws the view at the new
+size at once (a resize signalled just as the monitor starts waiting for
+a key shows at the next key or refresh). Press Ctrl-L to send the whole
+screen again, as in other terminal programs, if something else has
+written over it. After Ctrl-Z and `fg`, `curses` puts the view back as
+it was, a half-typed command included; `curses` ignores a Ctrl-Z that
+comes while it is sending the screen, so one pressed then needs
+pressing again. The served page writes nothing to the terminal, neither
+its requests nor the errors of a client that drops the connection. So
+the served address reaches the terminal once at the start and again
+only when the whole screen is sent (Ctrl-L, a resize, or its row moving
+when the footer changes): editors that forward ports they find in a
+terminal's output (VS Code's port auto-forwarding, set to read output)
+are not told of a new server every refresh.
 
 **Commands.** Press `:` or Enter in the view to type one on the command
-line, which opens on the window's bottom row (Backspace edits it, Enter
-carries it out, and an empty line types nothing):
+line, which opens on the window's bottom row and shows as much of the
+line's end as fits (Backspace edits it, Enter carries it out, Escape or
+an empty line types nothing, and a line takes at most 500 characters):
 
 ```
 pause|resume|abort [run | stage NAME | kind NAME] [reason]

@@ -1597,6 +1597,7 @@ def summarise_run(path: Path | str, now: datetime | None = None) -> Summary:
 REPAINT = "\x0c"
 # what Screen.wait gives when the terminal's window has changed size
 RESIZE = "resize"
+ESCAPE = "\x1b"
 
 _COLUMNS = (
     ("pending", 8),
@@ -1608,6 +1609,9 @@ _COLUMNS = (
     ("engine", 8),
     ("cached", 8),
 )
+
+# the key hint of a view printed to a terminal without its keys read
+PLAIN_HINT = "Ctrl-C: quit (keys are read only from a terminal)"
 
 HELP = (
     f"commands: {GRAMMAR}",
@@ -2731,6 +2735,15 @@ def _curses_styles(curses: Any, color: bool) -> dict[str, int]:
     return styles
 
 
+# how long curses waits, in milliseconds, after an Escape for the rest of
+# a key's sequence (an arrow key's, say) before taking it as Escape alone
+ESCAPE_DELAY = 25
+# the environment variables that would fix curses' idea of the window's
+# size: while the view is open they are set aside, so that it follows
+# the window as it is resized
+_SIZE_VARIABLES = ("LINES", "COLUMNS")
+
+
 class _CursesScreen:
     """The terminal on the standard input and output, through curses.
 
@@ -2739,10 +2752,14 @@ class _CursesScreen:
     locale's character type is set from the environment while the screen
     is open), clips text at the window's edge, reports a change of the
     window's size as a key, and puts the screen back after Ctrl-Z and
-    `fg`. Keys are read as they are typed (cbreak, no echo), Ctrl-C
-    included as an interrupt; a prompt opens on the bottom row, with the
-    cursor shown. The terminal's settings are put back on the way out,
-    however the loop ends. `curses` stands in for the module in tests."""
+    `fg`. Its size is always the window's: LINES and COLUMNS are set
+    aside while the screen is open. Keys are read as they are typed
+    (cbreak, no echo), Ctrl-C included as an interrupt; an Escape, with
+    whatever follows it at once (the rest of a key's sequence curses did
+    not read as a key), is no key. A prompt opens on the bottom row, with
+    the cursor shown; Escape cancels it. The terminal's settings, the
+    locale and the environment are put back on the way out, however the
+    loop ends. `curses` stands in for the module in tests."""
 
     def __init__(self, color: bool, curses: Any = None) -> None:
         if curses is None:
@@ -2752,21 +2769,30 @@ class _CursesScreen:
         self.window: Any = None
         self.styles: dict[str, int] = {}
         self._locale: str | None = None
+        self._environment: dict[str, str] = {}
+        self._rows: list[tuple[str, str]] = []
 
     def __enter__(self) -> _CursesScreen:
         curses = self.curses
         with contextlib.suppress(locale.Error):
             self._locale = locale.setlocale(locale.LC_CTYPE)
             locale.setlocale(locale.LC_CTYPE, "")
+        self._environment = {
+            name: os.environ.pop(name)
+            for name in _SIZE_VARIABLES
+            if name in os.environ
+        }
         try:
             window = curses.initscr()
         except BaseException:
-            self._put_locale_back()
+            self._put_back()
             raise
         try:
             curses.noecho()
             curses.cbreak()
             window.keypad(True)
+            with contextlib.suppress(AttributeError, curses.error):
+                curses.set_escdelay(ESCAPE_DELAY)
             self._cursor(0)
             self.styles = _curses_styles(curses, self.color)
         except BaseException:
@@ -2793,9 +2819,13 @@ class _CursesScreen:
             try:
                 curses.endwin()
             finally:
-                self._put_locale_back()
+                self._put_back()
 
-    def _put_locale_back(self) -> None:
+    def _put_back(self) -> None:
+        """The locale's character type and the size variables as they
+        were before the screen opened."""
+        os.environ.update(self._environment)
+        self._environment = {}
         if self._locale is not None:
             with contextlib.suppress(locale.Error):
                 locale.setlocale(locale.LC_CTYPE, self._locale)
@@ -2812,9 +2842,10 @@ class _CursesScreen:
 
     def draw(self, rows: Sequence[tuple[str, str]]) -> None:
         window = self.window
+        self._rows = list(rows)
         window.erase()
         height, _ = window.getmaxyx()
-        for row, (text, style) in enumerate(rows[:height]):
+        for row, (text, style) in enumerate(self._rows[:height]):
             if text:
                 # inserted into an empty row, text that does not fit is
                 # dropped at the right edge, and nothing wraps or scrolls,
@@ -2839,49 +2870,70 @@ class _CursesScreen:
             return "\x7f"
         return key if isinstance(key, str) else None
 
+    def _drop_burst(self) -> None:
+        """Read and drop the keys already waiting: the rest of a sequence
+        that began with Escape."""
+        self.window.timeout(0)
+        with contextlib.suppress(self.curses.error):
+            while True:
+                self.window.get_wch()
+
     def wait(self, timeout: float) -> str | None:
         self.window.timeout(max(0, round(timeout * 1000)))
         try:
-            return self._key()
+            key = self._key()
         except self.curses.error:
             return None
+        if key == ESCAPE:
+            self._drop_burst()
+            return None
+        return key
 
     def prompt(self, text: str) -> str | None:
         typed: list[str] = []
-        self.window.timeout(-1)
         self._cursor(1)
         try:
             while True:
                 self._prompt_row(text + "".join(typed))
+                self.window.timeout(-1)
                 try:
                     key = self._key()
                 except self.curses.error:
                     return None
                 if key in ("\n", "\r"):
                     break
-                if key in ("\x7f", "\x08"):
+                if key == ESCAPE:
+                    self._drop_burst()
+                    return None
+                if key == RESIZE:
+                    # the view as it was, at the new size, under the prompt
+                    self.draw(self._rows)
+                elif key in ("\x7f", "\x08"):
                     if typed:
                         typed.pop()
-                elif (
-                    key
-                    and key != RESIZE
-                    and key.isprintable()
-                    and len(typed) < PROMPT_LIMIT
-                ):
+                elif key and key.isprintable() and len(typed) < PROMPT_LIMIT:
                     typed.append(key)
         finally:
             self._cursor(0)
         return "".join(typed).strip() or None
 
     def _prompt_row(self, line: str) -> None:
-        """`line` on the bottom row, its end in view, the cursor after
-        it."""
+        """`line` on the bottom row, as much of its end as fits, curses
+        measuring each character's width, and the cursor after it."""
         window = self.window
         rows, columns = window.getmaxyx()
-        window.move(rows - 1, 0)
-        window.clrtoeol()
-        with contextlib.suppress(self.curses.error):
-            window.addstr(rows - 1, 0, _safe(line)[-max(1, columns - 1) :])
+        tail = _safe(line)[-max(1, columns - 1) :]
+        while True:
+            window.move(rows - 1, 0)
+            window.clrtoeol()
+            try:
+                window.addstr(rows - 1, 0, tail)
+            except self.curses.error:
+                # past the last column: a character less, from the start
+                if len(tail) > 1:
+                    tail = tail[1:]
+                    continue
+            break
         window.refresh()
 
 
@@ -2909,6 +2961,7 @@ def _default_screen(out: TextIO) -> Screen | None:
         return None
     if not addressable:
         return None
+    # NO_COLOR turns colour off when it is set and not empty
     color = not os.environ.get("NO_COLOR")
     return _CursesScreen(color)
 
@@ -3006,7 +3059,8 @@ def watch(
     size at once. Otherwise the view is printed afresh whenever the run
     changes, without styles, its lines cut to the width `size` gives
     (columns, rows; the terminal's or the environment's by default), and
-    keys come only from `keys` (none by default). `once` prints one
+    keys come only from `keys` (none by default; then, on a terminal,
+    the footer says Ctrl-C quits: PLAIN_HINT). `once` prints one
     view, writes the page and returns. `keys`, `screen`, `clock` and
     `size` stand in for the terminal in tests."""
     path = Path(path)
@@ -3021,6 +3075,15 @@ def watch(
         screen = _default_screen(out)
     source: Keys = screen or keys or NoKeys()
     hint = f"':' or Enter: {GRAMMAR}   q: quit"
+    # printed to a terminal curses does not draw on, where no key is read
+    plain_hint = (
+        PLAIN_HINT
+        if screen is None
+        and not once
+        and isinstance(source, NoKeys)
+        and _is_tty(out)
+        else ""
+    )
     monitor = RunMonitor(path)
     status_page = _StatusPage(path) if page else None
     server = serve_status(path, *address) if address is not None else None
@@ -3062,7 +3125,11 @@ def watch(
                     width = max(1, columns - 1)
                     if once or monitor.version != shown:
                         view = render_terminal(
-                            summary, width=width, footer=footer
+                            summary,
+                            width=width,
+                            footer=[*footer, plain_hint]
+                            if plain_hint
+                            else footer,
                         )
                         _write(out, view + ("\n" if once else "\n\n"))
                     if once:
