@@ -615,9 +615,11 @@ class TestAttach:
         """The firm and Sebastian resolved to QIDs: the review rows name
         no local id, and every finding still reaches its row."""
         extracted = resolved_batch()
+        # resolved by their records' labels, as the writer finds their
+        # items (#476)
         rows = resolve_batch(
             extracted,
-            {"Sebastian": "Q17", "Blauer Hut": "Q23"},
+            {"Sebastian Löbig": "Q17", "Hutmacherei zum Blauen Hut": "Q23"},
         )
         assert rows.claims[1].subject.qid == "Q23"
         assert counterparts(extracted, rows) == [0, 1, 2, 3]
@@ -646,16 +648,15 @@ class TestAttach:
         ]
 
     def test_one_local_id_may_resolve_to_two_qids(self):
-        """Resolution replaces each local ref by its own label, so one
-        local id can become two QIDs in two claims; every claim still
-        finds its row (review of #411)."""
+        """The match is checked claim by claim, so rows in which one local
+        id became two QIDs in two claims still each find their claim
+        (review of #411). resolve_batch now gives a local id one QID,
+        its entity's (#476); the rows are made by hand."""
         extracted = resolved_batch()
         data = extracted.model_dump(mode="json")
-        data["claims"][2]["subject"]["label"] = "Sebastian Löbig"
-        extracted = ClaimBatch.model_validate(data)
-        rows = resolve_batch(
-            extracted, {"Sebastian": "Q17", "Sebastian Löbig": "Q30"}
-        )
+        data["claims"][0]["subject"] = {"kind": "qid", "qid": "Q17"}
+        data["claims"][2]["subject"] = {"kind": "qid", "qid": "Q30"}
+        rows = ClaimBatch.model_validate(data)
         assert rows.claims[0].subject.qid == "Q17"
         assert rows.claims[2].subject.qid == "Q30"
         assert counterparts(extracted, rows) == [0, 1, 2, 3]
