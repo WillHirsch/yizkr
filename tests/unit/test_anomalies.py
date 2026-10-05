@@ -1243,8 +1243,8 @@ class TestImplausibleDate:
             (a_time(1911), a_time(1900, "century"), (1, 0)),
             (a_time(1901), a_time(1801, "century"), (1, 0)),
             # a month or a day before the birth year is before it
-            (a_time(1911), a_time(1801, month=3), (1, 0)),
-            (a_time(1911), a_time(1801, month=3, day=5), (1, 0)),
+            (a_time(1911), a_time(1801, "month", month=3), (1, 0)),
+            (a_time(1911), a_time(1801, "day", month=3, day=5), (1, 0)),
         ],
     )
     def test_spans_are_counted_as_wikibase_counts_them(
@@ -1288,16 +1288,20 @@ class TestImplausibleDate:
         assert counted(rahel_in(1992)) == (0, 1)
         # the range is closed on its early side too
         assert counted(rahel_in(1869)) == (1, 0)
-        # a coarse bound is read at its far edge: an earliest date in the
-        # 1870s from 1870, a latest date in the 1920s to 1929
+        # a coarse bound is read at its far edge: a birth in 1875 stated
+        # between the 1870s and 1880 may lie in 1870, and a residence
+        # bounded by the 1920s may last to 1929
         coarse_earliest = a_dated_batch(
-            a_dated_claim("rahel", "date_of_birth", a_time(1875)),
-            lived(
+            a_dated_claim(
                 "rahel",
-                ("point_in_time", a_time(1872)),
-                ("earliest_date", a_time(1870, "decade")),
-                ("latest_date", a_time(1880)),
+                "date_of_birth",
+                a_time(1875),
+                [
+                    ("earliest_date", a_time(1870, "decade")),
+                    ("latest_date", a_time(1880)),
+                ],
             ),
+            lived("rahel", ("point_in_time", a_time(1872))),
         )
         assert counted(coarse_earliest) is None
         # Eugen's birth read as 1925
