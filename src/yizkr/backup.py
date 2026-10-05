@@ -104,6 +104,7 @@ from pathlib import Path
 
 from yizkr.core import sparql
 from yizkr.core.config import Config, read_env_file
+from yizkr.core.dates import UnsupportedDate, unsupported_in_graph
 from yizkr.core.privacy import (
     BIRTHS_QUERY,
     DEFAULT_CUTOFF_YEARS,
@@ -304,7 +305,11 @@ def exclusion_report(
     item the privacy module's selection finds. The queries go to the
     instance's query service, with its vocabulary, unless `run` and
     `vocabulary` are given. The cutoff year is `cutoff_years` before the
-    year `now` reads (the system's UTC clock by default)."""
+    year `now` reads (the system's UTC clock by default). A graph holding a
+    date before the common era or in a calendar other than the proleptic
+    Gregorian anywhere, at any rank, raises UnsupportedDate naming its items
+    and statements, before anyone is assessed: the export stops
+    (ADR-0034)."""
     if vocabulary is None:
         from yizkr.core.wiki import WikiClient
 
@@ -312,6 +317,7 @@ def exclusion_report(
     properties, items = vocabulary
     run = run or sparql.runner(config)
     prefixes = prefix_block(config.concept_uri)
+    unsupported_in_graph(run, prefixes)
     bindings = run(
         prefixes
         + PERSON_FACTS_QUERY.format(
@@ -1058,6 +1064,13 @@ class UnfilterableDump(NonprivilegedExportRefused):
     reviewed for. The export refuses to run."""
 
 
+class UnsupportedDateRefused(NonprivilegedExportRefused, UnsupportedDate):
+    """The graph holds a date before the common era or in a calendar
+    other than the proleptic Gregorian (ADR-0034), named by its item and
+    statement. The check reads no such date, so it releases no one: the
+    export refuses to run."""
+
+
 # The types of property the export is made to filter, as the dump names
 # them: those the model manifest uses, an item, a string, a text in a
 # language, an external identifier, a time, a quantity and a globe
@@ -1709,13 +1722,16 @@ def export_nonprivileged(
     await_query_service(
         run, reading.revisions, timeout=lag_timeout, sleep=sleep, clock=clock
     )
-    report = exclusion_report(
-        config,
-        cutoff_years=cutoff_years,
-        run=run,
-        vocabulary=vocabulary,
-        now=now,
-    )
+    try:
+        report = exclusion_report(
+            config,
+            cutoff_years=cutoff_years,
+            run=run,
+            vocabulary=vocabulary,
+            now=now,
+        )
+    except UnsupportedDate as found:
+        raise UnsupportedDateRefused(str(found)) from found
     changed = stale_entities(run, reading.revisions)
     if changed:
         raise QueryServiceLag(
@@ -1791,8 +1807,9 @@ def run_backup(
     shared.
 
     A non-privileged export that refuses to run
-    (NonprivilegedExportRefused: the query service lags, or the dump holds
-    what the export is not made to filter) leaves the other dumps in place:
+    (NonprivilegedExportRefused: the query service lags, the dump holds
+    what the export is not made to filter, or the graph holds an
+    unsupported date) leaves the other dumps in place:
     the manifest records them and the refusal, old runs are pruned, and the
     refusal is raised."""
     stamp = next_backup_name(backup_root, now=now)

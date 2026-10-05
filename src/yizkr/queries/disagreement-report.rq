@@ -16,7 +16,10 @@
 # date and earliest end date that bound a residence's or a marriage's
 # start and end, and each stated-in source with the artifact it belongs to
 # (a page fragment belongs to the artifact it is part of). A statement
-# with no stated-in source shows no source.
+# with no stated-in source shows no source. Each time comes with the
+# calendar model its value node states, which the comparison checks: a
+# date before the common era or in a calendar other than the proleptic
+# Gregorian stops the report (ADR-0034).
 #
 # The comparison runs in Python, in yizkr.disagreement (ADR-0033): it
 # pairs the values that different artifacts attribute and sets aside
@@ -24,11 +27,14 @@
 # containment (place-containment.rq). MODELING.md "Contradictions" states
 # its rules.
 SELECT ?entity ?entityLabel ?property ?propertyLabel ?statement ?rank
-       ?value ?valueLabel ?precision
-       ?earliest ?earliestPrecision ?latest ?latestPrecision
-       ?latestStart ?latestStartPrecision ?earliestEnd ?earliestEndPrecision
-       ?start ?startPrecision ?end ?endPrecision
-       ?pointInTime ?pointInTimePrecision
+       ?value ?valueLabel ?precision ?calendar
+       ?earliest ?earliestPrecision ?earliestCalendar
+       ?latest ?latestPrecision ?latestCalendar
+       ?latestStart ?latestStartPrecision ?latestStartCalendar
+       ?earliestEnd ?earliestEndPrecision ?earliestEndCalendar
+       ?start ?startPrecision ?startCalendar
+       ?end ?endPrecision ?endCalendar
+       ?pointInTime ?pointInTimePrecision ?pointInTimeCalendar
        ?source ?sourceLabel ?artifact
 WHERE {
   # the properties that hold at most one true value per subject, and the
@@ -60,34 +66,49 @@ WHERE {
   ?entity ?p ?statement .
   ?statement ?ps ?value ;
              wikibase:rank ?rank .
-  # a time's stated precision
+  # a time's stated precision and its calendar model
   OPTIONAL { ?statement ?psv ?valueNode .
-             ?valueNode wikibase:timePrecision ?precision . }
+             ?valueNode wikibase:timePrecision ?precision .
+             OPTIONAL { ?valueNode wikibase:timeCalendarModel ?calendar . } }
   # the range its source states, and the dates it carries: a residence's or
   # a marriage's start and end, each with the bounds of its own (from the
   # earliest date to the latest start date, from the earliest end date to
   # the latest date), and an observation's point in time
   OPTIONAL { ?statement ?earliestLink ?earliestNode .
              ?earliestNode wikibase:timeValue ?earliest ;
-                           wikibase:timePrecision ?earliestPrecision . }
+                           wikibase:timePrecision ?earliestPrecision .
+             OPTIONAL { ?earliestNode wikibase:timeCalendarModel
+                          ?earliestCalendar . } }
   OPTIONAL { ?statement ?latestLink ?latestNode .
              ?latestNode wikibase:timeValue ?latest ;
-                         wikibase:timePrecision ?latestPrecision . }
+                         wikibase:timePrecision ?latestPrecision .
+             OPTIONAL { ?latestNode wikibase:timeCalendarModel
+                          ?latestCalendar . } }
   OPTIONAL { ?statement ?latestStartLink ?latestStartNode .
              ?latestStartNode wikibase:timeValue ?latestStart ;
-                              wikibase:timePrecision ?latestStartPrecision . }
+                              wikibase:timePrecision ?latestStartPrecision .
+             OPTIONAL { ?latestStartNode wikibase:timeCalendarModel
+                          ?latestStartCalendar . } }
   OPTIONAL { ?statement ?earliestEndLink ?earliestEndNode .
              ?earliestEndNode wikibase:timeValue ?earliestEnd ;
-                              wikibase:timePrecision ?earliestEndPrecision . }
+                              wikibase:timePrecision ?earliestEndPrecision .
+             OPTIONAL { ?earliestEndNode wikibase:timeCalendarModel
+                          ?earliestEndCalendar . } }
   OPTIONAL { ?statement ?startLink ?startNode .
              ?startNode wikibase:timeValue ?start ;
-                        wikibase:timePrecision ?startPrecision . }
+                        wikibase:timePrecision ?startPrecision .
+             OPTIONAL { ?startNode wikibase:timeCalendarModel
+                          ?startCalendar . } }
   OPTIONAL { ?statement ?endLink ?endNode .
              ?endNode wikibase:timeValue ?end ;
-                      wikibase:timePrecision ?endPrecision . }
+                      wikibase:timePrecision ?endPrecision .
+             OPTIONAL { ?endNode wikibase:timeCalendarModel
+                          ?endCalendar . } }
   OPTIONAL { ?statement ?pointInTimeLink ?pointInTimeNode .
              ?pointInTimeNode wikibase:timeValue ?pointInTime ;
-                              wikibase:timePrecision ?pointInTimePrecision . }
+                              wikibase:timePrecision ?pointInTimePrecision .
+             OPTIONAL { ?pointInTimeNode wikibase:timeCalendarModel
+                          ?pointInTimeCalendar . } }
   # every stated-in source, with its label and the artifact it belongs to
   OPTIONAL { ?statement prov:wasDerivedFrom ?reference .
              ?reference pr:{P:stated_in} ?source .
