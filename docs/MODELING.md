@@ -118,11 +118,15 @@ Artifact types, controlled-vocabulary values (`circa`, `male`), and
 infrastructure classes (`artifact_fragment`, `extraction_run`) are real
 classes but not entity kinds. A new item is not offered to the
 extractor until it says so. The classes of entities that are no entity
-kind, the artifact types, `time_period_class` and the infrastructure
-classes, are marked **`entity_class: true`**; with the entity kinds they
-are the manifest's **kind keys**, and the manifest does not load when an
-item in the subclass hierarchy is neither (amended by #462, 2026-10-05).
-A controlled-vocabulary value is neither.
+kind, `artifact` and the artifact types, `time_period_class` and the
+infrastructure classes, are marked **`entity_class: true`**; with the
+entity kinds they are the manifest's **kind keys**. The manifest does not
+load when an item in the subclass hierarchy is neither, or when an entity
+kind is also marked `entity_class` (amended by #462, 2026-10-05). A
+controlled-vocabulary value is neither. Outside the hierarchy nothing else
+tells a class (`time_period_class`) from a value (`circa`), since each may
+be the one item its property accepts, so the mark there is the manifest
+author's to set, and a test pins the classes it holds.
 
 **Controlled vocabulary values** (items, never entity kinds): `circa`;
 `male` and `female`; the participant roles `principal`, `parent`,
@@ -152,18 +156,26 @@ among its rejects. An existing item named by its QID has no kind in a
 batch and is not checked. A vocabulary ref to a kind key (`human`,
 `place`, `time_period_class`, `photograph`) names the class, not an
 entity of it, so only `instance_of` and `subclass_of` take one, and they
-take no controlled-vocabulary value (`circa`): an item value is an entity
-of the batch, an existing item named by its QID, or a vocabulary item its
-property names. Nor is an item value, a claim's or a qualifier's, ever
-the claim's own subject (the same local id, the same QID, or a local ref
-resolved to the subject's QID): no property of the manifest takes its
-subject as its value, so Flörburg `location` Flörburg and Sebastian his
-own `father` are refused and counted among extraction's rejects (amended
-by #461 and #462, 2026-10-05). `country_of_citizenship` accepts a place,
-since the place model has no country class; its description, which the
-prompt carries, says the value is a country, never a town, city or region
-within one, and validation does not tell them apart. `part_of`'s list is flat for now: it takes a place
-or an artifact whatever its subject, so a place `part_of` an artifact
+take no controlled-vocabulary value (`circa`); `depicts` (any kind) and
+`said_to_be_the_same_as` (the subject's kind) take no vocabulary item at
+all. An item value is thus an entity of the batch, an existing item named
+by its QID, or a vocabulary item its property names. Nor is an item
+value, a claim's or a qualifier's, ever the claim's own subject (the same
+local id, the same QID, the same vocabulary item, or a local ref resolved
+to the subject's QID): no property of the manifest takes its subject as
+its value, so Flörburg `location` Flörburg and Sebastian his own `father`
+are refused and counted among extraction's rejects. The claim is the unit
+of rejection: a qualifier naming the subject rejects its whole claim. The
+GEDCOM adapter leaves out a family's link that makes a parent their own
+child, and counts it (ADR-0036). (Amended by #461 and #462, 2026-10-05.)
+A `time_period` claim from extraction is, for now, a counted reject:
+`time_period` accepts only a period, an entity of `time_period_class`, no
+entity kind offers one and no QID exists before write.
+`country_of_citizenship` accepts a place, since the place model has no
+country class; its description, which the prompt carries, says the value
+is a country, never a town, city or region within one, and validation
+does not tell them apart. `part_of`'s list is flat for now: it takes a
+place or an artifact whatever its subject, so a place `part_of` an artifact
 passes the check, which reads the value alone.
 
 **Reference properties** (`stated_in`, `inferred_from_extraction_run`,

@@ -110,7 +110,10 @@ class ManifestItem(BaseModel):
     # are the manifest's kind keys: named by its key, such an item is the
     # class itself, so only a property that accepts a class takes it as a
     # value (ADR-0035 §3.5). An item in the subclass hierarchy is one or
-    # the other.
+    # the other. Outside the hierarchy nothing in the manifest tells a
+    # class (`time_period_class`) from a controlled-vocabulary value
+    # (`circa`): each may be the one item a property accepts. The mark is
+    # what tells them apart, so the loader cannot check it there.
     entity_class: bool = False
 
 
@@ -282,7 +285,9 @@ class Acceptance:
         `kind` is the value's entity kind, or, for a manifest item named
         by its key (`vocabulary`), that key. A kind key named so is a
         class: only a property that accepts a class takes it, and such a
-        property takes no other vocabulary item. A value whose kind is
+        property takes no other vocabulary item. A property that accepts
+        any kind, or the subject's own, takes an entity and so no
+        vocabulary item at all. A value whose kind is
         unknown (an existing item named by its QID) is refused only by a
         retired property, since nothing else can be checked of it."""
         if prop in self.retired:
@@ -307,6 +312,11 @@ class Acceptance:
             return (
                 f"property {prop!r} accepts an entity of kind {kind!r}, not "
                 f"the class itself: {kind!r} is a kind key"
+            )
+        if vocabulary and accepts in ("any", "subject"):
+            return (
+                f"property {prop!r} takes an entity, not the vocabulary "
+                f"value {kind!r}"
             )
         if kind is None or accepts == "any":
             return None

@@ -945,7 +945,10 @@ artifact types), so only `instance_of` and `subclass_of` take one, and
 they take no controlled-vocabulary value; and an item value, a claim's or
 a qualifier's, that names the claim's own subject is refused on every
 property, none of which takes its subject as its value. Each is a counted
-reject. `country_of_citizenship` keeps accepting a place, since the place
+reject, and the claim is the unit of rejection. A local ref whose entity
+record carries the subject's QID names the subject too; no pipeline path
+sets a record's QID before validation, so that branch applies to claims
+files validated by hand or built beforehand. `country_of_citizenship` keeps accepting a place, since the place
 model has no country class: the prompt, through its description, asks for
 a country.
 

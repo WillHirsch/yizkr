@@ -687,6 +687,12 @@ class TestAValueIsNeverItsOwnSubject:
             about("sebastian", "child", local_item("sebastian")),
             about("sebastian", "sibling", local_item("sebastian")),
             about("sebastian", "relative", local_item("sebastian")),
+            # the same vocabulary item
+            about(
+                {"kind": "vocab", "key": "photograph"},
+                "subclass_of",
+                vocab_item("photograph"),
+            ),
         ],
     )
     def test_a_claim_naming_its_subject_is_refused(self, claim):
@@ -750,6 +756,36 @@ class TestAValueIsNeverItsOwnSubject:
         assert problem.startswith("claims[0].qualifiers[0].value: ")
         assert "never its own subject" in problem
 
+    def test_every_qualifier_is_checked(self):
+        # the subject among two perspectives: the second is refused
+        claim = about(
+            "sebastian",
+            "referred_to_as",
+            {
+                "type": "monolingual",
+                "value": {"text": "Wastl", "language": "de"},
+            },
+            {"property": "perspective", "value": local_item("eugen")},
+            {"property": "perspective", "value": local_item("sebastian")},
+        )
+        (problem,) = problems_of(claim)
+        assert problem.startswith("claims[0].qualifiers[1].value: ")
+        assert "never its own subject" in problem
+
+    def test_one_reflexive_qualifier_rejects_the_whole_claim(self):
+        from yizkr.pipeline.extract import salvage_valid_claims
+
+        claim = about(
+            "eugen",
+            "father",
+            local_item("sebastian"),
+            {"property": "perspective", "value": local_item("eugen")},
+        )
+        valid, rejects = salvage_valid_claims([claim], RUN, entities=ENTITIES)
+        assert valid.claims == []
+        (reject,) = rejects
+        assert own_subject(reject["problems"])
+
     @pytest.mark.parametrize(
         "claim",
         [
@@ -791,8 +827,11 @@ class TestAValueIsNeverItsOwnSubject:
     def test_the_chunk_prompt_says_so(self):
         from yizkr.pipeline.chunking import CHUNK_PROMPT
 
-        assert "qualifier's, is never its own subject" in " ".join(
-            CHUNK_PROMPT.split()
+        prompt = " ".join(CHUNK_PROMPT.split())
+        assert "qualifier's, is never its own subject" in prompt
+        assert (
+            'a kind key ("place", "time_period_class") is a value of '
+            "instance_of or subclass_of alone" in prompt
         )
 
 
@@ -816,6 +855,13 @@ class TestAKindKeyIsNoValue:
             (about("gustav", "image", vocab_item("photograph")), "photograph"),
             # depicts takes an entity of any kind, never a class
             (about("gustav", "depicts", vocab_item("human")), "human"),
+            # nor does the subject's own kind take one
+            (
+                about(
+                    "sebastian", "said_to_be_the_same_as", vocab_item("human")
+                ),
+                "human",
+            ),
         ],
     )
     def test_a_kind_key_as_a_value_is_refused(self, claim, kind):
@@ -829,6 +875,8 @@ class TestAKindKeyIsNoValue:
             about("gustav", "instance_of", vocab_item("human")),
             about("gustav", "instance_of", vocab_item("time_period_class")),
             about("gustav", "instance_of", vocab_item("photograph")),
+            # an existing class, named by its QID
+            about("gustav", "instance_of", qid_item("Q5")),
             # an existing period item, named by its QID
             about("birth", "time_period", qid_item("Q88")),
             # a vocabulary value the property names
@@ -854,6 +902,28 @@ class TestAKindKeyIsNoValue:
             about("gustav", "instance_of", vocab_item("circa"))
         )
         assert "'circa' is a vocabulary value, not a class" in problem
+
+    def test_an_unknown_key_has_one_reason(self):
+        (problem,) = problems_of(
+            about("gustav", "instance_of", vocab_item("hat_maker"))
+        )
+        assert "unknown vocabulary item key 'hat_maker'" in problem
+
+    @pytest.mark.parametrize(
+        "claim",
+        [
+            about("sebastian", "depicts", vocab_item("circa")),
+            about(
+                {"kind": "qid", "qid": "Q71"},
+                "said_to_be_the_same_as",
+                vocab_item("circa"),
+            ),
+        ],
+    )
+    def test_an_entity_property_takes_no_vocabulary_value(self, claim):
+        (problem,) = problems_of(claim)
+        assert problem.startswith("claims[0].value: ")
+        assert "takes an entity, not the vocabulary value 'circa'" in problem
 
     def test_a_qualifier_is_checked_too(self):
         claim = about(

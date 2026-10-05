@@ -216,7 +216,7 @@ Rules — these mirror the archive's non-negotiable conventions:
   site and a relation of agency the institution. A claim's value, and a
   qualifier's, is never its own subject. An item value is an entity or
   a vocabulary item its property names: a kind key ("place",
-  "time_period_class") is a value of instance_of alone.
+  "time_period_class") is a value of instance_of or subclass_of alone.
 - A person's ordinary name lives in their entity-manifest label and
   aliases, and which part of it is which lives in the manifest's record;
   do NOT restate either as a claim, beyond `name` (below). Use the typed

@@ -266,7 +266,11 @@ class TestValidators:
         for key in ("artifact", "photograph"):
             raw = minimal_raw()
             del raw["items"][key]["entity_class"]
-            with pytest.raises(ValidationError, match=f"items.{key} is in"):
+            with pytest.raises(
+                ValidationError,
+                match=f"items.{key} is in the subclass hierarchy, so it is a "
+                "class: mark it entity_kind or entity_class",
+            ):
                 Manifest.model_validate(raw)
         raw = minimal_raw()
         del raw["items"]["photograph"]["entity_class"]

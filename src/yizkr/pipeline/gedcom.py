@@ -2759,6 +2759,11 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             continue
         for child in fam.all("CHIL"):
             for parent_xref, prop in ((husband, "father"), (wife, "mother")):
+                if parent_xref and parent_xref == child.value:
+                    # a person as their own parent is no reading the record
+                    # can mean: that link alone is left out, and counted
+                    outcome("FAM one person as parent and CHIL")
+                    continue
                 if parent_xref in people and child.value in people:
                     claim(
                         person_id(child.value),

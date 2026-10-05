@@ -800,7 +800,9 @@ def validate_against_manifest(
     * a vocabulary ref to a kind key, an entity kind (`human`, `place`)
       or another entity class (`time_period_class`, `photograph`), is a
       class, so only a property that accepts a class takes it, and such a
-      property takes no vocabulary value (`circa`) either. An item value
+      property takes no vocabulary value (`circa`) either; a property that
+      accepts any kind (`depicts`) or the subject's own takes no
+      vocabulary item at all. An item value
       is thus an entity of the batch, an existing item named by its QID,
       or a vocabulary item its property accepts;
     * an item value, a claim's or a qualifier's, never names the claim's
@@ -906,6 +908,11 @@ def validate_against_manifest(
             )
         if isinstance(value, ItemValue):
             check_ref(value.value, f"{where}.value")
+            if isinstance(value.value, VocabRef) and value.value.key not in (
+                items
+            ):
+                # an unknown key has one reason, which check_ref gives
+                return
             refusal = acceptance.refusal(
                 prop,
                 kind_of(value.value),
