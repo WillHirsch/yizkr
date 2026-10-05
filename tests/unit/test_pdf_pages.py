@@ -1299,12 +1299,12 @@ class TestTheCallEstimateCountsExcerpts:
         counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
         assert counted.stages["transcription"].reused == 1
         assert counted.excerpts.images == 1
-        assert set(counted.excerpts.calls) == {
-            "transcription",
-            "extraction",
-            "critique",
+        # by the run's own measure: an entity manifest and one chunk
+        assert counted.excerpts.calls == {
+            "transcription": 0,
+            "extraction": 2,
+            "critique": 1,
         }
-        assert counted.excerpts.calls["critique"] == 1
 
 
 def stricter_check(monkeypatch, phrase: str) -> None:
