@@ -223,12 +223,16 @@ Every statement carries at least one reference with:
   ever guessed (#424). It describes the physical page: a page that
   shows a spread with one half numbered keeps that one number for
   every claim read from it, as both ways of reading a PDF give it the
-  same (ADR-0037 §2). A source that gives a printed page number gives
-  its page number too: validation refuses one without the other, in a
-  prepared claims file as in an extractor's batch. An excerpt's claims
-  read the excerpt's own transcription, so they never take the printed
-  number of the page that places it, and its `part of` the container
-  keeps the container's physical page (ADR-0008)
+  same (ADR-0037 §2). The claims review sheet shows it in a
+  `printed_page` column beside `page`, empty where the reference has
+  none; like the other locators it is shown for checking and never read
+  back, so a curator's edit to it is ignored (#449). A source that gives
+  a printed page number gives its page number too: validation refuses
+  one without the other, in a prepared claims file as in an extractor's
+  batch. An excerpt's claims read the excerpt's own transcription, so
+  they never take the printed number of the page that places it, and
+  its `part of` the container keeps the container's physical page
+  (ADR-0008)
 - optional short transcription excerpt supporting human verification,
   tagged with the language it is written in (BCP-47). `yizkr ingest run`
   takes each document's language from its transcription by default
