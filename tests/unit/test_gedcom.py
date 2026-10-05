@@ -6698,6 +6698,7 @@ GREGORIAN_FORMS = [
 GREGORIAN_CALENDARS = [
     "@#DGREGORIAN@ ",
     "@#D GREGORIAN @ ",
+    "@# DGREGORIAN@ ",
     "@#dgregorian@ ",
     "GREGORIAN ",
     "gregorian ",
@@ -6741,16 +6742,43 @@ class TestTheGregorianCalendar:
         for date in with_gregorian(form, calendar):
             assert birth(date) == (claims, warnings), date
 
-    def test_eugens_birth_with_the_escape(self):
-        # 2 DATE @#DGREGORIAN@ 12 MAR 1836: a day-precision birth, as
-        # without the escape
-        batch = adapt_gedcom(
-            eugen("1 BIRT", "2 DATE @#DGREGORIAN@ 12 MAR 1836"),
-            artifact=EXPORT,
-        ).batch
-        assert on(batch, "i1", "date_of_birth") == [
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "2 DATE @#DGREGORIAN@ 12 MAR 1836",
+            # the value starts with a space
+            "2 DATE  @#DGREGORIAN@ 12 MAR 1836",
+            # the escape's closing @ ends it
+            "2 DATE @#DGREGORIAN@12 MAR 1836",
+        ],
+    )
+    def test_eugens_birth_with_the_escape(self, line):
+        # a day-precision birth, as without the escape
+        result = adapt_gedcom(eugen("1 BIRT", line), artifact=EXPORT)
+        assert on(result.batch, "i1", "date_of_birth") == [
             ("date_of_birth", (1836, 3, 12, "day"), [])
         ]
+        assert result.warnings == []
+
+    @pytest.mark.parametrize(
+        ("date", "plain"),
+        [
+            # a space left before the calendar within the date
+            ("ABT  GREGORIAN 1836", "ABT 1836"),
+            ("BET  @#DGREGORIAN@ 1836 AND 1840", "BET 1836 AND 1840"),
+            # the glued escape reads as the date after it
+            ("@#DGREGORIAN@1836", "1836"),
+            ("ABT @#DGREGORIAN@1836", "ABT 1836"),
+            # a calendar before the whole date and again before one of its
+            # dates, not in a row
+            ("GREGORIAN ABT GREGORIAN 1836", "ABT 1836"),
+            ("@#DGREGORIAN@ BET @#DGREGORIAN@ 1836 AND 1840",
+             "BET 1836 AND 1840"),
+        ],
+    )  # fmt: skip
+    def test_more_spellings_read_as_without_the_calendar(self, date, plain):
+        assert parse_gedcom_date(plain)[0] is not None
+        assert parse_gedcom_date(date) == parse_gedcom_date(plain)
 
     @pytest.mark.parametrize("tag", ["RESI", "OCCU"])
     @pytest.mark.parametrize(
@@ -6772,6 +6800,10 @@ class TestTheGregorianCalendar:
         expected = held_qualifiers(tag, plain)
         assert {prop for prop, _ in expected} & {"start_time", "end_time"}
         assert held_qualifiers(tag, date) == expected
+        assert (
+            adapt_gedcom(gustav(tag, date), artifact=EXPORT).warnings
+            == adapt_gedcom(gustav(tag, plain), artifact=EXPORT).warnings
+        )
 
     @pytest.mark.parametrize(
         ("date", "plain"),
@@ -6783,12 +6815,17 @@ class TestTheGregorianCalendar:
         ],
     )  # fmt: skip
     def test_a_marriage_and_a_divorce_give_the_same_dates(self, date, plain):
-        expected = dates(couple(marriage=plain), "f5-wedding")
-        assert expected
-        assert dates(couple(marriage=date), "f5-wedding") == expected
-        expected = dates(couple(divorce=plain), "f5-divorce")
-        assert expected
-        assert dates(couple(divorce=date), "f5-divorce") == expected
+        for event, written, written_plain in (
+            ("f5-wedding", couple(marriage=date), couple(marriage=plain)),
+            ("f5-divorce", couple(divorce=date), couple(divorce=plain)),
+        ):
+            expected = dates(written_plain, event)
+            assert expected
+            assert dates(written, event) == expected
+            assert (
+                adapt_gedcom(written, artifact=EXPORT).warnings
+                == adapt_gedcom(written_plain, artifact=EXPORT).warnings
+            )
 
     @pytest.mark.parametrize(
         "date",
@@ -6803,10 +6840,13 @@ class TestTheGregorianCalendar:
             "@#DGREGORIAN@",
             "GREGORIAN",
             "GREGORIAN GREGORIAN 1836",
+            "@#DGREGORIAN@ @#DGREGORIAN@ 1836",
+            "GREGORIAN @#DGREGORIAN@ 1836",
             "@#DGREGORIAN@ GREGORIAN 1836",
             "ABT GREGORIAN @#DGREGORIAN@ 1836",
             "GREGORIANX 1836",
             "XGREGORIAN 1836",
+            # the keyword glued to the year makes another word
             "GREGORIAN1836",
         ],
     )

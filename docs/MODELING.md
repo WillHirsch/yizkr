@@ -512,15 +512,17 @@ artifact a new QID, changes neither.
   written, with calendar `julian`, so that it is refused rather than
   read as Gregorian), the GEDCOM adapter fails a file that states one in
   any calendar but the Gregorian or with an epoch before the common era,
-  naming its DATE lines (a date it names as Gregorian, `@#DGREGORIAN@`
-  or GEDCOM 7's `GREGORIAN`, reads as the date without it), the review
-  sheet refuses a correction to one, the writer refuses a batch holding
-  one and writes nothing, and every
+  naming its DATE lines, the review sheet refuses a correction to one,
+  the writer refuses a batch holding one and writes nothing, and every
   reader of the graph (the disagreement report, the site, the
   possibly-living check, the non-privileged export, which checks the
   whole graph at any rank first, and reconcile's roster) stops with
   `UnsupportedDate`, naming the item and the statement, if a curator has
-  entered one.
+  entered one. A GEDCOM date that names the Gregorian calendar
+  (`@#DGREGORIAN@`, or GEDCOM 7's `GREGORIAN`), before the whole date or
+  before one of its dates, reads as the same date written without it; a
+  calendar inside a date phrase, or one named twice in a row, reads no
+  date, and the adapter warns as for any date it cannot parse.
 - Centuries and millennia are counted as Wikibase and Wikidata count
   them, from year 1: the nth century runs from year 100(n−1)+1 to year
   100n, so a date at century precision stored as any year from 1801 to

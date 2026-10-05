@@ -48,8 +48,8 @@ Source-first conventions carry over unchanged:
   never a guess. The Gregorian calendar named before a date
   (`@#DGREGORIAN@`, or GEDCOM 7's `GREGORIAN`), the one calendar the
   archive supports, changes nothing: the date gives the claim it gives
-  written without it, whether it stands alone or is one date of an
-  approximation, a range or a period.
+  written without it, whether it stands before the whole date,
+  approximation, range or period, or before one of its dates.
 * A date before the common era (a `B.C.`, `BC` or `BCE` epoch, spaced
   or not, or a year below 1) or in any calendar but the Gregorian (a
   calendar escape other than `@#DGREGORIAN@`, such as `@#DJULIAN@`,
