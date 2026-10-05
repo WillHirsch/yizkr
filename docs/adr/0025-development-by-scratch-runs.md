@@ -471,6 +471,10 @@ futile, and explain itself afterwards.
 - **A reviewer agent that reads anything beyond the aggregate summary is
   a local session.** The HTML and JSON reports, the detailed diff and the
   stage outputs hold corpus content (ADR-0024 §4).
+- Amended by #458 (2026-10-05): the diff's postable summary follows
+  `report.md`'s rules (docs/RUN_REPORT.md): it never gives counts or
+  deltas per language, nor an alert's value or limit, since they would
+  name the corpus's languages, which the operator keeps private.
 - **Dropped:** the gold set, the offline eval harness, the eval gate, the
   separate dev stack and `needs:eval`. The whole corpus is the test set.
   None of the gold set was drafted, so it leaves the local-only list.
