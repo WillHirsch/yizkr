@@ -595,12 +595,15 @@ class TestUnsupportedModel:
             "subversion 2.1 or newer is required",
             "Python SDK version 0.40.0 or later is required",
             "API version 2.0.0 or later is required",
+            "Mycli does not support this request",
+            "version 2 or newer is required",
         ],
         ids=["a tool", "a feature", "the API's version", "the API", "other",
              "a tool after the CLI's name", "a feature after the CLI's name",
              "cli- in another word", "Client", "a newer client",
              "authentication", "an undotted version", "subversion",
-             "an SDK's version", "the API's dotted version"],
+             "an SDK's version", "the API's dotted version",
+             "a word ending in cli", "a version with no dot"],
     )  # fmt: skip
     def test_a_400_about_anything_but_the_cli_is_not_one(self, text):
         step = {**UNSUPPORTED, "text": f"API Error: 400 {text}"}
