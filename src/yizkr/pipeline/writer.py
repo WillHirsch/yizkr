@@ -639,14 +639,8 @@ class WriteResult:
     refused_terms: list[str] = field(default_factory=list)
 
 
-def batch_fingerprint(batch: ClaimBatch, identity_hash: str = "") -> str:
-    """The fingerprint of `batch` in its run item's label: the start of the
-    SHA-256 of its canonical content and, for a batch written with an
-    identity map, of that map's hash, so a write of the batch with another
-    map has a run item of its own, which records that map (_run_terms)."""
+def batch_fingerprint(batch: ClaimBatch) -> str:
     canonical = json.dumps(batch.model_dump(mode="json"), sort_keys=True)
-    if identity_hash:
-        canonical += "\n" + identity_hash
     return hashlib.sha256(canonical.encode()).hexdigest()[:10]
 
 
@@ -1442,27 +1436,25 @@ def _run_terms(batch: ClaimBatch, identity_hash: str = "") -> tuple[str, str]:
     """The label and description of the batch's run item, as the writer
     looks for and writes them. The description records the hash of the
     identity map the batch is written with, when there is one
-    (`identity_hash`); the label's fingerprint covers it too
-    (batch_fingerprint), and the label gives "map" and its first MAP_TAG
-    hex digits after the run's date, before the model identifier, which a
-    cut may take off the label's end: by them a write finds the maps an
-    instance was written with in its labels alone
-    (BatchWriter._other_maps). Both are in the form the instance keeps a
-    term in, cut with a digest of the whole when a long model identifier
-    takes the
-    label past what the instance holds, so each batch's run item keeps a
-    label of its own (_term_text). Raises ValueError, naming the
-    characters, when either holds a character Python's Unicode tables do
-    not know (unknown_characters), whole, before any cut: the instance
-    may keep it in another form, and a re-run would mint the run item
-    again. Both are machine
-    text, from the run's own settings, so the batch is refused before
-    anything is read or written rather than its run left unlabelled."""
+    (`identity_hash`), and the label gives "map" and its first MAP_TAG hex
+    digits after the run's date, before the model identifier, which a cut
+    may take off the label's end: so a write of the batch with another map
+    has a run item of its own, and a write finds the maps an instance was
+    written with in its labels alone (BatchWriter._other_maps). Both are in
+    the form the instance keeps a term in, cut with a digest of the whole
+    when a long model identifier takes the label past what the instance
+    holds, so each batch's run item keeps a label of its own (_term_text).
+    Raises ValueError, naming the characters, when either holds a character
+    Python's Unicode tables do not know (unknown_characters), whole, before
+    any cut: the instance may keep it in another form, and a re-run would
+    mint the run item again. Both are machine text, from the run's own
+    settings, so the batch is refused before anything is read or written
+    rather than its run left unlabelled."""
     run = batch.extraction_run
     tag = f"map {identity_hash[:MAP_TAG]} " if identity_hash else ""
     label = (
         f"extraction run {run.started_at.date().isoformat()} {tag}"
-        f"{run.model_identifier} {batch_fingerprint(batch, identity_hash)}"
+        f"{run.model_identifier} {batch_fingerprint(batch)}"
     )
     description = (
         f"pipeline {run.pipeline_version}"

@@ -251,3 +251,60 @@ class TestWriteStepSummary:
             line.startswith("  directory.txt: entity 'firm' has a type hint")
             for line in step.lines
         )
+
+
+class TestTheMappedBatch:
+    """The step reads a document's mentions from its extraction
+    (`doc.batch`), the batch the run's map was made from, not from the
+    batch its review approves."""
+
+    def test_a_rejected_claim_never_swaps_two_mentions(self, tmp_path):
+        from tests.unit.test_identity_map_writes import (
+            _two_eugens_without_a_manifest,
+            _wiki,
+        )
+
+        # the extraction names the father (c001) first, then the son
+        extracted = _two_eugens_without_a_manifest()
+        wiki = _wiki()
+        first = write_mapped(
+            BatchWriter(wiki), extracted, identity=mapped(extracted)
+        )
+        step = WriteStep(tmp_path, wiki, "report.pdf", mapped(extracted))
+        step.doc.batch.write_text(extracted.model_dump_json())
+        # the reviewer rejects the father's birth: the son's ref comes
+        # first in the batch the review approves
+        father_born = claim_id(extracted.claims[0])
+        step.review(
+            extracted,
+            decide=lambda row: (
+                "reject" if row["claim_id"] == father_born else "approve"
+            ),
+        )
+
+        step.write(extracted)
+
+        assert [claim_id(c) for c in step.approved().claims] == [
+            claim_id(c) for c in extracted.claims[1:]
+        ]
+        # read from the approved batch alone, the son's mention would be
+        # the father's, and his birth written on the father's item
+        father = first.created_items["c001:father"]
+        son = first.created_items["c002:son"]
+        assert father != son
+        assert [_years_born(wiki, qid) for qid in (father, son)] == [
+            [1836],
+            [1870],
+        ]
+
+
+def _years_born(wiki, qid: str) -> list[int]:
+    """The years of the births stated on item `qid` of `wiki`."""
+    from tests.unit.test_pipeline import PROPERTIES
+
+    return [
+        int(statement.mainsnak.datavalue["value"]["time"][1:5])
+        for statement in wiki.wbi.item.get(qid).claims.get(
+            PROPERTIES["date_of_birth"]
+        )
+    ]

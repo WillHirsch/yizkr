@@ -23,7 +23,7 @@ import csv
 import pytest
 
 from tests.fixtures import example_universe as u
-from tests.fixtures.identity import write_mapped
+from tests.fixtures.identity import run_label, write_mapped
 from tests.integration.conftest import fictional_png, fixture_mark
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.cli import build_parser
@@ -40,7 +40,6 @@ from yizkr.pipeline.review import apply_review, claim_id, export_review_csv
 from yizkr.pipeline.writer import (
     BatchWriter,
     UnapprovedDepictsError,
-    batch_fingerprint,
 )
 
 pytestmark = pytest.mark.live
@@ -120,12 +119,9 @@ def last_revision(client, qid: str) -> int:
 
 
 def run_item_label(batch: ClaimBatch) -> str:
-    """The label the writer gives the batch's extraction-run item."""
-    run = batch.extraction_run
-    return (
-        f"extraction run {run.started_at.date().isoformat()} "
-        f"{run.model_identifier} {batch_fingerprint(batch)}"
-    )
+    """The label the writer gives the batch's extraction-run item, with the
+    map of the batch alone (write_mapped)."""
+    return run_label(batch)
 
 
 def nothing_written(client, portrait, batch: ClaimBatch):

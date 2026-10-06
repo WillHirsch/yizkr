@@ -69,14 +69,13 @@ import unicodedata
 import pytest
 from wikibaseintegrator.entities.baseentity import BaseEntity
 
-from tests.fixtures.identity import write_mapped
+from tests.fixtures.identity import run_label, write_mapped
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import writer
 from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import (
     CUT_MARK,
     BatchWriter,
-    batch_fingerprint,
     source_descriptor,
 )
 
@@ -457,10 +456,10 @@ def test_no_text_of_the_batch_stops_it(client, fixture_graph):
     }
     assert kept[hildegard]["label"] == label_kept(marker, "hildegard")
     assert kept[eugen]["label"] != kept[hildegard]["label"]
-    run_label = f"extraction run 2026-09-29 {MODEL} {batch_fingerprint(batch)}"
-    # the room ends inside "test", which the cut leaves out whole
-    assert run_label[room(TERM_LIMIT) - 3 : room(TERM_LIMIT) + 2] == " test"
-    assert kept[written.run_qid]["label"] == cut(run_label, TERM_LIMIT)
+    # the run item's label, its model identifier long, as the writer
+    # sends it, cut to the limit (#109 puts the map's tag before the
+    # identifier)
+    assert kept[written.run_qid]["label"] == run_label(batch)
     for term in (*kept[eugen].values(), kept[hildegard]["label"]):
         for text in term if isinstance(term, list) else [term]:
             assert len(text) <= TERM_LIMIT

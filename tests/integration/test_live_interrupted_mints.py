@@ -39,11 +39,11 @@ from pathlib import Path
 import pytest
 from wikibaseintegrator.entities.item import ItemEntity
 
-from tests.fixtures.identity import write_mapped
+from tests.fixtures.identity import run_label, write_mapped
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import registrar, writer
 from yizkr.pipeline.registrar import Registrar
-from yizkr.pipeline.writer import BatchWriter, batch_fingerprint
+from yizkr.pipeline.writer import BatchWriter
 
 from .conftest import fictional_png, fixture_mark, register_fictional
 
@@ -232,8 +232,7 @@ def test_a_run_item_mint_cut_short_is_typed_by_the_rerun(client, monkeypatch):
         client, f"Interrupted mint fixture source {MARK}", "certificate"
     )
     batch = fixture_batch(source.ref)
-    fingerprint = batch_fingerprint(batch)
-    label = f"extraction run 2026-09-29 integration-test {fingerprint}"
+    label = run_label(batch)
     # the session's marker gives the batch a run item no session made
     assert client.find_item_by_label(label) is None
 

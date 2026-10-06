@@ -894,7 +894,7 @@ class TestTerms:
         first = _batch_of(_cause(), run=run)
         second = _batch_of(_cause(cause="Herzschwäche"), run=run)
         identity = mapped(first)
-        fingerprint = batch_fingerprint(first, identity.hash)
+        fingerprint = batch_fingerprint(first)
         label = (
             f"extraction run 2026-07-12 map {identity.hash[:12]} "
             f"{model} {fingerprint}"

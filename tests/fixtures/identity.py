@@ -146,3 +146,14 @@ def by_label(*batches: ClaimBatch) -> IdentityMap:
         if ref.label
     }
     return joined(mapped(*documents.values()), *sorted(labels))
+
+
+def run_label(batch: ClaimBatch, identity: IdentityMap | None = None) -> str:
+    """The label the writer gives `batch`'s run item when it writes it with
+    `identity`, by default the map of `batch` alone (write_mapped): the map's
+    tag goes in it only when the batch names a local entity."""
+    from yizkr.pipeline.writer import _run_terms, mapped_clusters
+
+    identity = identity or mapped(batch)
+    clusters, _, _ = mapped_clusters(batch, identity)
+    return _run_terms(batch, identity.hash if clusters else "")[0]
