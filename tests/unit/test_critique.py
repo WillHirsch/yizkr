@@ -193,6 +193,49 @@ class TestCritique:
         assert "referred_to_as" in prompt
         assert "relative" in prompt and "kinship_type" in prompt
 
+    def test_a_kinship_label_is_right_for_a_person_never_named(self):
+        """The critic exempts a person the document never names, as the
+        extraction prompt does (#498): the postcard's writer, who signs
+        only "Dein Vater", is rightly labelled so, while "Tante Rahel" as
+        Rahel's label is a finding. Each person's row shows its mention
+        record's status, so the critic can tell the two apart."""
+        postcard = ClaimBatch.model_validate(
+            {
+                "extraction_run": RUN,
+                "entities": [
+                    {
+                        "id": "e01",
+                        "label": "Dein Vater",
+                        "kind": "human",
+                        "structure": {"kind": "human", "status": "kinship"},
+                    },
+                    {
+                        "id": "e02",
+                        "label": "Tante Rahel",
+                        "kind": "human",
+                        "structure": {
+                            "kind": "human",
+                            "given": [{"written": "Rahel"}],
+                        },
+                    },
+                    {"id": "e03", "label": "Klara", "kind": "human"},
+                ],
+            }
+        )
+        llm = ScriptedLlm(response([]))
+        run_critique(llm, postcard)
+        prompt = llm.prompts[0]
+        assert "e01 | human (status: kinship) | Dein Vater | -" in prompt
+        assert "e02 | human (status: name) | Tante Rahel | -" in prompt
+        # no mention record, no status
+        assert "e03 | human | Klara | -" in prompt
+        line = CATEGORIES["kinship_term_alias"]
+        assert '"Tante Rahel" as the label of Rahel' in line
+        assert "A person the document never names is rightly labelled" in line
+        assert '"Dein Vater"' in line and "a status other than `name`" in line
+        assert "that label is no finding" in line
+        assert "else what its label is instead (role, kinship" in prompt
+
     def test_a_finding_that_fails_its_checks_is_kept_verbatim(self):
         """A finding that fails validation is kept as given, with why,
         beside the valid ones and in the critic's order: never repaired,
