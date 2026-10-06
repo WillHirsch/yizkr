@@ -69,6 +69,7 @@ import unicodedata
 import pytest
 from wikibaseintegrator.entities.baseentity import BaseEntity
 
+from tests.fixtures.identity import write_mapped
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import writer
 from yizkr.pipeline.review import claim_id
@@ -327,7 +328,7 @@ def fixture_graph(client):
         client, f"Text shape fixture source {MARK}", "artifact"
     )
     batch = fixture_batch(registered.ref)
-    written = BatchWriter(client).write_batch(batch)
+    written = write_mapped(BatchWriter(client), batch)
     return registered.qid, batch, written
 
 
@@ -490,7 +491,7 @@ def test_a_rewrite_sends_no_edit(client, fixture_graph, monkeypatch):
 
     monkeypatch.setattr(BaseEntity, "_write", counted)
 
-    again = BatchWriter(client).write_batch(batch)
+    again = write_mapped(BatchWriter(client), batch)
 
     assert edits == []
     assert again.run_qid == written.run_qid

@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from tests.fixtures.identity import write_mapped
 from yizkr.claims import ClaimBatch, TimeValue
 from yizkr.core.dates import UnsupportedDate
 from yizkr.pipeline import writer
@@ -139,7 +140,7 @@ def test_the_writer_refuses_an_unsupported_date(client, source, case):
     revision = last_revision(client, source.qid)
 
     with pytest.raises(UnsupportedDate) as refusal:
-        BatchWriter(client).write_batch(batch)
+        write_mapped(BatchWriter(client), batch)
 
     (claim,) = batch.claims
     where, _ = CASES[case]

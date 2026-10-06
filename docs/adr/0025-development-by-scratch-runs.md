@@ -153,6 +153,13 @@ batch gives that person, or more than a configured number of years
 after it, every date read through the span its source states. Alert
 only; §3 is amended in place.
 
+Amended by #109 (2026-10-06): the writer mints and resolves only
+through the identity map (§7), and the resolve step reads no wiki, so
+no step before the write reads the wiki in the per-document path
+either; §2 is amended in place. Items are keyed within one identity
+map: a scratch run resets the instance before it writes its map, and
+its write stage (#200) passes the clustering stage's map to the writer.
+
 ## Context
 
 ADR-0024 §7 set up a *development stage*: until the owner declares a
@@ -331,7 +338,7 @@ a second store of assertions: the graph stays the system of record.
   record, each by its SHA-1, just before it writes the claims that cite
   them (ADR-0010, "Registration at write time"), so the one step before
   the write that still uses the wiki is the resolve step's read, until
-  #109. The stub test shows that nothing is registered before the
+  #109 (amended by #109, 2026-10-06: the resolve step reads no wiki). The stub test shows that nothing is registered before the
   write, and the registrar is the write path a scratch run's register
   stage calls after its reset (#200).
 - **A stage-version registry declares the version of each stage and of

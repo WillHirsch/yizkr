@@ -5,7 +5,7 @@ client's label index gives such a label its numerically earliest item
 and keeps every holder (`ItemLabels`); only a lookup whose label must
 name one item alone fails on it: a manifest vocabulary item (the
 vocabulary, the bootstrap) and a process item such as a run item (the
-writer's, the place-hierarchy pass's). Bootstrap, write, resolve, backup
+writer's, the place-hierarchy pass's). Bootstrap, write, backup
 and the site keep working beside two same-labelled people.
 
 The homonyms are fictional (docs/EXAMPLES.md): Eugen Löbig the master
@@ -18,6 +18,7 @@ from __future__ import annotations
 import pytest
 import yaml
 
+from tests.fixtures.identity import mapped
 from tests.unit.test_mention_records import FakeBootstrapWiki
 from tests.unit.test_pipeline import MEDIA_SHA1, RUN
 from tests.unit.test_pipeline import FakeWiki as WriterWiki
@@ -32,7 +33,6 @@ from yizkr.model.schema import (
     read_manifest_data,
 )
 from yizkr.pipeline.places import ensure_places_run_item
-from yizkr.pipeline.resolve import resolvable_labels, resolve_batch
 from yizkr.pipeline.writer import BatchWriter, _run_terms
 
 EUGEN = "Eugen Löbig"
@@ -295,46 +295,43 @@ def eugen_batch() -> ClaimBatch:
     )
 
 
-class TestTheWriterAndResolve:
-    def test_a_write_finds_the_earliest_and_mints_no_third(self):
+class TestTheWriter:
+    def test_a_write_mints_beside_the_two_and_finds_its_own_again(self):
+        """Nothing is found by its label (#109): the batch's Eugen is an
+        item of its own beside the two the instance holds, and a second
+        write with the same identity map finds it again."""
         wiki = HomonymWiki({MEDIA_SHA1: "Q23"})
         father, son = wiki.homonyms()
+        batch = eugen_batch()
+        identity = mapped(batch)
 
-        result = BatchWriter(wiki).write_batch(eugen_batch())
+        result = BatchWriter(wiki).write_batch(batch, identity=identity)
 
         assert result.written == 1
-        assert result.created_items["eugen"] == father
+        eugen = result.created_items["eugen"]
+        assert eugen not in (father, son)
         people = [
             qid
             for qid, item in wiki.wbi.item.store.items()
             if str(item.labels.get("en") or "") == EUGEN
         ]
-        assert sorted(people) == sorted([father, son])
+        assert sorted(people) == sorted([father, son, eugen])
         # a second write finds the same item and adds nothing
-        again = BatchWriter(wiki).write_batch(eugen_batch())
-        assert again.created_items["eugen"] == father
+        again = BatchWriter(wiki).write_batch(batch, identity=identity)
+        assert again.created_items["eugen"] == eugen
         assert again.written == 0
-
-    def test_resolve_names_the_item_the_writer_finds(self):
-        wiki = HomonymWiki({MEDIA_SHA1: "Q23"})
-        father, _ = wiki.homonyms()
-        batch = eugen_batch()
-
-        found = resolvable_labels(wiki, batch)
-
-        assert found == {EUGEN: father}
-        resolved = resolve_batch(batch, found)
-        assert resolved.claims[0].subject.qid == father
 
     def test_a_run_label_two_items_hold_fails_before_any_claim(self):
         wiki = HomonymWiki({MEDIA_SHA1: "Q23"})
-        label, _ = _run_terms(eugen_batch())
+        batch = eugen_batch()
+        identity = mapped(batch)
+        label, _ = _run_terms(batch, identity.hash)
         wiki.labelled(label)
         wiki.labelled(label)
         writes = wiki.wbi.item.writes
 
         with pytest.raises(RuntimeError, match="share the English label"):
-            BatchWriter(wiki).write_batch(eugen_batch())
+            BatchWriter(wiki).write_batch(batch, identity=identity)
         assert wiki.wbi.item.writes == writes
 
 

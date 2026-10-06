@@ -49,6 +49,7 @@ import unicodedata
 import pytest
 from wikibaseintegrator.wbi_exceptions import ModificationFailed
 
+from tests.fixtures.identity import corpus, mapped, write_mapped
 from tests.unit.test_pipeline import (
     DIRECTORY_SHA1,
     INTERVIEW_SHA1,
@@ -69,7 +70,7 @@ from tests.unit.test_pipeline import (
     _certificate_batch,
     _cleaned_up,
     _directory_batch,
-    _firm_batch,
+    _found_firm,
     _labelled,
     _not_in_nfc,
     _places,
@@ -406,7 +407,7 @@ class TestClaimsOfAShapeTheInstanceRefuses:
         # the refused claim comes first: the claim after it is written
         batch = _batch_of(refused, BIRTH)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         cid = claim_id(batch.claims[0])
         assert written.refused == [cid]
@@ -435,7 +436,7 @@ class TestClaimsOfAShapeTheInstanceRefuses:
         claim = _saying(case, text)
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(_batch_of(claim))
+        written = write_mapped(BatchWriter(wiki), _batch_of(claim))
 
         assert (written.written, written.refused, written.warnings) == (
             1,
@@ -453,7 +454,7 @@ class TestClaimsOfAShapeTheInstanceRefuses:
         batch = _batch_of(_saying("monolingual value", text))
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         (warning,) = written.warnings
         assert warning == (
@@ -513,7 +514,7 @@ class TestLocatorsGoOnOneLine:
         batch = _batch_of(claim)
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         (died,) = _statements(
             wiki, written.created_items["e07"], "cause_of_death"
@@ -521,7 +522,7 @@ class TestLocatorsGoOnOneLine:
         ((_, page, _, excerpt),) = _places(died)
         assert (page if where == "page number" else excerpt) == kept
         writes = wiki.wbi.item.writes
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch)
         assert (again.written, again.referenced, again.skipped) == (0, 0, 1)
         assert wiki.wbi.item.writes == writes
 
@@ -542,7 +543,7 @@ class TestLocatorsGoOnOneLine:
         }
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(_batch_of(claim))
+        written = write_mapped(BatchWriter(wiki), _batch_of(claim))
 
         (died,) = _statements(
             wiki, written.created_items["e07"], "cause_of_death"
@@ -556,7 +557,7 @@ class TestLocatorsGoOnOneLine:
         claim = _cause(blank) if where == "page number" else _quoting(blank)
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(_batch_of(claim))
+        written = write_mapped(BatchWriter(wiki), _batch_of(claim))
 
         (died,) = _statements(
             wiki, written.created_items["e07"], "cause_of_death"
@@ -576,8 +577,8 @@ class TestLocatorsGoOnOneLine:
         claim = _cause if where == "page number" else _quoting
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(
-            _batch_of(claim(first), claim(second))
+        written = write_mapped(
+            BatchWriter(wiki), _batch_of(claim(first), claim(second))
         )
 
         assert (written.written, written.referenced, written.skipped) == (
@@ -599,7 +600,7 @@ class TestLocatorsGoOnOneLine:
         assert len(one_line) > TEXT_LIMIT
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(_batch_of(_cause(lines)))
+        written = write_mapped(BatchWriter(wiki), _batch_of(_cause(lines)))
 
         (died,) = _statements(
             wiki, written.created_items["e07"], "cause_of_death"
@@ -646,11 +647,10 @@ class TestTypeHintSpacing:
         wiki = FakeWiki(
             {INTERVIEW_SHA1: "Q25", DIRECTORY_SHA1: "Q26"}, detached=True
         )
-        if found:
-            BatchWriter(wiki).write_batch(_firm_batch())
         directory = _directory_batch("unclassified_entity", type_hint=given)
+        identity = _found_firm(wiki, directory, found)
 
-        written = BatchWriter(wiki).write_batch(directory)
+        written = write_mapped(BatchWriter(wiki), directory, identity=identity)
 
         firm = written.created_items["firm"]
         hints = set(_by_value(_statements(wiki, firm, "type_hint")))
@@ -658,7 +658,7 @@ class TestTypeHintSpacing:
         assert hints == earlier | ({kept} if kept else set())
         assert written.warnings == []
         writes = wiki.wbi.item.writes
-        BatchWriter(wiki).write_batch(directory)
+        write_mapped(BatchWriter(wiki), directory, identity=identity)
         assert wiki.wbi.item.writes == writes
 
 
@@ -751,20 +751,23 @@ class TestTerms:
         # the certificate's batch names Sebastian by `given`
         wiki = FakeWiki({MEDIA_SHA1: "Q23", TREE_SHA1: "Q29"}, detached=True)
         batch = _named(_certificate_batch(), given)
+        tree_batch = _named(_tree_batch(), kept)
+        # the map in which the tree's Sebastian is the certificate's
+        identity = corpus(batch, tree_batch, entities=((given, kept),))
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch, identity=identity)
 
         sebastian = written.created_items["e01"]
         assert _labelled(wiki, kept) == [sebastian]
         assert _not_in_nfc(wiki) == []
         # a re-run finds him by that label, and writes nothing
         writes = wiki.wbi.item.writes
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch, identity=identity)
         assert again.created_items["e01"] == sebastian
         assert wiki.wbi.item.writes == writes
         # and so does the tree's batch, which names him as the instance
         # keeps his label
-        tree = BatchWriter(wiki).write_batch(_named(_tree_batch(), kept))
+        tree = write_mapped(BatchWriter(wiki), tree_batch, identity=identity)
         assert tree.created_items["e03"] == sebastian
 
     def test_a_label_of_whitespace_alone_is_no_label(self):
@@ -774,7 +777,7 @@ class TestTerms:
         batch = _named(_certificate_batch(), f" \n{NO_BREAK_SPACE}")
 
         with pytest.raises(ValueError, match="no label, or none but"):
-            BatchWriter(wiki).write_batch(batch)
+            write_mapped(BatchWriter(wiki), batch)
 
         assert _labelled(wiki, "") == []
 
@@ -794,7 +797,7 @@ class TestTerms:
         batch = _batch_of(_cause(label=LONG_EUGEN), kinship)
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         eugen, other = (
             written.created_items["e07"],
@@ -804,7 +807,7 @@ class TestTerms:
         assert _labelled(wiki, _term_cut(LONG_EUGEN)) == [eugen]
         assert _labelled(wiki, _term_cut(LONG_SEBASTIAN)) == [other]
         writes = wiki.wbi.item.writes
-        BatchWriter(wiki).write_batch(batch)
+        write_mapped(BatchWriter(wiki), batch)
         assert wiki.wbi.item.writes == writes
 
     @pytest.mark.parametrize("dry_run", [False, True], ids=["write", "plan"])
@@ -824,7 +827,7 @@ class TestTerms:
         )
         wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
 
-        written = BatchWriter(wiki, dry_run=dry_run).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki, dry_run=dry_run), batch)
 
         assert written.warnings == [
             "entity 'e01' has a description that is its label: its item is "
@@ -842,7 +845,7 @@ class TestTerms:
         )
         # a re-run finds him, warns of nothing and writes nothing
         writes = wiki.wbi.item.writes
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch)
         assert (again.created_items["e01"], again.warnings) == (sebastian, [])
         assert wiki.wbi.item.writes == writes
 
@@ -862,10 +865,10 @@ class TestTerms:
         assert min(map(len, aliases[3:])) > TERM_LIMIT
         wiki = FakeWiki({MEDIA_SHA1: "Q23", TREE_SHA1: "Q29"}, detached=True)
         if found:
-            BatchWriter(wiki).write_batch(_certificate_batch())
+            write_mapped(BatchWriter(wiki), _certificate_batch())
         tree = _with_aliases(_tree_batch(), aliases)
 
-        written = BatchWriter(wiki).write_batch(tree)
+        written = write_mapped(BatchWriter(wiki), tree)
 
         sebastian = written.created_items["e03"]
         assert sorted(_aliases(wiki, sebastian)) == sorted(
@@ -876,7 +879,7 @@ class TestTerms:
             ]
         )
         writes = wiki.wbi.item.writes
-        BatchWriter(wiki).write_batch(tree)
+        write_mapped(BatchWriter(wiki), tree)
         assert wiki.wbi.item.writes == writes
 
     def test_a_run_label_over_the_limit_is_cut_and_found_again(self):
@@ -889,17 +892,18 @@ class TestTerms:
         run = dict(RUN, model_identifier=model)
         first = _batch_of(_cause(), run=run)
         second = _batch_of(_cause(cause="Herzschwäche"), run=run)
-        label = f"extraction run 2026-07-12 {model} {batch_fingerprint(first)}"
+        fingerprint = batch_fingerprint(first, mapped(first).hash)
+        label = f"extraction run 2026-07-12 {model} {fingerprint}"
         assert label[TERM_ROOM - 1 : TERM_ROOM + 1] == " F"
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(first)
-        other = BatchWriter(wiki).write_batch(second)
+        written = write_mapped(BatchWriter(wiki), first)
+        other = write_mapped(BatchWriter(wiki), second)
 
         assert _labelled(wiki, _term_cut(label)) == [written.run_qid]
         assert other.run_qid != written.run_qid
         writes = wiki.wbi.item.writes
-        again = BatchWriter(wiki).write_batch(first)
+        again = write_mapped(BatchWriter(wiki), first)
         assert again.run_qid == written.run_qid
         assert wiki.wbi.item.writes == writes
 
@@ -908,25 +912,24 @@ class TestTerms:
         [f"  {SEBASTIAN}\n", LONG_SEBASTIAN],
         ids=["with whitespace around it", "over the limit"],
     )
-    def test_a_record_reaches_the_item_the_resolve_step_found(self, given):
+    def test_a_record_reaches_the_item_of_its_cluster(self, given):
         # the certificate's batch mints Sebastian under `given`; the tree's
-        # refs to him give his label as the instance keeps it, and the
-        # resolve step matched them to his item, while its manifest record
-        # gives `given`. The record's kind and alias reach the item
+        # refs to him give his label as the instance keeps it, while its
+        # manifest record gives `given`, and the identity map puts the two
+        # in one cluster. The record's kind and alias reach the item
         wiki = FakeWiki({MEDIA_SHA1: "Q23", TREE_SHA1: "Q29"}, detached=True)
-        certificate = BatchWriter(wiki).write_batch(
-            _named(_certificate_batch(), given)
+        kept = SEBASTIAN if given.strip() == SEBASTIAN else _term_cut(given)
+        certificate_batch = _named(_certificate_batch(), given)
+        tree = _named(_tree_batch(), kept, record=given)
+        identity = corpus(certificate_batch, tree, entities=(given,))
+        certificate = write_mapped(
+            BatchWriter(wiki), certificate_batch, identity=identity
         )
         sebastian = certificate.created_items["e01"]
-        (kept,) = [
-            label
-            for label in (SEBASTIAN, _term_cut(LONG_SEBASTIAN))
-            if _labelled(wiki, label)
-        ]
-        tree = _named(_tree_batch(), kept, record=given)
+        assert _labelled(wiki, kept) == [sebastian]
 
-        written = BatchWriter(wiki).write_batch(
-            resolve_batch(tree, {kept: sebastian})
+        written = write_mapped(
+            BatchWriter(wiki), resolve_batch(tree), identity=identity
         )
 
         assert _aliases(wiki, sebastian) == ["Wastl"]
@@ -957,8 +960,8 @@ class TestTerms:
             "extract": False,
         }
 
-        written = BatchWriter(wiki).write_batch(
-            _batch_of(keyed, entities=(blank,))
+        written = write_mapped(
+            BatchWriter(wiki), _batch_of(keyed, entities=(blank,))
         )
 
         assert written.written == 1
@@ -999,8 +1002,9 @@ class TestEveryCharacterOfTheInstancesClasses:
         text = char + words if at == "start" else words + char
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(
-            _batch_of(_saying("monolingual value", text), BIRTH)
+        written = write_mapped(
+            BatchWriter(wiki),
+            _batch_of(_saying("monolingual value", text), BIRTH),
         )
 
         assert (written.written, len(written.refused)) == (1, 1)
@@ -1016,8 +1020,9 @@ class TestEveryCharacterOfTheInstancesClasses:
         words = TEXT_OF[case]
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(
-            _batch_of(_saying(case, words + char + words), BIRTH)
+        written = write_mapped(
+            BatchWriter(wiki),
+            _batch_of(_saying(case, words + char + words), BIRTH),
         )
 
         assert (written.written, len(written.refused)) == (1, 1)
@@ -1040,7 +1045,7 @@ class TestEveryCharacterOfTheInstancesClasses:
         batch = _batch_of(claim)
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         (died,) = _statements(
             wiki, written.created_items["e07"], "cause_of_death"
@@ -1049,7 +1054,7 @@ class TestEveryCharacterOfTheInstancesClasses:
         kept = page if where == "page number" else excerpt
         assert kept == f"Blatt 12{inside}Flörburg"
         writes = wiki.wbi.item.writes
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch)
         assert (again.written, again.referenced, again.skipped) == (0, 0, 1)
         assert wiki.wbi.item.writes == writes
 
@@ -1060,14 +1065,14 @@ class TestEveryCharacterOfTheInstancesClasses:
             _certificate_batch(), f"{char}Sebastian{char}Löbig{char}"
         )
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         sebastian = written.created_items["e01"]
         label = str(wiki.wbi.item.get(sebastian).labels.get("en"))
         assert label.startswith("Sebastian") and label.endswith("Löbig")
         assert _labelled(wiki, label) == [sebastian]
         writes = wiki.wbi.item.writes
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch)
         assert again.created_items["e01"] == sebastian
         assert wiki.wbi.item.writes == writes
 
@@ -1078,8 +1083,9 @@ class TestEveryCharacterOfTheInstancesClasses:
         words = TEXT_OF[case]
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(
-            _batch_of(_saying(case, words + char + words), BIRTH)
+        written = write_mapped(
+            BatchWriter(wiki),
+            _batch_of(_saying(case, words + char + words), BIRTH),
         )
 
         assert (written.written, len(written.refused)) == (1, 1)
@@ -1102,7 +1108,7 @@ class TestEveryCharacterOfTheInstancesClasses:
         batch = _batch_of(claim)
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         (died,) = _statements(
             wiki, written.created_items["e07"], "cause_of_death"
@@ -1111,7 +1117,7 @@ class TestEveryCharacterOfTheInstancesClasses:
         kept = page if where == "page number" else excerpt
         assert kept == f"{edge}Blatt 12{inside}Flörburg{edge}"
         writes = wiki.wbi.item.writes
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch)
         assert (again.written, again.referenced, again.skipped) == (0, 0, 1)
         assert wiki.wbi.item.writes == writes
 
@@ -1122,12 +1128,12 @@ class TestEveryCharacterOfTheInstancesClasses:
         wiki = FakeWiki(
             {INTERVIEW_SHA1: "Q25", DIRECTORY_SHA1: "Q26"}, detached=True
         )
-        BatchWriter(wiki).write_batch(_firm_batch())
         directory = _directory_batch(
             "unclassified_entity", type_hint=f"Hut{char}geschäft"
         )
+        identity = _found_firm(wiki, directory, True)
 
-        written = BatchWriter(wiki).write_batch(directory)
+        written = write_mapped(BatchWriter(wiki), directory, identity=identity)
 
         inside = " " if char in WIKIBASE_BREAK_OR_TAB else "\ufffd"
         hints = set(
@@ -1137,7 +1143,7 @@ class TestEveryCharacterOfTheInstancesClasses:
         )
         assert hints == {"hat shop", f"Hut{inside}geschäft"}
         writes = wiki.wbi.item.writes
-        BatchWriter(wiki).write_batch(directory)
+        write_mapped(BatchWriter(wiki), directory, identity=identity)
         assert wiki.wbi.item.writes == writes
 
     @pytest.mark.parametrize("char", CLEANED.values(), ids=CLEANED)
@@ -1147,7 +1153,7 @@ class TestEveryCharacterOfTheInstancesClasses:
         wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
         batch = _named(_certificate_batch(), f"Sebastian{char}Löbig{char}")
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         sebastian = written.created_items["e01"]
         if char in "\ufffe\uffff":
@@ -1156,6 +1162,6 @@ class TestEveryCharacterOfTheInstancesClasses:
             kept = SEBASTIAN
         assert _labelled(wiki, kept) == [sebastian]
         writes = wiki.wbi.item.writes
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch)
         assert again.created_items["e01"] == sebastian
         assert wiki.wbi.item.writes == writes

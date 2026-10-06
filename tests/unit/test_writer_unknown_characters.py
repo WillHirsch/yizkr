@@ -46,6 +46,7 @@ import unicodedata
 
 import pytest
 
+from tests.fixtures.identity import write_mapped
 from tests.unit import test_pipeline, test_registrar
 from tests.unit.test_pipeline import (
     DIRECTORY_SHA1,
@@ -55,7 +56,7 @@ from tests.unit.test_pipeline import (
     _by_value,
     _cites,
     _directory_batch,
-    _firm_batch,
+    _found_firm,
     _labelled,
     _local,
     _places,
@@ -181,11 +182,11 @@ def newer_tables(monkeypatch):
     )
 
 
-def _written_again(wiki: FakeWiki, batch: ClaimBatch):
-    """`batch` written a second time to `wiki`: the result, and whether
-    the write sent no edit and made no item."""
+def _written_again(wiki: FakeWiki, batch: ClaimBatch, identity=None):
+    """`batch` written a second time to `wiki`, with `identity`: the
+    result, and whether the write sent no edit and made no item."""
     writes, items = wiki.wbi.item.writes, len(wiki.wbi.item.store)
-    again = BatchWriter(wiki).write_batch(batch)
+    again = write_mapped(BatchWriter(wiki), batch, identity=identity)
     return again, (wiki.wbi.item.writes, len(wiki.wbi.item.store)) == (
         writes,
         items,
@@ -386,7 +387,7 @@ class TestClaimsRefused:
         batch = _batch_of(claim, MARRIED)
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         cid = claim_id(batch.claims[0])
         assert written.refused == [cid]
@@ -417,7 +418,7 @@ class TestClaimsRefused:
         batch = _batch_of(claim, MARRIED)
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         cid = claim_id(batch.claims[0])
         assert written.refused == [cid]
@@ -446,12 +447,12 @@ class TestClaimsRefused:
         cid = claim_id(batch.claims[0])
         wiki = FakeWiki(LETTER, detached=True)
 
-        planned = BatchWriter(wiki, dry_run=True).write_batch(batch)
+        planned = write_mapped(BatchWriter(wiki, dry_run=True), batch)
 
         assert wiki.wbi.item.writes == 0
         assert planned.refused == [cid]
         assert planned.created_items == {}
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
         assert written.refused == [cid]
         assert written.created_items == {}
         assert _with_properties(wiki, "relative") == []
@@ -465,7 +466,7 @@ class TestClaimsRefused:
         batch = _batch_of(claim, MARRIED)
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         cid = claim_id(batch.claims[0])
         assert written.refused == [cid]
@@ -482,7 +483,7 @@ class TestClaimsRefused:
         batch = _batch_of(_named(f"Нина {MARKED}\U00011f41"), MARRIED)
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         cid = claim_id(batch.claims[0])
         assert written.warnings == [
@@ -498,7 +499,7 @@ class TestClaimsRefused:
         batch = _batch_of(_named(f"Нина {MARKED} {MARKED}"), MARRIED)
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.warnings == [
             f"claim {claim_id(batch.claims[0])} (birth_name) is refused, and "
@@ -520,7 +521,7 @@ class TestClaimsRefused:
         batch = _batch_of(claim, MARRIED)
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.warnings == [
             f"claim {claim_id(batch.claims[0])} (birth_name) is refused, and "
@@ -544,12 +545,12 @@ class TestClaimsRefused:
         )
         wiki = FakeWiki(LETTER, detached=True)
 
-        planned = BatchWriter(wiki, dry_run=True).write_batch(batch)
+        planned = write_mapped(BatchWriter(wiki, dry_run=True), batch)
 
         assert wiki.wbi.item.writes == 0
         assert planned.refused == [claim_id(batch.claims[0])]
         assert planned.refused_terms == ["nina: alias"]
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
         assert _same_counts(planned, written)
 
 
@@ -568,7 +569,10 @@ class TestLabels:
         label = f"Нина {MARKED}"
         if manifest:
             claims = (_named("Нина Сартина"), _widow())
-            entities = ({"id": "nina", "label": label, "kind": "human"},)
+            entities = (
+                {"id": "nina", "label": label, "kind": "human"},
+                {"id": "rudolf", "label": RUDOLF, "kind": "human"},
+            )
         else:
             # the first ref gives her label clean, a later one marked: any
             # of them may be the one the writer resolves first
@@ -585,7 +589,7 @@ class TestLabels:
         batch = _batch_of(*claims, rudolf, entities=entities)
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         cids = [claim_id(claim) for claim in batch.claims]
         assert written.refused == cids
@@ -620,7 +624,7 @@ class TestLabels:
         )
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.refused_terms == ["nina: label"]
         assert written.warnings[-1] == (
@@ -640,7 +644,7 @@ class TestLabels:
         batch = _batch_of(claim, MARRIED)
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.warnings[0].count("it mentions entity 'nina'") == 1
 
@@ -653,7 +657,7 @@ class TestLabels:
         )
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert (written.written, written.refused) == (1, [])
         assert (written.refused_terms, written.warnings) == ([], [])
@@ -680,7 +684,7 @@ class TestLabels:
         )
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.refused == [claim_id(batch.claims[0])]
         assert written.refused_terms == ["nina: label"]
@@ -707,7 +711,7 @@ class TestLabels:
             ),
         )
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert (written.written, written.refused) == (1, [])
         assert written.refused_terms == ["nina: label"]
@@ -729,11 +733,9 @@ class TestLabels:
         # record names it by an approved equivalence, its label marked:
         # that label would go as an alias of the item, and is left out
         wiki = FakeWiki(LETTER, detached=True)
-        nina = (
-            BatchWriter(wiki)
-            .write_batch(_batch_of(MARRIED))
-            .created_items["nina"]
-        )
+        nina = write_mapped(
+            BatchWriter(wiki), _batch_of(MARRIED)
+        ).created_items["nina"]
         claim = dict(
             _named("Нина Сартина"), subject={"kind": "qid", "qid": nina}
         )
@@ -753,7 +755,7 @@ class TestLabels:
             ),
         )
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.refused == []
         assert written.refused_terms == ["nina: label", "nina: alias"]
@@ -792,7 +794,7 @@ class TestTermsLeftOut:
         )
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.refused == []
         assert written.refused_terms == ["nina: alias"]
@@ -819,7 +821,7 @@ class TestTermsLeftOut:
         )
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.refused_terms == []
         nina = wiki.wbi.item.get(written.created_items["nina"])
@@ -838,7 +840,7 @@ class TestTermsLeftOut:
         )
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.refused == [claim_id(batch.claims[0])]
         assert written.refused_terms == []
@@ -862,7 +864,7 @@ class TestTermsLeftOut:
         )
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert (written.written, written.refused) == (2, [])
         assert written.refused_terms == []
@@ -894,7 +896,7 @@ class TestTermsLeftOut:
         )
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.refused == [claim_id(batch.claims[0])]
         assert written.refused_terms == []
@@ -916,7 +918,7 @@ class TestTermsLeftOut:
         )
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.refused_terms == ["nina: alias", "nina: alias"]
         assert (
@@ -931,13 +933,12 @@ class TestTermsLeftOut:
         wiki = FakeWiki(
             {INTERVIEW_SHA1: "Q25", DIRECTORY_SHA1: "Q26"}, detached=True
         )
-        if found:
-            BatchWriter(wiki).write_batch(_firm_batch())
         directory = _directory_batch(
             "unclassified_entity", type_hint=f"шляпный {MARKED}"
         )
+        identity = _found_firm(wiki, directory, found)
 
-        written = BatchWriter(wiki).write_batch(directory)
+        written = write_mapped(BatchWriter(wiki), directory, identity=identity)
 
         assert written.refused_terms == ["firm: type hint"]
         assert written.warnings == [
@@ -946,7 +947,7 @@ class TestTermsLeftOut:
         firm = written.created_items["firm"]
         hints = set(_by_value(_statements(wiki, firm, "type_hint")))
         assert hints == ({"hat shop"} if found else set())
-        again, unchanged = _written_again(wiki, directory)
+        again, unchanged = _written_again(wiki, directory, identity)
         assert unchanged
         assert _same_counts(written, again)
 
@@ -983,7 +984,7 @@ class TestPastTheCut:
         )
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.refused_terms == ["nina: alias"]
         nina = wiki.wbi.item.get(written.created_items["nina"])
@@ -999,11 +1000,9 @@ class TestPastTheCut:
         # an approved equivalence's aliases go to its item as other
         # aliases do
         wiki = FakeWiki(LETTER, detached=True)
-        nina = (
-            BatchWriter(wiki)
-            .write_batch(_batch_of(MARRIED))
-            .created_items["nina"]
-        )
+        nina = write_mapped(
+            BatchWriter(wiki), _batch_of(MARRIED)
+        ).created_items["nina"]
         claim = dict(
             _named("Нина Сартина"), subject={"kind": "qid", "qid": nina}
         )
@@ -1020,7 +1019,7 @@ class TestPastTheCut:
             ),
         )
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.refused_terms == ["nina: alias"]
         assert [
@@ -1050,7 +1049,7 @@ class TestPastTheCut:
             ),
         )
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.refused == [claim_id(batch.claims[1])]
         assert written.refused_terms == ["nina: label"]
@@ -1063,7 +1062,7 @@ class TestPastTheCut:
         batch = _batch_of(claim, MARRIED)
         wiki = FakeWiki(LETTER, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.refused == [claim_id(batch.claims[0])]
         assert _with_properties(wiki, "birth_name") == []
@@ -1098,7 +1097,7 @@ def test_a_run_item_term_refuses_the_batch_before_any_read(given, term):
     wiki = FakeWiki(LETTER, detached=True)
 
     with pytest.raises(ValueError, match="U\\+1E08F") as refused:
-        BatchWriter(wiki).write_batch(batch)
+        write_mapped(BatchWriter(wiki), batch)
 
     assert f"extraction run's {term}" in str(refused.value)
     assert (wiki.index_reads, wiki.wbi.item.writes) == (0, 0)

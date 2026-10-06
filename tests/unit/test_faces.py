@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from tests.fixtures import example_universe as u
+from tests.fixtures.identity import write_mapped
 from tests.unit.test_pipeline import PROPERTIES, FakeWiki, _cited
 from yizkr import cli
 from yizkr.claims import (
@@ -1023,7 +1024,7 @@ class TestWriteRefusesUnapprovedDepicts:
         writes = wiki.wbi.item.writes
 
         with pytest.raises(UnapprovedDepictsError) as refusal:
-            BatchWriter(wiki).write_batch(faces)
+            write_mapped(BatchWriter(wiki), faces)
 
         ids = [claim_id(claim) for claim in faces.claims]
         assert refusal.value.claim_ids == ids
@@ -1036,14 +1037,14 @@ class TestWriteRefusesUnapprovedDepicts:
     def test_dry_run_refuses_it_too(self):
         wiki = wiki_with_portrait()
         with pytest.raises(UnapprovedDepictsError):
-            BatchWriter(wiki, dry_run=True).write_batch(portrait_faces())
+            write_mapped(BatchWriter(wiki, dry_run=True), portrait_faces())
 
     def test_depicts_a_source_text_proposes_is_refused_alike(self):
         text = portrait_text()
         date, *depicts = text.claims
 
         with pytest.raises(UnapprovedDepictsError) as refusal:
-            BatchWriter(wiki_with_portrait()).write_batch(text)
+            write_mapped(BatchWriter(wiki_with_portrait()), text)
 
         assert refusal.value.claim_ids == [claim_id(c) for c in depicts]
         assert claim_id(date) not in str(refusal.value)
@@ -1052,7 +1053,7 @@ class TestWriteRefusesUnapprovedDepicts:
         approved = reviewed(portrait_faces(), tmp_path)
         wiki = wiki_with_portrait()
 
-        result = BatchWriter(wiki).write_batch(approved)
+        result = write_mapped(BatchWriter(wiki), approved)
 
         assert result.written == 2
         statements = depicted(wiki)
@@ -1071,7 +1072,7 @@ class TestWriteRefusesUnapprovedDepicts:
                 result.run_qid
             ]
         # and re-writing it is the no-op it is for any reviewed batch
-        again = BatchWriter(wiki).write_batch(approved)
+        again = write_mapped(BatchWriter(wiki), approved)
         assert (again.written, again.skipped) == (0, 2)
 
     def test_mixed_sheet_writes_every_approved_claim(self, tmp_path):
@@ -1088,8 +1089,10 @@ class TestWriteRefusesUnapprovedDepicts:
         approved, _ = apply_review(text, review_csv)
         wiki = wiki_with_portrait()
 
-        result = BatchWriter(wiki).write_batch(
-            approved, bulk_accepted=is_bulk_accepted(review_csv)
+        result = write_mapped(
+            BatchWriter(wiki),
+            approved,
+            bulk_accepted=is_bulk_accepted(review_csv),
         )
 
         assert result.written == 3
@@ -1105,8 +1108,9 @@ class TestWriteRefusesUnapprovedDepicts:
         wiki = wiki_with_portrait()
 
         with pytest.raises(UnapprovedDepictsError) as refusal:
-            BatchWriter(wiki).write_batch(
-                approved.model_copy(update={"claims": [eugen, edited]})
+            write_mapped(
+                BatchWriter(wiki),
+                approved.model_copy(update={"claims": [eugen, edited]}),
             )
 
         assert refusal.value.claim_ids == [claim_id(edited)]
@@ -1119,7 +1123,7 @@ class TestWriteRefusesUnapprovedDepicts:
         approved = reviewed(portrait_faces_by_label(manifest), tmp_path)
         wiki = wiki_with_portrait()
 
-        result = BatchWriter(wiki).write_batch(approved)
+        result = write_mapped(BatchWriter(wiki), approved)
 
         assert result.written == 2
         sitters = {
@@ -1182,7 +1186,7 @@ class TestWriteRefusesUnapprovedDepicts:
         writes = wiki.wbi.item.writes
 
         with pytest.raises(UnapprovedDepictsError) as refusal:
-            BatchWriter(wiki).write_batch(edited)
+            write_mapped(BatchWriter(wiki), edited)
 
         # the second sitter's claim, whose record is untouched, keeps its
         # approval; the batch is refused whole all the same
@@ -1218,7 +1222,7 @@ class TestWriteRefusesUnapprovedDepicts:
         wiki = wiki_with_portrait()
 
         with pytest.raises(UnapprovedDepictsError) as refusal:
-            BatchWriter(wiki).write_batch(retargeted)
+            write_mapped(BatchWriter(wiki), retargeted)
 
         assert refusal.value.claim_ids == [claim_id(eugen)]
         assert depicted(wiki) == {}
@@ -1233,7 +1237,7 @@ class TestWriteRefusesUnapprovedDepicts:
         approved = reviewed(both, tmp_path)
         wiki = wiki_with_portrait()
 
-        result = BatchWriter(wiki).write_batch(approved)
+        result = write_mapped(BatchWriter(wiki), approved)
 
         assert result.written == 3
         eugen = result.created_items["face-person-0"]
@@ -1257,7 +1261,7 @@ class TestWriteRefusesUnapprovedDepicts:
         )
         wiki = wiki_with_portrait()
 
-        result = BatchWriter(wiki).write_batch(approved)
+        result = write_mapped(BatchWriter(wiki), approved)
 
         assert result.written == 3
         peiltal = result.created_items["studio-town"]
@@ -1279,7 +1283,7 @@ class TestWriteRefusesUnapprovedDepicts:
         wiki = wiki_with_portrait()
 
         with pytest.raises(UnapprovedDepictsError) as refusal:
-            BatchWriter(wiki).write_batch(retargeted)
+            write_mapped(BatchWriter(wiki), retargeted)
 
         assert refusal.value.claim_ids == [
             claim_id(claim) for claim in approved.claims
@@ -1304,7 +1308,7 @@ class TestWriteRefusesUnapprovedDepicts:
         )
 
         with pytest.raises(UnapprovedDepictsError) as refusal:
-            BatchWriter(wiki_with_portrait()).write_batch(moved)
+            write_mapped(BatchWriter(wiki_with_portrait()), moved)
 
         assert refusal.value.claim_ids == [
             claim_id(claim) for claim in approved.claims
@@ -1315,7 +1319,7 @@ class TestWriteRefusesUnapprovedDepicts:
         # claims (ADR-0025): the gate leaves such a batch alone
         text = portrait_text()
         dated = text.model_copy(update={"claims": text.claims[:1]})
-        result = BatchWriter(wiki_with_portrait()).write_batch(dated)
+        result = write_mapped(BatchWriter(wiki_with_portrait()), dated)
         assert result.written == 1
 
 
@@ -1333,7 +1337,10 @@ class TestOneEntityRecordLookup:
     def two_records_for_the_first_face(tmp_path) -> ClaimBatch:
         """The portrait's faces approved row by row, with two manifest
         records under the first face's local id (which manifest
-        validation would refuse), each naming a different item."""
+        validation would refuse), each naming a different item. The
+        second face's record names Sebastian's item too: a batch whose
+        mentions share a local id cannot be mapped (#109), so every local
+        entity of it is one an approved equivalence names."""
         faces = portrait_faces_by_label(manifest=True)
         first, second = faces.entities
         doubled = faces.model_copy(
@@ -1341,7 +1348,7 @@ class TestOneEntityRecordLookup:
                 "entities": [
                     first.model_copy(update={"qid": "Q26"}),
                     first.model_copy(update={"label": RAHEL, "qid": "Q28"}),
-                    second,
+                    second.model_copy(update={"qid": "Q29"}),
                 ]
             }
         )
@@ -1349,12 +1356,14 @@ class TestOneEntityRecordLookup:
 
     @staticmethod
     def wiki() -> FakeWiki:
-        """The portrait's instance, with Eugen's item under Q26 too."""
+        """The portrait's instance, with Eugen's item under Q26 and
+        Sebastian's under Q29 too."""
         wiki = wiki_with_portrait()
-        eugen = wiki.wbi.item.new()
-        eugen.id = "Q26"
-        eugen.labels.set("en", EUGEN)
-        eugen.write()
+        for qid, label in (("Q26", EUGEN), ("Q29", SEBASTIAN)):
+            item = wiki.wbi.item.new()
+            item.id = qid
+            item.labels.set("en", label)
+            item.write()
         return wiki
 
     @staticmethod
@@ -1378,13 +1387,14 @@ class TestOneEntityRecordLookup:
         picked = entity_records(approved)["face-person-0"]
         wiki = self.wiki()
 
-        BatchWriter(wiki).write_batch(approved)
+        write_mapped(BatchWriter(wiki), approved)
 
         assert picked.qid in depicted(wiki)
         # an edit to the picked record voids the approval
         with pytest.raises(UnapprovedDepictsError):
-            BatchWriter(self.wiki()).write_batch(
-                self.edited(approved, picked, qid="Q27")
+            write_mapped(
+                BatchWriter(self.wiki()),
+                self.edited(approved, picked, qid="Q27"),
             )
 
     def test_passed_over_record_resolves_no_local_ref_adds_no_alias_or_kind(
@@ -1410,7 +1420,7 @@ class TestOneEntityRecordLookup:
         written, run_labels = {}, {}
         for name, batch in (("approved", approved), ("edited", edited)):
             wiki = self.wiki()
-            result = BatchWriter(wiki).write_batch(batch)
+            result = write_mapped(BatchWriter(wiki), batch)
             rahel = wiki.wbi.item.get("Q28")
             written[name] = (
                 set(depicted(wiki)),

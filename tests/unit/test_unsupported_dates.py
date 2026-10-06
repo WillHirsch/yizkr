@@ -24,6 +24,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+from tests.fixtures.identity import write_mapped
 from tests.unit.test_pipeline import (
     ARTIFACT,
     MEDIA_REF,
@@ -371,7 +372,7 @@ class TestTheWriter:
         writer = BatchWriter(wiki, dry_run=dry_run)
         batch = self.batch(value, qualifier)
         with pytest.raises(UnsupportedDate, match="nothing was written") as e:
-            writer.write_batch(batch)
+            write_mapped(writer, batch)
         assert wiki.wbi.item.store == {}
         assert wiki.index_reads == 0
         # the claim, by its id and property, and which part holds the date
@@ -399,7 +400,7 @@ class TestTheWriter:
 
     def test_the_same_batch_with_a_supported_date_is_written(self):
         wiki = FakeWiki({MEDIA_SHA1: "Q23"})
-        result = BatchWriter(wiki).write_batch(self.batch())
+        result = write_mapped(BatchWriter(wiki), self.batch())
         assert result.written == 1
 
 

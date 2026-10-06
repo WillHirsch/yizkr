@@ -32,11 +32,9 @@ fictional scan registered under exactly its media object's title:
   tagged label, unflagged (decision AM);
 * a scan registered under the person's name first: the person is an
   item of its own under its name tagged `" [not an artifact]"`, its
-  name an alias, the scan's item unchanged, and resolve's labels leave
-  the scan out, finding his item under his name as the writer does
-  (decision AN, #476); a ref with no kind naming him, written
-  after, joins that item, as the tag is one for every kind (decision
-  AZ);
+  name an alias, the scan's item unchanged (decision AN), and a rewrite
+  finds his item there again; nothing is found by its label alone
+  (#109);
 * Sebastian's portrait titled with Hildegard's name, his claim naming
   it before hers names her: the people are placed first, so she keeps
   her name and the portrait takes its tagged label (decision AN);
@@ -69,12 +67,12 @@ from pathlib import Path
 
 import pytest
 
-from yizkr.claims import ArtifactRef, ClaimBatch
+from tests.fixtures.identity import write_mapped
+from yizkr.claims import ArtifactRef
 from yizkr.core import wiki
 from yizkr.pipeline import gedcom, registrar, resolve, writer
 from yizkr.pipeline.gedcom import adapt_gedcom
 from yizkr.pipeline.registrar import UNHASHED_TITLE, Registrar
-from yizkr.pipeline.resolve import resolvable_labels
 from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import ENTITY_TAG, BatchWriter, media_object_label
 
@@ -167,14 +165,10 @@ def register_scan(
     )
 
 
-def write_export(
-    client, tmp_path, order: str, text: str | None = None, kindless=False
-):
+def write_export(client, tmp_path, order: str, text: str | None = None):
     """The export, `text` or the template's for `order`, registered by its
     hash, then written as `ingest run` writes it: its batch, citing the
-    export by that hash. `kindless` makes its claim's subject a ref with
-    no kind and no record, under Sebastian's name, as an extraction may
-    give one."""
+    export by that hash, with its own identity map."""
     text = text if text is not None else export(order)
     path = write_file(
         tmp_path, f"integration-test-{order}-{MARK}.ged", text.encode()
@@ -186,38 +180,13 @@ def write_export(
         description=DESCRIPTION,
     )
     batch = adapt_gedcom(text, artifact=ArtifactRef.from_path(path)).batch
-    if kindless:
-        given = batch.model_dump(mode="json")
-        for claim in given["claims"]:
-            claim["subject"] = {
-                "kind": "local",
-                "local_id": "e1",
-                "label": person(order),
-            }
-        given["entities"] = [
-            record for record in given["entities"] if record["id"] != "i1"
-        ]
-        batch = ClaimBatch.model_validate(given)
-    return BatchWriter(
-        client, artifact_qids={sha1(text.encode()): registered.artifact_qid}
-    ).write_batch(batch)
-
-
-def naming(order: str, *labels: str) -> ClaimBatch:
-    """The export's first claim once for each of `labels`, its subject a
-    ref with that label, no kind and no record."""
-    text = export(order)
-    exported = ArtifactRef.from_bytes(text.encode())
-    given = adapt_gedcom(text, artifact=exported).batch.model_dump(mode="json")
-    claim = given["claims"][0]
-    given["claims"] = [
-        dict(
-            claim,
-            subject={"kind": "local", "local_id": f"e{n}", "label": label},
-        )
-        for n, label in enumerate(labels)
-    ]
-    return ClaimBatch.model_validate(given)
+    return write_mapped(
+        BatchWriter(
+            client,
+            artifact_qids={sha1(text.encode()): registered.artifact_qid},
+        ),
+        batch,
+    )
 
 
 def entity(client, qid: str, props: str = "claims|aliases|info") -> dict:
@@ -409,23 +378,11 @@ def test_a_person_under_a_scans_label_is_an_item_of_its_own(client, tmp_path):
     assert after["lastrevid"] == before["lastrevid"]
     assert label(client, artifact) == person(order)
     assert flagged(written) == []
-    # the refs resolve reads the labels of: Sebastian, under his name and
-    # under his tagged label; each finds his item, as the writer does,
-    # under the tagged label where the scan holds his name (#476)
-    named = (person(order), f"{person(order)}{ENTITY_TAG}")
-    labels = resolvable_labels(client, naming(order, *named))
-    assert labels[person(order)] == sebastian
-    assert labels[f"{person(order)}{ENTITY_TAG}"] == sebastian
+    # a rewrite finds his item under the tagged label again
     again = write_export(client, tmp_path, order)
     assert again.created_items["i1"] == sebastian
-    kindless = write_export(client, tmp_path, order, kindless=True)
-    assert kindless.created_items["e1"] == sebastian
-    assert kindless.refused == []
     assert entity(client, artifact)["lastrevid"] == before["lastrevid"]
     assert label(client, artifact) == person(order)
-    labels = resolvable_labels(client, naming(order, *named))
-    assert labels[person(order)] == sebastian
-    assert labels[f"{person(order)}{ENTITY_TAG}"] == sebastian
 
 
 def test_a_portrait_titled_with_another_persons_name_leaves_her_it(
@@ -471,7 +428,10 @@ def test_a_scan_under_a_persons_name_is_flagged_against_the_media_object(
     written = write_export(client, tmp_path, f"{order}, again", text)
 
     media_object = written.created_items["md1"]
-    assert written.created_items["i1"] == sebastian
+    # the second export's person is a mention of its own map: never found
+    # by his name (#109)
+    assert written.created_items["i1"] != sebastian
+    assert label(client, written.created_items["i1"]) == person(order)
     assert label(client, sebastian) == person(order)
     assert label(client, media_object) == media_object_label(person(order))
     assert flagged(written) == [

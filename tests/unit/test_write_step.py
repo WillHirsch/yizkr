@@ -17,6 +17,7 @@ import unicodedata
 
 import pytest
 
+from tests.fixtures.identity import corpus, mapped, write_mapped
 from tests.unit.test_faces import (
     decide_by_hand,
     depicted,
@@ -27,6 +28,7 @@ from tests.unit.test_faces import (
 from tests.unit.test_pipeline import (
     DIRECTORY_SHA1,
     FIRM_ENTRY,
+    FIRM_LABEL,
     _directory_batch,
     _directory_lines_batch,
     _firm_batch,
@@ -45,9 +47,12 @@ from yizkr.pipeline.writer import BatchWriter
 
 class WriteStep:
     """An orchestrator over one document, its instance the fake `wiki`,
-    and the lines it logs."""
+    and the lines it logs. Its write resolves the batch's entities through
+    `identity`, or the map of the batch alone: the run's identity map
+    (Orchestrator._identity_map) is the map of the documents of a run, and
+    these tests write a batch the step is given."""
 
-    def __init__(self, tmp_path, wiki, name: str) -> None:
+    def __init__(self, tmp_path, wiki, name: str, identity=None) -> None:
         self.lines: list[str] = []
         self.orchestrator = Orchestrator(
             tmp_path / "docs",
@@ -58,6 +63,9 @@ class WriteStep:
             ),
         )
         self.orchestrator._client = wiki
+        self.orchestrator._identity_map = lambda doc, batch: (
+            identity or mapped(batch)
+        )
         self.doc = DocumentRun(tmp_path / "docs" / name, tmp_path / "state")
         self.doc.dir.mkdir(parents=True)
 
@@ -149,10 +157,13 @@ class TestWriteStepSummary:
     )
     def test_type_statements_are_counted(self, tmp_path, says, counts):
         wiki = _two_sources()
-        BatchWriter(wiki).write_batch(_firm_batch())
         kind, type_hint = says
         directory = _directory_batch(kind, type_hint=type_hint)
-        step = WriteStep(tmp_path, wiki, "directory.txt")
+        # the map puts the directory's firm in the interview's firm's
+        # cluster
+        identity = corpus(_firm_batch(), directory, entities=(FIRM_LABEL,))
+        write_mapped(BatchWriter(wiki), _firm_batch(), identity=identity)
+        step = WriteStep(tmp_path, wiki, "directory.txt", identity)
         step.review(directory, decide=lambda row: "approve")
 
         summary = step.write(directory)
@@ -170,9 +181,10 @@ class TestWriteStepSummary:
         # the directory's line-range chunk typed the firm by a kind the
         # vocabulary lacks: the writer records no kind for it, and says so
         wiki = _two_sources()
-        BatchWriter(wiki).write_batch(_firm_batch())
         directory = _directory_lines_batch("hat_shop")
-        step = WriteStep(tmp_path, wiki, "directory.txt")
+        identity = corpus(_firm_batch(), directory, entities=(FIRM_LABEL,))
+        write_mapped(BatchWriter(wiki), _firm_batch(), identity=identity)
+        step = WriteStep(tmp_path, wiki, "directory.txt", identity)
         step.review(directory, decide=lambda row: "approve")
 
         step.write(directory)

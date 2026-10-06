@@ -1810,11 +1810,12 @@ class TestViews:
         """The critic's finding on an entity that resolved to a QID still
         reaches its row, once, and the note names the entity and the
         finding's axis and category (#113, #386)."""
-        from yizkr.pipeline.resolve import resolve_batch
+        from yizkr.pipeline.reconcile import apply_equivalences
 
         class Resolving(Sampled):
             def _step_resolve(self, doc, batch):
-                return resolve_batch(batch, {"Klara": "Q17"})
+                # Klara's item, as an approved equivalence names it
+                return apply_equivalences(batch, {"e1": "Q17"})
 
         (tmp_path / "docs").mkdir()
         (tmp_path / "docs" / "letter.txt").write_text(
@@ -3102,16 +3103,19 @@ class TestWriteTimeRegistration:
     ):
         """The claims cite the document by the SHA-1 of its bytes, and the
         write hands the writer the item registration found or made for
-        it."""
+        it, and the run's identity map, which holds every mention of the
+        batch (#109)."""
         from yizkr.pipeline import writer
 
         given = []
+        mapped = []
 
         class Writer:
             def __init__(self, client, dry_run=False, artifact_qids=None):
                 given.append(dict(artifact_qids or {}))
 
-            def write_batch(self, batch, bulk_accepted=False):
+            def write_batch(self, batch, bulk_accepted=False, identity=None):
+                mapped.append(writer.mapped_clusters(batch, identity))
                 return writer.WriteResult(
                     run_qid="Q999", written=len(batch.claims)
                 )
@@ -3134,6 +3138,14 @@ class TestWriteTimeRegistration:
         approve_all_claims(doc)
         assert orchestrator.run() == 0
         assert given == [{doc.sha1: "Q100"}]
+        ((clusters, document, _terms),) = mapped
+        assert document == doc.sha1
+        assert clusters
+        # kept in the run directory, as a scratch run's clustering stage
+        # keeps its map
+        assert (
+            tmp_path / "state" / "corpus" / "clustering" / "identity-map.json"
+        ).is_file()
 
     def test_a_new_directory_records_its_bytes_before_any_view(
         self, tmp_path, monkeypatch

@@ -17,6 +17,7 @@ import re
 
 import pytest
 
+from tests.fixtures.identity import write_mapped
 from tests.unit.test_chunking import (
     DOC,
     DOC_REF,
@@ -1008,7 +1009,7 @@ class TestTheWriter:
                 "entities": [STANDESAMT],
             }
         )
-        result = BatchWriter(wiki).write_batch(batch)
+        result = write_mapped(BatchWriter(wiki), batch)
         assert result.written == 1
         (statement,) = wiki.wbi.item.get(artifact.id).claims.get("P90")
         office = statement.mainsnak.datavalue["value"]["id"]
@@ -1078,14 +1079,17 @@ class TestTheWriter:
         if isinstance(subject, ArtifactRef):
             subject = subject.model_dump()
         forbidden = cited(subject=subject, property=prop, value=value)
+        # every local entity has its record, as the identity map reads a
+        # batch with a manifest by its records (#109)
+        hildegard = {"id": "e1", "label": "Hildegard Löbig", "kind": "human"}
         batch = ClaimBatch.model_validate(
             {
                 "extraction_run": RUN,
                 "claims": [forbidden],
-                "entities": [STANDESAMT],
+                "entities": [STANDESAMT, hildegard],
             }
         )
-        result = BatchWriter(wiki).write_batch(batch)
+        result = write_mapped(BatchWriter(wiki), batch)
         (only,) = batch.claims
         assert result.refused == [claim_id(only)]
         assert result.written == 0
@@ -1121,7 +1125,7 @@ class TestTheWriter:
                 "entities": [STANDESAMT],
             }
         )
-        result = BatchWriter(wiki).write_batch(batch)
+        result = write_mapped(BatchWriter(wiki), batch)
         _, foreign = batch.claims
         assert result.refused == [claim_id(foreign)]
         assert result.written == 1

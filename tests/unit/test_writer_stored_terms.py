@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.fixtures.identity import write_mapped
 from tests.unit.test_pipeline import (
     DIRECTORY_SHA1,
     INTERVIEW_SHA1,
@@ -46,7 +47,7 @@ from tests.unit.test_pipeline import (
     _batch_of,
     _by_value,
     _directory_batch,
-    _firm_batch,
+    _found_firm,
     _labelled,
     _places,
     _sources,
@@ -77,11 +78,11 @@ from yizkr.pipeline.writer import TEXT_LIMIT, BatchWriter
 REPLACEMENT = "\N{REPLACEMENT CHARACTER}"
 
 
-def _written_again(wiki: FakeWiki, batch: ClaimBatch):
-    """`batch` written a second time to `wiki`: the result, and whether
-    the write sent no edit and made no item."""
+def _written_again(wiki: FakeWiki, batch: ClaimBatch, identity=None):
+    """`batch` written a second time to `wiki`, with `identity`: the
+    result, and whether the write sent no edit and made no item."""
     writes, items = wiki.wbi.item.writes, len(wiki.wbi.item.store)
-    again = BatchWriter(wiki).write_batch(batch)
+    again = write_mapped(BatchWriter(wiki), batch, identity=identity)
     return again, (wiki.wbi.item.writes, len(wiki.wbi.item.store)) == (
         writes,
         items,
@@ -117,7 +118,7 @@ class TestTermsAsTheInstanceKeepsThem:
         batch = _batch_of(_cause(label=given))
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         eugen = written.created_items["e07"]
         assert _labelled(wiki, kept) == [eugen]
@@ -132,8 +133,9 @@ class TestTermsAsTheInstanceKeepsThem:
         # it once, as an edit that repeats an alias is not the item's form
         wiki = FakeWiki({MEDIA_SHA1: "Q23", TREE_SHA1: "Q29"}, detached=True)
 
-        written = BatchWriter(wiki).write_batch(
-            _with_aliases(_tree_batch(), ["Wastl", " Wastl"])
+        written = write_mapped(
+            BatchWriter(wiki),
+            _with_aliases(_tree_batch(), ["Wastl", " Wastl"]),
         )
 
         sebastian = written.created_items["e03"]
@@ -164,7 +166,7 @@ class TestLocatorsAndHintsCleanedUp:
         batch = _batch_of(claim)
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         (died,) = _statements(
             wiki, written.created_items["e07"], "cause_of_death"
@@ -197,8 +199,8 @@ class TestLocatorsAndHintsCleanedUp:
         claim = _cause if where == "page number" else _quoting
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(
-            _batch_of(claim(given), claim(kept))
+        written = write_mapped(
+            BatchWriter(wiki), _batch_of(claim(given), claim(kept))
         )
 
         (died,) = _statements(
@@ -232,7 +234,7 @@ class TestLocatorsAndHintsCleanedUp:
         batch = _batch_of(claim)
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         (died,) = _statements(
             wiki, written.created_items["e07"], "cause_of_death"
@@ -255,19 +257,18 @@ class TestLocatorsAndHintsCleanedUp:
         wiki = FakeWiki(
             {INTERVIEW_SHA1: "Q25", DIRECTORY_SHA1: "Q26"}, detached=True
         )
-        if found:
-            BatchWriter(wiki).write_batch(_firm_batch())
         directory = _directory_batch(
             "unclassified_entity", type_hint=f"Hut{char}geschäft"
         )
+        identity = _found_firm(wiki, directory, found)
 
-        written = BatchWriter(wiki).write_batch(directory)
+        written = write_mapped(BatchWriter(wiki), directory, identity=identity)
 
         firm = written.created_items["firm"]
         hints = set(_by_value(_statements(wiki, firm, "type_hint")))
         earlier = {"hat shop"} if found else set()
         assert hints == earlier | {f"Hut{REPLACEMENT}geschäft"}
-        again, unchanged = _written_again(wiki, directory)
+        again, unchanged = _written_again(wiki, directory, identity)
         assert unchanged
         assert again.type_statements_written == 0
         assert len(_statements(wiki, firm, "type_hint")) == len(hints)
@@ -288,8 +289,8 @@ class TestClaimsTheInstanceWouldChange:
         words = TEXT_OF[case]
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(
-            _batch_of(_saying(case, f"  {words}\t"), BIRTH)
+        written = write_mapped(
+            BatchWriter(wiki), _batch_of(_saying(case, f"  {words}\t"), BIRTH)
         )
 
         assert (written.written, len(written.refused)) == (1, 1)
@@ -316,7 +317,7 @@ class TestClaimsTheInstanceWouldChange:
         wiki = FakeWiki(MEDIA, detached=True)
         batch = _batch_of(refused, BIRTH)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         cid = claim_id(batch.claims[0])
         assert written.refused == [cid]
@@ -370,7 +371,7 @@ class TestClaimsTheInstanceWouldChange:
         claim = _saying("monolingual value", text)
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(_batch_of(claim))
+        written = write_mapped(BatchWriter(wiki), _batch_of(claim))
 
         assert (written.written, written.refused) == (1, [])
         (named,) = _statements(wiki, written.created_items["e02"], "nickname")

@@ -21,8 +21,10 @@ from datetime import UTC, datetime
 import pytest
 
 from tests.fixtures import example_universe as u
+from tests.fixtures.identity import corpus, write_mapped
 from yizkr.claims import ArtifactRef, ClaimBatch, QidRef
 from yizkr.pipeline import reconcile, registrar, resolve, writer
+from yizkr.pipeline.clustering import IdentityMap
 from yizkr.pipeline.reconcile import apply_equivalences
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.resolve import resolve_batch
@@ -237,11 +239,11 @@ def test_conflicting_values_coexist(client, artifact):
     silently overwrote a source-attributed statement.
     """
     writer = BatchWriter(client)
-    first = writer.write_batch(birth_batch(CERTIFICATE, 1901))
+    first = write_mapped(writer, birth_batch(CERTIFICATE, 1901))
     person_qid = first.created_items["person-1"]
 
     writer = BatchWriter(client)  # fresh entity cache
-    writer.write_batch(birth_batch(CERTIFICATE, 1902))
+    write_mapped(writer, birth_batch(CERTIFICATE, 1902))
 
     years = birth_years_on(client, person_qid)
     assert "+1901-00-00T00:00:00Z" in years
@@ -250,9 +252,9 @@ def test_conflicting_values_coexist(client, artifact):
 
 def test_write_is_idempotent_and_dual_referenced(client, artifact):
     # written here, or found as the coexistence test wrote it
-    BatchWriter(client).write_batch(birth_batch(CERTIFICATE, 1901))
+    write_mapped(BatchWriter(client), birth_batch(CERTIFICATE, 1901))
     writer = BatchWriter(client)
-    result = writer.write_batch(birth_batch(CERTIFICATE, 1901))
+    result = write_mapped(writer, birth_batch(CERTIFICATE, 1901))
     assert result.written == 0
     assert result.skipped == 1
 
@@ -313,11 +315,21 @@ def test_agreeing_second_source_appends_reference(client, artifact):
     second = register_fictional(
         client, f"{ARTIFACT_TITLE} (second source)", "certificate"
     )
-    # the first source's statement: written here, or found as the
-    # coexistence test wrote it
-    BatchWriter(client).write_batch(birth_batch(CERTIFICATE, 1901))
+    # the identity map of the two sources, in which their person is one
+    # entity (#109)
+    identity = corpus(
+        birth_batch(CERTIFICATE, 1901),
+        birth_batch(second.ref, 1901),
+        entities=(PERSON_LABEL,),
+    )
+    # the first source's statement, written here
+    write_mapped(
+        BatchWriter(client), birth_batch(CERTIFICATE, 1901), identity=identity
+    )
     writer = BatchWriter(client)
-    result = writer.write_batch(birth_batch(second.ref, 1901))
+    result = write_mapped(
+        writer, birth_batch(second.ref, 1901), identity=identity
+    )
     assert result.written == 0
     # the session's first write of the second source appends its reference
     assert (result.referenced, result.skipped) == (1, 0)
@@ -330,7 +342,9 @@ def test_agreeing_second_source_appends_reference(client, artifact):
     assert sources == {artifact.artifact_qid, second.qid}
 
     # re-running the same batch is a no-op (reference already present)
-    rerun = BatchWriter(client).write_batch(birth_batch(second.ref, 1901))
+    rerun = write_mapped(
+        BatchWriter(client), birth_batch(second.ref, 1901), identity=identity
+    )
     assert rerun.written == 0
     assert rerun.referenced == 0
     assert rerun.skipped == 1
@@ -346,7 +360,7 @@ def test_curated_claim_carries_no_run_reference(client, artifact):
     )
     curated_batch = batch.model_copy(update={"claims": [death]})
     writer = BatchWriter(client)
-    result = writer.write_batch(curated_batch)
+    result = write_mapped(writer, curated_batch)
     person_qid = result.created_items["person-1"]
 
     properties, _ = client.vocabulary()
@@ -417,7 +431,7 @@ def test_detected_language_tags_excerpt_reference(client, artifact):
             ],
         }
     )
-    result = BatchWriter(client).write_batch(batch)
+    result = write_mapped(BatchWriter(client), batch)
     person_qid = result.created_items["person-1"]
 
     properties, _ = client.vocabulary()
@@ -525,11 +539,11 @@ def test_item10_vocabulary_writes_and_is_idempotent(client, artifact):
     verbatim monolingual cause round-trip, the occupation item is an
     instance of the occupation class, and a re-run writes nothing."""
     writer = BatchWriter(client)
-    first = writer.write_batch(vocabulary_batch(CERTIFICATE))
+    first = write_mapped(writer, vocabulary_batch(CERTIFICATE))
     person_qid = first.created_items["person-1"]
     occupation_qid = first.created_items["occ-1"]
 
-    rerun = BatchWriter(client).write_batch(vocabulary_batch(CERTIFICATE))
+    rerun = write_mapped(BatchWriter(client), vocabulary_batch(CERTIFICATE))
     assert rerun.written == 0
     assert rerun.skipped == 4
 
@@ -611,10 +625,10 @@ def test_typed_names_write_and_round_trip(client, artifact):
     """ADR-0011: typed name claims write end to end as referenced
     monolingual statements, keep the source's wording, and re-run clean."""
     writer = BatchWriter(client)
-    first = writer.write_batch(names_batch(CERTIFICATE))
+    first = write_mapped(writer, names_batch(CERTIFICATE))
     person_qid = first.created_items["person-1"]
 
-    rerun = BatchWriter(client).write_batch(names_batch(CERTIFICATE))
+    rerun = write_mapped(BatchWriter(client), names_batch(CERTIFICATE))
     assert rerun.written == 0
     assert rerun.skipped == 3
 
@@ -718,7 +732,7 @@ def test_organization_employer_and_type_hint_write(client, artifact):
     an unclassified entity is written under the holding class with its
     type hint — never mistyped as a person or place."""
     writer = BatchWriter(client)
-    result = writer.write_batch(harness_batch(CERTIFICATE))
+    result = write_mapped(writer, harness_batch(CERTIFICATE))
     person_qid = result.created_items["person-1"]
     org_qid = result.created_items["org-1"]
     ship_qid = result.created_items["ship-1"]
@@ -831,7 +845,7 @@ def test_adr0014_vocabulary_writes(client, artifact):
     """ADR-0014: sex_or_gender vocab item, the relative+kinship_type
     fallback qualifier, and a deportation event all write and round-trip."""
     writer = BatchWriter(client)
-    result = writer.write_batch(kinship_batch(CERTIFICATE))
+    result = write_mapped(writer, kinship_batch(CERTIFICATE))
     person_qid = result.created_items["person-1"]
     properties, items = client.vocabulary()
 
@@ -991,6 +1005,9 @@ class TypedFirm:
     sources: dict[str, str]  # universe source key -> artifact QID
     runs: dict[str, str]  # universe source key -> extraction-run QID
     batches: dict[str, ClaimBatch]  # universe source key -> its batch
+    # the map both batches are written with, in which the firm is one
+    # entity (#109)
+    identity: IdentityMap
 
 
 @pytest.fixture(scope="module")
@@ -1013,8 +1030,9 @@ def typed_firm(client, config) -> TypedFirm:
     batches = firm_batches(
         {key: artifact.ref for key, artifact in registered.items()}
     )
+    identity = corpus(*batches.values(), entities=(FIRM,))
     results = {
-        key: BatchWriter(client).write_batch(batches[key])
+        key: write_mapped(BatchWriter(client), batches[key], identity=identity)
         for key in (INTERVIEW, DIRECTORY)
     }
     firm = results[INTERVIEW].created_items["firm"]
@@ -1023,7 +1041,7 @@ def typed_firm(client, config) -> TypedFirm:
     wait_for_query_service(
         config, client, [firm, *sources.values(), *runs.values()]
     )
-    return TypedFirm(firm, sources, runs, batches)
+    return TypedFirm(firm, sources, runs, batches, identity)
 
 
 def statements_by_key(client, qid: str) -> dict[str, list[dict]]:
@@ -1143,7 +1161,11 @@ def test_rewriting_the_slice_writes_nothing(client, typed_firm):
     """A re-run reuses the firm and both run items: no second kind or type
     hint, and no claim written again."""
     for key, claims in ((INTERVIEW, 1), (DIRECTORY, 2)):
-        again = BatchWriter(client).write_batch(typed_firm.batches[key])
+        again = write_mapped(
+            BatchWriter(client),
+            typed_firm.batches[key],
+            identity=typed_firm.identity,
+        )
         assert again.created_items["firm"] == typed_firm.firm
         assert again.run_qid == typed_firm.runs[key]
         assert again.written == again.referenced == 0
@@ -1323,6 +1345,9 @@ class WitnessedSlice:
     sources: dict[str, str]  # universe source key -> artifact QID
     runs: dict[str, str]  # universe source key -> extraction-run QID
     batches: dict[str, ClaimBatch]  # as written: the directory's resolved
+    # the map every batch is written with, in which Sebastian is one
+    # entity (#109)
+    identity: IdentityMap
 
 
 @pytest.fixture(scope="module")
@@ -1349,8 +1374,12 @@ def witnessed(client, config) -> WitnessedSlice:
     batches = witness_batches(
         {key: artifact.ref for key, artifact in registered.items()}
     )
+    identity = corpus(
+        *batches.values(),
+        entities=(witness_marked(UNIVERSE["sebastian-loebig"].label),),
+    )
     results = {
-        key: BatchWriter(client).write_batch(batches[key])
+        key: write_mapped(BatchWriter(client), batches[key], identity=identity)
         for key in (MARRIAGE, INTERVIEW)
     }
     items = {
@@ -1359,24 +1388,26 @@ def witnessed(client, config) -> WitnessedSlice:
         "firm": results[INTERVIEW].created_items["firm"],
     }
     approved = apply_equivalences(batches[DIRECTORY], {"firm": items["firm"]})
-    _, item_labels = client.label_index()
-    batches[DIRECTORY] = resolve_batch(approved, item_labels)
-    # the writer sees QIDs only: no local ref of the directory's is left
-    assert [claim.subject for claim in batches[DIRECTORY].claims] == [
-        QidRef(qid=items["sebastian"]),
-        QidRef(qid=items["firm"]),
-    ]
+    batches[DIRECTORY] = resolve_batch(approved, identity)
+    # the equivalence names the firm by its QID; Sebastian's ref stays
+    # local, for the writer to find his item through the map
+    assert batches[DIRECTORY].claims[1].subject == QidRef(qid=items["firm"])
     assert batches[DIRECTORY].claims[0].value.value == QidRef(
         qid=items["firm"]
     )
-    results[DIRECTORY] = BatchWriter(client).write_batch(batches[DIRECTORY])
+    results[DIRECTORY] = write_mapped(
+        BatchWriter(client), batches[DIRECTORY], identity=identity
+    )
+    assert results[DIRECTORY].created_items == {
+        "sebastian": items["sebastian"]
+    }
     runs = {key: result.run_qid for key, result in results.items()}
     wait_for_query_service(
         config,
         client,
         [*items.values(), *sources.values(), *runs.values()],
     )
-    return WitnessedSlice(items, sources, runs, batches)
+    return WitnessedSlice(items, sources, runs, batches, identity)
 
 
 def test_later_source_adds_its_references_to_a_kind(client, witnessed):
@@ -1473,7 +1504,11 @@ def test_rewriting_the_later_slice_adds_nothing(client, witnessed):
         qid: statements_by_key(client, qid) for qid in witnessed.items.values()
     }
     for key, claims in ((MARRIAGE, 1), (INTERVIEW, 1), (DIRECTORY, 2)):
-        again = BatchWriter(client).write_batch(witnessed.batches[key])
+        again = write_mapped(
+            BatchWriter(client),
+            witnessed.batches[key],
+            identity=witnessed.identity,
+        )
         assert again.run_qid == witnessed.runs[key]
         assert (again.written, again.referenced, again.skipped) == (
             0,

@@ -14,6 +14,9 @@ instance and repopulates it for a scratch run (yizkr.reset).
 * A kept-state page on the instance makes the reset refuse before it
   changes anything, and the page, which the test wrote, is gone again at
   the end.
+* The same batches written with the same identity map after a reset give
+  the same items, by their labels and descriptions, and a second write of
+  them mints nothing (#109; test_live_identity_map.py).
 
 Only the first runs in every live session. The others reset the one
 instance, which takes minutes, and so run only when asked:
@@ -218,3 +221,38 @@ def test_a_kept_instance_refuses_the_reset(resets, config):
                 login=fresh.login,
             )
     assert not page_exists(config)
+
+
+def test_the_same_items_after_a_reset(resets, config, client):
+    """The writer's items are keyed by the identity map alone (#109): the
+    same batches written with the same map after a reset give each mention
+    the item they gave it before, under the same label and description,
+    and writing them again mints nothing."""
+    from tests.fixtures.identity import mapped
+
+    from .test_live_identity_map import (
+        HISTORY,
+        TREE,
+        history_batch,
+        labelled,
+        terms,
+        tree_batch,
+        write_both,
+    )
+
+    def after_a_reset():
+        resets(client)
+        fresh = WikiClient(config)
+        history = register_fictional(fresh, HISTORY, "genealogical_report")
+        tree = register_fictional(fresh, TREE, "genealogical_report")
+        identity = mapped(history_batch(history), tree_batch(tree))
+        made: list[dict] = []
+        _, items = write_both(fresh, history, tree, identity, made)
+        again: list[dict] = []
+        _, rewritten = write_both(fresh, history, tree, identity, again)
+        assert rewritten == items
+        assert labelled(again) == []
+        held = terms(fresh, items.values())
+        return identity.hash, {key: held[qid] for key, qid in items.items()}
+
+    assert after_a_reset() == after_a_reset()

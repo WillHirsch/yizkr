@@ -64,6 +64,7 @@ from pathlib import Path
 import pytest
 from wikibaseintegrator.entities.baseentity import BaseEntity
 
+from tests.fixtures.identity import write_mapped
 from yizkr.claims import ClaimBatch
 from yizkr.pipeline import registrar, writer
 from yizkr.pipeline.registrar import register_artifact
@@ -198,7 +199,7 @@ def fixture_graph(client):
     batch = ClaimBatch.model_validate(
         batch_content(registered.ref.sha1, prefix_of(fixture_marker()))
     )
-    written = BatchWriter(client).write_batch(batch)
+    written = write_mapped(BatchWriter(client), batch)
     return registered.qid, batch, written
 
 
@@ -282,7 +283,7 @@ def test_a_rewrite_sends_no_edit(client, fixture_graph, monkeypatch):
 
     monkeypatch.setattr(BaseEntity, "_write", counted)
 
-    again = BatchWriter(client).write_batch(batch)
+    again = write_mapped(BatchWriter(client), batch)
 
     assert edits == []
     assert again.run_qid == written.run_qid

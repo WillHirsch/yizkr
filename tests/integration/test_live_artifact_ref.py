@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from tests.fixtures.identity import write_mapped
 from tests.integration.conftest import fictional_png, fixture_mark
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import registrar, writer
@@ -105,15 +106,15 @@ def _stated_in(client, qid: str, year: int) -> set[str]:
 
 def test_sha1_source_cites_the_registered_item(client, registered):
     artifact_qid, ref = registered
-    result = BatchWriter(client).write_batch(
-        _batch(ref.sha1, PERSON_LABEL, 1903)
+    result = write_mapped(
+        BatchWriter(client), _batch(ref.sha1, PERSON_LABEL, 1903)
     )
     person_qid = result.created_items["person-1"]
     assert _stated_in(client, person_qid, 1903) == {artifact_qid}
 
     # a re-run resolves to the same item and finds the statement sourced
-    again = BatchWriter(client).write_batch(
-        _batch(ref.sha1, PERSON_LABEL, 1903)
+    again = write_mapped(
+        BatchWriter(client), _batch(ref.sha1, PERSON_LABEL, 1903)
     )
     assert (again.written, again.skipped) == (0, 1)
 
@@ -121,8 +122,9 @@ def test_sha1_source_cites_the_registered_item(client, registered):
 def test_unregistered_media_is_refused_before_any_write(client):
     unregistered = ArtifactRef.from_bytes(UNREGISTERED)
     with pytest.raises(UnregisteredArtifactError) as raised:
-        BatchWriter(client).write_batch(
-            _batch(unregistered.sha1, UNWRITTEN_LABEL, 1904)
+        write_mapped(
+            BatchWriter(client),
+            _batch(unregistered.sha1, UNWRITTEN_LABEL, 1904),
         )
     assert raised.value.sha1s == [unregistered.sha1]
     # the subject would have been minted first: it never was

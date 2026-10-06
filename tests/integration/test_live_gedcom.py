@@ -35,6 +35,7 @@ import json
 
 import pytest
 
+from tests.fixtures.identity import write_mapped
 from yizkr.claims import ArtifactRef
 from yizkr.pipeline import gedcom, writer
 from yizkr.pipeline.gedcom import (
@@ -180,7 +181,7 @@ def test_gedcom_sour_folds_and_obje_becomes_unheld_media(
 ):
     export_qid, export = gedcom_artifact
     result = adapt_gedcom(GEDCOM, artifact=export)
-    write = BatchWriter(client).write_batch(result.batch)
+    write = write_mapped(BatchWriter(client), result.batch)
     person_qid = write.created_items["i1"]
     media_qid = write.created_items["md1"]
     properties, items = client.vocabulary()
@@ -241,8 +242,8 @@ def test_gedcom_residence_period_is_a_start_and_an_end(
     between 1956 and 1957 and an end between 1974 and 1984, each end's
     range in its own pair of qualifiers, and no point in time."""
     _, export = gedcom_artifact
-    write = BatchWriter(client).write_batch(
-        adapt_gedcom(GEDCOM, artifact=export).batch
+    write = write_mapped(
+        BatchWriter(client), adapt_gedcom(GEDCOM, artifact=export).batch
     )
     person_qid = write.created_items["i1"]
     place_qid = write.created_items["pl1"]
@@ -291,8 +292,8 @@ def test_gedcom_alternatives_are_statements_of_their_own(
     (test_gedcom_family_is_a_marriage_bounded_by_its_events), and no
     spouse statement is written (#408)."""
     _, export = gedcom_artifact
-    write = BatchWriter(client).write_batch(
-        adapt_gedcom(GEDCOM, artifact=export).batch
+    write = write_mapped(
+        BatchWriter(client), adapt_gedcom(GEDCOM, artifact=export).batch
     )
     person_qid = write.created_items["i1"]
     properties, items = client.vocabulary()
@@ -385,8 +386,8 @@ def test_gedcom_family_is_a_marriage_bounded_by_its_events(
     one of about 1974, and ended by a divorce item, which holds a point in
     time of 1980 and its place (ADR-0036 §5)."""
     _, export = gedcom_artifact
-    write = BatchWriter(client).write_batch(
-        adapt_gedcom(GEDCOM, artifact=export).batch
+    write = write_mapped(
+        BatchWriter(client), adapt_gedcom(GEDCOM, artifact=export).batch
     )
     union_qid = write.created_items["f1"]
     wedding_qid = write.created_items["f1-wedding"]
@@ -455,8 +456,8 @@ def test_gedcom_divorce_without_a_wedding_is_of_a_marriage(
     nothing: a divorce ends a marriage, whose wedding the export does
     not state (ADR-0036, #408)."""
     _, export = gedcom_artifact
-    write = BatchWriter(client).write_batch(
-        adapt_gedcom(GEDCOM, artifact=export).batch
+    write = write_mapped(
+        BatchWriter(client), adapt_gedcom(GEDCOM, artifact=export).batch
     )
     union_qid = write.created_items["f2"]
     divorce_qid = write.created_items["f2-divorce"]
@@ -493,8 +494,8 @@ def test_gedcom_excerpts_of_an_export_without_a_language_are_undetermined(
     with the language `und`, which the instance takes for a monolingual
     text (ADR-0035 §6)."""
     _, export = gedcom_artifact
-    write = BatchWriter(client).write_batch(
-        adapt_gedcom(GEDCOM, artifact=export).batch
+    write = write_mapped(
+        BatchWriter(client), adapt_gedcom(GEDCOM, artifact=export).batch
     )
     properties, _ = client.vocabulary()
     excerpts = [
@@ -532,8 +533,8 @@ def test_gedcom_undated_death_is_a_death_event(client, gedcom_artifact):
     as its principal participant at normal rank, cited to the export at
     the citation's page. The spouse has no date of death (#323, #408)."""
     export_qid, export = gedcom_artifact
-    write = BatchWriter(client).write_batch(
-        adapt_gedcom(GEDCOM, artifact=export).batch
+    write = write_mapped(
+        BatchWriter(client), adapt_gedcom(GEDCOM, artifact=export).batch
     )
     spouse_qid = write.created_items["i2"]
     event_qid = write.created_items["i2-death"]
@@ -577,8 +578,8 @@ def test_gedcom_write_is_idempotent(client, gedcom_artifact):
     """Re-adapting and re-writing the same export writes nothing new."""
     _, export = gedcom_artifact
     first = adapt_gedcom(GEDCOM, artifact=export)
-    BatchWriter(client).write_batch(first.batch)
-    rerun = BatchWriter(client).write_batch(
-        adapt_gedcom(GEDCOM, artifact=export).batch
+    write_mapped(BatchWriter(client), first.batch)
+    rerun = write_mapped(
+        BatchWriter(client), adapt_gedcom(GEDCOM, artifact=export).batch
     )
     assert rerun.written == 0

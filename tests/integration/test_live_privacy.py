@@ -43,6 +43,7 @@ from datetime import UTC, datetime
 import pytest
 from wikibaseintegrator.wbi_enums import WikibaseRank
 
+from tests.fixtures.identity import write_mapped
 from yizkr.backup import exclusion_report
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import writer
@@ -171,7 +172,8 @@ def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
             value = [marked(item) for item in value]
         return value
 
-    return BatchWriter(client).write_batch(
+    return write_mapped(
+        BatchWriter(client),
         ClaimBatch.model_validate(
             {
                 "extraction_run": {
@@ -181,7 +183,7 @@ def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
                 },
                 "claims": marked(claims),
             }
-        )
+        ),
     )
 
 

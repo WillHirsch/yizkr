@@ -481,6 +481,24 @@ holds letters, and no word list may decide it (§6 reads no word by its
 meaning), so it stays a `name` statement. The extraction prompt, whose
 model reads meaning, tells it a stand-in is never `name`.
 
+Amended by #109 (2026-10-06): the identity map reaches the writer. The
+writer finds or mints the item of every mention through the map alone,
+one item per cluster, and refuses a batch with a mention the map does
+not hold before it reads or writes anything; the resolve step matches
+nothing by label and reads no wiki. A cluster's item is found again by
+its label and its description, which the map alone decides: the
+cluster's kind, the artifact kind of its one document or how many
+documents name it, and its place among the map's clusters of one label
+and kind by cluster id ("human named in a genealogical report (2)"),
+so the cluster id is what tells two homonyms apart, and the same
+batches written with the same map, again or after a reset, give the
+same items. Each ref's kind, and a record's type hint, reach the item,
+minted or found, cited to the artifact of the claim the ref is in. The
+run item records the map's hash. The clustering record item (#130) is
+not made yet. The writer's line in the readers' list of §8 below (it
+"finds them by exact label until #109") is so settled
+(docs/MODELING.md, "General approach").
+
 **Decided by the owner (2026-09-29):**
 
 - Before scratch run 1 (#145), extraction hands over the structure of
@@ -1446,7 +1464,9 @@ into "fix first, and measure in run 1": under the pre-baseline exception
   language.
 - The writer labels items in `en` (`pipeline/writer.py:553-559`) and finds
   them by exact label (`pipeline/writer.py:530-548`,
-  `pipeline/resolve.py:18-21`) until #109.
+  `pipeline/resolve.py:18-21`) until #109 (amended by #109, 2026-10-06:
+  the writer finds them through the identity map, by their label and
+  their cluster's description, and the resolve step finds none).
 - The single-call extraction path (`cli.py:375-394`,
   `pipeline/extract.py:49-102`) makes no manifest, so its batches carry no
   records. Scratch runs never take it.

@@ -257,7 +257,12 @@ and local refs.
   such a claim; only the claims the writer refuses while it plans are
   unseen by it, and there a first ref may give the label and kind. #109, whose identity map is to replace
   exact-label resolution, takes on carrying every ref's kind to its
-  item.
+  item. Amended by #109 (2026-10-06): the resolve step matches nothing
+  by label and makes no record; the writer resolves every local ref
+  through the identity map, and each ref's kind, and a record's type
+  hint, reach the item of its cluster, minted or found, cited to the
+  artifact of the claim the ref is in, a later ref of an item the batch
+  minted and chunks that give one entity two kinds among them.
 - The orchestrator's write summary (`write.json`) and its log line count
   the type statements written and referenced.
 

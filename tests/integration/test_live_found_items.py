@@ -1,17 +1,19 @@
 """Live check that a later document's aliases and kinds reach an item the
-writer found rather than minted (#240): through the resolve step's
-exact-label match, and through a batch without an entity manifest, whose
-local refs give their entities' kinds.
+writer found rather than minted (#240, #109): through the identity map,
+which puts every mention of Sebastian in one cluster and every mention
+of the firm in another, from a batch with an entity manifest and from
+one without, whose local refs give their entities' kinds.
 
 A slice of the example universe, under a marker of its own. The 1905
 marriage certificate's batch mints Sebastian Löbig, a human. The 2002
 interview's batch mints the family firm, unclassified, with the type hint
 "hat shop" (ADR-0013). The 1984 family tree names Sebastian again, and
-"Wastl" too: its batch takes the resolve step, as a run's does, so the
-writer receives his QID and pairs the tree's manifest record with it by
-label. The 1912 directory's batch is one the line-range tier made
-(ADR-0006): no manifest, so its local refs type the firm an organization
-and Sebastian a human, and the writer finds both by label.
+"Wastl" too: its batch takes the resolve step, as a run's does, which
+leaves its refs local, and the writer finds his item through the map.
+The 1912 directory's batch is one the line-range tier made (ADR-0006):
+no manifest, so its local refs type the firm an organization and
+Sebastian a human, and the writer finds both through the map. Every
+batch is written with the one map of the four.
 
 The marker, eight hex digits of a hash over the fixture, over the
 writer's and the resolve step's source and over eight random bytes drawn
@@ -30,8 +32,10 @@ from dataclasses import dataclass
 import pytest
 
 from tests.fixtures import example_universe as u
-from yizkr.claims import ArtifactRef, ClaimBatch, QidRef
+from tests.fixtures.identity import corpus, write_mapped
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import resolve, writer
+from yizkr.pipeline.clustering import IdentityMap
 from yizkr.pipeline.resolve import resolve_batch
 from yizkr.pipeline.writer import BatchWriter
 
@@ -216,6 +220,7 @@ class FoundSlice:
     sources: dict[str, str]  # universe source key -> artifact QID
     runs: dict[str, str]  # universe source key -> extraction-run QID
     batches: dict[str, ClaimBatch]  # as written: the tree's resolved
+    identity: IdentityMap  # the map every batch is written with
 
 
 @pytest.fixture(scope="module")
@@ -241,27 +246,28 @@ def found(client) -> FoundSlice:
     written = batches(
         {key: artifact.ref for key, artifact in registered.items()}
     )
+    identity = corpus(*written.values(), entities=(SEBASTIAN, FIRM))
     results = {}
     for key in SOURCES:
         if key == TREE:
-            _, item_labels = client.label_index()
-            written[TREE] = resolve_batch(written[TREE], item_labels)
-        results[key] = BatchWriter(client).write_batch(written[key])
+            written[TREE] = resolve_batch(written[TREE], identity)
+        results[key] = write_mapped(
+            BatchWriter(client), written[key], identity=identity
+        )
     items = {
         "sebastian": results[MARRIAGE].created_items["sebastian"],
         "firm": results[INTERVIEW].created_items["firm"],
     }
-    # the writer receives Sebastian's QID from the tree, and the tree's
-    # record without one
-    assert written[TREE].claims[0].subject == QidRef(qid=items["sebastian"])
-    assert written[TREE].entities[0].qid is None
+    # the resolve step leaves the tree's refs local; the writer finds
+    # Sebastian's item through the map
+    assert results[TREE].created_items == {"sebastian": items["sebastian"]}
     # the directory's refs reach the writer, which finds both items
     assert results[DIRECTORY].created_items == {
         "c001:firm": items["firm"],
         "c001:owner": items["sebastian"],
     }
     runs = {key: result.run_qid for key, result in results.items()}
-    return FoundSlice(items, sources, runs, written)
+    return FoundSlice(items, sources, runs, written, identity)
 
 
 def statements_by_key(client, qid: str) -> dict[str, list[dict]]:
@@ -307,16 +313,16 @@ def source_and_run(found: FoundSlice, key: str) -> list[set]:
 
 
 def test_resolved_record_gives_its_aliases(client, found):
-    """The tree's record reached the writer without a QID, the resolve step
-    having matched Sebastian by label; his item has the tree's name for
-    him all the same, and his label is not an alias of it."""
+    """The tree's record reached the writer with its refs local, and the
+    map put it in Sebastian's cluster; his item has the tree's name for
+    him, and his label is not an alias of it."""
     assert aliases(client, found.items["sebastian"]) == [DIMINUTIVE]
 
 
 def test_every_later_source_witnesses_a_kind(client, found):
     """Sebastian's one `instance of` cites the certificate that minted him,
-    then the tree (a record the resolve step matched) and the directory (a
-    ref without a record), each beside its extraction run. The tree's kind
+    then the tree (a record of his cluster) and the directory (a ref
+    without a record), each beside its extraction run. The tree's kind
     was written after its aliases went on, and they are still on."""
     _, items = client.vocabulary()
     (kind,) = statements_by_key(client, found.items["sebastian"])[
@@ -357,7 +363,9 @@ def test_rewriting_the_slice_adds_nothing(client, found):
         for qid in found.items.values()
     }
     for key in SOURCES:
-        again = BatchWriter(client).write_batch(found.batches[key])
+        again = write_mapped(
+            BatchWriter(client), found.batches[key], identity=found.identity
+        )
         assert again.run_qid == found.runs[key]
         assert (again.written, again.referenced) == (0, 0)
         assert again.skipped == len(found.batches[key].claims)

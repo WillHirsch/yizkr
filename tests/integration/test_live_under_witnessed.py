@@ -34,6 +34,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from tests.fixtures.identity import by_label, write_mapped
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
@@ -151,37 +152,37 @@ def fixture_graph(client, config):
             ),
         ]
     )
-    first = BatchWriter(client).write_batch(first_batch)
+    second_batch = batch(
+        [
+            # a coexisting machine value from another source
+            claim("date_of_birth", year(1912), source_b),
+            # an agreeing second source: appends a reference
+            claim("date_of_death", year(1970), source_b),
+        ]
+    )
+    curated_batch = batch(
+        [
+            # a curator sibling beside the machine nickname
+            claim("nickname", text("Fixy"), source_a, curated=True),
+            # a curator-only property
+            claim(
+                "birth_name",
+                text("Queue Fixture Born"),
+                source_a,
+                curated=True,
+            ),
+        ]
+    )
+    # the map of the three, in which the subject is one entity (#109)
+    identity = by_label(first_batch, second_batch, curated_batch)
+    first = write_mapped(BatchWriter(client), first_batch, identity=identity)
     # written again, source A's batch finds every statement
-    again = BatchWriter(client).write_batch(first_batch)
+    again = write_mapped(BatchWriter(client), first_batch, identity=identity)
     assert (again.written, again.referenced) == (0, 0)
     # source B's batch: its refs to the subject also give the subject's
     # kind, which the writer records beside source A's (#240)
-    BatchWriter(client).write_batch(
-        batch(
-            [
-                # a coexisting machine value from another source
-                claim("date_of_birth", year(1912), source_b),
-                # an agreeing second source: appends a reference
-                claim("date_of_death", year(1970), source_b),
-            ]
-        )
-    )
-    BatchWriter(client).write_batch(
-        batch(
-            [
-                # a curator sibling beside the machine nickname
-                claim("nickname", text("Fixy"), source_a, curated=True),
-                # a curator-only property
-                claim(
-                    "birth_name",
-                    text("Queue Fixture Born"),
-                    source_a,
-                    curated=True,
-                ),
-            ]
-        )
-    )
+    write_mapped(BatchWriter(client), second_batch, identity=identity)
+    write_mapped(BatchWriter(client), curated_batch, identity=identity)
     subject = first.created_items["queue-person"]
     wait_for_query_service(config, client, [subject])
     return subject, registered_a.qid, registered_b.qid

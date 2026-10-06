@@ -35,6 +35,7 @@ import json
 
 import pytest
 
+from tests.fixtures.identity import corpus, write_mapped
 from tests.fixtures.live_names import (
     EXPECTED_ALIASES,
     FIRST_CLAIMS,
@@ -149,9 +150,6 @@ def llm_path_person(client, tmp_path_factory):
     assert entity.label == MARKED_LABEL
     assert entity.structure is not None  # the record stood (ADR-0035 §5)
     assert set(entity.aliases) == EXPECTED_ALIASES - {"Ida Testerhof"}
-    written = BatchWriter(client).write_batch(first)
-    qid = written.created_items["e1"]
-
     second = extract(
         tmp_path_factory.mktemp("names-second"),
         second_doc,
@@ -162,8 +160,13 @@ def llm_path_person(client, tmp_path_factory):
     (entity,) = second.entities
     assert entity.structure is not None
     assert set(entity.aliases) == {"Peppi", "Ida Testerhof"}
-    again = BatchWriter(client).write_batch(second)
-    assert again.created_items["e1"] == qid  # the same item, found by label
+    # the identity map of the two, in which their person is one entity
+    # (#109)
+    identity = corpus(first, second, entities=((MARKED_LABEL, entity.label),))
+    written = write_mapped(BatchWriter(client), first, identity=identity)
+    qid = written.created_items["e1"]
+    again = write_mapped(BatchWriter(client), second, identity=identity)
+    assert again.created_items["e1"] == qid  # the one item of its cluster
     return qid, first_doc, second_doc
 
 
@@ -200,7 +203,7 @@ def test_llm_path_rewrite_changes_nothing(client, llm_path_person, tmp_path):
         entity_manifest(FIRST_DOCUMENT_ALIASES, 2, FIRST_RECORD),
         FIRST_CLAIMS,
     )
-    result = BatchWriter(client).write_batch(batch)
+    result = write_mapped(BatchWriter(client), batch)
     assert result.written == 0
     assert aliases_on(client, qid) == EXPECTED_ALIASES
 
@@ -249,7 +252,7 @@ def test_gedcom_path_alias_bag_and_typed_names(client, tmp_path):
     # regression must fail here rather than leave the fixture item dirty
     (person,) = [e for e in result.batch.entities if e.id == "i1"]
     assert set(person.aliases) == expected_aliases
-    qid = BatchWriter(client).write_batch(result.batch).created_items["i1"]
+    qid = write_mapped(BatchWriter(client), result.batch).created_items["i1"]
 
     item = client.wbi.item.get(qid)
     label = f"Hildegard Rahel Namecheck {MARK}"
@@ -262,7 +265,7 @@ def test_gedcom_path_alias_bag_and_typed_names(client, tmp_path):
         "Hildegard Probewald": {artifact_qid},
     }
 
-    rerun = BatchWriter(client).write_batch(
-        adapt_gedcom(GEDCOM, artifact=exported).batch
+    rerun = write_mapped(
+        BatchWriter(client), adapt_gedcom(GEDCOM, artifact=exported).batch
     )
     assert rerun.written == 0

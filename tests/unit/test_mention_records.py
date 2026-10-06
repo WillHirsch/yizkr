@@ -12,6 +12,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
+from tests.fixtures.identity import write_mapped
 from tests.unit.test_manifest import minimal_raw
 from yizkr.claims import (
     ClaimBatch,
@@ -1181,7 +1182,7 @@ class TestRecordsAreNeverWritten:
             """What the writer sends, but the run item's label, which ends
             in a fingerprint of the whole batch, the record included."""
             wiki = FakeWiki({TREE_SHA1: "Q29"}, detached=True)
-            BatchWriter(wiki).write_batch(batch)
+            write_mapped(BatchWriter(wiki), batch)
             items = []
             for item in wiki.wbi.item.sent:
                 label = item["labels"]["en"]["value"]

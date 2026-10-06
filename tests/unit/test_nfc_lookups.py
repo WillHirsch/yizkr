@@ -1,7 +1,8 @@
 """Offline tests: the label lookups outside the writer compare text in the
 form the instance keeps a term in, as the writer does (stored_term,
-_term_text; #370). Each is checked over a label given in NFD, as a source
-transcribed on another system may give it.
+_term_text; #370); the resolve step looks up no label (#109). Each is
+checked over a label given in NFD, as a source transcribed on another
+system may give it.
 
 The universe's names with a precomposed letter serve: Gustav Löbig, Ida
 Sörne, Flörburg."""
@@ -12,12 +13,9 @@ import unicodedata
 
 import pytest
 
-from tests.unit.test_pipeline import ARTIFACT, RUN
 from tests.unit.test_places import FINGERPRINT, RunItemWiki
-from yizkr.claims import ClaimBatch, LocalRef, QidRef
 from yizkr.pipeline.names import normalize_aliases
 from yizkr.pipeline.places import ensure_places_run_item
-from yizkr.pipeline.resolve import resolvable_labels, resolve_batch
 from yizkr.pipeline.writer import TERM_LIMIT, _term_text
 
 
@@ -38,134 +36,6 @@ def test_the_forms_differ():
     """The NFD label is another string than the one the instance keeps."""
     assert nfd(GUSTAV) != GUSTAV
     assert _term_text(nfd(GUSTAV)) == GUSTAV
-
-
-def naming(*labels: str) -> ClaimBatch:
-    """A batch of one claim for each of `labels`, its subject a person's
-    local ref with that label."""
-    return ClaimBatch.model_validate(
-        {
-            "extraction_run": RUN,
-            "claims": [
-                {
-                    "subject": {
-                        "kind": "local",
-                        "local_id": f"e{n}",
-                        "label": label,
-                        "instance_of": "human",
-                    },
-                    "property": "date_of_birth",
-                    "value": {"type": "time", "year": 1919},
-                    "source": {"artifact": ARTIFACT},
-                }
-                for n, label in enumerate(labels)
-            ],
-        }
-    )
-
-
-class Instance:
-    """The reads resolve makes of the instance: its item labels, as the
-    instance serves them, and the statements of the items they name (none
-    here, so none is an artifact)."""
-
-    def __init__(self, labels: dict[str, str]) -> None:
-        self.labels = labels
-        self.fetched: list[str] = []
-
-    def label_index(self):
-        return {}, dict(self.labels)
-
-    def vocabulary(self):
-        return {}, {}
-
-    def fetch_claims(self, qids):
-        self.fetched.extend(qids)
-        return {}
-
-
-def subjects(batch: ClaimBatch) -> list:
-    return [claim.subject for claim in batch.claims]
-
-
-class TestResolve:
-    def test_an_nfd_label_resolves_to_the_item_under_its_nfc_form(self):
-        instance = Instance({GUSTAV: "Q7"})
-        batch = naming(nfd(GUSTAV))
-
-        labels = resolvable_labels(instance, batch)
-
-        assert labels == {GUSTAV: "Q7"}
-        assert instance.fetched == ["Q7"]
-        assert subjects(resolve_batch(batch, labels)) == [QidRef(qid="Q7")]
-
-    def test_resolve_batch_looks_an_nfd_label_up_in_nfc(self):
-        """The instance's whole label index, as the live tests pass it,
-        resolves an NFD ref."""
-        (subject,) = subjects(
-            resolve_batch(naming(nfd(GUSTAV)), {GUSTAV: "Q7"})
-        )
-        assert subject == QidRef(qid="Q7")
-
-    def test_a_label_the_instance_trims_resolves(self):
-        """Whitespace and a line break the instance trims or makes one
-        space of do not keep a ref from the item the writer reuses."""
-        given = "  Gustav\nLöbig\t"
-        assert _term_text(given) == GUSTAV
-        instance = Instance({GUSTAV: "Q7"})
-        batch = naming(given)
-
-        labels = resolvable_labels(instance, batch)
-
-        assert subjects(resolve_batch(batch, labels)) == [QidRef(qid="Q7")]
-
-    def test_a_label_longer_than_the_instance_holds_resolves(self):
-        """The writer looks such a label up cut, with its digest; resolve
-        matches the same item."""
-        given = nfd("Hutmacherei zum Blauen Hut, Flörburg " * 10)
-        assert len(given) > TERM_LIMIT
-        held = _term_text(given)
-        instance = Instance({held: "Q9"})
-        batch = naming(given)
-
-        labels = resolvable_labels(instance, batch)
-
-        assert labels == {held: "Q9"}
-        assert subjects(resolve_batch(batch, labels)) == [QidRef(qid="Q9")]
-
-    def test_a_label_with_an_unknown_character_stays_local(self):
-        """The instance may keep it in another form, and the writer matches
-        no item by it, so neither does resolve."""
-        given = f"{GUSTAV}{MARK}"
-        instance = Instance({given: "Q7", GUSTAV: "Q8"})
-        batch = naming(given)
-
-        assert resolvable_labels(instance, batch) == {}
-        (subject,) = subjects(resolve_batch(batch, {given: "Q7"}))
-        assert isinstance(subject, LocalRef)
-
-    def test_an_unknown_character_past_the_cut_stays_local(self):
-        """The mark falls after the 250 characters the instance holds, but
-        the whole label is checked, as the writer checks it: the item under
-        the cut label is not matched."""
-        given = nfd("Hutmacherei zum Blauen Hut, Flörburg " * 8) + MARK
-        held = _term_text(given)
-        assert MARK not in held
-        instance = Instance({held: "Q9"})
-        batch = naming(given)
-
-        assert resolvable_labels(instance, batch) == {}
-        (subject,) = subjects(resolve_batch(batch, {held: "Q9"}))
-        assert isinstance(subject, LocalRef)
-
-    def test_another_label_stays_local(self):
-        batch = naming(nfd("Ida Sörne"))
-        instance = Instance({GUSTAV: "Q7"})
-
-        assert resolvable_labels(instance, batch) == {}
-        assert instance.fetched == []
-        (subject,) = subjects(resolve_batch(batch, {GUSTAV: "Q7"}))
-        assert isinstance(subject, LocalRef)
 
 
 class TestPlacesRunItem:

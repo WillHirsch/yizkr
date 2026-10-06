@@ -25,6 +25,7 @@ import math
 
 import pytest
 
+from tests.fixtures.identity import write_mapped
 from tests.unit.test_pipeline import (
     ARTIFACT,
     MEDIA_SHA1,
@@ -62,10 +63,11 @@ def birth(value: dict) -> dict:
 def written(value: dict) -> dict:
     """The time datavalue the writer stores for a birth claim."""
     wiki = FakeWiki({MEDIA_SHA1: "Q23"})
-    result = BatchWriter(wiki).write_batch(
+    result = write_mapped(
+        BatchWriter(wiki),
         ClaimBatch.model_validate(
             {"extraction_run": RUN, "claims": [birth(value)]}
-        )
+        ),
     )
     person = wiki.wbi.item.get(result.created_items["eugen"])
     (statement,) = person.claims.get(PROPERTIES["date_of_birth"])

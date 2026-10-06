@@ -51,6 +51,7 @@ import pytest
 from wikibaseintegrator.wbi_enums import WikibaseRank
 
 from tests.fixtures import example_universe as u
+from tests.fixtures.identity import write_mapped
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
@@ -280,9 +281,9 @@ def fixture_graph(client, config) -> dict[str, str]:
             "claims": claims,
         }
     )
-    written = BatchWriter(client).write_batch(batch)
+    written = write_mapped(BatchWriter(client), batch)
     # written again, the batch finds every person and statement
-    again = BatchWriter(client).write_batch(batch)
+    again = write_mapped(BatchWriter(client), batch)
     assert (again.written, again.referenced) == (0, 0)
     assert again.created_items == written.created_items
     qids = {key: written.created_items[f"kinship-{key}"] for key in PEOPLE}
