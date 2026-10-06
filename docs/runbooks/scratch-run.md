@@ -302,9 +302,12 @@ with `--until clustering` (or an earlier stage) needs none.
 - **reset.** The run's write key names what the write would put on the
   instance: the identity map's hash, each document's SHA-1 with the
   content hash of its batch and what registration reads of it (its kind,
-  its title, its derived media's record, an excerpt's PDFs), the
-  never-ingest list's hash, the writer's version and the source of the
-  modules that register and write, and the model manifest's hash. When
+  its title, its file name, its derived media's record, an excerpt's
+  PDFs), the never-ingest list's hash, the writer's version and the
+  source of the whole package but the modules that only read, and the
+  model manifest's hash. A batch's run stamps are in it, so every new run
+  resets and writes again; only a later invocation of the run that wrote
+  skips. When
   the instance-contents record still stands for this key (no other write
   has voided it, and nothing has cleared it), the instance holds what
   the key makes: the stage resets nothing, and register and write skip.
@@ -315,15 +318,21 @@ with `--until clustering` (or an earlier stage) needs none.
   lock: **a run to the end resets the instance unattended**, which takes
   minutes and discards everything on it. The reset refuses a kept
   instance itself too. It then records, in the instance's write-phase
-  state (`scratch-run.json`, which every reset clears), the run, the key
-  and the instance's newest revision and log entry.
+  state (`scratch-run.json`, which every reset clears), the run, the
+  key, an epoch it draws for this reset and the instance's newest
+  revision and log entry, under the same hold of the lock as the reset,
+  so no write can come between them. The records register, write and
+  site kept of an earlier reset are removed.
 - **register** registers each document as `ingest run` does at its
   write: the artifact item by the SHA-1 of its bytes, a deck's slides
   and images, a PDF's placed images, with registration's flags raised as
   alerts of the write. A batch the writer would refuse whole (a mention
   the identity map does not hold, an unsupported date, a run item's
   term the instance may keep in another form) is refused first, before
-  anything of its document is registered, and counted.
+  anything of its document is registered, and counted. Nothing of a
+  refused batch is written; a refused PDF's artifact may still be
+  registered as the container of an excerpt whose batch was not
+  refused.
 - **write** writes every claim of each registered document's batch,
   with no review and no approval file, at normal rank, with both
   references (stated in the artifact or fragment with its locator,
@@ -340,14 +349,17 @@ with `--until clustering` (or an earlier stage) needs none.
   reset, which has taken no other write since: a live test session, a
   manual edit or another tool in between refuses them, and the next
   invocation's reset stage resets again. Both hold the live-stack lock
-  while they write, so no live test session writes meanwhile. A write
+  for the whole of their writes, so no live test session writes
+  meanwhile: **a scratch write keeps `make test-live` waiting while it
+  lasts**, and no live session should be started during one. A write
   cut short in the middle of a document (Ctrl-C) leaves the instance a
   revision the state does not record, so the next invocation resets and
   writes everything again.
 - **site** builds the LAN site from the instance, as `yizkr
   publish-site` does, into `corpus/site/site/` in the run directory,
   once the query service shows the run items of the run whose writes the
-  instance holds (it waits up to five minutes). Every page's header says
+  instance holds and has taken in the newest revision the write left (it
+  waits up to five minutes). Every page's header says
   the instance holds a development-stage scratch run and names it. Serve
   it on the LAN only (`python -m http.server -d <that directory>`): it
   holds possibly-living people.

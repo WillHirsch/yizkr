@@ -288,7 +288,8 @@ and the judgement note's `judgement` and `judgement_note`) are marked
 `reference: true`: they are written only in a statement's references, so
 validation refuses one as a claim's or a qualifier's property, and no
 prompt offers it. A property may also be held back from the prompts with
-`offered: false` while it stays in the manifest and the bootstrap, as a
+`offered: false` while it stays in the manifest and the bootstrap: no
+prompt lists it, the critique's list of properties included, as a
 scratch run's run-item marks are (`scratch_run`, `run_manifest_hash`,
 `identity_map_hash`; #200). A
 property marked `document_subject: true` (`issued_by`) takes the
@@ -493,8 +494,10 @@ artifact a new QID, changes neither.
   SHA-256 of the settings its run manifest records, and `identity map
   hash →` the SHA-256 of the identity map the batch was written with.
   The three are string properties of a run item alone, marked `offered:
-  false` in the manifest, so no prompt offers them and the extraction's
-  prompts are as they were. A run item found again lacking one gains it;
+  false` in the manifest, so no prompt offers them: the extraction
+  prompts list only the properties a claim may use, and the critique
+  prompt only those the manifest offers (decision EZ), so every prompt
+  is as it was, byte for byte. A run item found again lacking one gains it;
   one it states already, at any rank, is left as it is. The LAN site
   reads them: when any run item states `unratified scratch run`, every
   page's header says the instance holds a development-stage scratch run

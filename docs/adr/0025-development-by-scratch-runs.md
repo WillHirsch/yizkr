@@ -167,18 +167,25 @@ write side). Each touches the wiki and makes no model call. The write
 key hashes the identity map's hash, each document's SHA-1 with its
 batch's content hash, whole, and what registration reads of it, the
 never-ingest list's hash, the writer's version with the source of the
-modules that register and write, and the model manifest's hash; §2 is
-amended in place. Register and write refuse, before they write anything,
-unless the instance's write-phase state names this run and this key and
+whole package but the modules that only read, and the model manifest's
+hash; §2 is amended in place. Register and write refuse, before they
+write anything, unless the instance's write-phase state names this run,
+this key and the epoch of the reset the run's reset stage recorded, and
 the instance's newest revision and log entry are those this run's last
-write left, and hold the live-stack lock while they write. A batch the
-writer would refuse whole is refused before anything of its document is
-registered. A write cut short within a document leaves a revision the
-state does not record, so the next invocation resets again. The run
-items carry three marks, `unratified scratch run` (the run id), `run
-manifest hash` and `identity map hash`, string properties of the
-manifest that no prompt offers (`offered: false`), so the stages before
-write are unchanged by them; §1 and §3 are amended in place.
+write left. The reset stage takes the live-stack lock across the reset
+and the state it records, so no write comes between them; register and
+write each hold it for the whole of their writes, so a scratch write
+keeps `make test-live` waiting while it lasts (decision EY). A batch the
+writer would refuse whole is refused before anything of it is written,
+and before its document is registered. A write cut short within a
+document leaves a revision the state does not record, so the next
+invocation resets again. The run items carry three marks, `unratified
+scratch run` (the run id), `run manifest hash` and `identity map hash`,
+string properties of the manifest that it holds back from the prompts
+(`offered: false`): the extraction prompts list only the properties a
+claim may use, and the critique prompt only those the manifest offers
+(decision EZ), so every prompt of the stages before write is as it was,
+byte for byte; §1 and §3 are amended in place.
 
 ## Context
 
@@ -400,13 +407,23 @@ a second store of assertions: the graph stays the system of record.
   recorded instance-contents key and no other write has cleared it
   (#200). Amended by #225 (2026-09-27): the batches' canonical content
   hashes take the place of the batch keys (ADR-0032 §11). Amended by
-  #200 (2026-10-06): a batch's hash is of the batch whole, its run stamps
-  included, since its run item's label holds them; beside it, the key
-  hashes what registration reads of each document (its kind, title,
+  #200 (2026-10-06), superseding #225's stamp-free hashing for the write
+  key (decision EX): a batch's hash is of the batch whole, its run stamps
+  included, since its run item's label and description hold them, so a
+  batch whose stamps differ writes another run item, and a key that left
+  them out would call an instance holding the old run items current. So
+  every new run that reaches the write resets and writes again, and only
+  a later invocation of the run that wrote finds the instance holding
+  what its key makes; a write makes no model call, so this costs only
+  the reset's and the write's time. Beside the batches, the key hashes
+  what registration reads of each document (its kind, title, file name,
   derived media's record and, for an excerpt, its PDFs) and the
   never-ingest list's hash; the writer's version is a declared number
-  with the source of the modules that register and write, and the
-  manifest's version the model manifest's hash.
+  with the source of the whole package but the modules that only read
+  the run directory or the instance (the report, the diff, the monitor,
+  the estimate, the site, the disagreement report and the command line),
+  since what is written reaches far into it; and the manifest's version
+  is the model manifest's hash.
 
 This keeps the stateless, file-based core of ADR-0019 §4: a run
 re-derives what to do from durable files and resumes by re-running. What

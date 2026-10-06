@@ -23,6 +23,7 @@ from yizkr.pipeline.critique import (
     entries,
     listings,
     note,
+    offered_properties,
     run_critique,
     sheet_notes,
 )
@@ -143,9 +144,33 @@ class TestCritique:
         prompt = llm.prompts[0]
         assert all(f"- {key}: " in prompt for key in CATEGORIES)
         assert "subject | predicate | value | existence" in prompt
-        properties, items = load_vocabulary()
+        _, items = load_vocabulary()
         assert ", ".join(sorted(items)) in prompt
-        assert ", ".join(sorted(properties)) in prompt
+        assert ", ".join(offered_properties()) in prompt
+
+    def test_no_property_held_back_from_the_prompts_reaches_it(self):
+        """A property the manifest marks `offered: false`, such as a
+        scratch run's run-item marks, is never listed, so adding one
+        leaves the critique prompt as it was (#200)."""
+        from yizkr.model.schema import load_manifest
+
+        held = [
+            key
+            for key, spec in load_manifest().properties.items()
+            if not spec.offered
+        ]
+        assert "scratch_run" in held
+        llm = ScriptedLlm(response([]))
+        run_critique(llm, batch())
+        listed = (
+            llm.prompts[0]
+            .split("Properties (manifest property keys): ")[1]
+            .split("\n")[0]
+        )
+        assert not set(held) & set(listed.split(", "))
+        # the retired and reference properties are listed as before
+        assert "spouse" in listed.split(", ")
+        assert "stated_in" in listed.split(", ")
 
     def test_the_category_list_is_the_issues(self):
         assert list(CATEGORIES) == [

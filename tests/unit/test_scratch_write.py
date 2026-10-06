@@ -28,10 +28,12 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
 from tests.unit.test_registration_flags import WritingWiki
+from yizkr import reset as reset_module
 from yizkr.claims import ClaimBatch
 from yizkr.core.config import Config
 from yizkr.core.corpus import ExclusionList
@@ -163,15 +165,24 @@ class Wiki(WritingWiki):
 
 class Run:
     """A scratch run's documents in a run directory, past the barrier,
-    with the write side's stand-ins: the instance `wiki`, a reset that
-    empties it (and clears what the real reset clears), the live-stack
-    lock and the site builder, each recording its use."""
+    with the write side's stand-ins: the instance `wiki`; in place of
+    `yizkr.reset.reset_instance`, a reset that empties it and clears what
+    the real reset clears, under the lock it is given or, given none, a
+    hold of its own, as the real one takes; the live-stack lock, which
+    with `intruder` set lets another session write to the instance each
+    time its last hold is released; the query service, which shows what
+    the instance holds unless `shown` or `newest` says otherwise; and the
+    site's build, each recording its use."""
 
     def __init__(self, tmp_path, monkeypatch, wiki=None, run_id="run-1"):
         self.tmp_path = tmp_path
         self.wiki = wiki or Wiki()
         self.resets = 0
         self.locks = 0
+        self.held = 0
+        self.intruder = False
+        self.newest: int | None = None
+        self.now = 0.0
         self.sites: list = []
         self.lines: list[str] = []
         # the scratch runs the query service shows; by default those the
@@ -193,29 +204,45 @@ class Run:
         self.driver._client = self.wiki
         self.driver._config = CONFIG
         self.documents: list[DocumentRun] = []
-        monkeypatch.setattr(scratchwrite, "reset_instance", self._reset)
+        monkeypatch.setattr(reset_module, "reset_instance", self._reset)
         monkeypatch.setattr(scratchwrite, "live_stack", self._lock)
         monkeypatch.setattr(scratchwrite, "client_of", lambda _: self.wiki)
         monkeypatch.setattr(scratchwrite, "_forget_client", lambda _: None)
         monkeypatch.setattr(scratchwrite, "build_site", self._site)
-        monkeypatch.setattr(scratchwrite, "shown_scratch_runs", self._shown)
+        monkeypatch.setattr(
+            scratchwrite, "query_service_probe", lambda config: self._probe
+        )
         monkeypatch.setattr(scratchwrite, "sleep", self._sleep)
+        monkeypatch.setattr(scratchwrite, "clock", lambda: self.now)
 
-    def _reset(self, env_file, log):
+    def _reset(self, *, env_file, yes, log, lock=None):
         from yizkr.core.instance import clear_contents
 
-        self.resets += 1
-        clear_contents(CONFIG, "yizkr scratch reset")
-        state = write_state_dir(CONFIG)
-        if state.exists():
-            for path in state.iterdir():
-                path.unlink()
-        self.wiki.wiped()
+        assert yes
+        with (lock or self._lock)():
+            self.resets += 1
+            clear_contents(CONFIG, "yizkr scratch reset")
+            state = write_state_dir(CONFIG)
+            if state.exists():
+                for path in state.iterdir():
+                    path.unlink()
+            self.wiki.wiped()
 
     @contextlib.contextmanager
     def _lock(self):
         self.locks += 1
-        yield
+        self.held += 1
+        try:
+            yield
+        finally:
+            self.held -= 1
+            if not self.held and self.intruder:
+                self.wiki.item("Brunnenring 35")
+
+    def _probe(self) -> tuple[list[str], int]:
+        return self._shown(None), (
+            self.wiki.writes if self.newest is None else self.newest
+        )
 
     def _site(self, config, out):
         self.sites.append(out)
@@ -231,6 +258,10 @@ class Run:
                 for value in string_values(self.wiki, qid, "scratch_run")
             }
         )
+
+    def advance(self, seconds):
+        """A wait, on the stand-in clock."""
+        self.now += seconds
 
     def _sleep(self, seconds):
         raise AssertionError("the site stage waited for the query service")
@@ -434,7 +465,10 @@ class TestTheWrite:
     def test_it_writes_under_the_live_stack_lock(self, run):
         run.past_the_barrier()
         # register and write each hold it; the reset holds its own
-        assert run.locks == 2
+        # the reset stage holds it across the reset and its state, and
+        # register and write each hold it; the reset takes no hold of its
+        # own under it
+        assert run.locks == 3
 
     def test_registration_names_the_scratch_run(self, run):
         run.past_the_barrier()
@@ -649,10 +683,57 @@ class TestTheSite:
     ):
         run.past_the_barrier(until="write")
         run.shown = ["run-0"]
-        monkeypatch.setattr(scratchwrite, "sleep", lambda seconds: None)
-        with pytest.raises(ScratchWriteRefused, match="shows no run item"):
+        monkeypatch.setattr(scratchwrite, "sleep", run.advance)
+        with pytest.raises(ScratchWriteRefused, match="not caught up"):
             run.stage("site")
         assert run.sites == []
+        # it gave up at the deadline, on the clock it is measured on
+        assert run.now == scratchwrite.SITE_WAIT
+
+    def test_the_site_waits_for_the_write_s_newest_revision(
+        self, run, monkeypatch
+    ):
+        """The query service shows the run's first run item before it has
+        taken in the rest of the write: the site waits for the newest
+        revision the write left."""
+        run.past_the_barrier(until="write")
+        revision = run.record("write")["revision"]
+        assert revision == run.wiki.writes
+        run.newest = revision - 1
+        waits = []
+
+        def sleep(seconds):
+            waits.append(seconds)
+            run.newest = revision
+
+        monkeypatch.setattr(scratchwrite, "sleep", sleep)
+        run.stage("site")
+        assert waits == [scratchwrite.SITE_POLL]
+        assert len(run.sites) == 1
+
+    def test_the_probe_reads_the_query_service_afresh(self):
+        """One probe, its clients made once, reads the query service anew
+        at each call."""
+        from yizkr.staticsite import SiteBuilder
+
+        answers = iter(
+            [
+                [{"run": {"value": "run-1"}}],
+                [{"version": {"value": "41"}}],
+                [{"run": {"value": "run-1"}}],
+                [{"version": {"value": "42"}}],
+            ]
+        )
+        builder = SiteBuilder(
+            CONFIG,
+            Path(),
+            run=lambda query: next(answers),
+            vocabulary=site_vocabulary(),
+        )
+        assert builder.query_scratch_runs() == ["run-1"]
+        assert builder.newest_revision() == 41
+        assert builder.query_scratch_runs() == ["run-1"]
+        assert builder.newest_revision() == 42
 
     def test_every_page_names_the_scratch_run(self, tmp_path):
         properties, items = site_vocabulary()
@@ -747,3 +828,246 @@ def test_the_record_of_the_instance_is_not_touched(run):
     run.past_the_barrier()
     record = read_record(CONFIG)
     assert record["run_id"] == "run-1"
+
+
+# -- the guard's edges --------------------------------------------------------
+
+
+class TestTheGuard:
+    def test_a_write_as_the_reset_s_lock_is_released_is_refused(self, run):
+        """Another session writes to the instance the moment the live-stack
+        lock is free: the reset and the state it records are under one
+        hold, so that write comes after the state, and register sees it."""
+        run.past_the_barrier(until="clustering")
+        run.intruder = True
+        run.stage("reset")
+        assert by_label(run.wiki, "Brunnenring 35")
+        run.intruder = False
+        with pytest.raises(ScratchWriteRefused, match="written to since"):
+            run.stage("register")
+
+    def test_a_write_stage_after_another_reset_s_register_is_refused(
+        self, run
+    ):
+        run.past_the_barrier(until="register")
+        directory = run.run_dir / CORPUS_DIR / "register"
+        record = scratchwrite.read_record(directory)
+        scratchwrite.save_record(directory, {**record, "epoch": "0" * 32})
+        writes = run.wiki.writes
+        with pytest.raises(ScratchWriteRefused, match="register stage"):
+            run.stage("write")
+        assert run.wiki.writes == writes
+
+    def test_a_reset_record_of_another_epoch_resets_again(
+        self, run, monkeypatch
+    ):
+        """An interrupted write goes on where it stopped only when the
+        run's reset record names the reset the instance's state records."""
+        from yizkr.pipeline import writer
+
+        real = writer.BatchWriter.write_batch
+
+        def interrupted(self, *args, **kwargs):
+            raise KeyboardInterrupt
+
+        run.past_the_barrier(until="register")
+        monkeypatch.setattr(writer.BatchWriter, "write_batch", interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            run.stage("write")
+        monkeypatch.setattr(writer.BatchWriter, "write_batch", real)
+        directory = run.run_dir / CORPUS_DIR / "reset"
+        record = scratchwrite.read_record(directory)
+        scratchwrite.save_record(directory, {**record, "epoch": "0" * 32})
+        run.past_the_barrier()
+        assert run.resets == 2
+        assert run.record("reset")["action"] == scratchwrite.RESET_DONE
+
+    def test_a_reset_clears_the_records_of_the_one_before(
+        self, run, tmp_path, monkeypatch
+    ):
+        run.past_the_barrier()
+        assert run.record("write")["recorded"]
+        run.wiki.item("Brunnenring 35")
+        run.past_the_barrier(until="reset")
+        # what register, write and site recorded of the earlier reset is
+        # gone, so no report shows it as this reset's
+        for stage in ("register", "write", "site"):
+            assert run.record(stage) == {}
+
+    def test_a_document_whose_write_fails_is_retried_and_then_recorded(
+        self, run, monkeypatch
+    ):
+        from yizkr.pipeline import writer
+
+        real = writer.BatchWriter.write_batch
+        letter = run.documents[1]
+
+        def failing(self, batch, *args, **kwargs):
+            if batch.claims[0].source.artifact.sha1 == letter.sha1:
+                raise ConnectionError("the wiki went away")
+            return real(self, batch, *args, **kwargs)
+
+        monkeypatch.setattr(writer.BatchWriter, "write_batch", failing)
+        run.past_the_barrier(until="write")
+        record = run.record("write")
+        assert record["failed"] == {letter.sha1: "ConnectionError"}
+        assert "recorded" not in record
+        assert recorded_contents(run.wiki).key is None
+        monkeypatch.setattr(writer.BatchWriter, "write_batch", real)
+        run.past_the_barrier()
+        assert run.resets == 1
+        assert run.record("reset")["action"] == scratchwrite.RESUMED
+        record = run.record("write")
+        assert record["failed"] == {}
+        assert set(record["documents"]) == {d.sha1 for d in run.documents}
+        assert recorded_contents(run.wiki).key == run.record("reset")["key"]
+
+
+# -- the write key ------------------------------------------------------------
+
+
+def _key(run, identity=None, exclusions=None) -> str:
+    identity = identity or scratchwrite.identity_map(run.context("write"))
+    return scratchwrite.write_key(identity, run.documents, exclusions)
+
+
+class TestTheKey:
+    @pytest.fixture
+    def keyed(self, run):
+        run.past_the_barrier(until="clustering")
+        return run, _key(run, exclusions=ExclusionList())
+
+    def test_the_same_inputs_give_the_same_key(self, keyed):
+        run, key = keyed
+        assert _key(run, exclusions=ExclusionList()) == key
+
+    def test_another_map_is_another_key(self, keyed):
+        from tests.fixtures.identity import joined
+
+        run, key = keyed
+        identity = scratchwrite.identity_map(run.context("write"))
+        other = joined(identity, "Leopold Löbig")
+        assert other.hash != identity.hash
+        assert _key(run, other, ExclusionList()) != key
+
+    def test_another_title_is_another_key(self, keyed):
+        run, key = keyed
+        run.documents[0].state.title = "Geburtsregister Flörburg 1914"
+        assert _key(run, exclusions=ExclusionList()) != key
+
+    def test_another_file_name_is_another_key(self, keyed, monkeypatch):
+        run, key = keyed
+        doc = run.documents[0]
+        moved = doc.source.with_name("leopold-1914.png")
+        doc.source.rename(moved)
+        monkeypatch.setattr(doc, "source", moved)
+        assert _key(run, exclusions=ExclusionList()) != key
+
+    def test_another_never_ingest_list_is_another_key(self, keyed):
+        run, key = keyed
+        listed = ExclusionList(sha1s=frozenset({sha1(SHOP)}))
+        assert _key(run, exclusions=listed) != key
+
+    def test_another_manifest_is_another_key(
+        self, keyed, tmp_path, monkeypatch
+    ):
+        run, key = keyed
+        changed = tmp_path / "manifest.yaml"
+        changed.write_bytes(scratchwrite.MANIFEST.read_bytes() + b"\n# x\n")
+        monkeypatch.setattr(scratchwrite, "MANIFEST", changed)
+        assert _key(run, exclusions=ExclusionList()) != key
+
+    def test_another_writer_version_is_another_key(self, keyed, monkeypatch):
+        run, key = keyed
+        monkeypatch.setattr(
+            scratchwrite, "WRITER_VERSION", scratchwrite.WRITER_VERSION + 1
+        )
+        assert _key(run, exclusions=ExclusionList()) != key
+
+    @pytest.mark.parametrize(
+        "module",
+        [
+            "claims.py",
+            "core/wiki.py",
+            "core/dates.py",
+            "model/schema.py",
+            "model/manifest.yaml",
+            "pipeline/writer.py",
+            "pipeline/registrar.py",
+            "pipeline/review.py",
+            "pipeline/clustering.py",
+            "pipeline/presentation.py",
+            "pipeline/orchestrate.py",
+            "queries/kinship.rq",
+        ],
+    )
+    def test_a_change_to_what_writes_is_another_digest(self, tmp_path, module):
+        import shutil
+
+        package = tmp_path / "yizkr"
+        shutil.copytree(
+            scratchwrite.PACKAGE,
+            package,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        before = scratchwrite.package_digest(package)
+        with open(package / module, "a") as handle:
+            handle.write("\n# a change\n")
+        assert scratchwrite.package_digest(package) != before
+
+    @pytest.mark.parametrize("module", sorted(scratchwrite.READ_ONLY))
+    def test_a_change_to_a_reader_is_the_same_digest(self, tmp_path, module):
+        import shutil
+
+        package = tmp_path / "yizkr"
+        shutil.copytree(
+            scratchwrite.PACKAGE,
+            package,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        before = scratchwrite.package_digest(package)
+        with open(package / module, "a") as handle:
+            handle.write("\n# a change\n")
+        assert scratchwrite.package_digest(package) == before
+
+
+# -- the driver ---------------------------------------------------------------
+
+
+@pytest.mark.write_side
+def test_the_driver_gives_each_corpus_stage_itself(tmp_path):
+    seen = []
+
+    def probe(context):
+        seen.append(context.driver)
+        return []
+
+    driver = ScratchDriver(
+        tmp_path / "corpus",
+        tmp_path / "runs" / "run-1",
+        cache_dir=tmp_path / "cache",
+        exclusions=ExclusionList(),
+        corpus_stages=[scratch.CorpusStage("probe", probe)],
+        log=lambda *args, **kwargs: None,
+    )
+    assert driver._corpus([]) == (None, None)
+    assert seen == [driver]
+
+
+def test_items_found_again_are_not_counted_as_minted(run):
+    from yizkr.pipeline.writer import BatchWriter
+
+    run.past_the_barrier()
+    record = run.record("write")
+    # Leopold twice (his two birth years keep his mentions apart), Gustav
+    assert sum(d["items_minted"] for d in record["documents"].values()) == 3
+    identity = scratchwrite.identity_map(run.context("write"))
+    letter = run.documents[1]
+    extracted = scratchwrite.extracted_batch(letter)
+    again = BatchWriter(run.wiki).write_batch(
+        scratchwrite.batch_to_write(extracted)[0],
+        identity=identity,
+        mapped_from=extracted,
+    )
+    assert again.created_items
+    assert again.minted == []

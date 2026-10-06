@@ -9,10 +9,15 @@ marker, which it checks before each.
 by one key (write_key): the identity map's hash; each document's SHA-1
 with the canonical content hash of its batch, whole, run stamps included,
 since the run item's label holds them, and what registration reads of it
-(its kind, its title, the record of its derived media and, for an
-excerpt, the PDFs that place it); the never-ingest list's hash; the
-writer's version (WRITER_VERSION and the source of CODE); and the
-model manifest's hash. Never a QID, an mtime or a timestamp.
+(its kind, its title, its file name, which its artifact's description
+gives, the record of its derived media and, for an excerpt, the PDFs
+that place it); the never-ingest list's hash; the writer's version
+(WRITER_VERSION and the package's source, code_digest); and the model
+manifest's hash. Never a QID, an mtime or a timestamp. A batch's run
+stamps differ from run to run, so a new run resets and writes again,
+and only a later invocation of the run that wrote finds the instance
+holding what its key makes; writing makes no model call, so this costs
+time alone.
 
 **reset.** When the instance-contents record (yizkr.core.instance) still
 stands and records this key, the instance holds what the key makes: the
@@ -22,8 +27,11 @@ this run reset the instance in an earlier invocation, with this key, and
 nothing has written to it since but this run's own stages (the
 write-phase state below), the stage resets nothing and the run goes on
 where it stopped. Otherwise it resets the instance as `yizkr scratch
-reset --yes` does (yizkr.reset), under the live-stack lock, which
-refuses a kept instance itself, and then records the write-phase state.
+reset --yes` does (yizkr.reset), which refuses a kept instance itself,
+and records the write-phase state, both under one hold of the live-stack
+lock, so no write comes between the reset and the state that would pass
+for this run's. The records register, write and site kept of an earlier
+reset go with it.
 
 **The write-phase state** (STATE_FILE, in the instance's write-phase
 directory, which the reset clears) names the run that reset the
@@ -45,7 +53,9 @@ with registration's flags raised as alerts of the write. A batch the
 writer would refuse whole is refused here first, before anything of its
 document is registered (check_batch): a mention the identity map does
 not hold, an unsupported date, a run item's term the instance may keep
-in another form. Nothing is written for a refused document.
+in another form. Nothing of a refused batch is written; a refused PDF's
+artifact may still be registered as the container of an excerpt whose
+batch was not refused.
 
 **write** writes every claim of each registered document's batch, the
 extraction's batch, which holds only claims the claim schema and the
@@ -72,6 +82,7 @@ run report reads the write's.
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
 import json
 import time
@@ -97,16 +108,23 @@ from yizkr.pipeline.stages import (
 )
 
 # the version of what the write side writes for the same inputs: a change
-# that writes something else for them bumps it, as does a change to
-# CODE's source, which the key hashes too
+# that writes something else for them bumps it, as does a change to the
+# package's source, which the key hashes too (code_digest)
 WRITER_VERSION = 1
-PACKAGE = files("yizkr.pipeline")
-CODE = (
-    "scratchwrite.py",
-    "writer.py",
-    "registrar.py",
-    "resolve.py",
-    "orchestrate.py",
+# the package whose source the key hashes, and the modules it leaves out:
+# those that only read the run directory or the instance, and decide
+# nothing a write puts on it
+PACKAGE = Path(__file__).resolve().parents[1]
+READ_ONLY = frozenset(
+    {
+        "cli.py",
+        "disagreement.py",
+        "staticsite.py",
+        "pipeline/estimate.py",
+        "pipeline/monitor.py",
+        "pipeline/report.py",
+        "pipeline/rundiff.py",
+    }
 )
 MANIFEST = files("yizkr.model") / "manifest.yaml"
 KEY_FORMAT = 1
@@ -126,8 +144,9 @@ CLAIM_SUMMARY = "scratch run: write unratified claim"
 # how long the site stage waits for the query service to show the run
 SITE_WAIT = 300.0
 SITE_POLL = 5.0
-# what the site stage waits with
+# what the site stage waits with, and the clock its deadline is on
 sleep = time.sleep
+clock = time.monotonic
 # the extraction-run item's marks (manifest properties)
 MARK_RUN = "scratch_run"
 MARK_MANIFEST = "run_manifest_hash"
@@ -183,17 +202,32 @@ def _file_hash(path: Path) -> str | None:
         return None
 
 
+def package_digest(package: Path) -> str:
+    """The SHA-256 of every file of the package, by its path within it,
+    but the READ_ONLY modules and compiled bytecode: the query pages the
+    reset publishes among them; what registers and writes
+    reaches far into it (the claim contract's values, dates, the
+    manifest, the review's entity records, the identity map's terms), so
+    the whole of it is hashed, and a change anywhere in it resets and
+    writes again, which costs no model call."""
+    found = {}
+    for path in sorted(package.rglob("*")):
+        relative = path.relative_to(package).as_posix()
+        if (
+            not path.is_file()
+            or "__pycache__" in path.parts
+            or relative in READ_ONLY
+        ):
+            continue
+        found[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return sha256_text(canonical_json(found))
+
+
+@functools.lru_cache(maxsize=1)
 def code_digest() -> str:
-    """The SHA-256 of the source of CODE, the modules that register and
-    write, as the package holds them."""
-    return sha256_text(
-        canonical_json(
-            {
-                name: hashlib.sha256((PACKAGE / name).read_bytes()).hexdigest()
-                for name in CODE
-            }
-        )
-    )
+    """package_digest of the package this module is in, read once a
+    process: the code a process runs does not change under it."""
+    return package_digest(PACKAGE)
 
 
 def _registration(doc: Any) -> dict[str, Any]:
@@ -201,9 +235,11 @@ def _registration(doc: Any) -> dict[str, Any]:
     from yizkr.pipeline.presentation import DERIVED_MEDIA
 
     containers = getattr(doc, "containers", None)
+    source = getattr(doc, "source", None)
     return {
         "kind": doc.kind,
         "title": getattr(doc.state, "title", None),
+        "name": source.name if source is not None else None,
         "derived_media": _file_hash(doc.dir / DERIVED_MEDIA),
         "containers": (
             sorted(container.sha1 for container in containers)
@@ -351,10 +387,13 @@ def check_state(client: Any, run_id: str, key: str) -> dict:
 
 def reset_instance(env_file: Path | None, log: Callable[..., None]) -> Any:
     """`yizkr scratch reset --yes` on the stack beside the env file
-    (yizkr.reset), under the live-stack lock."""
+    (yizkr.reset). Its caller holds the live-stack lock (run_reset), so
+    the reset takes no hold of its own."""
     from yizkr.reset import reset_instance as reset
 
-    return reset(env_file=env_file, yes=True, log=log)
+    return reset(
+        env_file=env_file, yes=True, log=log, lock=contextlib.nullcontext
+    )
 
 
 @contextlib.contextmanager
@@ -383,10 +422,12 @@ def build_site(config: Any, out: Path) -> dict:
     return publish_site(config, out, clean=True)
 
 
-def shown_scratch_runs(config: Any) -> list[str]:
-    from yizkr.staticsite import scratch_runs
+def query_service_probe(config: Any) -> Callable[[], tuple[list[str], int]]:
+    """What the query service shows: (scratch runs, newest revision)
+    (yizkr.staticsite.query_service_probe)."""
+    from yizkr.staticsite import query_service_probe as probe
 
-    return scratch_runs(config)
+    return probe(config)
 
 
 # -- reset ----------------------------------------------------------------
@@ -439,10 +480,19 @@ def run_reset(context: Any) -> list[str]:
         )
         return []
     context.log(f"{RESET}: resetting the instance ({recorded.why})")
-    reset_instance(context.env_file, context.log)
-    _forget_client(context)
-    epoch = uuid.uuid4().hex
-    save_state(client_of(context), run_id, key, epoch)
+    # what the stages after it recorded of an earlier reset no longer
+    # holds, and is not shown as this one's
+    for stage in (REGISTER, WRITE, SITE):
+        with contextlib.suppress(FileNotFoundError):
+            (context.directory.parent / stage / RECORD).unlink()
+    # the reset and the state it records under one hold of the lock, so
+    # no write can come between them that the state would take for this
+    # run's
+    with live_stack():
+        reset_instance(context.env_file, context.log)
+        _forget_client(context)
+        epoch = uuid.uuid4().hex
+        save_state(client_of(context), run_id, key, epoch)
     save_record(
         context.directory,
         {
@@ -663,11 +713,12 @@ def run_write(context: Any) -> list[str]:
                     "skipped": result.skipped,
                     "refused": len(result.refused),
                     "depicts_left_out": left_out,
-                    "items_minted": len(result.created_items),
+                    "items_minted": len(result.minted),
                 }
                 record["failed"].pop(doc.sha1, None)
                 context.driver._raise_flags(doc, result.flags)
-            save_state(client_of(context), run_id, key, epoch)
+            state = save_state(client_of(context), run_id, key, epoch)
+            record["revision"] = state["watermark"]["revision"]
             save_record(context.directory, record)
         complete = (
             not record["failed"]
@@ -699,23 +750,30 @@ def run_write(context: Any) -> list[str]:
 
 def run_site(context: Any) -> list[str]:
     """The site stage (the module docstring). It waits for the query
-    service only when the instance holds a run item of the run: one this
-    run wrote, or the one whose writes it kept."""
+    service only when the instance holds a run item of the run, one this
+    run wrote or the one whose writes it kept: until it shows that run,
+    and, after this run's write, an entity of the newest revision the
+    write left or a later one, for at most SITE_WAIT seconds."""
     expected = _reset_record(context).get("run_id")
     written = read_record(context.directory.parent / WRITE)
+    revision = written.get("revision") or 0
     config = client_of(context).config
-    waited = 0.0
-    while (written.get("skipped") or written.get("documents")) and (
-        expected not in (shown := shown_scratch_runs(config))
-    ):
-        if waited >= SITE_WAIT:
-            raise ScratchWriteRefused(
-                f"the query service shows no run item of scratch run "
-                f"{expected} after {SITE_WAIT:.0f} seconds (it shows "
-                f"{', '.join(shown) or 'none'}): the site was not built"
-            )
-        sleep(SITE_POLL)
-        waited += SITE_POLL
+    if written.get("skipped") or written.get("documents"):
+        probe = query_service_probe(config)
+        deadline = clock() + SITE_WAIT
+        while True:
+            shown, newest = probe()
+            if expected in shown and newest >= revision:
+                break
+            if clock() >= deadline:
+                raise ScratchWriteRefused(
+                    f"the query service has not caught up with the write "
+                    f"after {SITE_WAIT:.0f} seconds: it shows the run items "
+                    f"of {', '.join(shown) or 'no scratch run'} and "
+                    f"revision {newest}, waiting for {expected}'s and "
+                    f"revision {revision}: the site was not built"
+                )
+            sleep(SITE_POLL)
     out = context.directory / "site"
     summary = build_site(config, out)
     save_record(

@@ -233,6 +233,13 @@ SCRATCH_RUNS_QUERY = """\
 SELECT DISTINCT ?run WHERE {{ ?item wdt:{scratch_run} ?run . }}
 """
 
+# the newest revision of an entity the query service has taken in
+NEWEST_REVISION_QUERY = """\
+PREFIX schema: <http://schema.org/>
+SELECT (MAX(?revision) AS ?version)
+WHERE { ?entity schema:version ?revision . }
+"""
+
 CSS = """\
 :root { --ink: #222; --muted: #667; --accent: #7a4a20; --line: #ddd;
         --bg: #faf8f4; }
@@ -436,13 +443,25 @@ class SiteBuilder:
 
     @cached_property
     def scratch_runs(self) -> list[str]:
-        """The scratch runs whose run items the instance holds
-        (SCRATCH_RUNS_QUERY), none where its vocabulary has no
+        """The scratch runs whose run items the instance holds, read once
+        for the build (query_scratch_runs)."""
+        return self.query_scratch_runs()
+
+    def query_scratch_runs(self) -> list[str]:
+        """The scratch runs whose run items the query service shows now
+        (SCRATCH_RUNS_QUERY), none where the instance's vocabulary has no
         `unratified scratch run`."""
         if "scratch_run" not in self.properties:
             return []
         rows = self.run(self._instance_query(SCRATCH_RUNS_QUERY))
         return sorted({cell(row, "run") for row in rows} - {""})
+
+    def newest_revision(self) -> int:
+        """The newest revision of an entity the query service holds, by
+        its `schema:version` (NEWEST_REVISION_QUERY); 0 for none."""
+        rows = self.run(NEWEST_REVISION_QUERY)
+        value = cell(rows[0], "version") if rows else ""
+        return int(value) if value.isdigit() else 0
 
     def _page(self, title: str, body: str, root: str = "") -> str:
         return page(title, body, root, scratch_notice(self.scratch_runs))
@@ -1038,10 +1057,16 @@ class SiteBuilder:
         return self._page("Inconsistencies", "".join(body))
 
 
-def scratch_runs(config: Config) -> list[str]:
-    """The scratch runs whose run items the instance's query service shows
-    (SiteBuilder.scratch_runs)."""
-    return SiteBuilder(config, Path()).scratch_runs
+def query_service_probe(config: Config):
+    """A reader of what the instance's query service shows now: called,
+    it gives (the scratch runs whose run items it shows, the newest
+    revision of an entity it holds). Its clients are made once."""
+    builder = SiteBuilder(config, Path())
+
+    def probe() -> tuple[list[str], int]:
+        return builder.query_scratch_runs(), builder.newest_revision()
+
+    return probe
 
 
 def publish_site(config: Config, out_dir: Path, clean: bool = False) -> dict:

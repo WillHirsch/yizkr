@@ -622,6 +622,9 @@ class WriteResult:
     created_items: dict[str, str] = field(
         default_factory=dict
     )  # local_id -> QID
+    # the items this write made, never one it found: a subset of
+    # created_items' values, in the order they were made
+    minted: list[str] = field(default_factory=list)
     # step 5 of the module docstring, on the `instance of` and `type hint`
     # statements of items a ref or record found: the statements written,
     # and each artifact whose references an existing statement gained (a
@@ -1824,6 +1827,7 @@ class BatchWriter:
         self._aliased.add(placement.cluster)
         self._flag_held(placement, qid, result)
         result.created_items[ref.local_id] = qid
+        result.minted.append(qid)
         return qid
 
     def _kind_references(self, artifact_qid: str, run_qid: str | None):
