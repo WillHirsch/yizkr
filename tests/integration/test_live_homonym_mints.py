@@ -179,11 +179,14 @@ def test_both_are_minted_each_in_one_write(client, minted):
         assert item["descriptions"]["en"]["value"] == expected[item["id"]]
         (kind,) = item["claims"][properties["instance_of"]]
         assert kind["mainsnak"]["datavalue"]["value"]["id"] == items["human"]
-        (block,) = kind["references"]
+        # the source's reference and the run's, each a block of its own
+        # (MODELING.md, "Reference pattern")
+        assert len(kind["references"]) == 2
         cited = {
             key: [
                 snak["datavalue"]["value"]["id"]
-                for snak in block["snaks"][properties[key]]
+                for block in kind["references"]
+                for snak in block["snaks"].get(properties[key], [])
             ]
             for key in ("stated_in", "inferred_from_extraction_run")
         }
