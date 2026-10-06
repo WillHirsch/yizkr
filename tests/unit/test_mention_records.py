@@ -1453,6 +1453,15 @@ class TestEmptyStrings:
             "no name part",
         ]
 
+    def test_the_manifest_prompt_says_to_omit_never_to_leave_empty(self):
+        from yizkr.pipeline.chunking import ENTITY_MANIFEST_PROMPT
+
+        prompt = " ".join(ENTITY_MANIFEST_PROMPT.split())
+        assert (
+            "Omit a field you cannot fill, never write it as an empty "
+            'string ("").'
+        ) in prompt
+
     def test_only_an_empty_string_is_read(self):
         """A blank that is not empty, a part of the wrong shape and a
         record of no kind that takes one are left to validation."""
