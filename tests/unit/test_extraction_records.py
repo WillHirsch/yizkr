@@ -724,6 +724,55 @@ class TestTheManifestsRecords:
         }
         assert "Klara" not in json.dumps(coverage)
 
+    def test_a_record_whose_empty_parts_are_dropped_stands(self, tmp_path):
+        """An empty standard form is absent and gives no reason; an empty
+        name part is dropped and counted as `dropped`, but the record
+        it leaves stands, so no record is set aside. Flörburg's only
+        name, dropped, leaves a toponym with no name: that record is
+        set aside, once, with both its reasons (#497)."""
+        batch, coverage = extract(
+            tmp_path,
+            HILDEGARD
+            | {
+                "structure": {
+                    "kind": "human",
+                    "status": "name",
+                    "given": [{"written": "Hildegard", "standard": ""}],
+                    "surnames": [{"written": "Löbig"}, {"written": ""}],
+                }
+            },
+            SEBASTIAN
+            | {
+                "structure": {
+                    "kind": "human",
+                    "status": "name",
+                    "given": [{"written": "Sebastian", "standard": ""}],
+                    "titles": [""],
+                }
+            },
+            FLOERBURG
+            | {
+                "structure": {
+                    "kind": "place",
+                    "status": "toponym",
+                    "names": [{"written": "", "head": ""}],
+                }
+            },
+        )
+        structures = {e.id: e.structure for e in batch.entities}
+        assert structures["e1"].given[0].standard is None
+        assert [s.written for s in structures["e1"].surnames] == ["Löbig"]
+        assert structures["e2"].titles == []
+        assert structures["e3"] is None
+        assert coverage["records"] == {
+            "given": 2,
+            "recordless": 1,
+            "by_status": {"name": 2},
+            "unsplit_forms": 0,
+            "set_aside_records": 1,
+            "set_aside": {"dropped": 3, "no toponym": 1},
+        }
+
     def test_a_manifest_with_bad_records_is_never_refused(self):
         parsed, problems = ChunkedClaimExtractor._parse_entity_manifest(
             manifest(

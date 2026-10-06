@@ -262,9 +262,19 @@ ACTIONS = frozenset({"pause", "resume", "abort"})
 FALLBACK_TIERS = frozenset({"manifest", "segmentation"})
 # the leading labels of the reasons an extraction sets a mention record
 # aside by (ADR-0035 §5): claims.set_aside_structure's `schema` and
+# `dropped` (a name part dropped for an empty string, which leaves the
+# record standing when what is left can stand) and
 # claims.structure_problems' own
 SET_ASIDE_REASONS = frozenset(
-    {"schema", "kind", "addition", "initial", "no name part", "no toponym"}
+    {
+        "schema",
+        "dropped",
+        "kind",
+        "addition",
+        "initial",
+        "no name part",
+        "no toponym",
+    }
 )
 # the reason an entity's judgement note is set aside by (ADR-0035 §5),
 # which coverage.json counts among the records' reasons, once a note

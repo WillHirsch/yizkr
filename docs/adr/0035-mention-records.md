@@ -48,6 +48,20 @@ its other figures, and the report counts apart, never as zero, the
 extractions that lack each. The notes written are the writer's count,
 and wait for #410, which writes judgement notes to the wiki.
 
+Amended by #497 (2026-10-06): a record's empty strings are read
+structurally before it is validated (§5), never its wording. An optional
+field written as "" (a given name's `standard`, a place name's `toponym`
+or `head`, an address's `street` or `number`) is absent, as if omitted,
+and gives no reason. A name part that is "" (an entry of a list of
+strings, such as `titles` or `within`), or whose required field is (a
+given name, surname, place name or address whose `written` is ""), is
+dropped, and each drop gives the reason `dropped`. What is left stands
+or is set aside as any record does: a place whose only name is dropped
+has no toponym and is set aside, giving both reasons. A record that
+stands after a drop is not counted in `records.set_aside_records`. The
+entity-manifest prompt says to omit a field the model cannot fill,
+never to write it as "".
+
 Amended by #389 (2026-09-29): the transcription check, the stream
 assembly and language detection no longer read wording (§10): the check
 reads the transcription record (ADR-0037), and no wording fails a

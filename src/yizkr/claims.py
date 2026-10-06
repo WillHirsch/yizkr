@@ -74,7 +74,7 @@ import sys
 import unicodedata
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
 from pydantic import (
     BaseModel,
@@ -1167,20 +1167,108 @@ def structure_problems(entity: EntityRecord) -> list[str]:
     return problems
 
 
+_STRUCTURE_MODELS = {
+    model.model_fields["kind"].default: model
+    for model in (
+        PersonStructure,
+        PlaceStructure,
+        OrganizationStructure,
+        FamilyStructure,
+    )
+}
+
+
+def _part_model(annotation) -> type | None:
+    """The type of one name part a record field holds: `str` or a part
+    model for a list of them or an optional one, None for any other
+    field."""
+    for arg in get_args(annotation) or (annotation,):
+        if arg is str or (
+            isinstance(arg, type) and issubclass(arg, StrictModel)
+        ):
+            return arg
+    return None
+
+
+def _clear_empty_part(part, model: type) -> tuple[object, str | None]:
+    """A name part with each optional field the model wrote as an empty
+    string left out, or None and where the empty string is when the part
+    itself, or one of its required fields, is one."""
+    if model is str:
+        return (None, "") if part == "" else (part, None)
+    if not isinstance(part, dict):
+        return part, None
+    cleared = dict(part)
+    for name, info in model.model_fields.items():
+        if cleared.get(name) != "":
+            continue
+        if info.is_required():
+            return None, f".{name}"
+        del cleared[name]
+    return cleared, None
+
+
+def _clear_empty(structure: dict) -> tuple[dict, list[str]]:
+    """A mention record as the model wrote it, with its empty strings
+    read structurally (ADR-0035 §5): an optional field written as "" is
+    absent, and a name part that is "", or whose required field is, is
+    dropped, each drop giving the reason `dropped`. Only an empty string
+    is read so, never a word; whatever else the record holds is left for
+    validation."""
+    kind = structure.get("kind")
+    model = _STRUCTURE_MODELS.get(kind) if isinstance(kind, str) else None
+    if model is None:
+        return structure, []
+    cleared = dict(structure)
+    dropped: list[str] = []
+    for field, info in model.model_fields.items():
+        part_model = _part_model(info.annotation)
+        value = cleared.get(field)
+        if part_model is None or value is None:
+            continue
+        listed = isinstance(value, list)
+        kept = []
+        for index, part in enumerate(value if listed else [value]):
+            part, empty = _clear_empty_part(part, part_model)
+            if empty is None:
+                kept.append(part)
+                continue
+            where = f"{field}.{index}" if listed else field
+            dropped.append(
+                f"dropped: structure.{kind}.{where}{empty}: an empty string"
+            )
+        if listed:
+            cleared[field] = kept
+        elif kept:
+            cleared[field] = kept[0]
+        else:
+            del cleared[field]
+    return cleared, dropped
+
+
 def set_aside_structure(entity: dict) -> tuple[dict, list[str]]:
     """An entity of an entity manifest, as the model wrote it, with its
     mention record set aside when the record cannot stand (ADR-0035 §5),
     and the reasons.
 
+    The record's empty strings are read first (`_clear_empty`): an
+    optional field written as "" is absent, and a name part that is "",
+    or whose required field is, is dropped, each giving the reason
+    `dropped`. What is left stands or is set aside as the record would.
     The entity keeps its label, aliases and kind: a record that fails is
     dropped, never the entity or the manifest, and the entity is then
-    recordless. A record that does not parse gives the reason `schema`;
-    one that parses gives those of `structure_problems`. An entity that
-    is invalid without its record is returned as it is, for the
-    manifest's own validation to report.
+    recordless, with no `structure` key. A record that does not parse
+    gives the reason `schema`; one that parses gives those of
+    `structure_problems`. An entity that is invalid without its record
+    is returned as it is, for the manifest's own validation to report.
     """
-    if entity.get("structure") is None:
+    structure = entity.get("structure")
+    if structure is None:
         return entity, []
+    dropped: list[str] = []
+    if isinstance(structure, dict):
+        structure, dropped = _clear_empty(structure)
+        entity = {**entity, "structure": structure}
     rest = {key: value for key, value in entity.items() if key != "structure"}
     try:
         record = EntityRecord.model_validate(entity)
@@ -1191,9 +1279,9 @@ def set_aside_structure(entity: dict) -> tuple[dict, list[str]]:
             return entity, []
         first = exc.errors()[0]
         location = ".".join(str(step) for step in first["loc"])
-        return rest, [f"schema: {location}: {first['msg']}"]
+        return rest, [*dropped, f"schema: {location}: {first['msg']}"]
     problems = structure_problems(record)
-    return (rest, problems) if problems else (entity, [])
+    return (rest, dropped + problems) if problems else (entity, dropped)
 
 
 # ---------------------------------------------------------------------------

@@ -1287,6 +1287,207 @@ class TestSettingAside:
         assert set_aside_structure(plain) == (plain, [])
 
 
+class TestEmptyStrings:
+    """An empty string in a record is read structurally (ADR-0035 §5,
+    #497): an optional field written as "" is absent, and a name part
+    that is "", or whose required field is, is dropped and counted as
+    `dropped`; the record stands when what is left can stand."""
+
+    def test_an_empty_standard_form_is_absent_and_the_record_stands(self):
+        eugen = entity(
+            "e1",
+            "Eugen Löbig",
+            "human",
+            structure={
+                "kind": "human",
+                "status": "name",
+                "given": [{"written": "Eugen", "standard": ""}],
+                "surnames": [{"written": "Löbig"}],
+            },
+        )
+        kept, reasons = set_aside_structure(eugen)
+        assert reasons == []
+        assert kept["structure"]["given"] == [{"written": "Eugen"}]
+        record = EntityRecord.model_validate(kept)
+        assert record.structure.given[0].standard is None
+        assert structure_problems(record) == []
+        # the model's own entity is left as it wrote it
+        assert eugen["structure"]["given"][0]["standard"] == ""
+
+    def test_an_empty_head_is_absent_and_the_record_stands(self):
+        town = entity(
+            "e1",
+            "Flörburg",
+            "place",
+            structure={
+                "kind": "place",
+                "status": "toponym",
+                "names": [
+                    {"written": "Flörburg", "toponym": "Flörburg", "head": ""}
+                ],
+                "address": {
+                    "written": "Flörburg",
+                    "street": "",
+                    "number": "",
+                },
+            },
+        )
+        kept, reasons = set_aside_structure(town)
+        assert reasons == []
+        structure = EntityRecord.model_validate(kept).structure
+        assert structure.names[0].head is None
+        assert structure.names[0].toponym == "Flörburg"
+        assert structure.address.street is None
+        assert structure.address.number is None
+
+    def test_a_part_whose_written_form_is_empty_is_dropped(self):
+        town = entity(
+            "e1",
+            "Bad Flörburg",
+            "place",
+            aliases=["Flörburg"],
+            structure={
+                "kind": "place",
+                "status": "toponym",
+                "names": [
+                    {"written": "", "head": ""},
+                    {"written": "Bad Flörburg", "toponym": "Flörburg"},
+                ],
+                "address": {"written": "", "street": "Brunnenring"},
+                "within": [""],
+            },
+        )
+        kept, reasons = set_aside_structure(town)
+        assert reasons == [
+            "dropped: structure.place.names.0.written: an empty string",
+            "dropped: structure.place.address.written: an empty string",
+            "dropped: structure.place.within.0: an empty string",
+        ]
+        structure = EntityRecord.model_validate(kept).structure
+        assert [name.written for name in structure.names] == ["Bad Flörburg"]
+        assert structure.address is None and structure.within == []
+
+    def test_an_empty_string_in_a_list_of_parts_is_dropped(self):
+        eugen = entity(
+            "e1",
+            "Eugen Löbig",
+            "human",
+            aliases=["Muckel"],
+            structure={
+                "kind": "human",
+                "status": "name",
+                "given": [{"written": "Eugen"}, {"written": ""}],
+                "surnames": [{"written": "", "type": "birth"}],
+                "nicknames": ["Muckel", ""],
+                "titles": [""],
+            },
+        )
+        kept, reasons = set_aside_structure(eugen)
+        assert [reason.split(": ")[1] for reason in reasons] == [
+            "structure.human.given.1.written",
+            "structure.human.surnames.0.written",
+            "structure.human.nicknames.1",
+            "structure.human.titles.0",
+        ]
+        assert {reason.split(":", 1)[0] for reason in reasons} == {"dropped"}
+        structure = EntityRecord.model_validate(kept).structure
+        assert [name.written for name in structure.given] == ["Eugen"]
+        assert structure.surnames == [] and structure.titles == []
+        assert structure.nicknames == ["Muckel"]
+
+    def test_an_organisations_and_a_familys_empty_parts_are_dropped(self):
+        shop = entity(
+            "e1",
+            "Hutmacherei zum Blauen Hut",
+            "organization",
+            structure={
+                "kind": "organization",
+                "names": ["zum Blauen Hut", ""],
+                "kinds": ["Hutmacherei"],
+                "places": [""],
+            },
+        )
+        family = entity(
+            "e2",
+            "the Löbigs",
+            "family",
+            structure={"kind": "family", "surnames": ["", "Löbig"]},
+        )
+        kept, reasons = set_aside_structure(shop)
+        assert len(reasons) == 2 and "structure" in kept
+        assert kept["structure"]["names"] == ["zum Blauen Hut"]
+        assert kept["structure"]["places"] == []
+        kept, reasons = set_aside_structure(family)
+        assert reasons == [
+            "dropped: structure.family.surnames.0: an empty string"
+        ]
+        assert kept["structure"]["surnames"] == ["Löbig"]
+
+    def test_a_record_that_cannot_stand_without_its_part_is_set_aside(self):
+        town = entity(
+            "e1",
+            "Flörburg",
+            "place",
+            structure={
+                "kind": "place",
+                "status": "toponym",
+                "names": [{"written": "", "head": "Flörburg"}],
+            },
+        )
+        kept, reasons = set_aside_structure(town)
+        assert "structure" not in kept
+        assert [reason.split(":", 1)[0] for reason in reasons] == [
+            "dropped",
+            "no toponym",
+        ]
+        eugen = entity(
+            "e2",
+            "Eugen Löbig",
+            "human",
+            structure={"kind": "human", "given": [{"written": ""}]},
+        )
+        kept, reasons = set_aside_structure(eugen)
+        assert "structure" not in kept
+        assert [reason.split(":", 1)[0] for reason in reasons] == [
+            "dropped",
+            "no name part",
+        ]
+
+    def test_the_manifest_prompt_says_to_omit_never_to_leave_empty(self):
+        from yizkr.pipeline.chunking import ENTITY_MANIFEST_PROMPT
+
+        prompt = " ".join(ENTITY_MANIFEST_PROMPT.split())
+        assert (
+            "Omit a field you cannot fill, never write it as an empty "
+            'string ("").'
+        ) in prompt
+
+    def test_only_an_empty_string_is_read(self):
+        """A blank that is not empty, a part of the wrong shape and a
+        record of no kind that takes one are left to validation."""
+        blank = entity(
+            "e1",
+            "Eugen Löbig",
+            "human",
+            structure={"kind": "human", "given": [{"written": " "}]},
+        )
+        kept, reasons = set_aside_structure(blank)
+        assert not any(reason.startswith("dropped") for reason in reasons)
+        for structure in (
+            {"kind": "human", "given": [""]},
+            {"kind": "human", "titles": [None]},
+            {"kind": "event", "names": [""]},
+            {"kind": ["human"], "titles": [""]},
+        ):
+            kept, reasons = set_aside_structure(
+                entity("e1", "Eugen Löbig", "human", structure=structure)
+            )
+            assert "structure" not in kept
+            assert [reason.split(":", 1)[0] for reason in reasons] == [
+                "schema"
+            ]
+
+
 # -- the bootstrap ------------------------------------------------------------
 
 

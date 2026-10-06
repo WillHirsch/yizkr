@@ -194,8 +194,8 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   hold (a person's `unsplit`: forms whose given name and surname the
   source does not tell apart, ADR-0035 §2.1); the recordless mentions;
   the records set aside; the reasons records were set aside by, by
-  category (`schema`, `kind`, `addition`, `initial`, `no name part`,
-  `no toponym`; `report.SET_ASIDE_REASONS`); the notes by category
+  category (`schema`, `dropped`, `kind`, `addition`, `initial`,
+  `no name part`, `no toponym`; `report.SET_ASIDE_REASONS`); the notes by category
   (`kind`, `relation`, `date_reading`, `identity`, `other`, the
   categories of `claims.JudgementNote`); and the notes set aside. Counts
   only, never a label, a reason's text or a note's text.
@@ -206,6 +206,9 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   own `addition`, and a place's name is checked as written and again by
   its toponym and its head), so the reasons can outnumber the records
   set aside, which `records.set_aside_records` counts, once each. A
+  `dropped` reason counts a name part dropped for an empty string
+  (ADR-0035 §5, #497), and the record it leaves often stands, so it is
+  counted among the reasons whether or not its record was set aside. A
   record set aside on a mention of a kind that takes one (a
   person, place, organisation or family) leaves that mention recordless,
   so the recordless mentions are those given no record and those whose
