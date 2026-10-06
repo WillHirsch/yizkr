@@ -47,7 +47,6 @@ from yizkr.pipeline import writer
 from yizkr.pipeline.writer import (
     BatchWriter,
     source_descriptor,
-    source_title,
 )
 
 from .conftest import fixture_mark, register_fictional
@@ -234,14 +233,6 @@ def test_the_fixture_is_kept_in_nfc(client, config, fixture_graph):
     assert (written.written, written.referenced, written.skipped) == (3, 0, 0)
     properties, _ = client.vocabulary()
     found = items(client, written)
-    title = client.api_get(
-        {
-            "action": "wbgetentities",
-            "ids": registered.qid,
-            "props": "labels",
-            "languages": "en",
-        }
-    )["entities"][registered.qid]["labels"]["en"]["value"]
     for record in fixture_batch(registered.ref, "NFC").entities:
         item = found[record.id]
         assert item["labels"]["en"]["value"] == record.label
@@ -250,7 +241,7 @@ def test_the_fixture_is_kept_in_nfc(client, config, fixture_graph):
         ] == record.aliases
         description = item.get("descriptions", {}).get("en", {})
         assert description.get("value") == source_descriptor(
-            record.kind, source_title(title)
+            record.kind, "certificate"
         )
 
     def values(key: str, prop: str) -> list:

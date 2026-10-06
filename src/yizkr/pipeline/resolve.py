@@ -154,12 +154,11 @@ def _resolvable(batch: ClaimBatch) -> dict[str, tuple[str, str | None]]:
     own (homonym_ordinals; the module docstring)."""
     records = entity_records(batch)
     refused = pre_plan_refusals(batch, unnamed_entities(batch, records))
-    ordinals = homonym_ordinals(records)
+    terms = entity_terms(batch, records, refused)
+    ordinals = homonym_ordinals(records, terms)
     return {
         local_id: (label, kind)
-        for local_id, (label, kind) in entity_terms(
-            batch, records, refused
-        ).items()
+        for local_id, (label, kind) in terms.items()
         if not is_artifact_kind(kind) and ordinals.get(local_id, 1) == 1
     }
 

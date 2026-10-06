@@ -13,7 +13,8 @@ the son. The writer mints both:
   in the family history, inferred from the run), so no write leaves an
   item half made;
 * with descriptions that differ, the writer's source descriptor: the
-  father's "human named in “<title>”", the son's the same with "(2)",
+  father's "human named in a genealogical report", the kind of the
+  source, never its title, the son's the same with "(2)",
   his place among the manifest's records under the label, as Wikibase
   refuses two items with one label and one description; neither holds a
   life date of the batch's summaries;
@@ -159,19 +160,16 @@ def test_both_are_minted_each_in_one_write(client, minted):
     father, son = minted.first["father"], minted.first["son"]
     assert father != son
     properties, items = client.vocabulary()
-    title = client.api_get(
-        {
-            "action": "wbgetentities",
-            "ids": minted.source.qid,
-            "props": "labels",
-            "languages": "en",
-        }
-    )["entities"][minted.source.qid]["labels"]["en"]["value"]
+    # the source is registered as a genealogical report: its kind, never
+    # its title, goes in the description
     expected = {
-        father: source_descriptor("human", title),
-        son: source_descriptor("human", title, 2),
+        father: "human named in a genealogical report",
+        son: "human named in a genealogical report (2)",
     }
-    assert expected[father] != expected[son]
+    assert expected == {
+        father: source_descriptor("human", "genealogical_report"),
+        son: source_descriptor("human", "genealogical_report", 2),
+    }
     # one write made each, and it carried the whole item
     mints = labelled(minted.made)
     assert sorted(item["id"] for item in mints) == sorted([father, son])
@@ -208,6 +206,7 @@ def test_both_are_minted_each_in_one_write(client, minted):
         described = found[qid]["descriptions"]["en"]["value"]
         assert described == expected[qid]
         assert "hatter" not in described
+        assert MARK not in described
     assert int(father[1:]) < int(son[1:])
     _, labels = WikiClient(client.config).label_index()
     assert labels.holders(EUGEN) == (father, son)

@@ -184,9 +184,11 @@ convention; nothing keys on an artifact's label (§1, "Registration at
 write time" and "What is still matched by label").
 Amended by #86 (2026-10-06): the writer makes each new item in one
 write, with its label, its source descriptor as its description (the
-entity's kind and the title of the artifact that names it, its content
-tag taken out) and its `instance of` with both references. A manifest
-record from the second on under one label, as a son of his father's
+entity's kind and the artifact kind of the artifact that names it, as
+"human named in a letter"; never the artifact's title, which may name a
+living person) and its `instance of` with both references. A manifest
+record from the second on under one label (of those the extraction
+asserts about or a claim names), as a son of his father's
 name is when one document names both, is an item of its own: its
 description holds its place among the manifest's records under the
 label, so Wikibase takes it beside the first, and a re-run finds it by

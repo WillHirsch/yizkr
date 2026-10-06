@@ -7,9 +7,11 @@ The fixture is two Eugen Löbigs, father and son, both human, each a
 record of their own in the manifest of one batch citing the 2008 family
 history (*A few pages of family history*): the master hatter of the
 example universe, and a son of the same name, a homonym these tests make
-up. Wikibase refuses two items with one label and one description, so
-the son's description takes his place among the manifest's records
-under the label, and a re-run finds each by it.
+up. The description names the kind of the source, a genealogical
+report, never its title, which may name a living person. Wikibase
+refuses two items with one label and one description, so the son's
+description takes his place among the manifest's records under the
+label, and a re-run finds each by it.
 """
 
 from __future__ import annotations
@@ -23,24 +25,26 @@ from tests.unit.test_pipeline import (
     RUN,
     FakeWiki,
 )
-from tests.unit.test_writer_unknown_characters import MARKED, knows_the_mark
 from yizkr.claims import ClaimBatch, EntityRecord
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.resolve import resolvable_labels, resolve_batch
 from yizkr.pipeline.writer import (
-    TERM_LIMIT,
     BatchWriter,
+    entity_terms,
     homonym_ordinals,
     source_descriptor,
-    source_title,
 )
 
 EUGEN = "Eugen Löbig"
 TITLE = "A few pages of family history"
-# the family history as the registrar labels a second copy of one title
-TAGGED_TITLE = f"{TITLE} [0a1b2c3d]"
-FATHER_DESCRIPTION = f"human named in “{TITLE}”"
-SON_DESCRIPTION = f"human named in “{TITLE}” (2)"
+FATHER_DESCRIPTION = "human named in a genealogical report"
+SON_DESCRIPTION = "human named in a genealogical report (2)"
+# the artifact kinds the fake vocabulary holds besides test_pipeline's
+SOURCE_KINDS = {
+    "genealogical_report": "Q90",
+    "letter": "Q91",
+    "official_document": "Q92",
+}
 ARTIFACT = {"kind": "artifact", "sha1": MEDIA_SHA1}
 
 
@@ -96,7 +100,11 @@ def _eugens(order: tuple[str, str] = ("father", "son")) -> ClaimBatch:
 
 class ResolvingWiki(FakeWiki):
     """A fake instance the resolve step reads too: the statements of the
-    items it asks for."""
+    items it asks for, and a vocabulary with artifact kinds."""
+
+    def vocabulary(self):
+        properties, items = super().vocabulary()
+        return properties, {**items, **SOURCE_KINDS}
 
     def label_index(self):
         """(property labels, item labels) as the wiki client reads them:
@@ -118,12 +126,25 @@ class ResolvingWiki(FakeWiki):
         }
 
 
-def _wiki(title: str | None = TITLE) -> FakeWiki:
-    """A fake instance holding the family history, labelled `title`."""
+def _wiki(*kinds: tuple[str, str]) -> FakeWiki:
+    """A fake instance holding the family history, under its title, an
+    `instance of` each of `kinds` (QID, rank), a genealogical report
+    without any."""
+    from wikibaseintegrator.datatypes import Item
+    from wikibaseintegrator.wbi_enums import ActionIfExists, WikibaseRank
+
     wiki = ResolvingWiki(detached=True)
     history = wiki.wbi.item.new()
-    if title:
-        history.labels.set("en", title)
+    history.labels.set("en", TITLE)
+    for qid, rank in kinds or ((SOURCE_KINDS["genealogical_report"], ""),):
+        history.claims.add(
+            Item(
+                prop_nr=PROPERTIES["instance_of"],
+                value=qid,
+                rank=WikibaseRank(rank) if rank else WikibaseRank.NORMAL,
+            ),
+            action_if_exists=ActionIfExists.FORCE_APPEND,
+        )
     wiki.media[MEDIA_SHA1] = history.write().id
     return wiki
 
@@ -154,52 +175,73 @@ def _cited(statement: dict, key: str) -> list[str]:
 
 
 class TestTheDescriptor:
-    def test_kind_and_title(self):
-        assert source_descriptor("human", TITLE) == FATHER_DESCRIPTION
-        assert source_descriptor("human", TITLE, 2) == SON_DESCRIPTION
+    def test_kind_and_source_kind(self):
         assert (
-            source_descriptor("occupation_class", TITLE)
-            == f"occupation class named in “{TITLE}”"
+            source_descriptor("human", "genealogical_report")
+            == FATHER_DESCRIPTION
+        )
+        assert (
+            source_descriptor("human", "genealogical_report", 2)
+            == SON_DESCRIPTION
+        )
+        assert (
+            source_descriptor("occupation_class", "letter")
+            == "occupation class named in a letter"
+        )
+        assert (
+            source_descriptor("place", "official_document", 12)
+            == "place named in an official document (12)"
         )
 
-    def test_without_a_kind_or_a_title(self):
+    def test_without_a_kind_or_a_source_kind(self):
         assert source_descriptor(None, None) == "entity named in a source"
         assert source_descriptor("human", None, 3) == (
             "human named in a source (3)"
         )
 
-    @pytest.mark.parametrize("ordinal", [1, 2, 12])
-    def test_a_long_title_is_cut_and_the_ordinal_kept(self, ordinal):
-        title = "Hutmacherei zum Blauen Hut, Flörburg: " * 10
-        described = source_descriptor("human", title.strip(), ordinal)
-        # cut at a character, a space before the ellipsis dropped
-        assert TERM_LIMIT - 1 <= len(described) <= TERM_LIMIT
-        tail = f"…”{f' ({ordinal})' if ordinal > 1 else ''}"
-        assert described.endswith(tail)
-        assert described.startswith("human named in “Hutmacherei zum")
-        # no digest, as the cut of a long term has (_cut)
-        assert "sha1" not in described
 
-    def test_a_title_at_the_limit_is_whole(self):
-        room = TERM_LIMIT - len("human named in “”")
-        title = ("Flörburg " * 40)[:room].strip() + "x"
-        title = title[:room]
-        described = source_descriptor("human", title)
-        assert described == f"human named in “{title}”"
-        assert len(described) == TERM_LIMIT
+class TestTheSourceKind:
+    def test_never_the_title(self):
+        wiki = _wiki()
+        written = BatchWriter(wiki).write_batch(_eugens())
+        for local_id in ("father", "son"):
+            described = _description(wiki, written.created_items[local_id])
+            assert TITLE not in described
+            assert "family history" not in described
 
-    @knows_the_mark
-    def test_a_title_python_does_not_know_is_left_out(self):
-        # (here) Nina's 1958 letter, its title holding the combining
-        # Cyrillic i Python's tables do not know: the instance may keep it
-        # in another form, so the descriptor names no title
-        assert source_title(f"Письмо Нины {MARKED}") is None
+    def test_a_deprecated_kind_is_passed_over(self):
+        wiki = _wiki(
+            (SOURCE_KINDS["letter"], "deprecated"),
+            (SOURCE_KINDS["official_document"], ""),
+        )
+        written = BatchWriter(wiki).write_batch(_eugens())
+        assert _description(wiki, written.created_items["father"]) == (
+            "human named in an official document"
+        )
 
-    def test_the_title_loses_its_content_tag(self):
-        assert source_title(TAGGED_TITLE) == TITLE
-        assert source_title(f"{TITLE}, page 2") == f"{TITLE}, page 2"
-        assert source_title(None) is None
-        assert source_title("") is None
+    def test_a_kind_the_vocabulary_lacks_is_passed_over(self):
+        wiki = _wiki(("Q999", ""), (SOURCE_KINDS["letter"], ""))
+        written = BatchWriter(wiki).write_batch(_eugens())
+        assert _description(wiki, written.created_items["son"]) == (
+            "human named in a letter (2)"
+        )
+
+    def test_a_source_of_no_known_kind(self):
+        wiki = _wiki(("Q999", ""))
+        written = BatchWriter(wiki).write_batch(_eugens())
+        assert _description(wiki, written.created_items["father"]) == (
+            "human named in a source"
+        )
+        assert _description(wiki, written.created_items["son"]) == (
+            "human named in a source (2)"
+        )
+
+    def test_the_source_is_read_not_written(self):
+        wiki = _wiki()
+        history = wiki.media[MEDIA_SHA1]
+        before = wiki.wbi.item.get(history).get_json()
+        BatchWriter(wiki).write_batch(_eugens())
+        assert wiki.wbi.item.get(history).get_json() == before
 
 
 class TestTheOrdinals:
@@ -216,12 +258,37 @@ class TestTheOrdinals:
                 EntityRecord(id="e", label=EUGEN, kind="place"),
             )
         }
-        assert homonym_ordinals(records) == {
+        assert homonym_ordinals(records, set(records)) == {
             "a": 1,
             "b": 1,
             "c": 2,
             "e": 3,
         }
+
+    def test_an_audit_record_no_claim_names_takes_no_place(self):
+        records = {
+            record.id: record
+            for record in (
+                EntityRecord(id="a", label=EUGEN, kind="human", extract=False),
+                EntityRecord(id="b", label=EUGEN, kind="human"),
+                EntityRecord(id="c", label=EUGEN, kind="human", extract=False),
+            )
+        }
+        assert homonym_ordinals(records, {"b"}) == {"b": 1}
+        # named by a claim, an audit record takes its place
+        assert homonym_ordinals(records, {"b", "c"}) == {"b": 1, "c": 2}
+
+    def test_a_resolved_record_keeps_its_place(self):
+        # resolve names the father's item by QID, so no local ref names
+        # him: the extraction asserts about him, so he is still first
+        records = {
+            record.id: record
+            for record in (
+                EntityRecord(id="father", label=EUGEN, kind="human"),
+                EntityRecord(id="son", label=EUGEN, kind="human"),
+            )
+        }
+        assert homonym_ordinals(records, {"son"}) == {"father": 1, "son": 2}
 
 
 class TestTwoEugens:
@@ -306,23 +373,6 @@ class TestTwoEugens:
             SON_DESCRIPTION
         )
 
-    def test_the_title_is_read_without_its_content_tag(self):
-        wiki = _wiki(TAGGED_TITLE)
-        written = BatchWriter(wiki).write_batch(_eugens())
-        assert _description(wiki, written.created_items["son"]) == (
-            SON_DESCRIPTION
-        )
-
-    def test_an_untitled_source(self):
-        wiki = _wiki(None)
-        written = BatchWriter(wiki).write_batch(_eugens())
-        assert _description(wiki, written.created_items["father"]) == (
-            "human named in a source"
-        )
-        assert _description(wiki, written.created_items["son"]) == (
-            "human named in a source (2)"
-        )
-
     def test_the_first_joins_an_earlier_eugen_and_the_second_mints(self):
         # a Eugen Löbig a curator made, with a description of their own:
         # the father joins him, as the earliest item under the label
@@ -352,7 +402,7 @@ class TestTwoEugens:
         written = BatchWriter(wiki).write_batch(_eugens())
         other = wiki.wbi.item.new()
         other.labels.set("en", EUGEN)
-        other.descriptions.set("en", f"human named in “{TITLE}” (3)")
+        other.descriptions.set("en", f"{FATHER_DESCRIPTION} (3)")
         other.write()
 
         again = BatchWriter(wiki).write_batch(_eugens())
@@ -457,3 +507,65 @@ class TestResolve:
         assert again.created_items == {"son": son}
         assert sorted(_labelled(wiki, EUGEN)) == sorted([father, son])
         assert (again.written, again.skipped) == (0, 3)
+
+
+class TestARecordNoClaimNames:
+    """The manifest lists a Eugen Löbig no claim names (extract=false),
+    then the one its claim names, and the instance holds a curator's
+    Eugen: the named record is the first under the label, so it joins the
+    curator's Eugen, as resolve finds it, and nothing is minted."""
+
+    @staticmethod
+    def batch() -> ClaimBatch:
+        return ClaimBatch.model_validate(
+            {
+                "extraction_run": RUN,
+                "claims": [_born("named", 1836)],
+                "entities": [
+                    {
+                        "id": "unnamed",
+                        "label": EUGEN,
+                        "kind": "human",
+                        "extract": False,
+                    },
+                    {"id": "named", "label": EUGEN, "kind": "human"},
+                ],
+            }
+        )
+
+    @staticmethod
+    def wiki():
+        wiki = _wiki()
+        earlier = wiki.wbi.item.new()
+        earlier.labels.set("en", EUGEN)
+        earlier.descriptions.set("en", "a curator's Eugen")
+        return wiki, earlier.write().id
+
+    def test_the_named_record_joins_the_earlier_eugen(self):
+        wiki, earlier = self.wiki()
+        items = len(wiki.wbi.item.store)
+
+        written = BatchWriter(wiki).write_batch(self.batch())
+
+        assert written.created_items == {"named": earlier}
+        assert len(wiki.wbi.item.store) == items + 1  # the run item alone
+        assert _description(wiki, earlier) == "a curator's Eugen"
+
+    def test_resolve_and_the_plan_agree(self):
+        wiki, earlier = self.wiki()
+        batch = self.batch()
+        records = {record.id: record for record in batch.entities}
+        assert homonym_ordinals(records, entity_terms(batch, records)) == {
+            "named": 1
+        }
+
+        held = resolvable_labels(wiki, batch)
+        planned = BatchWriter(wiki, dry_run=True).write_batch(batch)
+
+        assert held == {EUGEN: earlier}
+        assert planned.created_items == {"named": earlier}
+        resolved = resolve_batch(batch, held)
+        assert resolved.claims[0].subject.model_dump() == {
+            "kind": "qid",
+            "qid": earlier,
+        }

@@ -71,7 +71,6 @@ from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import (
     BatchWriter,
     source_descriptor,
-    source_title,
 )
 
 from .conftest import fictional_png, fixture_mark, register_fictional
@@ -257,9 +256,8 @@ def test_what_holds_the_mark_is_refused_or_left_out(client, fixture_graph):
     assert english(item, "labels") == (
         f"{prefix_of(fixture_marker())}Нина Лёбиг"
     )
-    title = english(entity(client, source), "labels")
     assert english(item, "descriptions") == source_descriptor(
-        "human", source_title(title)
+        "human", "artifact"
     )
     assert english(item, "aliases") == ["Нина Сартина"]
     assert statements(client, nina, "relative") == []

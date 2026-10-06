@@ -77,7 +77,6 @@ from yizkr.pipeline.writer import (
     BatchWriter,
     batch_fingerprint,
     source_descriptor,
-    source_title,
 )
 
 from .conftest import fixture_mark, register_fictional
@@ -440,10 +439,9 @@ def test_no_text_of_the_batch_stops_it(client, fixture_graph):
     assert cited(client, father, "stated_in") == [source]
     # the terms, as the instance keeps them
     marker = fixture_marker()
-    kept = terms(
-        client, [eugen, hildegard, sebastian, written.run_qid, source]
-    )
-    described = source_descriptor("human", source_title(kept[source]["label"]))
+    kept = terms(client, [eugen, hildegard, sebastian, written.run_qid])
+    # the source is registered as an artifact of no narrower kind
+    described = source_descriptor("human", "artifact")
     assert kept[sebastian] == {
         "label": labels_of(marker)["sebastian"],
         "description": described,

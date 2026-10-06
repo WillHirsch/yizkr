@@ -37,7 +37,8 @@ but the second is never a parent; the HEAD's LANG gives the texts'
 language: see Amendments.
 Amended by #86 (2026-10-06): a person's summary, which gives the dates
 of their birth and death, is no longer their item's description: the
-writer describes every item it makes by its source alone
+writer describes every item it makes by its kind and the kind of its
+source alone, as "human named in a genealogical report"
 (docs/MODELING.md, "General approach"), and the summary stays in the
 batch's manifest.
 

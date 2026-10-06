@@ -65,11 +65,15 @@ Per batch, the writer:
    gate reads it): the record gives the label, the kind, type hint and
    aliases; otherwise the ref gives its own label and kind. The
    description is the writer's own source descriptor
-   (source_descriptor): the entity's kind and the title of the artifact
-   the first written claim to name it cites, never a summary or a ref's
-   description, which may give what the source asserts of the entity,
-   such as its life dates. A manifest record from the second on under
-   one label (homonym_ordinals), as a son of his father's name is when
+   (source_descriptor): the entity's kind and the artifact kind of the
+   artifact that the first claim to name it, of those the writer does not
+   refuse before its plan, cites (its `instance of`, read and never
+   written), never a summary or a ref's description, which may give what
+   the source asserts of the entity, such as its life dates, nor the
+   artifact's title, which may name a living person. A manifest record
+   from the second on under one label (homonym_ordinals: a record the
+   extraction asserts about, or one a claim names), as a son of his
+   father's name is when
    one document names both, is an entity of its own: it never joins the
    item its label names, but finds, or is made, the item under its label
    with its own description, which ends with its place among those
@@ -293,8 +297,8 @@ before it are written:
   a type hint that holds one is left out, never changed, and the
   result's `refused_terms` names it ("<local id>: <term>"), with a
   warning that names its characters by their code points. An entity's
-  description is the writer's source descriptor, which leaves out an
-  artifact title that holds one (source_title), so none is named. An
+  description is the writer's source descriptor, made of manifest keys
+  alone, so none is named. An
   entity whose label
   holds one has no item the writer can find or mint by it: each claim
   that mentions it, as its subject, its value or a qualifier's, is
@@ -886,61 +890,60 @@ def _term_text(text: str) -> str:
 
 
 def source_descriptor(
-    kind: str | None, title: str | None, ordinal: int = 1
+    kind: str | None, source: str | None, ordinal: int = 1
 ) -> str:
-    """The description a minted item takes: what the entity is and the
-    title of the source that names it, as a reader reads both, never
-    anything the source asserts of the entity (its life dates among them):
-    `kind`, the entity's kind key with its underscores made spaces
-    ("entity" without one), then "named in" and `title` in quotes
-    ("a source" without one), then, for the `ordinal`-th entity of its
-    batch's manifest under one label from the second on
-    (homonym_ordinals), that number in brackets, so that two people of one
-    name that one source names take two descriptions, as Wikibase refuses
-    two items with one label and one description. It is the form the
-    instance keeps a term in (stored_term), at most TERM_LIMIT characters:
-    a longer title is cut at a character and ends with an ellipsis, and
-    the ordinal is kept whole. Wikibase's label and description pair
-    stays unique without a digest a reader cannot read."""
+    """The description a minted item takes: what the entity is and what
+    kind of source names it, as a reader reads both, never anything the
+    source asserts of the entity (its life dates among them), nor the
+    source's title, which may name a living person: `kind`, the entity's
+    kind key with its underscores made spaces ("entity" without one), then
+    "named in" and `source`, the artifact kind key of the source, made
+    words the same way after "a" or "an" ("a source" without one), then,
+    for the `ordinal`-th entity of its batch's manifest under one label
+    from the second on (homonym_ordinals), that number in brackets, so
+    that two people of one name that one source names take two
+    descriptions, as Wikibase refuses two items with one label and one
+    description. It is in the form the instance keeps a term in
+    (stored_term)."""
     what = (kind or "entity").replace("_", " ")
     suffix = f" ({ordinal})" if ordinal > 1 else ""
-    if not title:
-        return stored_term(f"{what} named in a source{suffix}")
-    room = TERM_LIMIT - len(f"{what} named in “”{suffix}")
-    if len(title) > room:
-        title = title[: room - 1].rstrip() + "…"
-    return stored_term(f"{what} named in “{title}”{suffix}")
+    if source:
+        words = source.replace("_", " ")
+        article = "an" if words[:1].lower() in "aeiou" else "a"
+        where = f"{article} {words}"
+    else:
+        where = "a source"
+    return _term_text(f"{what} named in {where}{suffix}")
 
 
-def source_title(label: str | None) -> str | None:
-    """The title of an artifact, its English label `label`, as a source
-    descriptor gives it (source_descriptor): its content tags taken out
-    (_CONTENT_TAG), as the digest of its media is nothing a reader reads,
-    in the form the instance keeps a term in; None when it has none, or
-    holds a character Python's Unicode tables do not know
-    (unknown_characters), which the instance may keep in another form."""
-    if not label or unknown_characters(label):
-        return None
-    return stored_term(_CONTENT_TAG.sub("", label)) or None
-
-
-def homonym_ordinals(records: Mapping[str, EntityRecord]) -> dict[str, int]:
+def homonym_ordinals(
+    records: Mapping[str, EntityRecord], named: Collection[str]
+) -> dict[str, int]:
     """Local id -> the place, from 1, of each manifest record of a batch not
-    on the artifact side (is_artifact_kind) among the batch's records under
-    its label, in the form the writer sends a label (_term_text), in the
-    order of the manifest: so the second of two records under one label,
-    as a father and his son of one name, is 2. The manifest gives each
+    on the artifact side (is_artifact_kind) that counts among those records
+    under its label, in the form the writer sends a label (_term_text), in
+    the order of the manifest: so the second of two such records under one
+    label, as a father and his son of one name, is 2. A record counts when
+    the extraction asserts about it (`extract`), or when a claim the
+    writer does not refuse before its plan names it by a local ref
+    (`named`, entity_terms); a record recorded only for audit
+    (extract=false) that no claim names takes no place, so it never makes
+    a later record the second. A record the resolve step resolved, whose
+    refs name its item by QID, keeps its place by `extract`, so a re-run of
+    a resolved batch gives every record the place the first write gave
+    it. The manifest gives each
     entity a document names one record (ADR-0007), so a record from the
     second on is an entity of its own: the writer makes it an item of its
     own, never the one its label names, and the resolve step leaves it to
-    the writer. The places depend on the manifest alone, not on the
-    instance or the claims, so a re-run of the batch gives each record the
-    place it gave it, and the description it made the record's item with
-    (source_descriptor) finds that item again."""
+    the writer. The places depend on the batch alone, not on the instance,
+    so a re-run of the batch gives each record the place it gave it, and
+    the description it made the record's item with (source_descriptor)
+    finds that item again."""
     ordinals: dict[str, int] = {}
     counts: dict[str, int] = {}
     for local_id, record in records.items():
-        if is_artifact_kind(record.kind):
+        counts_here = record.extract or local_id in named
+        if not counts_here or is_artifact_kind(record.kind):
             continue
         label = _term_text(record.label)
         if not label:
@@ -1082,7 +1085,6 @@ class _FoundLabels:
         self._read: dict[str, str] | None = None
         self._made: dict[str, str] = {}
         self._titles: dict[str, list[tuple[str, str]]] | None = None
-        self._labels_of: dict[str, str] | None = None
 
     def items(self) -> ItemLabels:
         """The item labels the instance held when first asked, label ->
@@ -1103,15 +1105,6 @@ class _FoundLabels:
     def made(self, label: str, qid: str) -> None:
         """The write made the item `qid` under `label`."""
         self._made[label] = qid
-
-    def label_of(self, qid: str) -> str | None:
-        """The label the item `qid` held when the labels were read
-        (`items`), or None."""
-        if self._labels_of is None:
-            self._labels_of = {
-                held: label for label, held in self.items().pairs()
-            }
-        return self._labels_of.get(qid)
 
     def titled(self, title: str) -> list[tuple[str, str]]:
         """Each (label, QID) of the labels read (`items`), every holder of
@@ -1710,6 +1703,24 @@ class BatchWriter:
         result.created_items[ref.local_id] = qid
         return qid
 
+    def _artifact_kind(self, qid: str) -> str | None:
+        """The artifact kind of the artifact `qid`, as a source descriptor
+        names it (source_descriptor): the manifest key of the first of its
+        `instance of` values, deprecated ones aside, that the vocabulary
+        holds, or None. Read, never written (_entity)."""
+        keys = {item: key for key, item in self.items.items()}
+        statements = self._entity(qid).claims.get(
+            self.properties["instance_of"]
+        )
+        for statement in statements:
+            if statement.rank.value == "deprecated":
+                continue
+            value = (statement.mainsnak.datavalue or {}).get("value") or {}
+            key = keys.get(value.get("id"))
+            if key:
+                return key
+        return None
+
     def _own_item(self, label: str, description: str) -> str | None:
         """The item of an entity placed `own` (_plan): the earliest of the
         items under `label` whose English description is `description`, as
@@ -1843,6 +1854,7 @@ class BatchWriter:
         batch: ClaimBatch,
         refused: Collection[int],
         labels: _FoundLabels,
+        before: Collection[int],
     ) -> dict[str, _Placement]:
         """Where step 2 puts the item of each local entity of `batch` (_place),
         for the claims the writer writes, all but those at the places
@@ -1858,11 +1870,14 @@ class BatchWriter:
         under the labels, before the first write.
 
         Each placement carries the description its item is made with
-        (source_descriptor): the entity's kind, the title of the artifact
-        that the first of those claims to name it cites, and its place among
-        the manifest's records under its label (homonym_ordinals). A record
-        from the second on under one label is placed `own`: its item is the
-        one under its label with that description, found or made."""
+        (source_descriptor): the entity's kind, the kind of the artifact
+        that the first claim to name it cites (_artifact_kind), and its place
+        among the manifest's records under its label (homonym_ordinals),
+        both read past the claims at the places `before` alone, those the
+        writer refuses before its plan (pre_plan_refusals), as the resolve
+        step reads them. A record from the second on under one label is
+        placed `own`: its item is the one under its label with that
+        description, found or made."""
         entities = entity_terms(batch, self._entity_records, refused)
         planned: dict[str, bool] = {}
         placements: dict[str, _Placement] = {}
@@ -1872,24 +1887,31 @@ class BatchWriter:
                     placements[local_id] = self._place(
                         label, kind, labels, planned
                     )
+        # the sources and the places among the records under one label are
+        # read past the claims refused before the plan alone, as the resolve
+        # step reads them
         sources: dict[str, str] = {}
         for index, claim in enumerate(batch.claims):
-            if index in refused:
+            if index in before:
                 continue
             for ref in local_refs(claim):
                 sources.setdefault(
                     ref.local_id,
                     self._source_artifact_qid(claim.source.artifact),
                 )
-        ordinals = homonym_ordinals(self._entity_records)
+        ordinals = homonym_ordinals(
+            self._entity_records,
+            entity_terms(batch, self._entity_records, before),
+        )
         self._firsts = {}
         for local_id, placement in placements.items():
             _, kind = entities[local_id]
             ordinal = ordinals.get(local_id, 1)
-            title = source_title(labels.label_of(sources[local_id]))
             placements[local_id] = replace(
                 placement,
-                description=source_descriptor(kind, title, ordinal),
+                description=source_descriptor(
+                    kind, self._artifact_kind(sources[local_id]), ordinal
+                ),
                 own=ordinal > 1,
                 source=sources[local_id],
             )
@@ -1918,7 +1940,7 @@ class BatchWriter:
         warnings: list[str] = []
         flags: list[RegistrationFlag] = []
         while True:
-            placements = self._plan(batch, refused, labels)
+            placements = self._plan(batch, refused, labels, refusals)
             blocked = {
                 local_id: placement
                 for local_id, placement in placements.items()
@@ -2581,8 +2603,8 @@ class BatchWriter:
         is named, and nothing else of them, as nothing else of them is
         sent. An approved equivalence's record gives its label as an alias
         of its item. No description is named: the one a minted item takes
-        is the writer's own (source_descriptor), which leaves out a title
-        that holds such a character (source_title). A record's aliases and
+        is the writer's own (source_descriptor), made of manifest keys
+        alone. A record's aliases and
         type hint are named whether or not a claim the writer writes
         mentions it, as the writer may send them to an item the resolve
         step matched the record to, but for a record of which nothing is

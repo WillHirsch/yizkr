@@ -1681,7 +1681,20 @@ class FakeItems:
         return item
 
     def get(self, qid):
+        if qid not in self.store:
+            return _unheld(qid)
         return self.store[qid]
+
+
+def _unheld(qid: str):
+    """An item a test cites by QID without making it, as the artifact a
+    batch cites mostly is: its id alone, no terms and no statements, so
+    the writer reads no artifact kind of it (#86)."""
+    from wikibaseintegrator import WikibaseIntegrator
+
+    item = WikibaseIntegrator().item.new()
+    item.id = qid
+    return item
 
 
 def _in_form(value, form: str):
@@ -1766,6 +1779,8 @@ class DetachedItems(FakeItems):
         return self._bound(WikibaseIntegrator().item.new())
 
     def get(self, qid):
+        if qid not in self.store:
+            return _unheld(qid)
         return self._copy(self.store[qid], _as_served)
 
 
