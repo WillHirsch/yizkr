@@ -371,6 +371,30 @@ class TestTheSourceKind:
             _description(wiki, qid) for qid in _two_eugens_wiki_items(written)
         } == {"human named in a source", "human named in a source (2)"}
 
+    def test_the_kind_of_the_clusters_document_not_another_cited(self):
+        # the family history's batch also cites a letter, its last claim
+        # the father's birth as the letter gives it: the clusters' one
+        # document is the family history, whose kind names the source
+        wiki = _wiki()
+        letter = "f" * 40
+        source = wiki.wbi.item.new()
+        source.labels.set("en", "a letter")
+        from wikibaseintegrator.datatypes import Item
+
+        source.claims.add(
+            Item(
+                prop_nr=PROPERTIES["instance_of"], value=SOURCE_KINDS["letter"]
+            )
+        )
+        wiki.media[letter] = source.write().id
+        given = _eugens().model_dump(mode="json")
+        given["claims"].append(_born("father", 1837, letter))
+        batch = ClaimBatch.model_validate(given)
+        written = BatchWriter(wiki).write_batch(batch, identity=mapped(batch))
+        assert {
+            _description(wiki, qid) for qid in _two_eugens_wiki_items(written)
+        } == {REPORT, f"{REPORT} (2)"}
+
     def test_the_source_is_read_not_written(self):
         wiki = _wiki()
         history = wiki.media[MEDIA_SHA1]
@@ -651,6 +675,30 @@ class TestTheMapIsTheOnlyWay:
             ITEMS["human"]: [wiki.media[MEDIA_SHA1], wiki.media[TREE_SHA1]]
         }
         assert written.type_statements_referenced == 1
+
+    def test_a_minted_item_takes_every_mentions_label_as_an_alias(self):
+        # the map puts the tree's "Eugen Löbig der Ältere" in the father's
+        # cluster: the family history's write mints him under that fuller
+        # form, one mention giving each, with his own label as an alias,
+        # before the tree is written
+        wiki = _wiki()
+        tree = _tree(f"{EUGEN} der Ältere")
+        father_only = _eugens().model_copy(
+            update={
+                "entities": _eugens().entities[:1],
+                "claims": _eugens().claims[2:],
+            }
+        )
+        identity = corpus(
+            father_only, tree, entities=((EUGEN, f"{EUGEN} der Ältere"),)
+        )
+        father = (
+            BatchWriter(wiki)
+            .write_batch(father_only, identity=identity)
+            .created_items["father"]
+        )
+        assert _labelled(wiki, f"{EUGEN} der Ältere") == [father]
+        assert _aliases(wiki, father) == [EUGEN, "Muckel"]
 
     def test_a_later_kind_reaches_a_found_item_cited_to_its_artifact(self):
         # the tree types the father's cluster as an unclassified entity
