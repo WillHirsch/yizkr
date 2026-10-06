@@ -172,6 +172,14 @@ written claim mentions it, while a record's kind is warned of whatever
 its claims.
 The kinds still matched by label, and why, are listed in §1 ("What is
 still matched by label").
+Amended by #94 (2026-10-06): the wiki client's label index takes two or
+more items under one English label (homonyms, such as two people of one
+name): the label names the numerically earliest of them, which the
+writer and the resolve step both find under it, and only a lookup whose
+label must name one item alone fails on it, a manifest vocabulary item's
+or a run item's. The registrar's content tag stays as a label
+convention; nothing keys on an artifact's label (§1, "Registration at
+write time" and "What is still matched by label").
 
 ## Context
 
@@ -275,12 +283,15 @@ never by name (amended by #103, 2026-09-29):
   media object is never joined to the fragment, and the flag is on the
   fragment's artifact.
   When the title is already another item's label, the new item's label
-  takes a short content tag (`"<title> [<sha1[:8]>]"`), so labels stay
-  unique (the wiki client's label index; #94 would scope that rule away
-  from artifacts) and homonymous files stay separate artifacts. The tag
-  is a stopgap until #94, and which of two homonyms bears it depends on
-  the order they are registered in, so nothing may key on an artifact's
-  label: its key is its `media SHA-1`. Titles and labels are compared
+  takes a short content tag (`"<title> [<sha1[:8]>]"`), so homonymous
+  files stay separate artifacts with labels a reader can tell apart. The
+  wiki client's label index no longer needs unique item labels (amended
+  by #94, 2026-10-06: only a manifest vocabulary item's and a run item's
+  label must name one item), so the tag is a label convention, kept
+  while the writer finds a media object's registered artifacts by it.
+  Which of two homonyms bears it depends on the order they are
+  registered in, so nothing may key on an artifact's label: its key is
+  its `media SHA-1`. Titles and labels are compared
   and set in the form Wikibase stores terms in, by the rule the writer
   keeps labels by (its `stored_term`): each run of control characters
   and line or paragraph separators made one space, the separators and
@@ -648,10 +659,12 @@ an entity of an artifact kind or of artifact fragment (the writer's
   tag whatever its kind or none (AZ, amended by #444, 2026-10-03), its
   own label an alias of that item. The tag depends on the label and the
   side alone, so a re-run finds the item again, and nothing about the
-  item under the plain label changes. Labels stay unique, as the wiki client's label
-  index fails on two items with one English label (and Wikibase refuses
-  two with one label and description), so the entity cannot take the
-  plain label while another item holds it; the artifact keeps its title,
+  item under the plain label changes. The writer makes no second item
+  under a label an item holds, as it finds that item by the label (and
+  Wikibase refuses two with one label and description), so the entity
+  cannot take the plain label while another item holds it (amended by
+  #94, 2026-10-06: the wiki client's label index takes two items under
+  one label, and gives the label the earliest of them); the artifact keeps its title,
   and a person keeps its name as an alias, the closest to its name the
   wiki allows. Which side bears the tag depends on the order of the
   writes, as a content tag does: a person written before an artifact

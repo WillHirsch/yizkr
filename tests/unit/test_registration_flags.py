@@ -1539,9 +1539,10 @@ needs_unknown_mark = pytest.mark.skipif(
 class WritingWiki(FakeWiki):
     """The in-memory wiki with the surface the writer and resolve use
     beside the registrar's: its vocabulary, the label lookup and the label
-    index, which fail on a duplicate label as the wiki client's label
-    index does, the statements of the entities asked for, and the media
-    SHA-1 index."""
+    index, the statements of the entities asked for, and the media SHA-1
+    index. The label lookup and index fail on a duplicate label, which
+    the writer and registrar never make, though the wiki client's label
+    index takes item homonyms (#94; test_homonym_labels.py)."""
 
     PROPERTIES = {
         **FakeWiki.PROPERTIES,

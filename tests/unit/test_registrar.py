@@ -596,7 +596,10 @@ def part_of(entity) -> dict[tuple[str, str], list[str]]:
 
 
 def assert_labels_unique(wiki) -> None:
-    """The wiki client's label index fails on a duplicate label."""
+    """No two items share a label: registration content-tags a title
+    another item holds, and the writer never mints under a label an item
+    holds. The wiki client's label index takes such homonyms (#94); these
+    tests hold the registrar and writer to making none."""
     labels = [label_of(wiki, qid) for qid in wiki.entities]
     labels = [label for label in labels if label is not None]
     assert len(labels) == len(set(labels)), labels
