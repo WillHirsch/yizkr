@@ -746,6 +746,43 @@ class TestPauses:
         run.stage("places")
         assert run.record("places")["counts"]["applied"] == 3
 
+    def test_a_pause_mid_way_resumes_where_it_stopped(self, run, monkeypatch):
+        """Paused after its first containment is written, the run is
+        invoked again: the reset finds the instance holding this run's
+        writes alone and goes on, the write records no key over the
+        containment written, and the place stage applies the rest of
+        what it proposed without reading the graph or asking again."""
+        run.past_the_barrier(until="write")
+        real = scratchwrite._containment
+        made = []
+
+        def containment(*args, **kwargs):
+            made.append(args)
+            if len(made) == 2:
+                raise UsageLimitReached(
+                    "the five-hour window is used up",
+                    resumes_at=datetime(2026, 10, 6, 15, tzinfo=UTC),
+                )
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(scratchwrite, "_containment", containment)
+        with pytest.raises(UsageLimitReached):
+            run.stage("places")
+        assert len(run.record("places")["applied"]) == 1
+        proposals = run.record("places")["proposals"]
+        # the next invocation
+        for name in ("reset", "register", "write"):
+            run.stage(name)
+        assert run.record("reset")["action"] == scratchwrite.RESUMED
+        # the instance holds more than the write key makes
+        assert recorded_contents(run.wiki).key is None
+        run.stage("places")
+        record = run.record("places")
+        assert record["counts"]["applied"] == 3
+        assert record["proposals"] == proposals
+        assert len(run.engine.prompts) == 1
+        assert recorded_contents(run.wiki).key == record["key"]
+
     def test_an_invocation_after_a_pause_asks_nothing_again(
         self, run, monkeypatch
     ):
