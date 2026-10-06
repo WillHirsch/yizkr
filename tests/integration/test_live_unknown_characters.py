@@ -19,7 +19,8 @@ wrote her surname with the i over its a and a dot below it, gives:
   references;
 * her kinship to Rudolf, its kinship_type qualifier, a string value,
   holding the mark: the claim is refused whole, and Rudolf, whom only it
-  mentions, gets no item;
+  mentions, gets no item, though the manifest has a record of him, as
+  every entity a batch with a manifest names has (#109);
 * writing the batch again sends no edit at all, and refuses and leaves
   out the same.
 
@@ -169,7 +170,12 @@ def batch_content(sha1: str, prefix: str) -> dict:
                 "kind": "human",
                 "summary": f"fixture: Rudolf Löbig's widow, born {MARKED}",
                 "aliases": ["Нина Сартина", f"Нина {MARKED}"],
-            }
+            },
+            {
+                "id": "rudolf",
+                "label": f"{prefix}Лёбиг Рудольф Феликсович",
+                "kind": "human",
+            },
         ],
     }
 

@@ -132,7 +132,8 @@ def typed_names(client, qid: str, prop_key: str) -> dict[str, set[str]]:
 @pytest.fixture(scope="module")
 def llm_path_person(client, tmp_path_factory):
     """Two fictional documents about one person, written through the real
-    extractor wiring and writer. Returns (item QID, doc 1, doc 2)."""
+    extractor wiring and writer, with one identity map of the two. Returns
+    (item QID, doc 1, doc 2, the map)."""
     first_doc = fixture_artifact(client, "Integration names register")
     second_doc = fixture_artifact(client, "Integration names letter")
 
@@ -167,11 +168,11 @@ def llm_path_person(client, tmp_path_factory):
     qid = written.created_items["e1"]
     again = write_mapped(BatchWriter(client), second, identity=identity)
     assert again.created_items["e1"] == qid  # the one item of its cluster
-    return qid, first_doc, second_doc
+    return qid, first_doc, second_doc, identity
 
 
 def test_llm_path_alias_bag_is_hygiened_in_the_graph(client, llm_path_person):
-    qid, _, _ = llm_path_person
+    qid, _, _, _ = llm_path_person
     item = client.wbi.item.get(qid)
     assert str(item.labels.get("en")) == MARKED_LABEL
     # exactly the forms that add a part to the label, each whole; nothing
@@ -182,7 +183,7 @@ def test_llm_path_alias_bag_is_hygiened_in_the_graph(client, llm_path_person):
 def test_llm_path_typed_names_are_referenced_statements(
     client, llm_path_person
 ):
-    qid, first_doc, second_doc = llm_path_person
+    qid, first_doc, second_doc, _ = llm_path_person
     assert typed_names(client, qid, "birth_name") == {
         "Ida Probewald": {first_doc.qid}
     }
@@ -194,8 +195,11 @@ def test_llm_path_typed_names_are_referenced_statements(
 
 def test_llm_path_rewrite_changes_nothing(client, llm_path_person, tmp_path):
     """Idempotent: re-extracting and re-writing the first document adds no
-    statement and no alias."""
-    qid, first_doc, _ = llm_path_person
+    statement and no alias. The rewrite is mapped by the map the first
+    write was, as a run's every write is (one identity map an instance):
+    the map of the document alone describes its person by one source, not
+    two, and so keys another item."""
+    qid, first_doc, _, identity = llm_path_person
     batch = extract(
         tmp_path,
         first_doc,
@@ -203,7 +207,8 @@ def test_llm_path_rewrite_changes_nothing(client, llm_path_person, tmp_path):
         entity_manifest(FIRST_DOCUMENT_ALIASES, 2, FIRST_RECORD),
         FIRST_CLAIMS,
     )
-    result = write_mapped(BatchWriter(client), batch)
+    result = write_mapped(BatchWriter(client), batch, identity=identity)
+    assert result.created_items == {"e1": qid}
     assert result.written == 0
     assert aliases_on(client, qid) == EXPECTED_ALIASES
 

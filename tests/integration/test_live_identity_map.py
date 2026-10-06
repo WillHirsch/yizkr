@@ -24,7 +24,10 @@ every mention is a cluster of its own. On the instance:
   instance give the same items: an opt-in test of
   test_live_scratch_reset.py (`the_same_items_after_a_reset`) resets the
   instance, as it must run in a session of its own;
-* the run item records the map's hash.
+* the run item records the map's hash, and its label the map's tag;
+* a write of the history with another map, its own alone, is refused
+  before anything is written: the instance holds the first map's writes,
+  whose items that map alone finds again.
 
 Every label and title carries a marker, eight hex digits of a hash over
 the fixture, over the writer's, the resolve step's and the identity
@@ -42,13 +45,18 @@ from dataclasses import dataclass
 import pytest
 from wikibaseintegrator.entities.item import ItemEntity
 
-from tests.fixtures.identity import mapped
+from tests.fixtures.identity import mapped, run_label
 from yizkr.claims import ClaimBatch
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline import clustering, resolve, writer
 from yizkr.pipeline.clustering import IdentityMap
 from yizkr.pipeline.resolve import resolve_batch
-from yizkr.pipeline.writer import BatchWriter, source_descriptor
+from yizkr.pipeline.writer import (
+    MAP_TAG,
+    BatchWriter,
+    OtherIdentityMap,
+    source_descriptor,
+)
 
 from .conftest import Registered, fixture_mark, register_fictional
 
@@ -325,3 +333,26 @@ def test_the_run_item_records_the_maps_hash(client, written):
     held = terms(client, written.runs.values())
     for _, described in held.values():
         assert described.endswith(f", identity map {written.identity.hash}")
+    tag = f" map {written.identity.hash[:MAP_TAG]} "
+    for label, _ in held.values():
+        assert tag in label
+
+
+def test_a_write_with_another_map_is_refused(client, written):
+    history = history_batch(written.history)
+    # the map of the history alone: one of its clusters is described by
+    # another source descriptor than in the map of the two
+    alone = mapped(history)
+    assert alone.hash != written.identity.hash
+    made: list[dict] = []
+    with pytest.MonkeyPatch.context() as patch:
+        record_mints(patch, made)
+        with pytest.raises(OtherIdentityMap) as refused:
+            BatchWriter(client).write_batch(
+                resolve_batch(history, alone), identity=alone
+            )
+    assert written.identity.hash[:MAP_TAG] in refused.value.tags
+    assert alone.hash[:MAP_TAG] not in refused.value.tags
+    # nothing was written: no item, and no run item for the other map
+    assert made == []
+    assert client.find_item_by_label(run_label(history, alone)) is None
