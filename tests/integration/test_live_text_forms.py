@@ -5,11 +5,13 @@ Wikibase saves string and external-id values, labels, descriptions and
 aliases in Unicode NFC, and its API gives every text back in NFC,
 monolingual text included. A fictional fixture gives every text of its
 batch in the decomposed form (NFD), as a GEDCOM export can: its items'
-labels, an alias and a description, a monolingual value, a string
+labels, an alias and a summary, a monolingual value, a string
 qualifier, an external id, the excerpts, and the model identifier its run
 item is named by. It is written, and read back:
 
-* the items and statements hold the fixture's text in NFC. Wikibase
+* the items and statements hold the fixture's text in NFC, and each item
+  the writer's source descriptor as its description, never its summary
+  (#86). Wikibase
   keeps a monolingual text as it is sent, but its API gives every text
   back in NFC, and the query service takes canonically equivalent
   literals as one term, so only the entity's RDF, which
@@ -42,7 +44,11 @@ from wikibaseintegrator.entities.baseentity import BaseEntity
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.core.config import USER_AGENT
 from yizkr.pipeline import writer
-from yizkr.pipeline.writer import BatchWriter
+from yizkr.pipeline.writer import (
+    BatchWriter,
+    source_descriptor,
+    source_title,
+)
 
 from .conftest import fixture_mark, register_fictional
 
@@ -57,8 +63,9 @@ MARK = fixture_mark(FIXTURE, writer)
 
 # the fixture's entities as its source names them, before the marker: Ida,
 # by her married name with her birth name as an alias (ADR-0011), and
-# (here) her sister-in-law Hildegard and the town, Flörburg. Each has a
-# description: Wikibase refuses an item whose label and description are
+# (here) her sister-in-law Hildegard and the town, Flörburg. Each is minted
+# with a description, the writer's source descriptor (#86), which a re-run
+# gives it again: Wikibase refuses an item whose label and description are
 # another item's, so a writer that failed to find one of them by its label
 # could not mint a second item under the same label, which would stop
 # every writer's label index on the instance
@@ -227,6 +234,14 @@ def test_the_fixture_is_kept_in_nfc(client, config, fixture_graph):
     assert (written.written, written.referenced, written.skipped) == (3, 0, 0)
     properties, _ = client.vocabulary()
     found = items(client, written)
+    title = client.api_get(
+        {
+            "action": "wbgetentities",
+            "ids": registered.qid,
+            "props": "labels",
+            "languages": "en",
+        }
+    )["entities"][registered.qid]["labels"]["en"]["value"]
     for record in fixture_batch(registered.ref, "NFC").entities:
         item = found[record.id]
         assert item["labels"]["en"]["value"] == record.label
@@ -234,7 +249,9 @@ def test_the_fixture_is_kept_in_nfc(client, config, fixture_graph):
             alias["value"] for alias in item.get("aliases", {}).get("en", [])
         ] == record.aliases
         description = item.get("descriptions", {}).get("en", {})
-        assert description.get("value") == (record.summary or None)
+        assert description.get("value") == source_descriptor(
+            record.kind, source_title(title)
+        )
 
     def values(key: str, prop: str) -> list:
         return [

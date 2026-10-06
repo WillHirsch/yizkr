@@ -37,6 +37,12 @@ another form, and the writer matches no item by it either. Nor does an
 entity an approved equivalence names: its refs already name its item by
 QID (yizkr.pipeline.reconcile).
 
+Nor is a manifest record from the second on under one label, as the
+son of a father of one name is, when one document names both: the
+manifest gives each entity one record (ADR-0007), so the writer makes
+such a record an item of its own, found again by its description, never
+the item its label names (`homonym_ordinals` in yizkr.pipeline.writer).
+
 An entity on the artifact side (of an artifact kind, artifact or a class
 the manifest makes a `subclass_of` it, or of artifact fragment;
 `is_artifact_kind` in yizkr.pipeline.writer) is never resolved by its
@@ -91,6 +97,7 @@ from yizkr.claims import (
 from yizkr.pipeline.review import entity_records
 from yizkr.pipeline.writer import (
     entity_terms,
+    homonym_ordinals,
     is_artifact_item,
     is_artifact_kind,
     pre_plan_refusals,
@@ -142,15 +149,18 @@ def _resolvable(batch: ClaimBatch) -> dict[str, tuple[str, str | None]]:
     (label, kind), as the writer reads them (entity_terms) past the claims
     it refuses before its plan (pre_plan_refusals), so no entity whose
     label holds a character Python's Unicode tables do not know is among
-    them: all but those on the artifact side (the module docstring)."""
+    them: all but those on the artifact side, and a manifest record from
+    the second on under one label, which the writer makes an item of its
+    own (homonym_ordinals; the module docstring)."""
     records = entity_records(batch)
     refused = pre_plan_refusals(batch, unnamed_entities(batch, records))
+    ordinals = homonym_ordinals(records)
     return {
         local_id: (label, kind)
         for local_id, (label, kind) in entity_terms(
             batch, records, refused
         ).items()
-        if not is_artifact_kind(kind)
+        if not is_artifact_kind(kind) and ordinals.get(local_id, 1) == 1
     }
 
 

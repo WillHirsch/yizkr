@@ -22,9 +22,49 @@
   label must name one item alone: a vocabulary item's (the vocabulary
   read, the bootstrap) and a process item's, such as a run item's (#94).
   Until the writer resolves mentions through the identity map (#109), an
-  extracted entity whose label items share joins that earliest item; when
+  extracted entity whose label items share joins that earliest item (a
+  document's second record under one label aside, below); when
   the earliest is an artifact, the entity takes the artifact-tagged label
   instead (ADR-0010), so a later same-named person is never joined.
+- The writer makes each new item in one `wbeditentity` write: its label,
+  its description, its aliases, and its `instance of` (with a type hint
+  for an unclassified entity) with both references, stated in the
+  artifact and inferred from the run. A write that fails leaves no item,
+  and none without its kind (#86).
+- **An item's description is a source descriptor.** The writer
+  describes an item it makes by what it is and the source that names it,
+  as a reader reads both: the entity's kind, its key with spaces for
+  underscores ("entity" without one), "named in", and the title of the
+  artifact the first written claim to name it cites, in quotes, its
+  content tag (`[<sha1[:8]>]`) taken out ("a source" where the artifact
+  has no title, or one that holds a character Python's Unicode tables do
+  not know): `human named in “A few pages of family history”`. Nothing
+  the source asserts of the entity goes in it: never a summary, which
+  may give life dates (a GEDCOM person's gives them), nor a ref's
+  description, nor a QID or a digest a reader cannot read. A title too
+  long for the 250 characters is cut at a character and ends with "…".
+  The writer never changes the description of an item it finds (rule
+  3), and a curator may describe an item as they see fit.
+- **Homonyms in one document.** The manifest gives each entity a
+  document names one record (ADR-0007), so two records under one label,
+  as a father and his son of one name, are two entities. The first record
+  under a label (in the manifest's order, the label as the writer sends
+  it, on the person side of ADR-0010) finds the item its label names, as
+  above, or is made one, before any later record under it is. Each record
+  from the second on is an item of its own: its description ends with
+  its place among those records, `human named in “A few pages of family
+  history” (2)`, since Wikibase refuses two items with one label and one
+  description, and a re-run finds the item under its label with that
+  description (only the items under that label are read). The resolve
+  step leaves such a record local, so the review sheet shows it NEW, or
+  its item once the writer has made it. The places depend on the manifest
+  alone, so a re-run of the batch gives each record the place, and the
+  description, it had. Refs without a manifest record, as a face batch's,
+  still join under one label: such refs name one entity. This
+  descriptor stands in for the corpus identity's cluster id (ADR-0027,
+  #66): once the identity map reaches the writer (#109), the cluster id
+  takes the descriptor's place as what tells two homonyms apart, and the
+  writer finds an entity's item by it rather than by its label.
 - Wikibase keeps a label, a description or an alias trimmed, then
   cleaned up, then in NFC: each run of control characters in it (a line
   feed or a tab among them) made one space, the separators at either end
@@ -49,7 +89,9 @@
   that agree up to the cut stay two items' labels, and the run item's
   label, which holds the model's identifier, keeps its batch's
   fingerprint in the digest. An entity whose description would be its
-  label gets none, with a warning (#384).
+  label gets none, with a warning (#384); the description is the
+  writer's source descriptor (above), so only a label that is that very
+  descriptor meets this (#86).
 - Wikibase puts a term, and every text, in NFC by the tables of Unicode
   15.0 (ICU 72.1 in the wikibase/wikibase:7 image), and the writer by
   Python's (14.0.0 on Python 3.11). Unicode's normalization stability
@@ -58,20 +100,20 @@
   do not, noncharacters aside, read whole, past the cut too, so that no
   cut of such a term is sent either: a combining mark assigned since,
   such as U+1E08F, the combining Cyrillic Byelorussian-Ukrainian i, may
-  take another place in the instance's NFC. A description, an alias or
-  a type hint that holds one is left out, never changed, and the write's
-  result names it in `refused_terms`, with a warning. An entity whose label
+  take another place in the instance's NFC. An alias or a type hint
+  that holds one is left out, never changed, and the write's result
+  names it in `refused_terms`, with a warning. An entity's description is
+  the writer's source descriptor, which leaves out a title that holds one
+  (above), so no description is named (#86). An entity whose label
   holds one is neither found nor minted, and each claim that mentions
   it is refused. The registrar makes no alias of a title that holds one,
   and content-tags a new item's label made from one, as it does a taken
   label, so two same-named copies stay two items whatever form the
-  instance keeps the first one's label in. A description is named in
-  `refused_terms` only when a claim the writer writes mentions its
-  entity, as only the item such a claim mints would take it: a claim
-  refused for its text, as a misplaced document subject (ADR-0035
-  §3.4), or with an entity that may join neither the item under its
-  label nor the one under its tagged label (ADR-0010), mints nothing. A manifest record whose local refs only such refused
-  claims hold has nothing of it sent, so its aliases and type hint are
+  instance keeps the first one's label in. A claim refused for its
+  text, as a misplaced document subject (ADR-0035 §3.4), or with an
+  entity that may join neither the item under its label nor the one
+  under its tagged label (ADR-0010), mints nothing. A manifest record
+  whose local refs only such refused claims hold has nothing of it sent, so its aliases and type hint are
   not named in `refused_terms` either (amended by #444, 2026-10-03).
   A run item's label holding one, an extraction run's or the place-hierarchy
   pass's, or an extraction run's description, raises ValueError before

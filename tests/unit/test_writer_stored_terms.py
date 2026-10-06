@@ -45,7 +45,6 @@ from tests.unit.test_pipeline import (
     FakeWiki,
     _batch_of,
     _by_value,
-    _certificate_batch,
     _directory_batch,
     _firm_batch,
     _labelled,
@@ -64,31 +63,18 @@ from tests.unit.test_writer_limits import (
     _leaves,
     _quotes,
     _quoting,
-    _said_over,
     _saying,
     _to_the_last_space,
     _with_properties,
 )
 from tests.unit.test_writer_text_shapes import (
-    TERM_ROOM,
-    _term_cut,
     _with_aliases,
 )
 from yizkr.claims import ClaimBatch, RegionPercent
 from yizkr.pipeline.review import claim_id
-from yizkr.pipeline.writer import TERM_LIMIT, TEXT_LIMIT, BatchWriter
+from yizkr.pipeline.writer import TEXT_LIMIT, BatchWriter
 
 REPLACEMENT = "\N{REPLACEMENT CHARACTER}"
-
-
-def _summarised(summary: str) -> ClaimBatch:
-    """The certificate's batch, its manifest record of Sebastian giving
-    `summary`."""
-    batch = _certificate_batch()
-    (record,) = batch.entities
-    return batch.model_copy(
-        update={"entities": [record.model_copy(update={"summary": summary})]}
-    )
 
 
 def _written_again(wiki: FakeWiki, batch: ClaimBatch):
@@ -156,40 +142,6 @@ class TestTermsAsTheInstanceKeepsThem:
         )
         sent = [alias["value"] for alias in minted["aliases"]["en"]]
         assert sent == ["Wastl"]
-
-    def test_a_description_is_cut_once_trimmed(self):
-        # (here) Sebastian's summary, said over to one character past the
-        # limit, a line break and spaces around it: cut as the summary
-        # alone is, with the digest of the summary alone
-        summary = _said_over(
-            "Master hatter of Flörburg, of the Hutmacherei zum Blauen Hut, ",
-            TERM_LIMIT + 1,
-        )
-        assert summary[TERM_ROOM - 1 : TERM_ROOM + 1] == "ei"
-        wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
-
-        written = BatchWriter(wiki).write_batch(
-            _summarised(f"\n  {summary} \N{IDEOGRAPHIC SPACE}")
-        )
-
-        item = wiki.wbi.item.get(written.created_items["e01"])
-        assert str(item.descriptions.get("en")) == _term_cut(summary)
-
-    def test_whitespace_around_a_description_never_counts(self):
-        # the summary at the limit, taken past it by whitespace alone: kept
-        # whole, as the instance keeps it
-        summary = _said_over(
-            "Master hatter of Flörburg, of the Hutmacherei zum Blauen Hut, ",
-            TERM_LIMIT,
-        )
-        padded = f"\t {summary}\n\N{IDEOGRAPHIC SPACE}"
-        assert len(padded) > TERM_LIMIT
-        wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
-
-        written = BatchWriter(wiki).write_batch(_summarised(padded))
-
-        item = wiki.wbi.item.get(written.created_items["e01"])
-        assert str(item.descriptions.get("en")) == summary
 
 
 # -- locators and type hints: cleaned up as the instance gives them back ------

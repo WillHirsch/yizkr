@@ -11,9 +11,10 @@ first. A copy of Nina Sartina's 1958 letter, whose transcriber
 wrote her surname with the i over its a and a dot below it, gives:
 
 * Nina, by a fictional label without the mark, with an alias and a
-  description that hold it, and an alias that does not: her item is
-  minted with her label and the clean alias, and the marked alias and the
-  description are left out, named in the result's `refused_terms`;
+  summary that hold it, and an alias that does not: her item is minted
+  with her label, the clean alias and the writer's source descriptor as
+  its description (#86), and the marked alias is left out, named in the
+  result's `refused_terms`; the summary is never sent, so it is not;
 * her married name, a clean claim, which is written with both its
   references;
 * her kinship to Rudolf, its kinship_type qualifier, a string value,
@@ -67,7 +68,11 @@ from yizkr.claims import ClaimBatch
 from yizkr.pipeline import registrar, writer
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.review import claim_id
-from yizkr.pipeline.writer import BatchWriter
+from yizkr.pipeline.writer import (
+    BatchWriter,
+    source_descriptor,
+    source_title,
+)
 
 from .conftest import fictional_png, fixture_mark, register_fictional
 
@@ -239,12 +244,11 @@ def test_what_holds_the_mark_is_refused_or_left_out(client, fixture_graph):
     assert (written.written, written.referenced, written.skipped) == (1, 0, 0)
     refused = claim_id(batch.claims[1])
     assert written.refused == [refused]
-    assert written.refused_terms == ["nina: description", "nina: alias"]
+    assert written.refused_terms == ["nina: alias"]
     assert written.warnings == [
         f"claim {refused} (relative) is refused, and nothing of it is "
         f"written: its kinship_type qualifier {FAULT}. A cut or any other "
         f"change would alter what the source says",
-        f"entity 'nina' has a description that {FAULT}: it is left out",
         f"entity 'nina' has an alias that {FAULT}: it is left out",
     ]
     assert "rudolf" not in written.created_items
@@ -253,7 +257,10 @@ def test_what_holds_the_mark_is_refused_or_left_out(client, fixture_graph):
     assert english(item, "labels") == (
         f"{prefix_of(fixture_marker())}Нина Лёбиг"
     )
-    assert english(item, "descriptions") is None
+    title = english(entity(client, source), "labels")
+    assert english(item, "descriptions") == source_descriptor(
+        "human", source_title(title)
+    )
     assert english(item, "aliases") == ["Нина Сартина"]
     assert statements(client, nina, "relative") == []
     (married,) = statements(client, nina, "married_name")

@@ -48,7 +48,11 @@ from yizkr.pipeline.transcribe import (
     TextFileTranscriber,
     Transcription,
 )
-from yizkr.pipeline.writer import BatchWriter, UnregisteredArtifactError
+from yizkr.pipeline.writer import (
+    BatchWriter,
+    UnregisteredArtifactError,
+    source_descriptor,
+)
 
 RUN = {
     "model_identifier": "fake-model",
@@ -3977,24 +3981,20 @@ class TestWriterTextInNfc:
         assert again.run_qid == first.run_qid
         assert wiki.wbi.item.writes == writes
 
-    def test_a_summary_is_capped_as_the_instance_counts_it(self):
-        # Sebastian's summary: 248 characters in NFC, the form the instance
-        # stores and caps at 250, and more in the decomposed form the batch
-        # gives it in. It is his description whole
-        summary = (
+    def test_a_summary_never_becomes_the_description(self):
+        # Sebastian's summary gives his life dates, which a description
+        # never holds (#86): his item is made with the writer's source
+        # descriptor, in NFC, and nothing of the summary
+        summary = unicodedata.normalize(
+            "NFD",
             "Hatter of Flörburg, born on 15 February 1862, son of the "
-            "master hatter Eugen Löbig and Cäcilie Löbig née Tarle; married "
-            "Hildegard Laudler of Fläckfeld at Flörburg on 15 December "
-            "1905; owner of the Hutmacherei zum Blauen Hut after his "
-            "father's death"
+            "master hatter Eugen Löbig",
         )
-        decomposed = unicodedata.normalize("NFD", summary)
-        assert len(summary) <= 250 < len(decomposed)
         batch = _certificate_batch()
         (record,) = batch.entities
         batch = batch.model_copy(
             update={
-                "entities": [record.model_copy(update={"summary": decomposed})]
+                "entities": [record.model_copy(update={"summary": summary})]
             }
         )
         wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
@@ -4002,7 +4002,9 @@ class TestWriterTextInNfc:
         written = BatchWriter(wiki).write_batch(batch)
 
         item = wiki.wbi.item.get(written.created_items["e01"])
-        assert str(item.descriptions.get("en")) == summary
+        description = str(item.descriptions.get("en"))
+        assert description == source_descriptor(record.kind, None)
+        assert "1862" not in description
         assert _not_in_nfc(wiki) == []
 
     def test_nfc_is_the_only_change(self):

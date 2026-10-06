@@ -102,6 +102,7 @@ from yizkr.pipeline.writer import (
     TEXT_LIMIT,
     BatchWriter,
     batch_fingerprint,
+    source_descriptor,
 )
 
 # the characters these tests give texts, by name
@@ -806,48 +807,19 @@ class TestTerms:
         BatchWriter(wiki).write_batch(batch)
         assert wiki.wbi.item.writes == writes
 
-    @pytest.mark.parametrize("length", [TERM_LIMIT, TERM_LIMIT + 1])
-    def test_a_description_over_the_limit_is_cut(self, length):
-        # (here) Eugen's summary, said over and over: at the limit it is
-        # his description whole; one character more, and it is cut inside
-        # "Hutmacherei", which the cut leaves out whole
-        summary = _said_over(
-            "Master hatter of Flörburg, of the Hutmacherei zum Blauen Hut, ",
-            length,
-        )
-        batch = _certificate_batch()
-        (record,) = batch.entities
-        batch = batch.model_copy(
-            update={
-                "entities": [record.model_copy(update={"summary": summary})]
-            }
-        )
-        wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
-
-        written = BatchWriter(wiki).write_batch(batch)
-
-        item = wiki.wbi.item.get(written.created_items["e01"])
-        description = str(item.descriptions.get("en"))
-        if length > TERM_LIMIT:
-            assert summary[TERM_ROOM - 1 : TERM_ROOM + 1] == "ei"
-            assert description == _term_cut(summary)
-        else:
-            assert description == summary
-
     @pytest.mark.parametrize("dry_run", [False, True], ids=["write", "plan"])
     def test_a_description_that_is_the_label_is_left_out(self, dry_run):
-        # (here) the certificate's extraction gives Sebastian a summary of
-        # his name alone, a space after it: as the instance keeps them, his
-        # label and description would be the same, which it refuses. His
-        # item is made without a description, and a warning says so, in a
-        # dry run too (#401's review)
+        # (here) a label that is the very source descriptor the writer
+        # would describe its item by, a space after it: as the instance
+        # keeps them, label and description would be the same, which it
+        # refuses. The item is made without a description, and a warning
+        # says so, in a dry run too (#401's review; #86)
         batch = _certificate_batch()
         (record,) = batch.entities
+        label = source_descriptor(record.kind, None)
         batch = batch.model_copy(
             update={
-                "entities": [
-                    record.model_copy(update={"summary": f"{SEBASTIAN} "})
-                ]
+                "entities": [record.model_copy(update={"label": f"{label} "})]
             }
         )
         wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
@@ -865,7 +837,7 @@ class TestTerms:
         sebastian = written.created_items["e01"]
         item = wiki.wbi.item.get(sebastian)
         assert (str(item.labels.get("en")), item.descriptions.get("en")) == (
-            SEBASTIAN,
+            label,
             None,
         )
         # a re-run finds him, warns of nothing and writes nothing
