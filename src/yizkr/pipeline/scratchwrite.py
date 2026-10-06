@@ -101,7 +101,13 @@ from yizkr.pipeline.stages import (
 # CODE's source, which the key hashes too
 WRITER_VERSION = 1
 PACKAGE = files("yizkr.pipeline")
-CODE = ("scratchwrite.py", "writer.py", "registrar.py", "resolve.py")
+CODE = (
+    "scratchwrite.py",
+    "writer.py",
+    "registrar.py",
+    "resolve.py",
+    "orchestrate.py",
+)
 MANIFEST = files("yizkr.model") / "manifest.yaml"
 KEY_FORMAT = 1
 # the stages, in the order they run after clustering
@@ -591,6 +597,11 @@ def run_write(context: Any) -> list[str]:
     depicts = _depicts(context.documents)
     skipped = _skipped(context, WRITE)
     if skipped is not None:
+        if read_record(context.directory).get("key") == key and (
+            read_record(context.directory).get("recorded")
+        ):
+            # this run made what the instance holds: its counts stand
+            return []
         save_record(
             context.directory,
             {

@@ -471,6 +471,17 @@ class TestRefusals:
             run.stage("register")
         assert run.wiki.writes == before
 
+    def test_a_reset_the_run_s_record_does_not_name_is_refused(self, run):
+        run.past_the_barrier(until="reset")
+        # the instance's state names another reset of the instance than
+        # the one the run's reset stage recorded
+        directory = run.run_dir / CORPUS_DIR / "reset"
+        record = scratchwrite.read_record(directory)
+        scratchwrite.save_record(directory, {**record, "epoch": "0" * 32})
+        with pytest.raises(ScratchWriteRefused, match="reset since"):
+            run.stage("register")
+        assert run.wiki.writes == 0
+
     def test_a_write_with_no_reset_stage_is_refused(self, run):
         run.past_the_barrier(until="clustering")
         with pytest.raises(ScratchWriteRefused, match="reset stage"):
@@ -524,6 +535,16 @@ class TestReuse:
         assert again.record("write")["skipped"] is True
         # the site names the run whose writes the instance holds
         assert again.record("site")["run_id"] == "run-1"
+
+    def test_the_run_that_wrote_keeps_its_counts_when_invoked_again(self, run):
+        run.past_the_barrier()
+        counts = run.record("write")
+        writes = run.wiki.writes
+        run.past_the_barrier()
+        assert run.resets == 1
+        assert run.wiki.writes == writes
+        assert run.record("write") == counts
+        assert run.record("reset")["action"] == scratchwrite.SKIPPED
 
     def test_a_write_the_stage_did_not_make_voids_the_key(
         self, run, tmp_path, monkeypatch
