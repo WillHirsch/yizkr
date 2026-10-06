@@ -67,7 +67,8 @@ fails if asked. It reads:
   of two that name one SHA-1 (a file with another's bytes), the one that
   is no duplicate holds the views;
 - a corpus stage's outputs: the clustering stage's
-  `corpus/clustering/identity-map.json` (#105), its summary alone;
+  `corpus/clustering/identity-map.json` (#105), its summary alone, and
+  the write stage's `corpus/write/record.json` (#200), its counts alone;
 - and one file outside the run directory: the model manifest,
   `src/yizkr/model/manifest.yaml` as the code has it when the report is
   made. Its properties and item keys are the names `report.md` may give
@@ -159,6 +160,18 @@ attributes a recompute to it (ADR-0025 §3, ADR-0032 §11).
 
 **Corpus stages.** Each corpus stage the run registered or ran, with its
 state and attention labels, or `not run`; a run with none says so.
+
+**Write.** Once the run's write stage has run (#200;
+yizkr.pipeline.scratchwrite): the documents written, the statements
+written new, those that gained a reference, the claims already there and
+those the writer refused, the items minted, the batches refused whole
+before registration, the documents that failed, and whether the
+instance-contents key was recorded; or that the instance held what the
+run's write key makes, so nothing was reset or written. In both, the
+depicts claims the write left out of the batches: no scratch run writes
+a depicts statement (ADR-0005, ADR-0025 §1), and each one the batches
+hold is counted here (`aggregate.content.depicts.left_out`). Counts
+alone, never a document, a QID or a label.
 
 **Anomalies.** The alerts by check and by stage, each finding (a
 document or the run, a stage and a check) counted once: new when any of
@@ -321,9 +334,9 @@ slices paused and aborted.
 **Not available.** What the run directory cannot give is said to be, and
 never counted as none:
 
-- depicts proposals held: face detection is never a stage of a scratch
-  run (ADR-0005, ADR-0025), so none is proposed or held;
-- place-hierarchy proposals applied: only a write stage applies them;
+- depicts claims left out, and the write's counts: until the write stage
+  has run (above);
+- place-hierarchy proposals applied: no stage applies them yet (#201);
 - different-source contradictions: they are read from a written graph;
 - flags by tier and class: no stage makes flags yet. `_flags` in
   `yizkr.pipeline.report` is where the report reads them once the flags

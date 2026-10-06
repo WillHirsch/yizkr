@@ -160,6 +160,26 @@ either; §2 is amended in place. Items are keyed within one identity
 map: a scratch run resets the instance before it writes its map, and
 its write stage (#200) passes the clustering stage's map to the writer.
 
+Amended by #200 (2026-10-06): the write side is the scratch driver's
+corpus stages after clustering, in order: reset, register, write and
+site (`pipeline/scratchwrite.py`; docs/runbooks/scratch-run.md, The
+write side). Each touches the wiki and makes no model call. The write
+key hashes the identity map's hash, each document's SHA-1 with its
+batch's content hash, whole, and what registration reads of it, the
+never-ingest list's hash, the writer's version with the source of the
+modules that register and write, and the model manifest's hash; §2 is
+amended in place. Register and write refuse, before they write anything,
+unless the instance's write-phase state names this run and this key and
+the instance's newest revision and log entry are those this run's last
+write left, and hold the live-stack lock while they write. A batch the
+writer would refuse whole is refused before anything of its document is
+registered. A write cut short within a document leaves a revision the
+state does not record, so the next invocation resets again. The run
+items carry three marks, `unratified scratch run` (the run id), `run
+manifest hash` and `identity map hash`, string properties of the
+manifest that no prompt offers (`offered: false`), so the stages before
+write are unchanged by them; §1 and §3 are amended in place.
+
 ## Context
 
 ADR-0024 §7 set up a *development stage*: until the owner declares a
@@ -236,7 +256,10 @@ The owner replaced that plan on 2026-09-27, for four reasons.
   `stated in` the artifact or fragment with its locator, and `inferred
   from` the run item (CLAUDE.md rules 1, 2 and 4). The run item is marked
   as an unratified scratch run, and the LAN site says the instance holds
-  a development-stage scratch run and names it.
+  a development-stage scratch run and names it. Amended by #200
+  (2026-10-06): each run item states `unratified scratch run → <run id>`,
+  `run manifest hash` and `identity map hash`, stated in itself, and the
+  site's header names every run the run items name.
 - **Scratch graphs are development artefacts, never confirmations.**
   Nothing in one is kept, published or exported: no backup, public
   export or public site is ever made from it, and the next reset
@@ -376,7 +399,14 @@ a second store of assertions: the graph stays the system of record.
   versions. A run skips reset and write only when that key equals the
   recorded instance-contents key and no other write has cleared it
   (#200). Amended by #225 (2026-09-27): the batches' canonical content
-  hashes take the place of the batch keys (ADR-0032 §11).
+  hashes take the place of the batch keys (ADR-0032 §11). Amended by
+  #200 (2026-10-06): a batch's hash is of the batch whole, its run stamps
+  included, since its run item's label holds them; beside it, the key
+  hashes what registration reads of each document (its kind, title,
+  derived media's record and, for an excerpt, its PDFs) and the
+  never-ingest list's hash; the writer's version is a declared number
+  with the source of the modules that register and write, and the
+  manifest's version the model manifest's hash.
 
 This keeps the stateless, file-based core of ADR-0019 §4: a run
 re-derives what to do from durable files and resumes by re-running. What
@@ -461,7 +491,9 @@ futile, and explain itself afterwards.
   each recompute (input, stage or method version, prompt, manifest,
   model or parameters); anomalies by check, new and carried; calls and
   wall time; and content counts (documents, entities, claims, rejects,
-  critic findings, clusters, and held depicts proposals). It writes
+  critic findings, clusters, and held depicts proposals; amended by #200:
+  the depicts claims the write left out, and the write's counts). It
+  writes
   `report.html` and `report.json`, which stay local, and an
   aggregate-only `report.md` that is safe to post. Amended by #225
   (2026-09-27): a recompute is attributed through the LLM cache's entries

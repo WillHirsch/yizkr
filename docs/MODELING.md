@@ -288,7 +288,9 @@ and the judgement note's `judgement` and `judgement_note`) are marked
 `reference: true`: they are written only in a statement's references, so
 validation refuses one as a claim's or a qualifier's property, and no
 prompt offers it. A property may also be held back from the prompts with
-`offered: false` while it stays in the manifest and the bootstrap. A
+`offered: false` while it stays in the manifest and the bootstrap, as a
+scratch run's run-item marks are (`scratch_run`, `run_manifest_hash`,
+`identity_map_hash`; #200). A
 property marked `document_subject: true` (`issued_by`) takes the
 claim's own source document as its subject, named by an `artifact`
 reference to the source's media, and no other subject; validation
@@ -460,8 +462,9 @@ artifact a new QID, changes neither.
 - An artifact's description is put in the stored form, then cut,
   ending in "…" and never between a letter and its combining marks, to
   the 250 characters Wikibase takes: the one registration writes, ``"ingested
-  by `yizkr ingest run` from <file name>"``, passes that for a long file
-  name (ADR-0010 as amended by #373).
+  by `yizkr ingest run` from <file name>"`` (`yizkr scratch run` in a
+  scratch run, #200), passes that for a long file name (ADR-0010 as
+  amended by #373).
 - Registrar statements (`instance of`, `media file`, a fragment's
   `part of` + page qualifier) are referenced `stated in -> the artifact
   item itself`: an artifact asserts its own kind and composition by
@@ -482,6 +485,29 @@ artifact a new QID, changes neither.
   reference there: an extraction's claims would read as curated, and the
   place-hierarchy pass's containment, which cites the run alone, as
   unreferenced.
+- **A scratch run marks its run items** (#200; ADR-0025 §1). The run
+  item of each batch a scratch run writes states, in the same second
+  write as its kind and stated in itself, `unratified scratch run → <run
+  id>` (the run that wrote it: nothing it backs is ratified, reviewed or
+  confirmed, and the next reset discards it), `run manifest hash →` the
+  SHA-256 of the settings its run manifest records, and `identity map
+  hash →` the SHA-256 of the identity map the batch was written with.
+  The three are string properties of a run item alone, marked `offered:
+  false` in the manifest, so no prompt offers them and the extraction's
+  prompts are as they were. A run item found again lacking one gains it;
+  one it states already, at any rank, is left as it is. The LAN site
+  reads them: when any run item states `unratified scratch run`, every
+  page's header says the instance holds a development-stage scratch run
+  and names it.
+- **A scratch run writes unattended** (#200; ADR-0025 §1, §2). Its write
+  stage takes every claim of each document's batch, with no review and
+  no approval file, at normal rank, with both references, through the
+  run's one identity map, on an instance the run reset itself; depicts
+  claims are left out of what the writer is given, and counted in the
+  run report, so no scratch run writes a depicts statement (ADR-0005).
+  Each claim's write has the edit summary `scratch run: write unratified
+  claim`, and each artifact's description names `yizkr scratch run` as
+  what ingested it.
 - **Registration is part of the write** (ADR-0025 §2; ADR-0010 as
   amended by #103). `ingest run` registers a document just before it
   writes the claims that cite it: its artifact item, its page fragments

@@ -165,7 +165,14 @@ itself in its own `--help`.
   document's SHA-1; and the clustering stage's identity map must meet the
   traps `TRAPS` sets for it, read in the universe's terms, with the two
   the whole-cluster merge rule cannot meet (#361) recorded as expected by
-  a strict `xfail` that turns when the rule does.
+  a strict `xfail` that turns when the rule does. The driver's write side
+  (reset, register, write and site, #200) needs a stack, so every unit
+  test runs the driver with clustering as its only corpus stage (the
+  `_no_write_side` fixture in tests/unit/conftest.py); a test marked
+  `write_side` keeps them. `tests/unit/test_scratch_write.py` runs the
+  write side's stages in order over a run's documents on the in-memory
+  instance, with stand-ins for the reset, the live-stack lock and the
+  site's build.
 - **Live tests** (`tests/integration`, every module marked `live`) run
   against the deployed stack (`make up` or `make up-local`) through
   `make test-live`, which is `uv run pytest -m live tests/integration -v`.
@@ -183,7 +190,10 @@ itself in its own `--help`.
   instance, twice, so its resetting tests run only when
   `YIZKR_LIVE_RESET=1` asks for them, and fail at once in a session that
   runs other modules' tests too, and on a kept instance, which they read
-  with calls of their own; a reset that fails ends the session. A PR
+  with calls of their own; a reset that fails ends the session.
+  `tests/integration/test_live_scratch_write.py` runs a scratch run's
+  write side after such a reset, under the same opt-in and in a session
+  of its own, and ends by clearing the instance-contents key. A PR
   that changes a write path carries
   `needs:live-test`, and a substantial change to one gets a live test of
   its own (CLAUDE.md). Its live run comes as soon as the draft opens
@@ -507,8 +517,11 @@ path, though a leading `~` is expanded.
   marker and holds it to its end, waiting while a live session holds it,
   as a live session waits while a reset runs. A caller that holds the
   lock already, as a live test of the reset does, gives the reset its
-  own hold (`yizkr.reset.InstanceReset`, `lock`). A scratch run's write,
-  `yizkr bootstrap` and other writers to the stack don't take it, so the
+  own hold (`yizkr.reset.InstanceReset`, `lock`). A scratch run's
+  register and write stages take it while they write
+  (`yizkr.pipeline.scratchwrite.live_stack`), and its reset stage takes
+  it through the reset. `yizkr bootstrap` and other writers to the stack
+  don't take it, so the
   orchestrating session still gives the stack to one agent at a time
   (AGENT_PROTOCOL §3). Live test sessions need no check by hand for
   another one: the lock makes them wait their turn.

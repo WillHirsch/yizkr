@@ -74,9 +74,10 @@ and `yizkr.reset` for the reset.
   pacing settings, 2 GiB free on the run directory's and the cache's
   filesystems (`--min-free`), and the PDF renderer when the corpus holds
   a PDF. A stage that touches the wiki is checked for too: the stack must
-  answer and the instance must carry no kept-state marker. No such stage
-  is registered yet (below), so a run needs no stack. A refusal lists
-  every problem it found.
+  answer and the instance must carry no kept-state marker. The write
+  side's stages are such stages (The write side, below), so a run to the
+  end needs the stack up; one that stops at clustering or before needs
+  none. A refusal lists every problem it found.
 
   Once those checks pass, and once the settings are checked against
   those a resumed run recorded (other settings are refused as
@@ -139,9 +140,9 @@ and `yizkr.reset` for the reset.
   instance and the file `kept.json` in the record of the instance:
   keeper mode (#118) writes both, and `yizkr scratch reset` refuses while
   either is there (Reset the instance, below). The driver takes the same
-  reader (`yizkr.core.instance.instance_is_kept`) when the write side
-  (#200) registers its stages; until then it cannot tell a kept instance
-  from another, so it refuses every corpus stage that touches the wiki.
+  reader (`yizkr.core.instance.instance_is_kept`) before every stage of
+  the write side, and refuses the stage when it says kept or cannot
+  tell.
 - **The estimate.** `uv run yizkr scratch estimate`, with the options
   the run is to take, counts the engine calls that `yizkr scratch run`
   would make now, per stage and in all: the calls of the stages whose
@@ -261,13 +262,14 @@ uv run yizkr scratch run
   completed. It runs every one in each invocation that goes past the
   barrier, so a corpus stage keeps its outputs in `corpus/<stage>/` in
   the run directory and reuses them while their inputs stand, as the
-  documents' views are reused. The one registered is clustering (#105):
-  it writes the corpus's identity map to
+  documents' views are reused. The first is clustering (#105): it
+  writes the corpus's identity map to
   `corpus/clustering/identity-map.json`, from the documents' batches
   alone, with no wiki and no model (src/yizkr/pipeline/README.md,
   "Corpus clustering"). Its `done` event carries its counts: the
   ambiguous and conflicting clusters it left apart, the adjudication
-  calls they would take, and the count of hub keys.
+  calls they would take, and the count of hub keys. The write side
+  follows (below, The write side).
 - **Options.** `--until STAGE` stops after a stage (`transcription`,
   `extraction`, `critique`, or a corpus stage; `gedcom` stops with
   `extraction`). `--cache DIR` names the LLM cache (default
@@ -286,6 +288,73 @@ uv run yizkr scratch run
   corpus stage failed, or it refused to start; 2 when it stopped short
   (an abort, or a pause of the engine it could not wait out); 130 on
   Ctrl-C.
+
+## The write side
+
+After clustering come four corpus stages that touch the wiki and make no
+model call (#200; `yizkr.pipeline.scratchwrite`, ADR-0025 §1 and §2):
+`reset`, `register`, `write` and `site`. The driver runs each only while
+the stack answers and the instance carries no kept-state marker, which
+the preflight checks before anything is dispatched and the driver checks
+again before each of them. So a run to the end needs the stack up; a run
+with `--until clustering` (or an earlier stage) needs none.
+
+- **reset.** The run's write key names what the write would put on the
+  instance: the identity map's hash, each document's SHA-1 with the
+  content hash of its batch and what registration reads of it (its kind,
+  its title, its derived media's record, an excerpt's PDFs), the
+  never-ingest list's hash, the writer's version and the source of the
+  modules that register and write, and the model manifest's hash. When
+  the instance-contents record still stands for this key (no other write
+  has voided it, and nothing has cleared it), the instance holds what
+  the key makes: the stage resets nothing, and register and write skip.
+  When this run reset the instance in an earlier invocation, for this
+  key, and nothing but this run has written to it since, the run goes on
+  where it stopped. Otherwise it resets the instance as `yizkr scratch
+  reset --yes` does (below, Reset the instance), under the live-stack
+  lock: **a run to the end resets the instance unattended**, which takes
+  minutes and discards everything on it. The reset refuses a kept
+  instance itself too. It then records, in the instance's write-phase
+  state (`scratch-run.json`, which every reset clears), the run, the key
+  and the instance's newest revision and log entry.
+- **register** registers each document as `ingest run` does at its
+  write: the artifact item by the SHA-1 of its bytes, a deck's slides
+  and images, a PDF's placed images, with registration's flags raised as
+  alerts of the write. A batch the writer would refuse whole (a mention
+  the identity map does not hold, an unsupported date, a run item's
+  term the instance may keep in another form) is refused first, before
+  anything of its document is registered, and counted.
+- **write** writes every claim of each registered document's batch,
+  with no review and no approval file, at normal rank, with both
+  references (stated in the artifact or fragment with its locator,
+  inferred from the run item), through the run's one identity map.
+  Depicts claims are left out and counted in the run report. Each run
+  item is marked `unratified scratch run → <run id>`, and records the
+  `run manifest hash` (the run manifest's settings) and the `identity
+  map hash`, each stated in the run item itself. When every document is
+  written, the instance-contents record takes the write key.
+- **The guard.** Register and write each refuse, before they write
+  anything, unless the write-phase state names this run and this key,
+  and the instance's newest revision and log entry are still those this
+  run's last write left. So they write only to an instance this run
+  reset, which has taken no other write since: a live test session, a
+  manual edit or another tool in between refuses them, and the next
+  invocation's reset stage resets again. Both hold the live-stack lock
+  while they write, so no live test session writes meanwhile. A write
+  cut short in the middle of a document (Ctrl-C) leaves the instance a
+  revision the state does not record, so the next invocation resets and
+  writes everything again.
+- **site** builds the LAN site from the instance, as `yizkr
+  publish-site` does, into `corpus/site/site/` in the run directory,
+  once the query service shows the run items of the run whose writes the
+  instance holds (it waits up to five minutes). Every page's header says
+  the instance holds a development-stage scratch run and names it. Serve
+  it on the LAN only (`python -m http.server -d <that directory>`): it
+  holds possibly-living people.
+- **Records.** Each stage keeps what it did in
+  `corpus/<stage>/record.json` in the run directory: local-only, like
+  the rest of it. The run report counts the write's
+  (docs/RUN_REPORT.md, Write).
 
 ## Watch
 
@@ -572,8 +641,10 @@ set), in a private folder named after the instance's host.
   engine (its id, from `docker info`) that the last reset stopped the
   stack from. When it cannot be read, the reset refuses, and says to
   remove it by hand once you know where the stack runs from.
-- `write/`: the write stage's state between its invocations (#200),
-  which the reset sets aside.
+- `write/`: the write side's state between its invocations (#200),
+  `scratch-run.json`: the run that reset the instance, its write key,
+  the epoch of that reset and the instance's newest revision and log
+  entry as the run's last write left them. The reset sets it aside.
 - `reset/`: what each reset set aside.
 
 It is local-only data (docs/AGENT_PROTOCOL.md §6).
@@ -606,10 +677,7 @@ Nothing from them goes into the repository, GitHub or a cloud session.
 
 ## Not yet
 
-- Of the corpus stages only clustering (#105) is registered, and it
-  touches no wiki. The stages that do, the reset, register, write and
-  site stages (#200, with #103; the reset stage runs the reset above)
-  and place-hierarchy reconciliation (#201), register themselves as they
-  land. Until then a run finishes after clustering, and needs no stack.
+- Place-hierarchy reconciliation (#201) is not a stage yet: it will run
+  after the write and before the site.
   The estimate counts the per-document stages' calls, says that
   clustering makes none, and names any corpus stage it does not count.
