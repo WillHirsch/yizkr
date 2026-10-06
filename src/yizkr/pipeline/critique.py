@@ -36,6 +36,7 @@ from yizkr.claims import (
     EntityRecord,
     ItemValue,
     LocalRef,
+    PersonStructure,
     QuantityValue,
     load_vocabulary,
 )
@@ -70,10 +71,13 @@ CATEGORIES: dict[str, str] = {
         "a kinship term or other relational appellation recorded as an "
         'alias, or as the label of a person the document names ("my '
         'husband", "our great grandmother", "Oma", "Nana Maisie", '
-        '"Bubele"): it is not a name; suggest `relative` + '
-        "`kinship_type` (a literal kinship term), a marriage (a spousal "
-        "term) or `referred_to_as` (any other relational appellation), NOT "
-        "an alias (ADR-0018)"
+        '"Bubele"; "Tante Rahel" as the label of Rahel): it is not a name; '
+        "suggest `relative` + `kinship_type` (a literal kinship term), a "
+        "marriage (a spousal term) or `referred_to_as` (any other relational "
+        "appellation), NOT an alias (ADR-0018). A person the document never "
+        "names is rightly labelled with the document's own words for them "
+        '(the postcard\'s writer, who signs only "Dein Vater"; a status '
+        "other than `name`): that label is no finding"
     ),
     "deictic_alias": (
         'a deictic or generic reference recorded as an alias ("the '
@@ -202,7 +206,10 @@ Kinds (manifest item keys): {kinds}
 
 Properties (manifest property keys): {properties}
 
-Entities (id | kind | label | aliases):
+Entities (id | kind | label | aliases); a person's kind is followed by the
+status of its mention record: `name` when the document names the person,
+else what its label is instead (role, kinship, courtesy, placeholder or
+description):
 {entities_block}
 
 Claims (subject | property | value):
@@ -238,12 +245,22 @@ def _categories_block() -> str:
 
 
 def _entities_block(batch: ClaimBatch) -> str:
+    """One row per entity. A person with a mention record shows its status
+    after its kind, so the critic can tell a person the document never
+    names, whose label is rightly the document's words for them
+    (ADR-0018), from one it names."""
     lines = []
     for entity in batch.entities:
         aliases = ", ".join(entity.aliases) if entity.aliases else "-"
         hint = f" (hint: {entity.type_hint})" if entity.type_hint else ""
+        status = (
+            f" (status: {entity.structure.status})"
+            if isinstance(entity.structure, PersonStructure)
+            else ""
+        )
         lines.append(
-            f"{entity.id} | {entity.kind}{hint} | {entity.label} | {aliases}"
+            f"{entity.id} | {entity.kind}{hint}{status} | {entity.label} | "
+            f"{aliases}"
         )
     return "\n".join(lines)
 

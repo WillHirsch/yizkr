@@ -39,6 +39,12 @@ such as what a family calls a non-relative; `perspective` names that
 family only then. The chunk, manifest and record prompts say this in
 the same words, and the two properties' manifest descriptions state the
 same rule.
+Amended by #498 (2026-10-06): the critic's `kinship_term_alias` exempts
+a person the document never names, as the extraction prompts do: its
+label is rightly the document's own words for them, so the postcard's
+"Dein Vater" is no finding, while "Tante Rahel" as Rahel's label is one.
+The critic's entity rows show each person's mention-record status
+(ADR-0035 §2.1), which says whether the document names them.
 
 ## Context
 
