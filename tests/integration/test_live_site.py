@@ -45,6 +45,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import example_universe as u
+from tests.fixtures.identity import write_mapped
 from yizkr import staticsite
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.disagreement import (
@@ -297,7 +298,7 @@ def site(client, config, tmp_path_factory):
             description="written by tests/integration; safe to delete",
         )
     sources = {key: r.artifact_qid for key, r in registered.items()}
-    written = BatchWriter(client).write_batch(fixture_batch(cited))
+    written = write_mapped(BatchWriter(client), fixture_batch(cited))
     seeded = [
         written.created_items[local_id]
         for local_id in ("person", "address", "street", "town", "rahel")

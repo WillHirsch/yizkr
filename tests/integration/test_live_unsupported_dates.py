@@ -21,11 +21,12 @@ from datetime import UTC, datetime
 
 import pytest
 
+from tests.fixtures.identity import run_label, write_mapped
 from yizkr.claims import ClaimBatch, TimeValue
 from yizkr.core.dates import UnsupportedDate
 from yizkr.pipeline import writer
 from yizkr.pipeline.review import claim_id
-from yizkr.pipeline.writer import BatchWriter, batch_fingerprint
+from yizkr.pipeline.writer import BatchWriter
 
 from .conftest import fixture_mark, register_fictional
 
@@ -125,12 +126,9 @@ def last_revision(client, qid: str) -> int:
 
 
 def run_item_label(batch: ClaimBatch) -> str:
-    """The label the writer gives the batch's extraction-run item."""
-    run = batch.extraction_run
-    return (
-        f"extraction run {run.started_at.date().isoformat()} "
-        f"{run.model_identifier} {batch_fingerprint(batch)}"
-    )
+    """The label the writer gives the batch's extraction-run item, with the
+    map of the batch alone (write_mapped)."""
+    return run_label(batch)
 
 
 @pytest.mark.parametrize("case", sorted(CASES))
@@ -139,7 +137,7 @@ def test_the_writer_refuses_an_unsupported_date(client, source, case):
     revision = last_revision(client, source.qid)
 
     with pytest.raises(UnsupportedDate) as refusal:
-        BatchWriter(client).write_batch(batch)
+        write_mapped(BatchWriter(client), batch)
 
     (claim,) = batch.claims
     where, _ = CASES[case]

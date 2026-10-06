@@ -44,9 +44,9 @@ flowchart TD
 
 The two amber hexagons are the human gates — the run pauses there until you
 save the reviewed CSV, then continues on the next `ingest run`. Nothing
-before the write reads or writes the wiki but resolve: registration is the
-write's first step, just before the claims that cite the document
-(ADR-0025 §2; **register** below).
+before the write reads or writes the wiki: registration is the write's
+first step, just before the claims that cite the document (ADR-0025 §2;
+**register** below), and resolve matches nothing by label (#109).
 
 **The two gates**
 
@@ -396,10 +396,9 @@ re-running one step in isolation — but for a normal ingest you only ever run
   `approve` rows of its CSV take effect, because a wrong merge corrupts
   every downstream attribution (identity is never auto-confirmed,
   ADR-0007).
-- **resolve** — applies the approved equivalences, then replaces remaining
-  `local` refs whose label exactly matches an existing item; anything
-  fuzzier is left for the reviewer, who sees `NEW:<local_id>` vs a QID in
-  the claim CSV.
+- **resolve** — applies the approved equivalences; every other `local`
+  ref stays local, for the write to find its item through the identity
+  map (#109), so the claim CSV shows it as `NEW:<local_id>`.
 - **export-review / apply-review** — one CSV row per claim for
   OpenRefine or any spreadsheet (R4). Rows are matched back by
   `claim_id`, a content hash: sorting or filtering the sheet cannot
@@ -439,31 +438,37 @@ re-running one step in isolation — but for a normal ingest you only ever run
   artifact by the SHA-1 of its media, never by QID, and the write resolves
   that key through the `media SHA-1` statement registration writes, so a
   batch written to another instance, or after a reset, finds its artifacts
-  there once they are registered. Resolve's label match (above) is the one
-  step before the write that uses the wiki, until the identity-map writer
-  (#109). An item whose bytes a file another item names holds, or whose
+  there once they are registered. An item whose bytes a file another item names holds, or whose
   title is the label of an item with no hash, is flagged, never adopted:
   each write raises it as a `shared-file` or `unhashed-title` alert while
   that holds (#371; docs/ANOMALIES.md).
-- **write** — once registration (above) has found or made the
-  document's items, resolves each cited artifact's media SHA-1 to its
+- **write** — first checks that the run's identity map, made once an
+  invocation over the run's documents and kept in
+  `corpus/clustering/identity-map.json`, holds every mention of the
+  approved batch (refusing the document, before anything is registered,
+  when it does not); then, once registration (above) has found or made
+  the document's items, resolves each cited artifact's media SHA-1 to its
   artifact item (refusing the whole batch, before any write, if some
-  media has no item), mints the extraction-run item, creates items for
-  unresolved subjects (reusing exact-label matches on the entity's own
-  side only: an artifact-kind entity such as a GEDCOM media object
-  reuses an artifact or a part of one, never an item registration made,
-  an artifact with a hash or its page fragment, and any other entity
-  reuses an item that is neither. An entity that may not reuse the item
-  under its label takes an item of its own under its label tagged
-  `[media object]`, or, whatever its kind, `[not an artifact]`, its name
-  an alias; people and places are placed before media objects, so a
-  person takes a label no item holds. Each artifact registered under the
-  label of a media object that does not take it, content-tagged or not,
-  is raised as an `unhashed-title` alert, and an entity that may reuse
-  neither the item under its label nor the one under its tagged label,
-  as a media object whose tagged label a registered item holds too, is
-  refused, with its claims, before the first write;
-  ADR-0010 as amended by #444), writes each claim
+  media has no item), mints the extraction-run item, and finds or makes
+  the one item of each entity's cluster in the map, never by its label
+  alone (docs/MODELING.md, "One item per cluster"; #109). An instance
+  holds the writes of one map: a write with another map than its run
+  items record is refused, before the document's artifact is registered,
+  and the instance is reset first. The label an
+  item takes follows its side: an artifact-kind entity such as a GEDCOM
+  media object may take the label of an artifact or a part of one,
+  never one registration made, an artifact with a hash or its page
+  fragment, and any other entity the label of an item that is neither,
+  nor of a vocabulary or run item. An entity that may not take its label
+  takes its label tagged `[media object]`, or, whatever its kind, `[not
+  an artifact]`, its name an alias; people and places are placed before
+  media objects, so a person takes a label no item holds. Each artifact
+  registered under the label of a media object that does not take it,
+  content-tagged or not, is raised as an `unhashed-title` alert, and an
+  entity that may take neither its label nor its tagged label, as a
+  media object whose tagged label a registered item holds too, is
+  refused, with its claims, before the first write (ADR-0010 as amended
+  by #444 and #109). It writes each claim
   at normal rank with two references: `stated in → artifact/fragment`
   (with page/region/excerpt locator qualifiers) and `inferred from
   extraction run → run item`. Re-runs skip existing statements.
@@ -471,33 +476,17 @@ re-running one step in isolation — but for a normal ingest you only ever run
 ## Resolving entities across artifacts
 
 In `ingest run`, reconcile matches a document's entities against nothing
-(above), so no Gate 1 row ties an entity to an item already in the graph.
-**Resolve** still does, by exact label, as the writer finds an item: it
-replaces the `local` refs to an entity with the existing item the writer
-would reuse for it, by the entity's label (its manifest record's, else
-its first ref's): the item under that label, or, where an artifact or a
-part of one holds it, the item under its `" [not an artifact]"` tagged
-label (ADR-0010, amended by #476). A ref without a manifest record that
-resolves to the tagged item gains a record of its first ref's label and
-kind in the resolved batch, so the writer gives that item the ref's name
-as an alias and its kind; one with no kind, or of a batch citing more
-than one artifact, stays local, and the writer finds the tagged item
-itself. So a document meets the artifacts written before it under the
-same names only. A ref of an
-artifact kind or of artifact fragment is never resolved so, nor is any ref resolved to an
-artifact or a part of one: no artifact-kind entity is matched to a
-registered artifact (one with a hash, or its page fragment), no other
-entity to an artifact or a part of one, and no artifact is adopted, by
-its title or label (ADR-0010). It reads the instance's labels once a
-batch, and the statements of only the items under its entities' plain
-or tagged labels; the
-write reads the labels once too, with the vocabulary known (a fresh
-client reads them for the vocabulary as well). By default the
-loop takes every document to the gates in one pass, before any is
-written, so siblings in one folder run are invisible to each other, and
-two artifacts naming one person land as two items. A scratch run leaves
-identity to corpus clustering (#105; **Corpus clustering** below), and
-#119 removes this per-document path; until then, two mechanisms remain:
+(above), so no Gate 1 row ties an entity to an item already in the graph,
+and **resolve** matches nothing by label: the write finds each entity's
+item through the run's identity map (#109), the corpus clustering's map
+of the run's documents (**Corpus clustering** below), so two documents
+of the run naming one entity meet on its item when the map puts their
+mentions in one cluster. The write reads the instance's labels once, with
+the vocabulary known (a fresh
+client reads them for the vocabulary as well). Two artifacts naming one
+person the map keeps apart land as two items. A scratch run leaves
+identity to corpus clustering too (#105), and #119 removes this
+per-document path; until then, two mechanisms remain:
 
 - **`yizkr reconcile-graph`** — a separate, curator-run pass that proposes
   duplicate *pairs among items already in the graph* (across every artifact
@@ -512,8 +501,9 @@ identity to corpus clustering (#105; **Corpus clustering** below), and
 - **`yizkr ingest run --serial`** (ADR-0019) — processes artifacts one at a
   time, most-connective first (a greedy overlap of their entity names, so a
   family tree or GEDCOM leads), each **fully written before the next
-  reconciles**. A later artifact's "Gustav Löbig" then resolves to the
-  item an earlier artifact wrote under that label. A variant name
+  reconciles**. A later artifact's "Gustav Löbig" meets the item an
+  earlier artifact wrote when the identity map puts the two in one
+  cluster, never by the label alone (#109). A variant name
   ("Gustl") is not matched at Gate 1, since reconcile reads no roster, so
   `reconcile-graph` stays the way to consolidate such pairs, as well as
   pre-existing dups, cross-run dups, and within-artifact dups the

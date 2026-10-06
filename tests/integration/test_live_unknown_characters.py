@@ -19,7 +19,8 @@ wrote her surname with the i over its a and a dot below it, gives:
   references;
 * her kinship to Rudolf, its kinship_type qualifier, a string value,
   holding the mark: the claim is refused whole, and Rudolf, whom only it
-  mentions, gets no item;
+  mentions, gets no item, though the manifest has a record of him, as
+  every entity a batch with a manifest names has (#109);
 * writing the batch again sends no edit at all, and refuses and leaves
   out the same.
 
@@ -64,6 +65,7 @@ from pathlib import Path
 import pytest
 from wikibaseintegrator.entities.baseentity import BaseEntity
 
+from tests.fixtures.identity import write_mapped
 from yizkr.claims import ClaimBatch
 from yizkr.pipeline import registrar, writer
 from yizkr.pipeline.registrar import register_artifact
@@ -168,7 +170,12 @@ def batch_content(sha1: str, prefix: str) -> dict:
                 "kind": "human",
                 "summary": f"fixture: Rudolf Löbig's widow, born {MARKED}",
                 "aliases": ["Нина Сартина", f"Нина {MARKED}"],
-            }
+            },
+            {
+                "id": "rudolf",
+                "label": f"{prefix}Лёбиг Рудольф Феликсович",
+                "kind": "human",
+            },
         ],
     }
 
@@ -198,7 +205,7 @@ def fixture_graph(client):
     batch = ClaimBatch.model_validate(
         batch_content(registered.ref.sha1, prefix_of(fixture_marker()))
     )
-    written = BatchWriter(client).write_batch(batch)
+    written = write_mapped(BatchWriter(client), batch)
     return registered.qid, batch, written
 
 
@@ -282,7 +289,7 @@ def test_a_rewrite_sends_no_edit(client, fixture_graph, monkeypatch):
 
     monkeypatch.setattr(BaseEntity, "_write", counted)
 
-    again = BatchWriter(client).write_batch(batch)
+    again = write_mapped(BatchWriter(client), batch)
 
     assert edits == []
     assert again.run_qid == written.run_qid

@@ -30,6 +30,8 @@ from argparse import Namespace
 
 import pytest
 
+from tests.fixtures.identity import corpus, mapped, write_mapped
+
 # the module, not its TestStepRegister, so pytest collects that class once
 from tests.unit import test_registrar
 from tests.unit.test_registrar import (
@@ -39,7 +41,6 @@ from tests.unit.test_registrar import (
     OTHER_IMAGE,
     PORTRAIT,
     RESCAN,
-    SHOP,
     TITLE,
     FakeWiki,
     P,
@@ -55,6 +56,7 @@ from tests.unit.test_registrar import (
     strings,
 )
 from yizkr.core.corpus import ExclusionList
+from yizkr.core.wiki import ItemLabels
 from yizkr.pipeline import registrar as registrar_module
 from yizkr.pipeline.registrar import (
     REGISTRATION_CHECKS,
@@ -1537,12 +1539,13 @@ needs_unknown_mark = pytest.mark.skipif(
 
 
 class WritingWiki(FakeWiki):
-    """The in-memory wiki with the surface the writer and resolve use
-    beside the registrar's: its vocabulary, the label lookup and the label
-    index, the statements of the entities asked for, and the media SHA-1
-    index. The label lookup and index fail on a duplicate label, which
-    the writer and registrar never make, though the wiki client's label
-    index takes item homonyms (#94; test_homonym_labels.py)."""
+    """The in-memory wiki with the surface the writer uses beside the
+    registrar's: its vocabulary, the label lookup and the label index, the
+    statements of the entities asked for, and the media SHA-1 index. The
+    label lookup fails on a duplicate label, which the registrar never
+    makes; the label index takes item homonyms, as the wiki client's does
+    (#94), since the writer makes an item of each cluster of the identity
+    map under its label whatever items hold it (#109)."""
 
     PROPERTIES = {
         **FakeWiki.PROPERTIES,
@@ -1561,9 +1564,20 @@ class WritingWiki(FakeWiki):
                 return qid
         return None
 
-    def label_index(self) -> tuple[dict[str, str], dict[str, str]]:
-        assert_labels_unique(self)
-        return {}, {label_of(self, qid): qid for qid in self.entities}
+    def label_index(self) -> tuple[dict[str, str], ItemLabels]:
+        holders: dict[str, list[str]] = {}
+        for qid in sorted(self.entities, key=lambda q: int(q[1:])):
+            label = label_of(self, qid)
+            if label is not None:
+                holders.setdefault(label, []).append(qid)
+        return {}, ItemLabels(
+            {label: qids[0] for label, qids in holders.items()},
+            {
+                label: tuple(qids)
+                for label, qids in holders.items()
+                if len(qids) > 1
+            },
+        )
 
     def fetch_claims(self, ids: list[str]) -> dict[str, dict]:
         return {
@@ -1600,8 +1614,9 @@ def family_gedcom(wiki, text: str = FAMILY_GEDCOM):
 
 
 def naming(*labels: str):
-    """A batch of the GEDCOM export's claim once for each of `labels`,
-    its subject a ref with that label, no kind and no record."""
+    """A batch with no entity manifest of the GEDCOM export's claim once
+    for each of `labels`, its subject a ref with that label and no kind,
+    its value the media object's ref under its title."""
     from yizkr.claims import ArtifactRef, ClaimBatch
     from yizkr.pipeline.gedcom import adapt_gedcom
 
@@ -1610,6 +1625,8 @@ def naming(*labels: str):
         mode="json"
     )
     (claim,) = given["claims"]
+    claim["value"]["value"].update(label=TITLE, instance_of="artifact")
+    given["entities"] = []
     given["claims"] = [
         dict(
             claim,
@@ -1623,7 +1640,7 @@ def naming(*labels: str):
 def write_gedcom(wiki, text: str = FAMILY_GEDCOM):
     from yizkr.pipeline.writer import BatchWriter
 
-    return BatchWriter(wiki).write_batch(family_gedcom(wiki, text))
+    return write_mapped(BatchWriter(wiki), family_gedcom(wiki, text))
 
 
 def images(wiki, qid: str) -> list[str]:
@@ -1740,7 +1757,7 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         batch = family_gedcom(wiki)
         before = copy.deepcopy(wiki.entities)
 
-        written = BatchWriter(wiki, dry_run=True).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki, dry_run=True), batch)
 
         assert written.created_items["md1"] == "(new:md1)"
         assert flag_tuples(written.flags) == [
@@ -1759,7 +1776,7 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         batch = family_gedcom(wiki)
         before = copy.deepcopy(wiki.entities)
 
-        written = BatchWriter(wiki, dry_run=True).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki, dry_run=True), batch)
 
         assert written.created_items["md1"] == media_object
         assert flag_tuples(written.flags) == [
@@ -1784,7 +1801,7 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         record["kind"] = "photograph"
         batch = type(family_gedcom(wiki)).model_validate(given)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         media_object = written.created_items["md1"]
         assert media_object != artifact
@@ -1917,9 +1934,9 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         batch = family_gedcom(wiki)
         before = copy.deepcopy(wiki.entities)
 
-        planned = BatchWriter(wiki, dry_run=True).write_batch(batch)
+        planned = write_mapped(BatchWriter(wiki, dry_run=True), batch)
         assert wiki.entities == before
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert planned.refused == written.refused != []
         assert flag_tuples(planned.flags) == flag_tuples(written.flags)
@@ -1962,7 +1979,7 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
             if claim.value.value.local_id == "md1"
         ]
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.refused == (named if blocked else [])
         assert written.refused_terms == []
@@ -2002,7 +2019,7 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
             if claim.value.value.local_id == "md1"
         ]
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.refused == named
         assert written.refused_terms == ["md1: label"]
@@ -2042,7 +2059,7 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
             ClaimBatch.model_validate(given), "md1"
         )
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert len(written.refused) == 1
         assert not [w for w in written.warnings if "type hint of" in w]
@@ -2079,7 +2096,7 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
             if claim.value.value.local_id == "md1"
         ]
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.refused == named
         assert written.flags == []
@@ -2094,10 +2111,7 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         """Sebastian's record gives the kind 'pet', which the vocabulary
         lacks, and his one claim is refused, with the media object the plan
         blocks or for its marked excerpt: the record's kind is warned of
-        all the same. A second claim about him, refused for its marked
-        excerpt, has a place without a record of the kind 'lighthouse',
-        which the vocabulary lacks too: a ref's kind is warned of only when
-        a written claim mentions it, so it is not."""
+        all the same."""
         from yizkr.claims import ClaimBatch
         from yizkr.pipeline.writer import BatchWriter
 
@@ -2109,25 +2123,13 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
             if record["id"] == "i1":
                 record["kind"] = "pet"
                 record.pop("structure", None)
-        (claim,) = given["claims"]
-        place = {
-            "kind": "local",
-            "local_id": "pl1",
-            "label": "Flörburg",
-            "instance_of": "lighthouse",
-        }
-        given["claims"].append(
-            dict(claim, value={"type": "item", "value": place})
-        )
-        batch = self.with_marked_excerpt(
-            ClaimBatch.model_validate(given), "pl1"
-        )
+        batch = ClaimBatch.model_validate(given)
         if refusal == "marked":
             batch = self.with_marked_excerpt(batch, "md1")
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
-        assert len(written.refused) == 2
+        assert len(written.refused) == 1
         assert written.created_items == {}
         kinds = [w for w in written.warnings if "vocabulary lacks" in w]
         assert kinds == [
@@ -2159,7 +2161,7 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         if refusal == "marked":
             batch = self.with_marked_excerpt(batch, "md1")
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         sent = refusal == "written"
         assert ("md1" in written.created_items) is sent
@@ -2192,7 +2194,7 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
             ClaimBatch.model_validate(given), "md1"
         )
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert len(written.refused) == 1
         assert written.refused_terms == ["i1: alias"]
@@ -2222,7 +2224,7 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         batch = ClaimBatch.model_validate(given)
         before = copy.deepcopy(wiki.entities[plain])
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert len(written.refused) == 1
         assert "i2" in written.created_items
@@ -2230,8 +2232,9 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         assert wiki.entities[plain] == before
 
     def test_a_reused_writer_reads_its_items_afresh_each_write(self):
-        """The media object joins the portrait's item, registered before
-        content hashing, and a curator then hashes that item: the same
+        """The media object is an item of its own under the title of the
+        portrait's item, registered before content hashing, which it never
+        joins (#109), and a curator then hashes that item: the same
         writer's next write judges it registered, as a new writer's
         would, so the media object takes its tagged label and the
         portrait is flagged against it."""
@@ -2241,20 +2244,21 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         old = unhashed(wiki, TITLE, "File:Studio portrait.png", PORTRAIT)
         batch = family_gedcom(wiki)
         writer = BatchWriter(wiki)
-        first = writer.write_batch(batch)
-        assert first.created_items["md1"] == old
+        first = write_mapped(writer, batch)
+        assert first.created_items["md1"] != old
+        assert label_of(wiki, first.created_items["md1"]) == TITLE
         assert first.flags == []
         hash_item(wiki, old, PORTRAIT)
 
-        again = writer.write_batch(batch)
+        again = write_mapped(writer, batch)
 
         media_object = again.created_items["md1"]
-        assert media_object != old
+        assert media_object not in (old, first.created_items["md1"])
         assert label_of(wiki, media_object) == f"{TITLE} [media object]"
         assert flag_tuples(again.flags) == [
             (UNHASHED_TITLE, old, sha1(PORTRAIT), (media_object,))
         ]
-        assert flag_tuples(BatchWriter(wiki).write_batch(batch).flags) == (
+        assert flag_tuples(write_mapped(BatchWriter(wiki), batch).flags) == (
             flag_tuples(again.flags)
         )
 
@@ -2388,9 +2392,12 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         assert flag_tuples([*registrar.flags, *written.flags]) == flags
         assert_labels_unique(wiki)
 
-    def test_two_media_objects_under_one_title_raise_one_flag(self, tmp_path):
-        """Two objects of one export titled as the scan: both are the one
-        tagged item, and the scan is flagged against it once."""
+    def test_two_media_objects_under_one_title_are_flagged_each(
+        self, tmp_path
+    ):
+        """Two objects of one export titled as the scan: two entities of
+        the identity map, so two items under the tagged label (#109), and
+        the scan is flagged against each."""
         wiki = WritingWiki()
         artifact = (
             Registrar(wiki)
@@ -2401,10 +2408,12 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
 
         written = write_gedcom(wiki, text)
 
-        media_object = written.created_items["md1"]
-        assert written.created_items["md2"] == media_object
+        first, second = (written.created_items[i] for i in ("md1", "md2"))
+        assert first != second
+        assert label_of(wiki, first) == label_of(wiki, second)
         assert flag_tuples(written.flags) == [
-            (UNHASHED_TITLE, artifact, sha1(PORTRAIT), (media_object,))
+            (UNHASHED_TITLE, artifact, sha1(PORTRAIT), (first,)),
+            (UNHASHED_TITLE, artifact, sha1(PORTRAIT), (second,)),
         ]
 
     def test_a_media_objects_other_titles_go_on_its_own_item(self, tmp_path):
@@ -2522,7 +2531,9 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         """A person holds the name the portrait's scan and its media object
         are both titled with: the scan is content-tagged under it, the
         media object takes its tagged label, and the pair is flagged once,
-        by the registration or by the write, whichever comes second."""
+        by the registration or by the write, whichever comes second. The
+        export's person is an item of its own beside the other, under the
+        same name, as nothing is found by its label (#109)."""
         wiki = WritingWiki()
         person = wiki.item(
             "Sebastian Löbig",
@@ -2539,8 +2550,8 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
             written = write_gedcom(wiki, text)
 
         media_object = written.created_items["md1"]
-        assert written.created_items["i1"] == person
-        assert label_of(wiki, person) == "Sebastian Löbig"
+        assert written.created_items["i1"] != person
+        assert label_of(wiki, written.created_items["i1"]) == "Sebastian Löbig"
         assert label_of(wiki, artifact) == (
             f"Sebastian Löbig [{sha1(PORTRAIT)[:8]}]"
         )
@@ -2548,7 +2559,6 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         assert flag_tuples([*registrar.flags, *written.flags]) == [
             (UNHASHED_TITLE, artifact, sha1(PORTRAIT), (media_object,))
         ]
-        assert_labels_unique(wiki)
 
     def test_a_refusal_with_no_item_under_the_tagged_label_flags_nothing(
         self, tmp_path
@@ -2577,14 +2587,16 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         assert "an item this batch makes" in warning
 
 
-class TestOtherKindsStillMatchByLabel:
-    """An artifact-kind entity joins by its label only an item with no hash
-    that is an artifact or a part of one, such as another export's media
-    object; any other entity only an item that is neither, as before
-    (ADR-0010, "What is still matched by label"). Where it may not join
-    the item under its label, it is an item of its own under its tagged
-    label, its own label an alias, and no flag is raised unless an
-    artifact is registered under a media object's label."""
+class TestTheSideRuleNamesTheLabel:
+    """No entity joins an item by its label (#109): each cluster of the
+    identity map is an item of its own, found again by its label and
+    description. The side rule names the label it takes (ADR-0010): an
+    artifact-kind entity takes the label of an item with no hash that is
+    an artifact or a part of one, such as another export's media object,
+    and any other entity the label of an item that is neither. Where it
+    may not take its label, its item is under its tagged label, its own
+    label an alias, and no flag is raised unless an artifact is
+    registered under a media object's label."""
 
     def test_a_record_no_claim_names_never_names_a_media_objects_item(
         self,
@@ -2603,11 +2615,11 @@ class TestOtherKindsStillMatchByLabel:
             "0 TRLR\n"
         )
         wiki = WritingWiki()
-        first = BatchWriter(wiki).write_batch(family_gedcom(wiki, text))
+        first = write_mapped(BatchWriter(wiki), family_gedcom(wiki, text))
         media = first.created_items["md1"]
         kept = copy.deepcopy(wiki.entities[media])
 
-        again = BatchWriter(wiki).write_batch(family_gedcom(wiki, text))
+        again = write_mapped(BatchWriter(wiki), family_gedcom(wiki, text))
 
         assert again.created_items["md1"] == media
         assert again.type_statements_written == 0
@@ -2642,8 +2654,8 @@ class TestOtherKindsStillMatchByLabel:
         }
         kept = copy.deepcopy(wiki.entities[artifact.artifact_qid])
 
-        written = BatchWriter(wiki).write_batch(
-            ClaimBatch.model_validate(given)
+        written = write_mapped(
+            BatchWriter(wiki), ClaimBatch.model_validate(given)
         )
 
         assert written.type_statements_written == 0
@@ -2675,19 +2687,21 @@ class TestOtherKindsStillMatchByLabel:
         }
         kept = copy.deepcopy(wiki.entities[gustav])
 
-        BatchWriter(wiki).write_batch(ClaimBatch.model_validate(given))
+        write_mapped(BatchWriter(wiki), ClaimBatch.model_validate(given))
 
         assert wiki.entities[gustav] == kept
 
-    def test_a_person_joins_the_item_under_its_label(self, tmp_path):
+    def test_a_person_never_joins_the_item_under_its_label(self, tmp_path):
         wiki = WritingWiki()
         person = wiki.item(
             "Sebastian Löbig",
             ("instance_of", WritingWiki.ITEMS["human"], None),
         )
         written = write_gedcom(wiki)
-        assert written.created_items["i1"] == person
+        assert written.created_items["i1"] != person
+        assert label_of(wiki, written.created_items["i1"]) == "Sebastian Löbig"
         assert written.flags == []
+        assert write_gedcom(wiki).created_items == written.created_items
 
     def test_a_person_under_a_registered_artifacts_label_is_its_own_item(
         self, tmp_path
@@ -2823,27 +2837,37 @@ class TestOtherKindsStillMatchByLabel:
 
         written = write_gedcom(wiki, text)
 
-        assert written.created_items["i1"] == person
+        assert written.created_items["i1"] != person
         media_object = written.created_items["md1"]
         assert label_of(wiki, media_object) == "Sebastian Löbig [media object]"
         assert ITEMS["artifact"] not in strings(wiki, person, "instance_of")
-        assert images(wiki, person) == [media_object]
+        assert images(wiki, written.created_items["i1"]) == [media_object]
         assert written.flags == []
 
-    def test_two_media_objects_of_one_export_join_one_item(self, tmp_path):
+    def test_two_media_objects_of_one_export_are_two_items(self, tmp_path):
+        """Two records of one manifest under one title are two entities
+        (ADR-0007), two clusters of the identity map: two items under the
+        title, told apart by their descriptions."""
         wiki = WritingWiki()
         text = TWO_PEOPLE_GEDCOM.replace("Wedding portrait, 1905", TITLE)
         written = write_gedcom(wiki, text)
-        assert written.created_items["md1"] == written.created_items["md2"]
-        assert label_of(wiki, written.created_items["md1"]) == TITLE
+        first, second = (written.created_items[i] for i in ("md1", "md2"))
+        assert first != second
+        assert label_of(wiki, first) == label_of(wiki, second) == TITLE
+        descriptions = {
+            wiki.entities[qid]["descriptions"]["en"]["value"]
+            for qid in (first, second)
+        }
+        assert len(descriptions) == 2
+        assert write_gedcom(wiki, text).created_items == written.created_items
 
-    def test_a_media_object_joins_a_fragment_of_an_unhashed_artifact(
+    def test_a_media_object_beside_a_fragment_of_an_unhashed_artifact(
         self, tmp_path
     ):
         """On an instance from before content hashing, a fragment of an
         artifact with no hash is a part of an artifact with no hash: a
-        media object titled as it joins it, unflagged, as it joins the
-        artifact; a person never does."""
+        media object titled as it takes its label, unflagged, but never
+        joins it (#109); a person takes neither."""
         page = f"{LETTER_TITLE}, page 1"
 
         def legacy():
@@ -2861,7 +2885,8 @@ class TestOtherKindsStillMatchByLabel:
 
         wiki, fragment = legacy()
         written = write_gedcom(wiki, FAMILY_GEDCOM.replace(TITLE, page))
-        assert written.created_items["md1"] == fragment
+        assert written.created_items["md1"] != fragment
+        assert label_of(wiki, written.created_items["md1"]) == page
         assert written.flags == []
 
         wiki, fragment = legacy()
@@ -2870,197 +2895,67 @@ class TestOtherKindsStillMatchByLabel:
         assert label_of(wiki, fragment) == page
         assert person != fragment
 
-    def test_a_media_object_joins_an_unhashed_media_object(self, tmp_path):
+    def test_a_media_object_never_joins_an_unhashed_media_object(
+        self, tmp_path
+    ):
+        """Another export's media object under the title: the side rule
+        lets the media object take the title, and it is an item of its own
+        there, unflagged."""
         wiki = WritingWiki()
         older = gedcom_media_object(wiki, TITLE)
         written = write_gedcom(wiki)
-        assert written.created_items["md1"] == older
+        assert written.created_items["md1"] != older
+        assert label_of(wiki, written.created_items["md1"]) == TITLE
         assert written.flags == []
 
-    def test_resolve_never_resolves_an_artifact_kind_by_label(self):
-        from yizkr.claims import LocalRef, QidRef
-        from yizkr.pipeline.resolve import resolve_batch
-
-        wiki = WritingWiki()
-        batch = family_gedcom(wiki)
-        given = batch.model_dump(mode="json")
-        (claim,) = given["claims"]
-        claim["subject"].update(label="Sebastian Löbig")
-        claim["value"]["value"].update(label=TITLE)
-        # a ref of an artifact class with no record, by its own kind
-        photo = dict(
-            claim,
-            value={
-                "type": "item",
-                "value": {
-                    "kind": "local",
-                    "local_id": "ph1",
-                    "label": TITLE,
-                    "instance_of": "photograph",
-                },
-            },
-        )
-        given["claims"].append(photo)
-        # the media object as a claim's subject, and as an item-valued
-        # qualifier's value, by its record's kind
-        media_object = dict(claim["value"]["value"])
-        given["claims"].append(
-            dict(
-                claim,
-                subject=media_object,
-                value={"type": "item", "value": claim["subject"]},
-                qualifiers=[
-                    {
-                        "property": "image",
-                        "value": {"type": "item", "value": media_object},
-                    }
-                ],
-            )
-        )
-        labels = {"Sebastian Löbig": "Q500", TITLE: "Q501"}
-
-        resolved = resolve_batch(type(batch).model_validate(given), labels)
-
-        first, second, third = resolved.claims
-        assert first.subject == QidRef(qid="Q500")
-        assert isinstance(first.value.value, LocalRef)
-        assert isinstance(second.value.value, LocalRef)
-        assert isinstance(third.subject, LocalRef)
-        assert third.value.value == QidRef(qid="Q500")
-        (qualifier,) = third.qualifiers
-        assert isinstance(qualifier.value.value, LocalRef)
-
-    def test_resolve_never_resolves_an_artifact_fragment_by_label(self):
-        """A ref of the kind artifact fragment is on the artifact side, as
-        in the writer (is_artifact_kind): an item holding its label, here
-        a person's, is never its item."""
-        from yizkr.claims import LocalRef, QidRef
-        from yizkr.pipeline.resolve import resolve_batch
-
-        wiki = WritingWiki()
-        batch = family_gedcom(wiki)
-        given = batch.model_dump(mode="json")
-        (claim,) = given["claims"]
-        claim["subject"].update(label="Sebastian Löbig")
-        page = {
-            "kind": "local",
-            "local_id": "pg1",
-            "label": "Sebastian Löbig",
-            "instance_of": "artifact_fragment",
-        }
-        given["claims"] = [dict(claim, value={"type": "item", "value": page})]
-        labels = {"Sebastian Löbig": "Q500"}
-
-        resolved = resolve_batch(type(batch).model_validate(given), labels)
-
-        (only,) = resolved.claims
-        assert only.subject == QidRef(qid="Q500")
-        assert isinstance(only.value.value, LocalRef)
-
-    def test_resolve_never_resolves_a_ref_to_an_artifact(self, tmp_path):
-        """The labels a batch is resolved against leave out every artifact
-        and every part of one: a registered artifact, its fragment, an
-        artifact with no hash and a media object's item. A person's
-        remains."""
-        from yizkr.pipeline.resolve import resolvable_labels
-
-        wiki = WritingWiki()
-        Registrar(wiki).register_artifact(
-            scan(tmp_path, PORTRAIT), "photograph", "Sebastian Löbig", pages=1
-        )
-        unhashed(wiki, LETTER_TITLE, "File:Letter-to-sipkje-1952.png", LETTER)
-        unhashed(
-            wiki,
-            "letter-to-sipkje-1952, copy",
-            "File:Letter-to-sipkje-1952-copy.png",
-            LETTER_RESCAN,
-            kind=None,
-        )
-        wiki.item(SHOP, ("media_sha1", sha1(IMAGE), None))
-        gedcom_media_object(wiki, TITLE)
-        person = wiki.item(
-            "Hildegard Löbig",
-            ("instance_of", WritingWiki.ITEMS["human"], None),
-        )
-
-        held = [label_of(wiki, qid) for qid in wiki.entities]
-
-        labels = resolvable_labels(wiki, naming(*held, "Gustav Löbig"))
-
-        assert labels == {"Hildegard Löbig": person}
-
-    def test_the_resolve_step_leaves_a_person_under_an_artifacts_label_local(
-        self, tmp_path
-    ):
-        """`ingest run`'s resolve step resolves against those labels: a
-        person whose name a registered artifact holds stays local, and the
-        writer gives it an item of its own; another person resolves."""
+    def test_resolve_matches_nothing_by_label(self, tmp_path):
+        """A registered artifact holds Sebastian's name and a person's item
+        Hildegard's: the resolve step, of `ingest run` and of `yizkr
+        ingest resolve`, leaves every ref local and reads nothing of the
+        instance (#109)."""
         from types import SimpleNamespace
 
-        from yizkr.claims import ClaimBatch, LocalRef, QidRef
+        from yizkr import cli
+        from yizkr.claims import ClaimBatch
         from yizkr.pipeline.orchestrate import Orchestrator
 
         wiki = WritingWiki()
         Registrar(wiki).register_artifact(
             scan(tmp_path, PORTRAIT), "photograph", "Sebastian Löbig"
         )
-        given = family_gedcom(wiki, TWO_PEOPLE_GEDCOM).model_dump(mode="json")
-        for claim, name in zip(
-            given["claims"],
-            ("Sebastian Löbig", "Hildegard Löbig"),
-            strict=True,
-        ):
-            claim["subject"]["label"] = name
-        batch = ClaimBatch.model_validate(given)
-        hildegard = wiki.item(
+        wiki.item(
             "Hildegard Löbig",
             ("instance_of", WritingWiki.ITEMS["human"], None),
         )
+        batch = family_gedcom(wiki, TWO_PEOPLE_GEDCOM)
         doc = SimpleNamespace(equivalences_reviewed=tmp_path / "none.csv")
-        step = SimpleNamespace(client=wiki, log=lambda *a, **k: None)
+        step = SimpleNamespace(client=None, log=lambda *a, **k: None)
 
-        resolved = Orchestrator._step_resolve(step, doc, batch)
+        assert Orchestrator._step_resolve(step, doc, batch) == batch
 
-        subjects = [claim.subject for claim in resolved.claims]
-        assert isinstance(subjects[0], LocalRef)
-        assert subjects[1] == QidRef(qid=hildegard)
-
-    def test_cmd_resolve_leaves_a_person_under_an_artifacts_label_local(
-        self, tmp_path, monkeypatch
-    ):
-        """`yizkr resolve` resolves against the same labels: a person whose
-        name a registered artifact holds stays local in the batch it
-        writes, and another person resolves."""
-        from yizkr import cli
-        from yizkr.claims import ClaimBatch, LocalRef, QidRef
-
-        wiki = WritingWiki()
-        Registrar(wiki).register_artifact(
-            scan(tmp_path, PORTRAIT), "photograph", "Sebastian Löbig"
-        )
-        given = family_gedcom(wiki, TWO_PEOPLE_GEDCOM).model_dump(mode="json")
-        for claim, name in zip(
-            given["claims"],
-            ("Sebastian Löbig", "Hildegard Löbig"),
-            strict=True,
-        ):
-            claim["subject"]["label"] = name
-        hildegard = wiki.item(
-            "Hildegard Löbig",
-            ("instance_of", WritingWiki.ITEMS["human"], None),
-        )
         path = tmp_path / "batch.json"
-        path.write_text(json.dumps(given))
+        path.write_text(batch.model_dump_json())
+        identity_path = tmp_path / "identity-map.json"
+        identity_path.write_text(json.dumps(mapped(batch).data))
         out = tmp_path / "out" / "resolved.json"
-        monkeypatch.setattr(cli, "_client", lambda args: wiki)
-        args = Namespace(batch=path, equivalences=None, out=out, env_file=None)
+        args = Namespace(
+            batch=path,
+            equivalences=None,
+            identity_map=identity_path,
+            out=out,
+            env_file=None,
+        )
 
-        assert cli.cmd_resolve(args) == 0
+        def no_wiki(args):
+            raise AssertionError("the resolve step reads no wiki")
 
-        resolved = ClaimBatch.model_validate_json(out.read_text())
-        subjects = [claim.subject for claim in resolved.claims]
-        assert isinstance(subjects[0], LocalRef)
-        assert subjects[1] == QidRef(qid=hildegard)
+        original = cli._client
+        cli._client = no_wiki
+        try:
+            assert cli.cmd_resolve(args) == 0
+        finally:
+            cli._client = original
+        assert ClaimBatch.model_validate_json(out.read_text()) == batch
 
     def test_a_sitter_named_by_another_persons_portrait_keeps_her_name(
         self, tmp_path
@@ -3110,9 +3005,12 @@ class TestOtherKindsStillMatchByLabel:
             ),
             claim,
         ]
+        given["entities"].append(
+            {"id": "ph1", "label": "Sebastian Löbig", "kind": kind}
+        )
 
-        written = BatchWriter(wiki).write_batch(
-            ClaimBatch.model_validate(given)
+        written = write_mapped(
+            BatchWriter(wiki), ClaimBatch.model_validate(given)
         )
 
         person, photo = (written.created_items[i] for i in ("i1", "ph1"))
@@ -3175,45 +3073,64 @@ class TestOtherKindsStillMatchByLabel:
         assert tagged_label("Sebastian Löbig", kind) == f"Sebastian Löbig{tag}"
 
     @staticmethod
-    def kindless(wiki):
-        """The family GEDCOM's claim with its subject a ref with no kind
-        and no record, named "Sebastian Löbig", as an extraction may give
-        one."""
-        from yizkr.claims import ClaimBatch
+    def kindless():
+        """A claim of the portrait's scan, from a batch with no entity
+        manifest, whose subject is a ref with no kind named "Sebastian
+        Löbig", as an extraction may give one: that he is a person."""
+        from yizkr.claims import (
+            ArtifactRef,
+            Claim,
+            ClaimBatch,
+            ItemValue,
+            LocalRef,
+            SourceReference,
+            VocabRef,
+        )
 
-        given = family_gedcom(wiki).model_dump(mode="json")
-        (claim,) = given["claims"]
-        claim["subject"] = {
-            "kind": "local",
-            "local_id": "e1",
-            "label": "Sebastian Löbig",
-        }
-        given["entities"] = [
-            record for record in given["entities"] if record["id"] != "i1"
-        ]
-        return ClaimBatch.model_validate(given)
+        gedcom = family_gedcom(WritingWiki())
+        return ClaimBatch(
+            extraction_run=gedcom.extraction_run,
+            claims=[
+                Claim(
+                    subject=LocalRef(local_id="e1", label="Sebastian Löbig"),
+                    property="instance_of",
+                    value=ItemValue(value=VocabRef(key="human")),
+                    source=SourceReference(
+                        artifact=ArtifactRef(sha1=sha1(PORTRAIT))
+                    ),
+                )
+            ],
+        )
+
+    def one_entity(self, wiki):
+        """The map of the export and the scan's batch, in which every
+        mention of Sebastian is one entity."""
+        return corpus(
+            family_gedcom(wiki), self.kindless(), entities=("Sebastian Löbig",)
+        )
 
     @pytest.mark.parametrize("order", ["human-first", "kindless-first"])
     def test_a_kindless_ref_and_a_human_ref_meet_on_one_item(
         self, tmp_path, order
     ):
         """A registered artifact holds Sebastian's name: the GEDCOM's
-        `human` ref and an extraction's ref with no kind take one item
-        under the one tagged label, in either order, as they would meet
-        under his name with no artifact holding it."""
+        `human` ref and an extraction's ref with no kind, which the
+        identity map puts in one cluster, take one item under the one
+        tagged label, in either order."""
         from yizkr.pipeline.writer import BatchWriter
 
         wiki = WritingWiki()
         Registrar(wiki).register_artifact(
             scan(tmp_path, PORTRAIT), "photograph", "Sebastian Löbig"
         )
+        identity = self.one_entity(wiki)
         writes = [
-            lambda: write_gedcom(wiki).created_items["i1"],
-            lambda: (
-                BatchWriter(wiki)
-                .write_batch(self.kindless(wiki))
-                .created_items["e1"]
-            ),
+            lambda: write_mapped(
+                BatchWriter(wiki), family_gedcom(wiki), identity=identity
+            ).created_items["i1"],
+            lambda: write_mapped(
+                BatchWriter(wiki), self.kindless(), identity=identity
+            ).created_items["e1"],
         ]
         if order == "kindless-first":
             writes.reverse()
@@ -3228,16 +3145,22 @@ class TestOtherKindsStillMatchByLabel:
         self, tmp_path
     ):
         """Written before the artifact, the person keeps his name, and a
-        ref with no kind written after it joins his item there."""
+        ref with no kind of his cluster, written after it, finds his item
+        there."""
         from yizkr.pipeline.writer import BatchWriter
 
         wiki = WritingWiki()
-        person = write_gedcom(wiki).created_items["i1"]
+        identity = self.one_entity(wiki)
+        person = write_mapped(
+            BatchWriter(wiki), family_gedcom(wiki), identity=identity
+        ).created_items["i1"]
         Registrar(wiki).register_artifact(
             scan(tmp_path, PORTRAIT), "photograph", "Sebastian Löbig"
         )
 
-        written = BatchWriter(wiki).write_batch(self.kindless(wiki))
+        written = write_mapped(
+            BatchWriter(wiki), self.kindless(), identity=identity
+        )
 
         assert written.created_items["e1"] == person
         assert label_of(wiki, person) == "Sebastian Löbig"
@@ -3268,7 +3191,7 @@ class TestTheReviewsProbes:
                 )
         batch = ClaimBatch.model_validate(given)
 
-        runs = [BatchWriter(wiki).write_batch(batch) for _ in range(3)]
+        runs = [write_mapped(BatchWriter(wiki), batch) for _ in range(3)]
 
         fragment = runs[0].created_items["md1"]
         assert [run.created_items["md1"] for run in runs] == [fragment] * 3
@@ -3386,8 +3309,9 @@ class TestTheReviewsProbes:
     def test_an_entity_with_no_record_takes_its_first_refs_label(
         self, tmp_path
     ):
-        """An entity with no record named "Sebastian Löbig" by its first
-        ref and "Sebastian Loebig" by its second: its item takes the
+        """An entity of a batch without an entity manifest named
+        "Sebastian Löbig" by its first ref and "Sebastian Loebig" by its
+        second: its mention, and so its cluster and its item, take the
         first."""
         from yizkr.claims import ClaimBatch
         from yizkr.pipeline.writer import BatchWriter
@@ -3395,9 +3319,8 @@ class TestTheReviewsProbes:
         wiki = WritingWiki()
         given = family_gedcom(wiki).model_dump(mode="json")
         (claim,) = given["claims"]
-        given["entities"] = [
-            record for record in given["entities"] if record["id"] != "i1"
-        ]
+        given["entities"] = []
+        claim["value"]["value"].update(label=TITLE, instance_of="artifact")
         given["claims"] = [
             dict(
                 claim,
@@ -3408,19 +3331,17 @@ class TestTheReviewsProbes:
             for name in ("Sebastian Löbig", "Sebastian Loebig")
         ]
 
-        written = BatchWriter(wiki).write_batch(
-            ClaimBatch.model_validate(given)
+        written = write_mapped(
+            BatchWriter(wiki), ClaimBatch.model_validate(given)
         )
 
         assert label_of(wiki, written.created_items["i1"]) == "Sebastian Löbig"
 
     def test_two_refused_entities_in_one_claim(self, tmp_path):
         """Registered artifacts hold both labels of Sebastian and both of
-        his media object, and a second claim names Sebastian and a place
-        of a kind the vocabulary lacks: each refused entity is warned of
-        once, naming the claims that name it, each claim is refused once,
-        and the place's kind is not warned of, as no claim naming it is
-        written."""
+        his media object, and a second claim names Sebastian and a place:
+        each refused entity is warned of once, naming the claims that name
+        it, and each claim is refused once."""
         from yizkr.claims import ClaimBatch
         from yizkr.pipeline.review import claim_id
         from yizkr.pipeline.writer import BatchWriter
@@ -3448,10 +3369,13 @@ class TestTheReviewsProbes:
         given["claims"].append(
             dict(claim, value={"type": "item", "value": place})
         )
+        given["entities"].append(
+            {"id": "pl1", "label": "Flörburg", "kind": "place"}
+        )
         batch = ClaimBatch.model_validate(given)
         first, second = (claim_id(c) for c in batch.claims)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.refused == [first, second]
         refusals = [w for w in written.warnings if "is refused" in w]
@@ -3460,7 +3384,6 @@ class TestTheReviewsProbes:
         (media_object,) = [w for w in refusals if "'md1'" in w]
         assert f"({first}, {second})" in sebastian
         assert f"({first})" in media_object
-        assert not [w for w in written.warnings if "lighthouse" in w]
         assert written.created_items == {}
 
     def test_a_blocked_entitys_warning_names_only_claims_it_would_write(
@@ -3497,7 +3420,7 @@ class TestTheReviewsProbes:
         broken, named = (claim_id(c) for c in batch.claims)
         assert broken != named
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert sorted(written.refused) == sorted([broken, named])
         (sebastian,) = [
@@ -3593,10 +3516,15 @@ class TestTheWriteStepRaisesTheFlag:
             .register_artifact(scan(tmp_path, PORTRAIT), "photograph", TITLE)
             .artifact_qid
         )
+        batch = family_gedcom(wiki)
         path = tmp_path / "batch.json"
-        path.write_text(family_gedcom(wiki).model_dump_json())
+        path.write_text(batch.model_dump_json())
+        identity = tmp_path / "identity-map.json"
+        identity.write_text(json.dumps(mapped(batch).data))
         monkeypatch.setattr(cli, "_client", lambda args: wiki)
-        args = Namespace(batch=path, dry_run=False, env_file=None)
+        args = Namespace(
+            batch=path, identity_map=identity, dry_run=False, env_file=None
+        )
 
         assert cli.cmd_write(args) == 0
 
@@ -3692,11 +3620,9 @@ class CountingWiki(WritingWiki):
 
 
 class TestWhatResolveAndAWriteRead:
-    """Resolve reads the instance's labels once a batch, and the
-    statements of only the items its refs' labels name; a write reads the
-    labels once, and the statements of only the items it finds. Neither
-    reads every entity's statements, however many the instance holds
-    (ADR-0010, "What is still matched by label")."""
+    """Resolve reads nothing of the instance (#109); a write reads the
+    labels once, and the statements of only the items it finds, never
+    every entity's statements, however many the instance holds."""
 
     UNRELATED = 200
 
@@ -3725,85 +3651,22 @@ class TestWhatResolveAndAWriteRead:
         wiki.forget()
         return wiki, people, artifact, exported
 
-    def test_resolve_reads_the_statements_of_the_items_named(self, tmp_path):
-        from yizkr.pipeline.resolve import resolvable_labels
-
-        wiki, people, artifact, _ = self.instance(tmp_path)
-
-        labels = resolvable_labels(
-            wiki, naming("Unrelated person 0007", TITLE, "Gustav Löbig")
-        )
-
-        assert labels == {"Unrelated person 0007": people[7]}
-        assert wiki.label_reads == ["label_index"]
-        assert sorted(wiki.claims_of) == sorted([people[7], artifact])
-        assert wiki.fetches == 1
-        assert wiki.whole_reads == []
-        assert wiki.items_read == []
-
-    def test_a_fresh_client_resolves_from_one_read_of_the_labels(
-        self, tmp_path
-    ):
-        """A client that has not read the vocabulary yet, as the CLI's
-        is, reads the labels once for the match and the vocabulary."""
-        from yizkr.pipeline.resolve import resolvable_labels
-
-        wiki, people, _, _ = self.instance(tmp_path)
-        wiki.uncache()
-
-        labels = resolvable_labels(wiki, naming("Unrelated person 0007"))
-        assert labels == {"Unrelated person 0007": people[7]}
-        assert wiki.label_reads == ["label_index"]
-
-        wiki.uncache()
-        wiki.forget()
-        assert resolvable_labels(wiki, naming("Gustav Löbig")) == {}
-        assert wiki.label_reads == ["label_index"]
-
-    def test_resolve_reads_no_statements_for_a_media_object(self, tmp_path):
-        """A ref of an artifact kind under the scan's title, as a GEDCOM
-        media object is, is never resolved by its label, so the scan's
-        statements are not read."""
-        from yizkr.claims import ClaimBatch
-        from yizkr.pipeline.resolve import resolvable_labels
-
-        wiki, *_ = self.instance(tmp_path)
-        given = naming(TITLE).model_dump(mode="json")
-        given["claims"][0]["subject"]["instance_of"] = "photograph"
-        batch = ClaimBatch.model_validate(given)
-        wiki.forget()
-
-        assert resolvable_labels(wiki, batch) == {}
-        assert wiki.label_reads == ["label_index"]
-        assert wiki.fetches == 0
-        assert wiki.whole_reads == []
-
-    def test_resolve_reads_no_statements_when_no_label_is_held(self, tmp_path):
-        from yizkr.pipeline.resolve import resolvable_labels
-
-        wiki, *_ = self.instance(tmp_path)
-
-        assert resolvable_labels(wiki, naming("Gustav Löbig")) == {}
-        assert wiki.label_reads == ["label_index"]
-        assert wiki.fetches == 0
-        assert wiki.whole_reads == []
-
-    def test_the_resolve_step_reads_as_resolve_does(self, tmp_path):
+    def test_the_resolve_step_reads_nothing(self, tmp_path):
         from types import SimpleNamespace
 
         from yizkr.pipeline.orchestrate import Orchestrator
 
-        wiki, people, artifact, _ = self.instance(tmp_path)
+        wiki, *_ = self.instance(tmp_path)
         doc = SimpleNamespace(equivalences_reviewed=tmp_path / "none.csv")
         step = SimpleNamespace(client=wiki, log=lambda *a, **k: None)
+        batch = naming("Unrelated person 0007", TITLE)
 
-        Orchestrator._step_resolve(
-            step, doc, naming("Unrelated person 0007", TITLE)
-        )
+        assert Orchestrator._step_resolve(step, doc, batch) == batch
 
-        assert wiki.label_reads == ["label_index"]
-        assert sorted(wiki.claims_of) == sorted([people[7], artifact])
+        assert wiki.label_reads == []
+        assert wiki.claims_of == []
         assert wiki.whole_reads == []
+        assert wiki.items_read == []
 
     def test_a_write_reads_the_labels_once(self, tmp_path):
         """The GEDCOM written after the scan: its media object is placed
@@ -3816,8 +3679,8 @@ class TestWhatResolveAndAWriteRead:
         sha = batch.claims[0].source.artifact.sha1
         wiki.forget()
 
-        written = BatchWriter(wiki, artifact_qids={sha: exported}).write_batch(
-            batch
+        written = write_mapped(
+            BatchWriter(wiki, artifact_qids={sha: exported}), batch
         )
 
         assert [flag.artifact for flag in written.flags] == [artifact]
@@ -3834,13 +3697,13 @@ class TestWhatResolveAndAWriteRead:
         wiki, people, _, exported = self.instance(tmp_path)
         batch = family_gedcom(wiki)
         sha = batch.claims[0].source.artifact.sha1
-        first = BatchWriter(wiki, artifact_qids={sha: exported}).write_batch(
-            batch
+        first = write_mapped(
+            BatchWriter(wiki, artifact_qids={sha: exported}), batch
         )
         wiki.forget()
 
-        again = BatchWriter(wiki, artifact_qids={sha: exported}).write_batch(
-            batch
+        again = write_mapped(
+            BatchWriter(wiki, artifact_qids={sha: exported}), batch
         )
 
         assert again.created_items == first.created_items
@@ -3853,16 +3716,18 @@ class TestWhatResolveAndAWriteRead:
         self, tmp_path
     ):
         """The labels are read once, before the write makes anything: a
-        second ref under a label the write has made an item under finds
-        that item, as it would under the label read afresh."""
+        second ref of a cluster the write has made an item for finds that
+        item, as it would under the label read afresh."""
         from yizkr.pipeline.writer import BatchWriter
 
         wiki, _, _, exported = self.instance(tmp_path)
         batch = naming("Gustav Löbig", "Gustav Löbig")
         sha = batch.claims[0].source.artifact.sha1
 
-        written = BatchWriter(wiki, artifact_qids={sha: exported}).write_batch(
-            batch
+        written = write_mapped(
+            BatchWriter(wiki, artifact_qids={sha: exported}),
+            batch,
+            identity=corpus(batch, entities=("Gustav Löbig",)),
         )
 
         assert written.created_items["e0"] == written.created_items["e1"]
@@ -3871,76 +3736,21 @@ class TestWhatResolveAndAWriteRead:
 
     def test_each_write_reads_the_labels_afresh(self, tmp_path):
         """A writer that writes two batches reads the labels once for
-        each: an item made between them under a label the second names is
-        that entity's item."""
+        each: the item its first write made, under a label the second
+        names, is found again by the second."""
         from yizkr.pipeline.writer import BatchWriter
 
         wiki, _, _, exported = self.instance(tmp_path)
-        batch = family_gedcom(wiki)
+        batch = naming("Gustav Löbig")
         sha = batch.claims[0].source.artifact.sha1
         writer = BatchWriter(wiki, artifact_qids={sha: exported})
-        writer.write_batch(batch)
-        gustav = wiki.item(
-            "Gustav Löbig", ("instance_of", WritingWiki.ITEMS["human"], None)
-        )
+        gustav = write_mapped(writer, batch).created_items["e0"]
         wiki.forget()
 
-        written = writer.write_batch(naming("Gustav Löbig"))
+        written = write_mapped(writer, batch)
 
         assert written.created_items["e0"] == gustav
         assert wiki.label_reads == ["label_index"]
-
-    def test_resolve_reads_the_labels_of_values_and_qualifiers(self, tmp_path):
-        """Sebastian's claim names Gustav as its value and Hildegard in a
-        qualifier, each under the label of a person the instance holds:
-        both labels are wanted, the statements of only their items are
-        read, and both refs resolve to those items."""
-        from yizkr.claims import ClaimBatch, LocalRef, QidRef
-        from yizkr.pipeline.resolve import resolvable_labels, resolve_batch
-
-        wiki, *_ = self.instance(tmp_path)
-        gustav, hildegard = (
-            wiki.item(name, ("instance_of", WritingWiki.ITEMS["human"], None))
-            for name in ("Gustav Löbig", "Hildegard Löbig")
-        )
-        given = naming("Sebastian Löbig").model_dump(mode="json")
-        (claim,) = given["claims"]
-        claim["property"] = "relative"
-        claim["value"] = {
-            "type": "item",
-            "value": {
-                "kind": "local",
-                "local_id": "g",
-                "label": "Gustav Löbig",
-            },
-        }
-        claim["qualifiers"] = [
-            {
-                "property": "participant",
-                "value": {
-                    "type": "item",
-                    "value": {
-                        "kind": "local",
-                        "local_id": "h",
-                        "label": "Hildegard Löbig",
-                    },
-                },
-            }
-        ]
-        batch = ClaimBatch.model_validate(given)
-        wiki.forget()
-
-        labels = resolvable_labels(wiki, batch)
-
-        assert labels == {"Gustav Löbig": gustav, "Hildegard Löbig": hildegard}
-        assert sorted(wiki.claims_of) == sorted([gustav, hildegard])
-        assert wiki.fetches == 1
-        assert wiki.label_reads == ["label_index"]
-        (resolved,) = resolve_batch(batch, labels).claims
-        assert isinstance(resolved.subject, LocalRef)
-        assert resolved.value.value == QidRef(qid=gustav)
-        (qualifier,) = resolved.qualifiers
-        assert qualifier.value.value == QidRef(qid=hildegard)
 
     def test_a_write_scans_each_label_once_for_content_tags(
         self, tmp_path, monkeypatch
@@ -3984,7 +3794,7 @@ class TestWhatResolveAndAWriteRead:
         counting = Counting(writer_module._CONTENT_TAG)
         monkeypatch.setattr(writer_module, "_CONTENT_TAG", counting)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert sorted(flag.artifact for flag in written.flags) == sorted(
             [artifact, letter]

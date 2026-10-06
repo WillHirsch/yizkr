@@ -57,18 +57,22 @@ one excerpt; one whose bytes a document of the folder has, or that the
 never-ingest list names, is none. The run takes each excerpt after the
 folder's documents, as its PDF's transcription finds it.
 
-Two steps use the wiki: resolve, which matches labels to the graph's
-items, and the write, which registers the document first
+One step uses the wiki: the write, which registers the document first
 (yizkr.pipeline.registrar): its artifact item, a deck's slides as page
 fragments, and a deck's derived media or a PDF's images, each found or
 made by the SHA-1 of its bytes, just before the claims that cite them
 are written; an excerpt's write registers each PDF that places it, with
-its images. Everything else reads nothing from the wiki and writes
-nothing to it (ADR-0025 §2): the stages before the gates; a deck's
-derived media and a PDF's images, which are recorded in its directory
-(`derived-media.json`) for the write to register; and the reconcile
-step, which has no roster to match a document's entities against, so it
-proposes nothing and the first gate has nothing to review.
+its images. It finds or mints the item of every entity of the batch
+through the identity map of the run's documents (yizkr.pipeline.writer,
+step 2), which it keeps in the run directory's corpus folder as a
+scratch run's clustering stage does (`_identity_map`). Everything else,
+the resolve step among it, which matches nothing by its label, reads
+nothing from the wiki and writes nothing to it (ADR-0025 §2): the stages
+before the gates; a deck's derived media and a PDF's images, which are
+recorded in its directory (`derived-media.json`) for the write to
+register; and the reconcile step, which has no roster to match a
+document's entities against, so it proposes nothing and the first gate
+has nothing to review.
 
 Dependencies are make-style by content hash (`derivations.json`): the
 transcription is made from the correction, when there is one; the batch
@@ -844,8 +848,8 @@ class Orchestrator:
         self.extract_model = extract_model
         # serial mode (ADR-0019): process artifacts one at a time, in a
         # greedy-overlap sequence, each fully written before the next
-        # reconciles — so a later artifact's resolve step finds, by exact
-        # label, the items the earlier ones wrote.
+        # reconciles; every write finds its entities' items through the
+        # run's identity map (_identity_map), never by label.
         self.serial = serial
         # how many documents to extract (transcribe + chunked extract) at
         # once during serial mode's up-front extract-all phase. Multiplies
@@ -871,6 +875,12 @@ class Orchestrator:
         # image SHA-1 -> the excerpt found for it in this run
         # (_excerpts_of): one document however many PDFs place the image
         self._excerpts: dict[str, ExcerptRun] = {}
+        # the run's documents, their SHA-1s, and the identity map their
+        # writes resolve their entities through, made once an invocation
+        # (_identity_map)
+        self._run_documents: list[DocumentRun] = []
+        self._corpus_sha1s: set[str] = set()
+        self._identity = None
         # the run's engine client per role, and its LLM cache, each made
         # on first use and closed when the run ends
         self._engines: dict[str, Any] = {}
@@ -1911,7 +1921,7 @@ class Orchestrator:
             read_approved_equivalences,
             read_reviewed_aliases,
         )
-        from yizkr.pipeline.resolve import resolvable_labels, resolve_batch
+        from yizkr.pipeline.resolve import resolve_batch
 
         if doc.equivalences_reviewed.exists():
             approved = read_approved_equivalences(doc.equivalences_reviewed)
@@ -1921,7 +1931,9 @@ class Orchestrator:
                 read_reviewed_aliases(doc.equivalences_reviewed),
             )
             self.log(f"  applied {len(approved)} approved equivalences")
-        return resolve_batch(batch, resolvable_labels(self.client, batch))
+        # every other local ref stays local: the write finds its item
+        # through the run's identity map (_identity_map)
+        return resolve_batch(batch)
 
     def _step_export_review(self, doc: DocumentRun, batch: ClaimBatch) -> int:
         from yizkr.pipeline.review import export_review_csv
@@ -2031,14 +2043,81 @@ class Orchestrator:
             entries(json.loads(doc.critique.read_text())), extracted, rows
         )
 
-    def _step_write(self, doc: DocumentRun, batch: ClaimBatch) -> dict:
-        from yizkr.pipeline.review import apply_review, is_bulk_accepted
-        from yizkr.pipeline.writer import BatchWriter
+    # whether a write refuses an instance that holds the writes of another
+    # identity map (yizkr.pipeline.writer.OtherIdentityMap): an instance
+    # holds one map's writes, but the one the live tests share, whose
+    # labels their session marks keep apart
+    one_map = True
+
+    def _approved(self, doc: DocumentRun, batch: ClaimBatch) -> ClaimBatch:
+        """The claims of `batch` the document's reviewed sheet approves
+        (apply_review), kept as the document's approved batch, each warning
+        of the review logged."""
+        from yizkr.pipeline.review import apply_review
 
         approved, warnings = apply_review(batch, doc.review_reviewed)
         for warning in warnings:
             self.log(f"  {doc.source.name}: {warning}", file=sys.stderr)
         doc.approved.write_text(approved.model_dump_json(indent=2))
+        return approved
+
+    def _mapped(
+        self, doc: DocumentRun, approved: ClaimBatch, instance: bool = False
+    ):
+        """The run's identity map (_identity_map), once it holds every
+        mention of the document's approved batch, read from the batch the
+        map was made from, the document's extraction (`doc.batch`): raises
+        UnmappedMention otherwise, before anything is registered or
+        written (yizkr.pipeline.writer, step 2). With `instance`, and
+        `one_map`, it raises OtherIdentityMap too, then, when the instance
+        holds the writes of another map (_maps_on_instance), as the writer
+        would only after the document's artifact was registered. Returns
+        the map and that batch."""
+        from yizkr.pipeline.writer import (
+            OtherIdentityMap,
+            mapped_clusters,
+            other_identity_maps,
+        )
+
+        identity = self._identity_map()
+        extracted = (
+            ClaimBatch.model_validate_json(doc.batch.read_text())
+            if doc.batch.exists()
+            else None
+        )
+        clusters, _, _ = mapped_clusters(
+            approved, identity, mapped_from=extracted
+        )
+        if instance and self.one_map and clusters:
+            others = other_identity_maps(
+                self._maps_on_instance(), identity.hash
+            )
+            if others:
+                raise OtherIdentityMap(others)
+        return identity, extracted
+
+    def _maps_on_instance(self) -> Iterable[str]:
+        """The item labels of the instance, among them its run items' with
+        the tags of the identity maps they were written with
+        (yizkr.pipeline.writer.other_identity_maps)."""
+        _, labels = self.client.label_index()
+        return labels
+
+    def _step_write(
+        self,
+        doc: DocumentRun,
+        batch: ClaimBatch,
+        approved: ClaimBatch | None = None,
+    ) -> dict:
+        """Write the claims of `batch`, the document's resolved batch, that
+        its reviewed sheet approves (`approved`, made here when not given;
+        _approved), through the run's identity map (_mapped)."""
+        from yizkr.pipeline.review import is_bulk_accepted
+        from yizkr.pipeline.writer import BatchWriter
+
+        if approved is None:
+            approved = self._approved(doc, batch)
+        identity, extracted = self._mapped(doc, approved)
         # the artifact the write registered (_step_register), which the
         # claims cite by the SHA-1 of its bytes
         registered = doc.state.artifact_qid
@@ -2046,7 +2125,11 @@ class Orchestrator:
             self.client,
             artifact_qids={doc.sha1: registered} if registered else None,
         ).write_batch(
-            approved, bulk_accepted=is_bulk_accepted(doc.review_reviewed)
+            approved,
+            bulk_accepted=is_bulk_accepted(doc.review_reviewed),
+            identity=identity,
+            mapped_from=extracted,
+            one_map=self.one_map,
         )
         # a registered artifact under the label of an artifact-kind entity
         # of the batch, such as a GEDCOM media object, flagged as
@@ -2074,6 +2157,38 @@ class Orchestrator:
             "refused_terms": result.refused_terms,
             "approved_claims": len(approved.claims),
         }
+
+    def _identity_map(self):
+        """The identity map every write of the invocation resolves its
+        entities through (yizkr.pipeline.writer, step 2): the map of every
+        document of the run whose batch is made, the excerpts its PDFs'
+        transcriptions have found among them (_excerpts_of), as serial mode
+        finds them first, kept in the run directory's corpus folder as a
+        scratch run's clustering stage keeps it (clustering.
+        ensure_identity_map), and reused while its inputs stand. It is made
+        once an invocation, at its first write, and never again within it:
+        a document whose batch is made or changed after that is not in it,
+        and its write fails, with UnmappedMention, until a later
+        invocation. An instance holds the writes of one map: a later
+        invocation whose documents give another map is refused by the
+        writer (OtherIdentityMap), and its instance is reset first."""
+        if self._identity is not None:
+            return self._identity
+        from yizkr.pipeline.clustering import IdentityMap, ensure_identity_map
+
+        found: dict[str, Any] = {}
+        for run in self._run_documents:
+            found.setdefault(run.sha1, run)
+            for excerpt in self._excerpts_of(run, self._corpus_sha1s):
+                found.setdefault(excerpt.sha1, excerpt)
+        for excerpt in self._excerpts.values():
+            found.setdefault(excerpt.sha1, excerpt)
+        documents = [run for run in found.values() if run.batch.exists()]
+        output = ensure_identity_map(
+            self.state_dir / "corpus" / "clustering", documents
+        )
+        self._identity = IdentityMap(output.identity_map)
+        return self._identity
 
     # -- excerpts -----------------------------------------------------------
 
@@ -2511,13 +2626,18 @@ class Orchestrator:
             return doc.state.status
 
         if not derivations.current(doc.write_result):
+            # the run's identity map must hold every mention of the batch,
+            # and the instance no other map's writes, before anything is
+            # registered or written (_mapped)
+            approved = self._approved(doc, resolved)
+            self._mapped(doc, approved, instance=True)
             # registration is part of the write: the document's artifact,
             # and a deck's fragments and derived media, are found or made
             # by the SHA-1 of their bytes just before the claims that cite
             # them are written (ADR-0025 §2)
             doc.state.artifact_qid = self._step_register(doc)
             self.log(f"  registered as {doc.state.artifact_qid}")
-            summary = self._step_write(doc, resolved)
+            summary = self._step_write(doc, resolved, approved)
             atomic_write_text(doc.write_result, json.dumps(summary, indent=2))
             derivations.record(doc.write_result)
             doc.state.detail = (doc.state.detail or {}) | {"write": summary}
@@ -2671,7 +2791,10 @@ class Orchestrator:
         self._derived = {}
         self._views = {}
         self._excerpts = {}
+        self._run_documents = docs
+        self._identity = None
         corpus = {doc.sha1 for doc in docs}
+        self._corpus_sha1s = corpus
         # each run is an invocation of its own in the run directory
         self.rundir = RunDir(self.state_dir)
         self._start_run(docs)

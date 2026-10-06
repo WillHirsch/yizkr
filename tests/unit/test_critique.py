@@ -28,7 +28,6 @@ from yizkr.pipeline.critique import (
 )
 from yizkr.pipeline.llm import OutputLimitReached
 from yizkr.pipeline.reconcile import apply_equivalences
-from yizkr.pipeline.resolve import resolve_batch
 
 # the bytes of a fictional scan, which the claims below cite by
 # their SHA-1 (#102)
@@ -658,12 +657,9 @@ class TestAttach:
         """The firm and Sebastian resolved to QIDs: the review rows name
         no local id, and every finding still reaches its row."""
         extracted = resolved_batch()
-        # resolved by their records' labels, as the writer finds their
-        # items (#476)
-        rows = resolve_batch(
-            extracted,
-            {"Sebastian Löbig": "Q17", "Hutmacherei zum Blauen Hut": "Q23"},
-        )
+        # resolved by approved equivalences: nothing resolves by its label
+        # (#109)
+        rows = apply_equivalences(extracted, {"e01": "Q17", "e04": "Q23"})
         assert rows.claims[1].subject.qid == "Q23"
         assert counterparts(extracted, rows) == [0, 1, 2, 3]
         assert rendered(attach(self.FINDINGS, extracted, rows)) == rendered(
@@ -693,8 +689,8 @@ class TestAttach:
     def test_one_local_id_may_resolve_to_two_qids(self):
         """The match is checked claim by claim, so rows in which one local
         id became two QIDs in two claims still each find their claim
-        (review of #411). resolve_batch now gives a local id one QID,
-        its entity's (#476); the rows are made by hand."""
+        (review of #411). An approved equivalence gives a local id one
+        QID, its entity's; the rows are made by hand."""
         extracted = resolved_batch()
         data = extracted.model_dump(mode="json")
         data["claims"][0]["subject"] = {"kind": "qid", "qid": "Q17"}

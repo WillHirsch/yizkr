@@ -835,9 +835,9 @@ def _parts_text(pieces: dict[str, list[str]]) -> str:
     """The name a NAME's parts give, in the order GEDCOM writes a name,
     each part's pieces in turn (a GIVN 'Eugen' and a SURN 'Löbig' give
     'Eugen Löbig'), provided a given name or a surname is among them: a
-    prefix or a suffix alone ('Wwe.') names no one, and the writer, which
-    finds an item by its label, would make everyone it stood for one
-    item. Empty when they give none."""
+    prefix or a suffix alone ('Wwe.') names no one, and as a name it would
+    give everyone it stood for one name, on which identity keys. Empty
+    when they give none."""
     if not (pieces["GIVN"] or pieces["SURN"]):
         return ""
     return " ".join(

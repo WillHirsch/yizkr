@@ -10,8 +10,9 @@ family history; the son is made under the same label with a description
 of his own, as a curator makes a homonym (Wikibase refuses two items
 with one label and description, never one label alone), and a second
 batch gives him his birth and his father. A third batch names "Eugen
-Löbig" again: resolve and the writer both find the earliest of the two,
-the father, and the write mints no third.
+Löbig" again: resolve leaves its ref local, and the writer, which finds
+no item by its label (#109), makes it an item of its own beside the
+two.
 
 Every label and title carries a marker, eight hex digits of a hash over
 the fixture, over the wiki client's, writer's and resolve step's source
@@ -28,6 +29,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures.identity import mapped, write_mapped
 from yizkr.backup import run_backup
 from yizkr.claims import ClaimBatch
 from yizkr.core import wiki
@@ -35,7 +37,8 @@ from yizkr.core.wiki import WikiClient
 from yizkr.model.bootstrap import bootstrap_instance
 from yizkr.model.schema import load_manifest
 from yizkr.pipeline import resolve, writer
-from yizkr.pipeline.resolve import resolvable_labels, resolve_batch
+from yizkr.pipeline.clustering import IdentityMap
+from yizkr.pipeline.resolve import resolve_batch
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.staticsite import publish_site
 
@@ -93,6 +96,11 @@ class Homonyms:
     father: str
     son: str
     source: Registered
+    # the third batch, citing the 1984 family tree, and the identity map
+    # the father's batch and it are written with, which keeps the two
+    # Eugens it names apart
+    again: ClaimBatch
+    identity: IdentityMap
 
 
 @pytest.fixture(scope="module")
@@ -100,7 +108,13 @@ def homonyms(client: WikiClient, config) -> Homonyms:
     source = register_fictional(
         client, f"Family history 2008 {MARK}", "genealogical_report"
     )
-    first = BatchWriter(client).write_batch(batch(born(eugen(), 1836, source)))
+    tree = register_fictional(
+        client, f"Family tree 1984 {MARK}", "genealogical_report"
+    )
+    first_batch = batch(born(eugen(), 1836, source))
+    again = batch(born(eugen("eugen-again"), 1836, tree))
+    identity = mapped(first_batch, again)
+    first = write_mapped(BatchWriter(client), first_batch, identity=identity)
     father = first.created_items["eugen"]
     son = client.wbi.item.new()
     son.labels.set("en", EUGEN)
@@ -124,9 +138,15 @@ def homonyms(client: WikiClient, config) -> Homonyms:
             "source": {"artifact": source.ref.model_dump(mode="json")},
         },
     )
-    BatchWriter(client).write_batch(batch_son)
+    write_mapped(BatchWriter(client), batch_son)
     wait_for_query_service(config, client, [father, son.id])
-    return Homonyms(father=father, son=son.id, source=source)
+    return Homonyms(
+        father=father,
+        son=son.id,
+        source=source,
+        again=again,
+        identity=identity,
+    )
 
 
 def test_the_label_index_holds_both_and_names_the_earliest(client, homonyms):
@@ -154,21 +174,20 @@ def test_the_bootstrap_runs_again(client, homonyms):
     assert summary["updated"] == 0
 
 
-def test_resolve_and_the_writer_find_the_earliest(client, homonyms):
-    named = batch(born(eugen("eugen-again"), 1836, homonyms.source))
+def test_neither_resolve_nor_the_writer_joins_either(client, homonyms):
+    named = homonyms.again
     fresh = WikiClient(client.config)
 
-    found = resolvable_labels(fresh, named)
+    assert resolve_batch(named, homonyms.identity) == named
 
-    assert found == {EUGEN: homonyms.father}
-    resolved = resolve_batch(named, found)
-    assert resolved.claims[0].subject.qid == homonyms.father
+    written = write_mapped(
+        BatchWriter(fresh), named, identity=homonyms.identity
+    )
 
-    written = BatchWriter(fresh).write_batch(named)
-
-    assert written.created_items["eugen-again"] == homonyms.father
+    third = written.created_items["eugen-again"]
+    assert third not in (homonyms.father, homonyms.son)
     _, items = WikiClient(client.config).label_index()
-    assert items.holders(EUGEN) == (homonyms.father, homonyms.son)
+    assert items.holders(EUGEN) == (homonyms.father, homonyms.son, third)
 
 
 def test_the_site_builds_a_page_for_each(config, homonyms, tmp_path):

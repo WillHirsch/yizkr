@@ -350,7 +350,7 @@ tests = ["tests/unit/test_example.py::test_blank_names_are_dropped"]
   `test_live_backup.py`'s privacy and excerpt invariants over the
   non-privileged export; `test_live_nonprivileged_export.py`'s munge
   and block checks over the full dump and the export; and
-  `WikiClient.label_index`, which the writer and resolve read, and which
+  `WikiClient.label_index`, which the writer reads, and which
   raises on two properties that share an English label; two items under
   one label break a vocabulary read or the bootstrap only when it is a
   manifest vocabulary item's, and a write only when it is its run item's

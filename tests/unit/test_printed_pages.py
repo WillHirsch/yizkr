@@ -23,6 +23,7 @@ import pytest
 from pydantic import ValidationError
 
 from tests.fixtures import pdfs
+from tests.fixtures.identity import write_mapped
 from tests.fixtures.records import record_page
 from tests.unit.test_chunking import PlainLlm, ScriptedLlm, ndjson
 from tests.unit.test_excerpts import batch_of
@@ -705,8 +706,9 @@ class TestTheWriter:
 
     def test_the_block_holds_the_page_and_its_printed_number(self):
         wiki = FakeWiki({BOOKLET_REF.sha1: "Q23"}, detached=True)
-        result = BatchWriter(wiki).write_batch(
-            booklet_batch({"page_number": "6", "printed_page_number": "4"})
+        result = write_mapped(
+            BatchWriter(wiki),
+            booklet_batch({"page_number": "6", "printed_page_number": "4"}),
         )
         gustl = result.created_items["e1"]
         (statement,) = wiki.wbi.item.get(gustl).claims.get(
@@ -720,8 +722,8 @@ class TestTheWriter:
 
     def test_a_block_without_one_has_no_snak(self):
         wiki = FakeWiki({BOOKLET_REF.sha1: "Q23"}, detached=True)
-        result = BatchWriter(wiki).write_batch(
-            booklet_batch({"page_number": "5"})
+        result = write_mapped(
+            BatchWriter(wiki), booklet_batch({"page_number": "5"})
         )
         (statement,) = wiki.wbi.item.get(
             result.created_items["e1"]
@@ -735,10 +737,11 @@ class TestTheWriter:
         """It is a locator like the page number: cleaned up to one line
         (writer._locator_text), so a re-run finds its block."""
         wiki = FakeWiki({BOOKLET_REF.sha1: "Q23"}, detached=True)
-        result = BatchWriter(wiki).write_batch(
+        result = write_mapped(
+            BatchWriter(wiki),
             booklet_batch(
                 {"page_number": "6", "printed_page_number": " 4\n5 "}
-            )
+            ),
         )
         (statement,) = wiki.wbi.item.get(
             result.created_items["e1"]
@@ -748,12 +751,12 @@ class TestTheWriter:
     def test_a_rewrite_adds_nothing(self):
         wiki = FakeWiki({BOOKLET_REF.sha1: "Q23"}, detached=True)
         batch = booklet_batch({"page_number": "6", "printed_page_number": "4"})
-        first = BatchWriter(wiki).write_batch(batch)
+        first = write_mapped(BatchWriter(wiki), batch)
         (statement,) = wiki.wbi.item.get(first.created_items["e1"]).claims.get(
             PROPERTIES["sibling"]
         )
         blocks = len(statement.references.references)
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch)
         assert (again.written, again.referenced, again.skipped) == (0, 0, 1)
         (statement,) = wiki.wbi.item.get(first.created_items["e1"]).claims.get(
             PROPERTIES["sibling"]

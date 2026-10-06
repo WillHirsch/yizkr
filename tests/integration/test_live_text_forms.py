@@ -41,6 +41,7 @@ import pytest
 import requests
 from wikibaseintegrator.entities.baseentity import BaseEntity
 
+from tests.fixtures.identity import write_mapped
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.core.config import USER_AGENT
 from yizkr.pipeline import writer
@@ -209,7 +210,7 @@ def fixture_graph(client):
     )
     batch = fixture_batch(registered.ref, "NFD")
     assert fixture_batch(registered.ref, "NFC") != batch
-    written = BatchWriter(client).write_batch(batch)
+    written = write_mapped(BatchWriter(client), batch)
     return registered, written
 
 
@@ -293,8 +294,8 @@ def test_a_rewrite_sends_no_edit(client, fixture_graph, monkeypatch):
 
     monkeypatch.setattr(BaseEntity, "_write", counted)
 
-    again = BatchWriter(client).write_batch(
-        fixture_batch(registered.ref, "NFD")
+    again = write_mapped(
+        BatchWriter(client), fixture_batch(registered.ref, "NFD")
     )
 
     assert edits == []
@@ -310,8 +311,8 @@ def test_the_batch_in_nfc_adds_nothing(client, fixture_graph):
     registered, written = fixture_graph
     before = items(client, written)
 
-    again = BatchWriter(client).write_batch(
-        fixture_batch(registered.ref, "NFC")
+    again = write_mapped(
+        BatchWriter(client), fixture_batch(registered.ref, "NFC")
     )
 
     assert [again.created_items[key] for key in KEYS] == [

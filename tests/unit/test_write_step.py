@@ -17,6 +17,7 @@ import unicodedata
 
 import pytest
 
+from tests.fixtures.identity import corpus, mapped, write_mapped
 from tests.unit.test_faces import (
     decide_by_hand,
     depicted,
@@ -27,6 +28,7 @@ from tests.unit.test_faces import (
 from tests.unit.test_pipeline import (
     DIRECTORY_SHA1,
     FIRM_ENTRY,
+    FIRM_LABEL,
     _directory_batch,
     _directory_lines_batch,
     _firm_batch,
@@ -45,9 +47,12 @@ from yizkr.pipeline.writer import BatchWriter
 
 class WriteStep:
     """An orchestrator over one document, its instance the fake `wiki`,
-    and the lines it logs."""
+    and the lines it logs. Its write resolves the batch's entities through
+    `identity`, or the map of the batch alone: the run's identity map
+    (Orchestrator._identity_map) is the map of the documents of a run, and
+    these tests write a batch the step is given."""
 
-    def __init__(self, tmp_path, wiki, name: str) -> None:
+    def __init__(self, tmp_path, wiki, name: str, identity=None) -> None:
         self.lines: list[str] = []
         self.orchestrator = Orchestrator(
             tmp_path / "docs",
@@ -58,6 +63,8 @@ class WriteStep:
             ),
         )
         self.orchestrator._client = wiki
+        self.identity = identity
+        self.orchestrator._identity_map = lambda: self.identity
         self.doc = DocumentRun(tmp_path / "docs" / name, tmp_path / "state")
         self.doc.dir.mkdir(parents=True)
 
@@ -76,6 +83,8 @@ class WriteStep:
         decide_by_hand(self.doc.review_reviewed, decide)
 
     def write(self, batch: ClaimBatch) -> dict:
+        if self.identity is None:
+            self.identity = mapped(batch)
         return self.orchestrator._step_write(self.doc, batch)
 
     def approved(self) -> ClaimBatch:
@@ -149,10 +158,13 @@ class TestWriteStepSummary:
     )
     def test_type_statements_are_counted(self, tmp_path, says, counts):
         wiki = _two_sources()
-        BatchWriter(wiki).write_batch(_firm_batch())
         kind, type_hint = says
         directory = _directory_batch(kind, type_hint=type_hint)
-        step = WriteStep(tmp_path, wiki, "directory.txt")
+        # the map puts the directory's firm in the interview's firm's
+        # cluster
+        identity = corpus(_firm_batch(), directory, entities=(FIRM_LABEL,))
+        write_mapped(BatchWriter(wiki), _firm_batch(), identity=identity)
+        step = WriteStep(tmp_path, wiki, "directory.txt", identity)
         step.review(directory, decide=lambda row: "approve")
 
         summary = step.write(directory)
@@ -170,9 +182,10 @@ class TestWriteStepSummary:
         # the directory's line-range chunk typed the firm by a kind the
         # vocabulary lacks: the writer records no kind for it, and says so
         wiki = _two_sources()
-        BatchWriter(wiki).write_batch(_firm_batch())
         directory = _directory_lines_batch("hat_shop")
-        step = WriteStep(tmp_path, wiki, "directory.txt")
+        identity = corpus(_firm_batch(), directory, entities=(FIRM_LABEL,))
+        write_mapped(BatchWriter(wiki), _firm_batch(), identity=identity)
+        step = WriteStep(tmp_path, wiki, "directory.txt", identity)
         step.review(directory, decide=lambda row: "approve")
 
         step.write(directory)
@@ -238,3 +251,60 @@ class TestWriteStepSummary:
             line.startswith("  directory.txt: entity 'firm' has a type hint")
             for line in step.lines
         )
+
+
+class TestTheMappedBatch:
+    """The step reads a document's mentions from its extraction
+    (`doc.batch`), the batch the run's map was made from, not from the
+    batch its review approves."""
+
+    def test_a_rejected_claim_never_swaps_two_mentions(self, tmp_path):
+        from tests.unit.test_identity_map_writes import (
+            _two_eugens_without_a_manifest,
+            _wiki,
+        )
+
+        # the extraction names the father (c001) first, then the son
+        extracted = _two_eugens_without_a_manifest()
+        wiki = _wiki()
+        first = write_mapped(
+            BatchWriter(wiki), extracted, identity=mapped(extracted)
+        )
+        step = WriteStep(tmp_path, wiki, "report.pdf", mapped(extracted))
+        step.doc.batch.write_text(extracted.model_dump_json())
+        # the reviewer rejects the father's birth: the son's ref comes
+        # first in the batch the review approves
+        father_born = claim_id(extracted.claims[0])
+        step.review(
+            extracted,
+            decide=lambda row: (
+                "reject" if row["claim_id"] == father_born else "approve"
+            ),
+        )
+
+        step.write(extracted)
+
+        assert [claim_id(c) for c in step.approved().claims] == [
+            claim_id(c) for c in extracted.claims[1:]
+        ]
+        # read from the approved batch alone, the son's mention would be
+        # the father's, and his birth written on the father's item
+        father = first.created_items["c001:father"]
+        son = first.created_items["c002:son"]
+        assert father != son
+        assert [_years_born(wiki, qid) for qid in (father, son)] == [
+            [1836],
+            [1870],
+        ]
+
+
+def _years_born(wiki, qid: str) -> list[int]:
+    """The years of the births stated on item `qid` of `wiki`."""
+    from tests.unit.test_pipeline import PROPERTIES
+
+    return [
+        int(statement.mainsnak.datavalue["value"]["time"][1:5])
+        for statement in wiki.wbi.item.get(qid).claims.get(
+            PROPERTIES["date_of_birth"]
+        )
+    ]

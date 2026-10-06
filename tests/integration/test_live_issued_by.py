@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from tests.fixtures.identity import write_mapped
 from tests.integration.conftest import fixture_mark, register_fictional
 from yizkr.claims import ClaimBatch, validate_against_manifest
 from yizkr.pipeline import registrar, writer
@@ -106,7 +107,7 @@ def test_a_document_subject_is_written_on_its_artifact_item(client):
     extract = register_fictional(client, TITLE, "certificate")
     batch = _batch(extract.ref.sha1)
     assert validate_against_manifest(batch) == []
-    result = BatchWriter(client).write_batch(batch)
+    result = write_mapped(BatchWriter(client), batch)
     assert (result.written, result.skipped) == (1, 0)
     office = result.created_items["e1"]
     (statement,) = _issued_by(client, extract.qid)
@@ -120,7 +121,7 @@ def test_a_document_subject_is_written_on_its_artifact_item(client):
 
     # a re-run resolves the document to the same item and finds the
     # statement there, sourced
-    again = BatchWriter(client).write_batch(_batch(extract.ref.sha1))
+    again = write_mapped(BatchWriter(client), _batch(extract.ref.sha1))
     assert (again.written, again.skipped) == (0, 1)
     assert len(_issued_by(client, extract.qid)) == 1
 
@@ -132,7 +133,7 @@ def test_a_subject_naming_another_document_is_refused(client):
     other = register_fictional(client, OTHER_TITLE, "certificate")
     batch = _batch(extract.ref.sha1, subject_sha1=other.ref.sha1)
     assert validate_against_manifest(batch) != []
-    result = BatchWriter(client).write_batch(batch)
+    result = write_mapped(BatchWriter(client), batch)
     (claim,) = batch.claims
     assert result.refused == [claim_id(claim)]
     assert (result.written, result.skipped) == (0, 0)

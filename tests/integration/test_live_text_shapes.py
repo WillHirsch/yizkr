@@ -69,6 +69,7 @@ import unicodedata
 import pytest
 from wikibaseintegrator.entities.baseentity import BaseEntity
 
+from tests.fixtures.identity import mapped, write_mapped
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import writer
 from yizkr.pipeline.review import claim_id
@@ -327,7 +328,7 @@ def fixture_graph(client):
         client, f"Text shape fixture source {MARK}", "artifact"
     )
     batch = fixture_batch(registered.ref)
-    written = BatchWriter(client).write_batch(batch)
+    written = write_mapped(BatchWriter(client), batch)
     return registered.qid, batch, written
 
 
@@ -456,10 +457,22 @@ def test_no_text_of_the_batch_stops_it(client, fixture_graph):
     }
     assert kept[hildegard]["label"] == label_kept(marker, "hildegard")
     assert kept[eugen]["label"] != kept[hildegard]["label"]
-    run_label = f"extraction run 2026-09-29 {MODEL} {batch_fingerprint(batch)}"
-    # the room ends inside "test", which the cut leaves out whole
-    assert run_label[room(TERM_LIMIT) - 3 : room(TERM_LIMIT) + 2] == " test"
-    assert kept[written.run_qid]["label"] == cut(run_label, TERM_LIMIT)
+    # the run item's label: its date, the map's tag (the first 12 hex
+    # digits of the hash of the map it was written with, before the
+    # identifier, #109), its long model identifier and the batch's
+    # fingerprint, cut to the limit inside the repeated model text
+    whole = (
+        f"extraction run 2026-09-29 map {mapped(batch).hash[:12]} "
+        f"{MODEL} {batch_fingerprint(batch)}"
+    )
+    assert whole[room(TERM_LIMIT) - 3 : room(TERM_LIMIT) + 2] == "odel,"
+    model_at = whole.index(MODEL)
+    assert (
+        model_at
+        < whole.rindex(" ", 0, room(TERM_LIMIT) + 1)
+        < model_at + len(MODEL)
+    )
+    assert kept[written.run_qid]["label"] == cut(whole, TERM_LIMIT)
     for term in (*kept[eugen].values(), kept[hildegard]["label"]):
         for text in term if isinstance(term, list) else [term]:
             assert len(text) <= TERM_LIMIT
@@ -490,7 +503,7 @@ def test_a_rewrite_sends_no_edit(client, fixture_graph, monkeypatch):
 
     monkeypatch.setattr(BaseEntity, "_write", counted)
 
-    again = BatchWriter(client).write_batch(batch)
+    again = write_mapped(BatchWriter(client), batch)
 
     assert edits == []
     assert again.run_qid == written.run_qid

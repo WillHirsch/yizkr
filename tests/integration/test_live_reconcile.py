@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from tests.fixtures.identity import write_mapped
 from tests.integration.conftest import fixture_mark, wait_for_query_service
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import reconcile, writer
@@ -113,9 +114,9 @@ def written(client, config, tmp_path_factory):
     )
     # the claims cite the source by the SHA-1 of its media (#102)
     batch = _relations_batch(ArtifactRef.from_path(media))
-    result = BatchWriter(client).write_batch(batch)
+    result = write_mapped(BatchWriter(client), batch)
     # written again, the batch finds every item and statement
-    again = BatchWriter(client).write_batch(batch)
+    again = write_mapped(BatchWriter(client), batch)
     assert (again.written, again.referenced) == (0, 0)
     assert again.created_items == result.created_items
     wait_for_query_service(

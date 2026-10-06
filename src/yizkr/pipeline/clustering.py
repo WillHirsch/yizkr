@@ -223,6 +223,14 @@ unions end in.
   document's SHA-1, source and batch content hash); `config`: the
   thresholds' digest.
 
+**Its read side.** The writer and the resolve step read a map through
+`IdentityMap`: which cluster each mention of a batch is in
+(`clusters_of`, by the mentions' fingerprints under an artifact the
+batch's claims cite, raising UnmappedMention for a batch with a mention
+the map lacks), and each cluster's kind, labels and documents
+(`clusters`). The writer finds or mints one item per cluster through it
+alone (yizkr.pipeline.writer, step 2).
+
 The map holds labels, so it stays in the run directory, which is
 local-only data. What the stage returns, and so what reaches the run's
 events, is counts within labels of its own, never a document's words.
@@ -261,6 +269,7 @@ from yizkr.pipeline.fingerprints import (
     Mention,
     cluster_id,
     local_refs,
+    mention_map,
     mentions_of,
 )
 from yizkr.pipeline.orchestrate import BATCH_VOLATILE
@@ -2522,6 +2531,165 @@ def read_identity_map(path: Path) -> dict[str, Any] | None:
     except (AttributeError, KeyError, TypeError):
         return None
     return data
+
+
+# -- the identity map's read side ---------------------------------------------
+
+
+class UnmappedMention(LookupError):
+    """Mentions of a batch that the identity map it is written or resolved
+    with does not hold, or a batch with mentions and no identity map: the
+    message names the local ids, never a label."""
+
+    def __init__(self, local_ids: Sequence[str], reason: str = "") -> None:
+        self.local_ids = list(local_ids)
+        named = ", ".join(repr(local_id) for local_id in self.local_ids)
+        super().__init__(
+            f"{len(self.local_ids)} mention(s) of the batch are not in the "
+            f"identity map: {named}"
+            + (f" ({reason})" if reason else "")
+            + ". The identity map is the only way an entity finds or mints "
+            "its item: cluster the batch's document with the others "
+            "(yizkr.pipeline.clustering) and write it with that map. "
+            "Nothing was written."
+        )
+
+
+@dataclass(frozen=True)
+class Cluster:
+    """One cluster of an identity map, as the writer reads it: its id, its
+    kind (empty for none), the canonical label of each of its members in
+    the order of their fingerprints, and the SHA-1s of the documents its
+    members come from, each once, sorted."""
+
+    id: str
+    kind: str
+    labels: tuple[str, ...]
+    documents: tuple[str, ...]
+
+
+class IdentityMap:
+    """An identity map (cluster_corpus; the module docstring), as the
+    writer and the resolve step read it: which cluster each mention of a
+    batch is in (`clusters_of`), and each cluster's kind, labels and
+    documents (`cluster`). It reads the map alone, never the wiki, and
+    keeps what it derives from it (`memo`) for as long as it lives."""
+
+    def __init__(self, data: Mapping[str, Any]) -> None:
+        self.data = data
+        self._clusters: dict[str, Cluster] | None = None
+        self._memo: dict[str, Any] = {}
+
+    @classmethod
+    def read(cls, path: Path) -> IdentityMap:
+        """The identity map at `path` (read_identity_map); raises
+        ClusteringInputError when there is none, or it cannot be read, is of
+        another format or its decisions do not hash to its hash."""
+        data = read_identity_map(path)
+        if data is None:
+            raise ClusteringInputError(
+                f"{path.name} is no identity map this code reads: it is "
+                f"missing, unreadable, of another format than {FORMAT}, or "
+                f"its decisions do not hash to its hash"
+            )
+        return cls(data)
+
+    @classmethod
+    def of(
+        cls,
+        manifests: Sequence[Manifest],
+        config: ClusteringConfig | None = None,
+    ) -> IdentityMap:
+        """The identity map of the manifests (cluster_corpus)."""
+        return cls(cluster_corpus(manifests, config))
+
+    @property
+    def hash(self) -> str:
+        """The map's hash: the SHA-256 of every mention's cluster and
+        method (identity_hash)."""
+        return self.data["hash"]
+
+    def memo(self, name: str, compute: Callable[[], Any]) -> Any:
+        """What `compute` gives, made once for this map under `name`."""
+        if name not in self._memo:
+            self._memo[name] = compute()
+        return self._memo[name]
+
+    def clusters(self) -> dict[str, Cluster]:
+        """Every cluster of the map, by its id (Cluster)."""
+        if self._clusters is None:
+            mentions = self.data["mentions"]
+            self._clusters = {
+                cid: Cluster(
+                    id=cid,
+                    kind=entry.get("kind") or "",
+                    labels=tuple(
+                        mentions[member]["label"]
+                        for member in sorted(entry["members"])
+                    ),
+                    documents=tuple(
+                        sorted(
+                            {
+                                mentions[member]["document"]
+                                for member in entry["members"]
+                            }
+                        )
+                    ),
+                )
+                for cid, entry in self.data["clusters"].items()
+            }
+        return self._clusters
+
+    def cluster(self, cid: str) -> Cluster:
+        return self.clusters()[cid]
+
+    def clusters_of(
+        self, batch: ClaimBatch, documents: Iterable[str]
+    ) -> tuple[str, dict[str, str]]:
+        """The document the mentions of `batch` are mapped under, and the
+        cluster of each of them, local id -> cluster id. Each SHA-1 of
+        `documents`, the artifacts the batch's claims cite, is tried in
+        turn: a mention's fingerprint (yizkr.pipeline.fingerprints) is
+        made of its document's SHA-1, its label, kind, lines and
+        occurrence, never its local id. The first under which the map holds
+        every mention of the batch is its document. Raises UnmappedMention,
+        naming the local ids it lacks under the first SHA-1, when there is
+        none."""
+        mentions = self.data["mentions"]
+        missing: list[str] | None = None
+        doubled = False
+        for sha1 in documents:
+            try:
+                found = mention_map(sha1, batch)
+            except ValueError:
+                doubled = True
+                continue
+            lacking = [
+                local_id
+                for local_id, fingerprint in found.items()
+                if fingerprint not in mentions
+            ]
+            if not lacking:
+                return sha1.lower(), {
+                    local_id: mentions[fingerprint]["cluster"]
+                    for local_id, fingerprint in found.items()
+                }
+            if missing is None:
+                missing = lacking
+        if missing is not None:
+            raise UnmappedMention(missing)
+        local_ids = list(
+            dict.fromkeys(
+                [entity.id for entity in batch.entities]
+                + [ref.local_id for ref in local_refs(batch)]
+            )
+        )
+        raise UnmappedMention(
+            local_ids,
+            "two of its mentions share a local id"
+            if doubled
+            else "its claims cite no artifact",
+        )
 
 
 @dataclass(frozen=True)

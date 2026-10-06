@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 import yizkr.pipeline.gedcom as gedcom_module
+from tests.fixtures.identity import write_mapped
 from yizkr.claims import ArtifactRef
 from yizkr.model.bootstrap import bootstrap_instance
 from yizkr.model.schema import load_manifest
@@ -136,7 +137,7 @@ def test_untyped_name_forms_are_referenced_statements(client, tmp_path):
     (person,) = [e for e in result.batch.entities if e.id == "i1"]
     assert person.label == f"Ida {SURNAME}"
     assert "Peppi" in person.aliases
-    written = BatchWriter(client).write_batch(result.batch)
+    written = write_mapped(BatchWriter(client), result.batch)
     qid = written.created_items["i1"]
 
     names = statements(client, qid, "name")
@@ -179,8 +180,8 @@ def test_untyped_name_forms_are_referenced_statements(client, tmp_path):
     assert "Peppi" in {str(a) for a in item.aliases.get("en") or []}
 
     # within the session the re-run finds its own person and adds nothing
-    rerun = BatchWriter(client).write_batch(
-        adapt_gedcom(GEDCOM, artifact=exported).batch
+    rerun = write_mapped(
+        BatchWriter(client), adapt_gedcom(GEDCOM, artifact=exported).batch
     )
     assert rerun.written == 0
     assert rerun.created_items["i1"] == qid

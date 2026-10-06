@@ -45,6 +45,7 @@ from datetime import UTC, datetime
 import pytest
 from wikibaseintegrator.wbi_enums import WikibaseRank
 
+from tests.fixtures.identity import by_label, write_mapped
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.disagreement import Disagreement, disagreements
 from yizkr.pipeline import writer
@@ -223,10 +224,12 @@ def write_fixture(
     """Write the fixture's claim batches in order, under item labels that carry
     a marker: six hex digits of a hash over the fixture's cases and values
     (every claim, each artifact named by its letter in `artifacts`, which maps
-    the SHA-1 a claim cites to the letter). The writer finds a local item by
-    its label, so a version of the fixture with other values would otherwise
-    write onto an earlier version's items and see its old values beside the new
-    ones. With the marker it writes items of its own, and a re-run of one
+    the SHA-1 a claim cites to the letter). The batches are written with one
+    identity map in which each label is one entity (by_label), and an item is
+    found again by its label and the description that map gives it, so a
+    version of the fixture with other values would otherwise write onto an
+    earlier version's items and see its old values beside the new ones.
+    With the marker it writes items of its own, and a re-run of one
     version finds its own items again. The hash also covers the module's marker
     (conftest.fixture_mark: the writer's source and the session's random
     bytes), so each session writes items of its own: what an earlier session
@@ -262,11 +265,16 @@ def write_fixture(
             value = [marked(item) for item in value]
         return value
 
+    written = [batch(marked(claims)) for claims in batches]
+    # the map of the fixture, in which each label is one entity (#109)
+    identity = by_label(*written)
     return [
-        BatchWriter(client, artifact_qids=artifact_qids).write_batch(
-            batch(marked(claims))
+        write_mapped(
+            BatchWriter(client, artifact_qids=artifact_qids),
+            each,
+            identity=identity,
         )
-        for claims in batches
+        for each in written
     ]
 
 

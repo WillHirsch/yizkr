@@ -195,6 +195,20 @@ label, so Wikibase takes it beside the first, and a re-run finds it by
 that description; the resolve step leaves it to the writer. A summary or
 a ref's description is never sent, so neither is named in
 `refused_terms` (docs/MODELING.md, "General approach").
+Amended by #109 (2026-10-06): no entity is matched by its label. The
+writer finds or mints the item of every mention through the identity
+map, one item per cluster, found again by its label and a description
+the map alone decides: the cluster's kind, the artifact kind of its one
+document or how many documents name it, and its place among the map's
+clusters of one label and kind by cluster id. That place replaces #86's
+place among a manifest's records, and the cluster's documents replace
+the artifact of the first claim to name the entity. The resolve step
+reads no wiki and replaces no local ref. The side rule below names only
+the label an item takes: a person under an artifact's label takes the
+`[not an artifact]` label, and a media object under a registered
+artifact's title the `[media object]` label, but neither joins an item
+under either label, and two media objects under one title are two
+items. "What is still matched by label" is amended in place.
 
 ## Context
 
@@ -614,7 +628,14 @@ Together these close the "two items, one blob" leak (correctness) and
 skip redundant LLM passes for renamed-identical files both within a
 batch and across runs (efficiency), which were the concrete costs.
 
-**What is still matched by label** (amended by #444, 2026-10-02). No
+**What is still matched by label** (amended by #444, 2026-10-02; amended
+by #109, 2026-10-06: resolve's exact-label step, `resolvable_labels`, the
+writer's `reused_item` and its `_found_entities` are gone; no entity is
+matched by its label, the writer finds or makes each cluster's item of
+the identity map by its label and description, and reads the statements
+of only the items under the labels it looks at; the side rule below
+names the label an item takes, and the rest of this paragraph stands for
+the reads the writer still makes). No
 artifact-kind entity is matched to a registered artifact, no other
 entity to an artifact or a part of one, and no artifact is adopted, by
 its title or label. Registration finds an artifact by its SHA-1 alone.
@@ -738,7 +759,11 @@ an entity of an artifact kind or of artifact fragment (the writer's
   reset instance makes (it needs an item titled literally with a tag),
   and the warning names its items by QID.
 
-Labels still match, until the identity map (#109), for:
+Labels still match, until the identity map (#109), for the following
+(amended by #109, 2026-10-06: the first two items no longer hold; an
+entity of any side is found through the identity map, by its cluster's
+label and description, and never joins an item by its label; the side
+rule below names only the label its item takes):
 
 * every entity on its side, in resolve's exact-label step (the refs an
   extraction labels; not an artifact-kind ref, and not to an artifact)

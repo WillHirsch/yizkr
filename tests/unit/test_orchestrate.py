@@ -163,6 +163,13 @@ class ScriptedOrchestrator(Orchestrator):
         self.proposals = proposals
         self.fail_step = fail_step
         self.calls: list[str] = []
+        # the item labels of the scripted instance (_maps_on_instance)
+        self.instance_labels: list[str] = []
+        self.label_reads = 0
+
+    def _maps_on_instance(self):
+        self.label_reads += 1
+        return self.instance_labels
 
     def _llm(self, role, doc):
         return ScriptedModel(self.calls, doc.source.name, fail=self.fail_step)
@@ -201,7 +208,7 @@ class ScriptedOrchestrator(Orchestrator):
         self.calls.append(f"export:{doc.source.name}")
         return export_review_csv(batch, doc.review)
 
-    def _step_write(self, doc, batch):
+    def _step_write(self, doc, batch, approved=None):
         self.calls.append(f"write:{doc.source.name}")
         return {
             "run_qid": "Q999",
@@ -1810,11 +1817,12 @@ class TestViews:
         """The critic's finding on an entity that resolved to a QID still
         reaches its row, once, and the note names the entity and the
         finding's axis and category (#113, #386)."""
-        from yizkr.pipeline.resolve import resolve_batch
+        from yizkr.pipeline.reconcile import apply_equivalences
 
         class Resolving(Sampled):
             def _step_resolve(self, doc, batch):
-                return resolve_batch(batch, {"Klara": "Q17"})
+                # Klara's item, as an approved equivalence names it
+                return apply_equivalences(batch, {"e1": "Q17"})
 
         (tmp_path / "docs").mkdir()
         (tmp_path / "docs" / "letter.txt").write_text(
@@ -3083,6 +3091,108 @@ class TestWriteTimeRegistration:
         (doc,) = orchestrator.documents()
         assert (doc.state.status, doc.state.artifact_qid) == (WRITTEN, "Q100")
 
+    def test_an_unmapped_batch_registers_nothing(self, tmp_path):
+        """The run's identity map must hold every mention of the batch
+        before anything is registered or written (#109): a map that lacks
+        them fails the document, and nothing is registered."""
+        from yizkr.pipeline.clustering import IdentityMap
+
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_claims(doc)
+        empty = IdentityMap({"hash": "0" * 64, "mentions": {}, "clusters": {}})
+        orchestrator._identity_map = lambda: empty
+        calls = len(orchestrator.calls)
+
+        assert orchestrator.run() == 1
+
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == FAILED
+        assert doc.state.error.startswith("UnmappedMention")
+        assert steps(orchestrator.calls[calls:]) == []
+        assert not doc.write_result.exists()
+
+    def test_an_instance_of_another_map_registers_nothing(self, tmp_path):
+        """An instance that holds the writes of another identity map fails
+        the document before anything is registered or written, as the
+        writer would refuse it only after its artifact was registered: an
+        instance holds the writes of one map."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_claims(doc)
+        other = "ab" * 6
+        orchestrator.instance_labels = [
+            "Rahel Löbig",
+            f"extraction run 2026-07-01 map {other} scripted-model 1a2b3c4d",
+        ]
+        calls = len(orchestrator.calls)
+
+        assert orchestrator.run() == 1
+
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == FAILED
+        assert doc.state.error.startswith("OtherIdentityMap")
+        assert other in doc.state.error
+        assert wiki_steps(orchestrator.calls[calls:]) == []
+        assert not doc.write_result.exists()
+        assert json.loads(doc.state_path.read_text())["artifact_qid"] is None
+        # with the instance reset, the next run registers and writes
+        orchestrator.instance_labels = []
+        calls = len(orchestrator.calls)
+        assert orchestrator.run() == 0
+        assert wiki_steps(orchestrator.calls[calls:]) == ["register", "write"]
+
+    def test_the_maps_own_writes_pass(self, tmp_path):
+        """The run items of the run's own map are no other map's."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_claims(doc)
+        own = orchestrator._identity_map().hash[:12]
+        orchestrator._identity = None
+        orchestrator.instance_labels = [
+            f"extraction run 2026-07-01 map {own} scripted-model 1a2b3c4d"
+        ]
+
+        assert orchestrator.run() == 0
+
+        assert orchestrator.label_reads == 1
+
+    def test_the_map_is_made_once_an_invocation(self, tmp_path):
+        """Made at the first write and never again in the invocation, even
+        when a document's batch changes after it (#109): an instance holds
+        the writes of one map."""
+        orchestrator = completed_run(tmp_path)
+        made = []
+        from yizkr.pipeline import clustering
+
+        real = clustering.ensure_identity_map
+
+        def counted(*args, **kwargs):
+            made.append(args)
+            return real(*args, **kwargs)
+
+        clustering.ensure_identity_map = counted
+        try:
+            self.rewrite(orchestrator)
+            assert orchestrator.run() == 0
+            first = orchestrator._identity
+            assert orchestrator._identity_map() is first
+            assert len(made) == 1
+        finally:
+            clustering.ensure_identity_map = real
+
     def test_every_write_registers_again(self, tmp_path):
         """A write registers what it writes about each time: the registrar
         finds by SHA-1 what an earlier write registered, and a write that
@@ -3102,16 +3212,28 @@ class TestWriteTimeRegistration:
     ):
         """The claims cite the document by the SHA-1 of its bytes, and the
         write hands the writer the item registration found or made for
-        it."""
+        it, and the run's identity map, which holds every mention of the
+        batch (#109)."""
         from yizkr.pipeline import writer
 
         given = []
+        mapped = []
 
         class Writer:
             def __init__(self, client, dry_run=False, artifact_qids=None):
                 given.append(dict(artifact_qids or {}))
 
-            def write_batch(self, batch, bulk_accepted=False):
+            def write_batch(
+                self,
+                batch,
+                bulk_accepted=False,
+                identity=None,
+                mapped_from=None,
+                one_map=True,
+            ):
+                mapped.append(
+                    writer.mapped_clusters(batch, identity, mapped_from)
+                )
                 return writer.WriteResult(
                     run_qid="Q999", written=len(batch.claims)
                 )
@@ -3134,6 +3256,14 @@ class TestWriteTimeRegistration:
         approve_all_claims(doc)
         assert orchestrator.run() == 0
         assert given == [{doc.sha1: "Q100"}]
+        ((clusters, document, _terms),) = mapped
+        assert document == doc.sha1
+        assert clusters
+        # kept in the run directory, as a scratch run's clustering stage
+        # keeps its map
+        assert (
+            tmp_path / "state" / "corpus" / "clustering" / "identity-map.json"
+        ).is_file()
 
     def test_a_new_directory_records_its_bytes_before_any_view(
         self, tmp_path, monkeypatch

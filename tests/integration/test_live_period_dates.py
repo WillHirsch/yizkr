@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from tests.fixtures.identity import write_mapped
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.disagreement import disagreements
 from yizkr.pipeline import writer
@@ -152,7 +153,8 @@ def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
             value = [marked(item) for item in value]
         return value
 
-    written = BatchWriter(client).write_batch(
+    written = write_mapped(
+        BatchWriter(client),
         ClaimBatch.model_validate(
             {
                 "extraction_run": {
@@ -162,7 +164,7 @@ def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
                 },
                 "claims": marked(claims),
             }
-        )
+        ),
     )
     return written, marker
 

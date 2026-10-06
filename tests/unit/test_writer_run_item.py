@@ -18,6 +18,7 @@ from __future__ import annotations
 import pytest
 from wikibaseintegrator.wbi_enums import WikibaseRank
 
+from tests.fixtures.identity import mapped, write_mapped
 from tests.unit.test_pipeline import (
     ITEMS,
     MEDIA_SHA1,
@@ -87,10 +88,11 @@ def left_untyped(monkeypatch) -> tuple[FakeWiki, str]:
     with monkeypatch.context() as patch:
         cut_short_at(patch, wiki, TYPING)
         with pytest.raises(CutShort):
-            BatchWriter(wiki).write_batch(batch())
+            write_mapped(BatchWriter(wiki), batch())
     (run,) = wiki.wbi.item.store
     assert str(wiki.wbi.item.get(run).labels.get("en")).startswith(
-        "extraction run 2026-07-12 fake-model "
+        f"extraction run 2026-07-12 map {mapped(batch()).hash[:12]} "
+        "fake-model "
     )
     assert kinds(wiki, run) == []
     return wiki, run
@@ -105,7 +107,7 @@ class TestWriterRunItem:
     def test_a_new_run_item_states_its_kind_in_itself(self):
         wiki = instance_wiki()
 
-        result = BatchWriter(wiki).write_batch(batch())
+        result = write_mapped(BatchWriter(wiki), batch())
 
         run = result.run_qid
         assert kinds(wiki, run) == [(ITEMS["extraction_run"], "normal", [run])]
@@ -119,7 +121,7 @@ class TestWriterRunItem:
         item, typed."""
         wiki, left = left_untyped(monkeypatch)
 
-        result = BatchWriter(wiki).write_batch(batch())
+        result = write_mapped(BatchWriter(wiki), batch())
 
         assert result.run_qid == left
         assert kinds(wiki, left) == [
@@ -139,12 +141,12 @@ class TestWriterRunItem:
 
     def test_a_run_item_with_its_kind_gets_no_write(self):
         wiki = instance_wiki()
-        first = BatchWriter(wiki).write_batch(batch())
+        first = write_mapped(BatchWriter(wiki), batch())
         run = first.run_qid
         before = wiki.wbi.item.get(run).get_json()
         sent = len(wiki.wbi.item.sent)
 
-        again = BatchWriter(wiki).write_batch(batch())
+        again = write_mapped(BatchWriter(wiki), batch())
 
         assert again.run_qid == run
         assert writes_to(wiki, run, sent) == []
@@ -154,14 +156,14 @@ class TestWriterRunItem:
         """A dry run finds the untyped run item and writes nothing to it,
         as it writes nothing at all; with no run item, it makes none."""
         fresh = instance_wiki()
-        planned = BatchWriter(fresh, dry_run=True).write_batch(batch())
+        planned = write_mapped(BatchWriter(fresh, dry_run=True), batch())
         assert planned.run_qid == "(new:run)"
         assert fresh.wbi.item.writes == 0
 
         wiki, left = left_untyped(monkeypatch)
         writes = wiki.wbi.item.writes
 
-        planned = BatchWriter(wiki, dry_run=True).write_batch(batch())
+        planned = write_mapped(BatchWriter(wiki, dry_run=True), batch())
 
         assert planned.run_qid == left
         assert wiki.wbi.item.writes == writes
@@ -172,7 +174,7 @@ class TestWriterRunItem:
         (CLAUDE.md rules 3 and 4), and a re-run puts no second statement
         beside it."""
         wiki = instance_wiki()
-        run = BatchWriter(wiki).write_batch(batch()).run_qid
+        run = write_mapped(BatchWriter(wiki), batch()).run_qid
         item = wiki.wbi.item.get(run)
         (statement,) = item.claims.get(PROPERTIES["instance_of"])
         statement.rank = WikibaseRank.DEPRECATED
@@ -180,7 +182,7 @@ class TestWriterRunItem:
         before = wiki.wbi.item.get(run).get_json()
         sent = len(wiki.wbi.item.sent)
 
-        again = BatchWriter(wiki).write_batch(batch())
+        again = write_mapped(BatchWriter(wiki), batch())
 
         assert again.run_qid == run
         assert writes_to(wiki, run, sent) == []

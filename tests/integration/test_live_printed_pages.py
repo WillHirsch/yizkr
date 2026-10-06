@@ -32,6 +32,7 @@ import json
 
 import pytest
 
+from tests.fixtures.identity import write_mapped
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
@@ -159,7 +160,7 @@ def fixture_graph(client):
     registered = register_fictional(
         client, f"Our Family from Germany {MARK}", "artifact"
     )
-    written = BatchWriter(client).write_batch(fixture_batch(registered.ref))
+    written = write_mapped(BatchWriter(client), fixture_batch(registered.ref))
     return registered, written
 
 
@@ -247,7 +248,7 @@ def test_a_rewrite_adds_nothing(client, fixture_graph):
         )
     }
     before = {each: statements(client, *each) for each in written_to}
-    again = BatchWriter(client).write_batch(fixture_batch(registered.ref))
+    again = write_mapped(BatchWriter(client), fixture_batch(registered.ref))
     assert again.created_items == written.created_items
     assert (again.written, again.referenced, again.skipped) == (0, 0, 2)
     assert {each: statements(client, *each) for each in written_to} == (before)

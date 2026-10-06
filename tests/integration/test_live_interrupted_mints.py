@@ -39,10 +39,11 @@ from pathlib import Path
 import pytest
 from wikibaseintegrator.entities.item import ItemEntity
 
+from tests.fixtures.identity import run_label, write_mapped
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import registrar, writer
 from yizkr.pipeline.registrar import Registrar
-from yizkr.pipeline.writer import BatchWriter, batch_fingerprint
+from yizkr.pipeline.writer import BatchWriter
 
 from .conftest import fictional_png, fixture_mark, register_fictional
 
@@ -231,15 +232,14 @@ def test_a_run_item_mint_cut_short_is_typed_by_the_rerun(client, monkeypatch):
         client, f"Interrupted mint fixture source {MARK}", "certificate"
     )
     batch = fixture_batch(source.ref)
-    fingerprint = batch_fingerprint(batch)
-    label = f"extraction run 2026-09-29 integration-test {fingerprint}"
+    label = run_label(batch)
     # the session's marker gives the batch a run item no session made
     assert client.find_item_by_label(label) is None
 
     with monkeypatch.context() as patch:
         lose_after_first_write(patch, "ingest: extraction run", label)
         with pytest.raises(ConnectionLost):
-            BatchWriter(client).write_batch(batch)
+            write_mapped(BatchWriter(client), batch)
     # the run item, labelled and untyped: nothing else of the batch was
     # written
     left = client.find_item_by_label(label)
@@ -247,7 +247,7 @@ def test_a_run_item_mint_cut_short_is_typed_by_the_rerun(client, monkeypatch):
     assert kinds(client, left) == []
     assert client.find_item_by_label(PERSON["label"]) is None
 
-    written = BatchWriter(client).write_batch(batch)
+    written = write_mapped(BatchWriter(client), batch)
 
     run = written.run_qid
     assert run == left
@@ -271,6 +271,6 @@ def test_a_run_item_mint_cut_short_is_typed_by_the_rerun(client, monkeypatch):
 
     # a further re-run finds the run item typed, and writes nothing to it
     before = revision(client, run)
-    again = BatchWriter(client).write_batch(batch)
+    again = write_mapped(BatchWriter(client), batch)
     assert again.run_qid == run
     assert revision(client, run) == before

@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from tests.fixtures.identity import corpus, mapped, write_mapped
 from tests.fixtures.records import record_answer
 from yizkr.claims import (
     ArtifactRef,
@@ -26,7 +27,9 @@ from yizkr.claims import (
     QidRef,
     RegionPercent,
 )
+from yizkr.core.wiki import ItemLabels
 from yizkr.pipeline import extract
+from yizkr.pipeline.clustering import IdentityMap
 from yizkr.pipeline.extract import (
     ClaimFileExtractor,
     LlmClaimExtractor,
@@ -565,7 +568,7 @@ class TestExtractedClaimsCiteTheirDocument:
         (claim,) = batch.claims
         assert claim.curated is False
         wiki = FakeWiki({MEDIA_SHA1: "Q23"})
-        result = BatchWriter(wiki).write_batch(batch)
+        result = write_mapped(BatchWriter(wiki), batch)
         person = wiki.wbi.item.get(result.created_items["person-1"])
         (statement,) = person.claims.get(PROPERTIES["date_of_birth"])
         assert _cited(statement, "stated_in") == ["Q23"]
@@ -921,25 +924,33 @@ class TestRunMetadata:
 
 
 class TestResolve:
-    def test_exact_label_matches_replace_local_refs(self):
-        resolved = resolve_batch(batch(), {"Person One": "Q40"})
-        for claim in resolved.claims:
-            assert claim.subject == QidRef(qid="Q40")
-        # Person Two unmatched: stays local
-        assert isinstance(resolved.claims[0].value.value, LocalRef)
+    """The resolve step matches nothing by label and reads no wiki: every
+    local ref stays local, for the writer to resolve through the identity
+    map (#109)."""
 
-    def test_no_matches_is_identity(self):
-        assert resolve_batch(batch(), {}) == batch()
+    def test_every_local_ref_stays_local(self):
+        resolved = resolve_batch(batch())
+        assert resolved == batch()
+        assert isinstance(resolved.claims[0].subject, LocalRef)
+
+    def test_a_map_that_holds_the_batch_changes_nothing(self):
+        assert resolve_batch(batch(), mapped(batch())) == batch()
+
+    def test_a_map_without_the_batchs_mentions_refuses_it(self):
+        from yizkr.pipeline.clustering import UnmappedMention
+
+        with pytest.raises(UnmappedMention, match="not in the identity map"):
+            resolve_batch(batch(), mapped(_certificate_batch()))
 
     def test_original_batch_untouched(self):
         original = batch()
-        resolve_batch(original, {"Person One": "Q40"})
+        resolved = resolve_batch(original, mapped(original))
+        assert resolved is not original
         assert isinstance(original.claims[0].subject, LocalRef)
 
     def test_source_artifact_stays_content_addressed(self):
-        # entity resolution maps entities, never the cited artifact:
-        # that resolves to an item only at write time
-        resolved = resolve_batch(batch(), {"Person One": "Q40"})
+        # the cited artifact resolves to an item only at write time
+        resolved = resolve_batch(batch())
         for claim in resolved.claims:
             assert claim.source.artifact == ArtifactRef(sha1=MEDIA_SHA1)
 
@@ -1585,7 +1596,10 @@ def _refuse_as_the_instance(item) -> None:
       (_kept_term), has more than 250 characters or fails the same check,
       and an alias with nothing left (#384);
     * an item whose label and description, as Wikibase keeps them, are
-      the same (its LabelDescriptionNotEqualValidator, #401's review)."""
+      the same (its LabelDescriptionNotEqualValidator, #401's review).
+
+    Both stores refuse too an item whose label and description another
+    item holds (_refuse_a_taken_pair)."""
     data = item.get_json()
     for statements in data.get("claims", {}).values():
         for statement in statements:
@@ -1647,6 +1661,29 @@ def _refuse_as_the_instance(item) -> None:
             )
 
 
+def _refuse_a_taken_pair(item, store) -> None:
+    """Refuse an edit of `item` as Wikibase does when another item holds
+    its English label and description, both set, as Wikibase keeps them
+    (its label-with-description-conflict check, #109)."""
+    label = _kept_term(str(item.labels.get("en") or ""))
+    description = _kept_term(str(item.descriptions.get("en") or ""))
+    if not (label and description):
+        return
+    for qid, other in store.items():
+        if qid == item.id:
+            continue
+        if (
+            _kept_term(str(other.labels.get("en") or "")) == label
+            and _kept_term(str(other.descriptions.get("en") or ""))
+            == description
+        ):
+            raise _refusal(
+                "wikibase-validator-label-with-description-conflict",
+                f"Item {qid} already has label and description",
+                label,
+            )
+
+
 class FakeItems:
     """WikibaseIntegrator items held in memory; write() assigns a QID.
 
@@ -1670,6 +1707,7 @@ class FakeItems:
 
         def write(summary=None, **_):
             _refuse_as_the_instance(item)
+            _refuse_a_taken_pair(item, self.store)
             self.writes += 1
             if item.id is None:
                 item.id = f"Q{self._next}"
@@ -1740,6 +1778,7 @@ class DetachedItems(FakeItems):
     def _bound(self, item):
         def write(summary=None, **_):
             _refuse_as_the_instance(item)
+            _refuse_a_taken_pair(item, self.store)
             self.writes += 1
             if item.id is None:
                 item.id = f"Q{self._next}"
@@ -1850,14 +1889,23 @@ class FakeWiki:
 
     def label_index(self):
         """(property labels, item labels) as the wiki client's label index
-        gives them: the first item under a label, as find_item_by_label
-        finds it."""
-        items: dict[str, str] = {}
-        for qid, item in self.wbi.item.store.items():
+        gives them: a label two or more items hold names the earliest of
+        them, and keeps every holder (ItemLabels)."""
+        holders: dict[str, list[str]] = {}
+        for qid, item in sorted(
+            self.wbi.item.store.items(), key=lambda pair: int(pair[0][1:])
+        ):
             label = str(item.labels.get("en") or "")
             if label:
-                items.setdefault(label, qid)
-        return {}, items
+                holders.setdefault(label, []).append(qid)
+        return {}, ItemLabels(
+            {label: qids[0] for label, qids in holders.items()},
+            {
+                label: tuple(qids)
+                for label, qids in holders.items()
+                if len(qids) > 1
+            },
+        )
 
     def string_statement_index(self, property_pid):
         assert property_pid == PROPERTIES["media_sha1"]
@@ -1893,7 +1941,7 @@ OTHER_SHA1 = hashlib.sha1(b"fictional scan: a second example page").hexdigest()
 class TestWriterArtifactResolution:
     def test_sha1_resolves_to_the_registered_artifact(self):
         wiki = FakeWiki({MEDIA_SHA1: "Q23"})
-        result = BatchWriter(wiki).write_batch(batch())
+        result = write_mapped(BatchWriter(wiki), batch())
         assert result.written == 2
         person = wiki.wbi.item.get(result.created_items["person-1"])
         for pid in (PROPERTIES["sibling"], PROPERTIES["date_of_birth"]):
@@ -1908,7 +1956,9 @@ class TestWriterArtifactResolution:
 
     def test_each_claim_cites_its_own_artifact(self):
         wiki = FakeWiki({MEDIA_SHA1: "Q23", OTHER_SHA1: "Q24"})
-        result = BatchWriter(wiki).write_batch(_citing(MEDIA_SHA1, OTHER_SHA1))
+        result = write_mapped(
+            BatchWriter(wiki), _citing(MEDIA_SHA1, OTHER_SHA1)
+        )
         person = wiki.wbi.item.get(result.created_items["person-1"])
         cited = {
             statement.mainsnak.datavalue["value"]["time"][:5]: _cited(
@@ -1921,7 +1971,7 @@ class TestWriterArtifactResolution:
     def test_unregistered_media_writes_nothing(self):
         wiki = FakeWiki({MEDIA_SHA1: "Q23"})
         with pytest.raises(UnregisteredArtifactError) as raised:
-            BatchWriter(wiki).write_batch(_citing(MEDIA_SHA1, OTHER_SHA1))
+            write_mapped(BatchWriter(wiki), _citing(MEDIA_SHA1, OTHER_SHA1))
         assert raised.value.sha1s == [OTHER_SHA1]
         assert OTHER_SHA1[:12] in str(raised.value)
         # refused before the first write: no run item, no entities, so
@@ -1931,23 +1981,23 @@ class TestWriterArtifactResolution:
     def test_dry_run_resolves_the_same_way(self):
         wiki = FakeWiki()
         with pytest.raises(UnregisteredArtifactError):
-            BatchWriter(wiki, dry_run=True).write_batch(batch())
+            write_mapped(BatchWriter(wiki, dry_run=True), batch())
         wiki.media[MEDIA_SHA1] = "Q23"
-        result = BatchWriter(wiki, dry_run=True).write_batch(batch())
+        result = write_mapped(BatchWriter(wiki, dry_run=True), batch())
         assert result.written == 2
         assert wiki.wbi.item.writes == 0
 
     def test_rewrite_is_skipped_against_the_resolved_artifact(self):
         wiki = FakeWiki({MEDIA_SHA1: "Q23"})
-        BatchWriter(wiki).write_batch(batch())
-        again = BatchWriter(wiki).write_batch(batch())
+        write_mapped(BatchWriter(wiki), batch())
+        again = write_mapped(BatchWriter(wiki), batch())
         assert (again.written, again.skipped, again.referenced) == (0, 2, 0)
 
     def test_caller_supplied_qids_skip_the_index(self):
         # write-time registration hands over what it just registered
         wiki = FakeWiki()
         writer = BatchWriter(wiki, artifact_qids={MEDIA_SHA1.upper(): "Q23"})
-        result = writer.write_batch(batch())
+        result = write_mapped(writer, batch())
         assert wiki.index_reads == 0
         person = wiki.wbi.item.get(result.created_items["person-1"])
         (statement,) = person.claims.get(PROPERTIES["date_of_birth"])
@@ -1956,8 +2006,8 @@ class TestWriterArtifactResolution:
     def test_index_is_read_once_and_again_for_unseen_media(self):
         wiki = FakeWiki({MEDIA_SHA1: "Q23"})
         writer = BatchWriter(wiki)
-        writer.write_batch(batch())
-        writer.write_batch(batch())
+        write_mapped(writer, batch())
+        write_mapped(writer, batch())
         assert wiki.index_reads == 1
         # media registered after the index was read still resolves
         wiki.media[OTHER_SHA1] = "Q24"
@@ -2061,7 +2111,7 @@ class TestWriterTypeStatements:
 
     def test_minted_subject_and_value_kinds_cite_artifact_and_run(self):
         wiki = FakeWiki({MEDIA_SHA1: "Q23"})
-        result = BatchWriter(wiki).write_batch(batch())
+        result = write_mapped(BatchWriter(wiki), batch())
         # person-1 is minted as a claim's subject, person-2 as its value
         for local_id in ("person-1", "person-2"):
             item = wiki.wbi.item.get(result.created_items[local_id])
@@ -2074,7 +2124,7 @@ class TestWriterTypeStatements:
 
     def test_type_hint_cites_artifact_and_run(self):
         wiki = FakeWiki({INTERVIEW_SHA1: "Q25"})
-        result = BatchWriter(wiki).write_batch(_firm_batch())
+        result = write_mapped(BatchWriter(wiki), _firm_batch())
         firm = wiki.wbi.item.get(result.created_items["firm"])
         (kind,) = firm.claims.get(PROPERTIES["instance_of"])
         (hint,) = firm.claims.get(PROPERTIES["type_hint"])
@@ -2091,7 +2141,7 @@ class TestWriterTypeStatements:
         # the reviewer corrected the claim's value, not the entity's kind:
         # the kind and type hint remain the extraction's proposal
         wiki = FakeWiki({INTERVIEW_SHA1: "Q25"})
-        result = BatchWriter(wiki).write_batch(_firm_batch(curated=True))
+        result = write_mapped(BatchWriter(wiki), _firm_batch(curated=True))
         firm = wiki.wbi.item.get(result.created_items["firm"])
         (name,) = firm.claims.get(PROPERTIES["referred_to_as"])
         assert _cited(name, "stated_in") == ["Q25"]
@@ -2245,13 +2295,33 @@ def _snapshot(wiki: FakeWiki, qid: str) -> str:
     )
 
 
+def _found_firm(wiki, directory: ClaimBatch, found: bool) -> IdentityMap:
+    """The map the directory's batch is written with: when `found`, the map
+    in which the interview's firm, which this writes first, and the
+    directory's are one entity (_firm_corpus); otherwise the directory's
+    own, in which its firm is an entity of its own."""
+    if not found:
+        return mapped(directory)
+    identity = _firm_corpus(directory)
+    write_mapped(BatchWriter(wiki), _firm_batch(), identity=identity)
+    return identity
+
+
+def _firm_corpus(*later: ClaimBatch) -> IdentityMap:
+    """The map of the interview's batch and `later`, in which every mention
+    of the firm, under its label, is one entity."""
+    return corpus(_firm_batch(), *later, entities=(FIRM_LABEL,))
+
+
 class TestWriterLaterSourceTypes:
-    """A later batch that names an existing item records the kind and type
-    hint it gives the item: a matching statement gains the batch's source
-    and run, a different value becomes a statement of its own, and a
-    curated statement is never altered (rules 1-3, ADR-0002). The batch
-    gives them in its entity manifest or, without one (#240), gives the
-    kind on the local refs the writer matches to the item by label."""
+    """A later batch whose mention the identity map puts in an existing
+    item's cluster records the kind and type hint it gives the item: a
+    matching statement gains the batch's source and run, a different value
+    becomes a statement of its own, and a curated statement is never
+    altered (rules 1-3, ADR-0002). The batch gives them in its entity
+    manifest or, without one (#240), on its local refs (#109). Every batch
+    of a test is written with one map, in which the interview's and the
+    directory's firm are one entity."""
 
     @pytest.mark.parametrize(
         "directory_batch",
@@ -2262,18 +2332,18 @@ class TestWriterLaterSourceTypes:
         self, directory_batch
     ):
         wiki = _two_sources()
-        interview = BatchWriter(wiki).write_batch(_firm_batch())
+        later = directory_batch("unclassified_entity")
+        identity = _firm_corpus(later)
+        interview = write_mapped(
+            BatchWriter(wiki), _firm_batch(), identity=identity
+        )
         firm = interview.created_items["firm"]
         # a dry run plans; it writes nothing
         writes = wiki.wbi.item.writes
-        BatchWriter(wiki, dry_run=True).write_batch(
-            directory_batch("unclassified_entity")
-        )
+        write_mapped(BatchWriter(wiki, dry_run=True), later, identity=identity)
         assert wiki.wbi.item.writes == writes
 
-        directory = BatchWriter(wiki).write_batch(
-            directory_batch("unclassified_entity")
-        )
+        directory = write_mapped(BatchWriter(wiki), later, identity=identity)
         assert directory.created_items["firm"] == firm
         (kind,) = _statements(wiki, firm, "instance_of")
         assert _sources(kind) == [
@@ -2293,9 +2363,13 @@ class TestWriterLaterSourceTypes:
     )
     def test_different_kind_is_a_statement_of_its_own(self, directory_batch):
         wiki = _two_sources()
-        interview = BatchWriter(wiki).write_batch(_firm_batch())
+        later = directory_batch()
+        identity = _firm_corpus(later)
+        interview = write_mapped(
+            BatchWriter(wiki), _firm_batch(), identity=identity
+        )
         firm = interview.created_items["firm"]
-        directory = BatchWriter(wiki).write_batch(directory_batch())
+        directory = write_mapped(BatchWriter(wiki), later, identity=identity)
         kinds = _by_value(_statements(wiki, firm, "instance_of"))
         assert set(kinds) == {
             ITEMS["unclassified_entity"],
@@ -2328,11 +2402,13 @@ class TestWriterLaterSourceTypes:
     )
     def test_type_hint_same_or_different(self, hint, same):
         wiki = _two_sources()
-        interview = BatchWriter(wiki).write_batch(_firm_batch())
-        firm = interview.created_items["firm"]
-        directory = BatchWriter(wiki).write_batch(
-            _directory_batch("unclassified_entity", type_hint=hint)
+        later = _directory_batch("unclassified_entity", type_hint=hint)
+        identity = _firm_corpus(later)
+        interview = write_mapped(
+            BatchWriter(wiki), _firm_batch(), identity=identity
         )
+        firm = interview.created_items["firm"]
+        directory = write_mapped(BatchWriter(wiki), later, identity=identity)
         hints = _by_value(_statements(wiki, firm, "type_hint"))
         interview_sources = [(["Q25"], []), ([], [interview.run_qid])]
         directory_sources = [(["Q26"], []), ([], [directory.run_qid])]
@@ -2369,19 +2445,20 @@ class TestWriterLaterSourceTypes:
     )
     def test_rewriting_a_later_batch_adds_nothing(self, directory_batch):
         wiki = _two_sources()
-        firm = (
-            BatchWriter(wiki).write_batch(_firm_batch()).created_items["firm"]
-        )
         batch = directory_batch()
-        BatchWriter(wiki).write_batch(batch)
+        identity = _firm_corpus(batch)
+        firm = write_mapped(
+            BatchWriter(wiki), _firm_batch(), identity=identity
+        ).created_items["firm"]
+        write_mapped(BatchWriter(wiki), batch, identity=identity)
         assert set(_by_value(_statements(wiki, firm, "instance_of"))) == {
             ITEMS["unclassified_entity"],
             ITEMS["organization"],
         }
         before = _snapshot(wiki, firm)
         for again in (
-            BatchWriter(wiki).write_batch(batch),
-            BatchWriter(wiki).write_batch(_firm_batch()),
+            write_mapped(BatchWriter(wiki), batch, identity=identity),
+            write_mapped(BatchWriter(wiki), _firm_batch(), identity=identity),
         ):
             assert again.created_items["firm"] == firm
             assert (again.written, again.referenced, again.skipped) == (
@@ -2398,22 +2475,31 @@ class TestWriterLaterSourceTypes:
         DIRECTORY_BATCHES.values(),
         ids=DIRECTORY_BATCHES.keys(),
     )
-    @pytest.mark.parametrize("curation", ["human write", "deprecated"])
+    @pytest.mark.parametrize(
+        ("curation", "kind"),
+        [
+            ("human write", "organization"),
+            ("deprecated", "unclassified_entity"),
+        ],
+    )
     def test_curated_statement_is_left_untouched(
-        self, curation, directory_batch
+        self, curation, kind, directory_batch
     ):
         from wikibaseintegrator.datatypes import Item
         from wikibaseintegrator.models import Reference, References
         from wikibaseintegrator.wbi_enums import ActionIfExists, WikibaseRank
 
         wiki = _two_sources()
-        interview = BatchWriter(wiki).write_batch(_firm_batch())
+        later = directory_batch(kind)
+        identity = _firm_corpus(later)
+        interview = write_mapped(
+            BatchWriter(wiki), _firm_batch(), identity=identity
+        )
         firm_qid = interview.created_items["firm"]
         firm = wiki.wbi.item.get(firm_qid)
         if curation == "human write":
             # a curator records, from the interview, that the firm is an
             # organization: a statement with no extraction-run reference
-            kind = "organization"
             curated = Item(
                 prop_nr=PROPERTIES["instance_of"], value=ITEMS[kind]
             )
@@ -2425,13 +2511,12 @@ class TestWriterLaterSourceTypes:
             )
         else:
             # a curator deprecates the interview's kind
-            kind = "unclassified_entity"
             (curated,) = firm.claims.get(PROPERTIES["instance_of"])
             curated.rank = WikibaseRank.DEPRECATED
         firm.write()
         curated_before = json.dumps(curated.get_json(), sort_keys=True)
 
-        directory = BatchWriter(wiki).write_batch(directory_batch(kind))
+        directory = write_mapped(BatchWriter(wiki), later, identity=identity)
         same_value = [
             statement
             for statement in _statements(wiki, firm_qid, "instance_of")
@@ -2448,22 +2533,25 @@ class TestWriterLaterSourceTypes:
         assert directory.type_statements_written == 1
         assert directory.type_statements_referenced == 0
 
-    def test_resolved_reference_is_matched_by_label(self):
-        # the resolve step replaced the firm's local refs with its QID
-        # (an exact label match), leaving its manifest record unmarked
+    def test_the_resolve_step_matches_nothing_by_label(self):
+        # the firm's item is under its label; the resolve step leaves the
+        # directory's refs local all the same, and the write, with a map
+        # in which the two are not one entity, finds the firm no item
         wiki = _two_sources()
-        firm = (
-            BatchWriter(wiki).write_batch(_firm_batch()).created_items["firm"]
+        later = _directory_batch()
+        identity = mapped(_firm_batch(), later)
+        firm = write_mapped(
+            BatchWriter(wiki), _firm_batch(), identity=identity
+        ).created_items["firm"]
+        resolved = resolve_batch(later, identity)
+        assert resolved == later
+        directory = write_mapped(
+            BatchWriter(wiki), resolved, identity=identity
         )
-        resolved = resolve_batch(_directory_batch(), {FIRM_LABEL: firm})
-        assert isinstance(resolved.claims[0].subject, QidRef)
-        assert resolved.entities[0].qid is None
-        directory = BatchWriter(wiki).write_batch(resolved)
-        kinds = _by_value(_statements(wiki, firm, "instance_of"))
-        assert _sources(kinds[ITEMS["organization"]]) == [
-            (["Q26"], []),
-            ([], [directory.run_qid]),
-        ]
+        assert directory.created_items["firm"] != firm
+        assert set(_by_value(_statements(wiki, firm, "instance_of"))) == {
+            ITEMS["unclassified_entity"]
+        }
 
     def test_approved_equivalence_records_its_kind(self):
         from yizkr.pipeline.reconcile import apply_equivalences
@@ -2472,13 +2560,13 @@ class TestWriterLaterSourceTypes:
         # it, "the Blue Hat", matches no label, and a reviewer approves
         # the equivalence
         wiki = _two_sources()
-        directory = BatchWriter(wiki).write_batch(_directory_batch())
+        directory = write_mapped(BatchWriter(wiki), _directory_batch())
         firm = directory.created_items["firm"]
         approved = apply_equivalences(
             _firm_batch(label="the Blue Hat"), {"firm": firm}
         )
         assert isinstance(approved.claims[0].subject, QidRef)
-        interview = BatchWriter(wiki).write_batch(approved)
+        interview = write_mapped(BatchWriter(wiki), approved)
         interview_sources = [(["Q25"], []), ([], [interview.run_qid])]
         kinds = _by_value(_statements(wiki, firm, "instance_of"))
         assert set(kinds) == {
@@ -2496,8 +2584,8 @@ class TestWriterLaterSourceTypes:
         from yizkr.pipeline.gedcom import adapt_gedcom
 
         # Sebastian Löbig as the 1905 marriage certificate gives him, then
-        # as the family's GEDCOM export does: its adapter's local refs
-        # carry no label, so the writer finds him by his manifest label
+        # as the family's GEDCOM export does, which the identity map puts
+        # in his cluster
         text = (
             "0 HEAD\n1 CHAR UTF-8\n0 @I3@ INDI\n1 NAME Sebastian /Löbig/\n"
             "1 BIRT\n2 DATE 15 FEB 1862\n0 TRLR\n"
@@ -2506,10 +2594,13 @@ class TestWriterLaterSourceTypes:
         # instance holds as the item Q27's media SHA-1
         exported = ArtifactRef.from_bytes(text.encode())
         wiki = FakeWiki({MEDIA_SHA1: "Q23", exported.sha1: "Q27"})
-        first = BatchWriter(wiki).write_batch(_certificate_batch())
-        person = first.created_items["e01"]
         export = adapt_gedcom(text, artifact=exported).batch
-        gedcom = BatchWriter(wiki).write_batch(export)
+        identity = corpus(_certificate_batch(), export, entities=(SEBASTIAN,))
+        first = write_mapped(
+            BatchWriter(wiki), _certificate_batch(), identity=identity
+        )
+        person = first.created_items["e01"]
+        gedcom = write_mapped(BatchWriter(wiki), export, identity=identity)
         assert gedcom.created_items["i3"] == person
         assert gedcom.referenced == 1  # the agreeing birth date
         (kind,) = _statements(wiki, person, "instance_of")
@@ -2525,9 +2616,6 @@ class TestWriterLaterSourceTypes:
         # entry: the claim is written first, with its excerpt, and the
         # manifest's same kind adds nothing beside it
         wiki = _two_sources()
-        firm = (
-            BatchWriter(wiki).write_batch(_firm_batch()).created_items["firm"]
-        )
         claim = {
             "property": "instance_of",
             "value": {
@@ -2542,9 +2630,12 @@ class TestWriterLaterSourceTypes:
                 },
             },
         }
-        directory = BatchWriter(wiki).write_batch(
-            _directory_batch(extra_claims=(claim,))
-        )
+        later = _directory_batch(extra_claims=(claim,))
+        identity = _firm_corpus(later)
+        firm = write_mapped(
+            BatchWriter(wiki), _firm_batch(), identity=identity
+        ).created_items["firm"]
+        directory = write_mapped(BatchWriter(wiki), later, identity=identity)
         assert directory.written == 2
         kinds = _by_value(_statements(wiki, firm, "instance_of"))
         organization = kinds[ITEMS["organization"]]
@@ -2570,9 +2661,6 @@ class TestWriterLaterSourceTypes:
                 DIRECTORY_PAGE_2_SHA1: "Q28",
             }
         )
-        firm = (
-            BatchWriter(wiki).write_batch(_firm_batch()).created_items["firm"]
-        )
         claim = {
             "property": "instance_of",
             "value": {
@@ -2583,9 +2671,12 @@ class TestWriterLaterSourceTypes:
                 "artifact": {"kind": "artifact", "sha1": DIRECTORY_PAGE_2_SHA1}
             },
         }
-        directory = BatchWriter(wiki).write_batch(
-            _directory_batch(extra_claims=(claim,))
-        )
+        later = _directory_batch(extra_claims=(claim,))
+        identity = _firm_corpus(later)
+        firm = write_mapped(
+            BatchWriter(wiki), _firm_batch(), identity=identity
+        ).created_items["firm"]
+        directory = write_mapped(BatchWriter(wiki), later, identity=identity)
         kinds = _by_value(_statements(wiki, firm, "instance_of"))
         assert _sources(kinds[ITEMS["organization"]]) == [
             (["Q28"], []),
@@ -2605,9 +2696,6 @@ class TestWriterLaterSourceTypes:
                 DIRECTORY_SHA1: "Q26",
                 DIRECTORY_PAGE_2_SHA1: "Q28",
             }
-        )
-        firm = (
-            BatchWriter(wiki).write_batch(_firm_batch()).created_items["firm"]
         )
         since_1863 = ClaimBatch.model_validate(
             {
@@ -2647,7 +2735,11 @@ class TestWriterLaterSourceTypes:
                 ],
             }
         )
-        page_2 = BatchWriter(wiki).write_batch(since_1863)
+        identity = _firm_corpus(since_1863, _directory_batch())
+        firm = write_mapped(
+            BatchWriter(wiki), _firm_batch(), identity=identity
+        ).created_items["firm"]
+        page_2 = write_mapped(BatchWriter(wiki), since_1863, identity=identity)
         assert (page_2.written, page_2.type_statements_written) == (1, 0)
         (qualified,) = [
             statement
@@ -2656,7 +2748,9 @@ class TestWriterLaterSourceTypes:
         ]
         qualified_before = json.dumps(qualified.get_json(), sort_keys=True)
 
-        directory = BatchWriter(wiki).write_batch(_directory_batch())
+        directory = write_mapped(
+            BatchWriter(wiki), _directory_batch(), identity=identity
+        )
 
         organization = [
             statement
@@ -2681,9 +2775,9 @@ class TestWriterLaterSourceTypes:
         from yizkr.pipeline.reconcile import apply_equivalences
 
         wiki = _two_sources()
-        firm = (
-            BatchWriter(wiki).write_batch(_firm_batch()).created_items["firm"]
-        )
+        firm = write_mapped(BatchWriter(wiki), _firm_batch()).created_items[
+            "firm"
+        ]
         before = _snapshot(wiki, firm)
         widow = {"id": "widow", "label": "Ursula Löbig", "kind": "human"}
         address = {"id": "address", "label": "Angerring 57", "kind": "place"}
@@ -2732,7 +2826,7 @@ class TestWriterLaterSourceTypes:
         approved = apply_equivalences(reviewed, {"firm": firm})
         assert approved.entities[0].qid == firm
 
-        directory = BatchWriter(wiki).write_batch(approved)
+        directory = write_mapped(BatchWriter(wiki), approved)
 
         assert directory.written == 1
         assert _snapshot(wiki, firm) == before
@@ -2810,20 +2904,24 @@ def _three_sources() -> FakeWiki:
 
 
 class TestWriterRefKindWitnesses:
-    """A local ref without a manifest record gives its item's kind on the
-    artifact of the claim the ref is in (#240 review): the kind cites that
-    artifact, not the first one that mentions the item, and every artifact
-    whose ref gives the kind is a witness of it (rule 1)."""
+    """A local ref gives its item's kind on the artifact of the claim the
+    ref is in (#240 review, #109): the kind cites that artifact, not the
+    first one that mentions the item, and every artifact whose ref gives
+    the kind is a witness of it (rule 1), whether the item is minted or
+    found. The identity map puts every mention of the firm in one
+    cluster."""
 
     def test_a_refs_kind_cites_its_own_claims_artifact(self):
         # page 1's claim names the firm without a kind; page 2's types it
         wiki = _three_sources()
-        interview = BatchWriter(wiki).write_batch(_firm_batch())
+        pages = _directory_pages_batch(None, "organization")
+        identity = _firm_corpus(pages)
+        interview = write_mapped(
+            BatchWriter(wiki), _firm_batch(), identity=identity
+        )
         firm = interview.created_items["firm"]
 
-        directory = BatchWriter(wiki).write_batch(
-            _directory_pages_batch(None, "organization")
-        )
+        directory = write_mapped(BatchWriter(wiki), pages, identity=identity)
 
         kinds = _by_value(_statements(wiki, firm, "instance_of"))
         assert _sources(kinds[ITEMS["organization"]]) == [
@@ -2840,13 +2938,16 @@ class TestWriterRefKindWitnesses:
     def test_every_page_that_gives_the_kind_witnesses_it(self):
         # both pages' claims give the kind the interview gave
         wiki = _three_sources()
-        interview = BatchWriter(wiki).write_batch(_firm_batch())
-        firm = interview.created_items["firm"]
         batch = _directory_pages_batch(
             "unclassified_entity", "unclassified_entity"
         )
+        identity = _firm_corpus(batch)
+        interview = write_mapped(
+            BatchWriter(wiki), _firm_batch(), identity=identity
+        )
+        firm = interview.created_items["firm"]
 
-        directory = BatchWriter(wiki).write_batch(batch)
+        directory = write_mapped(BatchWriter(wiki), batch, identity=identity)
 
         (kind,) = _statements(wiki, firm, "instance_of")
         assert _sources(kind) == [
@@ -2860,7 +2961,7 @@ class TestWriterRefKindWitnesses:
         assert directory.type_statements_referenced == 2
         # and a re-run finds both witnesses there
         before = _snapshot(wiki, firm)
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch, identity=identity)
         assert again.type_statements_referenced == 0
         assert _snapshot(wiki, firm) == before
 
@@ -2894,25 +2995,28 @@ class TestWriterRefKindWitnesses:
             ]
 
         kinds_before = []
-        if found:
-            firm = (
-                BatchWriter(wiki)
-                .write_batch(_firm_batch())
-                .created_items["firm"]
-            )
-            kinds_before = kinds(firm)
         batch = given()
+        # found: the map puts the batch's firm in the interview's firm's
+        # cluster; minted: in a cluster of its own
+        identity = _firm_corpus(batch) if found else mapped(batch)
+        if found:
+            firm = write_mapped(
+                BatchWriter(wiki), _firm_batch(), identity=identity
+            ).created_items["firm"]
+            kinds_before = kinds(firm)
         warning = (
             f"entity {local_id!r} has the kind 'hat_shop', which the "
             "vocabulary lacks: no kind is recorded for it"
         )
         # found before the first write, so a dry run reports it too
         writes = wiki.wbi.item.writes
-        planned = BatchWriter(wiki, dry_run=True).write_batch(batch)
+        planned = write_mapped(
+            BatchWriter(wiki, dry_run=True), batch, identity=identity
+        )
         assert planned.warnings == [warning]
         assert wiki.wbi.item.writes == writes
 
-        directory = BatchWriter(wiki).write_batch(batch)
+        directory = write_mapped(BatchWriter(wiki), batch, identity=identity)
 
         assert directory.warnings == [warning]
         assert directory.written == claims
@@ -2921,7 +3025,8 @@ class TestWriterRefKindWitnesses:
 
     # a claims file written on an empty instance: page 1's ref mints the
     # firm, and each later page's ref, under a local id of its own, finds
-    # it by label -> (the pages' kinds, the artifacts each of the firm's
+    # it, as the map puts every page's firm in one cluster -> (the pages'
+    # kinds, the artifacts each of the firm's
     # kinds cites after the first write, its type statements written and
     # referenced)
     MINTED = {
@@ -2959,8 +3064,9 @@ class TestWriterRefKindWitnesses:
             dict(zip(DIRECTORY_PAGES, ("Q26", "Q28", "Q30"), strict=True))
         )
         batch = _directory_pages_batch(*page_kinds)
+        identity = corpus(batch, entities=(FIRM_LABEL,))
 
-        first = BatchWriter(wiki).write_batch(batch)
+        first = write_mapped(BatchWriter(wiki), batch, identity=identity)
 
         (firm,) = set(first.created_items.values())
         kinds = _by_value(_statements(wiki, firm, "instance_of"))
@@ -2979,7 +3085,7 @@ class TestWriterRefKindWitnesses:
         # so a second write of the batch finds every witness there
         before = _snapshot(wiki, firm)
         writes = wiki.wbi.item.writes
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch, identity=identity)
         assert (again.written, again.referenced) == (0, 0)
         assert again.type_statements_written == 0
         assert again.type_statements_referenced == 0
@@ -2990,18 +3096,23 @@ class TestWriterRefKindWitnesses:
         # a claims file with a manifest names the firm by its QID on page
         # 1 and by a local id on page 2, whose ref says human and whose
         # record says organization: the record's kind is recorded, citing
-        # the page that first mentions the firm, and the ref gives none
+        # the page whose ref gives it, and the ref gives none
         wiki = _three_sources()
-        interview = BatchWriter(wiki).write_batch(_firm_batch())
-        firm = interview.created_items["firm"]
         given = _directory_pages_batch(None, "human").model_dump(mode="json")
-        given["claims"][0]["subject"] = {"kind": "qid", "qid": firm}
         given["entities"] = [
             {"id": "c002:firm", "label": FIRM_LABEL, "kind": "organization"}
         ]
+        identity = _firm_corpus(ClaimBatch.model_validate(given))
+        interview = write_mapped(
+            BatchWriter(wiki), _firm_batch(), identity=identity
+        )
+        firm = interview.created_items["firm"]
+        given["claims"][0]["subject"] = {"kind": "qid", "qid": firm}
 
-        directory = BatchWriter(wiki).write_batch(
-            ClaimBatch.model_validate(given)
+        directory = write_mapped(
+            BatchWriter(wiki),
+            ClaimBatch.model_validate(given),
+            identity=identity,
         )
 
         assert directory.created_items == {"c002:firm": firm}
@@ -3011,7 +3122,7 @@ class TestWriterRefKindWitnesses:
             ITEMS["organization"],
         }
         assert _sources(kinds[ITEMS["organization"]]) == [
-            (["Q26"], []),
+            (["Q28"], []),
             ([], [directory.run_qid]),
         ]
         assert directory.type_statements_written == 1
@@ -3035,8 +3146,9 @@ class TestWriterRefKindWitnesses:
         given = _directory_batch(record_kind).model_dump(mode="json")
         given["claims"][0]["subject"]["instance_of"] = ref_kind
 
-        planned = BatchWriter(_two_sources(), dry_run=True).write_batch(
-            ClaimBatch.model_validate(given)
+        planned = write_mapped(
+            BatchWriter(_two_sources(), dry_run=True),
+            ClaimBatch.model_validate(given),
         )
 
         assert planned.warnings == (
@@ -3060,6 +3172,9 @@ class TestWriterRefKindWitnesses:
             "instance_of": "town",
         }
         given = _directory_batch().model_dump(mode="json")
+        given["entities"].append(
+            {"id": "floerburg", "label": "Flörburg", "kind": "town"}
+        )
         founded = given["claims"][0]
         located = {"type": "item", "value": town}
         if position == "value":
@@ -3071,8 +3186,9 @@ class TestWriterRefKindWitnesses:
                 {"property": "location", "value": located}
             ]
 
-        planned = BatchWriter(_two_sources(), dry_run=True).write_batch(
-            ClaimBatch.model_validate(given)
+        planned = write_mapped(
+            BatchWriter(_two_sources(), dry_run=True),
+            ClaimBatch.model_validate(given),
         )
 
         assert planned.warnings == [
@@ -3141,18 +3257,15 @@ def _approved(batch: ClaimBatch, approved: dict[str, str]) -> ClaimBatch:
 
 class TestWriterAliases:
     """Every document adds its names for an entity to the item's aliases,
-    append-only (ADR-0007), whichever step found the item: the writer by
-    exact label, the resolve step by exact label (#240), or a reviewer's
-    approved equivalence. The instance here serves every read as a copy
-    (DetachedItems), so an edit sent from a read taken before the aliases
-    went on would take them off again."""
+    append-only (ADR-0007), however its item was found: through the
+    identity map, which puts the tree's Sebastian in the certificate's
+    cluster (#109), or by a reviewer's approved equivalence. The instance
+    here serves every read as a copy (DetachedItems), so an edit sent from
+    a read taken before the aliases went on would take them off again."""
 
     # the tree's batch as the writer receives it, given Sebastian's QID
     FOUND_BY = {
-        "writer": lambda batch, qid: batch,
-        "resolve step": lambda batch, qid: resolve_batch(
-            batch, {SEBASTIAN: qid}
-        ),
+        "identity map": lambda batch, qid: batch,
         "equivalence": lambda batch, qid: _approved(batch, {"e03": qid}),
     }
 
@@ -3167,13 +3280,18 @@ class TestWriterAliases:
     ):
         wiki = FakeWiki({MEDIA_SHA1: "Q23", TREE_SHA1: "Q29"}, detached=True)
         writer = BatchWriter(wiki)
-        certificate = writer.write_batch(_certificate_batch())
+        identity = corpus(
+            _certificate_batch(), _tree_batch(), entities=(SEBASTIAN,)
+        )
+        certificate = write_mapped(
+            writer, _certificate_batch(), identity=identity
+        )
         sebastian = certificate.created_items["e01"]
         assert _aliases(wiki, sebastian) == []
         tree_batch = found_by(_tree_batch(), sebastian)
 
         tree = (writer if one_writer else BatchWriter(wiki)).write_batch(
-            tree_batch
+            tree_batch, identity=identity
         )
 
         assert _aliases(wiki, sebastian) == ["Wastl"]
@@ -3189,7 +3307,7 @@ class TestWriterAliases:
         ]
         # a re-run edits nothing, and the item's label is never an alias
         writes = wiki.wbi.item.writes
-        BatchWriter(wiki).write_batch(tree_batch)
+        write_mapped(BatchWriter(wiki), tree_batch, identity=identity)
         assert wiki.wbi.item.writes == writes
         assert _aliases(wiki, sebastian) == ["Wastl"]
 
@@ -3201,12 +3319,6 @@ class TestWriterAliases:
         # "Wastl" on it. The first writer's next batch, the tree's marriage
         # line, finds the alias already there, and edits from that read
         wiki = FakeWiki({MEDIA_SHA1: "Q23", TREE_SHA1: "Q29"}, detached=True)
-        writer = BatchWriter(wiki)
-        sebastian = writer.write_batch(_certificate_batch()).created_items[
-            "e01"
-        ]
-        BatchWriter(wiki).write_batch(_tree_batch())
-        assert _aliases(wiki, sebastian) == ["Wastl"]
         tree = _tree_batch()
         hildegard = {
             "id": "e04",
@@ -3245,7 +3357,16 @@ class TestWriterAliases:
             }
         )
 
-        writer.write_batch(married)
+        # the tree's marriage line holds every mention of its birth year's
+        identity = corpus(_certificate_batch(), married, entities=(SEBASTIAN,))
+        writer = BatchWriter(wiki)
+        sebastian = write_mapped(
+            writer, _certificate_batch(), identity=identity
+        ).created_items["e01"]
+        write_mapped(BatchWriter(wiki), _tree_batch(), identity=identity)
+        assert _aliases(wiki, sebastian) == ["Wastl"]
+
+        write_mapped(writer, married, identity=identity)
 
         assert _aliases(wiki, sebastian) == ["Wastl"]
         assert len(_statements(wiki, sebastian, "spouse")) == 1
@@ -3355,7 +3476,7 @@ class TestWriterPlaces:
     def test_each_place_is_a_block_of_its_own(self, first, second):
         wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
 
-        result = BatchWriter(wiki).write_batch(_births(first, second))
+        result = write_mapped(BatchWriter(wiki), _births(first, second))
 
         sebastian = result.created_items["e01"]
         (born,) = _statements(wiki, sebastian, "date_of_birth")
@@ -3376,7 +3497,7 @@ class TestWriterPlaces:
         wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
         groom, _ = PLACES["another page"]
 
-        result = BatchWriter(wiki).write_batch(_births(groom, groom))
+        result = write_mapped(BatchWriter(wiki), _births(groom, groom))
 
         (born,) = _statements(
             wiki, result.created_items["e01"], "date_of_birth"
@@ -3418,7 +3539,7 @@ class TestWriterPlaces:
         wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
         batch = _births(place, place)
 
-        first = BatchWriter(wiki).write_batch(batch)
+        first = write_mapped(BatchWriter(wiki), batch)
 
         sebastian = first.created_items["e01"]
         (born,) = _statements(wiki, sebastian, "date_of_birth")
@@ -3427,7 +3548,7 @@ class TestWriterPlaces:
         assert (first.written, first.referenced, first.skipped) == (1, 0, 1)
         # and a re-run finds the place there
         before = _snapshot(wiki, sebastian)
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch)
         assert (again.written, again.referenced, again.skipped) == (0, 0, 2)
         assert _snapshot(wiki, sebastian) == before
 
@@ -3439,13 +3560,13 @@ class TestWriterPlaces:
         # by a later run's batch that finds the same places
         wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
         places = [place for pair in PLACES.values() for place in pair]
-        first = BatchWriter(wiki).write_batch(_births(*places))
+        first = write_mapped(BatchWriter(wiki), _births(*places))
         sebastian = first.created_items["e01"]
         (born,) = _statements(wiki, sebastian, "date_of_birth")
         assert _places(born) == [_place(place) for place in places]
         before = _snapshot(wiki, sebastian)
 
-        again = BatchWriter(wiki).write_batch(_births(*places, run=run))
+        again = write_mapped(BatchWriter(wiki), _births(*places, run=run))
 
         assert (again.written, again.referenced, again.skipped) == (
             0,
@@ -3464,15 +3585,15 @@ class TestWriterPlaces:
         # run block)
         wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
         groom, margin = PLACES["another excerpt, no page"]
-        first = BatchWriter(wiki).write_batch(_births(groom))
+        first = write_mapped(BatchWriter(wiki), _births(groom))
         sebastian = first.created_items["e01"]
         (born,) = _statements(wiki, sebastian, "date_of_birth")
         groom_block = json.dumps(
             born.references.references[0].get_json(), sort_keys=True
         )
 
-        later = BatchWriter(wiki).write_batch(
-            _births(margin, run=LATER_RUN, curated=curated)
+        later = write_mapped(
+            BatchWriter(wiki), _births(margin, run=LATER_RUN, curated=curated)
         )
 
         (born,) = _statements(wiki, sebastian, "date_of_birth")
@@ -3507,8 +3628,8 @@ class TestWriterPlaces:
             dict(founded, source=dict(founded["source"], artifact=page_2))
         )
 
-        directory = BatchWriter(wiki).write_batch(
-            ClaimBatch.model_validate(batch)
+        directory = write_mapped(
+            BatchWriter(wiki), ClaimBatch.model_validate(batch)
         )
 
         (founding,) = _statements(
@@ -3531,8 +3652,9 @@ class TestWriterPlaces:
 
         wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
         groom, margin = PLACES["another page"]
-        first = BatchWriter(wiki).write_batch(
-            _births(groom, curated=curation == "human write")
+        first = write_mapped(
+            BatchWriter(wiki),
+            _births(groom, curated=curation == "human write"),
         )
         sebastian = first.created_items["e01"]
         if curation == "deprecated":
@@ -3542,7 +3664,7 @@ class TestWriterPlaces:
             item.write()
         before = _snapshot(wiki, sebastian)
 
-        later = BatchWriter(wiki).write_batch(_births(margin, run=LATER_RUN))
+        later = write_mapped(BatchWriter(wiki), _births(margin, run=LATER_RUN))
 
         assert (later.written, later.referenced, later.skipped) == (0, 0, 1)
         assert _snapshot(wiki, sebastian) == before
@@ -3565,8 +3687,8 @@ class TestWriterPlaces:
         exported = ArtifactRef.from_bytes(text.encode())
         wiki = FakeWiki({exported.sha1: "Q27"}, detached=True)
 
-        gedcom = BatchWriter(wiki).write_batch(
-            adapt_gedcom(text, artifact=exported).batch
+        gedcom = write_mapped(
+            BatchWriter(wiki), adapt_gedcom(text, artifact=exported).batch
         )
 
         (born,) = _statements(
@@ -3608,7 +3730,7 @@ class TestWriterPlaces:
         )
         batch = ClaimBatch.model_validate(given)
 
-        first = BatchWriter(wiki).write_batch(batch)
+        first = write_mapped(BatchWriter(wiki), batch)
 
         sebastian = first.created_items["e01"]
         (kind,) = _statements(wiki, sebastian, "instance_of")
@@ -3624,7 +3746,7 @@ class TestWriterPlaces:
         assert (first.written, first.referenced, first.skipped) == (1, 1, 0)
         # and a re-run finds both places there
         before = _snapshot(wiki, sebastian)
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch)
         assert (again.written, again.referenced, again.skipped) == (0, 0, 2)
         assert again.type_statements_referenced == 0
         assert _snapshot(wiki, sebastian) == before
@@ -3855,7 +3977,7 @@ class TestWriterTextInNfc:
         assert _in_form_batch(batch, "NFC") != batch
         wiki = FakeWiki({exported.sha1: "Q27"}, detached=True)
 
-        first = BatchWriter(wiki).write_batch(batch)
+        first = write_mapped(BatchWriter(wiki), batch)
 
         assert _not_in_nfc(wiki) == []
         ida = first.created_items["i5"]
@@ -3870,7 +3992,7 @@ class TestWriterTextInNfc:
         # a re-run finds Ida by her label, her aliases and every statement
         # written for her, and sends nothing
         writes = wiki.wbi.item.writes
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch)
         assert again.created_items["i5"] == ida
         assert (again.written, again.referenced) == (0, 0)
         assert wiki.wbi.item.writes == writes
@@ -3885,7 +4007,7 @@ class TestWriterTextInNfc:
         assert _in_form(claim, "NFD") != claim
         wiki = FakeWiki(TEXT_MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         subject = written.created_items[claim["subject"]["local_id"]]
         (statement,) = _statements(wiki, subject, claim["property"])
@@ -3897,7 +4019,7 @@ class TestWriterTextInNfc:
         )
         assert _not_in_nfc(wiki) == []
         before = _snapshot(wiki, subject)
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch)
         assert (again.written, again.referenced, again.skipped) == (0, 0, 2)
         assert _snapshot(wiki, subject) == before
 
@@ -3906,17 +4028,17 @@ class TestWriterTextInNfc:
     )
     def test_a_later_batch_finds_the_item_in_either_form(self, first, then):
         # the card's batch mints Ida's item; the compensation file's,
-        # which gives her label and alias in the other form, finds it, and
-        # adds the name the file gives her by, in NFC
+        # which gives her label and alias in the other form, and which the
+        # identity map puts in her cluster, finds it, and adds the name the
+        # file gives her by, in NFC
         wiki = FakeWiki(TEXT_MEDIA, detached=True)
-        card = BatchWriter(wiki).write_batch(
-            _in_form_batch(_card_batch(), first)
-        )
+        card_batch = _in_form_batch(_card_batch(), first)
+        later_batch = _in_form_batch(_compensation_batch(), then)
+        identity = corpus(card_batch, later_batch, entities=("Ida Löbig",))
+        card = write_mapped(BatchWriter(wiki), card_batch, identity=identity)
         ida = card.created_items["e05"]
 
-        later = BatchWriter(wiki).write_batch(
-            _in_form_batch(_compensation_batch(), then)
-        )
+        later = write_mapped(BatchWriter(wiki), later_batch, identity=identity)
 
         assert later.created_items["e05"] == ida
         assert _labelled(wiki, "Ida Löbig") == [ida]
@@ -3929,26 +4051,24 @@ class TestWriterTextInNfc:
         # the tree's batch gives his label decomposed. It is his label in
         # another form, never an alias of his
         wiki = FakeWiki({MEDIA_SHA1: "Q23", TREE_SHA1: "Q29"}, detached=True)
-        certificate = BatchWriter(wiki).write_batch(_certificate_batch())
+        certificate = write_mapped(BatchWriter(wiki), _certificate_batch())
         sebastian = certificate.created_items["e01"]
         tree = _approved(
             _in_form_batch(_tree_batch(), "NFD"), {"e03": sebastian}
         )
 
-        BatchWriter(wiki).write_batch(tree)
+        write_mapped(BatchWriter(wiki), tree)
 
         assert _aliases(wiki, sebastian) == ["Wastl"]
         writes = wiki.wbi.item.writes
-        BatchWriter(wiki).write_batch(tree)
+        write_mapped(BatchWriter(wiki), tree)
         assert wiki.wbi.item.writes == writes
 
-    def test_a_record_in_nfd_reaches_the_item_the_resolve_step_found(self):
-        # the tree's refs to Sebastian give his label in NFC, and the
-        # resolve step matched them to his item; its manifest record gives
-        # the label decomposed. The record's kind and alias reach the item
+    def test_a_record_in_nfd_reaches_the_item_of_its_cluster(self):
+        # the tree's manifest record gives Sebastian's label decomposed,
+        # and the identity map, which reads labels in NFC, puts it in the
+        # certificate's cluster: the record's kind and alias reach the item
         wiki = FakeWiki({MEDIA_SHA1: "Q23", TREE_SHA1: "Q29"}, detached=True)
-        certificate = BatchWriter(wiki).write_batch(_certificate_batch())
-        sebastian = certificate.created_items["e01"]
         tree = _tree_batch()
         (record,) = tree.entities
         tree = tree.model_copy(
@@ -3963,10 +4083,17 @@ class TestWriterTextInNfc:
             }
         )
 
-        written = BatchWriter(wiki).write_batch(
-            resolve_batch(tree, {SEBASTIAN: sebastian})
+        identity = corpus(_certificate_batch(), tree, entities=(SEBASTIAN,))
+        certificate = write_mapped(
+            BatchWriter(wiki), _certificate_batch(), identity=identity
+        )
+        sebastian = certificate.created_items["e01"]
+
+        written = write_mapped(
+            BatchWriter(wiki), resolve_batch(tree), identity=identity
         )
 
+        assert written.created_items == {"e03": sebastian}
         assert _aliases(wiki, sebastian) == ["Wastl"]
         (kind,) = _statements(wiki, sebastian, "instance_of")
         assert _sources(kind)[2:] == [(["Q29"], []), ([], [written.run_qid])]
@@ -3987,11 +4114,11 @@ class TestWriterTextInNfc:
             )
         )
         wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
-        first = BatchWriter(wiki).write_batch(batch)
+        first = write_mapped(BatchWriter(wiki), batch)
         assert _not_in_nfc(wiki) == []
         writes = wiki.wbi.item.writes
 
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch)
 
         assert again.run_qid == first.run_qid
         assert wiki.wbi.item.writes == writes
@@ -4014,7 +4141,7 @@ class TestWriterTextInNfc:
         )
         wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         item = wiki.wbi.item.get(written.created_items["e01"])
         description = str(item.descriptions.get("en"))
@@ -4051,7 +4178,7 @@ class TestWriterTextInNfc:
         assert unicodedata.normalize("NFD", excerpt) != excerpt
         wiki = FakeWiki(TEXT_MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         eugen = written.created_items["e07"]
         (died,) = _statements(wiki, eugen, "cause_of_death")
@@ -4059,7 +4186,7 @@ class TestWriterTextInNfc:
         assert [place[3] for place in _places(died)] == [excerpt]
         assert _not_in_nfc(wiki) == []
         writes = wiki.wbi.item.writes
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch)
         assert (again.written, again.referenced, again.skipped) == (0, 0, 1)
         assert wiki.wbi.item.writes == writes
 
@@ -4073,13 +4200,13 @@ class TestWriterTextInNfc:
             {INTERVIEW_SHA1: "Q25", DIRECTORY_SHA1: "Q26"}, detached=True
         )
         if found:
-            BatchWriter(wiki).write_batch(_firm_batch())
+            write_mapped(BatchWriter(wiki), _firm_batch())
         directory = _directory_batch(
             "unclassified_entity",
             type_hint=unicodedata.normalize("NFD", "Hutgeschäft"),
         )
 
-        written = BatchWriter(wiki).write_batch(directory)
+        written = write_mapped(BatchWriter(wiki), directory)
 
         firm = written.created_items["firm"]
         hints = _by_value(_statements(wiki, firm, "type_hint"))

@@ -465,8 +465,21 @@ def cmd_extract(args) -> int:
     return 0
 
 
+def _identity_map(args):
+    """The identity map `--identity-map` names, or None."""
+    if args.identity_map is None:
+        return None
+    from yizkr.pipeline.clustering import ClusteringInputError, IdentityMap
+
+    try:
+        return IdentityMap.read(args.identity_map)
+    except ClusteringInputError as exc:
+        sys.exit(str(exc))
+
+
 def cmd_resolve(args) -> int:
-    from yizkr.pipeline.resolve import resolvable_labels, resolve_batch
+    from yizkr.pipeline.clustering import UnmappedMention
+    from yizkr.pipeline.resolve import resolve_batch
 
     batch = _load_batch(args.batch)
     if args.equivalences:
@@ -481,7 +494,10 @@ def cmd_resolve(args) -> int:
             batch, approved, read_reviewed_aliases(args.equivalences)
         )
         print(f"applied {len(approved)} approved equivalences")
-    resolved = resolve_batch(batch, resolvable_labels(_client(args), batch))
+    try:
+        resolved = resolve_batch(batch, _identity_map(args))
+    except UnmappedMention as exc:
+        sys.exit(str(exc))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(resolved.model_dump_json(indent=2))
     print(f"wrote {args.out}")
@@ -652,13 +668,22 @@ def cmd_accept_all(args) -> int:
 
 
 def cmd_write(args) -> int:
-    from yizkr.pipeline.writer import BatchWriter
+    from yizkr.pipeline.clustering import UnmappedMention
+    from yizkr.pipeline.review import unapproved_depicts
+    from yizkr.pipeline.writer import BatchWriter, mapped_clusters
 
-    # a batch file that does not load is refused before the instance is
-    # contacted
+    # a batch file that does not load, or a local entity the identity map
+    # does not hold, is refused before the instance is contacted; an
+    # unapproved depicts claim is refused first, by the writer
     batch = _load_batch(args.batch)
+    identity = _identity_map(args)
+    if not unapproved_depicts(batch):
+        try:
+            mapped_clusters(batch, identity)
+        except UnmappedMention as exc:
+            sys.exit(str(exc))
     result = BatchWriter(_client(args), dry_run=args.dry_run).write_batch(
-        batch
+        batch, identity=identity
     )
     print(json.dumps(dataclasses.asdict(result), indent=2))
     if args.dry_run:
@@ -1453,14 +1478,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_reconcile)
 
     p = isub.add_parser(
-        "resolve", help="match local refs to existing items (exact label)"
+        "resolve",
+        help="apply approved equivalences; every other local ref stays "
+        "local, for the write to resolve through the identity map",
     )
     p.add_argument("--batch", type=Path, required=True)
     p.add_argument(
         "--equivalences",
         type=Path,
         help="reviewed equivalences CSV from `ingest reconcile`; approved "
-        "rows resolve to existing items before label matching",
+        "rows resolve to existing items",
+    )
+    p.add_argument(
+        "--identity-map",
+        type=Path,
+        help="the identity map the batch is to be written with "
+        "(identity-map.json); refuses a batch with a mention it lacks",
     )
     p.add_argument("--out", type=Path, default=Path("resolved.json"))
     p.set_defaults(func=cmd_resolve)
@@ -1507,6 +1540,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = isub.add_parser("write", help="write approved claims as statements")
     p.add_argument("--batch", type=Path, required=True)
+    p.add_argument(
+        "--identity-map",
+        type=Path,
+        help="the identity map (identity-map.json) every local entity of "
+        "the batch finds or mints its item through; required when the "
+        "batch names one, as a single batch written without a map, such "
+        "as a GEDCOM export's or a face batch's, is refused (the scratch "
+        "run's write is the write path)",
+    )
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_write)
 
@@ -1604,8 +1646,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--serial",
         action="store_true",
         help="take artifacts one at a time, hubs first, each fully written "
-        "before the next reconciles — so a later artifact's resolve step "
-        "finds, by exact label, the items the earlier ones wrote; "
+        "before the next reconciles; each write finds the items of its "
+        "entities through the run's identity map, never by label, and "
         "reconcile-graph consolidates an entity two artifacts name "
         "differently (ADR-0019). Advance by re-running after each claim "
         "review; about one re-run per artifact",

@@ -17,73 +17,107 @@
   alone, and renames must happen on the wiki and in the manifest
   together. Other items may share a label: two people of one name are
   two items under one label (homonyms). The wiki client's label index
-  gives such a label the numerically earliest of its items, which the
-  writer and the resolve step both find under it, and fails only where a
-  label must name one item alone: a vocabulary item's (the vocabulary
-  read, the bootstrap) and a process item's, such as a run item's (#94).
-  Until the writer resolves mentions through the identity map (#109), an
-  extracted entity whose label items share joins that earliest item (a
-  document's second record under one label aside, below); when
-  the earliest is an artifact, the entity takes the artifact-tagged label
-  instead (ADR-0010), so a later same-named person is never joined.
+  gives such a label the numerically earliest of its items, and keeps
+  every holder, and fails only where a label must name one item alone: a
+  vocabulary item's (the vocabulary read, the bootstrap) and a process
+  item's, such as a run item's (#94). No extracted entity is found by its
+  label (#109): the writer finds or mints its item through the identity
+  map alone (below).
+- **One item per cluster of the identity map** (#109; ADR-0035 as
+  amended, ADR-0027 draft #66). Every mention of a batch (an entity of
+  its manifest, or a local id of a batch without one) is in one cluster
+  of the identity map the batch is written with, and each cluster is one
+  item. The writer refuses a batch whole, before it reads or writes
+  anything, when a mention of it is not in the map, or it is written with
+  none (`UnmappedMention`); an entity an approved equivalence names needs
+  none, its record naming its item. It reads the mentions from the batch
+  the map was made from (`mapped_from`, the extraction's batch in `ingest
+  run`), so a review that drops claims never moves a local id of a batch
+  without a manifest to another mention. A single batch written without a
+  map, as `ingest gedcom` and then `ingest write`, or a face batch whose
+  gallery person has no QID, is refused so too (decision EW): the
+  scratch run's write is the write path, and #119 removes the
+  per-document one. The resolve step matches nothing by
+  label and reads no wiki: it leaves every local ref local, and, given
+  the map, refuses an unmapped batch before its review. So a curator's
+  'distinct', and the map's keeping two mentions apart, are never undone
+  by a shared label. A cluster's item takes the label most of its
+  mentions give (then the longest, the fullest form), every other label
+  of its mentions and each name the batch gives it as aliases, and its
+  `instance of` from the ref that mints it; every later ref of the
+  cluster, in the batch or a later one, adds its own kind and a record's
+  type hint, each cited to the artifact of the claim the ref is in. The
+  item is found again by its label and its description, which the map
+  alone decides (below), so writing the same batches with the same map,
+  again or after a reset, gives the same items and no duplicates.
+- **One identity map an instance** (decision EV, the orchestrator's;
+  #109). The keys hold within one map: a map grown by a document places
+  same-named clusters anew and counts a cluster's sources anew, so the
+  same key could name another cluster's item. So an instance holds the
+  writes of one map. The run item's description records the hash of the
+  map a batch is written with, its label gives `map` and the hash's first
+  12 hex digits after its date, and the writer refuses a batch, before
+  anything is written, when a run item on the instance records another
+  map (`OtherIdentityMap`): write with that map, or reset the instance.
+  `ingest run` checks this, and that the map holds the batch's mentions,
+  before it registers the document's artifact, so a refused document
+  leaves nothing on the instance. A scratch run resets the instance before it writes its one map
+  (ADR-0025), so it meets this by construction. `ingest run` makes its
+  map once an invocation, at its first write, over every document of the
+  run with a batch, the excerpts its PDFs have found among them, kept in
+  the run directory's `corpus/clustering`; a document whose batch is
+  made after it fails its write with `UnmappedMention`, before it is
+  registered, until a later invocation, whose map, if the documents
+  changed it, needs a reset instance. The live tests, which every session
+  writes to one instance under labels their session marks keep apart,
+  turn the refusal off. The side rule of ADR-0010 still names the label:
+  where an artifact holds a person's name, the person's item takes the
+  `" [not an artifact]"` label, and a media object's the `" [media
+  object]"` label where a registered artifact holds its title. No
+  cluster takes the label of a manifest vocabulary item or a run item,
+  which must name one item alone: a marriage a document calls
+  "marriage" takes `marriage [not an artifact]`, so the vocabulary reads
+  on. The
+  clustering record item (#130) will join the run as a reference of a
+  minted item's kind, the one place the writer references it
+  (`_kind_references`).
 - The writer makes each new item in one `wbeditentity` write: its label,
   its description, its aliases, and its `instance of` (with a type hint
   for an unclassified entity) with both references, stated in the
   artifact and inferred from the run. A write that fails leaves no item,
   and none without its kind (#86).
-- **An item's description is a source descriptor.** The writer
-  describes an item it makes by what it is and what kind of source names
-  it, as a reader reads both: the entity's kind, its key with spaces for
-  underscores ("entity" without one), "named in", and the artifact kind
-  of the artifact cited by the first claim to name it, of those the
-  writer does not refuse before its plan, after "a" or "an": the first of
-  the artifact's `instance of` values, deprecated ones aside, that the
-  manifest vocabulary holds, read and never written ("a source" where it
-  has none): `human named in a genealogical report`, `place named in a
-  certificate`. Nothing the source asserts of the entity goes in it:
-  never a summary, which may give life dates (a GEDCOM person's gives
-  them), nor a ref's description, nor a QID or a digest a reader cannot
-  read. Nor does the artifact's title (decision EU, privacy first, rule
-  7): a title can name a living person, and as a description it would
-  reach every item the document mints, the wiki's search suggestions and
-  the non-privileged export. Two documents of one kind give their items
-  the same descriptor, which is harmless: until #109 an entity joins the
-  item under its label whatever its document, and the "(2)" record of
-  one document joins the "(2)" item of another under the same label
-  (below), as two same-kind documents' second records under one label
-  are not told apart before the identity map. The writer never changes
-  the description of an item it finds (rule 3), and a curator may
-  describe an item as they see fit.
-- **Homonyms in one document.** The manifest gives each entity a
-  document names one record (ADR-0007), so two records under one label,
-  as a father and his son of one name, are two entities. The records
-  that count are those the extraction asserts about (`extract`) and
-  those a claim the writer does not refuse before its plan names by a
-  local ref; a record kept only for audit (extract=false) that no claim
-  names takes no place, so it never makes a later record the second, and
-  a record the resolve step resolved, its refs naming its item by QID,
-  keeps its place. The first counted record under a label (in the
-  manifest's order, the label as the writer sends it, on the person side
-  of ADR-0010) finds the item its label names, as above, or is made one,
-  before any later record under it is. Each counted record from the
-  second on is an item of its own: its description ends with its place
-  among those records, `human named in a genealogical report (2)`, since
-  Wikibase refuses two items with one label and one description, and a
-  re-run finds the item under its label with that description (only the
-  items under that label are read). The resolve step leaves such a
-  record local, so the review sheet shows it NEW, or its item once the
-  writer has made it. The places depend on the batch alone, so a re-run
-  of the batch gives each record the place, and the description, it
-  had. Where every claim naming the first record is refused, a later
-  record is minted alone under its "(2)" description and, with no item
-  under the label yet, becomes the earliest item there, which a later
-  mention of the label joins until #109. Refs without a manifest record,
-  as a face batch's, still join under one label: such refs name one
-  entity. This descriptor stands in for the corpus identity's cluster id
-  (ADR-0027, #66): once the identity map reaches the writer (#109), the
-  cluster id takes the descriptor's place as what tells two homonyms
-  apart, and the writer finds an entity's item by it rather than by its
-  label.
+- **An item's description is its cluster's source descriptor, the key
+  it is found by.** The writer describes an item it makes by what it is
+  and what names it, as a reader reads both, from the identity map
+  alone: the cluster's kind, its key with spaces for underscores
+  ("entity" without one), "named in", and, for a cluster whose mentions
+  come from one document, that document's artifact kind after "a" or
+  "an": the first of the artifact's `instance of` values, deprecated
+  ones aside, that the manifest vocabulary holds, read and never written
+  ("a source" where it has none), or, for a cluster of several
+  documents, how many: `human named in a genealogical report`, `place
+  named in a certificate`, `human named in 3 sources`. From the second
+  on, the cluster's place among the map's clusters of its label and
+  kind, in the order of their cluster ids, follows in brackets: `human
+  named in a genealogical report (2)`. Every cluster of the map counts,
+  one of mentions kept for audit alone (extract=false) too, so a "(2)"
+  item can stand with no "(1)" item beside it. So two people of one
+  name, in one document or in two of one kind, take two descriptions, as
+  Wikibase
+  refuses two items with one label and one description, and the cluster
+  id, through its place, is what tells them apart and finds each again
+  (#109; it replaces #86's place among a manifest's records, which the
+  manifest's order gave, and its source descriptor of the first claim's
+  artifact, which a batch gave). Nothing the source asserts of the
+  entity goes in it: never a summary, which may give life dates (a
+  GEDCOM person's gives them), nor a ref's description, nor a QID or a
+  digest a reader cannot read. Nor does the artifact's title (decision
+  EU, privacy first, rule 7): a title can name a living person, and as a
+  description it would reach every item the document mints, the wiki's
+  search suggestions and the non-privileged export. The writer never
+  changes the description of an item it finds (rule 3), and a curator
+  may describe an item as they see fit; only an item under the cluster's
+  label whose description is the cluster's is its item.
 - Wikibase keeps a label, a description or an alias trimmed, then
   cleaned up, then in NFC: each run of control characters in it (a line
   feed or a tab among them) made one space, the separators at either end
@@ -95,22 +129,21 @@
   same. The writer sends each term it makes in that form, with a line or
   paragraph separator inside made a space too (a run of them and of
   control characters is one space) and a Mongolian vowel separator at
-  either end dropped, and finds an item by its label in it,
-  so a label given in another form finds its item again; the registrar
-  compares and sets an artifact's title by the same rule, which it takes
-  from the writer (#369, #403), and so do the resolve step, matching an
-  entity's label as the writer's plan reads it (its manifest record's,
-  else its first ref's; #476), the place-hierarchy pass, finding its
-  run item, and alias hygiene, comparing an alias with the label and the
-  other aliases (#370). A term still over 250 characters in that
+  either end dropped, and finds an item by its label (and its
+  description) in it, so a label given in another form finds its item
+  again; the registrar compares and sets an artifact's title by the same
+  rule, which it takes from the writer (#369, #403), and so do the
+  place-hierarchy pass, finding its run item, and alias hygiene,
+  comparing an alias with the label and the other aliases (#370). A term still over 250 characters in that
   form is cut as a long locator is (below), with the digest of the whole,
   so whitespace around a term never counts towards the limit, two labels
   that agree up to the cut stay two items' labels, and the run item's
   label, which holds the model's identifier, keeps its batch's
   fingerprint in the digest. An entity whose description would be its
-  label gets none, with a warning (#384); the description is the
-  writer's source descriptor (above), so only a label that is that very
-  descriptor meets this (#86).
+  label gets none, with a warning (#384), and is found by its label and
+  an empty description; the description is the writer's source
+  descriptor (above), so only a label that is that very descriptor
+  meets this (#86).
 - Wikibase puts a term, and every text, in NFC by the tables of Unicode
   15.0 (ICU 72.1 in the wikibase/wikibase:7 image), and the writer by
   Python's (14.0.0 on Python 3.11). Unicode's normalization stability
@@ -477,16 +510,17 @@ artifact a new QID, changes neither.
   the label, but makes it an item of its own, labelled `"<label> [media
   object]"`, and its write raises the flag, on every artifact registered
   under that label, content-tagged or not (ADR-0010).
-- **An item is matched by its label on its own side only** (ADR-0010 as
-  amended by #444). A media object, or any artifact-kind entity, joins
-  by its label only an item with no hash that is an artifact or a part
-  of one; a person, a place or any other entity never joins an artifact
-  or a part of one. An entity that may not join the item under its label
-  takes an item of its own under its label tagged `" [media object]"`,
-  or, whatever its kind or none, `" [not an artifact]"` (one tag for
-  every kind, so refs of two kinds naming one person meet on one item;
-  amended by #444, 2026-10-03), its name an alias; one that may join
-  neither label's item is refused, with its claims, before the write.
+- **An item takes its label on its own side only** (ADR-0010 as
+  amended by #444 and #109). No entity joins an item by its label: each
+  cluster of the identity map is its own item (above). A media object,
+  or any artifact-kind entity, takes the label of an item with no hash
+  that is an artifact or a part of one, or a label nobody holds; a
+  person, a place or any other entity never takes the label of an
+  artifact or a part of one. One that may not take its label takes an
+  item of its own under its label tagged `" [media object]"`, or,
+  whatever its kind or none, `" [not an artifact]"` (one tag for every
+  kind; amended by #444, 2026-10-03), its name an alias; one that may
+  take neither label is refused, with its claims, before the write.
 - **A page fragment is keyed by its artifact.** The fragment for page
   *n* is the item that is an `instance of artifact fragment` and `part
   of` the artifact with `page number` *n*, whatever its label. A new one

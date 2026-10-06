@@ -23,6 +23,7 @@ import csv
 import pytest
 
 from tests.fixtures import example_universe as u
+from tests.fixtures.identity import run_label, write_mapped
 from tests.integration.conftest import fictional_png, fixture_mark
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.cli import build_parser
@@ -39,7 +40,6 @@ from yizkr.pipeline.review import apply_review, claim_id, export_review_csv
 from yizkr.pipeline.writer import (
     BatchWriter,
     UnapprovedDepictsError,
-    batch_fingerprint,
 )
 
 pytestmark = pytest.mark.live
@@ -119,12 +119,9 @@ def last_revision(client, qid: str) -> int:
 
 
 def run_item_label(batch: ClaimBatch) -> str:
-    """The label the writer gives the batch's extraction-run item."""
-    run = batch.extraction_run
-    return (
-        f"extraction run {run.started_at.date().isoformat()} "
-        f"{run.model_identifier} {batch_fingerprint(batch)}"
-    )
+    """The label the writer gives the batch's extraction-run item, with the
+    map of the batch alone (write_mapped)."""
+    return run_label(batch)
 
 
 def nothing_written(client, portrait, batch: ClaimBatch):
@@ -147,7 +144,7 @@ def test_raw_detect_faces_batch_is_refused(client, portrait, raw_faces):
     check = nothing_written(client, portrait, raw_faces)
 
     with pytest.raises(UnapprovedDepictsError) as refusal:
-        BatchWriter(client).write_batch(raw_faces)
+        write_mapped(BatchWriter(client), raw_faces)
 
     assert refusal.value.claim_ids == [
         claim_id(claim) for claim in raw_faces.claims
@@ -219,7 +216,7 @@ def test_batch_decided_row_by_row_is_written(
     approved, warnings = apply_review(raw_faces, review_csv)
     assert warnings == []
 
-    result = BatchWriter(client).write_batch(approved)
+    result = write_mapped(BatchWriter(client), approved)
 
     # the session's first reviewed write writes both
     assert (result.written, result.skipped) == (2, 0)
@@ -253,7 +250,7 @@ def test_batch_decided_row_by_row_is_written(
     # duplicated (the statements are counted, not keyed by sitter)
     before = depicts_statements(client, portrait.artifact_qid)
     count = len(depicts_ids(client, portrait.artifact_qid))
-    again = BatchWriter(client).write_batch(approved)
+    again = write_mapped(BatchWriter(client), approved)
     assert (again.written, again.skipped) == (0, 2)
     assert {
         f"face-person-{index}": again.created_items[f"face-person-{index}"]

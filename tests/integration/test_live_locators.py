@@ -31,6 +31,7 @@ import unicodedata
 
 import pytest
 
+from tests.fixtures.identity import write_mapped
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
@@ -133,8 +134,8 @@ def fixture_graph(client):
     registered = register_fictional(
         client, f"Locator fixture source {MARK}", "certificate"
     )
-    written = BatchWriter(client).write_batch(
-        fixture_batch(registered.ref, RUNS[0])
+    written = write_mapped(
+        BatchWriter(client), fixture_batch(registered.ref, RUNS[0])
     )
     return registered, written
 
@@ -211,8 +212,8 @@ def test_a_rewrite_adds_nothing(client, fixture_graph):
     person = written.created_items["locator-person"]
     before = births(client, person)
     for started_at in RUNS:
-        again = BatchWriter(client).write_batch(
-            fixture_batch(registered.ref, started_at)
+        again = write_mapped(
+            BatchWriter(client), fixture_batch(registered.ref, started_at)
         )
         assert again.created_items["locator-person"] == person
         assert (again.written, again.referenced, again.skipped) == (0, 0, 2)

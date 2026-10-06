@@ -21,6 +21,14 @@ ADR-0007 as amended by #388), read through each entity's mention
 record, not name tokens: two documents connect on a name they share, never on a surname
 or a prefix alone.
 
+Amended by #109 (2026-10-06): a later artifact no longer finds an
+earlier one's item by its label in the resolve step, which matches
+nothing by label. Every write of the run finds its entities' items
+through the run's identity map, made once an invocation over the run's
+documents, so a later artifact meets an earlier one's item when the map
+puts their mentions in one cluster; the serial order still decides
+which artifact reconciles first.
+
 ## Context
 
 Folder ingestion (`yizkr ingest run`, ADR-0007 / the orchestrator) advances

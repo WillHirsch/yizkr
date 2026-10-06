@@ -37,6 +37,7 @@ import unicodedata
 import pytest
 from wikibaseintegrator.wbi_exceptions import ModificationFailed
 
+from tests.fixtures.identity import write_mapped
 from tests.unit.test_pipeline import (
     DIRECTORY_SHA1,
     INTERVIEW_SHA1,
@@ -52,7 +53,7 @@ from tests.unit.test_pipeline import (
     _certificate_batch,
     _cites,
     _directory_batch,
-    _firm_batch,
+    _found_firm,
     _local,
     _not_in_nfc,
     _places,
@@ -388,7 +389,7 @@ class TestLocatorsOverTheLimit:
         wiki = FakeWiki(MEDIA, detached=True)
         batch = _batch_of(_cause(page))
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         eugen = written.created_items["e07"]
         assert _stored_page(wiki, eugen) == stored
@@ -396,7 +397,7 @@ class TestLocatorsOverTheLimit:
         assert _not_in_nfc(wiki) == []
         # a re-run builds the block the instance keeps, and adds nothing
         writes = wiki.wbi.item.writes
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch)
         assert (again.written, again.referenced, again.skipped) == (0, 0, 1)
         assert wiki.wbi.item.writes == writes
 
@@ -416,7 +417,7 @@ class TestLocatorsOverTheLimit:
         wiki = FakeWiki(MEDIA, detached=True)
         batch = _batch_of(claim(first), claim(second), claim(start))
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         (died,) = _statements(
             wiki, written.created_items["e07"], "cause_of_death"
@@ -433,7 +434,7 @@ class TestLocatorsOverTheLimit:
             0,
         )
         writes = wiki.wbi.item.writes
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch)
         assert (again.written, again.referenced, again.skipped) == (0, 0, 3)
         assert wiki.wbi.item.writes == writes
 
@@ -456,7 +457,7 @@ class TestLocatorsOverTheLimit:
         wiki = FakeWiki(MEDIA, detached=True)
         batch = _batch_of(claim)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         (died,) = _statements(
             wiki, written.created_items["e07"], "cause_of_death"
@@ -464,7 +465,7 @@ class TestLocatorsOverTheLimit:
         ((_, _, region, _),) = _places(died)
         assert region == form[:ROOM] + _mark(form)
         writes = wiki.wbi.item.writes
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch)
         assert (again.written, again.skipped) == (0, 1)
         assert wiki.wbi.item.writes == writes
 
@@ -481,7 +482,7 @@ class TestLocatorsOverTheLimit:
         wiki = FakeWiki(MEDIA, detached=True)
         batch = _batch_of(_quoting(excerpt))
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         (died,) = _statements(
             wiki, written.created_items["e07"], "cause_of_death"
@@ -490,7 +491,7 @@ class TestLocatorsOverTheLimit:
         assert kept == stored
         assert _not_in_nfc(wiki) == []
         writes = wiki.wbi.item.writes
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch)
         assert (again.written, again.referenced, again.skipped) == (0, 0, 1)
         assert wiki.wbi.item.writes == writes
 
@@ -563,7 +564,7 @@ class TestClaimsOverTheLimit:
         # the refused claim comes first: the claim after it is written
         batch = _batch_of(refused, BIRTH)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         cid = claim_id(batch.claims[0])
         assert written.refused == [cid]
@@ -603,7 +604,7 @@ class TestClaimsOverTheLimit:
             claim = _saying(case, text)
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(_batch_of(claim))
+        written = write_mapped(BatchWriter(wiki), _batch_of(claim))
 
         if length > TEXT_LIMIT:
             assert (written.written, len(written.refused)) == (0, 1)
@@ -633,7 +634,7 @@ class TestClaimsOverTheLimit:
         batch = _batch_of(claim, BIRTH)
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         assert written.refused == [claim_id(batch.claims[0])]
         (warning,) = written.warnings
@@ -661,7 +662,7 @@ class TestClaimsOverTheLimit:
         batch = _batch_of(nickname, birth, kinship, town)
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         ids = [claim_id(batch.claims[0]), claim_id(batch.claims[2])]
         assert written.refused == ids
@@ -691,7 +692,7 @@ class TestClaimsOverTheLimit:
         # a re-run refuses the same claims again, and writes nothing
         before = {qid: _snapshot(wiki, qid) for qid in wiki.wbi.item.store}
         writes = wiki.wbi.item.writes
-        again = BatchWriter(wiki).write_batch(batch)
+        again = write_mapped(BatchWriter(wiki), batch)
         assert again.refused == ids
         assert (again.written, again.referenced, again.skipped) == (0, 0, 2)
         assert wiki.wbi.item.writes == writes
@@ -702,7 +703,7 @@ class TestClaimsOverTheLimit:
         batch = _batch_of(_saying("external id", text), BIRTH)
         wiki = FakeWiki(MEDIA, detached=True)
 
-        planned = BatchWriter(wiki, dry_run=True).write_batch(batch)
+        planned = write_mapped(BatchWriter(wiki, dry_run=True), batch)
 
         assert planned.refused == [claim_id(batch.claims[0])]
         assert planned.written == 1
@@ -739,7 +740,7 @@ class TestKindsBesideARefusal:
         batch = _batch_of(_cause(cause=cause, kind=refused), _cause(kind=kept))
         wiki = FakeWiki(MEDIA, detached=True)
 
-        written = BatchWriter(wiki).write_batch(batch)
+        written = write_mapped(BatchWriter(wiki), batch)
 
         eugen = written.created_items["e07"]
         kinds = [
@@ -775,8 +776,6 @@ class TestTypeHintsOverTheLimit:
         wiki = FakeWiki(
             {INTERVIEW_SHA1: "Q25", DIRECTORY_SHA1: "Q26"}, detached=True
         )
-        if found:
-            BatchWriter(wiki).write_batch(_firm_batch())
         length = TEXT_LIMIT + (given == "401 characters")
         hint = _said_over(HEADING, length)
         sent = hint
@@ -784,8 +783,9 @@ class TestTypeHintsOverTheLimit:
             sent = unicodedata.normalize("NFD", hint)
             assert len(sent) > TEXT_LIMIT
         directory = _directory_batch("unclassified_entity", type_hint=sent)
+        identity = _found_firm(wiki, directory, found)
 
-        written = BatchWriter(wiki).write_batch(directory)
+        written = write_mapped(BatchWriter(wiki), directory, identity=identity)
 
         firm = written.created_items["firm"]
         hints = set(_by_value(_statements(wiki, firm, "type_hint")))
