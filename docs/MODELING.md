@@ -21,6 +21,10 @@
   writer and the resolve step both find under it, and fails only where a
   label must name one item alone: a vocabulary item's (the vocabulary
   read, the bootstrap) and a process item's, such as a run item's (#94).
+  Until the writer resolves mentions through the identity map (#109), an
+  extracted entity whose label items share joins that earliest item; when
+  the earliest is an artifact, the entity takes the artifact-tagged label
+  instead (ADR-0010), so a later same-named person is never joined.
 - Wikibase keeps a label, a description or an alias trimmed, then
   cleaned up, then in NFC: each run of control characters in it (a line
   feed or a tab among them) made one space, the separators at either end

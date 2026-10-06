@@ -796,7 +796,9 @@ class TestRegisterArtifact:
         wiki.item(TITLE)
         wiki.item(f"{TITLE} [{sha1(PORTRAIT)[:8]}]")
         writes = wiki.writes
-        with pytest.raises(RuntimeError, match="labels stay unique"):
+        with pytest.raises(
+            RuntimeError, match="a content-tagged title needs a free label"
+        ):
             register(wiki, scan(tmp_path, PORTRAIT))
         assert wiki.writes == writes
         assert wiki.media.requests == []

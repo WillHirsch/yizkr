@@ -1680,7 +1680,7 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         self, tmp_path
     ):
         """The artifact keeps the title; the media object's item takes it
-        with the writer's tag, so labels stay unique."""
+        with the writer's tag, so the two labels differ."""
         wiki = WritingWiki()
         _, written, artifact = self.write(tmp_path, wiki, "artifact-first")
 

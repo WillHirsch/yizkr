@@ -28,9 +28,11 @@ registration writes:
 **Identity is the SHA-1 alone.** An artifact is the item whose `media
 SHA-1` is the SHA-1 of its file's bytes, and with none a new item is made.
 A title never finds an item, so two files that share a title are two
-artifacts. Labels stay unique per kind, the wiki client's label index
-(yizkr.core.wiki), so a new item whose title is already another item's
-label takes a short content tag, ``"<title> [<sha1[:8]>]"``. A page
+artifacts. A new item whose title is already another item's label takes
+a short content tag, ``"<title> [<sha1[:8]>]"``: a label convention the
+writer's flagging of registered artifacts reads, and that keeps clear of
+Wikibase's refusal of two items with one label and description, not a
+requirement of the wiki client's label index. A page
 fragment is keyed by its artifact: the item that is an ``instance of
 artifact fragment`` and ``part of`` that artifact with that page's number.
 So same-titled artifacts never share a fragment, and a derived medium,
@@ -899,8 +901,8 @@ class Registrar:
             if tagged in labels:
                 raise RuntimeError(
                     f"the labels {label!r} and {tagged!r} both name other "
-                    f"items, and labels stay unique: no item was made "
-                    f"under either"
+                    f"items, and a content-tagged title needs a free label: "
+                    f"no item was made under either"
                 )
             label = tagged
         if len(label) > TERM_LIMIT:
