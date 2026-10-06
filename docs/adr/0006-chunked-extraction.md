@@ -26,6 +26,9 @@ claude CLI gave up on at the output limit is kept in the cache, as a
 refused answer is, so a later run replays the same fallback; a cached
 chunk answer whose entry records a `max_tokens` stop is rejected as a
 fresh one is (§5; ADR-0032 §4, §5).
+Amended by #500 (2026-10-06): an entity manifest that names no entity is
+accepted at once, without a second attempt or a fallback tier; its batch
+is claim-free (§5).
 
 ## Context
 
@@ -266,7 +269,9 @@ so each run makes the extraction again, from the cache at no engine
 cost, and a parser fix reaches it; the same answers fail the same way
 until `--refresh extract` or a new epoch asks afresh.
 Otherwise the empty batch is claim-free, on the word of the answers the
-extractor accepted, on either tier: a refused manifest falls back rather
+extractor accepted, on either tier: a manifest that names no entity is
+accepted at once, with no chunk asked and no fallback (ADR-0007, amended
+by #500); a refused manifest falls back rather
 than failing the document (ADR-0032 §5), and when the line-range tier
 finds nothing (every unit `extract: false`, or chunks that answered with
 none), the batch is kept like any other. The stage is done with an

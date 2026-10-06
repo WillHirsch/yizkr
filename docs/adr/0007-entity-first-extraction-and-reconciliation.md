@@ -55,6 +55,13 @@ and never refuses the manifest, and `coverage.json` counts the records
 given, recordless and set aside (by reason) and the notes (by category).
 The capitalised-token coverage check is gone, since capitals are no sign
 of a name in every language.
+Amended by #500 (2026-10-06): an empty entity list, or null, is the
+engine's word that the document names nothing, and validation accepts it
+at once: no second attempt, no line-range segmentation and no fallback
+tier, so the batch holds no entity and no claim, its attention says "no
+claims extracted: the entity manifest names no entity", and the run's
+`zero-entities` and `zero-claims` checks read it as any batch without
+entities, never as a `fallback-manifest`.
 
 Amends ADR-0006. The transport machinery specified there — forked
 conversations, NDJSON emission with sentinel, per-chunk state with
@@ -129,7 +136,8 @@ mentions — small enough to fit a single turn even for dense documents
       entities: list[EntityRecord]
 
 Validation: unique ids; non-empty labels; `kind` must be a manifest
-item key. One retry, then fall back to ADR-0006 line-range
+item key; an empty entity list is valid, a document that names nothing
+(amended by #500). One retry, then fall back to ADR-0006 line-range
 segmentation (which remains implemented as the degraded tier, with its
 own offset-window fallback below it). The manifest turn stays in the
 conversation, so every phase-2 fork sees the complete alias-unified
