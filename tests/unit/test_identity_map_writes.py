@@ -876,6 +876,43 @@ class TestAVocabularyLabel:
         _, labels = wiki.label_index()
         assert labels.sole("marriage") == "Q93"
 
+    def test_a_cluster_under_a_run_items_label_takes_its_tagged_label(self):
+        # a later document names a person by the label of the history's
+        # run item: the person's item takes the tagged label, and the run
+        # item keeps its label to itself, which a rewrite of the history
+        # finds it by
+        wiki = _wiki()
+        history = _eugens()
+        first = BatchWriter(wiki).write_batch(
+            history, identity=mapped(history)
+        )
+        run_label = str(wiki.wbi.item.get(first.run_qid).labels.get("en"))
+        named = ClaimBatch.model_validate(
+            {
+                "extraction_run": TREE_RUN,
+                "claims": [_born("e1", 1901, TREE_SHA1)],
+                "entities": [
+                    {"id": "e1", "label": run_label, "kind": "human"}
+                ],
+            }
+        )
+
+        # its map is its own: the instance holds the history's map too
+        written = BatchWriter(wiki).write_batch(
+            named, identity=mapped(named), one_map=False
+        )
+
+        item = written.created_items["e1"]
+        assert item != first.run_qid
+        assert _labelled(wiki, run_label) == [first.run_qid]
+        assert _labelled(wiki, f"{run_label} [not an artifact]") == [item]
+        _, labels = wiki.label_index()
+        assert labels.sole(run_label) == first.run_qid
+        again = BatchWriter(wiki).write_batch(
+            history, identity=mapped(history), one_map=False
+        )
+        assert again.run_qid == first.run_qid
+
 
 class TestAnUnmappedMention:
     @pytest.mark.parametrize("dry_run", [False, True], ids=["write", "plan"])

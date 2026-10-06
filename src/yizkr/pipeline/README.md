@@ -453,7 +453,8 @@ re-running one step in isolation — but for a normal ingest you only ever run
   the one item of each entity's cluster in the map, never by its label
   alone (docs/MODELING.md, "One item per cluster"; #109). An instance
   holds the writes of one map: a write with another map than its run
-  items record is refused, and the instance is reset first. The label an
+  items record is refused, before the document's artifact is registered,
+  and the instance is reset first. The label an
   item takes follows its side: an artifact-kind entity such as a GEDCOM
   media object may take the label of an artifact or a part of one,
   never one registration made, an artifact with a hash or its page

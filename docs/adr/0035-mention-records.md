@@ -496,8 +496,9 @@ same items. Each ref's kind, and a record's type hint, reach the item,
 minted or found, cited to the artifact of the claim the ref is in. The
 run item records the map's hash, and an instance holds the writes of one
 map (decision EV): the writer refuses a batch whose map is not the one
-the instance's run items record, which a scratch run, resetting the
-instance before it writes its one map, meets by construction. The
+the instance's run items record, and `ingest run` refuses it before it
+registers the document's artifact; a scratch run, resetting the
+instance before it writes its one map, meets this by construction. The
 mentions are read from the batch the map was made from, so a review
 that drops claims moves no local id. The clustering record item (#130)
 is not made yet. The writer's line in the readers' list of §8 below (it

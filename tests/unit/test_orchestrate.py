@@ -163,6 +163,13 @@ class ScriptedOrchestrator(Orchestrator):
         self.proposals = proposals
         self.fail_step = fail_step
         self.calls: list[str] = []
+        # the item labels of the scripted instance (_maps_on_instance)
+        self.instance_labels: list[str] = []
+        self.label_reads = 0
+
+    def _maps_on_instance(self):
+        self.label_reads += 1
+        return self.instance_labels
 
     def _llm(self, role, doc):
         return ScriptedModel(self.calls, doc.source.name, fail=self.fail_step)
@@ -3108,6 +3115,59 @@ class TestWriteTimeRegistration:
         assert doc.state.error.startswith("UnmappedMention")
         assert steps(orchestrator.calls[calls:]) == []
         assert not doc.write_result.exists()
+
+    def test_an_instance_of_another_map_registers_nothing(self, tmp_path):
+        """An instance that holds the writes of another identity map fails
+        the document before anything is registered or written, as the
+        writer would refuse it only after its artifact was registered: an
+        instance holds the writes of one map."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_claims(doc)
+        other = "ab" * 6
+        orchestrator.instance_labels = [
+            "Rahel Löbig",
+            f"extraction run 2026-07-01 map {other} scripted-model 1a2b3c4d",
+        ]
+        calls = len(orchestrator.calls)
+
+        assert orchestrator.run() == 1
+
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == FAILED
+        assert doc.state.error.startswith("OtherIdentityMap")
+        assert other in doc.state.error
+        assert wiki_steps(orchestrator.calls[calls:]) == []
+        assert not doc.write_result.exists()
+        assert json.loads(doc.state_path.read_text())["artifact_qid"] is None
+        # with the instance reset, the next run registers and writes
+        orchestrator.instance_labels = []
+        calls = len(orchestrator.calls)
+        assert orchestrator.run() == 0
+        assert wiki_steps(orchestrator.calls[calls:]) == ["register", "write"]
+
+    def test_the_maps_own_writes_pass(self, tmp_path):
+        """The run items of the run's own map are no other map's."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_claims(doc)
+        own = orchestrator._identity_map().hash[:12]
+        orchestrator._identity = None
+        orchestrator.instance_labels = [
+            f"extraction run 2026-07-01 map {own} scripted-model 1a2b3c4d"
+        ]
+
+        assert orchestrator.run() == 0
+
+        assert orchestrator.label_reads == 1
 
     def test_the_map_is_made_once_an_invocation(self, tmp_path):
         """Made at the first write and never again in the invocation, even

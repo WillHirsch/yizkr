@@ -330,7 +330,7 @@ import json
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
@@ -389,7 +389,7 @@ MEDIA_OBJECT_TAG = " [media object]"
 ENTITY_TAG = " [not an artifact]"
 # how many hex digits of an identity map's hash a run item's label gives
 # after its date (_run_terms), and the label a run item written with a map has
-# (BatchWriter._other_maps)
+# (other_identity_maps)
 MAP_TAG = 12
 _RUN_LABEL_MAP = re.compile(r"^extraction run \S+ map ([0-9a-f]{12}) ")
 # the content tag registration gives a label another item holds: " [", the
@@ -558,6 +558,22 @@ def unsupported_dates(batch: ClaimBatch) -> list[str]:
                     f"{problem}"
                 )
     return found
+
+
+def other_identity_maps(
+    labels: Iterable[str], identity_hash: str
+) -> list[str]:
+    """The MAP_TAG-digit tags of every identity map other than the one of
+    `identity_hash` that the run items among the item `labels` of an
+    instance record (_run_terms), sorted. Read from the labels alone."""
+    return sorted(
+        {
+            found.group(1)
+            for label in labels
+            if (found := _RUN_LABEL_MAP.match(label))
+        }
+        - {identity_hash[:MAP_TAG]}
+    )
 
 
 class OtherIdentityMap(RuntimeError):
@@ -1440,7 +1456,7 @@ def _run_terms(batch: ClaimBatch, identity_hash: str = "") -> tuple[str, str]:
     digits after the run's date, before the model identifier, which a cut
     may take off the label's end: so a write of the batch with another map
     has a run item of its own, and a write finds the maps an instance was
-    written with in its labels alone (BatchWriter._other_maps). Both are in
+    written with in its labels alone (other_identity_maps). Both are in
     the form the instance keeps a term in, cut with a digest of the whole
     when a long model identifier takes the label past what the instance
     holds, so each batch's run item keeps a label of its own (_term_text).
@@ -2354,18 +2370,9 @@ class BatchWriter:
     # -- extraction-run item -------------------------------------------------
 
     def _other_maps(self) -> list[str]:
-        """The MAP_TAG-digit tags of every identity map other than the one
-        the batch is written with that the labels of the instance's run
-        items record (_run_terms), sorted. Read from the labels alone."""
-        own = self._identity_hash[:MAP_TAG]
-        return sorted(
-            {
-                found.group(1)
-                for label in self._labels.items()
-                if (found := _RUN_LABEL_MAP.match(label))
-            }
-            - {own}
-        )
+        """The tags of the identity maps other than the batch's that the
+        instance's run items record (other_identity_maps)."""
+        return other_identity_maps(self._labels.items(), self._identity_hash)
 
     def ensure_run_item(
         self, batch: ClaimBatch, identity_hash: str = ""

@@ -2061,14 +2061,23 @@ class Orchestrator:
         doc.approved.write_text(approved.model_dump_json(indent=2))
         return approved
 
-    def _mapped(self, doc: DocumentRun, approved: ClaimBatch):
+    def _mapped(
+        self, doc: DocumentRun, approved: ClaimBatch, instance: bool = False
+    ):
         """The run's identity map (_identity_map), once it holds every
         mention of the document's approved batch, read from the batch the
         map was made from, the document's extraction (`doc.batch`): raises
         UnmappedMention otherwise, before anything is registered or
-        written (yizkr.pipeline.writer, step 2). Returns the map and that
-        batch."""
-        from yizkr.pipeline.writer import mapped_clusters
+        written (yizkr.pipeline.writer, step 2). With `instance`, and
+        `one_map`, it raises OtherIdentityMap too, then, when the instance
+        holds the writes of another map (_maps_on_instance), as the writer
+        would only after the document's artifact was registered. Returns
+        the map and that batch."""
+        from yizkr.pipeline.writer import (
+            OtherIdentityMap,
+            mapped_clusters,
+            other_identity_maps,
+        )
 
         identity = self._identity_map()
         extracted = (
@@ -2076,8 +2085,23 @@ class Orchestrator:
             if doc.batch.exists()
             else None
         )
-        mapped_clusters(approved, identity, mapped_from=extracted)
+        clusters, _, _ = mapped_clusters(
+            approved, identity, mapped_from=extracted
+        )
+        if instance and self.one_map and clusters:
+            others = other_identity_maps(
+                self._maps_on_instance(), identity.hash
+            )
+            if others:
+                raise OtherIdentityMap(others)
         return identity, extracted
+
+    def _maps_on_instance(self) -> Iterable[str]:
+        """The item labels of the instance, among them its run items' with
+        the tags of the identity maps they were written with
+        (yizkr.pipeline.writer.other_identity_maps)."""
+        _, labels = self.client.label_index()
+        return labels
 
     def _step_write(
         self,
@@ -2602,10 +2626,11 @@ class Orchestrator:
             return doc.state.status
 
         if not derivations.current(doc.write_result):
-            # the run's identity map must hold every mention of the batch
-            # before anything is registered or written (_mapped)
+            # the run's identity map must hold every mention of the batch,
+            # and the instance no other map's writes, before anything is
+            # registered or written (_mapped)
             approved = self._approved(doc, resolved)
-            self._mapped(doc, approved)
+            self._mapped(doc, approved, instance=True)
             # registration is part of the write: the document's artifact,
             # and a deck's fragments and derived media, are found or made
             # by the SHA-1 of their bytes just before the claims that cite

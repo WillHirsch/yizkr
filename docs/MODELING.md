@@ -58,8 +58,10 @@
   map a batch is written with, its label gives `map` and the hash's first
   12 hex digits after its date, and the writer refuses a batch, before
   anything is written, when a run item on the instance records another
-  map (`OtherIdentityMap`): write with that map, or reset the instance. A
-  scratch run resets the instance before it writes its one map
+  map (`OtherIdentityMap`): write with that map, or reset the instance.
+  `ingest run` checks this, and that the map holds the batch's mentions,
+  before it registers the document's artifact, so a refused document
+  leaves nothing on the instance. A scratch run resets the instance before it writes its one map
   (ADR-0025), so it meets this by construction. `ingest run` makes its
   map once an invocation, at its first write, over every document of the
   run with a batch, the excerpts its PDFs have found among them, kept in
