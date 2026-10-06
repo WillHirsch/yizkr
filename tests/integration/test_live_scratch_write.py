@@ -44,7 +44,12 @@ from yizkr.core.instance import (
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline import registrar, scratchwrite, writer
 from yizkr.pipeline.orchestrate import DocumentRun
-from yizkr.pipeline.scratch import CORPUS_DIR, CorpusContext, ScratchDriver
+from yizkr.pipeline.scratch import (
+    CORPUS_DIR,
+    CORPUS_STAGES,
+    CorpusContext,
+    ScratchDriver,
+)
 
 from . import test_live_scratch_reset
 from .conftest import (
@@ -170,6 +175,12 @@ class Run:
             cache_dir=tmp_path / "cache",
             exclusions=ExclusionList(),
             env_file=Path(config.env_file),
+            # the stages this test runs: with no place stage, the
+            # instance-contents record takes the write key (#201;
+            # test_live_scratch_places.py runs the place stage)
+            corpus_stages=tuple(
+                stage for stage in CORPUS_STAGES if stage.name != "places"
+            ),
         )
         self.driver._config = config
         self.documents = []

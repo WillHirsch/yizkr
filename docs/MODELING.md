@@ -511,6 +511,21 @@ artifact a new QID, changes neither.
   Each claim's write has the edit summary `scratch run: write unratified
   claim`, and each artifact's description names `yizkr scratch run` as
   what ingested it.
+- **A scratch run reconciles its places unattended** (#201; ADR-0009,
+  ADR-0025 §1). Its `places` stage, after the write and before the
+  site, applies each containment the place-hierarchy adjudicator
+  proposes as `part of → <container>` at normal rank, with no review:
+  `stated in` the artifact of each document whose mention record states
+  that containment (child within parent), each a reference block of its
+  own, where one does, and always `inferred from extraction run →` the
+  stage's run item, labelled `place-hierarchy run <model> <key>` and
+  described as the scratch run's place stage, which carries the three
+  scratch-run marks. A competing pair's containment, or one the
+  adjudicator turned round from what a record states, cites the run item
+  alone. Each write has the edit summary `scratch run: unratified place
+  containment`. Cycles, conflicting answers and answers outside the
+  schema are never written. The stages before the write read no graph
+  containment: only what the manifests assert.
 - **Registration is part of the write** (ADR-0025 §2; ADR-0010 as
   amended by #103). `ingest run` registers a document just before it
   writes the claims that cite it: its artifact item, its page fragments

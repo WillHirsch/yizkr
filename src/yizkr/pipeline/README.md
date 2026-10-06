@@ -682,15 +682,20 @@ refuses). The module docstring is the full account; in short:
 ## The scratch run's write side (`scratchwrite.py`, ADR-0025 §1, §2)
 
 After clustering, a scratch run's corpus stages are `reset`, `register`,
-`write` and `site` (#200). They touch the wiki and make no model call:
-the reset stage resets the instance unless the instance-contents record
-still stands for the run's write key, register registers each document
+`write`, `places` and `site` (#200, #201). They touch the wiki, and only
+`places` makes model calls: the reset stage resets the instance unless
+the instance-contents record still stands for the run's key (the place
+key: the write key with the place prompt and model), register registers each document
 as `ingest run` does at its write, write writes every claim of each
 batch through the run's one identity map with no approval file (depicts
 claims left out and counted), marking each run item an unratified
-scratch run's, and site builds the LAN site, whose header names the run.
-Register and write refuse unless this run reset the instance and nothing
-else has written to it since. docs/runbooks/scratch-run.md, The write
+scratch run's, places reconciles the place hierarchy unattended
+(ADR-0009: the `reconcile-places` worklist and adjudication, through the
+LLM cache, every containment applied with no review CSV, cycles,
+conflicts and answers outside the schema refused and counted), and site
+builds the LAN site, whose header names the run. Register, write and
+places refuse unless this run reset the instance and nothing else has
+written to it since. docs/runbooks/scratch-run.md, The write
 side, says how to run them and what each records.
 
 ## The run-to-run diff (`rundiff.py`, ADR-0025 §4)

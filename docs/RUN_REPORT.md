@@ -173,6 +173,18 @@ a depicts statement (ADR-0005, ADR-0025 §1), and each one the batches
 hold is counted here (`aggregate.content.depicts.left_out`). Counts
 alone, never a document, a QID or a label.
 
+**Place hierarchy.** Once the run's place stage has run (#201;
+yizkr.pipeline.scratchwrite, ADR-0009), in
+`aggregate.content.place_hierarchy`: the place questions asked and the
+calls they took, the proposals made, those applied, those already in the
+graph, the identity verdicts and the other verdicts (`distinct`,
+`uncertain`) not applied, the answer lines rejected by the answer's
+schema, the proposals refused as cycles and the questions refused as
+conflicts (answered with two verdicts), and whether the
+instance-contents key was recorded; or that the instance held what the
+run's key makes, so nothing was reconciled again. Counts alone, never a
+QID or a label.
+
 **Anomalies.** The alerts by check and by stage, each finding (a
 document or the run, a stage and a check) counted once: new when any of
 its alerts was new (on an output the engine answered in the run), carried
@@ -336,7 +348,7 @@ never counted as none:
 
 - depicts claims left out, and the write's counts: until the write stage
   has run (above);
-- place-hierarchy proposals applied: no stage applies them yet (#201);
+- place-hierarchy proposals: until the place stage has run (below);
 - different-source contradictions: they are read from a written graph;
 - flags by tier and class: no stage makes flags yet. `_flags` in
   `yizkr.pipeline.report` is where the report reads them once the flags

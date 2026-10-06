@@ -13,10 +13,20 @@ through the graph's `(location|part_of)+` closure — transitive
 elimination between rounds.
 
 Verdicts extend ADR-0007: same | a_within_b | b_within_a | distinct |
-uncertain. Only human-approved containment rows are ever written
-(`part_of`, referenced to the pass's run item — world knowledge
-carries process provenance, ADR-0009); `same` rows route to the
-existing curator-executed identity flow and are never applied here.
+uncertain. The prompt names each place by its label alone, with the
+labels of the places the graph puts it in, and numbers the questions
+of a batch: an answer names its question by that number, never by a
+QID, so the prompt is the same for the same graph whatever QIDs an
+instance gave its items (ADR-0032). The questions are put in an order
+the graph's labels decide, for the same reason.
+
+The command (`yizkr reconcile-places`) writes only human-approved
+containment rows (`part_of`, referenced to the pass's run item — world
+knowledge carries process provenance, ADR-0009); `same` rows route to
+the existing curator-executed identity flow and are never applied here.
+A development-stage scratch run applies every containment proposal
+unattended instead, in its `places` stage (yizkr.pipeline.scratchwrite,
+ADR-0025 §1).
 """
 
 from __future__ import annotations
@@ -64,6 +74,21 @@ class PlaceRecord:
     # nearest first, in the source's order (ADR-0035 §2.2); never
     # written to the graph
     chains: list[list[str]] = field(default_factory=list)
+    # the documents (SHA-1s) stating each chain, by its place in
+    # `chains`; empty where no one has said
+    chain_sources: list[list[str]] = field(default_factory=list)
+
+    def state(self, chain: list[str], sources: list[str] = ()) -> None:
+        """Add a chain its records state, with the documents stating it;
+        a chain it holds already gains those documents."""
+        if chain not in self.chains:
+            self.chains.append(list(chain))
+        index = self.chains.index(chain)
+        while len(self.chain_sources) < len(self.chains):
+            self.chain_sources.append([])
+        for sha1 in sources:
+            if sha1 not in self.chain_sources[index]:
+                self.chain_sources[index].append(sha1)
 
 
 @dataclass
@@ -72,6 +97,10 @@ class Question:
     qid_a: str
     qid_b: str
     context: str = ""  # human-readable why-this-is-asked
+    # the documents (SHA-1s of their media) whose mention records state
+    # the containment asked, when the run directories that say so are
+    # known; the source a containment applied from it is stated in
+    sources: list[str] = field(default_factory=list)
 
 
 PLACES_QUERY = """\
@@ -244,16 +273,29 @@ def record_containers(run_dir: Path) -> dict[str, list[list[str]]]:
             break
         if batch is None:
             continue
-        for entity in batch.entities:
-            record = entity.structure
-            if not isinstance(record, PlaceStructure) or not record.within:
-                continue
-            qid = entity.qid or created.get(entity.id)
-            if not isinstance(qid, str) or not qid:
-                continue
+        for qid, chain in batch_chains(batch, created):
             chains = found.setdefault(qid, [])
-            if record.within not in chains:
-                chains.append(list(record.within))
+            if chain not in chains:
+                chains.append(chain)
+    return found
+
+
+def batch_chains(
+    batch: ClaimBatch, created: dict
+) -> list[tuple[str, list[str]]]:
+    """(QID, chain of containers) for each place of `batch` whose mention
+    record states a container: the QID reconcile resolved it to, else
+    the item the writer used for its local id (`created`, local id ->
+    QID). A place with no such QID is left out."""
+    found = []
+    for entity in batch.entities:
+        record = entity.structure
+        if not isinstance(record, PlaceStructure) or not record.within:
+            continue
+        qid = entity.qid or created.get(entity.id)
+        if not isinstance(qid, str) or not qid:
+            continue
+        found.append((qid, list(record.within)))
     return found
 
 
@@ -306,30 +348,42 @@ def stated_parent_candidates(places: list[PlaceRecord]) -> list[Question]:
 
     ancestors = _ancestors(places)
     questions = []
-    asked: set[tuple[str, str]] = set()
+    asked: dict[tuple[str, str], Question] = {}
 
-    def ask(children: list[str], parents: list[str], context: str) -> None:
+    def ask(
+        children: list[str],
+        parents: list[str],
+        context: str,
+        sources: list[str],
+    ) -> None:
         for child in children:
             for parent in parents:
                 if (
                     parent == child
-                    or (child, parent) in asked
                     or parent in ancestors.get(child, ())
                     or child in ancestors.get(parent, ())
                 ):
                     continue
-                asked.add((child, parent))
-                questions.append(
-                    Question(
+                question = asked.get((child, parent))
+                if question is None:
+                    question = asked[(child, parent)] = Question(
                         kind="parent",
                         qid_a=child,
                         qid_b=parent,
                         context=context,
                     )
-                )
+                    questions.append(question)
+                for sha1 in sources:
+                    if sha1 not in question.sources:
+                        question.sources.append(sha1)
 
     for place in places:
-        for chain in place.chains:
+        for index, chain in enumerate(place.chains):
+            sources = (
+                place.chain_sources[index]
+                if index < len(place.chain_sources)
+                else []
+            )
             links = [
                 (container, found)
                 for container in chain
@@ -343,6 +397,7 @@ def stated_parent_candidates(places: list[PlaceRecord]) -> list[Question]:
                 parents,
                 f"a record states it within {nearest!r}, which names an "
                 f"existing place",
+                sources,
             )
             for (inner, children), (outer, parents) in zip(
                 links, links[1:], strict=False
@@ -352,6 +407,7 @@ def stated_parent_candidates(places: list[PlaceRecord]) -> list[Question]:
                     parents,
                     f"a record states {inner!r} within {outer!r}, each "
                     f"naming an existing place",
+                    sources,
                 )
     return questions
 
@@ -363,20 +419,30 @@ def build_worklist(
 ) -> list[Question]:
     """Deduplicated, spine-first: a question whose places the graph puts
     more places inside comes first (larger scale), then one whose places
-    it puts in fewer."""
+    it puts in fewer. Among equals, a stated container's question comes
+    before a competing pair's, and then the order of the text the prompt
+    gives each question decides (question_text), never a QID, so the
+    same graph asks its questions in the same batches, in the same order,
+    on any instance. A question asked twice keeps the first's kind and
+    context, and the documents stating either."""
     ancestors = _ancestors(places)
     inside: dict[str, int] = dict.fromkeys(ancestors, 0)
     for found in ancestors.values():
         for qid in found:
             inside[qid] = inside.get(qid, 0) + 1
-    seen: set[frozenset] = set()
+    seen: dict[frozenset, Question] = {}
     worklist: list[Question] = []
     for question in [*stated, *competing]:
         key = frozenset((question.qid_a, question.qid_b))
         if key in seen:
+            kept = seen[key]
+            for sha1 in question.sources:
+                if sha1 not in kept.sources:
+                    kept.sources.append(sha1)
             continue
-        seen.add(key)
+        seen[key] = question
         worklist.append(question)
+    names = place_names(places)
     worklist.sort(
         key=lambda q: (
             -max(inside.get(q.qid_a, 0), inside.get(q.qid_b, 0)),
@@ -384,6 +450,8 @@ def build_worklist(
                 len(ancestors.get(q.qid_a, ())),
                 len(ancestors.get(q.qid_b, ())),
             ),
+            q.kind != "parent",
+            question_text(q, names),
         )
     )
     return worklist
@@ -403,8 +471,9 @@ Verdicts:
   "distinct"    different places, neither contains the other
   "uncertain"   cannot tell from the names and evidence
 
-For every question output one NDJSON line:
-{{"qid_a": "<Q..>", "qid_b": "<Q..>", "verdict": "...",
+For every question output one NDJSON line, naming the question by its
+number:
+{{"question": <its number>, "verdict": "...",
 "confidence": <0-1>, "evidence": "<one sentence>"}}
 No wrapper object, no code fences, no prose. End with exactly:
 {{"done": true}}
@@ -412,6 +481,41 @@ No wrapper object, no code fences, no prose. End with exactly:
 Questions:
 {questions_block}
 """
+
+
+def place_names(places: list[PlaceRecord]) -> dict[str, str]:
+    """QID -> how the prompt names the place: its label, and the labels
+    of the places the graph puts it in, in their order, so two places of
+    one name read apart where the graph tells them apart."""
+    labels = {place.qid: place.label for place in places}
+    names = {}
+    for place in places:
+        within = sorted(
+            labels[parent] for parent in place.parents if parent in labels
+        )
+        names[place.qid] = repr(place.label) + (
+            f" (within {', '.join(map(repr, within))})" if within else ""
+        )
+    return names
+
+
+def question_text(question: Question, names: dict[str, str]) -> str:
+    """A question as the prompt gives it, without its number."""
+    return (
+        f"A: {names.get(question.qid_a, '?')}  vs  "
+        f"B: {names.get(question.qid_b, '?')}  ({question.context})"
+    )
+
+
+def adjudication_prompt(
+    questions: list[Question], names: dict[str, str]
+) -> str:
+    """The prompt that asks one batch of questions, numbered from 1."""
+    block = "\n".join(
+        f"{number}. {question_text(question, names)}"
+        for number, question in enumerate(questions, start=1)
+    )
+    return ADJUDICATION_PROMPT.format(questions_block=block)
 
 
 @dataclass
@@ -423,14 +527,31 @@ class PlaceProposal:
     evidence: str = ""
 
 
-def adjudicate_places(
+@dataclass
+class Adjudication:
+    """What the adjudicator answered: its `proposals`, one at most per
+    question; how many answer lines the answer schema `rejected` (one
+    naming no question asked, a verdict off the list, a confidence that
+    is no number from 0 to 1, evidence that is no text); the questions
+    it answered with two verdicts or more (`conflicts`), each refused
+    whole; and each batch's raw answer (`responses`), in order."""
+
+    proposals: list[PlaceProposal] = field(default_factory=list)
+    rejected: int = 0
+    conflicts: list[Question] = field(default_factory=list)
+    responses: list[str] = field(default_factory=list)
+
+
+def adjudicate(
     client: LlmClient,
     questions: list[Question],
     places: list[PlaceRecord],
     batch_pairs: int = BATCH_PAIRS,
-) -> list[PlaceProposal]:
-    labels = {place.qid: place.label for place in places}
-    proposals: list[PlaceProposal] = []
+) -> Adjudication:
+    """Ask the questions in batches of `batch_pairs`, in their order, each
+    batch one call (adjudication_prompt)."""
+    names = place_names(places)
+    found = Adjudication()
     batches = [
         questions[start : start + batch_pairs]
         for start in range(0, len(questions), batch_pairs)
@@ -441,57 +562,77 @@ def adjudicate_places(
         file=sys.stderr,
     )
     for index, chunk in enumerate(batches, start=1):
-        block = "\n".join(
-            f"- A: {question.qid_a} {labels.get(question.qid_a, '?')!r}"
-            f"  vs  B: {question.qid_b} {labels.get(question.qid_b, '?')!r}"
-            f"  ({question.context})"
-            for question in chunk
-        )
-        response = client.complete(
-            ADJUDICATION_PROMPT.format(questions_block=block)
-        )
-        valid = {
-            frozenset((question.qid_a, question.qid_b)) for question in chunk
-        }
-        parsed = _parse_place_proposals(
-            response, valid, cut_off=at_output_limit(client, response)
+        response = client.complete(adjudication_prompt(chunk, names))
+        found.responses.append(response)
+        parsed = parse_answers(
+            response, chunk, cut_off=at_output_limit(client, response)
         )
         print(
             f"  batch {index}/{len(batches)}: {len(chunk)} questions -> "
-            f"{len(parsed)} proposals (sentinel ok)",
+            f"{len(parsed.proposals)} proposals (sentinel ok)",
             file=sys.stderr,
         )
-        proposals.extend(parsed)
-    return proposals
+        found.proposals.extend(parsed.proposals)
+        found.rejected += parsed.rejected
+        found.conflicts.extend(parsed.conflicts)
+    return found
 
 
-def _parse_place_proposals(
-    response: str, valid: set[frozenset], *, cut_off: bool = False
+def adjudicate_places(
+    client: LlmClient,
+    questions: list[Question],
+    places: list[PlaceRecord],
+    batch_pairs: int = BATCH_PAIRS,
 ) -> list[PlaceProposal]:
+    return adjudicate(client, questions, places, batch_pairs).proposals
+
+
+def _number(value) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def parse_answers(
+    response: str, questions: list[Question], *, cut_off: bool = False
+) -> Adjudication:
     """The proposals of a place adjudication answer on the questions it
-    was asked. Raises ValueError for an answer cut off: one the engine
-    stopped at its output limit (`cut_off`, llm.at_output_limit), or one
-    without its terminal sentinel, a line whose `done` is true."""
-    proposals = []
+    was asked, numbered from 1 in their order. Raises ValueError for an
+    answer cut off: one the engine stopped at its output limit
+    (`cut_off`, llm.at_output_limit), or one without its terminal
+    sentinel, a line whose `done` is true."""
+    found = Adjudication()
     finished = False
+    answers: dict[int, list[PlaceProposal]] = {}
     for obj in scan_json_objects(response):
         if obj.get("done") is True:
             finished = True
             continue
-        if "qid_a" not in obj or "qid_b" not in obj:
+        number = obj.get("question")
+        verdict = obj.get("verdict")
+        confidence = obj.get("confidence")
+        evidence = obj.get("evidence", "")
+        if (
+            not isinstance(number, int)
+            or isinstance(number, bool)
+            or not 1 <= number <= len(questions)
+            or verdict not in VERDICTS
+            or (
+                confidence is not None
+                and (not _number(confidence) or not 0 <= confidence <= 1)
+            )
+            or not isinstance(evidence, str)
+        ):
+            # the adjudicator may only rule on asked questions, in the
+            # answer's schema
+            found.rejected += 1
             continue
-        verdict = obj.get("verdict", "")
-        if verdict not in VERDICTS:
-            continue
-        if frozenset((obj["qid_a"], obj["qid_b"])) not in valid:
-            continue  # the adjudicator may only rule on asked questions
-        proposals.append(
+        question = questions[number - 1]
+        answers.setdefault(number, []).append(
             PlaceProposal(
-                qid_a=obj["qid_a"],
-                qid_b=obj["qid_b"],
+                qid_a=question.qid_a,
+                qid_b=question.qid_b,
                 verdict=verdict,
-                confidence=obj.get("confidence"),
-                evidence=obj.get("evidence", ""),
+                confidence=confidence,
+                evidence=evidence,
             )
         )
     if cut_off:
@@ -500,7 +641,13 @@ def _parse_place_proposals(
         raise ValueError(
             "place adjudication response carried no terminal sentinel"
         )
-    return proposals
+    for number in sorted(answers):
+        given = answers[number]
+        if len({proposal.verdict for proposal in given}) > 1:
+            found.conflicts.append(questions[number - 1])
+            continue
+        found.proposals.append(given[0])
+    return found
 
 
 def export_places_csv(
@@ -537,6 +684,16 @@ def export_places_csv(
     return len(proposals)
 
 
+# why plan_containment set a row aside: an identity verdict, another
+# verdict that is no containment, a place within itself, or a cycle
+IDENTITY, NOT_CONTAINMENT, ITSELF, CYCLE = (
+    "identity",
+    "not containment",
+    "itself",
+    "cycle",
+)
+
+
 def plan_containment(
     rows: list[dict], creates_cycle
 ) -> tuple[list[tuple[str, str]], list[str]]:
@@ -548,8 +705,17 @@ def plan_containment(
     non-containment verdicts are skipped with a note — identity stays
     curator-executed (ADR-0007).
     """
+    edges, set_aside = plan(rows, creates_cycle)
+    return edges, [note for _why, note in set_aside]
+
+
+def plan(
+    rows: list[dict], creates_cycle
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """plan_containment, with each row set aside as (why, note): IDENTITY,
+    NOT_CONTAINMENT, ITSELF or CYCLE."""
     edges: list[tuple[str, str]] = []
-    notes: list[str] = []
+    notes: list[tuple[str, str]] = []
     planned_parents: dict[str, set[str]] = {}
 
     def reaches(node: str, target: str, seen=None) -> bool:
@@ -569,15 +735,21 @@ def plan_containment(
         verdict = row.get("verdict", "")
         if verdict == "same":
             notes.append(
-                f"{row['qid_a']} = {row['qid_b']}: identity is "
-                f"curator-executed (yizkr merge-items, or a referenced "
-                f"'said to be the same as') — not applied here"
+                (
+                    IDENTITY,
+                    f"{row['qid_a']} = {row['qid_b']}: identity is "
+                    f"curator-executed (yizkr merge-items, or a referenced "
+                    f"'said to be the same as') — not applied here",
+                )
             )
             continue
         if verdict not in ("a_within_b", "b_within_a"):
             notes.append(
-                f"{row['qid_a']} vs {row['qid_b']}: verdict {verdict!r} "
-                "is not containment — nothing to apply"
+                (
+                    NOT_CONTAINMENT,
+                    f"{row['qid_a']} vs {row['qid_b']}: verdict {verdict!r} "
+                    "is not containment — nothing to apply",
+                )
             )
             continue
         child, parent = (
@@ -586,14 +758,17 @@ def plan_containment(
             else (row["qid_b"], row["qid_a"])
         )
         if child == parent:
-            notes.append(f"{child}: cannot contain itself — skipped")
+            notes.append((ITSELF, f"{child}: cannot contain itself — skipped"))
             continue
         # cyclic if the parent already sits inside the child (live
         # closure), or would after this batch's earlier edges
         if creates_cycle(child, parent) or reaches(parent, child):
             notes.append(
-                f"applying {child} ⊂ {parent} would create a cycle — "
-                f"skipped, review the conflicting edge"
+                (
+                    CYCLE,
+                    f"applying {child} ⊂ {parent} would create a cycle — "
+                    f"skipped, review the conflicting edge",
+                )
             )
             continue
         edges.append((child, parent))
@@ -601,8 +776,19 @@ def plan_containment(
     return edges, notes
 
 
+RUN_DESCRIPTION = (
+    "reconcile-places pass (ADR-0009): human-approved containment "
+    "between place items"
+)
+
+
 def ensure_places_run_item(
-    client: WikiClient, fingerprint: str, model: str
+    client: WikiClient,
+    fingerprint: str,
+    model: str,
+    *,
+    description: str = RUN_DESCRIPTION,
+    marks: dict[str, str] | None = None,
 ) -> str:
     """The pass's run item, found by its label, which must name one item
     alone (WikiClient.find_item_by_label raises when two items hold it),
@@ -618,7 +804,10 @@ def ensure_places_run_item(
     and sent in the form the instance keeps a label in, as the writer
     sends one (writer._term_text: trimmed, one line, in Unicode NFC, cut
     to the characters the instance holds), so a model identifier given
-    in another form, such as NFD, finds the item made for it."""
+    in another form, such as NFD, finds the item made for it.
+    `description` is the description a new item takes, and `marks` the
+    string statements it states of itself (registrar.ensure_self_typed),
+    as a scratch run's place stage marks its run item."""
     from yizkr.pipeline.registrar import ensure_self_typed
     from yizkr.pipeline.writer import (
         _term_text,
@@ -638,17 +827,14 @@ def ensure_places_run_item(
     if qid is None:
         item = client.wbi.item.new()
         item.labels.set("en", label)
-        item.descriptions.set(
-            "en",
-            "reconcile-places pass (ADR-0009): human-approved containment "
-            "between place items",
-        )
+        item.descriptions.set("en", description)
         qid = item.write(summary="reconcile-places: run item").id
     ensure_self_typed(
         client,
         qid,
         "extraction_run",
         summary="reconcile-places: run item statements",
+        marks=marks,
     )
     return qid
 

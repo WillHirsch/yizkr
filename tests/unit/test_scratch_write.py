@@ -369,11 +369,13 @@ class TestTheStages:
             "reset",
             "register",
             "write",
+            "places",
             "site",
         ]
         for stage in scratch.CORPUS_STAGES[1:]:
             assert stage.touches_wiki
-            assert not stage.calls_engine
+            # the place stage alone calls the engine (#201)
+            assert stage.calls_engine == (stage.name == "places")
 
     def test_the_driver_reads_the_kept_state_marker(self):
         assert scratch.KEPT_STATE is scratch._instance_is_kept

@@ -87,9 +87,10 @@ by its check and stage, never by its value or limit.
 Some counts need what the run directory does not hold, and the report
 says so (NOT_AVAILABLE) rather than count none: depicts proposals, since
 face detection is never a stage of a scratch run; place-hierarchy
-proposals applied and different-source contradictions, which only a write
-stage makes; and flags by tier and class, until a stage makes them
-(`_flags` is where the report reads them).
+proposals, until the run's place stage has run (its record in
+CORPUS_DIR/places/ gives them); different-source contradictions, which
+only a written graph holds; and flags by tier and class, until a stage
+makes them (`_flags` is where the report reads them).
 """
 
 from __future__ import annotations
@@ -207,6 +208,21 @@ IDENTITY_MAP_FORMAT = 1
 # the write stage and its record of what it wrote (in CORPUS_DIR/<stage>/)
 WRITE_STAGE = "write"
 WRITE_RECORD = "record.json"
+# the place stage, which keeps its counts in a record of the same name
+PLACE_STAGE = "places"
+# the counts of the place stage's record, as the report names them
+PLACE_COUNTS = {
+    "questions": "questions",
+    "calls": "calls",
+    "made": "proposals_made",
+    "applied": "applied",
+    "present": "already_present",
+    "identity": "identity_not_applied",
+    "not_containment": "other_verdicts",
+    "schema_rejected": "rejected_by_schema",
+    "cycles": "refused_cycles",
+    "conflicts": "refused_conflicts",
+}
 
 # how many times the report reads run.json and the events while an
 # invocation starts or ends as it reads them, as run_state reads them
@@ -1310,6 +1326,7 @@ def build(path: Path | str, *, now: datetime | None = None) -> dict[str, Any]:
     run = _run(manifest, fold, ended, now)
     clusters = _clusters(path, fold)
     written = _written(path)
+    placed = _placed(path)
     return {
         "format": FORMAT,
         "generated_at": now.isoformat(timespec="seconds"),
@@ -1327,6 +1344,7 @@ def build(path: Path | str, *, now: datetime | None = None) -> dict[str, Any]:
             vocabulary=vocabulary,
             now=now,
             written=written,
+            placed=placed,
         ),
         "documents": [_document_record(d) for d in documents.values()],
         "failed_unread": [
@@ -1635,6 +1653,37 @@ def _aggregate_write(written: Mapping[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _placed(path: Path) -> dict[str, Any] | None:
+    """The place stage's record (yizkr.pipeline.scratchwrite), when the run
+    directory holds one with its counts, or one of a stage that skipped."""
+    found = _json(path / CORPUS_DIR / PLACE_STAGE / WRITE_RECORD)
+    if not isinstance(found, dict):
+        return None
+    if found.get("skipped") is True or isinstance(found.get("counts"), dict):
+        return found
+    return None
+
+
+def _aggregate_places(placed: Mapping[str, Any] | None) -> dict[str, Any]:
+    """What the place stage proposed and applied, in counts alone."""
+    if placed is None:
+        return {
+            "status": NOT_AVAILABLE,
+            "why": "no place stage of this run has run to its end",
+        }
+    if placed.get("skipped"):
+        return {"skipped": True}
+    counts = placed["counts"]
+    return {
+        "skipped": False,
+        **{
+            shown: _count(counts.get(key))
+            for key, shown in PLACE_COUNTS.items()
+        },
+        "contents_recorded": bool(placed.get("recorded")),
+    }
+
+
 def _clusters(path: Path, fold: _Fold) -> dict[str, Any]:
     """The clustering stage: its state, and the counts the summary of its
     identity map gives, when the run directory holds a map of the format
@@ -1849,6 +1898,7 @@ def _aggregate(
     vocabulary: _Vocabulary,
     now: datetime,
     written: Mapping[str, Any] | None = None,
+    placed: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The report's aggregates, which report.md shows all of but the
     documents per language: counts, rates and times, keyed by names of
@@ -1863,7 +1913,7 @@ def _aggregate(
         "corpus_stages": _aggregate_corpus(fold, run, vocabulary),
         "anomalies": _aggregate_alerts(alerts, fold, vocabulary),
         "content": _aggregate_content(
-            documents, clusters, flags, vocabulary, written
+            documents, clusters, flags, vocabulary, written, placed
         ),
         "calls": _aggregate_calls(fold, vocabulary),
         "control": _aggregate_control(control, vocabulary),
@@ -2240,6 +2290,7 @@ def _aggregate_content(
     flags: Mapping[str, Any],
     vocabulary: _Vocabulary,
     written: Mapping[str, Any] | None = None,
+    placed: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     entities: Counter = Counter()
     claims: Counter = Counter()
@@ -2384,11 +2435,7 @@ def _aggregate_content(
         "clusters": _aggregate_clusters(clusters, vocabulary),
         "depicts": _depicts(written),
         "write": _aggregate_write(written),
-        "place_hierarchy": {
-            "status": NOT_AVAILABLE,
-            "why": "no stage of a scratch run applies place-hierarchy "
-            "proposals yet",
-        },
+        "place_hierarchy": _aggregate_places(placed),
         "contradictions": {
             "status": NOT_AVAILABLE,
             "why": "different-source contradictions are read from a written "
@@ -3081,7 +3128,7 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
                         ("Depicts claims left out", "depicts"),
                         ("The write", "write"),
                         (
-                            "Place-hierarchy proposals applied",
+                            "Place-hierarchy proposals",
                             "place_hierarchy",
                         ),
                         ("Different-source contradictions", "contradictions"),
@@ -3122,7 +3169,35 @@ def _write_sections(content: Mapping[str, Any]) -> list[_Section]:
     lines.append(
         f"Depicts claims left out, never written: {_n(depicts['left_out'])}."
     )
-    return [_Section("Write", [lines], 3)]
+    sections = [_Section("Write", [lines], 3)]
+    places = content["place_hierarchy"]
+    if places.get("status") == NOT_AVAILABLE:
+        return sections
+    if places.get("skipped"):
+        shown = [
+            "The instance held what this run's key makes: no place was "
+            "reconciled again."
+        ]
+    else:
+        shown = [
+            f"{_n(places['questions'])} place questions asked in "
+            f"{_n(places['calls'])} calls; "
+            f"{_n(places['proposals_made'])} proposals made: "
+            f"{_n(places['applied'])} applied, "
+            f"{_n(places['already_present'])} already there, "
+            f"{_n(places['identity_not_applied'])} identity verdicts and "
+            f"{_n(places['other_verdicts'])} other verdicts not applied.",
+            f"Rejected by the schema: {_n(places['rejected_by_schema'])} "
+            "answers; refused: "
+            f"{_n(places['refused_cycles'])} cycles, "
+            f"{_n(places['refused_conflicts'])} conflicts. The "
+            "instance-contents key is "
+            + (
+                "recorded." if places["contents_recorded"] else "not recorded."
+            ),
+        ]
+    sections.append(_Section("Place hierarchy", [shown], 3))
+    return sections
 
 
 def _records_blocks(

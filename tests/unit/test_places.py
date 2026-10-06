@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 import csv
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -14,10 +15,12 @@ from tests.unit.test_registrar import FakeWiki, WriteRefused
 from yizkr.pipeline.places import (
     PlaceRecord,
     Question,
+    adjudicate,
     adjudicate_places,
     build_worklist,
     ensure_places_run_item,
     export_places_csv,
+    plan,
     plan_containment,
     record_containers,
     stated_parent_candidates,
@@ -401,12 +404,14 @@ class TestWorklist:
         keys = [frozenset((q.qid_a, q.qid_b)) for q in worklist]
         assert len(keys) == len(set(keys))  # deduplicated across sources
         # the questions with Germany (the graph puts a place in it) come
-        # first, and the places it puts nothing in after
+        # first, and the places it puts nothing in after; among equals, a
+        # stated container's question before a competing pair's, each in
+        # the order of its text, never of its QIDs (#201)
         assert keys == [
             frozenset(("Q7", "Q1")),
-            frozenset(("Q2", "Q7")),
-            frozenset(("Q3", "Q2")),
             frozenset(("Q3", "Q5")),
+            frozenset(("Q3", "Q2")),
+            frozenset(("Q2", "Q7")),
             frozenset(("Q3", "Q4")),
         ]
 
@@ -472,23 +477,17 @@ class TestAdjudication:
         lines = [
             json.dumps(
                 {
-                    "qid_a": "Q3",
-                    "qid_b": "Q2",
+                    "question": 1,
                     "verdict": "a_within_b",
                     "confidence": 0.95,
                     "evidence": "an address in the town",
                 }  # fmt: skip
             ),
             json.dumps(  # not an asked question: must be dropped
-                {
-                    "qid_a": "Q1",
-                    "qid_b": "Q4",
-                    "verdict": "same",
-                    "confidence": 1,
-                }
+                {"question": 2, "verdict": "same", "confidence": 1}
             ),
             json.dumps(  # unknown verdict: dropped
-                {"qid_a": "Q3", "qid_b": "Q2", "verdict": "overlaps"}
+                {"question": 1, "verdict": "overlaps"}
             ),
             json.dumps({"done": True}),
         ]
@@ -500,6 +499,99 @@ class TestAdjudication:
         ]
         # the prompt shows full labels — the evidence the model weighs
         assert "Brunnenring 35, Flörburg" in llm.prompts[0]
+
+    def test_the_prompt_names_no_qid(self):
+        """A question is named by its number in the batch and its places
+        by their labels, with those of the places the graph puts them in:
+        never by a QID, which a reset changes (#201; ADR-0032)."""
+        llm = ScriptedLlm('{"done": true}')
+        questions = [
+            Question(kind="parent", qid_a="Q3", qid_b="Q2", context="c1"),
+            Question(kind="parent", qid_a="Q6", qid_b="Q4", context="c2"),
+        ]
+        adjudicate_places(llm, questions, places())
+        (prompt,) = llm.prompts
+        assert not re.search(r"\bQ\d+\b", prompt)
+        assert "1. A: 'Brunnenring 35, Flörburg'  vs  B: 'Flörburg'" in prompt
+        assert "2. A: 'Rekau' (within 'Germany')  vs  B: 'Klurnau'" in prompt
+
+    def test_the_prompt_is_the_same_whatever_the_qids(self):
+        """Two instances that gave the same places other QIDs ask the
+        same prompt, in the same order (#201)."""
+
+        def renumbered(offset: int) -> list[PlaceRecord]:
+            def qid(old: str) -> str:
+                return f"Q{int(old[1:]) + offset}"
+
+            return (
+                [
+                    PlaceRecord(
+                        qid=qid(place.qid),
+                        label=place.label,
+                        aliases=place.aliases,
+                        parents=[qid(parent) for parent in place.parents],
+                        chains=place.chains,
+                    )
+                    for place in reversed(places())
+                ]
+                if offset
+                else places()
+            )
+
+        prompts = []
+        for offset in (0, 90):
+            found = renumbered(offset)
+            worklist = build_worklist(
+                found, [], stated_parent_candidates(found)
+            )
+            llm = ScriptedLlm('{"done": true}')
+            adjudicate_places(llm, worklist, found)
+            prompts.append(llm.prompts)
+        assert prompts[0] == prompts[1]
+
+    def test_answers_outside_the_schema_are_counted(self):
+        question = Question(kind="parent", qid_a="Q3", qid_b="Q2")
+        lines = [
+            {"question": 1, "verdict": "a_within_b", "confidence": 0.9},
+            {"question": "1", "verdict": "same"},  # no number
+            {"question": True, "verdict": "same"},  # no number
+            {"question": 0, "verdict": "same"},  # none asked
+            {"question": 1, "verdict": "same", "confidence": 2},
+            {"question": 1, "verdict": "same", "confidence": "high"},
+            {"question": 1, "verdict": "same", "evidence": ["x"]},
+            {"qid_a": "Q3", "qid_b": "Q2", "verdict": "same"},
+            {"done": True},
+        ]
+        found = adjudicate(
+            ScriptedLlm("\n".join(map(json.dumps, lines))),
+            [question],
+            places(),
+        )
+        assert [p.verdict for p in found.proposals] == ["a_within_b"]
+        assert found.rejected == 7
+        assert found.conflicts == []
+        assert len(found.responses) == 1
+
+    def test_a_question_answered_twice_differently_is_a_conflict(self):
+        questions = [
+            Question(kind="parent", qid_a="Q3", qid_b="Q2"),
+            Question(kind="parent", qid_a="Q6", qid_b="Q1"),
+        ]
+        lines = [
+            {"question": 1, "verdict": "a_within_b"},
+            {"question": 1, "verdict": "b_within_a"},
+            {"question": 2, "verdict": "a_within_b"},
+            {"question": 2, "verdict": "a_within_b"},  # the same twice
+            {"done": True},
+        ]
+        found = adjudicate(
+            ScriptedLlm("\n".join(map(json.dumps, lines))),
+            questions,
+            places(),
+        )
+        assert [(p.qid_a, p.qid_b) for p in found.proposals] == [("Q6", "Q1")]
+        assert found.conflicts == [questions[0]]
+        assert found.rejected == 0
 
     def test_the_prompt_asks_for_a_done_line_and_no_count(self):
         """The answer ends with `{"done": true}`, whose presence is the
@@ -516,7 +608,7 @@ class TestAdjudication:
     def test_an_answer_stopped_at_the_output_limit_raises(self, done):
         """Its engine stopped it at max_tokens: it is cut off, sentinel or
         no (#7)."""
-        verdict = json.dumps({"qid_a": "Q3", "qid_b": "Q2", "verdict": "same"})
+        verdict = json.dumps({"question": 1, "verdict": "same"})
         question = Question(kind="parent", qid_a="Q3", qid_b="Q2")
         llm = Stopping(f"{verdict}\n{done}", "max_tokens")
         with pytest.raises(ValueError, match="cut off at max_tokens"):
@@ -526,9 +618,7 @@ class TestAdjudication:
         assert proposal.verdict == "same"
 
     def test_missing_sentinel_raises(self):
-        llm = ScriptedLlm(
-            json.dumps({"qid_a": "Q3", "qid_b": "Q2", "verdict": "distinct"})
-        )
+        llm = ScriptedLlm(json.dumps({"question": 1, "verdict": "distinct"}))
         with pytest.raises(ValueError, match="sentinel"):
             adjudicate_places(
                 llm,
@@ -585,6 +675,66 @@ class TestPlanContainment:
         )
         assert edges == []
         assert any("itself" in note for note in notes)
+
+    def test_plan_says_why_each_row_was_set_aside(self):
+        """The scratch run's place stage counts each (#201)."""
+        from yizkr.pipeline import places
+
+        rows = [
+            row("Q3", "Q2", "a_within_b"),
+            row("Q2", "Q3", "a_within_b"),  # cyclic within the batch
+            row("Q1", "Q6", "a_within_b"),  # cyclic with the graph
+            row("Q5", "Q2", "same"),
+            row("Q4", "Q2", "distinct"),
+            row("Q4", "Q7", "uncertain"),
+            row("Q7", "Q7", "a_within_b"),
+        ]
+        edges, set_aside = plan(
+            rows, lambda child, parent: (child, parent) == ("Q1", "Q6")
+        )
+        assert edges == [("Q3", "Q2")]
+        assert [why for why, _note in set_aside] == [
+            places.CYCLE,
+            places.CYCLE,
+            places.IDENTITY,
+            places.NOT_CONTAINMENT,
+            places.NOT_CONTAINMENT,
+            places.ITSELF,
+        ]
+
+
+class TestSources:
+    """The documents whose records state a containment ride its question,
+    so the scratch run's place stage can say where it is stated (#201)."""
+
+    def test_a_chain_s_documents_ride_each_of_its_links(self):
+        flörburg = PlaceRecord(qid="Q2", label="Flörburg")
+        flörburg.state(["Kreis Peiltal", "Germany"], ["a" * 40])
+        flörburg.state(["Kreis Peiltal", "Germany"], ["b" * 40])
+        flörburg.state(["Kreis Peiltal"], ["c" * 40])
+        found = [
+            PlaceRecord(qid="Q1", label="Germany"),
+            flörburg,
+            PlaceRecord(qid="Q7", label="Kreis Peiltal"),
+        ]
+        questions = stated_parent_candidates(found)
+        assert [(q.qid_a, q.qid_b, q.sources) for q in questions] == [
+            ("Q2", "Q7", ["a" * 40, "b" * 40, "c" * 40]),
+            ("Q7", "Q1", ["a" * 40, "b" * 40]),
+        ]
+        assert flörburg.chains == [
+            ["Kreis Peiltal", "Germany"],
+            ["Kreis Peiltal"],
+        ]
+
+    def test_a_question_asked_twice_keeps_both_sources(self):
+        stated = Question(kind="parent", qid_a="Q2", qid_b="Q7", sources=["a"])
+        competing = Question(
+            kind="competing", qid_a="Q7", qid_b="Q2", sources=["b"]
+        )
+        (kept,) = build_worklist(places(), [competing], [stated])
+        assert kept is stated
+        assert kept.sources == ["a", "b"]
 
 
 class TestCsv:

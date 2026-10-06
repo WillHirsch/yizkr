@@ -187,6 +187,32 @@ claim may use, and the critique prompt only those the manifest offers
 (decision EZ), so every prompt of the stages before write is as it was,
 byte for byte; §1 and §3 are amended in place.
 
+Amended by #201 (2026-10-06): the write side gains a fifth stage,
+`places`, after the write and before the site, so the site shows the
+containment: ADR-0009's place-hierarchy reconciliation, run unattended.
+It is the write side's one stage that calls the engine, in the
+`extract` role, through the run's LLM cache, so a subscription limit
+pauses it as any stage, and the next invocation applies what it had
+proposed without asking again. Its prompt names places by their labels
+and questions by their numbers, never by a QID, and its questions are
+ordered by their text among equals, so the same batches ask the same
+prompts after any reset. Its key, the place key, is the write key with
+the prompt's template, the batch size and the engine, model and effort of
+its role; the instance-contents record takes it once the stage has
+applied every proposal of a complete write, and the reset stage looks
+for it, so a rerun of the run that wrote resets nothing and asks
+nothing. It runs under the write's guard, holding the live-stack lock
+for the whole stage, its model calls included (decision EY), and clears
+the instance-contents record before its first write. Every containment
+proposal is applied at normal rank with no review CSV, `stated in` each
+document whose mention record states it, where one does, and `inferred
+from` the stage's run item, which records the proposing model and
+carries the scratch-run marks; cycles, conflicting answers and answer
+lines outside the schema are refused and counted, never written. The
+proposals, raw answers and counts are kept in the stage's directory of
+the run; the run report counts them and the run diff compares them. §1
+and §2 are amended in place.
+
 ## Context
 
 ADR-0024 §7 set up a *development stage*: until the owner declares a
@@ -282,6 +308,14 @@ The owner replaced that plan on 2026-09-27, for four reasons.
   applied at normal rank, with ADR-0009's provenance and cycle guard and
   no review CSV. The stages before write use only the containment the
   manifests assert; graph containment is a product of the write.
+  Amended by #201 (2026-10-06): the scratch driver's `places` stage
+  (after `write`, before `site`) applies each containment proposal
+  stated in each document whose mention record states it and inferred
+  from the stage's run item, which names the proposing model; it refuses
+  and counts cycles, questions answered with two verdicts and answers
+  outside the schema. In keeper mode (§6, not yet built) its proposals go
+  through ratification with the run, as every write of the keeper run
+  does.
 - **Problems are fixed in the pipeline and regenerated, never repaired in
   the graph.** A problem found in a run report, a diff or the views of a
   scratch graph is filed as an issue with the `stage:*` label of the
@@ -423,7 +457,11 @@ a second store of assertions: the graph stays the system of record.
   the run directory or the instance (the report, the diff, the monitor,
   the estimate, the site, the disagreement report and the command line),
   since what is written reaches far into it; and the manifest's version
-  is the model manifest's hash.
+  is the model manifest's hash. Amended by #201 (2026-10-06): the place
+  stage's key is the write key with the adjudication prompt's template,
+  its batch size and the engine, model and effort of its role, never a
+  QID; once it has written, the instance holds what that key makes, so
+  the instance-contents record takes it and the reset skips only for it.
 
 This keeps the stateless, file-based core of ADR-0019 §4: a run
 re-derives what to do from durable files and resumes by re-running. What

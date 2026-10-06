@@ -13,6 +13,12 @@ and pruning it would drop a live pair. A place without a QID is never
 pruned by containment. Clustering's conflict check reads a member's
 containers among the cluster's members the same way. Blocking keys on
 whole name forms (ADR-0007, as amended by #388), not name tokens.
+Amended by #201 (2026-10-06): in a development-stage scratch run the
+place stage applies its containment proposals unattended (ADR-0009 and
+ADR-0025 §1, as amended by #201), and that containment is in the graph
+only after the write. The stages before the write, clustering's conflict
+check among them, read only the containment the manifests assert. The
+hand-off rows below stay human-reviewed.
 
 ## Context
 

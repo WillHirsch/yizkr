@@ -1536,6 +1536,42 @@ class TestCorpusStages:
         assert again.run() == EXIT_OK
         assert len(broken.contexts) == 2 and len(flags.contexts) == 1
 
+    def test_a_limit_in_a_corpus_stage_pauses_the_run_not_fails_it(
+        self, tmp_path, fakes
+    ):
+        """A corpus stage that calls the engine (the place stage, #201)
+        meets a subscription limit as any stage does: the invocation
+        pauses, the driver waits it out, and the next invocation runs the
+        stage again."""
+        corpus = small(tmp_path)
+        waits = Waits(*[None] * 10)
+        calls = []
+
+        def places(context):
+            calls.append(context)
+            if len(calls) == 1:
+                raise usage_limit(waits)
+            return []
+
+        stages = [CorpusStage("places", places)]
+        driver = a_run(
+            tmp_path,
+            corpus,
+            fakes,
+            corpus_stages=stages,
+            waits=waits,
+            poll=600,
+        )
+        assert driver.run() == EXIT_OK
+        first, second = RunDir(driver.state_dir).manifest()["invocations"]
+        assert (first["outcome"], first["reason"]) == (
+            "paused",
+            "UsageLimitReached",
+        )
+        assert second["outcome"] == "finished"
+        assert len(calls) == 2
+        assert ("failed", "places") not in corpus_events(driver.state_dir)
+
     def test_a_paused_corpus_stage_waits_and_an_abort_stops_it(
         self, tmp_path, fakes
     ):

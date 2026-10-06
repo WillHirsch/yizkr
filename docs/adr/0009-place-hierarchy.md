@@ -45,6 +45,26 @@ inferred from what is known of the place or carried over from another
 place the document names; the critic flags a `part_of` its excerpt does
 not state (`unsupported_containment`, ADR-0023). Everything else is this
 pass's to propose.
+Amended by #201 (2026-10-06): a development-stage scratch run runs this
+pass unattended, as its `places` stage after the write (ADR-0025 §1):
+the same worklist and adjudication, with every containment proposal
+applied at normal rank and no review CSV; `same`, `distinct` and
+`uncertain` verdicts write nothing, and a proposal that would close a
+cycle (against the graph's containment as read, or the batch's earlier
+proposals), a question answered with two verdicts (a conflict) and an
+answer line outside the answer's schema are refused and counted. Where
+a mention record states the containment applied, child within parent,
+the statement is also `stated in` the artifact of each document whose
+record states it, a reference block of its own beside `inferred from`
+the run item; a competing pair's containment, or a verdict that turns
+the stated containment round, cites the run item alone. The run item's
+label names the proposing model. The prompt names each place by its
+label, with the labels of the places the graph puts it in, and each
+question by its number within the batch, never by a QID, so the LLM
+cache answers the same graph's questions after any reset (ADR-0032);
+among questions of equal scale, a stated container's comes before a
+competing pair's, and then the order of their text decides. The
+command's own rounds, and its review CSV, are unchanged.
 
 ## Context
 
