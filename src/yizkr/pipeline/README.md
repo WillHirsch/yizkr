@@ -123,7 +123,10 @@ does reach them). To ask the model again, run with `--epoch extract=N`
 such as a failed one, or with `--refresh extract`, which extracts every
 document again. An extraction whose accepted answers say the document
 holds no claims, on either tier, is no failure: its batch is kept, and
-its `extraction` stage needs attention, with the reason.
+its `extraction` stage needs attention, with the reason. An entity
+manifest that names no entity (an empty list) is such an answer, taken at
+once: no second attempt, no segmentation and no fallback tier, and the
+reason reads "the entity manifest names no entity".
 
 State for each document lives in `var/runs/<folder>/<doc>/`: its views
 (`transcription.json`, `batch.json`, `critique.json`, and the extractor's

@@ -88,8 +88,9 @@ class Engine:
 
     Its answers: a reading of each image, noting what read it; an entity
     manifest of `fakes.people` people (ten to a chunk; the universe's, over
-    again once they run out), or none while
-    `fakes.refuse`, which the extractor refuses, and a segmentation of the
+    again once they run out), or while `fakes.refuse` one of a single
+    entity of a kind the manifest vocabulary lacks, which the extractor
+    refuses (a manifest of no entity it accepts), and a segmentation of the
     whole text as one unit; a claim per chunk, whose year the
     configuration and the document pick (the configuration alone while
     `fakes.same_claims`); and a critic with one concern. While
@@ -154,18 +155,17 @@ class Engine:
             }
             answer = {"units": [unit]}
         else:
-            people = (
-                []
-                if self.fakes.refuse
-                else [
-                    u.PEOPLE[n % len(u.PEOPLE)]
-                    for n in range(self.fakes.people)
-                ]
-            )
+            people = [
+                u.PEOPLE[n % len(u.PEOPLE)] for n in range(self.fakes.people)
+            ]
             answer = {
                 "entities": [
                     {"id": f"e{n}", "label": person.label, "kind": "human"}
                     for n, person in enumerate(people, 1)
+                ]
+                if not self.fakes.refuse
+                else [
+                    {"id": "e1", "label": "the reading room", "kind": "room"}
                 ]
             }
         return note + json.dumps(answer), str(uuid.uuid4())

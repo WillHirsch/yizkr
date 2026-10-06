@@ -14,6 +14,7 @@ import threading
 import pytest
 
 from yizkr.claims import ArtifactRef, ClaimBatch, EntityRecord
+from yizkr.pipeline.anomalies import batch_findings, load_config
 from yizkr.pipeline.chunking import (
     ENTITY_MANIFEST_PROMPT,
     ChunkedClaimExtractor,
@@ -305,6 +306,20 @@ LOGISTICS = (
 )
 # a manifest naming no entity at all
 NO_ENTITIES = json.dumps({"entities": []})
+# a short excerpt that names no one, nowhere and no date: weather, in a
+# letter's postscript
+WEATHER = "PS: Es regnet seit Tagen.\nDie Wege sind kaum zu begehen."
+# a longer page that names no one, in English
+ERRAND_LIST = "\n".join(
+    [
+        "Things to bring on the next visit:",
+        "two warm blankets, the good scissors, a tin of tea,",
+        "the spare key for the shed, string for the parcels,",
+        "a box of matches, the small lamp and its wick,",
+        "and the recipe for the plum cake, written out clearly.",
+        "Leave the gate shut behind you, and feed the hens before dark.",
+    ]
+)
 # what an unusable manifest or segmentation is refused for
 NO_MANIFEST = "no JSON object with an 'entities' array"
 NO_SEGMENTATION = "no JSON object with a 'units' array"
@@ -1667,27 +1682,28 @@ class TestFallbackLadder:
         )
 
     @pytest.mark.parametrize(
-        ("listed", "records", "problem"),
+        ("listed", "records", "problems"),
         [
-            ([], [], "empty entity list"),
-            (None, [], "empty entity list"),
-            ({}, None, "'entities' is not a list (dict)"),
-            ("", None, "'entities' is not a list (str)"),
-            (0, None, "'entities' is not a list (int)"),
+            ([], [], []),
+            (None, [], []),
+            ({}, None, ["'entities' is not a list (dict)"]),
+            ("", None, ["'entities' is not a list (str)"]),
+            (0, None, ["'entities' is not a list (int)"]),
         ],
     )
     def test_only_a_list_or_null_can_name_no_entity(
-        self, listed, records, problem
+        self, listed, records, problems
     ):
         """An empty list, or null, is the engine's word that the document
-        names nothing, refused so that the line-range tier looks again;
-        any other value where the entity list belongs is unusable (#45)."""
+        names nothing: a manifest of no entities, with no problem, so it is
+        accepted as it stands (#500); any other value where the entity
+        list belongs is unusable (#45)."""
         manifest = json.dumps({"entities": listed})
-        parsed, problems = ChunkedClaimExtractor._parse_entity_manifest(
+        parsed, found = ChunkedClaimExtractor._parse_entity_manifest(
             manifest, 1
         )
         entities = None if parsed is None else parsed.entities
-        assert (entities, problems) == (records, [problem])
+        assert (entities, found) == (records, problems)
 
 
 class TestExtractionsWithoutClaims:
@@ -1826,25 +1842,14 @@ class TestExtractionsWithoutClaims:
             pytest.param(
                 ILLEGIBLE,
                 [
-                    NO_ENTITIES,
                     "Nothing on this page can be read.",
-                    whole_page_segmentation_json(1, extract=False),
-                ],
-                NO_MANIFEST,
-                "every unit in the segmentation is extract=false",
-                id="named-nothing-then-prose",
-            ),
-            pytest.param(
-                ILLEGIBLE,
-                [
-                    NO_ENTITIES,
-                    NO_ENTITIES,
+                    "Nothing on this page can be read.",
                     whole_page_segmentation_json(1, extract=True),
                     ndjson([]),
                 ],
-                "empty entity list",
+                NO_MANIFEST,
                 "1 chunk answered with none",
-                id="named-nothing-then-chunk-with-none",
+                id="prose-then-chunk-with-none",
             ),
             pytest.param(
                 DOC,
@@ -1880,6 +1885,78 @@ class TestExtractionsWithoutClaims:
         coverage = side_output(tmp_path, "coverage.json")
         assert coverage["fallback"] == {"manifest": refused}
         assert (coverage["claims"], coverage["unread_objects"]) == (0, 0)
+
+    @pytest.mark.parametrize(
+        "answer",
+        [NO_ENTITIES, json.dumps({"entities": None})],
+        ids=["empty-list", "null"],
+    )
+    @pytest.mark.parametrize("llm_type", [ScriptedLlm, PlainLlm])
+    def test_a_manifest_that_names_nothing_is_accepted_at_once(
+        self, tmp_path, answer, llm_type
+    ):
+        """An empty entity list is the engine's word that the excerpt
+        names no one: the batch has no entity and no claim, after one call
+        and no chunk, with no second attempt, no segmentation and no
+        fallback tier, and its attention says only why it is empty
+        (#500)."""
+        llm = llm_type([answer])
+        extractor = self.extractor(llm, tmp_path)
+        batch = extractor.extract(page(WEATHER), DOC_REF)
+        assert len(llm.calls) == 1
+        assert (batch.claims, batch.entities) == ([], [])
+        assert not extractor.used_fallback_manifest
+        assert not extractor.used_fallback_segmentation
+        assert extractor.fallback == {}
+        assert extractor.attention == [
+            "no claims extracted: the entity manifest names no entity"
+        ]
+        coverage = side_output(tmp_path, "coverage.json")
+        assert coverage["strategy"] == "entity"
+        assert coverage["fallback"] == {}
+        assert (coverage["chunks"], coverage["claims"]) == (0, 0)
+        assert coverage["entities_total"] == 0
+
+    def test_a_second_attempt_that_names_nothing_ends_the_turn(self, tmp_path):
+        """A first answer the parser refuses is asked again; an empty list
+        on the second attempt is accepted, and no fallback tier is taken."""
+        llm = ScriptedLlm(["no manifest here", NO_ENTITIES])
+        extractor = self.extractor(llm, tmp_path)
+        batch = extractor.extract(page(WEATHER), DOC_REF)
+        assert [method for method, _ in llm.calls] == ["open", "open"]
+        assert (batch.claims, batch.entities) == ([], [])
+        assert extractor.fallback == {}
+        assert extractor.attention == [
+            "no claims extracted: the entity manifest names no entity"
+        ]
+
+    @pytest.mark.parametrize(
+        ("text", "raised"),
+        [
+            (WEATHER, []),
+            (ERRAND_LIST, ["zero-entities", "zero-claims"]),
+        ],
+        ids=["short", "long"],
+    )
+    def test_a_manifest_that_names_nothing_is_checked_as_nameless(
+        self, tmp_path, text, raised
+    ):
+        """The run's checks read such a batch as one with no entity and
+        no claim: `zero-entities` and `zero-claims` where the page is long
+        enough for them, and never `fallback-manifest` (#500)."""
+        llm = ScriptedLlm([NO_ENTITIES])
+        extractor = self.extractor(llm, tmp_path)
+        batch = extractor.extract(page(text), DOC_REF)
+        findings = batch_findings(
+            load_config(),
+            entities=len(batch.entities),
+            claims=len(batch.claims),
+            excerpts=[],
+            language=None,
+            letters=sum(char.isalnum() for char in text),
+            coverage=side_output(tmp_path, "coverage.json"),
+        )
+        assert [finding.check for finding in findings] == raised
 
     def test_line_windows_that_find_nothing_leave_a_claim_free_batch(
         self, tmp_path
@@ -2022,17 +2099,17 @@ class TestExtractionsWithoutClaims:
         ("manifests", "segmentations", "refused"),
         [
             pytest.param(
-                [NO_ENTITIES, NO_ENTITIES],
+                [logistics_manifest_json(), logistics_manifest_json()],
                 [whole_page_segmentation_json(4, extract=True)],
-                "the entity manifest was refused (every attempt: empty "
-                "entity list)",
-                id="manifest-named-nothing",
+                "the entity manifest was refused (every attempt: "
+                f"{UNKNOWN_KIND})",
+                id="manifest-refused",
             ),
             pytest.param(
-                ["no manifest here", NO_ENTITIES],
+                ["no manifest here", logistics_manifest_json()],
                 ["junk", "junk"],
-                f"the entity manifest was refused (1: {NO_MANIFEST}; 2: empty "
-                "entity list), and the segmentation (every attempt: "
+                f"the entity manifest was refused (1: {NO_MANIFEST}; 2: "
+                f"{UNKNOWN_KIND}), and the segmentation (every attempt: "
                 f"{NO_SEGMENTATION})",
                 id="both-tiers-refused",
             ),

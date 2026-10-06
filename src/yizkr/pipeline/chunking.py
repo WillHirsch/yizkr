@@ -1215,7 +1215,9 @@ class ChunkedClaimExtractor:
         call answered).
 
         No manifest means it was unusable in both attempts; the caller
-        falls back to line-range segmentation."""
+        falls back to line-range segmentation. A manifest of no entities,
+        the engine's word that the document names nothing, is usable, and
+        the first attempt that gives one ends the turn."""
         line_count = len(transcription.text.splitlines())
         kinds, kind_descriptions = entity_kind_prompt_lines()
         prompt = ENTITY_MANIFEST_PROMPT.format(
@@ -1236,9 +1238,9 @@ class ChunkedClaimExtractor:
     ) -> tuple[_Manifest | None, list[str]]:
         """(manifest, problems); the manifest is None when the answer holds
         no entity list. Only a list, or null, is one, and any other value
-        is unusable. An empty one, the engine's word that the document
-        names nothing, comes with the problem "empty entity list", so that
-        it is refused and the line-range tier looks again.
+        is unusable. An empty one, or null, is the engine's word that the
+        document names nothing: a manifest of no entities, accepted as it
+        stands, so no chunk is asked and no fallback tier is taken.
 
         An entity's mention record or judgement note that fails validation
         is set aside, never repaired and never the reason the manifest is
@@ -1271,8 +1273,6 @@ class ChunkedClaimExtractor:
             except Exception as exc:
                 return None, [str(exc)[:300]]
             problems: list[str] = []
-            if not records:
-                problems.append("empty entity list")
             seen: set[str] = set()
             for record in records:
                 if record.id in seen:
@@ -1710,19 +1710,26 @@ class ChunkedClaimExtractor:
                 f"{self.fallback['segmentation']}"
             )
         if not batch.claims:
-            reasons.append(f"no claims extracted: {self._why_empty(chunks)}")
+            reasons.append(
+                "no claims extracted: "
+                f"{self._why_empty(chunks, named=len(batch.entities))}"
+            )
         return reasons
 
-    def _why_empty(self, chunks: int) -> str:
+    def _why_empty(self, chunks: int, *, named: int) -> str:
         """Why an extraction holds no claims when no chunk failed, none
         gave an object the parser could not read and validation rejected
         nothing: what the answers it accepted say, naming the refused
-        manifest when the line-range tier stood in for it."""
+        manifest when the line-range tier stood in for it. `named` is the
+        number of entities the batch holds, none when the manifest named
+        nothing."""
         if chunks:
             plural = "" if chunks == 1 else "s"
             found = f"{chunks} chunk{plural} answered with none"
         elif self.used_fallback_manifest:
             found = "every unit in the segmentation is extract=false"
+        elif not named:
+            return "the entity manifest names no entity"
         else:
             return "every entity in the manifest is extract=false"
         if not self.used_fallback_manifest:
