@@ -340,7 +340,7 @@ has something to say:
 | `duration_s` | how long the call took, in seconds |
 | `wait_s` | seconds it waited for the subscription |
 | `refused` | how many of its attempts a limit refused |
-| `held` | why it last waited or paused: `usage limit`, `reserve`, `throttle`, `rate limit`, `overloaded` or `closed` |
+| `held` | why it last waited or paused: `usage limit`, `reserve`, `rate limit`, `overloaded`, `usage credits` or `closed` |
 | `error` | the exception's name, never its message |
 | `window`, `resumes_at` | for a pause for a subscription limit: the window, and when the pass can go on (UTC) |
 

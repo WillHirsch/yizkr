@@ -24,8 +24,8 @@ driver (docs/runbooks/scratch-run.md), the live monitor
 ([docs/MONITOR.md](MONITOR.md)), the anomaly checks (#196), the call
 estimate (#101) and the run report
 ([docs/RUN_REPORT.md](RUN_REPORT.md)). How the claude-code engine
-meets the subscription's limits, and paces its calls to leave headroom
-for development sessions, is under Subscription limits, below.
+meets the subscription's limits, and stops its calls at a reserve left
+to development sessions, is under Subscription limits, below.
 
 All three are runtime state under `var/` and are **local-only data**
 (docs/AGENT_PROTOCOL.md §6): they hold transcriptions, claims, session
@@ -992,7 +992,7 @@ in, and the kind of call:
 | `cache-replay` | a conversation's opening turn was replayed for a fork's session | `matches` |
 | `cache-reject` | a caller's rejection moved an answer aside | `reason` |
 | `cache-adopt` | an answer was seeded as an adoption | `reason` |
-| `call` | a call reached the engine, with or without the cache (a hit is none; a miss or a replay is one) | `outcome` (`ok`, `error`, `paused` or `interrupted`), `duration_s` (end to end, so it includes any time paced); when there is something to say, `replay` (`true` for a replay of a conversation's opening turn, Conversations and forks), `wait_s` (the part of `duration_s` spent waiting for the subscription), `refused` (how many of its attempts a limit refused), `held` (why it last waited or paused: `usage limit`, `reserve`, `throttle`, `rate limit`, `overloaded`, `usage credits` or `closed`), `error` (the exception's name, never its message), and for a pause for a subscription limit its `window` and `resumes_at` (absent for `usage credits`: the subscription does not say when that clears); and what the call's stream reported of it, below: `model`, `cli_version`, `usage`, `num_turns`, `subtype`, `stop_reason` and `api_error`; on the Anthropic API engine, which has no stream, only the `model` and the `stop_reason` (verbatim) its response gave of an answered call |
+| `call` | a call reached the engine, with or without the cache (a hit is none; a miss or a replay is one) | `outcome` (`ok`, `error`, `paused` or `interrupted`), `duration_s` (end to end, so it includes any time waited for the subscription); when there is something to say, `replay` (`true` for a replay of a conversation's opening turn, Conversations and forks), `wait_s` (the part of `duration_s` spent waiting for the subscription), `refused` (how many of its attempts a limit refused), `held` (why it last waited or paused: `usage limit`, `reserve`, `rate limit`, `overloaded`, `usage credits` or `closed`), `error` (the exception's name, never its message), and for a pause for a subscription limit its `window` and `resumes_at` (absent for `usage credits`: the subscription does not say when that clears); and what the call's stream reported of it, below: `model`, `cli_version`, `usage`, `num_turns`, `subtype`, `stop_reason` and `api_error`; on the Anthropic API engine, which has no stream, only the `model` and the `stop_reason` (verbatim) its response gave of an answered call |
 | `alert` | an anomaly alert was appended | `check`, `status` |
 | `anomaly-recheck` | a recheck of the stored outputs began (docs/ANOMALIES.md) | `config` (the thresholds' digest), `documents` |
 | `anomaly-error` | an anomaly check raised; nothing failed with it | `error` (the exception's name, never its message), `hook` |
@@ -1151,7 +1151,7 @@ opening turns, which the cache asked only for a fork's session, and
 The claude-code engine draws on the subscription's usage windows: a
 session window of five hours and weekly ones, each reopening at a set
 time. A call a limit refuses never fails a document, and the engine
-paces its calls to leave a reserve of each window to development
+stops its calls at a reserve of each window left to development
 sessions (#101; `yizkr.pipeline.llm`, "Subscription limits").
 
 **What the CLI reports**, as the pinned 2.1.288 prints it in its
@@ -1223,30 +1223,26 @@ reported `utilization`, plus the use of every call completed or still in
 flight since, at the use per call measured between the window's first
 report and its latest. Dispatch stops at the reserve line until the
 window reopens (a hold like any other, so one beyond the longest wait
-pauses the pass), and short of the line it is spaced so that what is left
-above the line lasts until the reset: with a share *left* above the line,
-a use *per call* and *T* seconds to the reset, one call every
-*T* × *per call* / *left* seconds.
+pauses the pass). Short of the line, calls go at full speed and are never
+spaced: whatever a window allows is used as soon as it can be, so the
+work is done as early as the window permits (owner, 2026-10-06, #495).
 
-**What the reserve achieves and what it cannot.** It paces only from
-`rate_limit_info`'s `utilization`, never from `unifiedWindows`: below
-the first warning threshold it has nothing to pace against, so the
-reserve gives no protection there at all, whatever
-`$YIZKR_CLAUDE_RESERVE` is set to; and a first warning that arrives late
-— close to 100% already used, or past its elapsed-time gate — can give
-little or none either, since there may be no room left to pace before
-the CLI refuses outright at 100%. What it does achieve is pacing dispatch
-from whichever warning it does get, so that ordinary use across a
-window's many calls keeps what is left above the line spread out to the
-reset rather than spent all at once. Keeping headroom below the first
-warning needs either a local budget counting a window's own use or
-pacing from `unifiedWindows`; the owner decided (2026-09-28) not to add
-the first, and the engine does not do the second, so this reserve is
-best-effort pacing from the CLI's own reports, not a guarantee of
-headroom. Two more limits:
+**What the reserve achieves and what it cannot.** It reads only
+`rate_limit_info`'s `utilization`, never `unifiedWindows`: below the
+first warning threshold it has no use to go by, so the reserve gives no
+protection there at all, whatever `$YIZKR_CLAUDE_RESERVE` is set to; and
+a first warning that arrives late — close to 100% already used, or past
+its elapsed-time gate — can give little or none either, since the CLI
+may refuse outright at 100% before the line is reached. What it does
+achieve is stopping dispatch at the line once a warning gives a
+window's use. Keeping headroom below the first warning needs either a
+local budget counting a window's own use or reading `unifiedWindows`;
+the owner decided (2026-09-28) not to add the first, and the engine does
+not do the second, so this reserve is a best-effort stop from the CLI's
+own reports, not a guarantee of headroom. Two more limits:
 
 - the use per call includes what other sessions used meanwhile, which
-  makes the pacing stricter, never looser;
+  brings the line sooner, never later;
 - a report that a call ran on usage credits (`isUsingOverage`) pauses
   the pass at once, process-wide, whatever the reserve, whatever window
   the report names or fails to, and whatever else it says or leaves

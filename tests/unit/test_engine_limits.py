@@ -61,7 +61,6 @@ from yizkr.pipeline.llm import (
     RESERVE,
     RESERVE_ENV,
     RESET_MARGIN,
-    THROTTLE,
     USAGE_LIMIT,
     AttemptingLlmClient,
     ClaudeCodeClient,
@@ -1024,9 +1023,10 @@ def calls(pacer, *reports: dict | None) -> None:
 
 
 class TestReserve:
-    """Calls are paced to leave a reserve of each usage window (25% by
-    default) to development sessions, from what the calls' streams report
-    of the window."""
+    """Dispatch stops at a reserve of each usage window (25% by default)
+    left to development sessions, from what the calls' streams report of
+    the window; short of that line, calls go at full speed, never spaced
+    (#495)."""
 
     @pytest.fixture
     def pacer(self, clock):
@@ -1061,9 +1061,10 @@ class TestReserve:
     def test_unified_windows_never_move_the_reported_utilization(
         self, pacer, clock
     ):
-        """With utilization reported too, the spacing is the one that
-        utilization alone gives (as in the test below), whatever
-        unifiedWindows say of the windows (#452 review)."""
+        """With utilization reported too, the window's use is the one that
+        utilization alone gives, whatever unifiedWindows say of the windows
+        (#452 review): at 0.60 used, short of the line, a call goes at
+        once, though unifiedWindows say 0.95."""
         resets = START + HOUR
         unified = {
             "unifiedWindows": {
@@ -1081,11 +1082,8 @@ class TestReserve:
             *[None] * 9,
             report(0.60, resets_at=resets) | unified,
         )
+        assert admit(pacer) == {"waited": 0.0, "refused": 0, "held": None}
         assert clock.slept == []
-        record = admit(pacer)
-        assert clock.slept == [pytest.approx(240.0)]
-        assert record["waited"] == pytest.approx(240.0)
-        assert record["held"] == THROTTLE
 
     def test_limit_scope_names_no_window(self, pacer, clock):
         """A report with limitScope and no rateLimitType names no window,
@@ -1096,66 +1094,60 @@ class TestReserve:
         assert admit(pacer) == {"waited": 0.0, "refused": 0, "held": None}
         assert clock.slept == []
 
-    def test_calls_are_spaced_so_the_headroom_lasts_until_the_reset(
-        self, pacer, clock
-    ):
+    def test_calls_short_of_the_line_are_never_spaced(self, pacer, clock):
+        """However near the reserve line a window is, the calls short of it
+        go at once, one after another: the work is done as soon as the
+        window allows, never spread out to the reset (#495)."""
         resets = START + HOUR
         # the window's first report, nine calls that report nothing, and a
-        # report 0.10 of the window later: 0.01 of it per call
+        # report 0.10 of the window later: 0.01 of it per call, with 0.15
+        # left above the reserve line
         calls(
             pacer,
             report(0.50, resets_at=resets),
             *[None] * 9,
             report(0.60, resets_at=resets),
         )
+        for _ in range(14):
+            assert admit(pacer) == {"waited": 0.0, "refused": 0, "held": None}
         assert clock.slept == []
-        record = admit(pacer)
-        # 0.15 left above the reserve line, at 0.01 a call, over the hour
-        # to the reset: a call every 240 s
-        assert clock.slept == [pytest.approx(240.0)]
-        assert record["waited"] == pytest.approx(240.0)
-        assert record["held"] == THROTTLE
-
-    def test_a_throttle_pause_resumes_at_its_own_next_slot(self, pacer, clock):
-        """A throttle hold's own next slot (240 s away, above) is always
-        short of the window's full reset (an hour away here): a pause on
-        it resumes there, never at the window's raw reset, which could be
-        hours away."""
-        resets = START + HOUR
-        calls(
-            pacer,
-            report(0.50, resets_at=resets),
-            *[None] * 9,
-            report(0.60, resets_at=resets),
-        )
-        with pytest.raises(UsageLimitReached) as paused:
-            admit(pacer, max_wait=100.0)
-        assert paused.value.reason == THROTTLE
-        assert paused.value.resumes_at == datetime.fromtimestamp(
-            clock.now + 240.0, UTC
-        )
+        assert clock.now == START
 
     def test_calls_in_flight_count_against_the_reserve(self, pacer, clock):
-        """Five calls' worth is left above the line: each call dispatched
-        and not yet answered takes its share, so the five are spread
-        evenly over the hour, the last one at the reset."""
+        """0.05 of the window is left above the line, at 0.02 a call: each
+        call dispatched and not yet answered takes its share, so three go
+        at once and the fourth meets the line, where dispatch stops until
+        the window reopens."""
         resets = START + HOUR
         calls(
             pacer,
-            report(0.60, resets_at=resets),
+            report(0.50, resets_at=resets),
             *[None] * 9,
             report(0.70, resets_at=resets),
         )
-        for _ in range(5):
-            admit(pacer)
-        assert clock.slept == [pytest.approx(720.0)] * 5
-        assert clock.now == pytest.approx(resets)
+        for _ in range(3):
+            assert admit(pacer)["held"] is None
+        assert clock.slept == []
+        with pytest.raises(UsageLimitReached) as paused:
+            admit(pacer, max_wait=0)
+        assert paused.value.reason == RESERVE
+        assert paused.value.resumes_at == datetime.fromtimestamp(resets, UTC)
 
     def test_dispatch_stops_at_the_reserve_line_until_the_reset(
         self, pacer, clock
     ):
         resets = START + 2 * HOUR
         calls(pacer, report(0.76, resets_at=resets))
+        record = admit(pacer)
+        assert record["held"] == RESERVE
+        assert clock.now == resets + RESET_MARGIN
+
+    def test_a_window_used_exactly_to_the_line_holds(self, pacer, clock):
+        """The line itself is the reserve's: a window used exactly up to
+        it (0.75, with a reserve of 0.25) holds the next call until the
+        window reopens."""
+        resets = START + 2 * HOUR
+        calls(pacer, report(0.75, resets_at=resets))
         record = admit(pacer)
         assert record["held"] == RESERVE
         assert clock.now == resets + RESET_MARGIN
@@ -1289,10 +1281,26 @@ class TestReserve:
         client.complete("Read the second letter.")
         assert clock.slept == []
         client.complete("Read the third letter.")
-        # 0.10 of the window a call, 0.15 left above the line: a call every
-        # 2400 s
-        assert clock.slept == [pytest.approx(2400.0)]
-        assert client.last_pacing()["held"] == THROTTLE
+        # 0.10 of the window a call, 0.15 left above the line: the third
+        # call goes at once, never spaced (#495)
+        assert clock.slept == []
+        assert client.last_pacing().get("held") is None
+
+    def test_a_client_waits_at_the_reserve_line_until_the_reset(
+        self, cli, clock
+    ):
+        resets = START + HOUR
+        cli.windows = [
+            report(0.50, resets_at=resets),
+            report(0.80, resets_at=resets),
+        ]
+        client = ClaudeCodeClient(max_wait=2 * HOUR)
+        client.complete("Read the first letter.")
+        client.complete("Read the second letter.")
+        assert clock.slept == []
+        client.complete("Read the third letter.")
+        assert client.last_pacing()["held"] == RESERVE
+        assert clock.now == pytest.approx(resets + RESET_MARGIN)
 
 
 class TestOverage:

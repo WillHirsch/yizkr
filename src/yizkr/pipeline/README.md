@@ -792,12 +792,12 @@ Two Anthropic-backed providers, differing in how usage is billed:
   hours, and weekly) rather than API rate limits. A call a limit refuses
   never fails a document: the engine asks again once the limit lifts, or
   pauses the pass (`UsageLimitReached`) with the time it can go on, and it
-  paces its calls, from what the CLI itself reports of each window, to
-  leave a reserve of it to development sessions
-  (`$YIZKR_CLAUDE_RESERVE`, `$YIZKR_CLAUDE_MAX_WAIT`; docs/LLM_CACHE.md,
-  Subscription limits) — best-effort, since the engine paces only from
-  the utilization the CLI reports once one of its own warning thresholds
-  is passed, so the reserve gives no protection below the first of
+  stops its calls, from what the CLI itself reports of each window, at a
+  reserve of it left to development sessions, going at full speed short
+  of it (`$YIZKR_CLAUDE_RESERVE`, `$YIZKR_CLAUDE_MAX_WAIT`;
+  docs/LLM_CACHE.md, Subscription limits) — best-effort, since the engine
+  reads only the utilization the CLI reports once one of its own warning
+  thresholds is passed, so the reserve gives no protection below the first of
   those. (CLI 2.1.288 also reports each window's use in its
   `rate_limit_event`'s `unifiedWindows`, whatever the thresholds; the
   engine does not read it.)

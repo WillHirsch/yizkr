@@ -418,8 +418,8 @@ class UsageLimitReached(PassPaused):
     already in flight when it lands, may already have used credits —
     only turning extra usage off on the account guarantees none does.
 
-    `reason` names the hold (``USAGE_LIMIT``, ``RESERVE``, ``THROTTLE``,
-    ``RATE_LIMIT``, ``OVERLOADED``, ``OVERAGE`` or ``CLOSED``), `window`
+    `reason` names the hold (``USAGE_LIMIT``, ``RESERVE``, ``RATE_LIMIT``,
+    ``OVERLOADED``, ``OVERAGE`` or ``CLOSED``), `window`
     the CLI's name for the usage window when one is known (``five_hour``,
     ``seven_day``, ...), and `resumes_at` (a UTC datetime) when the pass
     can go on: the time the CLI reported that the window reopens, or,
@@ -1371,15 +1371,15 @@ def tool_failures(
 #   is estimated from its last reported utilization, plus the use of each
 #   call completed or in flight since, at the use per call measured
 #   between the first report in the window and the latest. Dispatch
-#   stops at the reserve line until the window reopens, and short of it
-#   is spaced so that what is left above the line lasts until the reset.
-#   This paces only from rate_limit_info's utilization, never from
-#   unifiedWindows, so it is best-effort, not a guarantee: below the CLI's
-#   first warning it has nothing to pace against, so the reserve gives no
-#   protection there, and a first warning that arrives late (close to 100%
-#   already used, or past its elapsed-time gate) can give little or none
-#   either. The use per call includes what other sessions used in the
-#   same time, which makes the pacing stricter, never looser;
+#   stops at the reserve line until the window reopens; short of it,
+#   calls go at full speed, never spaced, so the work is done as soon as
+#   the window allows. It reads only rate_limit_info's utilization, never from
+#   unifiedWindows, so it is best-effort, not a guarantee: below
+#   the CLI's first warning it has no use to go by, so the reserve gives
+#   no protection there, and a first warning that arrives late (close to
+#   100% already used, or past its elapsed-time gate) can give little or
+#   none either. The use per call includes what other sessions used in the
+#   same time, which brings the line sooner, never later;
 # * pauses dispatch process-wide the moment a report says a call ran on usage
 #   credits, whatever the reserve, whatever window it names or fails to, and
 #   whatever else it says or leaves out. This only stops dispatch once that
@@ -1405,14 +1405,12 @@ LIMIT_STATUSES = frozenset({429, 529})
 LIMIT_ERRORS = frozenset({"rate_limit", "overloaded"})
 
 # Why a call waited, or its pass paused: a used-up usage window; a window
-# used up to the reserve; dispatch spaced to keep the reserve; a refusal
-# with no reset time the local clock has not passed; an overload; a
-# report that a call ran on usage credits (whatever else that report
-# said, or left out, of the window it named); and a wait the client's
-# close ended.
+# used up to the reserve; a refusal with no reset time the local clock has
+# not passed; an overload; a report that a call ran on usage credits
+# (whatever else that report said, or left out, of the window it named);
+# and a wait the client's close ended.
 USAGE_LIMIT = "usage limit"
 RESERVE = "reserve"
-THROTTLE = "throttle"
 RATE_LIMIT = "rate limit"
 OVERLOADED = "overloaded"
 OVERAGE = "usage credits"
@@ -1735,7 +1733,6 @@ class _Pacer:
         self._pause_until = 0.0
         self._dispatched = 0
         self._completed = 0
-        self._last_dispatch: float | None = None
         # the hold the log last announced
         self._announced: tuple | None = None
 
@@ -1788,7 +1785,6 @@ class _Pacer:
                 hold = self._hold(now, reserve)
                 if hold is None or hold.until <= now:
                     self._dispatched += 1
-                    self._last_dispatch = now
                     return
             delay = hold.until - now
             record["held"] = hold.reason
@@ -1950,25 +1946,14 @@ class _Pacer:
             used = self._used(window)
             if used is None:
                 continue
-            left = line - used
-            if left <= 0:
+            if used >= line:
                 holds.append(_Hold(reopens, RESERVE, name, window.resets_at))
-            elif window.per_call and self._last_dispatch is not None:
-                spacing = (window.resets_at - now) * window.per_call / left
-                holds.append(
-                    _Hold(
-                        min(self._last_dispatch + spacing, reopens),
-                        THROTTLE,
-                        name,
-                        window.resets_at,
-                    )
-                )
         return max(holds, key=lambda hold: hold.until, default=None)
 
     def _announce(self, hold: _Hold, reserve: float) -> None:
         """Say in the log, once per hold, why calls wait: once for a
-        window's hold, however many calls wait for it or are spaced by it,
-        and once for each backoff."""
+        window's hold, however many calls wait for it, and once for each
+        backoff."""
         announced = (
             hold.reason,
             hold.window,
@@ -1987,16 +1972,6 @@ class _Pacer:
             )
             return
         window = f"the claude subscription's {_describe_window(hold.window)}"
-        if hold.reason == THROTTLE:
-            logger.warning(
-                "%s nears the reserve left to development sessions (%s): "
-                "calls are spaced so that what is left above it lasts "
-                "until the window reopens at %s",
-                window,
-                f"{reserve:.0%}",
-                _stamp(hold.resets_at or hold.until),
-            )
-            return
         if hold.reason == USAGE_LIMIT:
             why = f"{window} is used up"
         elif hold.reason == RESERVE:
@@ -2022,10 +1997,7 @@ def _paused(
     is still ahead, else when the engine would have asked again; for a
     call reported to have run on usage credits, the subscription says no
     time at all, so `resumes_at` is None rather than a manufactured
-    far-future timestamp (`_stamp` cannot format one). A throttle hold's
-    own `until` is always its own next slot, short of the window's full
-    reset (`_hold`), so it resumes there rather than at the reopen the
-    narrative below still names."""
+    far-future timestamp (`_stamp` cannot format one)."""
     if hold.reason == OVERAGE:
         return UsageLimitReached(
             "the claude subscription reports a call ran on usage "
@@ -2042,7 +2014,6 @@ def _paused(
     ahead = hold.resets_at is not None and hold.resets_at > now
     reopens = hold.resets_at if ahead else hold.until
     when = _stamp(reopens)
-    resumes = hold.until if hold.reason == THROTTLE else reopens
     window = f"the claude subscription's {_describe_window(hold.window)}"
     reserved = (
         f"the reserve this pass leaves to development sessions "
@@ -2063,11 +2034,6 @@ def _paused(
             f"{window} is used up to {reserved}, and it reopens at {when}: "
             f"later than {longest}"
         )
-    elif hold.reason == THROTTLE:
-        what = (
-            f"{window} is so near {reserved} that its next call would wait "
-            f"longer than {longest}; the window reopens at {when}"
-        )
     else:
         what = (
             f"the claude CLI keeps refusing calls ({hold.reason}"
@@ -2075,13 +2041,12 @@ def _paused(
             + f"), and the engine would ask again at {when}: later than "
             f"{longest}"
         )
-    resumed = when if resumes == reopens else _stamp(resumes)
     return UsageLimitReached(
         f"{what}. The pass is paused and makes no further calls; its "
-        f"completed outputs are kept. Run it again after {resumed}.",
+        f"completed outputs are kept. Run it again after {when}.",
         reason=hold.reason,
         window=hold.window,
-        resumes_at=_utc(resumes),
+        resumes_at=_utc(reopens),
     )
 
 

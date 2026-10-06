@@ -251,7 +251,6 @@ HOLDS = frozenset(
     {
         "usage limit",
         "reserve",
-        "throttle",
         "rate limit",
         "overloaded",
         "usage credits",
