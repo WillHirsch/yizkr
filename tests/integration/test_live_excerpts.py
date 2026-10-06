@@ -129,6 +129,10 @@ class Engine:
 
 
 class Scripted(Orchestrator):
+    # the one instance every live session writes to holds the writes of
+    # many identity maps, their labels kept apart by their session marks
+    one_map = False
+
     def _llm(self, role, doc):
         return Engine()
 

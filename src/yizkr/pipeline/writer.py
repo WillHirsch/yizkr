@@ -44,113 +44,118 @@ Per batch, the writer:
    and under any reference, is left as it is (`ensure_self_typed` in
    yizkr.pipeline.registrar). A dry run writes neither;
 2. finds or makes the item of every unresolved `local` subject or value
-   through the identity map the batch is written with, and through it
-   alone (yizkr.pipeline.clustering, ADR-0035): each local id is a
-   mention of the batch (yizkr.pipeline.fingerprints), every mention is
-   in one cluster of the map, and each cluster is one item. Before
-   anything is read or written, a batch that names a local entity is
-   refused whole (UnmappedMention) when it is written with no map, or
-   when the map does not hold every mention of the batch under an
-   artifact its claims cite (mapped_clusters); an entity an approved
-   equivalence names (ADR-0007) needs none, as its record names its item
-   by QID. No item is ever found by its label alone, so a curator's
-   decision that two entities are distinct, and the map's keeping two
-   mentions apart, are never undone by a label they share. A cluster's
-   item is made under its label (the label most of its mentions give,
-   then the longest, of those the writer can send, `cluster_terms`), in
-   the form the instance keeps labels in, whatever form the batch gives
-   it in: trimmed, cleaned up, in Unicode NFC, and cut to the
-   characters the instance holds in a label (`_term_text`), with a
-   description made from the map alone (source_descriptor): the
-   cluster's kind; the artifact kind of the document its mentions come
-   from (the first of the artifact's `instance of` values, deprecated
-   ones aside, that the vocabulary holds, read and never written), or
-   how many documents they come from; and, from the second on, the
-   cluster's place among the map's clusters of its label and kind, in
-   the order of their cluster ids, so two people of one name, which
-   Wikibase refuses as two items with one label and one description,
-   take two descriptions, and a write of a batch with the same map, on
-   the instance or after a reset, finds each cluster's item again: the
-   earliest item under its label whose English description is its
-   description (_cluster_item). Only the items under the label are read
-   for it. The description is never a summary or a ref's description,
-   which may give what the source asserts of the entity, such as its
-   life dates, nor a title, which may name a living person, nor a QID or
-   a digest. A minted item whose description would be its label gets
-   none, with a warning, as Wikibase refuses an item whose label and
-   description are the same. The keys hold within one map: a scratch
-   run resets the instance before it writes its map (ADR-0025). The
-   instance's labels are read once a write, with the vocabulary known,
-   and the run item is found among them and the items the write makes
-   (`_FoundLabels`); a label two or more items hold names the
+   through the identity map the batch is written with, and through it alone
+   (yizkr.pipeline.clustering, ADR-0035): each local id is a mention of the
+   batch (yizkr.pipeline.fingerprints), every mention is in one cluster of
+   the map, and each cluster is one item. Before anything is read or
+   written, a batch that names a local entity is refused whole
+   (UnmappedMention) when it is written with no map, or when the map does
+   not hold every mention of the batch under an artifact its claims cite
+   (mapped_clusters); an entity an approved equivalence names (ADR-0007)
+   needs none, as its record names its item by QID. No item is ever found
+   by its label alone, so a curator's decision that two entities are
+   distinct, and the map's keeping two mentions apart, are never undone by
+   a label they share. A cluster's item is made under its label (the label
+   most of its mentions give, then the longest, of those the writer can
+   send, `cluster_terms`), in the form the instance keeps labels in,
+   whatever form the batch gives it in: trimmed, cleaned up, in Unicode
+   NFC, and cut to the characters the instance holds in a label
+   (`_term_text`), with a description made from the map alone
+   (source_descriptor): the cluster's kind; the artifact kind of the
+   document its mentions come from (the first of the artifact's `instance
+   of` values, deprecated ones aside, that the vocabulary holds, read and
+   never written), or how many documents they come from; and, from the
+   second on, the cluster's place among the map's clusters of its label and
+   kind, in the order of their cluster ids, so two people of one name,
+   which Wikibase refuses as two items with one label and one description,
+   take two descriptions, and a write of a batch with the same map, on the
+   instance or after a reset, finds each cluster's item again: the earliest
+   item under its label whose English description is its description
+   (_cluster_item). Only the items under the label are read for it. The
+   description is never a summary or a ref's description, which may give
+   what the source asserts of the entity, such as its life dates, nor a
+   title, which may name a living person, nor a QID or a digest. A minted
+   item whose description would be its label gets none, with a warning, as
+   Wikibase refuses an item whose label and description are the same. The
+   keys hold within one map, so an instance holds the writes of one map: a
+   run item's label gives the map's tag, and a batch written with another
+   map than the instance's run items record is refused before anything is
+   written (OtherIdentityMap), unless the caller allows maps to mix
+   (`one_map`), as on an instance whose writers keep their labels apart; a
+   scratch run resets the instance before it writes its one map (ADR-0025).
+   The mentions are read from the batch the map was made from, when the
+   caller gives it (`mapped_from`): the reviewed batch a write is given may
+   have lost claims, which would move the mentions of a batch without an
+   entity manifest. The instance's labels are read once a write, with the
+   vocabulary known, and the run item is found among them and the items the
+   write makes (`_FoundLabels`); a label two or more items hold names the
    numerically earliest of them (`ItemLabels`). Each item is made in one
-   write, with its label, its description, its aliases, its `instance
-   of`, and an unclassified entity's `type hint`, the last two with two
+   write, with its label, its description, its aliases, its `instance of`,
+   and an unclassified entity's `type hint`, the last two with two
    references (_kind_references): stated in -> the artifact of the claim
    that mints it, and inferred from extraction run -> the run item; so a
-   write that fails leaves no item, and none without its kind. An
-   entity's kind is the extraction's proposal, a machine write like any
-   claim (ADR-0003). A local ref resolves through the batch's
-   entity-manifest record of its id when there is one (ADR-0007, read
-   through `entity_records` in yizkr.pipeline.review, as the depicts gate
-   reads it): the record gives the kind, type hint and aliases;
-   otherwise the ref gives its own label and kind. A cluster's item is
-   made with, or gains, append-only, as aliases the labels of all its
-   mentions in the map and every label and alias the batch gives a local
-   id of the cluster in a claim it writes; those of an entity an
-   approved equivalence names go on before any claim is written. A
-   cluster no mention of which has a label the instance keeps has no
-   item: a ref to it raises ValueError, as one with no label does. A kind
-   the vocabulary lacks is recorded for no item, minted or found: the
-   result's `warnings` name each entity that gives one, found before the
-   first write: a manifest record's kind whatever its claims, and the
-   kind of a ref without a record only when a written claim mentions it.
-   The label a cluster's item takes follows the side rule (ADR-0010):
-   it takes its label when the item under the label is on its side (an
-   artifact or a part of one, `is_artifact_item`: an item with a `media
-   SHA-1` or a `media file`, or an `instance of` an artifact kind or of
-   artifact fragment, for an artifact-kind cluster, of an artifact kind
-   or of artifact fragment, `is_artifact_kind`, such as the GEDCOM
-   import's media object, as long as registration did not make it
-   (_registered): an artifact, which carries a `media SHA-1`, or its page
-   fragment, `part of` one; an item that is neither for any other), or
+   write that fails leaves no item, and none without its kind. An entity's
+   kind is the extraction's proposal, a machine write like any claim
+   (ADR-0003). A local ref resolves through the batch's entity-manifest
+   record of its id when there is one (ADR-0007, read through
+   `entity_records` in yizkr.pipeline.review, as the depicts gate reads
+   it): the record gives the kind, type hint and aliases; otherwise the ref
+   gives its own label and kind. A cluster's item is made with, or gains,
+   append-only, as aliases the labels of all its mentions in the map and
+   every label and alias the batch gives a local id of the cluster in a
+   claim it writes; those of an entity an approved equivalence names go on
+   before any claim is written. A cluster no mention of which has a label
+   the instance keeps has no item: a ref to it raises ValueError, as one
+   with no label does. A kind the vocabulary lacks is recorded for no item,
+   minted or found: the result's `warnings` name each entity that gives
+   one, found before the first write: a manifest record's kind whatever its
+   claims, and the kind of a ref without a record only when a written claim
+   mentions it. The label a cluster's item takes follows the side rule
+   (ADR-0010): it takes its label when the item under the label is on its
+   side (an artifact or a part of one, `is_artifact_item`: an item with a
+   `media SHA-1` or a `media file`, or an `instance of` an artifact kind or
+   of artifact fragment, for an artifact-kind cluster, of an artifact kind
+   or of artifact fragment, `is_artifact_kind`, such as the GEDCOM import's
+   media object, as long as registration did not make it (_registered): an
+   artifact, which carries a `media SHA-1`, or its page fragment, `part of`
+   one; an item that is neither for any other, but a manifest vocabulary
+   item or a run item, whose label must name it alone, _process_item), or
    when no item holds the label. Otherwise it takes its tagged label
    (`tagged_label`): its label with MEDIA_OBJECT_TAG at its end for an
    artifact-kind cluster (`media_object_label`), and with ENTITY_TAG for
-   any other, whatever its kind, its own label then an alias of the
-   item. Where a media object does not take its label, the result's
-   `flags` name, against the media object's item, as unhashed-title,
-   every artifact registered under the label, whatever item holds it:
-   the artifact under it (the fragment's whole, for a fragment) and
-   every artifact under it with its own content tag in it ([sha1[:8]] of
-   its media, or of the fragment's whole), at its end or before a
-   fragment's ", page <n>" (_registered_under), in the order of their
-   items, as the registrar flags each when the registration comes second
-   (yizkr.pipeline.registrar), on every write that finds them so; a dry
-   run names the item's placeholder. Where each cluster's item is found
-   or made is settled before the first write (_plan), in a dry run too,
-   with the labels the batch itself makes items under: the clusters not
-   on the artifact side are placed first, so of a person and a media
-   object of one batch under a label no item holds, the person takes it,
-   whichever the batch names first. A cluster that may take neither its
-   label nor its tagged label, as when registered artifacts hold both
-   labels of a media object, is refused then, with every claim that
-   names one of its local ids: the result's `refused` names those claims
-   and a warning names each entity by its local id, its claims by their
-   claim ids and the two items by QID, and the rest of the batch is
-   written. For a refused artifact-kind entity the `flags` name, against
-   the item under its tagged label, each artifact registered under its
-   label; a refusal with no such pair, as of a person, place or other
+   any other, whatever its kind, its own label then an alias of the item.
+   Where a media object does not take its label, the result's `flags` name,
+   against the media object's item, as unhashed-title, every artifact
+   registered under the label, whatever item holds it: the artifact under
+   it (the fragment's whole, for a fragment) and every artifact under it
+   with its own content tag in it ([sha1[:8]] of its media, or of the
+   fragment's whole), at its end or before a fragment's ", page <n>"
+   (_registered_under), in the order of their items, as the registrar flags
+   each when the registration comes second (yizkr.pipeline.registrar), on
+   every write that finds them so; a dry run names the item's placeholder.
+   Where each cluster's item is found or made is settled before the first
+   write (_plan), in a dry run too, with the labels the batch itself makes
+   items under: the clusters not on the artifact side are placed first, so
+   of a person and a media object of one batch under a label no item holds,
+   the person takes it, whichever the batch names first. A cluster that may
+   take neither its label nor its tagged label, as when registered
+   artifacts hold both labels of a media object, is refused then, with
+   every claim that names one of its local ids: the result's `refused`
+   names those claims and a warning names each entity by its local id, its
+   claims by their claim ids and the two items by QID, and the rest of the
+   batch is written. For a refused artifact-kind entity the `flags` name,
+   against the item under its tagged label, each artifact registered under
+   its label; a refusal with no such pair, as of a person, place or other
    entity, or of a media object with no artifact registered under its
    label, is the warning and `refused` alone (ADR-0010). The plan is made
    of the claims the writer writes, without those refused before it
-   (pre_plan_refusals: for their text, or as a misplaced document
-   subject, ADR-0035 §3.4): an entity, such as a media object, that only
-   such claims name is never placed, so it is neither blocked nor
-   flagged. Of a manifest record that only refused claims name, refused
-   before the plan or with an entity the plan blocks, nothing is sent,
-   so none of its aliases or type hint is named in the result's
-   `refused_terms` (_unsent_records);
+   (pre_plan_refusals: for their text, or as a misplaced document subject,
+   ADR-0035 §3.4): an entity, such as a media object, that only such claims
+   name is never placed, so it is neither blocked nor flagged. Of a
+   manifest record that only refused claims name, refused before the plan
+   or with an entity the plan blocks, nothing is sent, so none of its
+   aliases or type hint is named in the result's `refused_terms`
+   (_unsent_records);
 3. writes each claim as a statement at NORMAL rank (the contract has
    no rank field — ADR-0002) with TWO references (ADR-0003):
    * stated in -> artifact, with page number / printed page number /
@@ -324,6 +329,7 @@ import hashlib
 import json
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
@@ -381,6 +387,11 @@ MEDIA_OBJECT_TAG = " [media object]"
 # naming one person meet on one item, as they do under a free label
 # (tagged_label)
 ENTITY_TAG = " [not an artifact]"
+# how many hex digits of an identity map's hash a run item's label gives
+# after its date (_run_terms), and the label a run item written with a map has
+# (BatchWriter._other_maps)
+MAP_TAG = 12
+_RUN_LABEL_MAP = re.compile(r"^extraction run \S+ map ([0-9a-f]{12}) ")
 # the content tag registration gives a label another item holds: " [", the
 # first 8 hex digits of the media's SHA-1, "]" (yizkr.pipeline.registrar)
 _CONTENT_TAG = re.compile(r" \[[0-9a-f]{8}\]")
@@ -547,6 +558,23 @@ def unsupported_dates(batch: ClaimBatch) -> list[str]:
                     f"{problem}"
                 )
     return found
+
+
+class OtherIdentityMap(RuntimeError):
+    """The instance holds writes of another identity map than the one a
+    batch is written with: items are keyed within one map (step 2 of the
+    module docstring)."""
+
+    def __init__(self, tags: list[str]) -> None:
+        self.tags = tags
+        shown = ", ".join(tags)
+        super().__init__(
+            f"the instance holds the writes of another identity map (map "
+            f"{shown}, by the run items' labels), and a cluster's item is "
+            f"found again only by the map it was written with: write with "
+            f"that map, or reset the instance (yizkr scratch reset) before "
+            f"writing with this one. Nothing was written."
+        )
 
 
 class UnregisteredArtifactError(LookupError):
@@ -1414,9 +1442,14 @@ def _run_terms(batch: ClaimBatch, identity_hash: str = "") -> tuple[str, str]:
     """The label and description of the batch's run item, as the writer
     looks for and writes them. The description records the hash of the
     identity map the batch is written with, when there is one
-    (`identity_hash`), which the label's fingerprint covers too
-    (batch_fingerprint). Both are in the form the instance keeps a term in,
-    cut with a digest of the whole when a long model identifier takes the
+    (`identity_hash`); the label's fingerprint covers it too
+    (batch_fingerprint), and the label gives "map" and its first MAP_TAG
+    hex digits after the run's date, before the model identifier, which a
+    cut may take off the label's end: by them a write finds the maps an
+    instance was written with in its labels alone
+    (BatchWriter._other_maps). Both are in the form the instance keeps a
+    term in, cut with a digest of the whole when a long model identifier
+    takes the
     label past what the instance holds, so each batch's run item keeps a
     label of its own (_term_text). Raises ValueError, naming the
     characters, when either holds a character Python's Unicode tables do
@@ -1426,8 +1459,9 @@ def _run_terms(batch: ClaimBatch, identity_hash: str = "") -> tuple[str, str]:
     text, from the run's own settings, so the batch is refused before
     anything is read or written rather than its run left unlabelled."""
     run = batch.extraction_run
+    tag = f"map {identity_hash[:MAP_TAG]} " if identity_hash else ""
     label = (
-        f"extraction run {run.started_at.date().isoformat()} "
+        f"extraction run {run.started_at.date().isoformat()} {tag}"
         f"{run.model_identifier} {batch_fingerprint(batch, identity_hash)}"
     )
     description = (
@@ -1448,11 +1482,16 @@ def _run_terms(batch: ClaimBatch, identity_hash: str = "") -> tuple[str, str]:
 
 
 def mapped_clusters(
-    batch: ClaimBatch, identity: IdentityMap | None
+    batch: ClaimBatch,
+    identity: IdentityMap | None,
+    mapped_from: ClaimBatch | None = None,
 ) -> tuple[dict[str, str], str | None, dict[str, ClusterTerms]]:
     """Each local id of `batch`, by the id of its mention's cluster in
     `identity`; the document the batch's mentions are mapped under; and the
-    map's clusters' terms (cluster_terms). Nothing for a batch that names
+    map's clusters' terms (cluster_terms). The mentions are read from
+    `mapped_from`, the batch the map was made from, when it is given (the
+    extraction's batch, of which `batch` is the reviewed and resolved
+    form), and from `batch` otherwise. Nothing for a batch that names
     no local entity by a local ref, but those an approved equivalence
     names, whose item it is (ADR-0007): it needs no map. Raises
     UnmappedMention for a batch that names one when `identity` is None, or
@@ -1478,16 +1517,21 @@ def mapped_clusters(
         raise UnmappedMention(
             named, "the batch is written with no identity map"
         )
-    documents = dict.fromkeys(
-        claim.source.artifact.sha1 for claim in batch.claims
-    )
-    document, clusters = identity.clusters_of(batch, documents)
-    # a local ref of a batch with an entity manifest that names no record
-    # of it is no mention of the batch
+    # the mentions are those of the batch the map was made from: a review
+    # that drops claims changes the stand-in label and the order of the
+    # mentions of a batch without an entity manifest, never theirs
+    source = mapped_from or batch
+    cited = Counter(claim.source.artifact.sha1 for claim in source.claims)
+    # the artifact most of its claims cite first: the document's own
+    documents = sorted(cited, key=lambda sha1: -cited[sha1])
+    document, clusters = identity.clusters_of(source, documents)
+    # a local ref the mapped batch does not name, or that a batch with an
+    # entity manifest has no record of, is no mention of it
     unrecorded = [local_id for local_id in named if local_id not in clusters]
     if unrecorded:
         raise UnmappedMention(
-            unrecorded, "the batch's entity manifest has no record of them"
+            unrecorded,
+            "the batch the map was made from has no mention of them",
         )
     return clusters, document, cluster_terms(identity)
 
@@ -1731,10 +1775,10 @@ class BatchWriter:
         return qid
 
     def _kind_references(self, artifact_qid: str, run_qid: str | None):
-        """The references of the kind and type hint a minted item is made
-        with: stated in the artifact of the claim that mints it, and
-        inferred from the run (_references). The one place a minted item's
-        kind is referenced."""
+        """The references of a kind or type hint an item is made with or
+        gains (step 5 of the module docstring): stated in the artifact of
+        the claim whose ref gives it, and inferred from the run
+        (_references). The one place an entity's kind is referenced."""
         return self._references(artifact_qid=artifact_qid, run_qid=run_qid)
 
     def _cluster_item(self, placement: _Placement) -> str | None:
@@ -1848,13 +1892,39 @@ class BatchWriter:
         hashing, another media object's item, or a fragment of an artifact
         with no hash. Any other cluster may take the label of an item that is
         neither. Each may take a label the batch makes an item under for a
-        cluster of its own side."""
+        cluster of its own side. No cluster takes the label of a vocabulary
+        item or a run item (_process_item)."""
         qid = labels.get(label)
         if qid is None:
             return planned.get(label, artifact) == artifact
+        if self._process_item(qid):
+            return False
         if artifact:
             return self._registered(qid) is None and self._artifact_item(qid)
         return not self._artifact_item(qid)
+
+    def _process_item(self, qid: str) -> bool:
+        """Is the item `qid` one whose label must name it alone: an item of
+        the manifest's vocabulary, or a run item (an `instance of`
+        extraction run)? No cluster takes such a label, so a cluster under
+        a vocabulary item's label, as "marriage", takes its tagged label
+        and the vocabulary keeps its label to itself (ItemLabels.sole)."""
+        if qid in set(self.items.values()):
+            return True
+        run = self.items.get("extraction_run")
+        if run is None:
+            return False
+        claims = self._entity(qid).get_json().get("claims") or {}
+        values = (
+            ((statement.get("mainsnak") or {}).get("datavalue") or {}).get(
+                "value"
+            )
+            for statement in claims.get(self.properties["instance_of"], [])
+        )
+        return any(
+            isinstance(value, dict) and value.get("id") == run
+            for value in values
+        )
 
     def _place(
         self,
@@ -2291,6 +2361,20 @@ class BatchWriter:
 
     # -- extraction-run item -------------------------------------------------
 
+    def _other_maps(self) -> list[str]:
+        """The MAP_TAG-digit tags of every identity map other than the one
+        the batch is written with that the labels of the instance's run
+        items record (_run_terms), sorted. Read from the labels alone."""
+        own = self._identity_hash[:MAP_TAG]
+        return sorted(
+            {
+                found.group(1)
+                for label in self._labels.items()
+                if (found := _RUN_LABEL_MAP.match(label))
+            }
+            - {own}
+        )
+
     def ensure_run_item(
         self, batch: ClaimBatch, identity_hash: str = ""
     ) -> str:
@@ -2543,9 +2627,7 @@ class BatchWriter:
         ]
         if any(self._has_artifact_reference(s, artifact_qid) for s in same):
             return
-        references = self._references(
-            artifact_qid=artifact_qid, run_qid=result.run_qid
-        )
+        references = self._kind_references(artifact_qid, result.run_qid)
         target = next((s for s in same if not self._is_curated(s)), None)
         if target is not None:
             present = {
@@ -2729,6 +2811,8 @@ class BatchWriter:
         batch: ClaimBatch,
         bulk_accepted: bool = False,
         identity: IdentityMap | None = None,
+        mapped_from: ClaimBatch | None = None,
+        one_map: bool = True,
     ) -> WriteResult:
         """Write `batch`, finding or minting the item of each of its local
         entities through the identity map `identity` alone (step 2 of the
@@ -2740,7 +2824,14 @@ class BatchWriter:
         label or description holds a character Python's Unicode tables do
         not know (_run_terms), and UnmappedMention, then too, when the batch
         names a local entity and `identity` is None or does not hold every
-        mention of the batch (yizkr.pipeline.clustering.IdentityMap). A
+        mention of the batch (yizkr.pipeline.clustering.IdentityMap), read
+        from `mapped_from`, the batch the map was made from, when it is
+        given (mapped_clusters). With `one_map`, it raises OtherIdentityMap
+        before anything is written, in a dry run too, when a run item on the
+        instance records another map than `identity` (_other_maps): an
+        instance holds the writes of one map. Without it, as on an instance
+        whose writers keep their labels apart, as the live tests' session
+        marks do, maps may mix. A
         claim whose own text the instance cannot hold raises nothing: it is
         refused alone, and the rest of the batch is written (the module
         docstring); so is an entity that may take neither its label nor its
@@ -2759,7 +2850,7 @@ class BatchWriter:
         # before anything is read or written: an unmapped one refuses the
         # batch whole (_map)
         self._clusters, self._document, self._terms = mapped_clusters(
-            batch, identity
+            batch, identity, mapped_from
         )
         self._identity_hash = (
             identity.hash if identity and self._clusters else ""
@@ -2790,6 +2881,11 @@ class BatchWriter:
         self._items = {}
         self._aliased = set()
         self._entity_cache = {}
+        # one map an instance: refused before anything is written
+        if one_map and self._identity_hash:
+            others = self._other_maps()
+            if others:
+                raise OtherIdentityMap(others)
         # found before the first write, in a dry run as well: the claims
         # whose own text the instance cannot hold, which the loop below
         # leaves out whole

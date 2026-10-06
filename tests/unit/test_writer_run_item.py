@@ -18,7 +18,7 @@ from __future__ import annotations
 import pytest
 from wikibaseintegrator.wbi_enums import WikibaseRank
 
-from tests.fixtures.identity import write_mapped
+from tests.fixtures.identity import mapped, write_mapped
 from tests.unit.test_pipeline import (
     ITEMS,
     MEDIA_SHA1,
@@ -91,7 +91,8 @@ def left_untyped(monkeypatch) -> tuple[FakeWiki, str]:
             write_mapped(BatchWriter(wiki), batch())
     (run,) = wiki.wbi.item.store
     assert str(wiki.wbi.item.get(run).labels.get("en")).startswith(
-        "extraction run 2026-07-12 fake-model "
+        f"extraction run 2026-07-12 map {mapped(batch()).hash[:12]} "
+        "fake-model "
     )
     assert kinds(wiki, run) == []
     return wiki, run

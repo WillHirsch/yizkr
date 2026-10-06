@@ -16,7 +16,9 @@ as GEDCOM 5.5.1 has one asserted, by a DATE or a PLAC with a value or a
 Y, and one that states none is counted. An end of unstated kind is
 labelled as the end of its union. Two unions of one couple, or their
 events, get labels of their own, told apart by a number, since the
-writer finds an item by its label, and an entity whose id another
+writer found an item by its label (amended by #109, 2026-10-06: the
+writer finds it through the identity map; the numbers keep the labels a
+reader reads apart), and an entity whose id another
 entity holds (a family whose xref is another union's event's, or a
 person's) takes a numbered one. Each union and each event is counted
 by kind in the adapter's outcomes, and so is an undated divorce or

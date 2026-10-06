@@ -30,7 +30,14 @@
   item. The writer refuses a batch whole, before it reads or writes
   anything, when a mention of it is not in the map, or it is written with
   none (`UnmappedMention`); an entity an approved equivalence names needs
-  none, its record naming its item. The resolve step matches nothing by
+  none, its record naming its item. It reads the mentions from the batch
+  the map was made from (`mapped_from`, the extraction's batch in `ingest
+  run`), so a review that drops claims never moves a local id of a batch
+  without a manifest to another mention. A single batch written without a
+  map, as `ingest gedcom` and then `ingest write`, or a face batch whose
+  gallery person has no QID, is refused so too (decision EW): the
+  scratch run's write is the write path, and #119 removes the
+  per-document one. The resolve step matches nothing by
   label and reads no wiki: it leaves every local ref local, and, given
   the map, refuses an unmapped batch before its review. So a curator's
   'distinct', and the map's keeping two mentions apart, are never undone
@@ -42,17 +49,33 @@
   type hint, each cited to the artifact of the claim the ref is in. The
   item is found again by its label and its description, which the map
   alone decides (below), so writing the same batches with the same map,
-  again or after a reset, gives the same items and no duplicates. The
-  keys hold within one map: a scratch run resets the instance before it
-  writes its map (ADR-0025), and `ingest run` writes with the map of its
-  run's documents, kept in the run directory's `corpus/clustering`, as
-  the scratch run's clustering stage keeps its own. The run item's
-  description records the hash of the map a batch is written with, and
-  its label's fingerprint covers it, so a write with another map has a
-  run item of its own. The side rule of ADR-0010 still names the label:
+  again or after a reset, gives the same items and no duplicates.
+- **One identity map an instance** (decision EV, the orchestrator's;
+  #109). The keys hold within one map: a map grown by a document places
+  same-named clusters anew and counts a cluster's sources anew, so the
+  same key could name another cluster's item. So an instance holds the
+  writes of one map. The run item's description records the hash of the
+  map a batch is written with, its label gives `map` and the hash's first
+  12 hex digits after its date, and the writer refuses a batch, before
+  anything is written, when a run item on the instance records another
+  map (`OtherIdentityMap`): write with that map, or reset the instance. A
+  scratch run resets the instance before it writes its one map
+  (ADR-0025), so it meets this by construction. `ingest run` makes its
+  map once an invocation, at its first write, over every document of the
+  run with a batch, the excerpts its PDFs have found among them, kept in
+  the run directory's `corpus/clustering`; a document whose batch is
+  made after it fails its write with `UnmappedMention`, before it is
+  registered, until a later invocation, whose map, if the documents
+  changed it, needs a reset instance. The live tests, which every session
+  writes to one instance under labels their session marks keep apart,
+  turn the refusal off. The side rule of ADR-0010 still names the label:
   where an artifact holds a person's name, the person's item takes the
   `" [not an artifact]"` label, and a media object's the `" [media
-  object]"` label where a registered artifact holds its title. The
+  object]"` label where a registered artifact holds its title. No
+  cluster takes the label of a manifest vocabulary item or a run item,
+  which must name one item alone: a marriage a document calls
+  "marriage" takes `marriage [not an artifact]`, so the vocabulary reads
+  on. The
   clustering record item (#130) will join the run as a reference of a
   minted item's kind, the one place the writer references it
   (`_kind_references`).
@@ -74,8 +97,11 @@
   named in a certificate`, `human named in 3 sources`. From the second
   on, the cluster's place among the map's clusters of its label and
   kind, in the order of their cluster ids, follows in brackets: `human
-  named in a genealogical report (2)`. So two people of one name, in one
-  document or in two of one kind, take two descriptions, as Wikibase
+  named in a genealogical report (2)`. Every cluster of the map counts,
+  one of mentions kept for audit alone (extract=false) too, so a "(2)"
+  item can stand with no "(1)" item beside it. So two people of one
+  name, in one document or in two of one kind, take two descriptions, as
+  Wikibase
   refuses two items with one label and one description, and the cluster
   id, through its place, is what tells them apart and finds each again
   (#109; it replaces #86's place among a manifest's records, which the

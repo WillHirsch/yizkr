@@ -10,9 +10,9 @@ of one document, unless the test gives it another.
 
 Items are keyed by their cluster within one map: two batches written
 with maps of their own give a cluster of one label, kind and source
-descriptor the same key, and the second write finds the first's item,
-as a test of a later write of a document reads it. A test of how a
-corpus's clusters meet on items gives every batch one map.
+descriptor the same key, and the second write finds the first's item.
+A test of how a corpus's clusters meet on items gives every batch one
+map.
 """
 
 from __future__ import annotations
@@ -43,9 +43,15 @@ def mapped(*batches: ClaimBatch, source: str = DOCUMENT) -> IdentityMap:
 
 def write_mapped(writer, batch: ClaimBatch, **options):
     """`writer.write_batch(batch, ...)`, with the map of `batch` alone
-    (mapped) unless `options` give one."""
+    (mapped) unless `options` give one. Its instance may hold the writes of
+    other maps (`one_map` false, unless `options` say otherwise): a test
+    writes its batches each with its map onto one fake instance, and the
+    live tests write onto the one instance every session writes to, their
+    labels kept apart by their session marks. The writer's refusal of
+    another map on an instance is tested on its own."""
     if options.get("identity") is None:
         options["identity"] = mapped(batch)
+    options.setdefault("one_map", False)
     return writer.write_batch(batch, **options)
 
 

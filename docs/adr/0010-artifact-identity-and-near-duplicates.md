@@ -628,7 +628,14 @@ Together these close the "two items, one blob" leak (correctness) and
 skip redundant LLM passes for renamed-identical files both within a
 batch and across runs (efficiency), which were the concrete costs.
 
-**What is still matched by label** (amended by #444, 2026-10-02). No
+**What is still matched by label** (amended by #444, 2026-10-02; amended
+by #109, 2026-10-06: resolve's exact-label step, `resolvable_labels`, the
+writer's `reused_item` and its `_found_entities` are gone; no entity is
+matched by its label, the writer finds or makes each cluster's item of
+the identity map by its label and description, and reads the statements
+of only the items under the labels it looks at; the side rule below
+names the label an item takes, and the rest of this paragraph stands for
+the reads the writer still makes). No
 artifact-kind entity is matched to a registered artifact, no other
 entity to an artifact or a part of one, and no artifact is adopted, by
 its title or label. Registration finds an artifact by its SHA-1 alone.

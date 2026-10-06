@@ -1545,7 +1545,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="the identity map (identity-map.json) every local entity of "
         "the batch finds or mints its item through; required when the "
-        "batch names one",
+        "batch names one, as a single batch written without a map, such "
+        "as a GEDCOM export's or a face batch's, is refused (the scratch "
+        "run's write is the write path)",
     )
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_write)
@@ -1644,8 +1646,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--serial",
         action="store_true",
         help="take artifacts one at a time, hubs first, each fully written "
-        "before the next reconciles — so a later artifact's resolve step "
-        "finds, by exact label, the items the earlier ones wrote; "
+        "before the next reconciles; each write finds the items of its "
+        "entities through the run's identity map, never by label, and "
         "reconcile-graph consolidates an entity two artifacts name "
         "differently (ADR-0019). Advance by re-running after each claim "
         "review; about one re-run per artifact",

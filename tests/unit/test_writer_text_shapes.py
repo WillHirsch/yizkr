@@ -102,6 +102,7 @@ from yizkr.pipeline.writer import (
     TERM_LIMIT,
     TEXT_LIMIT,
     BatchWriter,
+    _term_text,
     batch_fingerprint,
     source_descriptor,
 )
@@ -892,15 +893,20 @@ class TestTerms:
         run = dict(RUN, model_identifier=model)
         first = _batch_of(_cause(), run=run)
         second = _batch_of(_cause(cause="Herzschwäche"), run=run)
-        fingerprint = batch_fingerprint(first, mapped(first).hash)
-        label = f"extraction run 2026-07-12 {model} {fingerprint}"
-        assert label[TERM_ROOM - 1 : TERM_ROOM + 1] == " F"
+        identity = mapped(first)
+        fingerprint = batch_fingerprint(first, identity.hash)
+        label = (
+            f"extraction run 2026-07-12 map {identity.hash[:12]} "
+            f"{model} {fingerprint}"
+        )
         wiki = FakeWiki(MEDIA, detached=True)
 
         written = write_mapped(BatchWriter(wiki), first)
         other = write_mapped(BatchWriter(wiki), second)
 
-        assert _labelled(wiki, _term_cut(label)) == [written.run_qid]
+        assert len(label) > TERM_LIMIT
+        # cut as the writer cuts a term (its cuts are tested above)
+        assert _labelled(wiki, _term_text(label)) == [written.run_qid]
         assert other.run_qid != written.run_qid
         writes = wiki.wbi.item.writes
         again = write_mapped(BatchWriter(wiki), first)

@@ -44,6 +44,7 @@ from yizkr.pipeline.reconcile import apply_equivalences
 from yizkr.pipeline.resolve import resolve_batch
 from yizkr.pipeline.writer import (
     BatchWriter,
+    OtherIdentityMap,
     cluster_terms,
     mapped_clusters,
     source_descriptor,
@@ -361,6 +362,15 @@ class TestTheSourceKind:
             "human named in an official document",
             "human named in an official document (2)",
         }
+
+    def test_a_kind_the_vocabulary_lacks_is_passed_over(self):
+        wiki = _wiki(("Q999", ""), (SOURCE_KINDS["letter"], ""))
+        written = BatchWriter(wiki).write_batch(
+            _eugens(), identity=mapped(_eugens())
+        )
+        assert {
+            _description(wiki, qid) for qid in _two_eugens_wiki_items(written)
+        } == {"human named in a letter", "human named in a letter (2)"}
 
     def test_a_source_of_no_known_kind(self):
         wiki = _wiki(("Q999", ""))
@@ -733,6 +743,140 @@ class TestTheMapIsTheOnlyWay:
         ) == (0, 0)
 
 
+def _two_eugens_without_a_manifest() -> ClaimBatch:
+    """A batch without an entity manifest that names two Eugen Löbigs, the
+    father (c001) and the son (c002), human both, by their refs alone: the
+    father's birth, the son's, and the son's relative, his father."""
+
+    def eugen(local_id: str) -> dict:
+        return {
+            "kind": "local",
+            "local_id": local_id,
+            "label": EUGEN,
+            "instance_of": "human",
+        }
+
+    born = [_born("c001:father", 1836), _born("c002:son", 1870)]
+    for claim, local_id in zip(born, ("c001:father", "c002:son"), strict=True):
+        claim["subject"] = eugen(local_id)
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": RUN,
+            "claims": [
+                *born,
+                {
+                    "subject": eugen("c002:son"),
+                    "property": "relative",
+                    "value": {"type": "item", "value": eugen("c001:father")},
+                    "source": {
+                        "artifact": {"kind": "artifact", "sha1": MEDIA_SHA1}
+                    },
+                },
+            ],
+        }
+    )
+
+
+class TestAReviewedBatch:
+    """The map is made from the extraction's batch; the writer is given
+    the reviewed one. A batch without an entity manifest names its mentions
+    by the first label its refs give and their order, which a review that
+    drops claims changes: the writer reads the mentions from the batch the
+    map was made from (`mapped_from`)."""
+
+    def test_a_dropped_claim_never_swaps_two_mentions(self):
+        extracted = _two_eugens_without_a_manifest()
+        identity = mapped(extracted)
+        wiki = _wiki()
+        first = BatchWriter(wiki).write_batch(extracted, identity=identity)
+        assert (
+            first.created_items["c001:father"]
+            != (first.created_items["c002:son"])
+        )
+        # the reviewer rejects the father's birth: the son's ref now comes
+        # first in the batch
+        reviewed = extracted.model_copy(
+            update={"claims": extracted.claims[1:]}
+        )
+
+        written = BatchWriter(wiki).write_batch(
+            reviewed, identity=identity, mapped_from=extracted
+        )
+
+        assert written.created_items == first.created_items
+        # read from the reviewed batch alone, the son is the first mention,
+        # the father's
+        clusters, _, _ = mapped_clusters(reviewed, identity)
+        mapped_from, _, _ = mapped_clusters(
+            reviewed, identity, mapped_from=extracted
+        )
+        assert clusters["c002:son"] == mapped_from["c001:father"]
+
+    def test_a_local_id_the_mapped_batch_lacks_is_refused(self):
+        extracted = _two_eugens_without_a_manifest()
+        given = extracted.model_dump(mode="json")
+        given["claims"][0]["subject"]["local_id"] = "c003:other"
+        with pytest.raises(UnmappedMention, match="'c003:other'"):
+            mapped_clusters(
+                ClaimBatch.model_validate(given),
+                mapped(extracted),
+                mapped_from=extracted,
+            )
+
+
+class TestAVocabularyLabel:
+    def test_a_cluster_under_a_vocabulary_label_takes_its_tagged_label(
+        self,
+    ):
+        # a document names a marriage "marriage", the label the manifest's
+        # class holds: the marriage's item takes the tagged label, so the
+        # class keeps its label to itself and the vocabulary reads on
+        class VocabularyWiki(SourcedWiki):
+            def vocabulary(self):
+                properties, items = super().vocabulary()
+                return properties, {**items, "marriage": "Q93"}
+
+        wiki = VocabularyWiki(detached=True)
+        source = wiki.wbi.item.new()
+        source.labels.set("en", TITLE)
+        wiki.media[MEDIA_SHA1] = source.write().id
+        marriage = wiki.wbi.item.new()
+        marriage.id = "Q93"
+        marriage.labels.set("en", "marriage")
+        marriage.write()
+        batch = ClaimBatch.model_validate(
+            {
+                "extraction_run": RUN,
+                "claims": [
+                    {
+                        "subject": _ref("m1"),
+                        "property": "start_time",
+                        "value": {"type": "time", "year": 1905},
+                        "source": {
+                            "artifact": {
+                                "kind": "artifact",
+                                "sha1": MEDIA_SHA1,
+                            }
+                        },
+                    }
+                ],
+                "entities": [
+                    {"id": "m1", "label": "marriage", "kind": "marriage"}
+                ],
+            }
+        )
+
+        written = BatchWriter(wiki).write_batch(batch, identity=mapped(batch))
+
+        item = written.created_items["m1"]
+        assert item != "Q93"
+        assert _labelled(wiki, "marriage") == ["Q93"]
+        assert _labelled(wiki, "marriage [not an artifact]") == [item]
+        assert _aliases(wiki, item) == ["marriage"]
+        _, labels = wiki.label_index()
+        assert labels.sole("marriage") == "Q93"
+
+
 class TestAnUnmappedMention:
     @pytest.mark.parametrize("dry_run", [False, True], ids=["write", "plan"])
     def test_no_map_refuses_the_batch_before_any_read(self, dry_run):
@@ -762,7 +906,7 @@ class TestAnUnmappedMention:
             dict(given["claims"][0], subject=dict(_ref("e2"), label=EUGEN))
         )
         batch = ClaimBatch.model_validate(given)
-        with pytest.raises(UnmappedMention, match="'e2'.*no record"):
+        with pytest.raises(UnmappedMention, match="'e2'.*no mention"):
             mapped_clusters(batch, mapped(batch))
 
     def test_a_batch_naming_no_local_entity_needs_no_map(self):
@@ -779,15 +923,81 @@ class TestTheRunItem:
         assert described.endswith(f", identity map {identity.hash}")
 
     def test_another_map_has_a_run_item_of_its_own(self):
+        # on an instance whose writers keep their labels apart, as the
+        # live tests' do, where maps may mix
         wiki = _wiki()
         first = BatchWriter(wiki).write_batch(
             _eugens(), identity=mapped(_eugens())
         )
         other = BatchWriter(wiki).write_batch(
-            _eugens(), identity=mapped(_eugens(), _tree())
+            _eugens(), identity=mapped(_eugens(), _tree()), one_map=False
         )
         assert other.run_qid != first.run_qid
         again = BatchWriter(wiki).write_batch(
-            _eugens(), identity=mapped(_eugens())
+            _eugens(), identity=mapped(_eugens()), one_map=False
         )
         assert again.run_qid == first.run_qid
+        label = str(wiki.wbi.item.get(first.run_qid).labels.get("en"))
+        assert label.startswith(
+            f"extraction run 2026-07-12 map {mapped(_eugens()).hash[:12]} "
+        )
+
+
+class TestOneMapAnInstance:
+    """Items are keyed within one identity map: a write with another map
+    than the one an instance was written with is refused before anything
+    is read past the labels, or written, in a dry run too."""
+
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["write", "plan"])
+    def test_a_grown_map_is_refused(self, dry_run):
+        # the family history written with its own map; then the 1984 tree
+        # joins the corpus, and the grown map would place the Eugens anew
+        wiki = _wiki()
+        BatchWriter(wiki).write_batch(_eugens(), identity=mapped(_eugens()))
+        grown = mapped(_eugens(), _tree())
+        writes, items = wiki.wbi.item.writes, len(wiki.wbi.item.store)
+
+        with pytest.raises(OtherIdentityMap, match="reset the instance"):
+            BatchWriter(wiki, dry_run=dry_run).write_batch(
+                _tree(), identity=grown
+            )
+
+        assert (wiki.wbi.item.writes, len(wiki.wbi.item.store)) == (
+            writes,
+            items,
+        )
+
+    def test_the_same_map_writes_on(self):
+        wiki = _wiki()
+        identity = mapped(_eugens(), _tree())
+        BatchWriter(wiki).write_batch(_eugens(), identity=identity)
+        written = BatchWriter(wiki).write_batch(_tree(), identity=identity)
+        assert written.written == 1
+
+    def test_a_batch_without_local_entities_is_not_held_to_it(self):
+        wiki = _wiki()
+        father = (
+            BatchWriter(wiki)
+            .write_batch(_eugens(), identity=mapped(_eugens()))
+            .created_items["father"]
+        )
+        approved = apply_equivalences(_tree(), {"e1": father})
+        written = BatchWriter(wiki).write_batch(approved)
+        # the tree's birth year agrees with the history's: one more source
+        assert written.referenced == 1
+
+    def test_the_tag_survives_a_cut_run_label(self):
+        # a model identifier long enough to cut the run label: the map's
+        # tag comes before it, so the cut keeps it
+        long = dict(RUN, model_identifier="fake-model " * 40)
+        batch = _eugens().model_copy(
+            update={
+                "extraction_run": _eugens().extraction_run.model_validate(long)
+            }
+        )
+        wiki = _wiki()
+        BatchWriter(wiki).write_batch(batch, identity=mapped(batch))
+        with pytest.raises(OtherIdentityMap):
+            BatchWriter(wiki).write_batch(
+                _tree(), identity=mapped(_eugens(), _tree())
+            )

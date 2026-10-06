@@ -201,7 +201,7 @@ class ScriptedOrchestrator(Orchestrator):
         self.calls.append(f"export:{doc.source.name}")
         return export_review_csv(batch, doc.review)
 
-    def _step_write(self, doc, batch):
+    def _step_write(self, doc, batch, approved=None):
         self.calls.append(f"write:{doc.source.name}")
         return {
             "run_qid": "Q999",
@@ -3084,6 +3084,55 @@ class TestWriteTimeRegistration:
         (doc,) = orchestrator.documents()
         assert (doc.state.status, doc.state.artifact_qid) == (WRITTEN, "Q100")
 
+    def test_an_unmapped_batch_registers_nothing(self, tmp_path):
+        """The run's identity map must hold every mention of the batch
+        before anything is registered or written (#109): a map that lacks
+        them fails the document, and nothing is registered."""
+        from yizkr.pipeline.clustering import IdentityMap
+
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_claims(doc)
+        empty = IdentityMap({"hash": "0" * 64, "mentions": {}, "clusters": {}})
+        orchestrator._identity_map = lambda: empty
+        calls = len(orchestrator.calls)
+
+        assert orchestrator.run() == 1
+
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == FAILED
+        assert doc.state.error.startswith("UnmappedMention")
+        assert steps(orchestrator.calls[calls:]) == []
+        assert not doc.write_result.exists()
+
+    def test_the_map_is_made_once_an_invocation(self, tmp_path):
+        """Made at the first write and never again in the invocation, even
+        when a document's batch changes after it (#109): an instance holds
+        the writes of one map."""
+        orchestrator = completed_run(tmp_path)
+        made = []
+        from yizkr.pipeline import clustering
+
+        real = clustering.ensure_identity_map
+
+        def counted(*args, **kwargs):
+            made.append(args)
+            return real(*args, **kwargs)
+
+        clustering.ensure_identity_map = counted
+        try:
+            self.rewrite(orchestrator)
+            assert orchestrator.run() == 0
+            first = orchestrator._identity
+            assert orchestrator._identity_map() is first
+            assert len(made) == 1
+        finally:
+            clustering.ensure_identity_map = real
+
     def test_every_write_registers_again(self, tmp_path):
         """A write registers what it writes about each time: the registrar
         finds by SHA-1 what an earlier write registered, and a write that
@@ -3114,8 +3163,17 @@ class TestWriteTimeRegistration:
             def __init__(self, client, dry_run=False, artifact_qids=None):
                 given.append(dict(artifact_qids or {}))
 
-            def write_batch(self, batch, bulk_accepted=False, identity=None):
-                mapped.append(writer.mapped_clusters(batch, identity))
+            def write_batch(
+                self,
+                batch,
+                bulk_accepted=False,
+                identity=None,
+                mapped_from=None,
+                one_map=True,
+            ):
+                mapped.append(
+                    writer.mapped_clusters(batch, identity, mapped_from)
+                )
                 return writer.WriteResult(
                     run_qid="Q999", written=len(batch.claims)
                 )

@@ -310,7 +310,9 @@ gave its cause of death all the same:
   MARR's date and place, but was not taken. It would state a family's
   marriage one way with two partners and another way with one. A
   person's second such marriage would share the first's label, and so
-  its item, since the writer finds an item by its label. And the DIV
+  its item, since the writer found an item by its label (amended by
+  #109, 2026-10-06: the writer finds it through the identity map, where
+  the two are two mentions). And the DIV
   would still go unmapped, since the model has no divorce event. With
   unknown values, a one-partner family's MARR and DIV would date a
   spouse statement whose value is unknown, as an undated DIV would end
@@ -327,7 +329,9 @@ gave its cause of death all the same:
   "Rudolf Löbig", a label or alias like any NAME's value, which the
   NAME's TYPE types. A prefix or a suffix alone (`Wwe.`) names no one,
   and as a label it would make everyone so named one item, since the
-  writer finds an item by its label, so it gives no name. A NAME with a
+  writer found an item by its label (amended by #109, 2026-10-06: it
+  would give them one name, on which identity keys), so it gives no
+  name. A NAME with a
   value is read from the value, as before, which its parts are taken to
   restate. A person whose first NAME has no value now takes their label
   from that NAME's parts, rather than from a later NAME, which changes

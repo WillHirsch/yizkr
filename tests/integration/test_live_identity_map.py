@@ -193,9 +193,14 @@ def record_mints(patch, made: list[dict]) -> None:
     patch.setattr(ItemEntity, "write", recording)
 
 
-def write_both(client: WikiClient, history, tree, identity, made):
+def write_both(
+    client: WikiClient, history, tree, identity, made, one_map=False
+):
     """The two batches written, each by a writer of its own, with the one
-    map: (run QIDs, (batch, local id) -> QID)."""
+    map: (run QIDs, (batch, local id) -> QID). The one instance every live
+    session writes to holds the writes of many maps, their labels kept
+    apart by their session marks, so the writer's refusal of another map
+    is off (`one_map`) but on a reset instance."""
     runs, items = {}, {}
     with pytest.MonkeyPatch.context() as patch:
         record_mints(patch, made)
@@ -204,7 +209,9 @@ def write_both(client: WikiClient, history, tree, identity, made):
             ("tree", tree_batch(tree)),
         ):
             result = BatchWriter(client).write_batch(
-                resolve_batch(batch, identity), identity=identity
+                resolve_batch(batch, identity),
+                identity=identity,
+                one_map=one_map,
             )
             runs[name] = result.run_qid
             items.update(

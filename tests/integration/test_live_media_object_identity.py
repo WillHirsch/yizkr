@@ -67,14 +67,19 @@ from pathlib import Path
 
 import pytest
 
-from tests.fixtures.identity import write_mapped
-from yizkr.claims import ArtifactRef
+from tests.fixtures.identity import corpus, mapped, write_mapped
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.core import wiki
 from yizkr.pipeline import gedcom, registrar, resolve, writer
 from yizkr.pipeline.gedcom import adapt_gedcom
 from yizkr.pipeline.registrar import UNHASHED_TITLE, Registrar
 from yizkr.pipeline.review import claim_id
-from yizkr.pipeline.writer import ENTITY_TAG, BatchWriter, media_object_label
+from yizkr.pipeline.writer import (
+    ENTITY_TAG,
+    BatchWriter,
+    mapped_clusters,
+    media_object_label,
+)
 
 from .conftest import fictional_png, fixture_mark
 
@@ -165,10 +170,22 @@ def register_scan(
     )
 
 
-def write_export(client, tmp_path, order: str, text: str | None = None):
+def write_export(
+    client, tmp_path, order: str, text: str | None = None, identity=None
+):
     """The export, `text` or the template's for `order`, registered by its
     hash, then written as `ingest run` writes it: its batch, citing the
-    export by that hash, with its own identity map."""
+    export by that hash, with `identity`, or its own identity map."""
+    batch, qids = export_batch(client, tmp_path, order, text)
+    return write_mapped(
+        BatchWriter(client, artifact_qids=qids), batch, identity=identity
+    )
+
+
+def export_batch(client, tmp_path, order: str, text: str | None = None):
+    """The export, `text` or the template's for `order`, registered by its
+    hash: its batch, citing the export by that hash, and the artifact
+    QIDs its writer is given."""
     text = text if text is not None else export(order)
     path = write_file(
         tmp_path, f"integration-test-{order}-{MARK}.ged", text.encode()
@@ -180,13 +197,7 @@ def write_export(client, tmp_path, order: str, text: str | None = None):
         description=DESCRIPTION,
     )
     batch = adapt_gedcom(text, artifact=ArtifactRef.from_path(path)).batch
-    return write_mapped(
-        BatchWriter(
-            client,
-            artifact_qids={sha1(text.encode()): registered.artifact_qid},
-        ),
-        batch,
-    )
+    return batch, {sha1(text.encode()): registered.artifact_qid}
 
 
 def entity(client, qid: str, props: str = "claims|aliases|info") -> dict:
@@ -365,8 +376,42 @@ def test_a_person_under_a_scans_label_is_an_item_of_its_own(client, tmp_path):
     scan = register_scan(client, tmp_path, order, named=person(order))
     artifact = scan.artifact_qid
     before = entity(client, artifact)
+    batch, qids = export_batch(client, tmp_path, order)
+    # an extraction's ref with no kind naming him, citing the scan, which
+    # the identity map puts in the export's Sebastian's cluster (decision
+    # AZ, #109)
+    kindless = ClaimBatch.model_validate(
+        {
+            "extraction_run": batch.extraction_run.model_dump(mode="json"),
+            "claims": [
+                {
+                    "subject": {
+                        "kind": "local",
+                        "local_id": "e1",
+                        "label": person(order),
+                    },
+                    "property": "instance_of",
+                    "value": {
+                        "type": "item",
+                        "value": {"kind": "vocab", "key": "human"},
+                    },
+                    "source": {
+                        "artifact": {
+                            "kind": "artifact",
+                            "sha1": sha1(
+                                scan_bytes(f"{order}, {person(order)}")
+                            ),
+                        }
+                    },
+                }
+            ],
+        }
+    )
+    identity = corpus(batch, kindless, entities=(person(order),))
 
-    written = write_export(client, tmp_path, order)
+    written = write_mapped(
+        BatchWriter(client, artifact_qids=qids), batch, identity=identity
+    )
 
     sebastian = written.created_items["i1"]
     assert sebastian != artifact
@@ -378,9 +423,15 @@ def test_a_person_under_a_scans_label_is_an_item_of_its_own(client, tmp_path):
     assert after["lastrevid"] == before["lastrevid"]
     assert label(client, artifact) == person(order)
     assert flagged(written) == []
-    # a rewrite finds his item under the tagged label again
-    again = write_export(client, tmp_path, order)
+    # a rewrite finds his item under the tagged label again, and so does
+    # the ref with no kind, as the tag is one for every kind
+    again = write_mapped(
+        BatchWriter(client, artifact_qids=qids), batch, identity=identity
+    )
     assert again.created_items["i1"] == sebastian
+    found = write_mapped(BatchWriter(client), kindless, identity=identity)
+    assert found.created_items["e1"] == sebastian
+    assert found.refused == []
     assert entity(client, artifact)["lastrevid"] == before["lastrevid"]
     assert label(client, artifact) == person(order)
 
@@ -414,22 +465,39 @@ def test_a_scan_under_a_persons_name_is_flagged_against_the_media_object(
     client, tmp_path
 ):
     order = "person, scan, export"
-    first = write_export(client, tmp_path, order)
+    text = export(order).replace(
+        f"2 TITL {title(order)}\n", f"2 TITL {person(order)}\n"
+    )
+    # one identity map of the two exports, in which their two Sebastians
+    # are two entities (#109)
+    first_batch, first_qids = export_batch(client, tmp_path, order)
+    again_batch, again_qids = export_batch(
+        client, tmp_path, f"{order}, again", text
+    )
+    identity = mapped(first_batch, again_batch)
+    first_cluster = mapped_clusters(first_batch, identity)[0]["i1"]
+    assert mapped_clusters(again_batch, identity)[0]["i1"] != first_cluster
+    first = write_mapped(
+        BatchWriter(client, artifact_qids=first_qids),
+        first_batch,
+        identity=identity,
+    )
     sebastian = first.created_items["i1"]
     scan = register_scan(client, tmp_path, order, named=person(order))
     artifact = scan.artifact_qid
     data = sha1(scan_bytes(f"{order}, {person(order)}"))
     assert label(client, artifact) == f"{person(order)} [{data[:8]}]"
     assert flagged(scan) == []
-    text = export(order).replace(
-        f"2 TITL {title(order)}\n", f"2 TITL {person(order)}\n"
+
+    written = write_mapped(
+        BatchWriter(client, artifact_qids=again_qids),
+        again_batch,
+        identity=identity,
     )
 
-    written = write_export(client, tmp_path, f"{order}, again", text)
-
     media_object = written.created_items["md1"]
-    # the second export's person is a mention of its own map: never found
-    # by his name (#109)
+    # the second export's person is an entity of his own in the map:
+    # never found by his name (#109)
     assert written.created_items["i1"] != sebastian
     assert label(client, written.created_items["i1"]) == person(order)
     assert label(client, sebastian) == person(order)

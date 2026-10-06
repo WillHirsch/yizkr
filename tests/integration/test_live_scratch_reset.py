@@ -246,10 +246,12 @@ def test_the_same_items_after_a_reset(resets, config, client):
         history = register_fictional(fresh, HISTORY, "genealogical_report")
         tree = register_fictional(fresh, TREE, "genealogical_report")
         identity = mapped(history_batch(history), tree_batch(tree))
+        # a reset instance holds one map's writes: the writer's refusal of
+        # another map stays on
         made: list[dict] = []
-        _, items = write_both(fresh, history, tree, identity, made)
+        _, items = write_both(fresh, history, tree, identity, made, True)
         again: list[dict] = []
-        _, rewritten = write_both(fresh, history, tree, identity, again)
+        _, rewritten = write_both(fresh, history, tree, identity, again, True)
         assert rewritten == items
         assert labelled(again) == []
         held = terms(fresh, items.values())

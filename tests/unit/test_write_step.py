@@ -63,9 +63,8 @@ class WriteStep:
             ),
         )
         self.orchestrator._client = wiki
-        self.orchestrator._identity_map = lambda doc, batch: (
-            identity or mapped(batch)
-        )
+        self.identity = identity
+        self.orchestrator._identity_map = lambda: self.identity
         self.doc = DocumentRun(tmp_path / "docs" / name, tmp_path / "state")
         self.doc.dir.mkdir(parents=True)
 
@@ -84,6 +83,8 @@ class WriteStep:
         decide_by_hand(self.doc.review_reviewed, decide)
 
     def write(self, batch: ClaimBatch) -> dict:
+        if self.identity is None:
+            self.identity = mapped(batch)
         return self.orchestrator._step_write(self.doc, batch)
 
     def approved(self) -> ClaimBatch:
