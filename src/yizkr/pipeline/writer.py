@@ -31,7 +31,9 @@ Per batch, the writer:
    anything but its own source document, are refused before the first
    write, as a claim whose text the instance cannot hold is (below);
 1. mints an extraction-run item from the batch metadata (idempotent:
-   matched by a deterministic label containing the batch content hash),
+   matched by a deterministic label containing the batch content hash,
+   which must name one item alone: when two items hold it the write
+   fails before it writes any claim, `ItemLabels.sole`),
    with its run details in the label/description — items describe
    themselves; statements stay reserved for source-attributed claims.
    Its one statement, `instance of -> extraction run`, cites the run
@@ -48,7 +50,9 @@ Per batch, the writer:
    cleaned up, in Unicode NFC, and cut to the characters the instance
    holds in a label, `_term_text`; the instance's labels are read once a
    write, with the vocabulary known, and the run item and each entity are
-   found among them and the items the write makes, `_FoundLabels`),
+   found among them and the items the write makes, `_FoundLabels`; a
+   label two or more items hold, as two people of one name do, names
+   the numerically earliest of them, `ItemLabels`),
    writing each minted item's `instance of`, and an
    unclassified entity's `type hint`, with two references: stated in ->
    the artifact that mentions the entity, and inferred from extraction
@@ -323,7 +327,7 @@ from yizkr.claims import (
     VocabRef,
 )
 from yizkr.core.dates import UnsupportedDate
-from yizkr.core.wiki import WikiClient
+from yizkr.core.wiki import ItemLabels, WikiClient
 from yizkr.model.schema import load_acceptance
 from yizkr.pipeline.review import (
     claim_id,
@@ -974,11 +978,14 @@ class _Placement:
 class _FoundLabels:
     """The item each label names on the instance, as the writer finds an
     item by its label, for one write: the instance's item labels read
-    once, on first need (`WikiClient.label_index`, which fails on a
-    duplicate label), with each item the write makes for an entity under
-    its label since (`made`). The documents of a run are written one at a
-    time, and the write itself makes every item it gives a label, so the
-    labels read once stay current through the write: the plan
+    once, on first need (`WikiClient.label_index`), with each item the
+    write makes for an entity under its label since (`made`). A label two
+    or more items hold (homonyms, such as two people of one name) names
+    the numerically earliest of them (ItemLabels), so the plan, the write
+    and the resolve step all find that one; the run item's label must
+    name one item alone (`sole`). The documents of a run are written one
+    at a time, and the write itself makes every item it gives a label, so
+    the labels read once stay current through the write: the plan
     (BatchWriter._plan), the artifacts registered under a label
     (BatchWriter._registered_under), the items found or made for the
     batch's entities and its run item all read them, and a write reads
@@ -994,31 +1001,38 @@ class _FoundLabels:
         self._made: dict[str, str] = {}
         self._titles: dict[str, list[tuple[str, str]]] | None = None
 
-    def items(self) -> dict[str, str]:
+    def items(self) -> ItemLabels:
         """The item labels the instance held when first asked, label ->
-        QID."""
+        QID, a shared label naming its earliest item (ItemLabels)."""
         if self._read is None:
-            _, self._read = self._client.label_index()
+            _, read = self._client.label_index()
+            self._read = ItemLabels.of(read)
         return self._read
 
     def get(self, label: str, default: str | None = None) -> str | None:
         return self._made.get(label) or self.items().get(label) or default
+
+    def sole(self, label: str) -> str | None:
+        """The one item under `label`, made by the write or read; raises
+        when two or more items held it when read (ItemLabels.sole)."""
+        return self._made.get(label) or self.items().sole(label)
 
     def made(self, label: str, qid: str) -> None:
         """The write made the item `qid` under `label`."""
         self._made[label] = qid
 
     def titled(self, title: str) -> list[tuple[str, str]]:
-        """Each (label, QID) of the labels read (`items`) that is `title`
-        as it is or with one content tag taken out of it, wherever it is
-        (_CONTENT_TAG), in the order of their items. The labels are
-        indexed once, on first need, by each label and by each label with
-        one of its content tags taken out, so a lookup costs only what it
-        finds. The items the write makes are not in it: the writer makes
-        no artifact, so none of them is registered (_registered_under)."""
+        """Each (label, QID) of the labels read (`items`), every holder of
+        a shared label included, that is `title` as it is or with one
+        content tag taken out of it, wherever it is (_CONTENT_TAG), in the
+        order of their items. The labels are indexed once, on first need,
+        by each label and by each label with one of its content tags taken
+        out, so a lookup costs only what it finds. The items the write
+        makes are not in it: the writer makes no artifact, so none of them
+        is registered (_registered_under)."""
         if self._titles is None:
             titles: dict[str, list[tuple[str, str]]] = {}
-            for label, qid in self.items().items():
+            for label, qid in self.items().pairs():
                 keys = {label}
                 keys.update(
                     label[: tag.start()] + label[tag.end() :]
@@ -2038,7 +2052,8 @@ class BatchWriter:
         label, description = _run_terms(batch)
         from yizkr.pipeline.registrar import ensure_self_typed
 
-        existing = self._labels.get(label)
+        # the run item's label is its key, and names one item alone
+        existing = self._labels.sole(label)
         if existing:
             # a write cut short between the two below left the run item
             # without its kind, which it gains now; one that states it

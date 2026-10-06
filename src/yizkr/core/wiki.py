@@ -6,15 +6,21 @@ the MediaWiki API (lag-free: no dependency on the search index or the
 query service), and manifest keys are resolved to this instance's P/Q
 ids by exact English label — the project's idempotency convention.
 
-English labels are unique per entity kind by convention; the label
-index fails loudly on a duplicate rather than silently picking one.
+A property label names one property (Wikibase refuses two), and the label
+index fails loudly on a duplicate. Item labels need not be unique: two
+people of one name are two items under one label (homonyms). The index
+gives such a label its numerically earliest item and keeps every holder
+(`ItemLabels`), and only a lookup whose label must name one item alone
+fails on it (`ItemLabels.sole`): a manifest vocabulary item, found by its
+label in `vocabulary` and the bootstrap, and a process item, such as a
+run item, whose label is its key (`find_item_by_label`).
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 
 import requests
@@ -22,6 +28,64 @@ import yaml
 
 from yizkr.core.config import USER_AGENT, Config
 from yizkr.model.schema import DEFAULT_MANIFEST, read_manifest_data
+
+
+class ItemLabels(dict[str, str]):
+    """The instance's item labels, label -> QID, as `WikiClient.label_index`
+    reads them. A label two or more items hold (homonyms, such as two
+    people of one name) names the numerically earliest of them, so every
+    reader of a label finds the same item; `holders` gives them all, in
+    that order. A lookup whose label must name one item alone, a manifest
+    vocabulary item's or a run item's, asks `sole`, which fails on a label
+    two items hold rather than pick one."""
+
+    def __init__(
+        self,
+        labels: Mapping[str, str] | Iterable[tuple[str, str]] = (),
+        shared: Mapping[str, tuple[str, ...]] | None = None,
+    ) -> None:
+        super().__init__(labels)
+        # label -> every item that holds it, earliest first, for a label
+        # two or more items hold
+        self.shared: dict[str, tuple[str, ...]] = dict(shared or {})
+
+    @classmethod
+    def of(cls, labels: Mapping[str, str]) -> ItemLabels:
+        """`labels` as ItemLabels: itself when it is one, and otherwise a
+        mapping in which each label names one item."""
+        return labels if isinstance(labels, ItemLabels) else cls(labels)
+
+    def holders(self, label: str) -> tuple[str, ...]:
+        """Every item that holds `label`, earliest first; none when no
+        item does."""
+        if label in self.shared:
+            return self.shared[label]
+        return (self[label],) if label in self else ()
+
+    def pairs(self) -> Iterator[tuple[str, str]]:
+        """(label, QID) for every item that holds a label, each holder of a
+        shared label included."""
+        for label in self:
+            for qid in self.holders(label):
+                yield label, qid
+
+    def sole(self, label: str) -> str | None:
+        """The one item that holds `label`, or None when no item does.
+        Raises when two or more items hold it: the caller finds an item
+        by a label that must name one item alone."""
+        holders = self.holders(label)
+        if len(holders) > 1:
+            raise RuntimeError(
+                f"{len(holders)} items share the English label {label!r}: "
+                f"{', '.join(holders)}. This label must name one item "
+                f"alone (a manifest vocabulary item, or a process item "
+                f"such as a run item); resolve the duplicate on the wiki."
+            )
+        return holders[0] if holders else None
+
+
+def _qid_order(qid: str) -> int:
+    return int(qid[1:])
 
 
 class WikiClient:
@@ -155,27 +219,43 @@ class WikiClient:
 
     def label_index(
         self, snapshot: dict[str, dict] | None = None
-    ) -> tuple[dict[str, str], dict[str, str]]:
+    ) -> tuple[dict[str, str], ItemLabels]:
         """(property label -> P id, item label -> Q id).
 
-        Labels are the idempotency key across the whole system; a
-        duplicate label is a modeling defect and fails loudly here.
+        A property label names one property, and two properties under one
+        label fail loudly here. Two or more items may hold one label
+        (homonyms): the label names the earliest of them, and the index
+        keeps every holder (ItemLabels), so that only a lookup whose label
+        must name one item fails on it (`ItemLabels.sole`).
         """
         entities = snapshot if snapshot is not None else self.snapshot()
         properties: dict[str, str] = {}
-        items: dict[str, str] = {}
+        holders: dict[str, list[str]] = {}
         for entity_id, info in entities.items():
             label = info["label"]
             if label is None:
                 continue
-            table = properties if entity_id.startswith("P") else items
-            if label in table:
+            if not entity_id.startswith("P"):
+                holders.setdefault(label, []).append(entity_id)
+                continue
+            if label in properties:
                 raise RuntimeError(
-                    f"Two entities share the English label {label!r}: "
-                    f"{table[label]} and {entity_id}. Labels are the "
-                    f"idempotency key; resolve the duplicate on the wiki."
+                    f"Two properties share the English label {label!r}: "
+                    f"{properties[label]} and {entity_id}. A property is "
+                    f"found by its label; resolve the duplicate on the "
+                    f"wiki."
                 )
-            table[label] = entity_id
+            properties[label] = entity_id
+        for qids in holders.values():
+            qids.sort(key=_qid_order)
+        items = ItemLabels(
+            {label: qids[0] for label, qids in holders.items()},
+            {
+                label: tuple(qids)
+                for label, qids in holders.items()
+                if len(qids) > 1
+            },
+        )
         if snapshot is None:
             self._labels_read = (properties, items)
         return properties, items
@@ -183,6 +263,9 @@ class WikiClient:
     def vocabulary(self) -> tuple[dict[str, str], dict[str, str]]:
         """(property key -> P id, item key -> Q id) via manifest labels.
 
+        Each manifest item's label must name one item alone
+        (`ItemLabels.sole`): a label it shares with another item fails
+        here, whatever other labels items share.
         The labels this client last read whole (`label_index`) answer it
         when they hold the whole vocabulary, so a caller that has just
         read them, as resolve does, costs no second read; otherwise the
@@ -211,8 +294,11 @@ class WikiClient:
         self._labels_read = None
 
     def find_item_by_label(self, label: str) -> str | None:
+        """The one item that holds `label`, or None: for a label that must
+        name one item alone, as a process item's does. Raises when two or
+        more items hold it (`ItemLabels.sole`)."""
         _, item_labels = self.label_index()
-        return item_labels.get(label)
+        return ItemLabels.of(item_labels).sole(label)
 
     def iter_entities(self, props: str) -> Iterator[tuple[str, dict]]:
         """(id, data) for every live entity on the instance, as
@@ -244,7 +330,8 @@ class WikiClient:
         If two entities carry the same value the numerically-earliest id
         wins deterministically — that is the very duplicate the hash key
         exists to prevent, surfaced for the near-duplicate pass rather
-        than fatal here (unlike labels, which fail loudly).
+        than fatal here, as an item label two items hold names the
+        earliest of them in `label_index`.
         """
         candidates: dict[str, list[str]] = {}
         for entity_id, entity in self.iter_entities("claims"):
@@ -499,7 +586,8 @@ def _vocabulary_of(
     raw: dict, property_labels: dict[str, str], item_labels: dict[str, str]
 ) -> tuple[dict[str, str], dict[str, str], list[str]]:
     """(property key -> P id, item key -> Q id, the keys not found) of the
-    manifest `raw` under the instance's labels."""
+    manifest `raw` under the instance's labels. Raises when a manifest
+    item's label is one that two or more items hold (ItemLabels.sole)."""
     properties: dict[str, str] = {}
     items: dict[str, str] = {}
     missing: list[str] = []
@@ -509,8 +597,9 @@ def _vocabulary_of(
             missing.append(f"property {key!r}")
         else:
             properties[key] = pid
+    held = ItemLabels.of(item_labels)
     for key, spec in raw["items"].items():
-        qid = item_labels.get(spec["label"])
+        qid = held.sole(spec["label"])
         if qid is None:
             missing.append(f"item {key!r}")
         else:

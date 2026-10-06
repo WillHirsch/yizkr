@@ -3,7 +3,10 @@
 Ensures every property and item declared in the manifest exists in the
 target instance, matched by exact English label (lag-free page
 enumeration via WikiClient), then records the local id <-> Wikidata id
-mapping on the wiki page named in the manifest.
+mapping on the wiki page named in the manifest. A manifest entity's
+label must name one entity alone, and the bootstrap fails on one that two
+items hold (`ItemLabels.sole`); other items may share labels, as two
+people of one name do.
 
 Idempotent: re-running against an up-to-date instance is a no-op.
 The only statements written are the manifest's `subclass of` claims,
@@ -18,7 +21,7 @@ from __future__ import annotations
 
 import sys
 
-from yizkr.core.wiki import WikiClient
+from yizkr.core.wiki import ItemLabels, WikiClient
 from yizkr.model.schema import Manifest
 
 
@@ -180,6 +183,9 @@ def bootstrap_instance(
     log("Enumerating existing entities ...")
     snapshot = client.snapshot()
     labels_p, labels_q = client.label_index(snapshot)
+    # a manifest item's label must name one item alone; any other label
+    # may be shared, as two people of one name share theirs
+    labels_q = ItemLabels.of(labels_q)
 
     counts = {"create": 0, "update": 0, "ok": 0}
     property_ids: dict[str, str] = {}
@@ -197,7 +203,7 @@ def bootstrap_instance(
             log(f"  [{action}] property {pid}  {spec.label}")
 
     for key, spec in manifest.items.items():
-        existing_id = labels_q.get(spec.label)
+        existing_id = labels_q.sole(spec.label)
         info = snapshot.get(existing_id) if existing_id else None
         qid, action = ensure_entity(
             client, "item", spec, existing_id, info, dry_run

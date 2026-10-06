@@ -47,7 +47,9 @@ step 2).
 What resolving a batch reads of the instance: its item labels once
 (`label_index`), and the statements of just the items under the labels,
 plain or tagged, of the batch's entities (`fetch_claims`), never every
-item's.
+item's. A label two or more items hold (homonyms, such as two people of
+one name) resolves to the numerically earliest of them, the item the
+writer finds under it too (`ItemLabels` in yizkr.core.wiki).
 
 An entity's label and kind are read as the writer's plan reads them,
 past every claim the writer refuses before its plan (`pre_plan_refusals`:
@@ -106,7 +108,9 @@ def resolvable_labels(client, batch: ClaimBatch) -> dict[str, str]:
     under the tagged label is given under that label too, which names it
     as the writer finds it there, and tells resolve_batch it is tagged.
     The labels are read once (`label_index`), and the statements of only
-    the items under those labels (`fetch_claims`)."""
+    the items under those labels (`fetch_claims`). A label two or more
+    items hold, as two people of one name do, names the earliest of them,
+    as it does for the writer (ItemLabels)."""
     entities = _resolvable(batch).values()
     _, held = client.label_index()
     found = {

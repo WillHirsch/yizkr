@@ -12,9 +12,19 @@
   (local id – Wikidata id) on the wiki page `Project:Model mapping`.
   Local P/Q ids are per-instance and never recorded in the repo.
 - Every entity gets a label and a short description; name variants go
-  in aliases. English labels are the bootstrap's idempotency key:
-  unique per entity kind, and renames must happen on the wiki and in
-  the manifest together.
+  in aliases. English labels are the bootstrap's idempotency key: a
+  property's and a manifest vocabulary item's label names one entity
+  alone, and renames must happen on the wiki and in the manifest
+  together. Other items may share a label: two people of one name are
+  two items under one label (homonyms). The wiki client's label index
+  gives such a label the numerically earliest of its items, which the
+  writer and the resolve step both find under it, and fails only where a
+  label must name one item alone: a vocabulary item's (the vocabulary
+  read, the bootstrap) and a process item's, such as a run item's (#94).
+  Until the writer resolves mentions through the identity map (#109), an
+  extracted entity whose label items share joins that earliest item; when
+  the earliest is an artifact, the entity takes the artifact-tagged label
+  instead (ADR-0010), so a later same-named person is never joined.
 - Wikibase keeps a label, a description or an alias trimmed, then
   cleaned up, then in NFC: each run of control characters in it (a line
   feed or a tab among them) made one space, the separators at either end
@@ -446,15 +456,15 @@ artifact a new QID, changes neither.
   files that share a title are two artifacts, and media without bytes to
   hash cannot be registered.
   Bit-identical media is never stored, itemised, or extracted twice.
-- Labels stay unique per kind: when a title is already another item's
-  label, the new artifact's label is disambiguated with a short content
-  tag (`"<title> [<sha1[:8]>]"`) rather than colliding. Titles are
+- When a title is already another item's label, the new artifact's
+  label is disambiguated with a short content tag
+  (`"<title> [<sha1[:8]>]"`) rather than colliding. Titles are
   compared and set in the form Wikibase stores labels in, by the rule the
   writer keeps labels by (above: trimmed, then U+FFFE and U+FFFF made
   U+FFFD, then NFC; #369, #403), an artifact's description goes in that
   form too, and a title longer than the 250 characters Wikibase takes,
   as it is or once tagged, is cut to fit, ending in "…" (#371). The tag
-  is a stopgap until labels need not be unique for artifacts (#94), and
+  is a label convention, no longer one the label index needs (#94), and
   which homonym bears it depends on registration order: nothing may key
   on an artifact's label, only on its `media SHA-1`.
 - A file on the never-ingest list is never registered or uploaded, and

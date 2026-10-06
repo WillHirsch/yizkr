@@ -604,7 +604,9 @@ def plan_containment(
 def ensure_places_run_item(
     client: WikiClient, fingerprint: str, model: str
 ) -> str:
-    """The pass's run item, found by its label or made. Its ``instance of
+    """The pass's run item, found by its label, which must name one item
+    alone (WikiClient.find_item_by_label raises when two items hold it),
+    or made. Its ``instance of
     -> extraction run`` cites the item itself, so it is written in a
     second write, and a run item that a pass cut short between the two
     writes left without it gets it when the next pass finds it

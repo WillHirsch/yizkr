@@ -596,7 +596,10 @@ def part_of(entity) -> dict[tuple[str, str], list[str]]:
 
 
 def assert_labels_unique(wiki) -> None:
-    """The wiki client's label index fails on a duplicate label."""
+    """No two items share a label: registration content-tags a title
+    another item holds, and the writer never mints under a label an item
+    holds. The wiki client's label index takes such homonyms (#94); these
+    tests hold the registrar and writer to making none."""
     labels = [label_of(wiki, qid) for qid in wiki.entities]
     labels = [label for label in labels if label is not None]
     assert len(labels) == len(set(labels)), labels
@@ -793,7 +796,9 @@ class TestRegisterArtifact:
         wiki.item(TITLE)
         wiki.item(f"{TITLE} [{sha1(PORTRAIT)[:8]}]")
         writes = wiki.writes
-        with pytest.raises(RuntimeError, match="labels stay unique"):
+        with pytest.raises(
+            RuntimeError, match="a content-tagged title needs a free label"
+        ):
             register(wiki, scan(tmp_path, PORTRAIT))
         assert wiki.writes == writes
         assert wiki.media.requests == []
