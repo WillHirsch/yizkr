@@ -53,6 +53,7 @@ from tests.unit.test_scratch import (  # noqa: F401
 )
 from yizkr.claims import (
     EntityRecord,
+    _clear_empty,
     set_aside_structure,
     structure_problems,
 )
@@ -2542,6 +2543,7 @@ class TestContent:
                 ],
             },  # fmt: skip
             {"kind": "human", "status": "name"},
+            {"kind": "human", "status": "name", "nicknames": [""]},
         ]
         reasons = set()
         for structure in records_given:
@@ -2564,7 +2566,11 @@ class TestContent:
         # here until the report names it
         written = {
             label
-            for check in (structure_problems, set_aside_structure)
+            for check in (
+                structure_problems,
+                set_aside_structure,
+                _clear_empty,
+            )
             for label in re.findall(
                 r"""f?["']([a-z ]+): """, inspect.getsource(check)
             )

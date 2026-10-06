@@ -882,8 +882,11 @@ a name, not something a source asserts, so ADR-0022's Ruling 1 holds for
 the graph. Records live in the batch view and the LLM cache, as local-only
 data. A record may divide and label a name, never add to it: every part
 must occur in the label or an alias, folded, as whole words (a standard
-form and an organisation's places aside). A record that fails that, or
-that does not parse, is set aside and counted, and the entity keeps its
+form and an organisation's places aside). An optional field the model
+writes as an empty string is read as absent, and a name part that is
+empty, or whose written form is, is dropped and counted (`dropped`); the
+record stands if what is left can. A record that fails that, or that
+does not parse, is set aside and counted, and the entity keeps its
 label, aliases and kind. The GEDCOM adapter fills each person's record
 from the NAME's value and its GIVN, SURN, SPFX, NPFX, NSFX, NICK and
 `_MARNM` (ADR-0035 §6): a part the value does not restate reaches its

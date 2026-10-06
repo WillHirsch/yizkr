@@ -618,7 +618,8 @@ and `family` entity a "structure", what its names are made of, read from
 its label and aliases as the document writes them. Divide and label the
 words; never add one that is in neither the label nor an alias (a given
 name's standard form aside), and leave out every field the document does
-not settle: each is optional.
+not settle: each is optional. Omit a field you cannot fill, never write it
+as an empty string ("").
 - A person: {{"kind": "human", "status": "<status>",
   "given": [{{"written": "...", "standard": "...", "initial": false}}],
   "surnames": [{{"written": "...", "type": "<birth, married or other>"}}],
@@ -1244,7 +1245,9 @@ class ChunkedClaimExtractor:
         is set aside, never repaired and never the reason the manifest is
         refused (ADR-0035 §5): the entity keeps its label, aliases and
         kind, and the manifest counts each reason by its category, and the
-        records set aside (one record can give several reasons)."""
+        records set aside (one record can give several reasons, and one
+        whose only reasons are name parts dropped for an empty string
+        stands)."""
         _, item_keys = load_vocabulary()
         for obj in scan_json_objects(response):
             if "entities" not in obj:
@@ -1263,7 +1266,7 @@ class ChunkedClaimExtractor:
                     data.pop("qid", None)  # resolution state, never model-set
                     data, reasons = _set_aside_note(data)
                     data, more = set_aside_structure(data)
-                    set_aside_records += bool(more)
+                    set_aside_records += bool(more) and "structure" not in data
                     for reason in reasons + more:
                         category = reason.split(":", 1)[0]
                         set_aside[category] = set_aside.get(category, 0) + 1
