@@ -992,7 +992,7 @@ in, and the kind of call:
 | `cache-replay` | a conversation's opening turn was replayed for a fork's session | `matches` |
 | `cache-reject` | a caller's rejection moved an answer aside | `reason` |
 | `cache-adopt` | an answer was seeded as an adoption | `reason` |
-| `call` | a call reached the engine, with or without the cache (a hit is none; a miss or a replay is one) | `outcome` (`ok`, `error`, `paused` or `interrupted`), `duration_s` (end to end, so it includes any time paced); when there is something to say, `replay` (`true` for a replay of a conversation's opening turn, Conversations and forks), `wait_s` (the part of `duration_s` spent waiting for the subscription), `refused` (how many of its attempts a limit refused), `held` (why it last waited or paused: `usage limit`, `reserve`, `rate limit`, `overloaded`, `usage credits` or `closed`), `error` (the exception's name, never its message), and for a pause for a subscription limit its `window` and `resumes_at` (absent for `usage credits`: the subscription does not say when that clears); and what the call's stream reported of it, below: `model`, `cli_version`, `usage`, `num_turns`, `subtype`, `stop_reason` and `api_error`; on the Anthropic API engine, which has no stream, only the `model` and the `stop_reason` (verbatim) its response gave of an answered call |
+| `call` | a call reached the engine, with or without the cache (a hit is none; a miss or a replay is one) | `outcome` (`ok`, `error`, `paused` or `interrupted`), `duration_s` (end to end, so it includes any time waited for the subscription); when there is something to say, `replay` (`true` for a replay of a conversation's opening turn, Conversations and forks), `wait_s` (the part of `duration_s` spent waiting for the subscription), `refused` (how many of its attempts a limit refused), `held` (why it last waited or paused: `usage limit`, `reserve`, `rate limit`, `overloaded`, `usage credits` or `closed`), `error` (the exception's name, never its message), and for a pause for a subscription limit its `window` and `resumes_at` (absent for `usage credits`: the subscription does not say when that clears); and what the call's stream reported of it, below: `model`, `cli_version`, `usage`, `num_turns`, `subtype`, `stop_reason` and `api_error`; on the Anthropic API engine, which has no stream, only the `model` and the `stop_reason` (verbatim) its response gave of an answered call |
 | `alert` | an anomaly alert was appended | `check`, `status` |
 | `anomaly-recheck` | a recheck of the stored outputs began (docs/ANOMALIES.md) | `config` (the thresholds' digest), `documents` |
 | `anomaly-error` | an anomaly check raised; nothing failed with it | `error` (the exception's name, never its message), `hook` |
@@ -1227,20 +1227,19 @@ pauses the pass). Short of the line, calls go at full speed and are never
 spaced: whatever a window allows is used as soon as it can be, so the
 work is done as early as the window permits (owner, 2026-10-06, #495).
 
-**What the reserve achieves and what it cannot.** It paces only from
-`rate_limit_info`'s `utilization`, never from `unifiedWindows`: below
-the first warning threshold it has nothing to pace against, so the
-reserve gives no protection there at all, whatever
-`$YIZKR_CLAUDE_RESERVE` is set to; and a first warning that arrives late
-— close to 100% already used, or past its elapsed-time gate — can give
-little or none either, since there may be no room left to pace before
-the CLI refuses outright at 100%. What it does achieve is stopping
-dispatch at the line once a warning gives a window's use. Keeping
-headroom below the first warning needs either a local budget counting a window's own use or
-pacing from `unifiedWindows`; the owner decided (2026-09-28) not to add
-the first, and the engine does not do the second, so this reserve is
-best-effort pacing from the CLI's own reports, not a guarantee of
-headroom. Two more limits:
+**What the reserve achieves and what it cannot.** It reads only
+`rate_limit_info`'s `utilization`, never `unifiedWindows`: below the
+first warning threshold it has no use to go by, so the reserve gives no
+protection there at all, whatever `$YIZKR_CLAUDE_RESERVE` is set to; and
+a first warning that arrives late — close to 100% already used, or past
+its elapsed-time gate — can give little or none either, since the CLI
+may refuse outright at 100% before the line is reached. What it does
+achieve is stopping dispatch at the line once a warning gives a
+window's use. Keeping headroom below the first warning needs either a
+local budget counting a window's own use or reading `unifiedWindows`;
+the owner decided (2026-09-28) not to add the first, and the engine does
+not do the second, so this reserve is a best-effort stop from the CLI's
+own reports, not a guarantee of headroom. Two more limits:
 
 - the use per call includes what other sessions used meanwhile, which
   brings the line sooner, never later;

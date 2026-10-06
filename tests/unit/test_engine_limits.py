@@ -1142,6 +1142,16 @@ class TestReserve:
         assert record["held"] == RESERVE
         assert clock.now == resets + RESET_MARGIN
 
+    def test_a_window_used_exactly_to_the_line_holds(self, pacer, clock):
+        """The line itself is the reserve's: a window used exactly up to
+        it (0.75, with a reserve of 0.25) holds the next call until the
+        window reopens."""
+        resets = START + 2 * HOUR
+        calls(pacer, report(0.75, resets_at=resets))
+        record = admit(pacer)
+        assert record["held"] == RESERVE
+        assert clock.now == resets + RESET_MARGIN
+
     def test_a_reserve_line_the_window_passes_later_pauses_the_pass(
         self, pacer, clock
     ):

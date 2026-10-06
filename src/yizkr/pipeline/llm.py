@@ -1405,11 +1405,10 @@ LIMIT_STATUSES = frozenset({429, 529})
 LIMIT_ERRORS = frozenset({"rate_limit", "overloaded"})
 
 # Why a call waited, or its pass paused: a used-up usage window; a window
-# used up to the reserve; a refusal
-# with no reset time the local clock has not passed; an overload; a
-# report that a call ran on usage credits (whatever else that report
-# said, or left out, of the window it named); and a wait the client's
-# close ended.
+# used up to the reserve; a refusal with no reset time the local clock has
+# not passed; an overload; a report that a call ran on usage credits
+# (whatever else that report said, or left out, of the window it named);
+# and a wait the client's close ended.
 USAGE_LIMIT = "usage limit"
 RESERVE = "reserve"
 RATE_LIMIT = "rate limit"
@@ -1947,8 +1946,7 @@ class _Pacer:
             used = self._used(window)
             if used is None:
                 continue
-            left = line - used
-            if left <= 0:
+            if used >= line:
                 holds.append(_Hold(reopens, RESERVE, name, window.resets_at))
         return max(holds, key=lambda hold: hold.until, default=None)
 
