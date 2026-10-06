@@ -28,7 +28,6 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
-from pathlib import Path
 
 import pytest
 
@@ -711,29 +710,36 @@ class TestTheSite:
         assert waits == [scratchwrite.SITE_POLL]
         assert len(run.sites) == 1
 
-    def test_the_probe_reads_the_query_service_afresh(self):
+    def test_the_probe_reads_the_query_service_afresh(self, monkeypatch):
         """One probe, its clients made once, reads the query service anew
         at each call."""
-        from yizkr.staticsite import SiteBuilder
+        from yizkr import staticsite
 
         answers = iter(
             [
                 [{"run": {"value": "run-1"}}],
                 [{"version": {"value": "41"}}],
-                [{"run": {"value": "run-1"}}],
+                [{"run": {"value": "run-1"}}, {"run": {"value": "run-2"}}],
                 [{"version": {"value": "42"}}],
             ]
         )
-        builder = SiteBuilder(
-            CONFIG,
-            Path(),
-            run=lambda query: next(answers),
-            vocabulary=site_vocabulary(),
+        made = []
+
+        class Client:
+            def __init__(self, config):
+                made.append(config)
+
+            def vocabulary(self):
+                return site_vocabulary()
+
+        monkeypatch.setattr(staticsite, "WikiClient", Client)
+        monkeypatch.setattr(
+            staticsite.sparql, "runner", lambda config: lambda q: next(answers)
         )
-        assert builder.query_scratch_runs() == ["run-1"]
-        assert builder.newest_revision() == 41
-        assert builder.query_scratch_runs() == ["run-1"]
-        assert builder.newest_revision() == 42
+        probe = staticsite.query_service_probe(CONFIG)
+        assert probe() == (["run-1"], 41)
+        assert probe() == (["run-1", "run-2"], 42)
+        assert made == [CONFIG]
 
     def test_every_page_names_the_scratch_run(self, tmp_path):
         properties, items = site_vocabulary()
