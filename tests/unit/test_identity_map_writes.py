@@ -677,27 +677,27 @@ class TestTheMapIsTheOnlyWay:
         assert written.type_statements_referenced == 1
 
     def test_a_minted_item_takes_every_mentions_label_as_an_alias(self):
-        # the map puts the tree's "Eugen Löbig der Ältere" in the father's
-        # cluster: the family history's write mints him under that fuller
-        # form, one mention giving each, with his own label as an alias,
-        # before the tree is written
+        # the family history calls the father "Eugen Löbig der Ältere", and
+        # the map puts the tree's "Eugen Löbig" in his cluster: the family
+        # history's write mints him under the fuller form, one mention
+        # giving each, with the tree's name as an alias, before the tree
+        # is written
         wiki = _wiki()
-        tree = _tree(f"{EUGEN} der Ältere")
+        elder = f"{EUGEN} der Ältere"
+        (father,) = _eugens().entities[:1]
         father_only = _eugens().model_copy(
             update={
-                "entities": _eugens().entities[:1],
+                "entities": [father.model_copy(update={"label": elder})],
                 "claims": _eugens().claims[2:],
             }
         )
-        identity = corpus(
-            father_only, tree, entities=((EUGEN, f"{EUGEN} der Ältere"),)
-        )
+        identity = corpus(_tree(), father_only, entities=((EUGEN, elder),))
         father = (
             BatchWriter(wiki)
             .write_batch(father_only, identity=identity)
             .created_items["father"]
         )
-        assert _labelled(wiki, f"{EUGEN} der Ältere") == [father]
+        assert _labelled(wiki, elder) == [father]
         assert _aliases(wiki, father) == [EUGEN, "Muckel"]
 
     def test_a_later_kind_reaches_a_found_item_cited_to_its_artifact(self):
