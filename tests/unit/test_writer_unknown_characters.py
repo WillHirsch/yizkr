@@ -73,8 +73,14 @@ from yizkr.pipeline.writer import (
     BatchWriter,
     _term_text,
     _unknown_fault,
+    source_descriptor,
     unknown_characters,
 )
+
+# the description an item minted for Nina takes: the writer's own source
+# descriptor, never her summary nor her ref's description (#86); the
+# fake instance holds no label for the letter, so it names no title
+NINAS_DESCRIPTION = source_descriptor("human", None)
 
 # The ten code points Unicode 15.0 assigns with a canonical combining
 # class other than 0, which Python 3.11's 14.0.0 tables leave unassigned,
@@ -765,11 +771,13 @@ class TestLabels:
 @knows_the_mark
 @pytest.mark.usefixtures("newer_tables")
 class TestTermsLeftOut:
-    """A description, an alias or a type hint that holds a character
-    Python's tables do not know is left out, never changed, and named; the
-    item is written without it."""
+    """An alias or a type hint that holds a character Python's tables do
+    not know is left out, never changed, and named; the item is written
+    without it. A summary or a ref's description is never sent (#86): the
+    item's description is the writer's source descriptor, so one that holds
+    such a character is neither sent nor named."""
 
-    def test_a_description_and_an_alias_are_left_out(self):
+    def test_an_alias_is_left_out_and_a_summary_never_sent(self):
         batch = _batch_of(
             MARRIED,
             entities=(
@@ -787,14 +795,13 @@ class TestTermsLeftOut:
         written = BatchWriter(wiki).write_batch(batch)
 
         assert written.refused == []
-        assert written.refused_terms == ["nina: description", "nina: alias"]
+        assert written.refused_terms == ["nina: alias"]
         assert written.warnings == [
-            f"entity 'nina' has a description that {FAULT}: it is left out",
             f"entity 'nina' has an alias that {FAULT}: it is left out",
         ]
         nina = wiki.wbi.item.get(written.created_items["nina"])
         assert str(nina.labels.get("en")) == NINA
-        assert nina.descriptions.get("en") is None
+        assert str(nina.descriptions.get("en")) == NINAS_DESCRIPTION
         assert [str(alias) for alias in nina.aliases.get("en")] == [
             "Нина Сартина"
         ]
@@ -804,9 +811,9 @@ class TestTermsLeftOut:
         assert unchanged
         assert _same_counts(written, again)
 
-    def test_a_refs_description_is_left_out(self):
-        # no manifest: the first ref's description is the one the writer
-        # would send
+    def test_a_refs_description_is_never_sent(self):
+        # no manifest: the ref's description is never sent, so its mark is
+        # not named
         batch = _batch_of(
             _named("Лёбиг", "married_name", description=f"born {MARKED}")
         )
@@ -814,17 +821,17 @@ class TestTermsLeftOut:
 
         written = BatchWriter(wiki).write_batch(batch)
 
-        assert written.refused_terms == ["nina: description"]
+        assert written.refused_terms == []
         nina = wiki.wbi.item.get(written.created_items["nina"])
-        assert nina.descriptions.get("en") is None
+        assert str(nina.descriptions.get("en")) == NINAS_DESCRIPTION
         again, unchanged = _written_again(wiki, batch)
         assert unchanged
         assert _same_counts(written, again)
 
     def test_a_refused_claims_ref_gives_no_description(self):
         # the first ref to Nina is in a claim refused for its value, and
-        # the writer never resolves it: the description sent is the clean
-        # one of the ref in the claim it writes, and none is named
+        # the writer never resolves it: neither ref's description is sent,
+        # and none is named
         batch = _batch_of(
             _named(f"Нина {MARKED}", description=f"born {MARKED}"),
             _named("Лёбиг", "married_name", description="вдова Рудольфа"),
@@ -836,7 +843,7 @@ class TestTermsLeftOut:
         assert written.refused == [claim_id(batch.claims[0])]
         assert written.refused_terms == []
         nina = wiki.wbi.item.get(written.created_items["nina"])
-        assert str(nina.descriptions.get("en")) == "вдова Рудольфа"
+        assert str(nina.descriptions.get("en")) == NINAS_DESCRIPTION
         again, unchanged = _written_again(wiki, batch)
         assert unchanged
         assert _same_counts(written, again)
@@ -844,10 +851,10 @@ class TestTermsLeftOut:
     @pytest.mark.parametrize(
         "marked_first", [True, False], ids=["marked first", "clean first"]
     )
-    def test_the_first_refs_description_is_the_one_counted(self, marked_first):
-        # no manifest, two refs to Nina in claims the writer writes: the
-        # first gives the description the writer sends, and only it is
-        # named when it holds the mark
+    def test_no_refs_description_is_counted(self, marked_first):
+        # no manifest, two refs to Nina in claims the writer writes:
+        # whichever comes first, neither's description is sent, and
+        # neither is named when it holds the mark
         marked = _named("Лёбиг", "married_name", description=f"born {MARKED}")
         clean = _named("Нина Сартина", description="вдова Рудольфа")
         batch = _batch_of(
@@ -858,14 +865,9 @@ class TestTermsLeftOut:
         written = BatchWriter(wiki).write_batch(batch)
 
         assert (written.written, written.refused) == (2, [])
-        assert written.refused_terms == (
-            ["nina: description"] if marked_first else []
-        )
+        assert written.refused_terms == []
         nina = wiki.wbi.item.get(written.created_items["nina"])
-        sent = nina.descriptions.get("en")
-        assert (str(sent) if sent else None) == (
-            None if marked_first else "вдова Рудольфа"
-        )
+        assert str(nina.descriptions.get("en")) == NINAS_DESCRIPTION
         again, unchanged = _written_again(wiki, batch)
         assert unchanged
         assert _same_counts(written, again)
@@ -966,7 +968,7 @@ class TestPastTheCut:
         assert unknown_characters(_term_text(LONG_TERM)) == []
         assert len(LONG_TEXT) > TEXT_LIMIT
 
-    def test_a_long_description_and_alias_are_left_out(self):
+    def test_a_long_alias_is_left_out_and_a_long_summary_never_sent(self):
         batch = _batch_of(
             MARRIED,
             entities=(
@@ -983,9 +985,9 @@ class TestPastTheCut:
 
         written = BatchWriter(wiki).write_batch(batch)
 
-        assert written.refused_terms == ["nina: description", "nina: alias"]
+        assert written.refused_terms == ["nina: alias"]
         nina = wiki.wbi.item.get(written.created_items["nina"])
-        assert nina.descriptions.get("en") is None
+        assert str(nina.descriptions.get("en")) == NINAS_DESCRIPTION
         assert [str(alias) for alias in nina.aliases.get("en")] == [
             "Нина Сартина"
         ]

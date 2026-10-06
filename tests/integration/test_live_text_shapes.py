@@ -28,15 +28,16 @@ back through the API:
 * Eugen's label, his summary and two of his aliases are over the 250
   characters Wikibase holds in a term, and his other aliases are his pet
   name with a line break after it, with spaces around it, and a blank: the
-  instance keeps the label, the description and the two aliases cut, with
-  their digests, the pet name once, and no blank. Hildegard's label, given
+  instance keeps the label and the two aliases cut, with their digests,
+  the pet name once, and no blank. His summary is never sent: his item's
+  description is the writer's source descriptor (#86). Hildegard's label, given
   with a line break before it, a tab inside and a space after it, agrees
   with Eugen's well past the cut: she has an item of her own, whose label
   is hers trimmed and cut;
 * Sebastian, named by the ninth claim, has a summary that is his label
-  with a space after it: his item is made without a description, and the
-  first write of the fixture's version says so in a warning (#401's
-  review);
+  with a space after it: as a summary is never sent (#86), his item takes
+  the source descriptor, and no warning is given (#401's review, which
+  the unit tests keep for a label that is the descriptor);
 * the batch's model identifier makes the run item's label longer than the
   instance holds: it is cut with the digest of the whole label, which
   holds the batch's fingerprint;
@@ -71,7 +72,12 @@ from wikibaseintegrator.entities.baseentity import BaseEntity
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import writer
 from yizkr.pipeline.review import claim_id
-from yizkr.pipeline.writer import CUT_MARK, BatchWriter, batch_fingerprint
+from yizkr.pipeline.writer import (
+    CUT_MARK,
+    BatchWriter,
+    batch_fingerprint,
+    source_descriptor,
+)
 
 from .conftest import fixture_mark, register_fictional
 
@@ -399,13 +405,9 @@ def test_no_text_of_the_batch_stops_it(client, fixture_graph):
     refusals = [w for w in written.warnings if w.startswith("claim ")]
     for warning, cid, fault in zip(refusals, refused, faults, strict=True):
         assert warning.startswith(f"claim {cid} {fault}")
-    # the session's first write mints Sebastian, without the description
-    # that would be his label, and says so
-    assert [w for w in written.warnings if w not in refusals] == [
-        "entity 'sebastian' has a description that is its label: its "
-        "item is made without one, as Wikibase refuses an item whose "
-        "label and description are the same"
-    ]
+    # the session's first write mints Sebastian with the source
+    # descriptor, never his summary, which is his label (#86)
+    assert [w for w in written.warnings if w not in refusals] == []
     eugen = written.created_items["eugen"]
     hildegard = written.created_items["hildegard"]
     sebastian = written.created_items["sebastian"]
@@ -438,14 +440,16 @@ def test_no_text_of_the_batch_stops_it(client, fixture_graph):
     # the terms, as the instance keeps them
     marker = fixture_marker()
     kept = terms(client, [eugen, hildegard, sebastian, written.run_qid])
+    # the source is registered as an artifact of no narrower kind
+    described = source_descriptor("human", "artifact")
     assert kept[sebastian] == {
         "label": labels_of(marker)["sebastian"],
-        "description": None,
+        "description": described,
         "aliases": [],
     }
     assert kept[eugen] == {
         "label": label_kept(marker, "eugen"),
-        "description": cut(SUMMARY, TERM_LIMIT),
+        "description": described,
         "aliases": sorted(
             ["Muckel", *(cut(alias, TERM_LIMIT) for alias in LONG_ALIASES)]
         ),

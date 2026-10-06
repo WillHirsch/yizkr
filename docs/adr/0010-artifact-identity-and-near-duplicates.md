@@ -100,7 +100,9 @@ sound for any newer instance, and what it refuses beyond need shows in
 `refused` and `refused_terms`. A claim whose text, or whose source
 block's locator, holds one is refused whole; a description, an alias or
 a type hint holding one is left out and counted (`refused_terms`, a
-description only when a claim the writer writes mentions its entity);
+description only when a claim the writer writes mentions its entity;
+amended by #86, 2026-10-06: an entity's description is the writer's own
+source descriptor, never a text of the batch, so none is named);
 an entity whose label holds one is neither found nor minted, and the
 claims that mention it are refused. Each text is read whole, past the
 cut to TERM_LIMIT or TEXT_LIMIT too, so no cut of such a text is sent:
@@ -180,6 +182,19 @@ label must name one item alone fails on it, a manifest vocabulary item's
 or a run item's. The registrar's content tag stays as a label
 convention; nothing keys on an artifact's label (§1, "Registration at
 write time" and "What is still matched by label").
+Amended by #86 (2026-10-06): the writer makes each new item in one
+write, with its label, its source descriptor as its description (the
+entity's kind and the artifact kind of the artifact that names it, as
+"human named in a letter"; never the artifact's title, which may name a
+living person) and its `instance of` with both references. A manifest
+record from the second on under one label (of those the extraction
+asserts about or a claim names), as a son of his father's
+name is when one document names both, is an item of its own: its
+description holds its place among the manifest's records under the
+label, so Wikibase takes it beside the first, and a re-run finds it by
+that description; the resolve step leaves it to the writer. A summary or
+a ref's description is never sent, so neither is named in
+`refused_terms` (docs/MODELING.md, "General approach").
 
 ## Context
 
@@ -664,7 +679,9 @@ an entity of an artifact kind or of artifact fragment (the writer's
   Wikibase refuses two with one label and description), so the entity
   cannot take the plain label while another item holds it (amended by
   #94, 2026-10-06: the wiki client's label index takes two items under
-  one label, and gives the label the earliest of them); the artifact keeps its title,
+  one label, and gives the label the earliest of them; amended by #86,
+  2026-10-06: the second manifest record under one label is made an item
+  of its own, under a description of its own); the artifact keeps its title,
   and a person keeps its name as an alias, the closest to its name the
   wiki allows. Which side bears the tag depends on the order of the
   writes, as a content tag does: a person written before an artifact

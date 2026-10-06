@@ -467,6 +467,14 @@ def label_only(client) -> str:
     return item.write(summary="integration test: an untyped item").id
 
 
+def describe(client, qid: str, description: str) -> None:
+    """A curator's description of the item `qid`, set once."""
+    item = client.wbi.item.get(qid)
+    if str(item.descriptions.get("en") or "") != description:
+        item.descriptions.set("en", description)
+        item.write(summary="integration test: a curator's description")
+
+
 @pytest.fixture(scope="module")
 def fixture_graph(client, config):
     """Write the fixture under its marked labels (idempotent: a re-run
@@ -572,6 +580,11 @@ def fixture_graph(client, config):
     }
     qids["letter"] = letter.qid
     qids["letter page"] = letter.fragment_qids[1]
+    # the writer describes an item it mints by its source alone (#86): the
+    # descriptions that name "Named In Text" are a curator's
+    for role, ref in ENTITIES.items():
+        if "description" in ref:
+            describe(client, qids[role], ref["description"])
     deprecate_type(client, qids["deprecated type"])
     add_type(
         client,

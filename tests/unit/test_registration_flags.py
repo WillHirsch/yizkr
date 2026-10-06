@@ -1940,15 +1940,12 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
 
     @needs_unknown_mark
     @pytest.mark.parametrize("blocked", [True, False])
-    def test_a_blocked_entitys_marked_description_is_not_counted(
-        self, blocked
-    ):
-        """The media object's description holds a character Python's
-        Unicode tables do not know (#444, #431). Blocked, it is refused
-        with its claim, once, and its description, which only an item a
-        written claim mints would take, is neither named in
-        refused_terms nor warned of. Not blocked, its item is made and the
-        description is named, as the writer leaves it out."""
+    def test_a_media_objects_marked_summary_is_not_counted(self, blocked):
+        """The media object's summary holds a character Python's Unicode
+        tables do not know (#444, #431). Blocked, it is refused with its
+        claim, once. Either way its summary is never sent, as a minted
+        item's description is the writer's source descriptor (#86), so it
+        is neither named in refused_terms nor warned of."""
         from yizkr.pipeline.review import claim_id
         from yizkr.pipeline.writer import BatchWriter
 
@@ -1968,13 +1965,10 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         written = BatchWriter(wiki).write_batch(batch)
 
         assert written.refused == (named if blocked else [])
-        assert written.refused_terms == (
-            [] if blocked else ["md1: description"]
-        )
-        described = [
+        assert written.refused_terms == []
+        assert not [
             w for w in written.warnings if "'md1' has a description" in w
         ]
-        assert len(described) == (0 if blocked else 1)
         assert ("md1" in written.created_items) is not blocked
 
     @needs_unknown_mark

@@ -35,6 +35,12 @@ a divorce's PLAC and a MARR's TYPE naming a ceremony are read, and an
 ANUL is read; a couple of two HUSBs or two WIFEs is a union's couple,
 but the second is never a parent; the HEAD's LANG gives the texts'
 language: see Amendments.
+Amended by #86 (2026-10-06): a person's summary, which gives the dates
+of their birth and death, is no longer their item's description: the
+writer describes every item it makes by its kind and the kind of its
+source alone, as "human named in a genealogical report"
+(docs/MODELING.md, "General approach"), and the summary stays in the
+batch's manifest.
 
 ## Context
 
@@ -288,8 +294,8 @@ gave its cause of death all the same:
   but commas and spaces (`, , ,`, the jurisdictions of a place a tool
   leaves empty) names no place: under any event it gives no place claim
   and no place item, and under a DEAT it states no death. The person's
-  summary, the item's description, gives a death date only from a DEAT
-  that states the death.
+  summary (the item's description until #86, 2026-10-06) gives a death
+  date only from a DEAT that states the death.
 - **A family with one partner or none has its MARR and DIV counted.** A
   family whose HUSB or WIFE is missing, or names no person the adapter
   maps (no INDI record, or a person without a name, below), gives no
