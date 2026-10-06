@@ -1,0 +1,728 @@
+"""Offline tests for a scratch run's write side (#200; ADR-0025 §1, §2):
+the corpus stages after clustering, reset, register, write and site
+(yizkr.pipeline.scratchwrite), run in order over a run's documents on the
+unit tests' in-memory instance, with no stack and no engine.
+
+* The driver registers them after clustering, in that order; each
+  touches the wiki and makes no model call.
+* The write takes every claim of each batch, with no approval file, at
+  normal rank, with both references, through the run's one identity
+  map; depicts claims are left out and counted. Each run item is marked
+  an unratified scratch run's, naming the run, and records the hashes of
+  the run manifest's settings and of the identity map.
+* It refuses unless this run reset the instance and nothing else has
+  written to it since; a batch the writer would refuse whole is refused
+  before anything of its document is registered.
+* A rerun whose write key is the recorded instance-contents key resets
+  nothing and writes nothing, until a write the stage did not make, or
+  another key, voids the record.
+* The LAN site's header names the scratch run.
+
+Every document is fictional (docs/EXAMPLES.md): Leopold Löbig's birth
+register extract, a letter from his brother Gustav, and a photograph of
+the shop front at Brunnenring 35.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import hashlib
+import json
+
+import pytest
+
+from tests.unit.test_registration_flags import WritingWiki
+from yizkr.claims import ClaimBatch
+from yizkr.core.config import Config
+from yizkr.core.corpus import ExclusionList
+from yizkr.core.instance import (
+    read_record,
+    recorded_contents,
+    write_state_dir,
+)
+from yizkr.pipeline import report, scratch, scratchwrite
+from yizkr.pipeline.orchestrate import DocumentRun
+from yizkr.pipeline.scratch import CORPUS_DIR, CorpusContext, ScratchDriver
+from yizkr.pipeline.scratchwrite import ScratchWriteRefused
+from yizkr.staticsite import SiteBuilder, scratch_notice
+
+HOST = "wikibase.example"
+URL = f"http://{HOST}"
+CONFIG = Config(
+    wikibase_url=URL,
+    concept_uri=URL,
+    admin_name="admin",
+    admin_pass="Hutmacherei-1863",
+    wdqs_url=f"http://query.{HOST}",
+    sparql_url=f"http://query.{HOST}/sparql",
+    env_file=None,
+)
+RUN = {
+    "model_identifier": "claude-sonnet-5",
+    "pipeline_version": "0.1.0",
+    "started_at": "2026-10-06T09:00:00Z",
+}
+EXTRACT = b"\x89PNG synthetic scan of Leopold's 1914 birth register extract"
+LETTER = b"\x89PNG synthetic scan of Gustav's 1952 letter to Leopold"
+SHOP = b"\x89PNG synthetic photograph of the shop front at Brunnenring 35"
+
+
+def sha1(data: bytes) -> str:
+    return hashlib.sha1(data).hexdigest()
+
+
+def person(local_id: str, label: str) -> dict:
+    return {
+        "kind": "local",
+        "local_id": local_id,
+        "label": label,
+        "instance_of": "human",
+    }
+
+
+def claim(data: bytes, subject: dict, prop: str, value: dict) -> dict:
+    return {
+        "subject": subject,
+        "property": prop,
+        "value": value,
+        "source": {
+            "artifact": {"kind": "artifact", "sha1": sha1(data)},
+            "page_number": "1",
+        },
+        "confidence": 0.9,
+    }
+
+
+def born(data: bytes, year: int, local_id: str = "leopold") -> dict:
+    return claim(
+        data,
+        person(local_id, "Leopold Löbig"),
+        "date_of_birth",
+        {"type": "time", "year": year, "month": 5},
+    )
+
+
+def brothers(data: bytes) -> dict:
+    return claim(
+        data,
+        person("gustav", "Gustav Löbig"),
+        "sibling",
+        {"type": "item", "value": person("leopold", "Leopold Löbig")},
+    )
+
+
+def depicts(data: bytes) -> dict:
+    return claim(
+        data,
+        {"kind": "artifact", "sha1": sha1(data)},
+        "depicts",
+        {"type": "item", "value": person("leopold", "Leopold Löbig")},
+    )
+
+
+def batch(*claims: dict) -> ClaimBatch:
+    return ClaimBatch.model_validate(
+        {"extraction_run": RUN, "claims": list(claims)}
+    )
+
+
+class Wiki(WritingWiki):
+    """The in-memory instance, with what the write side reads besides:
+    the vocabulary of the claims these tests write and of a run item's
+    marks, and the instance's newest revision and log entry (every item
+    written and every file uploaded), as the instance-contents record
+    reads them."""
+
+    PROPERTIES = {
+        **WritingWiki.PROPERTIES,
+        "date_of_birth": "P70",
+        "sibling": "P71",
+        "depicts": "P72",
+        "scratch_run": "P73",
+        "run_manifest_hash": "P74",
+        "identity_map_hash": "P75",
+    }
+    config = CONFIG
+
+    def api_get(self, params):
+        if params.get("list") == "allrevisions":
+            revisions = [{"revid": self.writes}] if self.writes else []
+            return {"query": {"allrevisions": [{"revisions": revisions}]}}
+        if params.get("list") == "logevents":
+            uploads = sum(len(v) for v in self.media.versions.values())
+            entries = [{"logid": uploads}] if uploads else []
+            return {"query": {"logevents": entries}}
+        return super().api_get(params)
+
+    def wiped(self) -> None:
+        """Empty the instance, as a reset does."""
+        fresh = Wiki()
+        self.entities, self.media = fresh.entities, fresh.media
+        self.writes = 0
+
+
+class Run:
+    """A scratch run's documents in a run directory, past the barrier,
+    with the write side's stand-ins: the instance `wiki`, a reset that
+    empties it (and clears what the real reset clears), the live-stack
+    lock and the site builder, each recording its use."""
+
+    def __init__(self, tmp_path, monkeypatch, wiki=None, run_id="run-1"):
+        self.tmp_path = tmp_path
+        self.wiki = wiki or Wiki()
+        self.resets = 0
+        self.locks = 0
+        self.sites: list = []
+        self.lines: list[str] = []
+        # the scratch runs the query service shows; by default those the
+        # instance's run items name, with no lag
+        self.shown: list[str] | None = None
+        self.folder = tmp_path / "corpus"
+        self.folder.mkdir(exist_ok=True)
+        self.run_dir = tmp_path / "runs" / run_id
+        self.driver = ScratchDriver(
+            self.folder,
+            self.run_dir,
+            run_id=run_id,
+            cache_dir=tmp_path / "cache",
+            exclusions=ExclusionList(),
+            log=lambda *args, **kwargs: self.lines.append(
+                " ".join(map(str, args))
+            ),
+        )
+        self.driver._client = self.wiki
+        self.driver._config = CONFIG
+        self.documents: list[DocumentRun] = []
+        monkeypatch.setattr(scratchwrite, "reset_instance", self._reset)
+        monkeypatch.setattr(scratchwrite, "live_stack", self._lock)
+        monkeypatch.setattr(scratchwrite, "client_of", lambda _: self.wiki)
+        monkeypatch.setattr(scratchwrite, "_forget_client", lambda _: None)
+        monkeypatch.setattr(scratchwrite, "build_site", self._site)
+        monkeypatch.setattr(scratchwrite, "shown_scratch_runs", self._shown)
+        monkeypatch.setattr(scratchwrite, "sleep", self._sleep)
+
+    def _reset(self, env_file, log):
+        from yizkr.core.instance import clear_contents
+
+        self.resets += 1
+        clear_contents(CONFIG, "yizkr scratch reset")
+        state = write_state_dir(CONFIG)
+        if state.exists():
+            for path in state.iterdir():
+                path.unlink()
+        self.wiki.wiped()
+
+    @contextlib.contextmanager
+    def _lock(self):
+        self.locks += 1
+        yield
+
+    def _site(self, config, out):
+        self.sites.append(out)
+        return {"people": 2, "artifacts": 3}
+
+    def _shown(self, config) -> list[str]:
+        if self.shown is not None:
+            return list(self.shown)
+        return sorted(
+            {
+                value
+                for qid in self.wiki.entities
+                for value in string_values(self.wiki, qid, "scratch_run")
+            }
+        )
+
+    def _sleep(self, seconds):
+        raise AssertionError("the site stage waited for the query service")
+
+    def add(self, name: str, data: bytes, claims: ClaimBatch) -> DocumentRun:
+        path = self.folder / name
+        path.write_bytes(data)
+        doc = DocumentRun(path, self.run_dir)
+        doc.dir.mkdir(parents=True, exist_ok=True)
+        doc.batch.write_text(claims.model_dump_json(indent=2))
+        self.documents.append(doc)
+        return doc
+
+    def context(self, stage: str) -> CorpusContext:
+        return CorpusContext(
+            run=self.driver.rundir,
+            documents=tuple(self.documents),
+            directory=self.run_dir / CORPUS_DIR / stage,
+            env_file=None,
+            log=self.driver.log,
+            driver=self.driver,
+        )
+
+    def stage(self, name: str):
+        if name == "clustering":
+            from yizkr.pipeline.clustering import run_stage
+
+            return run_stage(self.context(name))
+        return getattr(scratchwrite, f"run_{name}")(self.context(name))
+
+    def past_the_barrier(self, until: str = "site") -> None:
+        """The corpus stages in order, as the driver runs them."""
+        for name in ("clustering", "reset", "register", "write", "site"):
+            self.stage(name)
+            if name == until:
+                return
+
+    def record(self, stage: str) -> dict:
+        return scratchwrite.read_record(self.run_dir / CORPUS_DIR / stage)
+
+
+@pytest.fixture
+def run(tmp_path, monkeypatch):
+    made = Run(tmp_path, monkeypatch)
+    made.add("leopold-birth-extract.png", EXTRACT, batch(born(EXTRACT, 1914)))
+    made.add(
+        "gustav-letter-1952.png",
+        LETTER,
+        batch(brothers(LETTER), born(LETTER, 1913), depicts(LETTER)),
+    )
+    return made
+
+
+# -- what the instance holds --------------------------------------------------
+
+
+def statements(wiki, qid: str, key: str) -> list[dict]:
+    return wiki.entities[qid]["claims"].get(Wiki.PROPERTIES[key], [])
+
+
+def cited(statement: dict, key: str) -> list[str]:
+    return [
+        snak["datavalue"]["value"]
+        if isinstance(snak["datavalue"]["value"], str)
+        else snak["datavalue"]["value"]["id"]
+        for reference in statement.get("references", [])
+        for snak in reference["snaks"].get(Wiki.PROPERTIES[key], [])
+    ]
+
+
+def string_values(wiki, qid: str, key: str) -> list[str]:
+    return [
+        statement["mainsnak"]["datavalue"]["value"]
+        for statement in statements(wiki, qid, key)
+    ]
+
+
+def run_items(wiki) -> list[str]:
+    kind = Wiki.ITEMS["extraction_run"]
+    return [
+        qid
+        for qid in wiki.entities
+        if any(
+            statement["mainsnak"]["datavalue"]["value"]["id"] == kind
+            for statement in statements(wiki, qid, "instance_of")
+        )
+    ]
+
+
+def by_label(wiki, label: str) -> list[str]:
+    return [
+        qid
+        for qid, entity in wiki.entities.items()
+        if entity.get("labels", {}).get("en", {}).get("value") == label
+    ]
+
+
+# -- the stages ---------------------------------------------------------------
+
+
+@pytest.mark.write_side
+class TestTheStages:
+    def test_the_write_side_follows_clustering_in_order(self):
+        assert [stage.name for stage in scratch.CORPUS_STAGES] == [
+            "clustering",
+            "reset",
+            "register",
+            "write",
+            "site",
+        ]
+        for stage in scratch.CORPUS_STAGES[1:]:
+            assert stage.touches_wiki
+            assert not stage.calls_engine
+
+    def test_the_driver_reads_the_kept_state_marker(self):
+        assert scratch.KEPT_STATE is scratch._instance_is_kept
+
+    def test_the_unit_tests_leave_the_write_side_out_unless_asked(self):
+        assert "reset" in [stage.name for stage in scratch.CORPUS_STAGES]
+
+
+def test_the_unit_tests_leave_the_write_side_out():
+    assert [stage.name for stage in scratch.CORPUS_STAGES] == ["clustering"]
+
+
+# -- the write ----------------------------------------------------------------
+
+
+class TestTheWrite:
+    def test_every_claim_is_written_with_both_references(self, run):
+        run.past_the_barrier()
+        wiki = run.wiki
+        assert run.resets == 1
+        # the two sources give Leopold two birth years: the map keeps his
+        # two mentions apart, and each is an item
+        leopolds = by_label(wiki, "Leopold Löbig")
+        (gustav,) = by_label(wiki, "Gustav Löbig")
+        extract, letter = (
+            wiki.string_statement_index(Wiki.PROPERTIES["media_sha1"])[
+                sha1(data)
+            ]
+            for data in (EXTRACT, LETTER)
+        )
+        births = [
+            statement
+            for leopold in leopolds
+            for statement in statements(wiki, leopold, "date_of_birth")
+        ]
+        assert len(births) == 2
+        runs = set(run_items(wiki))
+        assert len(runs) == 2
+        for statement in births + statements(wiki, gustav, "sibling"):
+            # normal rank, as every scratch write is (rule 4)
+            assert statement.get("rank", "normal") == "normal"
+            (artifact,) = cited(statement, "stated_in")
+            assert artifact in {extract, letter}
+            (run_item,) = cited(statement, "inferred_from_extraction_run")
+            assert run_item in runs
+
+    def test_depicts_claims_are_left_out_and_counted(self, run):
+        run.past_the_barrier()
+        assert not any(
+            statements(run.wiki, qid, "depicts") for qid in run.wiki.entities
+        )
+        record = run.record("write")
+        assert record["depicts_left_out"] == 1
+        letter = run.documents[1]
+        assert record["documents"][letter.sha1]["depicts_left_out"] == 1
+        # the run report counts them
+        content = report._aggregate_content({}, {}, {}, _vocabulary(), record)
+        assert content["depicts"] == {"left_out": 1}
+        assert content["write"]["documents_written"] == 2
+
+    def test_each_run_item_is_marked_an_unratified_scratch_run(self, run):
+        run.past_the_barrier()
+        wiki = run.wiki
+        identity = scratchwrite.identity_map(run.context("write"))
+        settings = scratchwrite.manifest_hash(run.driver.rundir)
+        for qid in run_items(wiki):
+            assert string_values(wiki, qid, "scratch_run") == ["run-1"]
+            assert string_values(wiki, qid, "run_manifest_hash") == [settings]
+            assert string_values(wiki, qid, "identity_map_hash") == [
+                identity.hash
+            ]
+            for key in ("scratch_run", "run_manifest_hash", "instance_of"):
+                for statement in statements(wiki, qid, key):
+                    # each stated in the run item itself
+                    assert cited(statement, "stated_in") == [qid]
+
+    def test_the_write_records_its_key(self, run):
+        run.past_the_barrier()
+        recorded = recorded_contents(run.wiki)
+        assert recorded.key == run.record("reset")["key"]
+        assert recorded.run_id == "run-1"
+        assert run.record("write")["recorded"] is True
+
+    def test_writing_makes_no_model_call(self, run):
+        run.past_the_barrier()
+        assert run.driver._engines == {}
+
+    def test_it_writes_under_the_live_stack_lock(self, run):
+        run.past_the_barrier()
+        # register and write each hold it; the reset holds its own
+        assert run.locks == 2
+
+    def test_registration_names_the_scratch_run(self, run):
+        run.past_the_barrier()
+        (extract,) = by_label(run.wiki, "leopold-birth-extract")
+        description = run.wiki.entities[extract]["descriptions"]["en"]
+        assert "yizkr scratch run" in description["value"]
+
+
+# -- the refusals -------------------------------------------------------------
+
+
+class TestRefusals:
+    def test_a_write_without_this_run_s_reset_is_refused(self, run):
+        run.past_the_barrier(until="clustering")
+        # the record says this run reset the instance, the state that
+        # another run did
+        run.stage("reset")
+        state = scratchwrite.read_state(CONFIG)
+        state["run_id"] = "run-0"
+        scratchwrite.state_path(CONFIG).write_text(json.dumps(state))
+        before = run.wiki.writes
+        with pytest.raises(ScratchWriteRefused, match="run-0 reset it"):
+            run.stage("register")
+        with pytest.raises(ScratchWriteRefused, match="did not reset"):
+            run.stage("write")
+        assert run.wiki.writes == before
+
+    def test_a_write_to_the_instance_since_the_reset_is_refused(self, run):
+        run.past_the_barrier(until="reset")
+        # a live test, say, writes to the instance
+        run.wiki.item("Brunnenring 35")
+        before = run.wiki.writes
+        with pytest.raises(ScratchWriteRefused, match="written to since"):
+            run.stage("register")
+        assert run.wiki.writes == before
+
+    def test_a_write_with_no_reset_stage_is_refused(self, run):
+        run.past_the_barrier(until="clustering")
+        with pytest.raises(ScratchWriteRefused, match="reset stage"):
+            run.stage("register")
+        assert run.wiki.writes == 0
+
+    def test_a_batch_the_writer_would_refuse_registers_nothing(
+        self, monkeypatch, run
+    ):
+        from tests.fixtures.identity import mapped
+
+        # the identity map holds none of the shop front's mentions
+        identity = mapped(
+            *(scratchwrite.extracted_batch(doc) for doc in run.documents)
+        )
+        monkeypatch.setattr(scratchwrite, "identity_map", lambda _: identity)
+        run.add(
+            "brunnenring-35.png",
+            SHOP,
+            batch(born(SHOP, 1914, local_id="leopold-shop")),
+        )
+        run.stage("reset")
+        run.stage("register")
+        run.stage("write")
+        record = run.record("register")
+        assert record["refused"] == {sha1(SHOP): "UnmappedMention"}
+        index = run.wiki.string_statement_index(Wiki.PROPERTIES["media_sha1"])
+        assert sha1(SHOP) not in index
+        assert sha1(EXTRACT) in index
+        assert run.record("write")["refused"] == {
+            sha1(SHOP): "UnmappedMention"
+        }
+
+
+# -- reuse --------------------------------------------------------------------
+
+
+class TestReuse:
+    def test_a_rerun_with_the_recorded_key_resets_and_writes_nothing(
+        self, run, tmp_path, monkeypatch
+    ):
+        run.past_the_barrier()
+        writes = run.wiki.writes
+        again = Run(tmp_path, monkeypatch, wiki=run.wiki, run_id="run-2")
+        again.documents = run.documents
+        again.shown = ["run-1"]
+        again.past_the_barrier()
+        assert again.resets == 0
+        assert run.wiki.writes == writes
+        assert again.record("reset")["action"] == scratchwrite.SKIPPED
+        assert again.record("write")["skipped"] is True
+        # the site names the run whose writes the instance holds
+        assert again.record("site")["run_id"] == "run-1"
+
+    def test_a_write_the_stage_did_not_make_voids_the_key(
+        self, run, tmp_path, monkeypatch
+    ):
+        run.past_the_barrier()
+        run.wiki.item("Brunnenring 35")
+        again = Run(tmp_path, monkeypatch, wiki=run.wiki, run_id="run-2")
+        again.documents = run.documents
+        again.past_the_barrier()
+        assert again.resets == 1
+        assert by_label(run.wiki, "Brunnenring 35") == []
+        assert recorded_contents(run.wiki).run_id == "run-2"
+
+    def test_another_batch_is_another_key(self, run, tmp_path, monkeypatch):
+        run.past_the_barrier()
+        key = run.record("reset")["key"]
+        letter = run.documents[1]
+        letter.batch.write_text(
+            batch(brothers(LETTER), born(LETTER, 1914)).model_dump_json()
+        )
+        again = Run(tmp_path, monkeypatch, wiki=run.wiki, run_id="run-2")
+        again.documents = run.documents
+        again.past_the_barrier()
+        assert again.resets == 1
+        assert again.record("reset")["key"] != key
+
+    def test_a_cleared_record_resets_first(self, run, tmp_path, monkeypatch):
+        from yizkr.core.instance import clear_contents
+
+        run.past_the_barrier()
+        clear_contents(CONFIG, "yizkr live tests")
+        again = Run(tmp_path, monkeypatch, wiki=run.wiki, run_id="run-2")
+        again.documents = run.documents
+        again.past_the_barrier()
+        assert again.resets == 1
+
+    def test_an_invocation_cut_short_goes_on_where_it_stopped(
+        self, run, monkeypatch
+    ):
+        from yizkr.pipeline import writer
+
+        real = writer.BatchWriter.write_batch
+        calls = []
+
+        def once(self, *args, **kwargs):
+            calls.append(1)
+            if len(calls) == 2:
+                raise KeyboardInterrupt
+            return real(self, *args, **kwargs)
+
+        monkeypatch.setattr(writer.BatchWriter, "write_batch", once)
+        run.past_the_barrier(until="register")
+        with pytest.raises(KeyboardInterrupt):
+            run.stage("write")
+        assert len(run_items(run.wiki)) == 1
+        monkeypatch.setattr(writer.BatchWriter, "write_batch", real)
+        # the next invocation: no reset, the first document not again
+        run.past_the_barrier()
+        assert run.resets == 1
+        assert run.record("reset")["action"] == scratchwrite.RESUMED
+        assert len(run_items(run.wiki)) == 2
+        assert recorded_contents(run.wiki).run_id == "run-1"
+
+    def test_a_write_cut_short_within_a_document_resets_again(
+        self, run, monkeypatch
+    ):
+        run.past_the_barrier(until="write")
+        # a revision the write-phase state does not record, as a write
+        # cut short within a document leaves one
+        state = scratchwrite.read_state(CONFIG)
+        state["watermark"] = {"revision": 1, "log": 0}
+        scratchwrite.state_path(CONFIG).write_text(json.dumps(state))
+        from yizkr.core.instance import clear_contents
+
+        clear_contents(CONFIG, "test")
+        run.past_the_barrier()
+        assert run.resets == 2
+        assert run.record("reset")["action"] == scratchwrite.RESET_DONE
+
+
+# -- the site -----------------------------------------------------------------
+
+
+class TestTheSite:
+    def test_the_site_waits_for_the_run_s_items(self, run, monkeypatch):
+        run.past_the_barrier(until="write")
+        run.shown = []
+        waits = []
+
+        def sleep(seconds):
+            waits.append(seconds)
+            run.shown = ["run-1"]
+
+        monkeypatch.setattr(scratchwrite, "sleep", sleep)
+        run.stage("site")
+        assert waits == [scratchwrite.SITE_POLL]
+        assert run.sites == [run.run_dir / CORPUS_DIR / "site" / "site"]
+        assert run.record("site")["run_id"] == "run-1"
+
+    def test_a_query_service_that_never_shows_the_run_fails_it(
+        self, run, monkeypatch
+    ):
+        run.past_the_barrier(until="write")
+        run.shown = ["run-0"]
+        monkeypatch.setattr(scratchwrite, "sleep", lambda seconds: None)
+        with pytest.raises(ScratchWriteRefused, match="shows no run item"):
+            run.stage("site")
+        assert run.sites == []
+
+    def test_every_page_names_the_scratch_run(self, tmp_path):
+        properties, items = site_vocabulary()
+
+        def runner(query: str) -> list[dict]:
+            if "SELECT DISTINCT ?run" in query:
+                return [{"run": {"value": "20261006-090000"}}]
+            return []
+
+        out = tmp_path / "site"
+        summary = SiteBuilder(
+            CONFIG, out, run=runner, vocabulary=(properties, items)
+        ).build()
+        assert summary["scratch_runs"] == ["20261006-090000"]
+        pages = sorted(out.glob("*.html"))
+        assert pages
+        for page in pages:
+            text = page.read_text()
+            assert "development-stage scratch run" in text
+            assert "<code>20261006-090000</code>" in text
+
+    def test_an_instance_with_no_scratch_run_has_no_notice(self, tmp_path):
+        out = tmp_path / "site"
+        SiteBuilder(
+            CONFIG,
+            out,
+            run=lambda query: [],
+            vocabulary=site_vocabulary(),
+        ).build()
+        assert "scratch run" not in (out / "index.html").read_text()
+        assert scratch_notice([]) == ""
+
+
+def site_vocabulary():
+    """Every manifest key with an id, as tests/unit/test_staticsite.py
+    gives them."""
+    import yaml
+
+    from yizkr.model.schema import read_manifest_data
+
+    raw = yaml.safe_load(read_manifest_data())
+    properties = {key: f"P{n}" for n, key in enumerate(raw["properties"], 1)}
+    items = {key: f"Q{n}" for n, key in enumerate(raw["items"], 1)}
+    return properties, items
+
+
+# -- the run item's marks -----------------------------------------------------
+
+
+class TestTheMarks:
+    def test_a_run_item_found_without_its_marks_gains_them(self):
+        from yizkr.pipeline.registrar import ensure_self_typed
+
+        wiki = Wiki()
+        qid = wiki.item(
+            "extraction run 2026-10-06",
+            ("instance_of", Wiki.ITEMS["extraction_run"], None),
+        )
+        marks = {"scratch_run": "run-1", "identity_map_hash": "0" * 64}
+        assert ensure_self_typed(
+            wiki, qid, "extraction_run", summary="t", marks=marks
+        )
+        assert string_values(wiki, qid, "scratch_run") == ["run-1"]
+        writes = wiki.writes
+        assert not ensure_self_typed(
+            wiki, qid, "extraction_run", summary="t", marks=marks
+        )
+        assert wiki.writes == writes
+
+
+def _vocabulary():
+    return report._Vocabulary.of({})
+
+
+def test_the_report_says_when_no_write_ran():
+    content = report._aggregate_content({}, {}, {}, _vocabulary(), None)
+    assert content["depicts"]["status"] == report.NOT_AVAILABLE
+    assert content["write"]["status"] == report.NOT_AVAILABLE
+    assert report._write_sections(content) == []
+
+
+def test_the_report_counts_a_skipped_write():
+    content = report._aggregate_content(
+        {}, {}, {}, _vocabulary(), {"skipped": True, "depicts_left_out": 3}
+    )
+    assert content["write"] == {"skipped": True}
+    (section,) = report._write_sections(content)
+    assert "Depicts claims left out, never written: 3." in section.blocks[0]
+
+
+def test_the_record_of_the_instance_is_not_touched(run):
+    run.past_the_barrier()
+    record = read_record(CONFIG)
+    assert record["run_id"] == "run-1"

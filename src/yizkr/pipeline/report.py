@@ -204,6 +204,9 @@ RECORDED = "recorded"
 CLUSTERING = "clustering"
 IDENTITY_MAP = "identity-map.json"
 IDENTITY_MAP_FORMAT = 1
+# the write stage and its record of what it wrote (in CORPUS_DIR/<stage>/)
+WRITE_STAGE = "write"
+WRITE_RECORD = "record.json"
 
 # how many times the report reads run.json and the events while an
 # invocation starts or ends as it reads them, as run_state reads them
@@ -1306,6 +1309,7 @@ def build(path: Path | str, *, now: datetime | None = None) -> dict[str, Any]:
     vocabulary = _Vocabulary.of(manifest)
     run = _run(manifest, fold, ended, now)
     clusters = _clusters(path, fold)
+    written = _written(path)
     return {
         "format": FORMAT,
         "generated_at": now.isoformat(timespec="seconds"),
@@ -1322,6 +1326,7 @@ def build(path: Path | str, *, now: datetime | None = None) -> dict[str, Any]:
             flags=_flags(path),
             vocabulary=vocabulary,
             now=now,
+            written=written,
         ),
         "documents": [_document_record(d) for d in documents.values()],
         "failed_unread": [
@@ -1571,6 +1576,65 @@ def _run(
     }
 
 
+def _written(path: Path) -> dict[str, Any] | None:
+    """The write stage's record of what it wrote (yizkr.pipeline.
+    scratchwrite), when the run directory holds one it reads."""
+    found = _json(path / CORPUS_DIR / WRITE_STAGE / WRITE_RECORD)
+    if not isinstance(found, dict) or not isinstance(
+        found.get("depicts_left_out"), int
+    ):
+        return None
+    return found
+
+
+def _depicts(written: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The depicts claims the write stage left out of the batches: no
+    scratch run writes one (ADR-0025 §1)."""
+    if written is None:
+        return {
+            "status": NOT_AVAILABLE,
+            "why": "no write stage of this run has run, and the write "
+            "counts the depicts claims it leaves out",
+        }
+    return {"left_out": _count(written["depicts_left_out"])}
+
+
+def _aggregate_write(written: Mapping[str, Any] | None) -> dict[str, Any]:
+    """What the write stage wrote, in counts alone."""
+    if written is None:
+        return {
+            "status": NOT_AVAILABLE,
+            "why": "no write stage of this run has run",
+        }
+    if written.get("skipped"):
+        return {"skipped": True}
+    documents = [
+        record
+        for record in (written.get("documents") or {}).values()
+        if isinstance(record, dict)
+    ]
+
+    def total(key: str) -> int:
+        return sum(
+            _count(record.get(key))
+            for record in documents
+            if isinstance(record.get(key), int)
+        )
+
+    return {
+        "skipped": False,
+        "documents_written": len(documents),
+        "statements_written": total("written"),
+        "statements_referenced": total("referenced"),
+        "claims_skipped": total("skipped"),
+        "claims_refused": total("refused"),
+        "items_minted": total("items_minted"),
+        "batches_refused": len(written.get("refused") or {}),
+        "documents_failed": len(written.get("failed") or {}),
+        "contents_recorded": bool(written.get("recorded")),
+    }
+
+
 def _clusters(path: Path, fold: _Fold) -> dict[str, Any]:
     """The clustering stage: its state, and the counts the summary of its
     identity map gives, when the run directory holds a map of the format
@@ -1784,6 +1848,7 @@ def _aggregate(
     flags: Mapping[str, Any],
     vocabulary: _Vocabulary,
     now: datetime,
+    written: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The report's aggregates, which report.md shows all of but the
     documents per language: counts, rates and times, keyed by names of
@@ -1797,7 +1862,9 @@ def _aggregate(
         "stages": _aggregate_stages(documents, fold, vocabulary),
         "corpus_stages": _aggregate_corpus(fold, run, vocabulary),
         "anomalies": _aggregate_alerts(alerts, fold, vocabulary),
-        "content": _aggregate_content(documents, clusters, flags, vocabulary),
+        "content": _aggregate_content(
+            documents, clusters, flags, vocabulary, written
+        ),
         "calls": _aggregate_calls(fold, vocabulary),
         "control": _aggregate_control(control, vocabulary),
     }
@@ -2172,6 +2239,7 @@ def _aggregate_content(
     clusters: Mapping[str, Any],
     flags: Mapping[str, Any],
     vocabulary: _Vocabulary,
+    written: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     entities: Counter = Counter()
     claims: Counter = Counter()
@@ -2314,15 +2382,12 @@ def _aggregate_content(
             ),
         },
         "clusters": _aggregate_clusters(clusters, vocabulary),
-        "depicts": {
-            "status": NOT_AVAILABLE,
-            "why": "face detection is never a stage of a scratch run, so no "
-            "depicts statement is proposed or held",
-        },
+        "depicts": _depicts(written),
+        "write": _aggregate_write(written),
         "place_hierarchy": {
             "status": NOT_AVAILABLE,
-            "why": "place-hierarchy proposals are applied by a write stage, "
-            "and no write stage ran",
+            "why": "no stage of a scratch run applies place-hierarchy "
+            "proposals yet",
         },
         "contradictions": {
             "status": NOT_AVAILABLE,
@@ -3006,13 +3071,15 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
             3,
         ),
         _Section("Clusters", _cluster_blocks(clusters), 3),
+        *_write_sections(content),
         _Section(
             "Not available",
             [
                 [
                     f"{what}: {content[key]['status']}: {content[key]['why']}"
                     for what, key in (
-                        ("Depicts proposals held", "depicts"),
+                        ("Depicts claims left out", "depicts"),
+                        ("The write", "write"),
                         (
                             "Place-hierarchy proposals applied",
                             "place_hierarchy",
@@ -3020,12 +3087,42 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
                         ("Different-source contradictions", "contradictions"),
                         ("Flags by tier and class", "flags"),
                     )
+                    if content[key].get("status") == NOT_AVAILABLE
                 ]
             ],
             3,
         ),
     ]
     return sections
+
+
+def _write_sections(content: Mapping[str, Any]) -> list[_Section]:
+    """The write stage's counts, when it ran."""
+    write, depicts = content["write"], content["depicts"]
+    if write.get("status") == NOT_AVAILABLE:
+        return []
+    if write.get("skipped"):
+        lines = [
+            "The instance held what this run's write key makes: no reset, "
+            "and nothing written."
+        ]
+    else:
+        lines = [
+            f"{_n(write['documents_written'])} documents written: "
+            f"{_n(write['statements_written'])} statements new, "
+            f"{_n(write['statements_referenced'])} gained a reference, "
+            f"{_n(write['claims_skipped'])} claims already there, "
+            f"{_n(write['claims_refused'])} refused; "
+            f"{_n(write['items_minted'])} items minted. "
+            f"{_n(write['batches_refused'])} batches refused whole, "
+            f"{_n(write['documents_failed'])} documents failed; the "
+            "instance-contents key is "
+            + ("recorded." if write["contents_recorded"] else "not recorded.")
+        ]
+    lines.append(
+        f"Depicts claims left out, never written: {_n(depicts['left_out'])}."
+    )
+    return [_Section("Write", [lines], 3)]
 
 
 def _records_blocks(

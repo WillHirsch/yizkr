@@ -17,15 +17,18 @@ check guards, extraction and the critique; or the GEDCOM adapter for a
 own, is a document of its own, an excerpt (orchestrate.ExcerptRun), which
 takes the same stages once its PDF's transcription has found it, and
 joins the run plan then. Nothing before the barrier reads or writes the
-wiki: a scratch run registers no artifact, and a deck's derived media are
-recorded in its directory (ADR-0025 §2). There is no human stop. When
-every document's per-document stages have ended, done or failed, the run
-is at the **barrier**, and the driver runs the corpus stages registered
-with it (CORPUS_STAGES), in order, over the documents whose stages all
-completed, excerpts among them: every one, in each invocation that goes
-past the barrier, so a corpus stage reuses its own outputs while their
-inputs stand, as the views do. Face detection is never a stage of a
-scratch run.
+wiki: no artifact is registered before the register stage, and a deck's
+derived media are recorded in its directory (ADR-0025 §2). There is no
+human stop. When every document's per-document stages have ended, done
+or failed, the run is at the **barrier**, and the driver runs the corpus
+stages registered with it (CORPUS_STAGES), in order, over the documents
+whose stages all completed, excerpts among them: every one, in each
+invocation that goes past the barrier, so a corpus stage reuses its own
+outputs while their inputs stand, as the views do. They are clustering,
+which makes the identity map, and then the write side
+(yizkr.pipeline.scratchwrite): reset, register, write and site, which
+touch the wiki and make no model call. Face detection is never a stage
+of a scratch run, and no scratch run writes a depicts statement.
 
 **Order.** One document of each kind, the first by name, goes through
 every per-document stage first: the canaries. The rest follow stage by
@@ -263,13 +266,15 @@ class CorpusContext:
     stages all completed, with their views in their directories, and a
     directory of its own in the run directory (`directory`, which the
     stage makes when it writes there), the connection settings' env file,
-    and the driver's log."""
+    the driver's log, and the driver itself, whose wiki client and whose
+    registration of a document at its write a stage that writes uses."""
 
     run: RunDir
     documents: tuple[DocumentRun, ...]
     directory: Path
     env_file: Path | None
     log: Callable[..., None]
+    driver: Any = None
 
 
 @dataclass(frozen=True)
@@ -306,15 +311,45 @@ def _clustering(context: CorpusContext) -> Sequence[str]:
     return run_stage(context)
 
 
-# the corpus stages, in the order they run after the barrier
+def _write_side(name: str) -> Callable[[CorpusContext], Sequence[str]]:
+    """The stage `name` of the write side (yizkr.pipeline.scratchwrite):
+    reset, register, write or site. The module is imported as the stage
+    runs, since only a run past the barrier needs it."""
+
+    def run(context: CorpusContext) -> Sequence[str]:
+        from yizkr.pipeline import scratchwrite
+
+        return getattr(scratchwrite, f"run_{name}")(context)
+
+    run.__name__ = f"_{name}"
+    return run
+
+
+# the corpus stages, in the order they run after the barrier: clustering,
+# then the write side, which touches the wiki and makes no model call
 CORPUS_STAGES: tuple[CorpusStage, ...] = (
     CorpusStage("clustering", _clustering, calls_engine=False),
+    *(
+        CorpusStage(
+            name, _write_side(name), touches_wiki=True, calls_engine=False
+        )
+        for name in ("reset", "register", "write", "site")
+    ),
 )
 
+
+def _instance_is_kept(env_file: Path | None) -> bool:
+    """Whether the instance the env file names carries the kept-state
+    marker, on the host or on the instance (yizkr.core.instance)."""
+    from yizkr.core.instance import instance_is_kept
+
+    return instance_is_kept(env_file)
+
+
 # whether the instance carries the kept-state marker (ADR-0025 §6): a
-# callable of the env file. None while nothing can tell, and then a stage
-# that touches the wiki is refused
-KEPT_STATE: Callable[[Path | None], bool] | None = None
+# callable of the env file. A stage that touches the wiki is refused when
+# it says so, when it cannot tell, and when it is None
+KEPT_STATE: Callable[[Path | None], bool] | None = _instance_is_kept
 
 
 # -- refusals -----------------------------------------------------------------
@@ -747,6 +782,9 @@ class ScratchDriver(Orchestrator):
     space, in bytes, the preflight asks for. `clock`, `sleep` and `poll`
     serve the waits (for a resume, and for the subscription); the other
     options are the orchestrator's. A scratch run keeps its settings."""
+
+    # the command an artifact's description says ingested it
+    command = "yizkr scratch run"
 
     def __init__(
         self,
@@ -1708,6 +1746,7 @@ class ScratchDriver(Orchestrator):
                 directory=self.state_dir / CORPUS_DIR / stage.name,
                 env_file=self.env_file,
                 log=self.log,
+                driver=self,
             )
             self.log(f"{stage.name}: over {len(completed)} documents")
             self.rundir.emit("started", stage=stage.name)

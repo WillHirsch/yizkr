@@ -696,6 +696,34 @@ properties:
     datatype: wikibase-item
     accepts: [divorce, annulment, death, event, unclassified_entity]
 
+  # --- scratch runs (ADR-0025 §1): statements of a run item, never of
+  # an extracted entity, so no prompt offers them ---
+
+  scratch_run:
+    label: unratified scratch run
+    description: >-
+      on an extraction-run item: the development-stage scratch run that
+      wrote it, by its run id. Nothing a scratch run writes is ratified,
+      reviewed or confirmed, and the next reset discards it
+    datatype: string
+    offered: false
+
+  run_manifest_hash:
+    label: run manifest hash
+    description: >-
+      on an extraction-run item: the SHA-256 of the settings the run
+      manifest of the run that wrote it records
+    datatype: string
+    offered: false
+
+  identity_map_hash:
+    label: identity map hash
+    description: >-
+      on an extraction-run item: the SHA-256 of the identity map the
+      run's batch was written with
+    datatype: string
+    offered: false
+
 # `entity_kind: true` marks an item the extractor may type a
 # document-mentioned entity as (ADR-0007 manifest pass). The extraction
 # prompt renders that set — and each kind's description — from here, so

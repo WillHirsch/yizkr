@@ -55,7 +55,16 @@ changing what they check:
   unit tests always give it a temporary deploy dir. The live tests
   under tests/integration read the real env file.
 
-test_conftest.py tests the first two and the last two, and
+- **No write side in a scratch run.** The scratch driver's corpus
+  stages that touch the wiki (reset, register, write and site,
+  yizkr.pipeline.scratchwrite) need a stack, which no unit test has: a
+  run that went past the barrier would be refused at its preflight. So
+  `scratch.CORPUS_STAGES` holds clustering alone in every unit test (the
+  `_no_write_side` fixture). A test marked `write_side` keeps them, and
+  gives the stages the fake wiki and stand-ins they use
+  (test_scratch_write.py).
+
+test_conftest.py tests the first two and the last three, and
 test_anomalies.py the third.
 """
 
@@ -224,6 +233,23 @@ def _no_instance_record(request, monkeypatch, tmp_path_factory):
     monkeypatch.setenv(
         "YIZKR_INSTANCE_STATE",
         str(tmp_path_factory.getbasetemp() / "instance-records" / own),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _no_write_side(request, monkeypatch):
+    """Leave the scratch driver's stages that touch the wiki out of its
+    corpus stages, unless the test is marked `write_side`."""
+    if request.node.get_closest_marker("write_side") is not None:
+        return
+    from yizkr.pipeline import scratch
+
+    monkeypatch.setattr(
+        scratch,
+        "CORPUS_STAGES",
+        tuple(
+            stage for stage in scratch.CORPUS_STAGES if not stage.touches_wiki
+        ),
     )
 
 
