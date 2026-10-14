@@ -885,8 +885,12 @@ class TestKeptAnswer:
         run.engine.broken = True
         with pytest.raises(ValueError, match="sentinel"):
             run.stage("places")
-        # asked once: an answer the engine gave in this run is no kept one
+        # asked once: an answer the engine gave in this run is no kept
+        # one, so it is not asked again, of the engine or of the cache
         assert len(run.engine.prompts) == 1
+        events = [e["event"] for e in run.driver.rundir.events()]
+        assert events.count("cache-miss") == 1
+        assert "cache-hit" not in events
 
 
 # -- the guard ----------------------------------------------------------------
