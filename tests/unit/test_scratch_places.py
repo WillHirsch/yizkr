@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -151,6 +152,18 @@ def graph(wiki) -> tuple[list, list]:
 QUESTION = re.compile(r"^(\d+)\. A: '([^']*)'.*?  vs  B: '([^']*)'", re.M)
 
 
+MIRRORED = {"a_within_b": "b_within_a", "b_within_a": "a_within_b"}
+
+
+def verdict(verdicts: dict, a: str, b: str) -> str:
+    """The verdict on A against B, by their labels: as given, else the
+    mirror of the verdict given on B against A, else `uncertain`."""
+    if (a, b) in verdicts:
+        return verdicts[(a, b)]
+    found = verdicts.get((b, a), "uncertain")
+    return MIRRORED.get(found, found)
+
+
 class Adjudicator:
     """A fake engine that answers each question of a place prompt by the
     labels of its two places (`verdicts`, by (label A, label B)), with
@@ -170,6 +183,8 @@ class Adjudicator:
         self.extra = list(extra)
         self.prompts: list[str] = []
         self.pause = False
+        # an answer without its terminal sentinel while set
+        self.broken = False
 
     def complete(self, prompt, image_paths=()):
         assert self.run.held, "the engine was called without the lock"
@@ -184,13 +199,15 @@ class Adjudicator:
             json.dumps(
                 {
                     "question": int(number),
-                    "verdict": self.verdicts.get((a, b), "uncertain"),
+                    "verdict": verdict(self.verdicts, a, b),
                     "confidence": 0.9,
                     "evidence": "fictional",
                 }
             )
             for number, a, b in QUESTION.findall(prompt)
         ]
+        if self.broken:
+            return "\n".join(lines)
         return "\n".join([*lines, *self.extra, '{"done": true}'])
 
 
@@ -256,13 +273,14 @@ def extract_batch() -> ClaimBatch:
 
 
 def letter_batch() -> ClaimBatch:
-    """The letter: Leopold born at Fläckfeld."""
+    """The letter: Leopold born at Fläckfeld, which its record puts in
+    Kreis Peiltal."""
     return ClaimBatch.model_validate(
         {
             "extraction_run": RUN,
             "entities": [
                 {"id": "leopold", "label": "Leopold Löbig", "kind": "human"},
-                entity("flackfeld", "Fläckfeld"),
+                entity("flackfeld", "Fläckfeld", ["Kreis Peiltal"]),
             ],
             "claims": [born_at(LETTER, place("flackfeld", "Fläckfeld"))],
         }
@@ -284,7 +302,14 @@ class PlaceRun(Run):
     place stage's role, behind the run's LLM cache, and the graph read
     from the in-memory instance."""
 
-    def __init__(self, tmp_path, monkeypatch, wiki=None, run_id="run-1"):
+    def __init__(
+        self,
+        tmp_path,
+        monkeypatch,
+        wiki=None,
+        run_id="run-1",
+        documents=None,
+    ):
         monkeypatch.setenv("YIZKR_LLM_MODEL", MODEL)
         super().__init__(
             tmp_path, monkeypatch, wiki=wiki or PlaceWiki(), run_id=run_id
@@ -293,8 +318,13 @@ class PlaceRun(Run):
         self.driver._engines[scratchwrite.PLACE_ROLE] = self.engine
         self.driver.rundir.path.mkdir(parents=True, exist_ok=True)
         monkeypatch.setattr(scratchwrite, "place_graph", graph)
-        self.add("leopold-birth-extract.png", EXTRACT, extract_batch())
-        self.add("gustav-letter-1952.png", LETTER, letter_batch())
+        if documents is None:
+            documents = (
+                ("leopold-birth-extract.png", EXTRACT, extract_batch()),
+                ("gustav-letter-1952.png", LETTER, letter_batch()),
+            )
+        for name, data, batch in documents:
+            self.add(name, data, batch)
 
     def past_the_barrier(self, until: str = "site") -> None:
         for name in ("clustering", "reset", "register", "write", "places"):
@@ -610,6 +640,17 @@ class TestRefusedAndCounted:
 
 
 class TestKeys:
+    def test_the_run_s_events_name_the_calls_places(self, run):
+        """Keyed as the extract role's calls are, the place stage's calls
+        are named apart in the run's events, so the report counts them
+        apart from the extraction's (#201)."""
+        run.past_the_barrier()
+        events = run.driver.rundir.events()
+        calls = [e for e in events if e["event"] in ("call", "cache-miss")]
+        assert calls
+        assert {e.get("role") for e in calls} == {"places"}
+        assert {e.get("stage") for e in calls if "stage" in e} <= {"places"}
+
     def test_no_prompt_names_a_qid(self, run):
         run.past_the_barrier()
         (prompt,) = run.engine.prompts
@@ -631,7 +672,15 @@ class TestKeys:
         second = PlaceRun(
             tmp_path / "again", monkeypatch, wiki=first.wiki, run_id="run-2"
         )
-        second.wiki._next_qid = 500
+        # the items' QIDs cross a digit boundary (Q1xx to Q1xxx), which
+        # turns round the order of the competing pairs' QIDs as strings,
+        # and the query service gives its places in another order
+        second.wiki._next_qid = 1000
+        monkeypatch.setattr(
+            scratchwrite,
+            "place_graph",
+            lambda wiki: (list(reversed(graph(wiki)[0])), graph(wiki)[1]),
+        )
         # the one LLM cache both runs call through
         second.driver.cache_dir = first.driver.cache_dir
         second.driver._engines[scratchwrite.PLACE_ROLE] = second.engine
@@ -640,7 +689,9 @@ class TestKeys:
         # other QIDs, the same prompt
         assert second.qid("Flörburg") != before
         assert second.engine.prompts == []
-        assert second.record("places")["counts"]["applied"] == 3
+        counts = second.record("places")["counts"]
+        assert counts["applied"] == 3
+        assert counts == first.record("places")["counts"]
 
     def test_the_key_is_the_write_key_with_the_prompt_and_the_model(
         self, run, monkeypatch
@@ -684,6 +735,158 @@ class TestKeys:
         )
         run.past_the_barrier(until="write")
         assert recorded_contents(run.wiki).key == run.record("write")["key"]
+
+
+# -- the direction a document states -------------------------------------
+
+
+class TestDirection:
+    def test_a_containment_cites_only_what_states_its_direction(
+        self, tmp_path, monkeypatch
+    ):
+        """Document X states Fläckfeld within Kreis Mockburg, document Y
+        Kreis Mockburg within Fläckfeld. A containment written is stated
+        in the document that states it in that direction alone (#201)."""
+        x = b"\x89PNG synthetic scan of a 1931 parish card from Flaeckfeld"
+        y = b"\x89PNG synthetic scan of a 1931 district list of Mockburg"
+
+        def stating(data, child, parent, child_id, parent_id):
+            return ClaimBatch.model_validate(
+                {
+                    "extraction_run": RUN,
+                    "entities": [
+                        {
+                            "id": "leopold",
+                            "label": "Leopold Löbig",
+                            "kind": "human",
+                        },
+                        entity(child_id, child, [parent]),
+                        entity(parent_id, parent),
+                    ],
+                    "claims": [
+                        born_at(data, place(child_id, child)),
+                        born_at(data, place(parent_id, parent)),
+                    ],
+                }
+            )
+
+        for verdict, cited_doc in (("a_within_b", x), ("b_within_a", y)):
+            base = tmp_path / verdict
+            base.mkdir()
+            run = PlaceRun(base, monkeypatch, documents=())
+            run.add(
+                "parish-card.png",
+                x,
+                stating(x, "Fläckfeld", "Kreis Mockburg", "f", "k"),
+            )
+            run.add(
+                "district-list.png",
+                y,
+                stating(y, "Kreis Mockburg", "Fläckfeld", "k", "f"),
+            )
+            run.engine.verdicts = {("Fläckfeld", "Kreis Mockburg"): verdict}
+            run.past_the_barrier()
+            child, parent = (
+                ("Fläckfeld", "Kreis Mockburg")
+                if verdict == "a_within_b"
+                else ("Kreis Mockburg", "Fläckfeld")
+            )
+            # one item of each name in each document: the map keeps a
+            # document's places apart from another's, so look at the
+            # statements whatever item holds them
+            written = [
+                statement
+                for qid in by_label(run.wiki, child)
+                for statement in containment(run.wiki, qid)
+            ]
+            assert written, verdict
+            other = y if cited_doc is x else x
+            cites = [cited(statement, "stated_in") for statement in written]
+            # the document stating the other direction is never cited; the
+            # one stating this direction is, where its record names both
+            # places (a pair only the other document's record joins cites
+            # no document)
+            assert all(run.artifact(other) not in c for c in cites), verdict
+            assert [run.artifact(cited_doc)] in cites, verdict
+            clear_contents(CONFIG, "the next case")
+
+
+# -- the whole write --------------------------------------------------------
+
+
+class TestWholeWrite:
+    def test_the_stage_waits_for_a_complete_write(self, run, monkeypatch):
+        """The letter's write fails, then succeeds on the next invocation:
+        the place stage asks nothing over the part written, and then
+        asks every question of the whole write (decision FB)."""
+        from yizkr.pipeline import writer
+
+        real = writer.BatchWriter.write_batch
+        failed = []
+
+        def write_batch(self, batch, **kwargs):
+            if not failed and any(
+                e.label == "Fläckfeld" for e in batch.entities
+            ):
+                failed.append(True)
+                raise RuntimeError("the letter's write failed")
+            return real(self, batch, **kwargs)
+
+        monkeypatch.setattr(writer.BatchWriter, "write_batch", write_batch)
+        run.past_the_barrier(until="write")
+        assert run.record("write").get("recorded") is None
+        attention = run.stage("places")
+        assert attention == [
+            "the write is not complete: no place was reconciled"
+        ]
+        assert run.engine.prompts == []
+        assert run.record("places") == {}
+        # the next invocation: the letter is written, and every question
+        # of the whole write is asked
+        for name in ("reset", "register", "write", "places"):
+            run.stage(name)
+        assert run.record("write")["recorded"] is True
+        asked = run.record("places")["counts"]["questions"]
+        (prompt,) = run.engine.prompts
+        assert "'Fläckfeld'" in prompt
+        assert len(QUESTION.findall(prompt)) == asked
+        whole = PlaceRun(tmp_path_of(run) / "whole", monkeypatch)
+        clear_contents(CONFIG, "the whole write, for comparison")
+        whole.past_the_barrier()
+        assert whole.record("places")["counts"]["questions"] == asked
+
+
+def tmp_path_of(run) -> Path:
+    path = run.tmp_path
+    path.joinpath("whole").mkdir(exist_ok=True)
+    return path
+
+
+# -- a malformed answer the cache kept --------------------------------------
+
+
+class TestKeptAnswer:
+    def test_a_malformed_answer_kept_is_asked_again(self, run):
+        """The engine's answer lacks its terminal sentinel: the stage
+        fails. Invoked again, the LLM cache's kept answer is rejected and
+        asked once more, and the engine's new answer is taken (#201)."""
+        run.past_the_barrier(until="write")
+        run.engine.broken = True
+        with pytest.raises(ValueError, match="sentinel"):
+            run.stage("places")
+        assert len(run.engine.prompts) == 1
+        run.engine.broken = False
+        run.stage("places")
+        assert len(run.engine.prompts) == 2
+        assert run.record("places")["counts"]["applied"] == 3
+
+    def test_a_malformed_answer_from_the_engine_fails_the_stage(self, run):
+        run.past_the_barrier(until="write")
+        run.engine.broken = True
+        with pytest.raises(ValueError, match="sentinel"):
+            run.stage("places")
+        # asked once: an answer the engine gave in this run is no kept one
+        assert len(run.engine.prompts) == 1
 
 
 # -- the guard ----------------------------------------------------------------

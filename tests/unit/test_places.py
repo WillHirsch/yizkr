@@ -445,7 +445,12 @@ class TestWorklist:
         ]
         deep = Question(kind="competing", qid_a="Q2", qid_b="Q8")
         shallow = Question(kind="competing", qid_a="Q4", qid_b="Q9")
-        assert build_worklist(found, [deep, shallow], []) == [shallow, deep]
+        # a competing pair is asked in the order of its places' names:
+        # Bad Flörburg before Flörburg (#201)
+        assert pairs(build_worklist(found, [deep, shallow], [])) == [
+            ("Q4", "Q9"),
+            ("Q8", "Q2"),
+        ]
 
 
 class ScriptedLlm:
@@ -512,8 +517,15 @@ class TestAdjudication:
         adjudicate_places(llm, questions, places())
         (prompt,) = llm.prompts
         assert not re.search(r"\bQ\d+\b", prompt)
-        assert "1. A: 'Brunnenring 35, Flörburg'  vs  B: 'Flörburg'" in prompt
-        assert "2. A: 'Rekau' (within 'Germany')  vs  B: 'Klurnau'" in prompt
+        assert (
+            "1. A: 'Brunnenring 35, Flörburg' (a record places it in "
+            "'Flörburg')  vs  B: 'Flörburg' (a record places it in "
+            "'Kreis Peiltal, Germany')  (c1)"
+        ) in prompt
+        assert (
+            "2. A: 'Rekau' (within 'Germany'; a record places it in "
+            "'Germany')  vs  B: 'Klurnau'  (c2)"
+        ) in prompt
 
     def test_the_prompt_is_the_same_whatever_the_qids(self):
         """Two instances that gave the same places other QIDs ask the
@@ -548,6 +560,79 @@ class TestAdjudication:
             adjudicate_places(llm, worklist, found)
             prompts.append(llm.prompts)
         assert prompts[0] == prompts[1]
+
+    def test_competing_pairs_ask_the_same_after_a_renumbering(self):
+        """A reset renumbers the items across a digit boundary (Q9 becomes
+        Q1003, Q12 Q1006) and the query service gives its rows in another
+        order; the competing pairs, ordered there by their QIDs' strings,
+        and every context are asked the same all the same (#201)."""
+        import random
+
+        def graph(offset: int, seed: int):
+            def qid(old: str) -> str:
+                return f"Q{int(old[1:]) + offset}"
+
+            found = [
+                PlaceRecord(
+                    qid=qid(place.qid),
+                    label=place.label,
+                    aliases=place.aliases,
+                    parents=[qid(parent) for parent in place.parents],
+                    chains=[list(chain) for chain in place.chains],
+                )
+                for place in places()
+            ]
+            random.Random(seed).shuffle(found)
+            competing = []
+            for a, b, context in (
+                ("Q2", "Q4", "both asserted as place of birth of Ida"),
+                ("Q4", "Q7", "both asserted as place of death of Ida"),
+                ("Q9", "Q2", "both asserted as place of birth of Felix"),
+            ):
+                # the query's order: the QIDs as strings
+                a, b = sorted((qid(a), qid(b)))
+                competing.append(
+                    Question(
+                        kind="competing", qid_a=a, qid_b=b, context=context
+                    )
+                )
+            found.append(PlaceRecord(qid=qid("Q9"), label="Lager Klurnau"))
+            random.Random(seed).shuffle(competing)
+            return found, competing
+
+        prompts = []
+        for offset, seed in ((0, 1), (994, 2), (1000, 3)):
+            found, competing = graph(offset, seed)
+            worklist = build_worklist(
+                found, competing, stated_parent_candidates(found)
+            )
+            llm = ScriptedLlm('{"done": true}')
+            adjudicate_places(llm, worklist, found)
+            prompts.append(llm.prompts)
+        assert prompts[0] == prompts[1] == prompts[2]
+
+    def test_a_stated_pair_asked_from_two_chains_keeps_the_least_context(
+        self,
+    ):
+        """Whatever order the graph gives its places in, a pair two
+        records ask keeps one context (#201)."""
+        one = PlaceRecord(qid="Q2", label="Flörburg", chains=[["Hesse"]])
+        two = PlaceRecord(
+            qid="Q8",
+            label="Bad Flörburg",
+            chains=[["Flörburg", "Hesse"]],
+        )
+        hesse = PlaceRecord(qid="Q7", label="Hesse")
+        contexts = {
+            tuple(
+                (q.qid_a, q.qid_b, q.context)
+                for q in build_worklist(
+                    order, [], stated_parent_candidates(order)
+                )
+            )
+            for order in ([one, two, hesse], [hesse, two, one])
+        }
+        assert len(contexts) == 1
 
     def test_answers_outside_the_schema_are_counted(self):
         question = Question(kind="parent", qid_a="Q3", qid_b="Q2")
@@ -669,6 +754,83 @@ class TestPlanContainment:
         assert edges == [("Q3", "Q2")]
         assert any("cycle" in note for note in notes)
 
+    def test_a_cycle_through_the_graph_and_the_batch_is_refused(self):
+        """The graph puts Kreis Peiltal in Hesse; the batch puts Hesse in
+        Fläckfeld, then Fläckfeld in Kreis Peiltal, which closes a cycle
+        through both (#201)."""
+        graph = {"Q7": ["Q10"]}  # Kreis Peiltal within Hesse
+        rows = [
+            row("Q10", "Q20", "a_within_b"),  # Hesse within Fläckfeld
+            row("Q20", "Q7", "a_within_b"),  # Fläckfeld within Kreis Peiltal
+        ]
+        edges, set_aside = plan(
+            rows, lambda c, p: False, lambda node: graph.get(node, ())
+        )
+        assert edges == [("Q10", "Q20")]
+        assert [why for why, _note in set_aside] == ["cycle"]
+
+    def test_the_command_s_apply_walks_the_graph_too(
+        self, tmp_path, monkeypatch
+    ):
+        """`reconcile-places --apply` refuses that cycle as well."""
+        from yizkr.pipeline import places
+
+        class Wiki(RunItemWiki):
+            PROPERTIES = {
+                **RunItemWiki.PROPERTIES,
+                "location": "P9",
+                "inferred_from_extraction_run": "P61",
+            }
+
+        wiki = Wiki()
+
+        def item(label: str) -> str:
+            made = wiki.wbi.item.new()
+            made.labels.set("en", label)
+            return made.write().id
+
+        kreis, hesse, flackfeld = (
+            item(label) for label in ("Kreis Peiltal", "Hesse", "Fläckfeld")
+        )
+        path = tmp_path / "places.csv"
+        with open(path, "w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=places.CSV_FIELDS)
+            writer.writeheader()
+            for found in (
+                row(hesse, flackfeld, "a_within_b"),
+                row(flackfeld, kreis, "a_within_b"),
+            ):
+                writer.writerow(found)
+        monkeypatch.setattr(
+            places,
+            "fetch_places",
+            lambda client, config: [
+                PlaceRecord(qid=kreis, label="Kreis Peiltal", parents=[hesse])
+            ],
+        )
+
+        class Answer:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b'{"boolean": false}'
+
+        monkeypatch.setattr(
+            places.urllib.request, "urlopen", lambda *a, **k: Answer()
+        )
+        config = type(
+            "C", (), {"concept_uri": "http://x", "sparql_url": "http://q"}
+        )()
+        summary = places.apply_containment(wiki, config, path, "model")
+        assert summary["written"] == 1
+        assert any("cycle" in note for note in summary["notes"])
+        part_of = Wiki.PROPERTIES["part_of"]
+        assert wiki.entities[flackfeld]["claims"].get(part_of) is None
+
     def test_self_containment_refused(self):
         edges, notes = plan_containment(
             [row("Q3", "Q3", "a_within_b")], creates_cycle=lambda c, p: False
@@ -703,6 +865,41 @@ class TestPlanContainment:
         ]
 
 
+class TestNames:
+    """How the prompt names a place: never by its QID (#201)."""
+
+    def test_namesakes_read_apart_by_their_records(self):
+        one = PlaceRecord(qid="Q2", label="Flörburg")
+        one.state(["Kreis Peiltal"], ["a" * 40])
+        two = PlaceRecord(qid="Q8", label="Flörburg")
+        two.state(["Kreis Mockburg"], ["b" * 40])
+        names = places_module().place_names([one, two])
+        assert names["Q2"] == (
+            "'Flörburg' (a record places it in 'Kreis Peiltal')"
+        )
+        assert names["Q8"] == (
+            "'Flörburg' (a record places it in 'Kreis Mockburg')"
+        )
+
+    def test_namesakes_nothing_tells_apart_are_numbered_by_their_documents(
+        self,
+    ):
+        one = PlaceRecord(qid="Q2", label="Rekau")
+        one.state([], ["b" * 40])
+        two = PlaceRecord(qid="Q8", label="Rekau")
+        two.state([], ["a" * 40])
+        for order in ([one, two], [two, one]):
+            names = places_module().place_names(order)
+            # the place the earlier document names is [1], whatever its QID
+            assert names == {"Q8": "'Rekau' [1]", "Q2": "'Rekau' [2]"}
+
+
+def places_module():
+    from yizkr.pipeline import places
+
+    return places
+
+
 class TestSources:
     """The documents whose records state a containment ride its question,
     so the scratch run's place stage can say where it is stated (#201)."""
@@ -727,14 +924,22 @@ class TestSources:
             ["Kreis Peiltal"],
         ]
 
-    def test_a_question_asked_twice_keeps_both_sources(self):
-        stated = Question(kind="parent", qid_a="Q2", qid_b="Q7", sources=["a"])
-        competing = Question(
-            kind="competing", qid_a="Q7", qid_b="Q2", sources=["b"]
-        )
-        (kept,) = build_worklist(places(), [competing], [stated])
-        assert kept is stated
-        assert kept.sources == ["a", "b"]
+    def test_a_question_asked_twice_keeps_each_direction_s_sources(self):
+        """Document X states Fläckfeld within Kreis Mockburg, document Y
+        the reverse: each direction keeps its own documents, so a
+        containment written is stated in those that state it in that
+        direction alone (#201)."""
+        found = [
+            PlaceRecord(qid="Q20", label="Fläckfeld"),
+            PlaceRecord(qid="Q21", label="Kreis Mockburg"),
+        ]
+        x = Question(kind="parent", qid_a="Q20", qid_b="Q21", sources=["x"])
+        y = Question(kind="parent", qid_a="Q21", qid_b="Q20", sources=["y"])
+        (kept,) = build_worklist(found, [], [y, x])
+        assert kept.stated() == {("Q20", "Q21"): ["x"], ("Q21", "Q20"): ["y"]}
+        # the one kept is the same whichever came first
+        (again,) = build_worklist(found, [], [x, y])
+        assert (again.qid_a, again.qid_b) == (kept.qid_a, kept.qid_b)
 
 
 class TestCsv:
@@ -901,13 +1106,13 @@ class TestCommand:
                 ["Kreis Mockburg"],
                 ["Kreis Mockburg", "Hesse"],
             ]
-            return []
+            return places.Adjudication()
 
         monkeypatch.setattr(cli.Config, "load", lambda env_file: None)
         monkeypatch.setattr(cli, "WikiClient", lambda config: None)
         monkeypatch.setattr(places, "fetch_places", lambda c, cf: graph)
         monkeypatch.setattr(places, "fetch_competing_pairs", lambda c, cf: [])
-        monkeypatch.setattr(places, "adjudicate_places", adjudicate)
+        monkeypatch.setattr(places, "adjudicate", adjudicate)
         monkeypatch.setattr(llm, "make_client", lambda name: None)
         args = argparse.Namespace(
             env_file=None,
@@ -918,6 +1123,43 @@ class TestCommand:
         )
         assert cli.cmd_reconcile_places(args) == 0
         assert asked == [("Q20", "Q21"), ("Q21", "Q7")]
+
+    def test_it_says_what_it_left_out(self, tmp_path, monkeypatch, capsys):
+        """Conflicting answers and answers outside the schema are counted
+        where the command says what it wrote (#201)."""
+        import argparse
+
+        from yizkr import cli
+        from yizkr.pipeline import llm, places
+
+        graph = [
+            PlaceRecord(qid="Q20", label="Fläckfeld", chains=[["Hesse"]]),
+            PlaceRecord(qid="Q7", label="Hesse"),
+        ]
+        monkeypatch.setattr(cli.Config, "load", lambda env_file: None)
+        monkeypatch.setattr(cli, "WikiClient", lambda config: None)
+        monkeypatch.setattr(places, "fetch_places", lambda c, cf: graph)
+        monkeypatch.setattr(places, "fetch_competing_pairs", lambda c, cf: [])
+        monkeypatch.setattr(
+            places,
+            "adjudicate",
+            lambda client, worklist, found: places.Adjudication(
+                rejected=2, conflicts=list(worklist)
+            ),
+        )
+        monkeypatch.setattr(llm, "make_client", lambda name: None)
+        args = argparse.Namespace(
+            env_file=None,
+            apply=None,
+            llm="anthropic",
+            out=tmp_path / "places.csv",
+            run=None,
+        )
+        assert cli.cmd_reconcile_places(args) == 0
+        assert (
+            "left out: 1 question(s) answered with two verdicts, 2 answer "
+            "line(s) outside the answer's schema"
+        ) in capsys.readouterr().out
 
     def test_run_takes_several_directories(self):
         from yizkr import cli

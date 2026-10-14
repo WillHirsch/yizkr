@@ -202,7 +202,7 @@ def cmd_publish_queries(args) -> int:
 
 def cmd_reconcile_places(args) -> int:
     from yizkr.pipeline.places import (
-        adjudicate_places,
+        adjudicate,
         apply_containment,
         build_worklist,
         export_places_csv,
@@ -258,8 +258,14 @@ def cmd_reconcile_places(args) -> int:
             "nothing to adjudicate — the hierarchy already answers everything"
         )
         return 0
-    proposals = adjudicate_places(make_client(args.llm), worklist, places)
-    rows = export_places_csv(proposals, worklist, places, args.out)
+    found = adjudicate(make_client(args.llm), worklist, places)
+    rows = export_places_csv(found.proposals, worklist, places, args.out)
+    if found.conflicts or found.rejected:
+        print(
+            f"left out: {len(found.conflicts)} question(s) answered with "
+            f"two verdicts, {found.rejected} answer line(s) outside the "
+            "answer's schema"
+        )
     print(
         f"wrote {args.out} ({rows} proposals). Fill the 'decision' column, "
         f"then re-run with --apply. Containment rows write referenced "

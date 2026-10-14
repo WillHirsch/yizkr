@@ -245,7 +245,9 @@ KINDS = frozenset(DOCUMENT_STAGES)
 DOCUMENT_STAGE_NAMES = frozenset(
     stage for stages in DOCUMENT_STAGES.values() for stage in stages
 )
-ROLES = frozenset(MODEL_ROLES)
+# the roles calls are made in: the models', and the scratch run's place
+# stage, whose calls the run's events name apart
+ROLES = frozenset(MODEL_ROLES) | {PLACE_STAGE}
 MODES = frozenset({"scratch run", "ingest run"})
 PROJECT_STAGES = frozenset({"development", "kept"})
 EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})

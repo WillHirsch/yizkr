@@ -45,7 +45,12 @@ from yizkr.claims import ClaimBatch, PlaceStructure
 from yizkr.core.config import Config
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.extract import scan_json_objects
-from yizkr.pipeline.llm import CUT_OFF_AT_LIMIT, LlmClient, at_output_limit
+from yizkr.pipeline.llm import (
+    CUT_OFF_AT_LIMIT,
+    LlmClient,
+    at_output_limit,
+    reject_response,
+)
 from yizkr.queries.publish import prefix_block
 
 VERDICTS = ("same", "a_within_b", "b_within_a", "distinct", "uncertain")
@@ -98,9 +103,29 @@ class Question:
     qid_b: str
     context: str = ""  # human-readable why-this-is-asked
     # the documents (SHA-1s of their media) whose mention records state
-    # the containment asked, when the run directories that say so are
-    # known; the source a containment applied from it is stated in
+    # A within B (`sources`) and B within A (`reverse_sources`), when the
+    # run directories that say so are known: a containment applied is
+    # stated in those that state it in the direction written
     sources: list[str] = field(default_factory=list)
+    reverse_sources: list[str] = field(default_factory=list)
+
+    def swapped(self) -> Question:
+        """The same question with A and B the other way round."""
+        return Question(
+            kind=self.kind,
+            qid_a=self.qid_b,
+            qid_b=self.qid_a,
+            context=self.context,
+            sources=list(self.reverse_sources),
+            reverse_sources=list(self.sources),
+        )
+
+    def stated(self) -> dict[tuple[str, str], list[str]]:
+        """(child, parent) -> the documents stating that containment."""
+        return {
+            (self.qid_a, self.qid_b): list(self.sources),
+            (self.qid_b, self.qid_a): list(self.reverse_sources),
+        }
 
 
 PLACES_QUERY = """\
@@ -373,6 +398,8 @@ def stated_parent_candidates(places: list[PlaceRecord]) -> list[Question]:
                         context=context,
                     )
                     questions.append(question)
+                # the least context, whatever order the places came in
+                question.context = min(question.context, context)
                 for sha1 in sources:
                     if sha1 not in question.sources:
                         question.sources.append(sha1)
@@ -423,26 +450,37 @@ def build_worklist(
     before a competing pair's, and then the order of the text the prompt
     gives each question decides (question_text), never a QID, so the
     same graph asks its questions in the same batches, in the same order,
-    on any instance. A question asked twice keeps the first's kind and
-    context, and the documents stating either."""
+    on any instance. A competing pair is asked with its places in the
+    order of their names, never of their QIDs. Of a pair asked twice, the
+    one that sorts first by (kind, question_text) is kept, with the
+    documents stating each direction of the containment."""
     ancestors = _ancestors(places)
     inside: dict[str, int] = dict.fromkeys(ancestors, 0)
     for found in ancestors.values():
         for qid in found:
             inside[qid] = inside.get(qid, 0) + 1
-    seen: dict[frozenset, Question] = {}
-    worklist: list[Question] = []
-    for question in [*stated, *competing]:
-        key = frozenset((question.qid_a, question.qid_b))
-        if key in seen:
-            kept = seen[key]
-            for sha1 in question.sources:
-                if sha1 not in kept.sources:
-                    kept.sources.append(sha1)
-            continue
-        seen[key] = question
-        worklist.append(question)
     names = place_names(places)
+    groups: dict[frozenset, list[Question]] = {}
+    for question in [*stated, *competing]:
+        if question.kind != "parent" and names.get(
+            question.qid_b, ""
+        ) < names.get(question.qid_a, ""):
+            question = question.swapped()
+        key = frozenset((question.qid_a, question.qid_b))
+        groups.setdefault(key, []).append(question)
+    worklist: list[Question] = []
+    for group in groups.values():
+        kept = min(
+            group, key=lambda q: (q.kind != "parent", question_text(q, names))
+        )
+        directed: dict[tuple[str, str], list[str]] = {}
+        for question in group:
+            for pair, found in question.stated().items():
+                listed = directed.setdefault(pair, [])
+                listed.extend(sha1 for sha1 in found if sha1 not in listed)
+        kept.sources = directed.get((kept.qid_a, kept.qid_b), [])
+        kept.reverse_sources = directed.get((kept.qid_b, kept.qid_a), [])
+        worklist.append(kept)
     worklist.sort(
         key=lambda q: (
             -max(inside.get(q.qid_a, 0), inside.get(q.qid_b, 0)),
@@ -484,18 +522,42 @@ Questions:
 
 
 def place_names(places: list[PlaceRecord]) -> dict[str, str]:
-    """QID -> how the prompt names the place: its label, and the labels
-    of the places the graph puts it in, in their order, so two places of
-    one name read apart where the graph tells them apart."""
+    """QID -> how the prompt names the place: its label, the labels of
+    the places the graph puts it in, and the chains of containers its
+    records state, each in order, so two places of one name read apart
+    where the graph or their records tell them apart. Places whose names
+    still coincide are numbered [1], [2], ... in the order of the
+    documents whose records name them, never of their QIDs."""
     labels = {place.qid: place.label for place in places}
     names = {}
     for place in places:
         within = sorted(
             labels[parent] for parent in place.parents if parent in labels
         )
+        stated = sorted({", ".join(chain) for chain in place.chains if chain})
+        parts = []
+        if within:
+            parts.append(f"within {', '.join(map(repr, within))}")
+        if stated:
+            parts.append(
+                f"a record places it in {'; '.join(map(repr, stated))}"
+            )
         names[place.qid] = repr(place.label) + (
-            f" (within {', '.join(map(repr, within))})" if within else ""
+            f" ({'; '.join(parts)})" if parts else ""
         )
+    by_name: dict[str, list[PlaceRecord]] = {}
+    for place in places:
+        by_name.setdefault(names[place.qid], []).append(place)
+    for name, same in by_name.items():
+        if len(same) < 2:
+            continue
+        same.sort(
+            key=lambda place: sorted(
+                sha1 for found in place.chain_sources for sha1 in found
+            )
+        )
+        for number, place in enumerate(same, start=1):
+            names[place.qid] = f"{name} [{number}]"
     return names
 
 
@@ -562,11 +624,23 @@ def adjudicate(
         file=sys.stderr,
     )
     for index, chunk in enumerate(batches, start=1):
-        response = client.complete(adjudication_prompt(chunk, names))
+        prompt = adjudication_prompt(chunk, names)
+        response = client.complete(prompt)
+        try:
+            parsed = parse_answers(
+                response, chunk, cut_off=at_output_limit(client, response)
+            )
+        except ValueError as exc:
+            # an answer the LLM cache kept from an earlier invocation is
+            # rejected and asked once more; one the engine gave in this
+            # run fails the batch
+            if not reject_response(client, response, f"places: {exc}"):
+                raise
+            response = client.complete(prompt)
+            parsed = parse_answers(
+                response, chunk, cut_off=at_output_limit(client, response)
+            )
         found.responses.append(response)
-        parsed = parse_answers(
-            response, chunk, cut_off=at_output_limit(client, response)
-        )
         print(
             f"  batch {index}/{len(batches)}: {len(chunk)} questions -> "
             f"{len(parsed.proposals)} proposals (sentinel ok)",
@@ -695,7 +769,7 @@ IDENTITY, NOT_CONTAINMENT, ITSELF, CYCLE = (
 
 
 def plan_containment(
-    rows: list[dict], creates_cycle
+    rows: list[dict], creates_cycle, parents_of=lambda node: ()
 ) -> tuple[list[tuple[str, str]], list[str]]:
     """Approved rows -> (child, parent) edges, with the cycle guard.
 
@@ -705,26 +779,30 @@ def plan_containment(
     non-containment verdicts are skipped with a note — identity stays
     curator-executed (ADR-0007).
     """
-    edges, set_aside = plan(rows, creates_cycle)
+    edges, set_aside = plan(rows, creates_cycle, parents_of)
     return edges, [note for _why, note in set_aside]
 
 
 def plan(
-    rows: list[dict], creates_cycle
+    rows: list[dict], creates_cycle, parents_of=lambda node: ()
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """plan_containment, with each row set aside as (why, note): IDENTITY,
-    NOT_CONTAINMENT, ITSELF or CYCLE."""
+    NOT_CONTAINMENT, ITSELF or CYCLE. `parents_of(node)` gives the
+    places the graph puts `node` in, which the walk up from a parent
+    takes beside the batch's earlier edges, so a cycle through both is
+    caught."""
     edges: list[tuple[str, str]] = []
     notes: list[tuple[str, str]] = []
     planned_parents: dict[str, set[str]] = {}
 
     def reaches(node: str, target: str, seen=None) -> bool:
-        """Walking UP the planned edges from `node`, do we hit `target`?"""
+        """Walking UP the planned edges and the graph's from `node`, do we
+        hit `target`?"""
         seen = seen or set()
         if node in seen:
             return False
         seen.add(node)
-        for parent in planned_parents.get(node, set()):
+        for parent in planned_parents.get(node, set()) | set(parents_of(node)):
             if parent == target or reaches(parent, target, seen):
                 return True
         return False
@@ -867,7 +945,14 @@ def apply_containment(
 
     with open(csv_path, newline="") as handle:
         rows = list(csv.DictReader(handle))
-    edges, notes = plan_containment(rows, creates_cycle)
+    # the graph's containment, which a cycle may run through beside the
+    # rows' own edges
+    graph = {
+        place.qid: place.parents for place in fetch_places(client, config)
+    }
+    edges, notes = plan_containment(
+        rows, creates_cycle, lambda node: graph.get(node, ())
+    )
     written = skipped = 0
     run_qid = None
     fingerprint = hashlib.sha256(csv_path.read_bytes()).hexdigest()[:10]

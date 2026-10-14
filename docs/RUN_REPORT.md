@@ -183,7 +183,8 @@ schema, the proposals refused as cycles and the questions refused as
 conflicts (answered with two verdicts), and whether the
 instance-contents key was recorded; or that the instance held what the
 run's key makes, so nothing was reconciled again. Counts alone, never a
-QID or a label.
+QID or a label. The place stage's calls count under their own role,
+`places`, in the calls' lines by role, apart from the extraction's.
 
 **Anomalies.** The alerts by check and by stage, each finding (a
 document or the run, a stage and a check) counted once: new when any of

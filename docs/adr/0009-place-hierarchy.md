@@ -50,21 +50,33 @@ pass unattended, as its `places` stage after the write (ADR-0025 §1):
 the same worklist and adjudication, with every containment proposal
 applied at normal rank and no review CSV; `same`, `distinct` and
 `uncertain` verdicts write nothing, and a proposal that would close a
-cycle (against the graph's containment as read, or the batch's earlier
-proposals), a question answered with two verdicts (a conflict) and an
-answer line outside the answer's schema are refused and counted. Where
-a mention record states the containment applied, child within parent,
-the statement is also `stated in` the artifact of each document whose
-record states it, a reference block of its own beside `inferred from`
-the run item; a competing pair's containment, or a verdict that turns
-the stated containment round, cites the run item alone. The run item's
-label names the proposing model. The prompt names each place by its
-label, with the labels of the places the graph puts it in, and each
-question by its number within the batch, never by a QID, so the LLM
-cache answers the same graph's questions after any reset (ADR-0032);
-among questions of equal scale, a stated container's comes before a
-competing pair's, and then the order of their text decides. The
-command's own rounds, and its review CSV, are unchanged.
+cycle (through the graph's containment as read, the batch's earlier
+proposals, or both at once), a question answered with two verdicts (a
+conflict) and an answer line outside the answer's schema are refused
+and counted. The cycle guard of the command's `--apply` walks the
+graph's containment beside the batch's edges in the same way. Where a
+mention record states the containment applied, in the direction
+written, child within parent, the statement is also `stated in` the
+artifact of each document whose record states it so, a reference block
+of its own beside `inferred from` the run item; a document whose record
+states the reverse is never cited, and a competing pair's containment,
+or a verdict that turns every stated containment round, cites the run
+item alone (decision FA, which the owner confirms before the keeper
+run). The run item's label names the proposing model. The pass runs
+over a complete write only (decision FB). The prompt names each place
+by its label, with the labels of the places the graph puts it in and the
+chains of containers its records state, and places whose names still
+coincide by [1], [2], ... in the order of the documents that name them;
+each question by its number within the batch; a competing pair with its
+places in the order of their names; and of a pair asked twice, the
+question that sorts first by its text. It never names a QID, nor orders
+anything by one, so the LLM cache answers the same graph's questions
+after any reset, renumbered items included (ADR-0032); among questions
+of equal scale, a stated container's comes before a competing pair's,
+and then the order of their text decides. An answer the cache kept that
+does not parse is rejected and asked once more. The command's own
+rounds and its review CSV are unchanged; it now prints how many
+conflicting answers and answers outside the schema it left out.
 
 ## Context
 

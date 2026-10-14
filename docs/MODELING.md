@@ -516,8 +516,10 @@ artifact a new QID, changes neither.
   site, applies each containment the place-hierarchy adjudicator
   proposes as `part of → <container>` at normal rank, with no review:
   `stated in` the artifact of each document whose mention record states
-  that containment (child within parent), each a reference block of its
-  own, where one does, and always `inferred from extraction run →` the
+  that containment in the direction written (child within parent; a
+  document stating the reverse is never cited), each a reference block
+  of its own and with no page, since a mention record has no locator,
+  where one does, and always `inferred from extraction run →` the
   stage's run item, labelled `place-hierarchy run <model> <key>` and
   described as the scratch run's place stage, which carries the three
   scratch-run marks. A competing pair's containment, or one the

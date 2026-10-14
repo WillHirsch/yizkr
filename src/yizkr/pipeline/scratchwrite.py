@@ -83,30 +83,40 @@ write key makes.
 
 **places** reconciles the place hierarchy (ADR-0009) unattended, under
 the guard the write takes (the reset stage's record, the write-phase
-state and the live-stack lock, held for the whole stage), over what the
-write wrote: once the query service shows the write, it reads the
-graph's places and their containment and the unresolved competing place
-values (yizkr.pipeline.places), gives each written place the chains of
-containers its documents' mention records state, with the documents
-that state each, and asks the adjudicator, through the run's LLM cache
-in the role PLACE_ROLE, the questions the worklist derives from them.
-The questions, the parsed proposals and their counts go in the stage's
-record, and each batch's raw answer in RESPONSES beside it, for this
-reset of the instance and this place key: an invocation after a pause
-applies the proposals it made, and asks nothing again. Every
-containment proposal is applied, with no review CSV, as a `part_of`
-statement at normal rank with two kinds of reference: `stated in` each
-document whose record states the containment, where one does, and
-`inferred from` the stage's run item, which records the proposing model
-in its label and is marked as the write's run items are. A proposal
-that would make a cycle with the graph's containment or another
-proposal, a question answered with two verdicts, and an answer line
-outside the answer's schema are refused and counted, never written;
-`same`, `distinct` and `uncertain` verdicts are counted and write
-nothing. Before its first write the stage clears the instance-contents
-record, and once it has applied every proposal of a complete write it
-records the place key. The stages before write never read this
-containment: they use only what the manifests assert.
+state and the live-stack lock, held for the whole stage), over the whole
+of what the write wrote: until the write record says the write is
+complete, the stage does nothing and records nothing, so its proposals
+are never made over part of a write. Once the query service shows the
+write, it reads the graph's places and their containment and the
+unresolved competing place values (yizkr.pipeline.places), gives each
+written place the chains of containers its documents' mention records
+state, with the documents that state each, and asks the adjudicator,
+through the run's LLM cache in the role PLACE_ROLE, the questions the
+worklist derives from them. Its calls are keyed as that role's are, and
+reported to the run's events under the role and stage `places`. The
+prompts name no QID and order their places and questions by what the
+graph and the records say of them, so the same batches ask the same
+prompts after any reset. An answer the cache kept from an earlier
+invocation that does not parse is rejected and asked once more. The
+questions, the parsed proposals, the documents stating each direction
+of each containment asked and the counts go in the stage's record, and
+each batch's raw answer in RESPONSES beside it, for this reset of the
+instance and this place key: an invocation after a pause applies the
+proposals it made, and asks nothing again. Every containment proposal
+is applied, with no review CSV, as a `part_of` statement at normal rank
+with two kinds of reference: `stated in` each document whose record
+states that containment in the direction written, child within parent,
+where one does, and `inferred from` the stage's run item, which records
+the proposing model in its label and is marked as the write's run items
+are. A proposal that would close a cycle (through the graph's
+containment as read, the batch's earlier proposals, or both), a
+question answered with two verdicts, and an answer line outside the
+answer's schema are refused and counted, never written; `same`,
+`distinct` and `uncertain` verdicts are counted and write nothing.
+Before its first write the stage clears the instance-contents record,
+and once it has applied every proposal it records the place key. The
+stages before write never read this containment: they use only what the
+manifests assert.
 
 **site** builds the LAN site (yizkr.staticsite) from the instance into
 the stage's directory of the run, once the query service shows the run
@@ -541,9 +551,19 @@ def place_graph(client: Any) -> tuple[list[Any], list[Any]]:
 
 def place_client(context: Any) -> Any:
     """The client the place stage calls the engine through: the run's
-    engine in PLACE_ROLE, behind the run's LLM cache, every call and
-    what the cache does reported to the run's events."""
-    return context.driver.role_client(PLACE_ROLE, events=context.run.emit)
+    engine in PLACE_ROLE, behind the run's LLM cache and keyed as that
+    role's calls are, every call and what the cache does reported to the
+    run's events under the role and stage `places`, so the report and
+    the monitor count them apart from the extraction's."""
+
+    def emit(event: str, **fields: Any) -> Any:
+        if "role" in fields:
+            fields["role"] = PLACES
+        if fields.get("stage") is not None:
+            fields["stage"] = PLACES
+        return context.run.emit(event, **fields)
+
+    return context.driver.role_client(PLACE_ROLE, events=emit)
 
 
 # -- reset ----------------------------------------------------------------
@@ -995,12 +1015,14 @@ def _propose(context: Any, key: str, written: dict, record: dict) -> None:
         json.dumps({"key": key, "responses": found.responses}, indent=2)
         + "\n",
     )
-    # the documents whose records state a question's containment, in the
-    # direction the question asks it: child within parent
-    sources = {
-        (question.qid_a, question.qid_b): list(question.sources)
+    # the documents whose records state each containment asked, by its
+    # direction, child within parent
+    stated_by = [
+        [child, parent, found]
         for question in worklist
-    }
+        for (child, parent), found in question.stated().items()
+        if found
+    ]
     record.update(
         parents={place.qid: list(place.parents) for place in places},
         questions=len(worklist),
@@ -1012,10 +1034,10 @@ def _propose(context: Any, key: str, written: dict, record: dict) -> None:
                 "verdict": proposal.verdict,
                 "confidence": proposal.confidence,
                 "evidence": proposal.evidence,
-                "sources": sources.get((proposal.qid_a, proposal.qid_b), []),
             }
             for proposal in found.proposals
         ],
+        stated_by=stated_by,
         schema_rejected=found.rejected,
         conflicts=len(found.conflicts),
     )
@@ -1091,6 +1113,15 @@ def run_places(context: Any) -> list[str]:
                 "the write stage has not written the documents for this "
                 "reset of the instance: no place was reconciled"
             )
+        if not written.get("recorded"):
+            # proposals are made over the whole write alone, never over
+            # part of it: the stage waits for an invocation whose write
+            # completes, and records nothing meanwhile
+            context.log(
+                f"{PLACES}: the write is not complete, so no place is "
+                "reconciled in this invocation"
+            )
+            return ["the write is not complete: no place was reconciled"]
         record = _place_record(context, target, epoch)
         record["run_id"] = run_id
         if "proposals" not in record:
@@ -1107,12 +1138,15 @@ def run_places(context: Any) -> list[str]:
                 for qid, parents in (record.get("parents") or {}).items()
             ]
         )
+        graph = record.get("parents") or {}
         edges, set_aside = hierarchy.plan(
-            rows, lambda child, parent: child in ancestors.get(parent, ())
+            rows,
+            lambda child, parent: child in ancestors.get(parent, ()),
+            lambda node: graph.get(node, ()),
         )
         sources = {
-            (row["qid_a"], row["qid_b"]): row.get("sources") or []
-            for row in rows
+            (child, parent): found
+            for child, parent, found in record.get("stated_by") or []
         }
         artifacts = registered.get("documents") or {}
         client = client_of(context)
@@ -1171,7 +1205,7 @@ def run_places(context: Any) -> list[str]:
         record["counts"] = counts = _counts(
             record, [why for why, _note in set_aside]
         )
-        if written.get("recorded") and not record.get("recorded"):
+        if not record.get("recorded"):
             record_contents(client, target, run_id)
             record["recorded"] = True
         save_record(context.directory, record)

@@ -79,6 +79,18 @@ VERDICTS = {
 QUESTION = re.compile(r"^(\d+)\. A: '([^']*)'.*?  vs  B: '([^']*)'", re.M)
 
 
+MIRRORED = {"a_within_b": "b_within_a", "b_within_a": "a_within_b"}
+
+
+def verdict(verdicts: dict, a: str, b: str) -> str:
+    """The verdict on A against B, by their labels: as given, else the
+    mirror of the verdict given on B against A, else `uncertain`."""
+    if (a, b) in verdicts:
+        return verdicts[(a, b)]
+    found = verdicts.get((b, a), "uncertain")
+    return MIRRORED.get(found, found)
+
+
 class Adjudicator:
     """A fake engine: each question of a place prompt answered by the
     labels of its places (VERDICTS, else `uncertain`)."""
@@ -98,7 +110,7 @@ class Adjudicator:
             json.dumps(
                 {
                     "question": int(number),
-                    "verdict": VERDICTS.get((a, b), "uncertain"),
+                    "verdict": verdict(VERDICTS, a, b),
                     "confidence": 0.9,
                     "evidence": "fictional",
                 }
