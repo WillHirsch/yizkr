@@ -463,7 +463,6 @@ class TestTheWrite:
 
     def test_it_writes_under_the_live_stack_lock(self, run):
         run.past_the_barrier()
-        # register and write each hold it; the reset holds its own
         # the reset stage holds it across the reset and its state, and
         # register and write each hold it; the reset takes no hold of its
         # own under it
@@ -682,12 +681,42 @@ class TestTheSite:
     ):
         run.past_the_barrier(until="write")
         run.shown = ["run-0"]
-        monkeypatch.setattr(scratchwrite, "sleep", run.advance)
+
+        def sleep(seconds):
+            run.advance(seconds)
+            # a wait that never gives up fails here, not by hanging
+            assert run.now <= scratchwrite.SITE_WAIT + scratchwrite.SITE_POLL
+
+        monkeypatch.setattr(scratchwrite, "sleep", sleep)
         with pytest.raises(ScratchWriteRefused, match="not caught up"):
             run.stage("site")
         assert run.sites == []
         # it gave up at the deadline, on the clock it is measured on
         assert run.now == scratchwrite.SITE_WAIT
+
+    def test_the_site_makes_its_probe_once(self, run, monkeypatch):
+        """However often the site stage polls the query service, it polls
+        with one probe, made once."""
+        run.past_the_barrier(until="write")
+        run.shown = []
+        made = []
+
+        def probe(config):
+            made.append(config)
+            return run._probe
+
+        polls = []
+
+        def sleep(seconds):
+            polls.append(seconds)
+            if len(polls) == 2:
+                run.shown = ["run-1"]
+
+        monkeypatch.setattr(scratchwrite, "query_service_probe", probe)
+        monkeypatch.setattr(scratchwrite, "sleep", sleep)
+        run.stage("site")
+        assert len(polls) == 2
+        assert made == [CONFIG]
 
     def test_the_site_waits_for_the_write_s_newest_revision(
         self, run, monkeypatch
@@ -928,6 +957,47 @@ class TestTheGuard:
         assert set(record["documents"]) == {d.sha1 for d in run.documents}
         assert recorded_contents(run.wiki).key == run.record("reset")["key"]
 
+    def test_a_document_whose_registration_fails_keeps_the_key_unrecorded(
+        self, run, monkeypatch
+    ):
+        """A document registration failed is not among those the write
+        takes, yet the instance does not hold what the key makes until it
+        is registered and written."""
+        real = run.driver._step_register
+        extract, letter = run.documents
+
+        def failing(doc):
+            if doc.sha1 == letter.sha1:
+                raise ConnectionError("the wiki went away")
+            return real(doc)
+
+        monkeypatch.setattr(run.driver, "_step_register", failing)
+        run.past_the_barrier(until="write")
+        assert run.record("register")["failed"] == {
+            letter.sha1: "ConnectionError"
+        }
+        record = run.record("write")
+        assert set(record["documents"]) == {extract.sha1}
+        assert not record.get("recorded")
+        assert recorded_contents(run.wiki).key is None
+        monkeypatch.setattr(run.driver, "_step_register", real)
+        run.past_the_barrier()
+        assert run.resets == 1
+        assert run.record("register")["failed"] == {}
+        assert run.record("write")["recorded"] is True
+        assert recorded_contents(run.wiki).key == run.record("reset")["key"]
+
+    def test_a_stage_record_of_another_reset_is_not_continued(self, run):
+        run.past_the_barrier(until="register")
+        context = run.context("register")
+        record = scratchwrite.read_record(context.directory)
+        assert record["documents"]
+        key, epoch = record["key"], record["epoch"]
+        assert scratchwrite._ongoing(context, key, epoch) == record
+        other = scratchwrite._ongoing(context, key, "0" * 32)
+        assert other["epoch"] == "0" * 32
+        assert other["documents"] == {}
+
 
 # -- the write key ------------------------------------------------------------
 
@@ -988,6 +1058,28 @@ class TestTheKey:
         monkeypatch.setattr(
             scratchwrite, "WRITER_VERSION", scratchwrite.WRITER_VERSION + 1
         )
+        assert _key(run, exclusions=ExclusionList()) != key
+
+    def test_another_package_source_is_another_key(self, keyed, monkeypatch):
+        run, key = keyed
+        monkeypatch.setattr(scratchwrite, "code_digest", lambda: "0" * 64)
+        assert _key(run, exclusions=ExclusionList()) != key
+
+    def test_another_kind_is_another_key(self, keyed, monkeypatch):
+        from yizkr.pipeline import orchestrate
+
+        run, key = keyed
+        # the same file, read as another kind of document
+        monkeypatch.setattr(
+            orchestrate, "document_kind", lambda source: "presentation"
+        )
+        assert _key(run, exclusions=ExclusionList()) != key
+
+    def test_another_record_of_derived_media_is_another_key(self, keyed):
+        from yizkr.pipeline.presentation import DERIVED_MEDIA
+
+        run, key = keyed
+        (run.documents[0].dir / DERIVED_MEDIA).write_text('{"media": []}\n')
         assert _key(run, exclusions=ExclusionList()) != key
 
     @pytest.mark.parametrize(
@@ -1077,3 +1169,25 @@ def test_items_found_again_are_not_counted_as_minted(run):
     )
     assert again.created_items
     assert again.minted == []
+
+
+def test_the_record_counts_only_the_items_a_document_s_write_made(
+    run, monkeypatch
+):
+    from tests.fixtures.identity import joined
+
+    run.past_the_barrier(until="clustering")
+    # Leopold's two mentions in one cluster: the extract's write makes his
+    # item, and the letter's finds it again
+    identity = joined(
+        scratchwrite.identity_map(run.context("write")), "Leopold Löbig"
+    )
+    monkeypatch.setattr(scratchwrite, "identity_map", lambda _: identity)
+    for stage in ("reset", "register", "write"):
+        run.stage(stage)
+    extract, letter = run.documents
+    documents = run.record("write")["documents"]
+    assert documents[extract.sha1]["items_minted"] == 1
+    # Gustav's item alone
+    assert documents[letter.sha1]["items_minted"] == 1
+    assert len(by_label(run.wiki, "Leopold Löbig")) == 1

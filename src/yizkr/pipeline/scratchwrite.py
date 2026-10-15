@@ -29,9 +29,9 @@ write-phase state below), the stage resets nothing and the run goes on
 where it stopped. Otherwise it resets the instance as `yizkr scratch
 reset --yes` does (yizkr.reset), which refuses a kept instance itself,
 and records the write-phase state, both under one hold of the live-stack
-lock, so no write comes between the reset and the state that would pass
-for this run's. The records register, write and site kept of an earlier
-reset go with it.
+lock, so no session that takes the lock writes between the reset and the
+state, which would take its write for this run's. The records register,
+write and site kept of an earlier reset go with it.
 
 **The write-phase state** (STATE_FILE, in the instance's write-phase
 directory, which the reset clears) names the run that reset the
@@ -204,12 +204,12 @@ def _file_hash(path: Path) -> str | None:
 
 def package_digest(package: Path) -> str:
     """The SHA-256 of every file of the package, by its path within it,
-    but the READ_ONLY modules and compiled bytecode: the query pages the
-    reset publishes among them; what registers and writes
-    reaches far into it (the claim contract's values, dates, the
-    manifest, the review's entity records, the identity map's terms), so
-    the whole of it is hashed, and a change anywhere in it resets and
-    writes again, which costs no model call."""
+    the query pages the reset publishes among them, but the READ_ONLY
+    modules and compiled bytecode. What registers and writes reaches far
+    into the package (the claim contract's values, dates, the manifest,
+    the review's entity records, the identity map's terms), so the whole
+    of it is hashed, and a change anywhere in it resets and writes again,
+    which costs no model call."""
     found = {}
     for path in sorted(package.rglob("*")):
         relative = path.relative_to(package).as_posix()
@@ -486,8 +486,8 @@ def run_reset(context: Any) -> list[str]:
         with contextlib.suppress(FileNotFoundError):
             (context.directory.parent / stage / RECORD).unlink()
     # the reset and the state it records under one hold of the lock, so
-    # no write can come between them that the state would take for this
-    # run's
+    # no session that takes the lock writes between them, where the state
+    # would take its write for this run's
     with live_stack():
         reset_instance(context.env_file, context.log)
         _forget_client(context)

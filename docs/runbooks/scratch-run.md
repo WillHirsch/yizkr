@@ -321,8 +321,8 @@ with `--until clustering` (or an earlier stage) needs none.
   state (`scratch-run.json`, which every reset clears), the run, the
   key, an epoch it draws for this reset and the instance's newest
   revision and log entry, under the same hold of the lock as the reset,
-  so no write can come between them. The records register, write and
-  site kept of an earlier reset are removed.
+  so no session that takes the lock writes between them. The records
+  register, write and site kept of an earlier reset are removed.
 - **register** registers each document as `ingest run` does at its
   write: the artifact item by the SHA-1 of its bytes, a deck's slides
   and images, a PDF's placed images, with registration's flags raised as
