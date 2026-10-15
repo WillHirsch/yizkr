@@ -173,9 +173,10 @@ write anything, unless the instance's write-phase state names this run,
 this key and the epoch of the reset the run's reset stage recorded, and
 the instance's newest revision and log entry are those this run's last
 write left. The reset stage takes the live-stack lock across the reset
-and the state it records, so no write comes between them; register and
-write each hold it for the whole of their writes, so a scratch write
-keeps `make test-live` waiting while it lasts (decision EY). A batch the
+and the state it records, so no session that takes the lock writes
+between them; register and write each hold it for the whole of their
+writes, so a scratch write keeps `make test-live` waiting while it
+lasts (decision EY). A batch the
 writer would refuse whole is refused before anything of it is written,
 and before its document is registered. A write cut short within a
 document leaves a revision the state does not record, so the next
