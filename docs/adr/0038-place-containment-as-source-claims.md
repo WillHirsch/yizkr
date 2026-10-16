@@ -7,8 +7,9 @@ decision FA of #201's amendment (PR #513, parked), with the parts of its
 adjudication that follow from them (§9 below). The rest of ADR-0009
 stands. Until the owner accepts this ADR, ADR-0009, ADR-0017 and
 MODELING.md stay as they are; the consequences in §8 are applied with
-the code that implements it. Its implementation follows #141, the
-owner's walk of #146's graph, which holds only extraction's containment.
+the code that implements it. Its implementation comes before #146, the
+first scratch run that writes, since the owner resolves every open issue
+that affects write structure first (2026-10-16).
 
 ## Context
 
@@ -213,7 +214,7 @@ Applied with the implementation, once the owner accepts this ADR:
    states it", and asks for the time the source gives (§2), never the
    document's date. The extraction critic's `unsupported_containment`
    also flags a time qualifier its excerpt does not state. This changes
-   a prompt, so its PR carries `needs:scratch-diff` and `stage:extract`
+   a prompt, so its PR carries `needs:scratch-diff` and `stage:extraction`
    (ADR-0025 §4).
 4. **The writer** writes a `part_of` claim's time qualifiers like any
    claim's. The claim schema and the manifest accept, where they don't yet, `point_in_time`,
@@ -336,6 +337,3 @@ Applied with the implementation, once the owner accepts this ADR:
    the source it rests on (§1), and never asserts geography on their own
    authority. The alternative is a curator-assertion reference, as
    ADR-0002 allows for resolutions.
-7. **The ADR registry.** #19 needs a row for ADR-0038 (proposed). This
-   session edits no other issue, so that is for the owner or the
-   orchestrator.
