@@ -167,11 +167,18 @@ def test_a_fresh_vocabulary_read_survives(client, homonyms):
 
 
 def test_the_bootstrap_runs_again(client, homonyms):
+    """A second run changes nothing. The first brings the instance up to
+    the manifest, whatever another branch's run left on it (a changed
+    description updates it), so the test holds in any order."""
+    bootstrap_instance(
+        WikiClient(client.config), load_manifest(), log=lambda *_: None
+    )
     fresh = WikiClient(client.config)
     summary = bootstrap_instance(fresh, load_manifest(), log=lambda *_: None)
 
     assert summary["created"] == 0
     assert summary["updated"] == 0
+    assert summary["statements_added"] == 0
 
 
 def test_neither_resolve_nor_the_writer_joins_either(client, homonyms):
