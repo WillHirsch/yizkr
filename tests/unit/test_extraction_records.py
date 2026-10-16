@@ -794,9 +794,9 @@ class TestTheAppellationLabel:
 
     def extract_names(self, tmp_path):
         """Hildegard labelled "Omama", her record holding it as a
-        nickname, with two `name` claims: one restating the model's label,
-        one the name her label becomes. Sebastian's appellation names an
-        ego outside the manifest."""
+        nickname, with three `name` claims: one restating the model's
+        label, one the name her label becomes, and one another form.
+        Sebastian's appellation names an ego outside the manifest."""
         omama = appellation("e2", "Opa", "Opa")
         omama["qualifiers"] = [
             {
@@ -829,7 +829,9 @@ class TestTheAppellationLabel:
                         claim("e1", "Omama", 1876),
                         appellation("e1", "Omama", "Omama"),
                         self.name_claim("e1", "Omama", "Omama"),
-                        self.name_claim("e1", "Omama", "Hildegard Löbig"),
+                        # the new label, cased otherwise
+                        self.name_claim("e1", "Omama", "HILDEGARD Löbig"),
+                        self.name_claim("e1", "Omama", "Hilde"),
                     ]
                 ),
                 ndjson([claim("e2", "Opa", 1862), omama]),
@@ -845,8 +847,10 @@ class TestTheAppellationLabel:
         self, tmp_path
     ):
         batch, coverage, extractor = self.extract_names(tmp_path)
-        names = [c for c in batch.claims if c.property == "name"]
-        assert names == []
+        names = [
+            c.value.value.text for c in batch.claims if c.property == "name"
+        ]
+        assert names == ["Hilde"]
         rejected = [r["claim"] for r in extractor._rejects]
         assert [c["property"] for c in rejected] == ["name", "referred_to_as"]
         assert rejected[0]["value"]["value"]["text"] == "Omama"

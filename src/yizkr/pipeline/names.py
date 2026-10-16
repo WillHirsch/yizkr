@@ -43,9 +43,9 @@ add something, in their order and verbatim spelling:
   beside the label "Rahel Löbig") and a courtesy name ("Nana Maisie")
   stay. One made only of the record's name parts is judged by the rules
   above, so a derivable reordering stays dropped however it is marked.
-  An appellation the alias bag lacks is added to it first. A place's,
-  an organisation's or a family's marks count for nothing: appellations
-  are a person's.
+  An appellation the alias bag lacks is added to it first, unless the
+  entity is a place, an organisation or a family. Their marks count for
+  nothing here: they are never persons.
 
 **The appellation label.** A person whose label is one of the document's
 appellations for them, and whose record stands with the status `name`,
@@ -53,12 +53,14 @@ takes the name the record gives as its label (`appellation_label`).
 Every form, the label and each alias, competes: one made only of the
 record's name parts as itself, any other with its longest run of
 name-part words, never joined across a word that is none ("Rahel Löbig"
-of "Frau Rahel Löbig geb. Tarle"). One that is no appellation wins, then
-the one of most words, a whole form before a run, most letters, least
-punctuation. The appellation stays an alias. The rule reads the
-`referred_to_as` claims only, never a word the record merely leaves out,
-so a label that holds a name part its record omits is left alone, and a
-label beside no form that holds a name word stays as it is.
+of "Frau Rahel Löbig geb. Tarle") and never holding an unbalanced
+bracket or quote ("Ida Sörne" of "Frau Ida Sörne (Löbig)"). One that is
+no appellation wins, then the one of most words, a whole form before a
+run, most letters, least punctuation. The appellation stays an alias.
+The rule reads the `referred_to_as` claims only, never a word the record
+merely leaves out, so a label that holds a name part its record omits is
+left alone, and a label beside no form that gives a run of name-part
+words stays as it is.
 
 Whether a record stands is judged on the alias bag as it comes, before
 this cleanup (ADR-0035 §5 before §8), and never again after it: a
@@ -66,7 +68,10 @@ dropped alias may have been the only form holding a part the record
 gives that no rule above keeps, such as an organisation's kind.
 
 Nothing is composed and nothing is split, so a compound or a particle
-surname stays whole. Idempotent: cleaning a cleaned bag changes nothing.
+surname stays whole. Idempotent: cleaning a cleaned bag changes nothing,
+and settling a settled entity (normalize_entity_dict) changes nothing,
+so long as its record stands, or was set aside, as the manifest parse
+leaves it.
 """
 
 from __future__ import annotations
@@ -93,6 +98,9 @@ from yizkr.claims import (
 _EDGES = ".,;:()\"'[]"
 # the property whose claims say a form is an appellation (ADR-0018)
 APPELLATION = "referred_to_as"
+# the kinds that are never a person: their marked forms are no
+# appellations of theirs
+NOT_PERSONS = frozenset({"place", "organization", "family"})
 
 
 def _parts(record) -> list[tuple[str, bool]]:
@@ -307,28 +315,81 @@ def _letters(form: str) -> int:
     return sum(len(word) for word in _words(form))
 
 
-def _punctuation(form: str) -> int:
-    """How many marks a form holds that are neither a word character nor
-    a space."""
-    return len(re.findall(r"[^\w\s]", form))
+def _punctuation(form: str, own: frozenset[str] = frozenset()) -> int:
+    """How many marks a form holds, in NFC, that are neither a word
+    character nor a space, save those the record's own parts spell with
+    (`own`: a hyphen in "Hans-Xxx")."""
+    return sum(
+        mark not in own
+        for mark in re.findall(r"[^\w\s]", unicodedata.normalize("NFC", form))
+    )
+
+
+def _category(char: str) -> str:
+    return unicodedata.category(char)
+
+
+def _opens(token: str) -> bool:
+    """Whether a token starts with an opening bracket or quote. A
+    right single quote is no opener: it is the apostrophe of "’t"."""
+    return _category(token[0]) in ("Ps", "Pi") or token[0] in '"»›'
+
+
+def _closes(token: str) -> bool:
+    """Whether a token ends with a closing bracket or quote."""
+    return _category(token[-1]) in ("Pe", "Pi", "Pf") or token[-1] == '"'
+
+
+def _trimmed(text: str) -> str:
+    """`text` without the punctuation and spaces at its ends."""
+    start, end = 0, len(text)
+    while start < end and (
+        text[start].isspace() or _category(text[start]).startswith("P")
+    ):
+        start += 1
+    while end > start and (
+        text[end - 1].isspace() or _category(text[end - 1]).startswith("P")
+    ):
+        end -= 1
+    return text[start:end]
+
+
+def _bracketed(form: str) -> bool:
+    """Whether a form holds a bracket, or a quote at a word's edge."""
+    return any(_category(char) in ("Ps", "Pe") for char in form) or any(
+        _opens(token) or _closes(token) for token in form.split()
+    )
 
 
 def _name_run(form: str, name_words: frozenset[str]) -> str:
     """The longest run of consecutive words of `form` that are each made
     only of name parts, as the form writes it with the punctuation at its
-    edges trimmed; the first of the longest; "" when no word is. A word
+    ends trimmed; the first of the longest; "" when no word is. A word
     that is no name part ("geb.", "Frau") ends a run, so no run is
-    composed across it."""
+    composed across it. Nor does a run hold an unbalanced bracket or
+    quote: one starts afresh at a word that opens one and ends after a
+    word that closes one, and a word with a bracket inside it ("Hilde(gard)")
+    is no run word. An apostrophe inside a word ("O’Xxx") stays in it."""
     runs: list[list[re.Match]] = [[]]
     for token in re.finditer(r"\S+", form):
-        if _only_names(token.group().strip(_EDGES), name_words):
+        text = token.group()
+        core = _trimmed(text)
+        if _opens(text) and runs[-1]:
+            runs.append([])
+        if (
+            core
+            and not any(_category(char) in ("Ps", "Pe") for char in core)
+            and _only_names(core, name_words)
+        ):
             runs[-1].append(token)
         elif runs[-1]:
+            runs.append([])
+        if _closes(text) and runs[-1]:
             runs.append([])
     longest = max(runs, key=len)
     if not longest:
         return ""
-    return form[longest[0].start() : longest[-1].end()].strip(_EDGES + " ")
+    return _trimmed(form[longest[0].start() : longest[-1].end()])
 
 
 def appellation_label(
@@ -340,14 +401,18 @@ def appellation_label(
     itself.
 
     Every form, the label and each alias, competes: one made only of the
-    record's name parts as itself, any other with its longest run of
-    name-part words (`_name_run`). The candidate that is no appellation
+    record's name parts and free of brackets and quotes as itself, any
+    other with its longest run of name-part words (`_name_run`), which
+    never holds an unbalanced bracket or quote. The candidate that is no
+    appellation
     comes first (a pet name the record holds as a nickname gives way to
     a name), then the one of most words, then a whole form before a
     run, then the one of most letters in its words, then of least
-    punctuation (so "Rahel Löbig" before "Löbig, Rahel"), then the
-    first. With no candidate, no form holding a name word, the label
-    stays."""
+    punctuation, in NFC and leaving out the marks the record's own parts
+    spell with (so "Rahel Löbig" before "Löbig, Rahel", while the hyphen
+    of a record's "Hans-Xxx" weighs nothing), then the first. With no
+    candidate, as when the record's name is written only fused with a
+    bracket ("Hilde(gard)"), the label stays."""
     from yizkr.pipeline.writer import stored_term
 
     if not isinstance(record, PersonStructure) or record.status != "name":
@@ -361,10 +426,15 @@ def appellation_label(
     )
     candidates: list[tuple[str, bool]] = []
     for form in forms:
-        if _only_names(form, name_words):
+        if _only_names(form, name_words) and not _bracketed(form):
             candidates.append((form, True))
         elif run := _name_run(form, name_words):
             candidates.append((run, False))
+    own = frozenset(
+        mark
+        for part, _open in _parts(record)
+        for mark in re.findall(r"[^\w\s]", unicodedata.normalize("NFC", part))
+    )
     if not candidates:
         return label
     best, _whole = max(
@@ -374,7 +444,7 @@ def appellation_label(
             len(_words(candidate[0])),
             candidate[1],
             _letters(candidate[0]),
-            -_punctuation(candidate[0]),
+            -_punctuation(candidate[0], own),
         ),
     )
     return best
@@ -411,8 +481,8 @@ def _unlisted(
 
 def appellation_parts(entity: dict, appellations: Iterable[str]) -> int:
     """How many name parts of a person's record that stands are, whole,
-    one of the forms the document gives as the person's appellations: a
-    form one person calls another filed as a name part."""
+    one of the document's appellations of the person, including a pet
+    name the record rightly holds as a nickname."""
     from yizkr.pipeline.writer import stored_term
 
     record = _standing(entity)
@@ -430,13 +500,15 @@ def normalize_entity_dict(
     """`entity` with its label set by `appellation_label` and its alias
     bag cleaned (normalize_aliases) by the record it has, if that record
     stands, and the forms the document gives as its `appellations`. A
-    person's appellation the bag lacks joins it, and a label the rule
-    replaces stays among the aliases."""
+    person's appellation the bag lacks joins it (or that of an entity of
+    a kind that may be a person), and a label the rule replaces stays
+    among the aliases. Idempotent for an entity whose record stands, or
+    was set aside, as the manifest parse leaves it."""
     appellations = list(appellations)
     record = _standing(entity)
     label = entity.get("label", "") or ""
     aliases = list(entity.get("aliases") or [])
-    if entity.get("kind") == "human":
+    if entity.get("kind") not in NOT_PERSONS:
         aliases += _unlisted(label, aliases, appellations)
     named = appellation_label(label, aliases, record, appellations)
     if named == label:

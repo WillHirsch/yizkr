@@ -323,14 +323,25 @@ class TestNames:
         assert courtesy == ["Nana Maisie"]
         assert literal == []
 
-    def test_the_postcards_pet_name_is_an_appellation(self):
-        (greeting,) = [
+    def test_every_greeting_by_a_pet_name_is_an_appellation(self):
+        # the postcard's, the 1939 letter's and the booklet's translation
+        # of it: each greets Klara by her pet name, from Sebastian's view
+        greetings = [
             a
             for a in u.ASSERTIONS
-            if a.source == "postcard-1938" and a.value == "Pünktchen"
+            if a.excerpt in ("Liebes Pünktchen!", "Dear Pünktchen!")
         ]
-        assert greeting.property == "referred_to_as"
-        assert dict(greeting.qualifiers) == {"perspective": "sebastian-loebig"}
+        assert {a.source for a in greetings} == {
+            "postcard-1938",
+            "letter-excerpt-1939",
+            "family-booklet-2011",
+        }
+        for greeting in greetings:
+            assert greeting.property == "referred_to_as", greeting
+            assert greeting.value == "Pünktchen"
+            assert dict(greeting.qualifiers)["perspective"] == (
+                "sebastian-loebig"
+            )
 
 
 class TestFamily:

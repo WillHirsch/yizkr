@@ -1,6 +1,8 @@
 """Offline tests for alias hygiene from mention records (ADR-0035 §8,
 ADR-0022 §4 as amended; #409)."""
 
+import unicodedata
+
 import pytest
 
 from yizkr.claims import (
@@ -11,6 +13,8 @@ from yizkr.claims import (
     set_aside_structure,
 )
 from yizkr.pipeline.names import (
+    _name_run,
+    appellation_parts,
     appellations_of,
     normalize_aliases,
     normalize_entity_dict,
@@ -586,6 +590,8 @@ class TestAppellationLabel:
             ["Rahel Löbig", "Löbig, Rahel"],
             ["Löbig, Rahel", "Rahel Löbig"],
             ["Rahel Löbig", "LÖBIG, Rahel"],
+            # the comma written after a decomposed umlaut
+            ["Rahel Lo\u0308big", "Lo\u0308big, Rahel"],
         ],
     )
     def test_a_register_inversion_never_takes_the_label(self, aliases):
@@ -594,7 +600,7 @@ class TestAppellationLabel:
         settled = normalize_entity_dict(
             rahel("Tante Rahel", aliases), ["Tante Rahel"]
         )
-        assert settled["label"] == "Rahel Löbig"
+        assert unicodedata.normalize("NFC", settled["label"]) == "Rahel Löbig"
         assert settled["aliases"] == ["Tante Rahel"]
 
     def test_more_letters_win_a_tie_of_words(self):
@@ -630,12 +636,157 @@ class TestAppellationLabel:
         )
         assert settled["label"] == "Rahel Löbig"
 
+    @pytest.mark.parametrize(
+        ("label", "aliases", "structure", "marks"),
+        [
+            ("Tante Rahel", ["Rahel Löbig"], RAHEL, ["Tante Rahel"]),
+            (
+                "Omama",
+                ["Oma Hildegard"],
+                person(given=[{"written": "Hildegard"}]),
+                ["Omama", "Oma Hildegard"],
+            ),
+            (
+                "Tante Rahel",
+                ["Frau Rahel Löbig geb. Tarle"],
+                person(
+                    given=[{"written": "Rahel"}],
+                    surnames=[{"written": "Löbig"}, {"written": "Tarle"}],
+                    titles=["Frau"],
+                ),
+                ["Tante Rahel"],
+            ),
+            ("Tante Rahel", ["Löbig, Rahel"], RAHEL, ["Tante Rahel"]),
+        ],
+        ids=["whole", "run", "geb", "inversion"],
+    )
+    def test_it_is_idempotent(self, label, aliases, structure, marks):
+        """Settling a settled entity changes nothing, its record standing
+        as the manifest parse left it."""
+        once = normalize_entity_dict(rahel(label, aliases, structure), marks)
+        assert once["label"] != label
+        assert normalize_entity_dict(once, marks) == once
+
+    @pytest.mark.parametrize(
+        ("label", "aliases", "structure", "named"),
+        [
+            ("Tante Rahel [Löbig]", [], RAHEL, "Rahel"),
+            ("Tante [Rahel] Löbig", [], RAHEL, "Rahel"),
+            (
+                "Omama",
+                ["Oma Hilde (Hildegard Löbig)"],
+                person(
+                    given=[{"written": "Hildegard"}],
+                    nicknames=["Hilde"],
+                    surnames=[{"written": "Löbig"}],
+                ),
+                "Hildegard Löbig",
+            ),
+            (
+                "Omama",
+                ["Oma \u201eHildegard\u201c"],
+                person(given=[{"written": "Hildegard"}]),
+                "Hildegard",
+            ),
+            (
+                "Tante Ida",
+                ["Frau Ida Sörne (Löbig)"],
+                person(
+                    given=[{"written": "Ida"}],
+                    surnames=[{"written": "Sörne"}, {"written": "Löbig"}],
+                    titles=["Frau"],
+                ),
+                "Ida Sörne",
+            ),
+        ],
+        ids=["trailing", "inner", "gloss", "quotes", "register"],
+    )
+    def test_a_run_holds_no_unbalanced_bracket_or_quote(
+        self, label, aliases, structure, named
+    ):
+        """A bracket or quote starts or ends a run, so the label never
+        carries half of one; a gloss in brackets competes on its own."""
+        entity = rahel(label, aliases, structure)
+        settled = normalize_entity_dict(entity, [label])
+        assert settled["label"] == named
+        assert label in settled["aliases"]
+
+    def test_the_records_own_hyphen_is_no_punctuation(self):
+        """'Hans-Xxx' is how the record spells the given name: its hyphen
+        weighs nothing, so the record's spelling, given first, keeps the
+        tie."""
+        record = person(
+            given=[{"written": "Hans-Xxx"}], surnames=[{"written": "Löbig"}]
+        )
+        entity = rahel(
+            "Onkel Hans", ["Hans-Xxx Löbig", "Hans Xxx Löbig"], record
+        )
+        assert normalize_entity_dict(entity, ["Onkel Hans"])["label"] == (
+            "Hans-Xxx Löbig"
+        )
+
+    def test_a_name_fused_with_a_bracket_gives_no_candidate(self):
+        """'Hilde(gard)' holds a bracket inside it, so it is no run word:
+        with no candidate, the marked label stays."""
+        record = person(given=[{"written": "Hilde"}])
+        entity = rahel("Oma Hilde(gard)", [], record)
+        settled = normalize_entity_dict(entity, ["Oma Hilde(gard)"])
+        assert settled["label"] == "Oma Hilde(gard)"
+
     def test_a_form_with_no_word_gives_nothing(self):
         record = person(given=[{"written": "Rahel"}])
         settled = normalize_entity_dict(
             rahel("Tante Rahel", ["?"], record), ["Tante Rahel"]
         )
         assert settled["label"] == "Rahel"
+
+
+class TestNameRun:
+    # name words as the run compares them: folded, accents dropped
+    WORDS = frozenset({"rahel", "lobig", "tarle"})
+
+    def test_its_ends_are_trimmed(self):
+        assert _name_run("Tante Rahel Löbig,", self.WORDS) == "Rahel Löbig"
+
+    def test_the_first_longest_run_wins(self):
+        assert (
+            _name_run("Rahel, Tante Tarle Löbig geb. Rahel", self.WORDS)
+            == "Tarle Löbig"
+        )
+
+    def test_a_right_single_quote_inside_a_word_stays(self):
+        words = frozenset({"sipkje", "van", "t", "nijks"})
+        assert _name_run("Mem Sipkje van \u2019t Nijks", words) == (
+            "Sipkje van \u2019t Nijks"
+        )
+
+
+class TestPersonsOnly:
+    def test_an_organisation_gains_no_unlisted_appellation(self):
+        entity = {
+            "id": "e1",
+            "kind": "organization",
+            "label": "Hutmacherei zum Blauen Hut",
+            "aliases": [],
+        }
+        assert normalize_entity_dict(entity, ["die Firma"])["aliases"] == []
+
+    def test_an_organisations_marked_name_is_no_appellation_part(self):
+        entity = {
+            "id": "e1",
+            "kind": "organization",
+            "label": "Hutmacherei zum Blauen Hut",
+            "aliases": [],
+            "structure": OrganizationStructure(
+                names=["zum Blauen Hut"], kinds=["Hutmacherei"]
+            ).model_dump(),
+        }
+        assert appellation_parts(entity, ["zum Blauen Hut"]) == 0
+
+    def test_a_persons_marked_name_part_is_counted(self):
+        record = RAHEL.model_copy(update={"nicknames": ["Pünktchen"]})
+        entity = rahel("Rahel Löbig", ["Pünktchen"], record)
+        assert appellation_parts(entity, ["Pünktchen"]) == 1
 
 
 class TestAppellationsOf:

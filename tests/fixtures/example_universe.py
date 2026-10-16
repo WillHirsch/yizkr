@@ -2484,9 +2484,12 @@ ASSERTIONS = tuple(
         ),
         (
             "klara-loebig",
-            "nickname",
+            "referred_to_as",
             "Pünktchen",
-            {"sourcing_circumstances": "machine_assisted"},
+            {
+                "perspective": "sebastian-loebig",
+                "sourcing_circumstances": "machine_assisted",
+            },
             "Dear Pünktchen!",
         ),
         (
@@ -2537,7 +2540,13 @@ ASSERTIONS = tuple(
             {"point_in_time": Date(1939, 7, 28)},
             "Flörburg, Brunnenring 35, den 28. Juli 1939",
         ),
-        ("klara-loebig", "nickname", "Pünktchen", "Liebes Pünktchen!"),
+        (
+            "klara-loebig",
+            "referred_to_as",
+            "Pünktchen",
+            {"perspective": "sebastian-loebig"},
+            "Liebes Pünktchen!",
+        ),
         (
             "gustav-loebig",
             "nickname",

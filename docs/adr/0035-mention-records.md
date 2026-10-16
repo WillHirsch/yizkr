@@ -82,18 +82,20 @@ the label stays. The appellation stays an alias, and every local ref
 takes the new label; a `name` claim restating the model's label stays a
 reject, and one restating the new label is dropped and counted
 (`records.appellation_label_names`). An appellation the manifest turn
-did not list joins the person's aliases. Appellations are a person's:
-the cleanup and clustering ignore marks on a place, an organisation or a
-family.
+did not list joins the aliases of a person, or of an entity of a kind
+that may be one. The cleanup keeps appellations for a person's record
+only. Places, organisations and families, never persons, key on marked
+forms as on any other name; persons and the kinds that may be persons
+(an unclassified entity, a ref with no kind) never do.
 Both run where the batch is assembled, once the chunks' claims exist;
 `coverage.json` counts the labels replaced (`records.appellation_labels`)
 and the record name parts that are appellations
-(`records.appellation_parts`), and the run report sums both. A form one person calls another, or one
-through a relation, is never a record name part (§2.1), and a kinship
+(`records.appellation_parts`), and the run report sums both. A form one
+person calls another, or one through a relation, is never a record name part (§2.1), and a kinship
 word before a name ("Tante", "Onkel") is neither a name part nor a
 title. Identity is unchanged: clustering keys on the record's name
-parts, and a recordless mention (§7, rule 1) never keys on a form its
-document gives as an appellation, as label or alias.
+parts, and a recordless mention that may be a person (§7, rule 1) never
+keys on a form its document gives as an appellation, as label or alias.
 
 Amended by #389 (2026-09-29): the transcription check, the stream
 assembly and language detection no longer read wording (§10): the check
@@ -1324,8 +1326,9 @@ and brackets in a NAME value, which §10 names.
      without a record, never one with a record, and for the four kinds
      that take records such a link is never confident. Two line-range
      batches that each name "Hildegard Löbig" pair, but never merge.
-     (Amended by #499: never on a form its document gives as an
-     appellation, as label or alias.)
+     (Amended by #499: a mention that may be a person, of any kind but
+     a place, an organisation or a family, never on a form its document
+     gives as an appellation, as label or alias.)
 2. **Sex and civil status only block.** Stated sexes that differ, or civil
    statuses that cannot both hold, make a pair ambiguous, and a closure
    that joins them a contradiction. They never corroborate. Statuses
@@ -1453,7 +1456,9 @@ Löbig" goes however it is marked. A label that is such an appellation,
 on a person whose record stands with the status `name`, becomes the name
 the record gives (the amendment above says how), and the appellation
 stays an alias. Nothing else is read: no field marks an appellation, and
-a word the record merely leaves out never moves a label.
+a word the record merely leaves out never moves a label. The marks are
+read for persons and the kinds that may be persons; a place's, an
+organisation's or a family's alias is judged as before, marked or not.
 
 ### 9. What the same prompt revision takes in
 

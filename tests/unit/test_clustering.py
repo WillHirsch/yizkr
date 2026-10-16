@@ -1801,6 +1801,56 @@ class TestRecordless:
             pair(unmarked[0], "e1", unmarked[1], "e1")
         }
 
+    def test_a_kindless_or_unclassified_appellation_keys_nothing(self):
+        """A ref with no kind (a line-range batch without `instance_of`)
+        and an unclassified entity may each be a person: neither keys on
+        a form its document gives as an appellation."""
+        said = {
+            "type": "monolingual",
+            "value": {"text": "Oma", "language": "de"},
+        }
+
+        def kindless(name: str) -> Doc:
+            sha1 = hashlib.sha1(name.encode()).hexdigest()
+            ref = {"kind": "local", "local_id": "p1", "label": "Oma"}
+            batch = ClaimBatch.model_validate(
+                {
+                    "extraction_run": RUN,
+                    "claims": [
+                        {
+                            "subject": ref,
+                            "property": "referred_to_as",
+                            "value": said,
+                            "source": {
+                                "artifact": {"kind": "artifact", "sha1": sha1}
+                            },
+                        }
+                    ],
+                }
+            )
+            return Doc("a register", Manifest(sha1, batch), {"p1": name})
+
+        bare = [kindless("first"), kindless("second")]
+        assert blocked_pairs([doc.manifest for doc in bare]) == set()
+
+        def unclassified(name: str) -> Doc:
+            return register(
+                name,
+                [
+                    entity(
+                        "e1",
+                        "Oma",
+                        "unclassified_entity",
+                        type_hint="grandmother",
+                    )
+                ],
+                [("e1", "referred_to_as", said)],
+                {"e1": name},
+            )
+
+        loose = [unclassified("first"), unclassified("second")]
+        assert blocked_pairs([doc.manifest for doc in loose]) == set()
+
     def test_marks_on_an_organisation_change_nothing(self):
         """Appellations are a person's: a recordless organisation keys on
         an alias its document marks as it does on any other."""

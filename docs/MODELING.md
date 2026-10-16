@@ -1097,12 +1097,14 @@ words only for a person it never names. Where a person's label is one of
 the document's appellations and their record names them, every form
 competes for the label: one made only of name parts as itself, any other
 with its longest run of name-part words (never joined across a word such
-as "geb."), so "Omama" beside "Oma Hildegard" becomes "Hildegard". For identity, a recordless
-person never keys on a form its document gives as an appellation, as
-label or alias; a person with a record keys on its name parts; and a pet
-name the person is called by anyone stays a record nickname and keys as
-one (ADR-0035 §7). Appellations are a person's: marks on a place, an
-organisation or a family change nothing. Appellations
+as "geb."), so "Omama" beside "Oma Hildegard" becomes "Hildegard". For
+identity, a recordless person never keys on a form its document gives as
+an appellation, as label or alias; a person with a record keys on its
+name parts; and a pet name the person is called by anyone stays a record
+nickname and keys as one (ADR-0035 §7). Places, organisations and
+families, never persons, key on marked forms as on any other name;
+persons and the kinds that may be persons (an unclassified entity, a ref
+with no kind) never do. Appellations
 are multi-valued and coexist (ADR-0002): many people may call one person
 many things. Because each appellation is a statement whose *subject* is
 the referent and whose ego (the `relative` object or the `perspective`

@@ -69,9 +69,10 @@ name (ADR-0035 §8, as amended). Identity is unchanged: a recordless
 mention never keys on a form its document gives as an appellation, so
 however many people are called "Oma" they never meet by it; a person
 with a record keys on its name parts; and a pet name the person is
-called by anyone stays a record nickname and keys as one. Appellations
-are a person's: marks on a place, an organisation or a family change
-nothing. A form one person calls another, or one
+called by anyone stays a record nickname and keys as one. Places,
+organisations and families, never persons, key on marked forms as on any
+other name; persons and the kinds that may be persons (an unclassified
+entity, a ref with no kind) never do. A form one person calls another, or one
 through a relation, is never a record name part, and a kinship word
 before a name is never a record title. The critic's `kinship_term_alias`
 flags a kinship form as the label of a person the document names, and a
