@@ -3,8 +3,10 @@
 A claim's judgement note lands in the run block of its statement, beside
 `inferred from extraction run`, never in the `stated in` block or as a
 qualifier, and a batch written again adds nothing, while a second claim
-of the run with another note adds its own run block (ADR-0035 §4). An
-entity's note lands in the run block of its item's `instance of`. A
+of the run with another note adds its own run block (ADR-0035 §4). A
+later run's noted and bare claims from the place a statement already
+cites add their run blocks, in either order. An entity's note lands
+in the run block of its item's `instance of`. A
 union and its events, from an extraction's batch, land as items with
 their kinds, roles, bounds, dates, places and court, each statement with
 both references (ADR-0036, ADR-0003). A `spouse` claim, which validation
@@ -86,11 +88,13 @@ def role(key: str) -> list[dict]:
     ]
 
 
-def batch_of(sha1: str, *claims: dict, entities=()) -> ClaimBatch:
+def batch_of(
+    sha1: str, *claims: dict, entities=(), model: str = "integration-test"
+) -> ClaimBatch:
     return ClaimBatch.model_validate(
         {
             "extraction_run": {
-                "model_identifier": "integration-test",
+                "model_identifier": model,
                 "pipeline_version": "0.0.0",
                 "started_at": STARTED,
             },
@@ -246,6 +250,61 @@ def test_a_second_claim_of_the_run_with_another_note_adds_its_block(client):
         client, result.created_items["e4"], "point_in_time"
     )
     assert len(statement["references"]) == 3
+
+
+@pytest.mark.parametrize("noted_first", [True, False])
+def test_a_later_runs_noted_and_bare_claims_join_the_statement(
+    client, noted_first
+):
+    """An earlier run's bare wedding date, then a later run's noted and
+    bare claims of it from the same place. The statement carried their
+    source block before the write, so the noted claim adds its run
+    block, and the bare one adds its own, since the statement then cites
+    its run, in either order: a bare claim first is looked at again once
+    the batch's other claims are written. The later batch written again
+    adds nothing."""
+    test = f"later run, {'noted' if noted_first else 'bare'} first"
+    judgment = register_fictional(
+        client,
+        f"Yizkr Notes Test Divorce Judgment, {test} {MARK}",
+        "certificate",
+    )
+    first = write_mapped(
+        BatchWriter(client), batch_of(judgment.ref.sha1, wedding_date(test))
+    )
+    assert first.written == 1
+    claims = [wedding_date(test, DATE_NOTE), wedding_date(test)]
+    if not noted_first:
+        claims.reverse()
+    later = batch_of(
+        judgment.ref.sha1, *claims, model="integration-test-later"
+    )
+    result = write_mapped(BatchWriter(client), later)
+    assert result.run_qid != first.run_qid
+    assert (result.written, result.referenced, result.skipped) == (0, 2, 0)
+    assert result.notes_written == 1
+    _, items = client.vocabulary()
+    (statement,) = statements(
+        client, first.created_items["e4"], "point_in_time"
+    )
+    assert run_blocks(client, statement) == sorted(
+        [
+            (first.run_qid, None, None),
+            (result.run_qid, None, None),
+            (
+                result.run_qid,
+                items["judgement_date_reading"],
+                DATE_NOTE["text"],
+            ),
+        ],
+        key=lambda shown: tuple(part or "" for part in shown),
+    )
+    again = write_mapped(BatchWriter(client), later)
+    assert (again.written, again.referenced, again.skipped) == (0, 0, 2)
+    (statement,) = statements(
+        client, first.created_items["e4"], "point_in_time"
+    )
+    assert len(statement["references"]) == 4
 
 
 def test_an_entitys_note_lands_on_its_instance_of(client):
