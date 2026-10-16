@@ -515,8 +515,10 @@ a second claim of the run, from the same place or another, adds its own
 run block where its note differs. Where the statement already carries
 the claim's source block, its run block is added only when it carries a
 note, or when the statement cites its run in a block with another note;
-a note-less claim this leaves out is looked at again once the batch's
-other claims are written. So a run's noted and note-less claims give the
+a curated statement is compared by the artifacts it cited before the
+write, and a claim that adds nothing is looked at again once the batch's
+other claims are written and its kinds recorded. So a run's noted and
+note-less claims, and a curator's claims beside machine claims, give the
 same blocks in whatever order the batch gives them, for the run that
 wrote the statement and for a later one, and a later run's note-less
 claims alone add nothing there, as before notes. An entity's kind takes

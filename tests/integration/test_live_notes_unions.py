@@ -9,8 +9,11 @@ union and its events, from an extraction's batch, land as items with
 their kinds, roles, bounds, dates, places and court, each statement with
 both references (ADR-0036, ADR-0003). A `spouse` claim, which validation
 refuses, is refused by the writer too, since `yizkr write` takes a batch
-without validating it. The tests write fictional fixture data only (the
-universe's 1957 divorce judgment, under test labels). Every title and
+without validating it. The interview's relative claim, Klara as
+Nicholas's aunt, lands with its kinship type, kinship class and degree
+as qualifiers (ADR-0035 §3.3). The tests write fictional fixture data
+only (the universe's 1957 divorce judgment and the interview, under test
+labels). Every title and
 label carries the session's marker (conftest.fixture_mark), so each
 session meets the fixture as a first write and a re-run within it
 reuses its entities.
@@ -35,7 +38,9 @@ pytestmark = pytest.mark.live
 FIXTURE = (
     "#410: the 1957 divorce judgment's marriage of Leopold and Agnes, its "
     "civil wedding and its divorce, with judgement notes on a date and on "
-    "the court's kind, and a spouse claim"
+    "the court's kind, and a spouse claim; and the interview's relative "
+    "claim, Klara as Nicholas's aunt (kinship_type aunt, kinship_class "
+    "kin_aunt_or_uncle, degree 0)"
 )
 MARK = fixture_mark(FIXTURE, writer)
 STARTED = datetime.now(UTC).isoformat()

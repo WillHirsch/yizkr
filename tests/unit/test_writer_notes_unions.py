@@ -16,6 +16,7 @@ burial register, the interview.
 from __future__ import annotations
 
 import hashlib
+import json
 import unicodedata
 
 import pytest
@@ -1209,3 +1210,196 @@ class TestARetiredQualifier:
             f"and nothing of it is written: its spouse qualifier is retired "
             f"and takes no claim (ADR-0036)"
         ) in result.warnings
+
+
+def explicit_kind(note: dict | None = None, *, reverse=False, run=RUN):
+    """The court's batch with an explicit `instance of` organization claim
+    for the court, from the judgment's page 1, and the court's record
+    noted `note`; the two claims in the batch's order or `reverse`d."""
+    batch = TestAnEntitysNote().court_batch(note)
+    kind = {
+        "subject": COURT,
+        "property": "instance_of",
+        "value": {
+            "type": "item",
+            "value": {"kind": "vocab", "key": "organization"},
+        },
+        "source": source(excerpt=EXCERPT),
+    }
+    claims = [*batch.model_dump(mode="json")["claims"], kind]
+    if reverse:
+        claims.reverse()
+    return batch_of(
+        *claims,
+        entities=batch.model_dump(mode="json")["entities"],
+        run=run,
+    )
+
+
+class TestKindsAndCuratedStatementsInOneWrite:
+    """The kinds are recorded before the claims that added nothing are
+    looked at again, and a statement is compared as it stood before the
+    write, so neither an explicit `instance of` claim nor a curated
+    statement makes the blocks depend on the batch's order (#410)."""
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_an_explicit_kind_claim_and_a_later_runs_noted_kind(self, reverse):
+        wiki = NotedWiki()
+        earlier = explicit_kind()
+        identity = mapped(earlier)
+        first = write_mapped(BatchWriter(wiki), earlier, identity=identity)
+        later = explicit_kind(KIND_NOTE, reverse=reverse, run=LATER_RUN)
+        result = write_mapped(BatchWriter(wiki), later, identity=identity)
+        court = result.created_items["e6"]
+        (kind,) = statements(wiki, court, "instance_of")
+        assert run_blocks(kind) == [
+            (first.run_qid, None, None),
+            (result.run_qid, None, None),
+            (result.run_qid, "Q40", KIND_NOTE["text"]),
+        ]
+        writes = wiki.wbi.item.writes
+        again = write_mapped(BatchWriter(wiki), later, identity=identity)
+        assert again.notes_written == 0
+        assert wiki.wbi.item.writes == writes
+
+    @pytest.mark.parametrize(
+        "x",
+        [
+            wedding_date(DATE_NOTE),
+            wedding_date(DATE_NOTE, page="2"),
+            dict(wedding_date(page="2"), curated=True),
+        ],
+        ids=["noted, page 1", "noted, page 2", "curated, page 2"],
+    )
+    def test_a_curated_statement_and_a_later_runs_claims(self, x):
+        """The curator's wedding date from the judgment's page 1, then a
+        later run's claims X and Y from the burial register, Y bare on
+        page 1: the same blocks in both orders, and a rewrite adds
+        nothing."""
+        shown = []
+        for reverse in (False, True):
+            wiki = NotedWiki()
+            curated = batch_of(dict(wedding_date(), curated=True))
+            claims = [x, wedding_date()]
+            if reverse:
+                claims.reverse()
+            later = cited_to(batch_of(*claims, run=LATER_RUN), BURIAL_SHA1)
+            identity = joined(mapped(curated, later), WEDDING["label"])
+            write_mapped(BatchWriter(wiki), curated, identity=identity)
+            result = write_mapped(BatchWriter(wiki), later, identity=identity)
+            statement = the_wedding_date(wiki, result)
+            shown.append(
+                sorted(
+                    json.dumps(block, sort_keys=True)
+                    for block in blocks(statement)
+                )
+            )
+            writes = wiki.wbi.item.writes
+            write_mapped(BatchWriter(wiki), later, identity=identity)
+            assert wiki.wbi.item.writes == writes, reverse
+        assert shown[0] == shown[1]
+
+
+def office_batch(note=None, sha1=JUDGMENT_SHA1, run=RUN) -> ClaimBatch:
+    """The Wiedergutmachungsamt Peiltal, an unclassified entity with the
+    type hint 'compensation office', carrying out the divorce (a fixture
+    pairing, not a source's), cited to `sha1`."""
+    office = local("o1", "Wiedergutmachungsamt Peiltal", "unclassified_entity")
+    record = {
+        "id": "o1",
+        "label": office["label"],
+        "kind": "unclassified_entity",
+        "type_hint": "compensation office",
+    }
+    if note:
+        record["note"] = note
+    batch = batch_of(
+        {
+            "subject": DIVORCE,
+            "property": "carried_out_by",
+            "value": {"type": "item", "value": office},
+            "source": source(),
+        },
+        entities=[
+            {"id": "e5", "label": DIVORCE["label"], "kind": "divorce"},
+            record,
+        ],
+        run=run,
+    )
+    return cited_to(batch, sha1)
+
+
+class TestMoreKinds:
+    def test_a_later_documents_type_hint_takes_a_bare_run_block(self):
+        """Written without a note from the judgment, then from the burial
+        register with one: the type hint gains the later run's bare block,
+        and the kind its noted one."""
+        wiki = NotedWiki()
+        earlier = office_batch()
+        later = office_batch(KIND_NOTE, sha1=BURIAL_SHA1, run=LATER_RUN)
+        identity = joined(
+            mapped(earlier, later),
+            "Wiedergutmachungsamt Peiltal",
+            DIVORCE["label"],
+        )
+        first = write_mapped(BatchWriter(wiki), earlier, identity=identity)
+        result = write_mapped(BatchWriter(wiki), later, identity=identity)
+        office = result.created_items["o1"]
+        assert office == first.created_items["o1"]
+        (hint,) = statements(wiki, office, "type_hint")
+        assert run_blocks(hint) == [
+            (first.run_qid, None, None),
+            (result.run_qid, None, None),
+        ]
+        (kind,) = statements(wiki, office, "instance_of")
+        assert (result.run_qid, "Q40", KIND_NOTE["text"]) in run_blocks(kind)
+
+    def test_an_equivalences_note_left_out_says_its_kind_is_recorded(self):
+        from yizkr.pipeline.reconcile import apply_equivalences
+
+        wiki = NotedWiki()
+        court_of = TestCuratedAndOtherStatements().court
+        first = write_mapped(BatchWriter(wiki), court_of())
+        court = first.created_items["e6"]
+        later = apply_equivalences(
+            court_of(UNKNOWN_NOTE, sha1=BURIAL_SHA1), {"e6": court}
+        )
+        result = write_mapped(BatchWriter(wiki), later)
+        (warning,) = note_warnings(result)
+        assert warning.startswith("entity 'e6' has a judgement note")
+        assert warning.endswith(": its kind is recorded without it")
+
+    def test_a_curators_kind_listed_first_is_passed_over(self):
+        """The court's kinds: a curator's, citing the judgment, listed
+        before the machine one. A later run's note joins the machine one,
+        once, and a rewrite writes nothing."""
+        wiki = NotedWiki()
+        court_of = TestCuratedAndOtherStatements().court
+        identity = joined(mapped(court_of()), COURT["label"])
+        first = write_mapped(BatchWriter(wiki), court_of(), identity=identity)
+        court = first.created_items["e6"]
+        item = wiki.wbi.item.get(court)
+        curated = BatchWriter._item_claim(
+            NOTE_PROPERTIES["instance_of"], NOTE_ITEMS["organization"]
+        )
+        curated.references = BatchWriter(wiki)._references("Q23")
+        BatchWriter._append(item, curated, beside_equal=True)
+        kinds = item.claims.claims[NOTE_PROPERTIES["instance_of"]]
+        kinds.insert(0, kinds.pop())
+        item.write()
+        noted = court_of(KIND_NOTE).model_dump(mode="json")
+        later = batch_of(
+            *noted["claims"], entities=noted["entities"], run=LATER_RUN
+        )
+        result = write_mapped(BatchWriter(wiki), later, identity=identity)
+        assert result.notes_written == 1
+        curators, machine = statements(wiki, court, "instance_of")
+        assert run_blocks(curators) == []
+        assert run_blocks(machine) == [
+            (first.run_qid, None, None),
+            (result.run_qid, "Q40", KIND_NOTE["text"]),
+        ]
+        writes = wiki.wbi.item.writes
+        again = write_mapped(BatchWriter(wiki), later, identity=identity)
+        assert again.notes_written == 0
+        assert wiki.wbi.item.writes == writes

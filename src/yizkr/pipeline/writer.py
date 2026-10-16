@@ -214,23 +214,28 @@ Per batch, the writer:
    (ADR-0035 §4). Where the statement carries the claim's source block,
    the claim's run block is appended when no block of the statement
    carries it whole, and it carries a note or the statement cites its run
-   in a block with another note. A machine claim without a note that this
-   leaves out is looked at again once the batch's other claims are
-   written, so it joins a block of its run that a noted claim after it
-   gave the statement. So a second claim of the same run adds its own run
-   block where its note differs, a run's noted and note-less claims give
-   the same blocks in whatever order the batch gives them, for the run
-   that wrote the statement and for a later one, and a later run's
-   note-less claims alone add nothing where their source agrees. One
-   statement can thus carry several run blocks of one run; a reader
+   in a block with another note. A curated statement, one with no
+   extraction-run reference (a curator's own write, until a machine
+   claim's blocks join it) or whose rank a curator changed, is compared
+   by artifact alone: the claim is skipped when any of the statement's
+   blocks cites the claim's artifact, under whatever locator, and
+   otherwise its blocks are appended as above. Whether a statement is
+   curated, and the artifacts it cites for that comparison, are read as
+   the statement stood before the write (_before_write), so what the
+   write's own claims do to it, a machine claim joining it or a curated
+   claim citing an artifact, changes nothing another claim of the write
+   adds. A claim that adds nothing is looked at again once the batch's
+   other claims are written and its kinds recorded (step 5), so it joins
+   a block of its run that a noted claim after it, or a kind, gave the
+   statement, as it would had it come after them. So a second claim of
+   the same run adds its own run block where its note differs, a run's
+   noted and note-less claims, and a curator's claims beside machine
+   claims, give the same blocks in whatever order the batch gives them,
+   for the run that wrote the statement and for a later one, and a later
+   run's note-less claims alone add nothing where their source agrees.
+   One statement can thus carry several run blocks of one run; a reader
    counts runs by run item, never by blocks. A batch written again adds
-   nothing.
-   A curated statement, one with no extraction-run reference (a
-   curator's own write, until a machine claim's blocks join it) or
-   whose rank a curator changed, is compared by artifact alone: the
-   claim is skipped when any of the statement's blocks cites the
-   claim's artifact, under whatever locator, and otherwise its blocks
-   are appended as above. Same value but different qualifiers is a
+   nothing. Same value but different qualifiers is a
    different assertion and coexists as its own statement (ADR-0002);
 5. after the claims, records the kind every local ref of a written
    claim gives the item it resolves to, minted or found, and a record's
@@ -659,7 +664,8 @@ class WriteResult:
     skipped: int = 0
     # claims recorded on an existing equal statement as reference blocks
     # it gained: an agreeing second source, or the same source in another
-    # place (step 4 of the module docstring)
+    # place, or its run's block alone (another note, or a bare block beside
+    # a noted one of its run) (step 4 of the module docstring)
     referenced: int = 0
     created_items: dict[str, str] = field(
         default_factory=dict
@@ -1740,6 +1746,9 @@ class BatchWriter:
         # clusters whose found item has been given its aliases
         self._items: dict[tuple[str, str], str] = {}
         self._aliased: set[str] = set()
+        # per write_batch call: how each statement a claim matches stood
+        # before the write (_before_write)
+        self._before: dict[tuple, tuple[bool, frozenset[str]] | None] = {}
 
     # -- artifact resolution (content-addressed sources) -------------------
 
@@ -2702,7 +2711,13 @@ class BatchWriter:
                     return True
         return False
 
-    def _blocks_to_add(self, statement, references, artifact_qid: str) -> list:
+    def _blocks_to_add(
+        self,
+        statement,
+        references,
+        artifact_qid: str,
+        before: tuple[bool, frozenset[str]] | None = None,
+    ) -> list:
         """The reference blocks of a claim that the equal statement it
         matches gains (step 4 of the module docstring); none when the
         claim is already recorded there.
@@ -2722,16 +2737,23 @@ class BatchWriter:
         block is added only when it carries a note or the statement cites
         its run in another block (one with another note): a later run
         without a note adds nothing to a block its source agrees with.
-        A curated statement is compared by artifact alone: a block that
-        cites the claim's artifact under any locator records the claim.
+        A statement that was curated before the write (`before`, from
+        _before_write) is compared by artifact alone, by the artifacts it
+        cited then: one of them that is the claim's records the claim, and
+        otherwise the claim adds each of its blocks the statement does not
+        carry now. So what this write's own claims did to the statement,
+        a machine claim joining it or a curated claim citing an artifact,
+        changes nothing another claim of the write adds, whatever their
+        order.
         """
         present = {
             self._reference_key(block)
             for block in statement.references.references
         }
         source, *runs = references.references
-        if self._is_curated(statement):
-            if self._has_artifact_reference(statement, artifact_qid):
+        curated, cited = before or (False, frozenset())
+        if curated:
+            if artifact_qid in cited:
                 return []
         elif self._reference_key(source) in present:
             return [
@@ -2745,6 +2767,37 @@ class BatchWriter:
             for block in references.references
             if self._reference_key(block) not in present
         ]
+
+    def _before_write(self, subject_qid: str, wbi_claim, statement):
+        """How the statement equal to `wbi_claim` on `subject_qid` stood
+        before this write: whether it was curated (_is_curated) and the
+        artifacts its blocks cited then, or None when the write made it.
+        Kept the first time a claim of the write looks for it, before
+        anything of the write changes it."""
+        key = (
+            subject_qid,
+            wbi_claim.mainsnak.property_number,
+            json.dumps(
+                self._value_key(wbi_claim.mainsnak.datavalue.get("value")),
+                sort_keys=True,
+            ),
+            json.dumps(self._qualifier_snapshot(wbi_claim)),
+        )
+        if key not in self._before:
+            stated_in = self.properties["stated_in"]
+            self._before[key] = (
+                None
+                if statement is None
+                else (
+                    self._is_curated(statement),
+                    frozenset(
+                        ((snak.datavalue or {}).get("value") or {}).get("id")
+                        for block in statement.references.references
+                        for snak in block.snaks.get(stated_in) or []
+                    ),
+                )
+            )
+        return self._before[key]
 
     def _noted(self, block) -> bool:
         """Does the reference block carry a judgement note? None does on
@@ -3238,6 +3291,7 @@ class BatchWriter:
         self._items = {}
         self._aliased = set()
         self._entity_cache = {}
+        self._before = {}
         # one map an instance: refused before anything is written
         if one_map and self._identity_hash:
             others = self._other_maps()
@@ -3288,8 +3342,8 @@ class BatchWriter:
             flags=flags,
             refused_terms=refused_terms,
         )
-        # the machine claims without a note that a statement's blocks
-        # already recorded, looked at again after the loop
+        # the claims that added nothing to the statement they matched,
+        # looked at again after the loop and the kinds (dry runs hold none)
         withheld: list[tuple] = []
         for index, claim in enumerate(batch.claims):
             if index in refused:
@@ -3335,20 +3389,28 @@ class BatchWriter:
                 note=claim.note,
             )
             existing = self._find_matching_statement(subject_qid, wbi_claim)
+            before = self._before_write(subject_qid, wbi_claim, existing)
             if existing is not None:
                 blocks = self._blocks_to_add(
-                    existing, references, artifact_qid
+                    existing, references, artifact_qid, before
                 )
                 if not blocks:
                     result.skipped += 1
-                    if not claim.curated and not _sent_note(claim.note):
-                        # a machine claim without a note whose run block
-                        # may join once a noted claim of its run has (the
-                        # module docstring, step 4): looked at again after
-                        # the loop, so the batch's order changes nothing
-                        withheld.append(
-                            (subject_qid, wbi_claim, references, artifact_qid)
+                    # a claim that adds nothing yet may add its run's block
+                    # once the batch's other claims are written and its
+                    # kinds recorded, beside a noted block of its run they
+                    # gave the statement (the module docstring, step 4):
+                    # looked at again then, so the batch's order changes
+                    # nothing
+                    withheld.append(
+                        (
+                            subject_qid,
+                            wbi_claim,
+                            references,
+                            artifact_qid,
+                            before,
                         )
+                    )
                     continue
                 self._add_blocks(subject_qid, existing, blocks, result)
                 continue
@@ -3366,18 +3428,26 @@ class BatchWriter:
                     map(self._noted, references.references)
                 )
             result.written += 1
-        for subject_qid, wbi_claim, references, artifact_qid in withheld:
+        # the kinds first, so an explicit `instance of` claim looked at
+        # again below meets the run blocks they gave its statement
+        if not self.dry_run:
+            self._record_kinds(result)
+        for (
+            subject_qid,
+            wbi_claim,
+            references,
+            artifact_qid,
+            before,
+        ) in withheld:
             existing = self._find_matching_statement(subject_qid, wbi_claim)
             blocks = (
-                self._blocks_to_add(existing, references, artifact_qid)
+                self._blocks_to_add(existing, references, artifact_qid, before)
                 if existing is not None
                 else []
             )
             if blocks:
                 self._add_blocks(subject_qid, existing, blocks, result)
                 result.skipped -= 1
-        if not self.dry_run:
-            self._record_kinds(result)
         return result
 
     def _add_blocks(
