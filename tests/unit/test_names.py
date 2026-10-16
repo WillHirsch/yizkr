@@ -590,8 +590,9 @@ class TestAppellationLabel:
             ["Rahel Löbig", "Löbig, Rahel"],
             ["Löbig, Rahel", "Rahel Löbig"],
             ["Rahel Löbig", "LÖBIG, Rahel"],
-            # the comma written after a decomposed umlaut
-            ["Rahel Lo\u0308big", "Lo\u0308big, Rahel"],
+            # a decomposed umlaut is no punctuation: the inversion,
+            # given first, still loses to its comma
+            ["Löbig, Rahel", "Rahel Lo\u0308big"],
         ],
     )
     def test_a_register_inversion_never_takes_the_label(self, aliases):
@@ -731,7 +732,7 @@ class TestAppellationLabel:
     def test_a_name_fused_with_a_bracket_gives_no_candidate(self):
         """'Hilde(gard)' holds a bracket inside it, so it is no run word:
         with no candidate, the marked label stays."""
-        record = person(given=[{"written": "Hilde"}])
+        record = person(given=[{"written": "Hilde(gard)"}])
         entity = rahel("Oma Hilde(gard)", [], record)
         settled = normalize_entity_dict(entity, ["Oma Hilde(gard)"])
         assert settled["label"] == "Oma Hilde(gard)"
