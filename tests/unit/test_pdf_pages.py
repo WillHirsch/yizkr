@@ -50,6 +50,7 @@ from yizkr.pipeline.language import detect_language
 from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
     FAILED,
+    PAGED,
     TRANSCRIPTION_VOLATILE,
     DocumentRun,
     ExcerptRun,
@@ -703,7 +704,7 @@ class TestImages:
             exclusions=ExclusionList(),
         )
         (doc,) = orchestrator.documents()
-        transcription, _resolution = orchestrator._transcribe(doc, "vision")
+        transcription, _resolution = orchestrator._transcribe(doc, PAGED)
         assert not doc.dir.exists()
         reading = transcription.reading
         (image,) = reading.images
@@ -820,12 +821,12 @@ class TestAScratchRun:
         # it is closed, never as the reading is let go
         made = []
 
-        class Kept(transcribe.PdfReading):
+        class Kept(transcribe.PagedReading):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, **kwargs)
                 made.append(self)
 
-        monkeypatch.setattr(transcribe, "PdfReading", Kept)
+        monkeypatch.setattr(transcribe, "PagedReading", Kept)
         counted = estimate_of(tmp_path, corpus, engine)
         assert per_stage(counted, "hits")["transcription"] == 1
         assert len(made) == 1
@@ -948,7 +949,7 @@ class TestTheCallEstimateCountsExcerpts:
         compilations place, is one image."""
         counted = estimate_of(tmp_path, compilations(tmp_path), engine)
         excerpts = counted.excerpts
-        assert (excerpts.images, excerpts.pdfs) == (3, 2)
+        assert (excerpts.images, excerpts.containers) == (3, 2)
         assert excerpts.measured_stages == {
             "transcription": 0,
             "extraction": 0,
@@ -964,7 +965,8 @@ class TestTheCallEstimateCountsExcerpts:
         more = counted.total().more + 9
         assert any(f", and up to {more} more." in line for line in lines)
         assert excerpt_line(counted).startswith(
-            "- Up to 9 more for excerpts: 3 images that 2 PDFs place"
+            "- Up to 9 more for excerpts: 3 images that 2 PDFs or decks "
+            "place on their pages or slides"
         )
         assert (
             "Their calls: 0 transcription, as typical, no run having "
@@ -994,7 +996,7 @@ class TestTheCallEstimateCountsExcerpts:
         excerpts = estimate_of(tmp_path, corpus, engine).excerpts
         # the booklet places the letter's top alone, so only the album
         # places an image that may become an excerpt
-        assert (excerpts.images, excerpts.pdfs) == (2, 1)
+        assert (excerpts.images, excerpts.containers) == (2, 1)
 
     def test_an_image_the_never_ingest_list_names_is_no_excerpt(
         self,
@@ -1007,7 +1009,7 @@ class TestTheCallEstimateCountsExcerpts:
             engine,
             exclusions=ExclusionList.parse(f"{gray_sha1(1)}\n"),
         ).excerpts
-        assert (excerpts.images, excerpts.pdfs) == (2, 2)
+        assert (excerpts.images, excerpts.containers) == (2, 2)
 
     def test_the_mean_for_excerpts_over_the_runs_measured(
         self,
@@ -1043,8 +1045,8 @@ class TestTheCallEstimateCountsExcerpts:
         }
         line = excerpt_line(counted)
         assert line.startswith(
-            "- Up to 4 more for excerpts: 1 image that 1 PDF places within "
-            "text-layer pages"
+            "- Up to 4 more for excerpts: 1 image that 1 PDF or deck places "
+            "on its pages or slides"
         )
         assert line.endswith(
             "Their calls: 0 transcription, by the mean over 1 excerpt the "
@@ -1236,7 +1238,7 @@ class TestTheCallEstimateCountsExcerpts:
             stages={"transcription": StageCalls(made=1, known=1)},
             excerpts=estimate.ExcerptCalls(
                 images=1,
-                pdfs=1,
+                containers=1,
                 calls={"extraction": 2, "critique": 1},
                 measured_stages={"extraction": 0, "critique": 0},
             ),
@@ -1325,7 +1327,7 @@ class TestTheCallEstimateCountsExcerpts:
         assert counted.resumed
         assert counted.stages["transcription"].reused == 1
         excerpts = counted.excerpts
-        assert (excerpts.images, excerpts.pdfs) == (1, 1)
+        assert (excerpts.images, excerpts.containers) == (1, 1)
         # its transcription stands; its extraction and critique are to
         # make, neither measured
         assert excerpts.calls == {
@@ -1475,7 +1477,7 @@ def unseen(text: str = SECOND) -> str:
     )
 
 
-def set_asides(orchestrator: CachedRun, kind: str = "media") -> list[dict]:
+def set_asides(orchestrator: CachedRun, kind: str = "pdf") -> list[dict]:
     """The set-aside events of this run for documents of a kind: the
     PDFs' by default, since an excerpt's transcription is its image's
     reading, set aside with it."""
@@ -1824,7 +1826,7 @@ class TestReuse:
             for event in this_run(again, "reused")
             if event["stage"] == "transcription"
         ]
-        assert reused == ["media", "excerpt"]
+        assert reused == ["pdf", "excerpt"]
 
 
 class TestTheView:

@@ -327,7 +327,7 @@ Every statement carries at least one reference with:
   from the model: only for a claim whose page number is one physical
   page whose record gives a printed number. A range, a page given in
   words, a page the record gives no printed number and a transcription
-  with no record (a text file's, a deck's slide text) get none; none is
+  with no record (a text file's, a deck's slides) get none; none is
   ever guessed (#424). It describes the physical page: a page that
   shows a spread with one half numbered keeps that one number for
   every claim read from it, as both ways of reading a PDF give it the
@@ -807,8 +807,14 @@ and reference the artifact itself or the producing run.
   of`, `media file`, `media SHA-1`) is one statement citing each of them;
   a later container's name for the item is an alias, unless another
   item already has that label (ADR-0008 as amended by #50).
-- Unpacking is deterministic (documented ZIP+XML), never generative;
-  only claim extraction from the slide text uses an LLM.
+- Unpacking is deterministic (documented ZIP+XML), never generative:
+  the slide text is read from the XML. Each image a deck embeds that is
+  read on its own (not decoration, the never-ingest list not naming it,
+  in a format the vision engine reads) is read by the vision engine and
+  extracted as a document of its own, an excerpt, whose claims cite the
+  image, as a PDF's placed image is (below; ADR-0008 as amended by
+  #502). A scanned document on a slide so gives claims that cite the
+  scan, not the deck.
 - **A compilation's original excerpts are artifacts of their own**
   (ADR-0008 as amended by #289, #176 and #397). A compilation sets text
   of its own (a typed translation, commentary) beside images of excerpts

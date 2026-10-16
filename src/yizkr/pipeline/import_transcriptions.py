@@ -909,7 +909,7 @@ def import_transcriptions(
         scans = {
             doc.known_sha1: doc.source
             for doc in orchestrator.documents()
-            if doc.unreadable is None and doc.kind == "media"
+            if doc.unreadable is None and doc.kind in ("media", "pdf")
         }
         adopt: list[_Media] = []
         left: list[_Media] = []

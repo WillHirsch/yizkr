@@ -174,7 +174,7 @@ _UNSHOWN = frozenset({"documents.languages"})
 # counted: `by_kind`, `reused_by`, `hits_by_reason`, `forced`, ...
 _COUNTER = re.compile(
     r"^by_|_by_|_by$|^(forced|attention_labels|failure_labels|fallbacks|"
-    r"routes|language_resolved|pdf_pages|per_pdf|set_aside|pauses|aborts|"
+    r"routes|language_resolved|pdf_pages|per_pdf|per_deck|set_aside|pauses|aborts|"
     r"give_ups_replayed|holds|errors|models|outcomes|output_limit_stops)$"
 )
 _SHA1 = re.compile(r"[0-9a-f]{40}")

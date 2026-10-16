@@ -35,33 +35,38 @@ pipeline runs the same without. The client factory (yizkr.pipeline.llm)
 wraps the run's engine clients in it; the orchestrator only names the
 cache folder, the refreshed roles and the epochs, and records the cache's
 events in the run directory. The transcription is routed per document
-(vision, text file, slide text); a curator's
+(vision, paged, text file); a curator's
 `<doc>/transcription.corrected.txt` routes it to the correction instead.
-A PDF on the vision route is read page by page when any of its pages has
-a usable text layer (yizkr.pipeline.textlayer): those pages from their
-text layer, without a model call, its other pages by the vision engine,
-and each image placed within a text-layer page by the vision engine on
-its own, as a witness of its own (ADR-0008). The images' bytes and their
-transcriptions are kept in the document's directory, recorded in
-`derived-media.json`, beside the PDF's own transcription. A PDF none of
-whose pages has one is read whole by the vision engine. The PDF renderer
-the vision engine and the transcription check need is checked once,
-before any document.
+A paged container, a PDF or a deck, takes the paged route: it is read
+page by page by its format's reader (yizkr.pipeline.containers), each
+page from the text the file holds where it holds a usable one (a PDF's
+text layer, yizkr.pipeline.textlayer; a deck's slide XML,
+yizkr.pipeline.presentation), without a model call, any other page by
+the vision engine, and each image placed on a page whose own text is
+read by the vision engine on its own, as a witness of its own
+(ADR-0008). The images' bytes and their transcriptions are kept in the
+document's directory, recorded in `derived-media.json`, beside the
+container's own transcription. A PDF none of whose pages has a usable
+text layer is read whole by the vision engine. The PDF renderer the
+vision engine and the transcription check need is checked once, before
+any document.
 
-Each image a PDF's transcription reads on its own, with a reading that
-passes the check, is then a document of its own, an excerpt
+Each image a container's transcription reads on its own, with a reading
+that passes the check, is then a document of its own, an excerpt
 (ExcerptRun): its identity is the SHA-1 of its bytes, its directory is in
 the state directory's EXCERPTS_DIR, its transcription is the reading the
-PDF kept, and its claims cite the image. An image several PDFs place is
-one excerpt; one whose bytes a document of the folder has, or that the
-never-ingest list names, is none. The run takes each excerpt after the
-folder's documents, as its PDF's transcription finds it.
+container kept, and its claims cite the image. An image several
+containers place is one excerpt; one whose bytes a document of the
+folder has, or that the never-ingest list names, is none. The run takes
+each excerpt after the folder's documents, as its container's
+transcription finds it.
 
 One step uses the wiki: the write, which registers the document first
 (yizkr.pipeline.registrar): its artifact item, a deck's slides as page
 fragments, and a deck's derived media or a PDF's images, each found or
 made by the SHA-1 of its bytes, just before the claims that cite them
-are written; an excerpt's write registers each PDF that places it, with
+are written; an excerpt's write registers each container that places it,
+with
 its images. It finds or mints the item of every entity of the batch
 through the identity map of the run's documents (yizkr.pipeline.writer,
 step 2), which it keeps in the run directory's corpus folder as a
@@ -211,18 +216,25 @@ DUPLICATE = "duplicate"
 # the run's control file held the document's next stage
 PAUSED = "paused"
 
-# the kind of an image a PDF places within one of its text-layer pages,
-# taken as a document of its own (ExcerptRun), and the directory of the
-# state directory that holds such documents' directories, each named for
-# its image's SHA-1
+# the kind of a PDF, a paged container of its own (ADR-0008)
+PDF = "pdf"
+# the kind of an image a paged container places on one of its pages and
+# reads on its own (a PDF's text-layer page, a deck's slide), taken as a
+# document of its own (ExcerptRun), and the directory of the state
+# directory that holds such documents' directories, each named for its
+# image's SHA-1
 EXCERPT = "excerpt"
 EXCERPTS_DIR = "excerpts"
+# the transcription route of a paged container, a PDF or a deck, read by
+# its format's reader (yizkr.pipeline.containers)
+PAGED = "paged"
 
 # the stages each kind of document runs before the gates, in order
 _EXTRACTED = ("transcription", "extraction", "critique")
 DOCUMENT_STAGES = {
     "gedcom": ("gedcom",),
     "presentation": _EXTRACTED,
+    PDF: _EXTRACTED,
     "text": _EXTRACTED,
     "media": _EXTRACTED,
     EXCERPT: _EXTRACTED,
@@ -254,7 +266,10 @@ REUSED = "reused"
 
 
 def document_kind(source: Path) -> str:
-    """The kind of source a document is: a run's slices are kinds."""
+    """The kind of source a document is: a run's slices are kinds. A
+    deck (`presentation`) and a PDF (`pdf`) are the paged containers,
+    each of its own kind, since each has a reader of its own; `media` is
+    any other file, a photograph or a scan read whole."""
     suffix = source.suffix.lower()
     if suffix in GEDCOM_SUFFIXES:
         return "gedcom"
@@ -262,24 +277,27 @@ def document_kind(source: Path) -> str:
         return "presentation"
     if suffix in TEXT_SUFFIXES:
         return "text"
+    if suffix == ".pdf":
+        return PDF
     return "media"
 
 
 def route_transcription(source: Path, correction: Path | None = None) -> str:
     """The transcription method for a document, chosen deterministically.
 
-    A curator's correction wins; otherwise the source decides: slide text
-    is data in a deck, a text file is its own transcription, and anything
-    else is read by the vision engine. The vision route reads a PDF page
-    by page when any of its pages has a usable text layer, each page by
-    its own method, chosen as deterministically
-    (yizkr.pipeline.textlayer); a PDF without one, and an image, it reads
-    whole."""
+    A curator's correction wins; otherwise the source decides: a text
+    file is its own transcription; a paged container, a deck or a PDF,
+    takes the paged route (PAGED), read page by page by its format's
+    reader (yizkr.pipeline.containers), each page by its own method,
+    chosen as deterministically, and each image placed on a page whose
+    own text is read, read on its own; and anything else, an image, is
+    read whole by the vision engine. The paged route reads a PDF none of
+    whose pages has a usable text layer whole by the vision engine too."""
     if correction is not None and correction.is_file():
         return "correction"
     suffix = source.suffix.lower()
-    if suffix in PRESENTATION_SUFFIXES:
-        return "slide-text"
+    if suffix in PRESENTATION_SUFFIXES or suffix == ".pdf":
+        return PAGED
     if suffix in TEXT_SUFFIXES:
         return "text-file"
     return "vision"
@@ -725,20 +743,22 @@ class DocumentRun:
 
 
 class ExcerptRun(DocumentRun):
-    """An image a PDF places within one of its text-layer pages, taken as
-    a document of its own: a witness apart from the PDF, whose claims cite
-    the image alone (ADR-0008).
+    """An image a paged container places on one of its pages and reads on
+    its own (a PDF's text-layer page, a deck's slide), taken as a document
+    of its own: a witness apart from the container, whose claims cite the
+    image alone (ADR-0008).
 
     Its identity is the SHA-1 of its bytes, and so is its directory's
     name, in the state directory's EXCERPTS_DIR: an image that several
-    PDFs place is one document, whichever of them places it first.
-    `containers` are the PDFs that place it, each keeping the image's
-    bytes and its reading in its own directory (presentation.
+    containers place is one document, whichever of them places it first.
+    `containers` are the PDFs and decks that place it, each keeping the
+    image's bytes and its reading in its own directory (presentation.
     derived_transcription); the first one's copy of the bytes is its
-    source. Its transcription is the reading the PDF's transcription made
-    of it (Orchestrator._transcribe_excerpt), so no model is asked again.
-    Its title names its first place: "<the PDF's title> — page 6, image
-    1"."""
+    source. Its transcription is the reading the container's
+    transcription made of it (Orchestrator._transcribe_excerpt), so no
+    model is asked again. Its title names its first place, by the first
+    name the container's record gives it: "<the PDF's title> — page 6,
+    image 1", or "<the deck's title> — image2.png"."""
 
     def __init__(
         self, sha1: str, container: DocumentRun, medium: Any, state_dir: Path
@@ -757,7 +777,7 @@ class ExcerptRun(DocumentRun):
         return EXCERPT
 
     def placed_by(self, container: DocumentRun) -> None:
-        """Add a PDF that places the image too."""
+        """Add a container that places the image too."""
         if all(known.dir != container.dir for known in self.containers):
             self.containers.append(container)
 
@@ -1211,8 +1231,8 @@ class Orchestrator:
         is refused before anything is registered or uploaded, and an
         embedded image the list names is left out
         (yizkr.pipeline.registrar). An excerpt is registered as the
-        derived medium of each PDF that places it, each PDF registered
-        first. Returns the artifact's QID.
+        derived medium of each container that places it, each container
+        registered first. Returns the artifact's QID.
 
         An item the registrar flags as maybe an older artifact (another
         item names a file that holds its bytes, or its title is the label
@@ -1266,7 +1286,8 @@ class Orchestrator:
         if found is None:
             raise ExcludedMedia(
                 f"image {doc.sha1[:12]} is on the never-ingest list, or no "
-                "PDF that places it records it: nothing of it was registered"
+                "container that places it records it: nothing of it was "
+                "registered"
             )
         return found
 
@@ -1312,21 +1333,23 @@ class Orchestrator:
         return result.artifact_qid, derived
 
     def _placed_images(self, doc: DocumentRun):
-        """The record of the images a PDF read page by page places within
-        its pages, kept in its directory by its transcription
-        (_keep_reading), when it is there whole and made for the PDF's
-        bytes as they are now; None for any other document, and for a PDF
-        whose record is not there. A reused transcription that marks
-        images has its record whole, or is made again
-        (_transcription_failure)."""
+        """The record of the images a paged container places on its pages
+        (presentation.read_derived_media): a deck's, kept in its directory
+        before its transcription (_step_derive_media), or a PDF's read page
+        by page, kept by its transcription (_keep_reading), when it is
+        there whole and made for the container's bytes as they are now;
+        None for any other document, and for a container whose record is
+        not there. A reused transcription that marks images has its record
+        whole, or is made again (_transcription_failure)."""
         from yizkr.pipeline.presentation import read_derived_media
 
-        if doc.kind != "media":
+        container = {PDF: "pdf", "presentation": "presentation"}.get(doc.kind)
+        if container is None:
             return None
         record = read_derived_media(doc.dir)
         if (
             record is None
-            or record.container != "pdf"
+            or record.container != container
             or record.source_sha1 != doc.sha1
         ):
             return None
@@ -1450,7 +1473,7 @@ class Orchestrator:
         memo = (doc.sha1, doc.transcription.name)
         if memo in self._views:
             return self._views[memo]
-        checked = self._route(doc) in ("vision", "text-file", EXCERPT)
+        checked = self._route(doc) in ("vision", PAGED, "text-file", EXCERPT)
         transcription = self._reused_view(
             doc,
             doc.transcription,
@@ -1492,22 +1515,24 @@ class Orchestrator:
         """Why the transcription check fails `transcription` of the
         document now, or None when it passes. A vision transcription made
         whole is checked with its record, and fails without one; a text
-        file's, which has none, by its text. A PDF read page by page is
-        checked where the vision engine read it: each page it read, with
-        the page's one-page record (`Transcription.page_record`), as its
-        reading was checked when the page was made, so that a page the
-        record calls blank needs no text; and the transcription of each
-        image placed within a page that the document's directory keeps
-        (`_image_failure`). Its text-layer pages are the document's own
-        text and are never checked. It is made again, too, when what it
-        marks is not kept whole beside it (`_reading_failure`). A
-        transcription that passes carries the flag of the check made now,
-        or none (the first vision page's, for a PDF read page by page),
+        file's, which has none, by its text. A container read page by page
+        (a PDF's, a deck's) is checked where the vision engine read it:
+        each page it read, with the page's one-page record
+        (`Transcription.page_record`), as its reading was checked when the
+        page was made, so that a page the record calls blank needs no
+        text; and the transcription of each image placed within a page
+        that the document's directory keeps (`_image_failure`). Its pages
+        read from the file's own text (a PDF's text layer, a deck's slide
+        XML) are the document's own text and are never checked. It is made
+        again, too, when what it marks is not kept whole beside it
+        (`_reading_failure`). A transcription that passes carries the flag
+        of the check made now, or none (the first vision page's, for a
+        container read page by page),
         since a check changed since it was made may flag it otherwise; the
         flag is no part of its content. It reads files only, and writes
         none."""
         from yizkr.pipeline.textlayer import VISION
-        from yizkr.pipeline.transcribe import PDF_PAGES, check_vision_page
+        from yizkr.pipeline.transcribe import check_vision_page, is_paged
         from yizkr.pipeline.transcription_check import (
             TranscriptionCheckFailed,
             check_transcription,
@@ -1515,7 +1540,7 @@ class Orchestrator:
             media_page_count,
         )
 
-        if not transcription.engine.startswith(f"{PDF_PAGES}:"):
+        if not is_paged(transcription):
             check = check_transcription(
                 transcription.text,
                 pages=media_page_count(doc.source),
@@ -1528,7 +1553,7 @@ class Orchestrator:
             transcription.flag = check.signature if check.flagged else None
             return None
         flag = None
-        for page in transcription.pages:
+        for page in transcription.pages or ():
             if page.provenance.method == VISION:
                 check = check_vision_page(transcription, page)
                 if not check.passed:
@@ -1547,25 +1572,33 @@ class Orchestrator:
         return failure
 
     def _reading_failure(self, doc: DocumentRun, transcription) -> str | None:
-        """Why a PDF's transcription read page by page is to be made again
-        although it passes the check, or None: an image it marks that the
-        never-ingest list names now, since such an image is never kept or
-        marked; a record of the images it marks that is missing, damaged,
-        made for other bytes, or names other images, or an image's bytes
-        that are not kept whole (presentation.read_derived_media), since
-        the write registers them from it; or an image it marks that has no
-        transcription of its own, since its reading failed or was lost, so
-        that the image is read again. Its pages the vision engine read are
-        read again through the LLM cache, which answers the calls it
-        answered before."""
+        """Why a container's transcription read page by page is to be made
+        again although it passes the check, or None: an image it marks
+        that the never-ingest list names now, since such an image is never
+        kept or marked; a record of the images it marks that is missing,
+        damaged, made for other bytes, or names other images, or an
+        image's bytes that are not kept whole
+        (presentation.read_derived_media), since the write registers them
+        from it; or an image it marks that has no transcription of its
+        own, since its reading failed or was lost, so that the image is
+        read again. A PDF's record names the images its transcription
+        marks, and those only. A deck's names every image it embeds, so
+        its transcription is to mark exactly those of them it reads on
+        their own (presentation.read_on_their_own): one made by an older
+        reader that read none is made again. Its pages and images the
+        vision engine read are read again through the LLM cache, which
+        answers the calls it answered before."""
         from yizkr.pipeline.presentation import (
             derived_transcription,
             read_derived_media,
+            read_on_their_own,
         )
 
         images = list(
             dict.fromkeys(
-                sha1 for page in transcription.pages for sha1 in page.images
+                sha1
+                for page in transcription.pages or ()
+                for sha1 in page.images
             )
         )
         for sha1 in images:
@@ -1574,14 +1607,22 @@ class Orchestrator:
                     f"the never-ingest list names image {sha1[:12]}, which "
                     "it marks"
                 )
-        if not images:
+        deck = doc.kind == "presentation"
+        if not images and not deck:
             return None
         record = read_derived_media(doc.dir)
         if (
             record is None
-            or record.container != "pdf"
+            or record.container != ("presentation" if deck else "pdf")
             or record.source_sha1 != doc.sha1
-            or set(record.media) != set(images)
+            or set(images)
+            != (
+                read_on_their_own(
+                    record, doc.dir, excluded=self._excluded_image
+                )
+                if deck
+                else set(record.media)
+            )
         ):
             return (
                 "the record of the images it marks is missing, damaged or "
@@ -1626,11 +1667,11 @@ class Orchestrator:
 
     def _step_transcribe(self, doc: DocumentRun):
         """Transcribe the document by its route, record the language it
-        was found to be in, and write the transcription view. What a PDF
-        read page by page made beside its transcription, its images and
-        their transcriptions, is kept first (`_keep_reading`), and what
-        of it needs attention is the stage's attention."""
-        from yizkr.pipeline.transcribe import PDF_PAGES
+        was found to be in, and write the transcription view. What a
+        container read page by page made beside its transcription, its
+        images and their transcriptions, is kept first (`_keep_reading`),
+        and what of it needs attention is the stage's attention."""
+        from yizkr.pipeline.transcribe import is_paged
 
         method = self._route(doc)
         transcription, resolution = self._run_stage(
@@ -1659,7 +1700,7 @@ class Orchestrator:
         changed = _write_view(
             doc.transcription, transcription.model_dump_json(indent=2)
         )
-        if transcription.engine.startswith(f"{PDF_PAGES}:") and changed:
+        if is_paged(transcription) and changed:
             self.log(f"  {doc.source.name}: {_read_by_page(transcription)}")
         if self.language == "auto" and changed:
             self.log(f"  {doc.source.name}: language {resolution.describe()}")
@@ -1669,8 +1710,8 @@ class Orchestrator:
         """(transcription, language resolution) by the routed method."""
         transcribe = {
             "vision": self._transcribe_vision,
+            PAGED: self._transcribe_paged,
             "text-file": self._transcribe_text_file,
-            "slide-text": self._transcribe_slides,
             "correction": self._transcribe_correction,
             EXCERPT: self._transcribe_excerpt,
         }[method]
@@ -1678,16 +1719,16 @@ class Orchestrator:
 
     def _transcribe_excerpt(self, doc: DocumentRun):
         """(transcription, language resolution) of an excerpt: the reading
-        of its image that a PDF placing it keeps (presentation.
+        of its image that a container placing it keeps (presentation.
         derived_transcription), the first of them whose reading names the
         image and passes the check (`_image_failure`). No model is asked:
-        the PDF's transcription read the image, through the LLM cache. Its
-        class and pages are the reading's; its flag is the one the check
-        made now raises on the reading, as a reused view's is, not the one
-        stored with it; and its language comes from the reading's record
-        (language.record_language), as a vision transcription's does;
-        from its text (language.resolve_language) only for a reading with
-        no record. RuntimeError when none keeps one."""
+        the container's transcription read the image, through the LLM
+        cache. Its class and pages are the reading's; its flag is the one
+        the check made now raises on the reading, as a reused view's is,
+        not the one stored with it; and its language comes from the
+        reading's record (language.record_language), as a vision
+        transcription's does; from its text (language.resolve_language)
+        only for a reading with no record. RuntimeError when none keeps one."""
         from yizkr.pipeline.language import record_language, resolve_language
         from yizkr.pipeline.presentation import derived_transcription
         from yizkr.pipeline.transcribe import Transcription
@@ -1718,32 +1759,47 @@ class Orchestrator:
                 update={"language": resolution.code, "flag": flag}
             ), resolution
         raise RuntimeError(
-            f"no PDF that places image {doc.sha1[:12]} keeps a reading of it "
-            "that passes the transcription check"
+            f"no container that places image {doc.sha1[:12]} keeps a reading "
+            "of it that passes the transcription check"
         )
 
-    def _transcribe_vision(self, doc: DocumentRun):
-        """(transcription, language resolution) by the vision route: a PDF
-        page by page when any of its pages has a usable text layer
-        (transcribe.PdfPageTranscriber), and anything else whole. Nothing
-        is written: what the page-by-page reading made beside the
-        transcription rides on it (`Transcription.reading`) for
-        `_step_transcribe` to keep."""
+    def _transcribe_paged(self, doc: DocumentRun):
+        """(transcription, language resolution) by the paged route: a
+        container read page by page by its format's reader
+        (transcribe.PagedTranscriber), a deck slide by slide
+        (transcribe.DeckTranscriber) and a PDF page by page when any of its
+        pages has a usable text layer (transcribe.PdfPageTranscriber); a
+        PDF none of whose pages has one is read whole
+        (`_transcribe_vision`). Nothing is written: what the page-by-page
+        reading made beside the transcription rides on it
+        (`Transcription.reading`) for `_step_transcribe` to keep."""
         from yizkr.pipeline.transcribe import (
-            LlmVisionTranscriber,
+            DeckTranscriber,
             PdfPageTranscriber,
         )
 
-        if doc.source.suffix.lower() == ".pdf":
-            paged = PdfPageTranscriber(
-                functools.partial(self._llm, "transcribe", doc),
-                language=self.language,
-                fallback_language=self.fallback_language,
-                excluded=self._excluded_image,
-            )
-            transcription = paged.transcribe(doc.source)
-            if transcription is not None:
-                return transcription, paged.last_resolution
+        reader = (
+            DeckTranscriber
+            if doc.source.suffix.lower() in PRESENTATION_SUFFIXES
+            else PdfPageTranscriber
+        )
+        paged = reader(
+            functools.partial(self._llm, "transcribe", doc),
+            language=self.language,
+            fallback_language=self.fallback_language,
+            excluded=self._excluded_image,
+        )
+        transcription = paged.transcribe(doc.source)
+        if transcription is not None:
+            return transcription, paged.last_resolution
+        return self._transcribe_vision(doc)
+
+    def _transcribe_vision(self, doc: DocumentRun):
+        """(transcription, language resolution) by the vision engine,
+        reading the document whole: an image, or a PDF none of whose
+        pages has a usable text layer."""
+        from yizkr.pipeline.transcribe import LlmVisionTranscriber
+
         # the transcriber checks what the engine or the cache answers, and
         # rejects an answer that fails the check (ADR-0032)
         transcriber = LlmVisionTranscriber(
@@ -1755,24 +1811,28 @@ class Orchestrator:
         return transcription, transcriber.last_resolution
 
     def _excluded_image(self, sha1: str) -> bool:
-        """Does the never-ingest list name an image a PDF places within a
-        page, by the SHA-1 of its bytes? Such an image is never read or
-        kept."""
+        """Does the never-ingest list name an image a paged container
+        places on a page, by the SHA-1 of its bytes? Such an image is never
+        read on its own, kept as the container's reading of it, or
+        extracted."""
         return self.exclusions is not None and is_excluded(
             self.exclusions, sha1=sha1
         )
 
     def _keep_reading(self, doc: DocumentRun, transcription) -> None:
-        """Keep what a PDF read page by page made beside its
-        transcription, in the document's directory: the images placed
+        """Keep what a container read page by page made beside its
+        transcription, in the document's directory: a PDF's images placed
         within its pages, recorded as its derived media
-        (presentation.keep_derived_media), and each image's own
-        transcription beside its bytes (presentation.
-        derived_transcription). A kept transcription of an image that the
-        check fails now is moved aside first, never deleted, whether or
-        not a new one takes its place. An image the never-ingest list names
-        now is not in the record, so nothing registers or extracts what an
-        earlier reading kept of it."""
+        (presentation.keep_derived_media), or for a deck the record of
+        every image it embeds, which names them by their names in the
+        archive (`_derived_media`); then each image's own transcription
+        beside its bytes (presentation.derived_transcription). A kept
+        transcription of an image that the check fails now is moved aside
+        first, never deleted, whether or not a new one takes its place. An
+        image the never-ingest list names now is not in a PDF's record,
+        and has no reading of its own in either, so nothing extracts what
+        an earlier reading kept of it, and the write registers no image
+        the list names."""
         from yizkr.pipeline.presentation import (
             DERIVED_MEDIA_DIR,
             DerivedMediaRecord,
@@ -1782,24 +1842,29 @@ class Orchestrator:
         )
 
         reading = transcription.reading
-        record = DerivedMediaRecord(
-            source_sha1=transcription.artifact.sha1,
-            container="pdf",
-            title=doc.state.title,
-            media={
-                image.sha1: DerivedMedium(
-                    names=image.names,
-                    slides=image.pages,
-                    file=f"{DERIVED_MEDIA_DIR}/{image.sha1}{image.suffix}",
-                )
-                for image in reading.images
-            },
-        )
-        keep_derived_media(
-            record,
-            {image.sha1: image.path for image in reading.images},
-            doc.dir,
-        )
+        if doc.kind == "presentation":
+            self._derived_media(doc)
+        else:
+            record = DerivedMediaRecord(
+                source_sha1=transcription.artifact.sha1,
+                container="pdf",
+                title=doc.state.title,
+                media={
+                    image.sha1: DerivedMedium(
+                        names=image.names,
+                        slides=image.pages,
+                        file=(
+                            f"{DERIVED_MEDIA_DIR}/{image.sha1}{image.suffix}"
+                        ),
+                    )
+                    for image in reading.images
+                },
+            )
+            keep_derived_media(
+                record,
+                {image.sha1: image.path for image in reading.images},
+                doc.dir,
+            )
         for image in reading.images:
             path = derived_transcription(doc.dir, image.sha1)
             if path.exists() and self._image_failure(doc, image.sha1):
@@ -1819,25 +1884,6 @@ class Orchestrator:
         )
         transcription = transcriber.transcribe(doc.source)
         return transcription, transcriber.last_resolution
-
-    def _transcribe_slides(self, doc: DocumentRun):
-        # deterministic: slide text is data in the file, not an image to
-        # read; [Slide N] markers scope the claim locators
-        from yizkr.pipeline.language import resolve_language
-        from yizkr.pipeline.presentation import slide_transcript
-        from yizkr.pipeline.transcribe import Transcription
-
-        text = slide_transcript(self._presentation(doc))
-        resolution = resolve_language(
-            text, self.language, fallback=self.fallback_language
-        )
-        transcription = Transcription(
-            artifact=ArtifactRef(sha1=doc.sha1),
-            text=text,
-            language=resolution.code,
-            engine="pptx-adapter",
-        )
-        return transcription, resolution
 
     def _transcribe_correction(self, doc: DocumentRun):
         from yizkr.pipeline.language import resolve_language
@@ -2198,9 +2244,9 @@ class Orchestrator:
     def _excerpts_of(
         self, doc: DocumentRun, corpus: Collection[str]
     ) -> list[ExcerptRun]:
-        """The excerpts of a PDF read page by page (ExcerptRun), by their
-        SHA-1s, from what its directory keeps: each image the record of
-        its images names (_placed_images) that has a reading of its own
+        """The excerpts of a container read page by page (ExcerptRun), by
+        their SHA-1s, from what its directory keeps: each image the record
+        of its images names (_placed_images) that has a reading of its own
         which passes the check (`_image_failure`), and which shows a page
         of a document (`_image_shows_a_page`): an image whose record calls
         every page blank (a photograph with no writing) or not a document
@@ -2210,8 +2256,8 @@ class Orchestrator:
         one whose bytes a document of the corpus has (`corpus`, their
         SHA-1s): that document is the witness, and its bytes are not
         extracted again (ADR-0010). Each is found or made by its SHA-1
-        among the run's excerpts, so an image that several PDFs place is
-        one excerpt, with each of them among its containers. Reads files
+        among the run's excerpts, so an image that several containers place
+        is one excerpt, with each of them among its containers. Reads files
         only, and writes none."""
         from yizkr.pipeline.presentation import derived_transcription
 
@@ -2261,7 +2307,7 @@ class Orchestrator:
     def _plan_excerpts(self, excerpts: Sequence[ExcerptRun]) -> None:
         """Add the excerpts the run plan does not hold yet to it, as the
         documents they are, each with its stages (docs/RUN_MANIFEST.md):
-        they are found as their PDFs' transcriptions are made."""
+        they are found as their containers' transcriptions are made."""
         manifest = self.rundir.manifest()
         planned = list(manifest.get("documents") or [])
         known = {
@@ -2786,7 +2832,7 @@ class Orchestrator:
         # from the engine or from the cache, or is a view the run reuses
         # and checks again
         preflight_vision_transcription(
-            doc.source for doc in docs if doc.kind == "media"
+            doc.source for doc in docs if doc.kind == PDF
         )
         # seed with content already fully ingested in prior runs, so a
         # renamed copy skips the pipeline (cross-run dedup, ADR-0010)
@@ -3020,11 +3066,13 @@ def _supersede(path: Path) -> Path | None:
 
 
 def _read_by_page(transcription) -> str:
-    """How a PDF read page by page was read, as counts: its pages by
-    method, and the images read on their own."""
-    methods = Counter(page.provenance.method for page in transcription.pages)
+    """How a container read page by page was read, as counts: its pages
+    by method, and the images read on their own."""
+    methods = Counter(
+        page.provenance.method for page in transcription.pages or ()
+    )
     images = len(
-        {sha1 for page in transcription.pages for sha1 in page.images}
+        {sha1 for page in transcription.pages or () for sha1 in page.images}
     )
     return "read page by page: " + ", ".join(
         [f"{count} {method}" for method, count in sorted(methods.items())]
@@ -3033,8 +3081,8 @@ def _read_by_page(transcription) -> str:
 
 
 def _reading_attention(result: tuple) -> list[str]:
-    """What of a page-by-page reading of a PDF needs attention
-    (transcribe.PdfReading.attention), for the transcription stage's
+    """What of a page-by-page reading of a container needs attention
+    (transcribe.PagedReading.attention), for the transcription stage's
     `done` event: nothing for any other transcription."""
     transcription, _resolution = result
     reading = transcription.reading

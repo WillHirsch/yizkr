@@ -177,12 +177,13 @@ and `yizkr.reset` for the reset.
     chunks an entity manifest makes follow its entities, which a text's
     length only approaches, so a dense document can take more;
   - **up to more for excerpts**: an image a PDF places within a
-    text-layer page, read on its own, becomes a document of its own, an
-    excerpt (ADR-0008), found only as its PDF is transcribed. The PDF's
-    transcription stage, which the estimate takes through the pipeline's
-    own code, reads the PDF page by page from the file itself
-    (pypdfium2, no model call), so the estimate knows each image it
-    places: once however many PDFs place it, and none that the
+    text-layer page, or a deck embeds on a slide, read on its own,
+    becomes a document of its own, an excerpt (ADR-0008), found only as
+    its container is transcribed. The container's transcription stage,
+    which the estimate takes through the pipeline's own code, reads it
+    page by page from the file itself (a PDF with pypdfium2, a deck from
+    its XML, no model call), so the estimate knows each image it places:
+    once however many PDFs and decks place it, and none that the
     never-ingest list names or whose bytes a document of the corpus has.
     An image whose kept reading (one that passed the check, which the
     cache answers) calls every page blank or not a document page is left
@@ -393,8 +394,9 @@ uv run yizkr scratch abort  [<run>] [--stage NAME | --kind NAME] [--reason TEXT]
 
 The monitor's command line (`:` or Enter) asks the same. A request names
 the whole run, a stage (`transcription`, `extraction`, `critique`,
-`gedcom`, or a corpus stage) or a kind (`text`, `media`, `presentation`,
-`gedcom`), and goes into the run's control file, which the driver reads
+`gedcom`, or a corpus stage) or a kind (`text`, `media` for a photograph or
+an image read whole, `pdf`, `presentation`, `gedcom`, `excerpt`), and
+goes into the run's control file, which the driver reads
 before each stage of each document and before each corpus stage. With no
 run named, the command takes the latest, and says which run it wrote to.
 

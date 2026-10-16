@@ -265,16 +265,27 @@ re-running one step in isolation — but for a normal ingest you only ever run
   record, by its transcription stage, each named for its places ("page
   6, image 1") with the pages it is on; the write registers them after
   the PDF, each `part of` it once per page (ADR-0008).
-- **excerpts** — each image a PDF places within a text-layer page, with
-  a reading of its own that passes the check, is a document of its own
-  (kind `excerpt`, `ExcerptRun`), in `excerpts/<sha1>/` of the state
-  directory: its transcription is that reading, taken without a call,
-  and its extraction and critique cite the image. The same image in
-  several PDFs is one excerpt; one whose bytes a document of the corpus
-  has, or that the never-ingest list names, is none. `ingest run` takes
-  excerpts after the folder's documents; the scratch driver as their
-  PDF's transcription ends, the first as the excerpts' canary. An
-  excerpt's write registers each PDF that places it, with its images.
+- **excerpts** — each image a PDF places within a text-layer page, or a
+  deck embeds on a slide, with a reading of its own that passes the
+  check, is a document of its own (kind `excerpt`, `ExcerptRun`), in
+  `excerpts/<sha1>/` of the state directory: its transcription is that
+  reading, taken without a call, and its extraction and critique cite
+  the image. The same image in several PDFs and decks is one excerpt;
+  one whose bytes a document of the corpus has, or that the never-ingest
+  list names, is none. `ingest run` takes excerpts after the folder's
+  documents; the scratch driver as their container's transcription ends,
+  the first as the excerpts' canary. An excerpt's write registers each
+  container that places it, with its images.
+- **paged containers** — a PDF (kind `pdf`) and a deck (kind
+  `presentation`) take the `paged` route (`yizkr.pipeline.containers`,
+  ADR-0008 as amended by #502): a reader per format gives the pages,
+  each with its own text where the file holds it and the images placed
+  on it, and one transcriber (`transcribe.PagedTranscriber`) makes the
+  transcription and reads each image on its own. A deck's slides are
+  read from their XML (method `slide-xml`), behind `[Slide N]` markers,
+  each image read on its own marked below its slide's marker
+  (`[Slide 2, image 1: sha1:…]`); an image in a format the vision engine
+  does not read (a TIFF) is noted, not read.
 - **transcribe** — engines: `llm` (LLM-vision, ADR-0004), `textfile`
   (wrap an existing/manual transcription; keeps the pipeline fully
   local), `htr` (a Transkribus-style platform adapter, dropped as LLM
@@ -323,7 +334,8 @@ re-running one step in isolation — but for a normal ingest you only ever run
 - **transcription check** — runs on the output of the `llm` and
   `textfile` engines (in `ingest run`, the vision and text-file methods)
   before anything uses it, in `ingest run` and `ingest transcribe`
-  alike; slide text and a curator's correction are not checked. It is
+  alike; a deck's slide text, a PDF's text layer and a curator's
+  correction are not checked, a deck's images' readings are. It is
   `yizkr.pipeline.transcription_check`, a step with its own version,
   apart from the transcription's. It runs on every transcription a run
   makes, from the engine or the LLM cache, and on every transcription

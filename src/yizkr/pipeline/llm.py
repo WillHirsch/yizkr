@@ -3285,7 +3285,7 @@ def _typical_calls(
     """The calls a document of `kind` typically makes in `stage`, with no
     run to measure them in (estimate_calls)."""
     if stage == "transcription":
-        return 1 if kind == "media" else 0
+        return 1 if kind in ("media", "pdf") else 0
     if stage == "critique":
         return 1
     if stage == "extraction":

@@ -1890,12 +1890,14 @@ class TestContent:
             "placed": 2,
             "distinct": 2,
             "per_pdf": {"2": 1},
-            "excerpts": 0,
         }
+        assert aggregate["documents"]["excerpts"] == 0
         text = render_markdown(aggregate)
         assert (
             "read on their own: 2 in 1 PDFs (2 distinct; images per PDF: "
-            "2 in 1); documents of their own (excerpts): 0"
+            "2 in 1); images embedded in decks and read on their own: 0 in "
+            "0 decks (0 distinct; images per deck: none); documents of "
+            "their own (excerpts): 0"
         ) in text
         assert letter not in text
 

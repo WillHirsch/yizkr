@@ -102,7 +102,13 @@ snapshot, and says so.
 **Documents.** The documents planned (a SHA-1 planned twice is one
 document) by kind; languages, by the transcriptions read, and by kind
 (in `report.html` and `report.json` alone: see below);
-the transcription routes (vision, text file, slide text, correction) and
+the transcription routes, by what made each transcription (`llm-vision`,
+`pdf-pages` for a PDF read page by page, `pptx-adapter` for a deck,
+`text-file`, `correction`); the pages of the PDFs read page by page, by
+method, and the images placed within them and read on their own (PDFs
+that place any, images placed, distinct images, images per PDF); the
+images the decks embed on their slides and read on their own, counted
+alike (`deck_images`); the excerpts among the documents; and
 how each language was resolved (record, detected, fallback, override); the
 documents that failed, each once: those whose stage failed, as their
 latest events leave them, and those the latest invocation failed outside
