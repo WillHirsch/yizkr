@@ -983,10 +983,18 @@ entity) is kept when it holds a word that is no name part ("Tante
 Rahel" beside "Rahel Löbig", "Omama"); one made only of name parts is
 judged as any other, so a reordering stays dropped. Where a person's
 label is one of those appellations and its record stands with the status
-`name`, the label becomes the name the record gives: the fullest of its
-forms made only of name parts (one that is no appellation first), or
-else the label's own name words, in its order; the appellation stays an
-alias, and every local ref takes the new label. This runs where the
+`name`, the label becomes the name the record gives. Every form, the
+label and each alias, competes: one made only of name parts as itself,
+any other with its longest run of name-part words, never joined across a
+word that is none ("Rahel Löbig" of "Frau Rahel Löbig geb. Tarle"). One
+that is no appellation wins, then the one of most words, a whole form
+before a run, most letters, least punctuation (so "Rahel Löbig" before
+"Löbig, Rahel"); with no form holding a name word, the label stays. The
+appellation stays an alias, every local ref takes the new label, a
+`name` claim restating the model's label stays a reject, and one
+restating the new label is dropped and counted
+(`appellation_label_names`). A `referred_to_as` the manifest turn did not
+list joins the person's aliases. This runs where the
 batch is assembled, once the chunks' claims exist, and fires on marked
 appellations only, never on a word the record merely leaves out. The
 GEDCOM adapter cleans by the record it fills, as extraction does. A place's or an organisation's alias that
@@ -1063,7 +1071,9 @@ call a careful reader could make differently. `coverage.json` counts the
 records given (and by status, and the `unsplit` forms they hold),
 recordless and set aside (the records, and the reasons by category), the
 labels the appellation rule replaced with a name (`appellation_labels`),
-and the notes by category.
+the `name` claims dropped for restating one (`appellation_label_names`),
+the record name parts that are appellations (`appellation_parts`), and
+the notes by category.
 
 **Appellations are aliases and sourced statements** (ADR-0018, amended
 by #499). Every form a source uses to name or address a person is an
@@ -1083,9 +1093,16 @@ as object (§Kinship); a spousal term ("my husband") gives a marriage
 "the informant", "my husband", "our great grandmother", a role or
 form-field label) is never an alias. The label stays the display name: a
 name form wherever the document names the person, and the document's own
-words only for a person it never names. Identity never reads an
-appellation: clustering keys on the mention record's name parts, and a
-recordless mention never on an appellation (ADR-0035 §7). Appellations
+words only for a person it never names. Where a person's label is one of
+the document's appellations and their record names them, every form
+competes for the label: one made only of name parts as itself, any other
+with its longest run of name-part words (never joined across a word such
+as "geb."), so "Omama" beside "Oma Hildegard" becomes "Hildegard". For identity, a recordless
+person never keys on a form its document gives as an appellation, as
+label or alias; a person with a record keys on its name parts; and a pet
+name the person is called by anyone stays a record nickname and keys as
+one (ADR-0035 §7). Appellations are a person's: marks on a place, an
+organisation or a family change nothing. Appellations
 are multi-valued and coexist (ADR-0002): many people may call one person
 many things. Because each appellation is a statement whose *subject* is
 the referent and whose ego (the `relative` object or the `perspective`

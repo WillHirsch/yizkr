@@ -458,13 +458,15 @@ class TestAppellations:
         assert (
             "If it holds a LITERAL kinship term, record the kinship too, as "
             'above: "Tante Rahel", where Rahel is the aunt, also gives '
-            '`relative` + `kinship_type` "Tante" with the ego as the object.'
+            '`relative` + `kinship_type` "Tante" + `kinship_class` '
+            "kin_aunt_or_uncle, with the ego as the object."
         ) in flat(CHUNK_PROMPT)
         assert (
             "If it is NOT a literal relation (a courtesy title such as a "
             '"Tante" who is no aunt, "Nana Maisie", a pet name, or a name '
-            'one person calls another, "Bubele"), `referred_to_as` is all '
-            "it gives."
+            'one person calls another, "Bubele"), it gives no kinship: '
+            "`referred_to_as` alone, beside a `nickname` claim where the "
+            "source marks a pet name as what the person is called."
         ) in flat(CHUNK_PROMPT)
 
     def test_an_unsure_term_is_referred_to_as_alone(self):
@@ -481,7 +483,12 @@ class TestAppellations:
             'a letter to Klara that writes "Tante Rahel" and elsewhere '
             '"Rahel Löbig" gives Rahel the claims `referred_to_as` "Tante '
             'Rahel", with Klara as its `perspective`, and `relative` to '
-            'Klara with the kinship_type "Tante".'
+            'Klara with the kinship_type "Tante" and the kinship_class '
+            "kin_aunt_or_uncle."
+        ) in chunk
+        assert (
+            '`relative` to Nicholas with the kinship_type "Omama" and the '
+            "kinship_class kin_grandparent"
         ) in chunk
         assert (
             'whether it names her elsewhere ("Hildegard Löbig", her label) '
@@ -563,6 +570,22 @@ class TestAppellations:
             "gives it as an entity; a literal kinship term also gives the "
             "kinship"
         ) in flat(EXTRACTION_PROMPT)
+        assert (
+            '`relative` with the kinship_type "Tante" and the kinship_class '
+            "kin_aunt_or_uncle)."
+        ) in flat(EXTRACTION_PROMPT)
+        assert (
+            'A description that is no form of address ("the deceased", "my '
+            'husband") gives none.'
+        ) in flat(EXTRACTION_PROMPT)
+
+    def test_the_critic_is_told_an_appellation_is_right(self):
+        assert (
+            "An appellation (a kinship term, alone or with a name, a pet "
+            "name or a courtesy name) among a person's aliases, or recorded "
+            "as a `referred_to_as` claim, and a kinship term as `relative` + "
+            "`kinship_type`, are right — do not flag them."
+        ) in flat(critique.CRITIQUE_PROMPT)
 
     def test_the_vocabulary_draws_the_same_line(self):
         """The single-call prompt names the two properties through the
@@ -764,6 +787,89 @@ class TestTheAppellationLabel:
         assert by_id["e2"].label == "Opa"
         assert coverage["rejected_claims"] == 1
 
+    def name_claim(self, local_id, label, text):
+        found = appellation(local_id, label, text)
+        found["property"] = "name"
+        return found
+
+    def extract_names(self, tmp_path):
+        """Hildegard labelled "Omama", her record holding it as a
+        nickname, with two `name` claims: one restating the model's label,
+        one the name her label becomes. Sebastian's appellation names an
+        ego outside the manifest."""
+        omama = appellation("e2", "Opa", "Opa")
+        omama["qualifiers"] = [
+            {
+                "property": "perspective",
+                "value": {
+                    "type": "item",
+                    "value": {"kind": "local", "local_id": "e9"},
+                },
+            }
+        ]
+        record = name_record("Hildegard", "Löbig") | {"nicknames": ["Omama"]}
+        llm = ScriptedLlm(
+            [
+                manifest(
+                    HILDEGARD
+                    | {
+                        "label": "Omama",
+                        "aliases": ["Hildegard Löbig"],
+                        "structure": record,
+                    },
+                    SEBASTIAN
+                    | {
+                        "label": "Opa",
+                        "aliases": ["Sebastian Löbig"],
+                        "structure": name_record("Sebastian", "Löbig"),
+                    },
+                ),
+                ndjson(
+                    [
+                        claim("e1", "Omama", 1876),
+                        appellation("e1", "Omama", "Omama"),
+                        self.name_claim("e1", "Omama", "Omama"),
+                        self.name_claim("e1", "Omama", "Hildegard Löbig"),
+                    ]
+                ),
+                ndjson([claim("e2", "Opa", 1862), omama]),
+            ]
+        )
+        extractor = ChunkedClaimExtractor(
+            llm, state_dir=tmp_path / "state", budget=LINE_LENGTH
+        )
+        batch = extractor.extract(transcription(), DOC_REF)
+        return batch, side_output(tmp_path, "coverage.json"), extractor
+
+    def test_a_name_claim_restating_the_models_label_stays_rejected(
+        self, tmp_path
+    ):
+        batch, coverage, extractor = self.extract_names(tmp_path)
+        names = [c for c in batch.claims if c.property == "name"]
+        assert names == []
+        rejected = [r["claim"] for r in extractor._rejects]
+        assert [c["property"] for c in rejected] == ["name", "referred_to_as"]
+        assert rejected[0]["value"]["value"]["text"] == "Omama"
+        assert coverage["rejected_claims"] == 2
+
+    def test_a_name_claim_of_the_new_label_is_dropped_and_counted(
+        self, tmp_path
+    ):
+        batch, coverage, _extractor = self.extract_names(tmp_path)
+        by_id = {e.id: e for e in batch.entities}
+        assert by_id["e1"].label == "Hildegard Löbig"
+        assert coverage["records"]["appellation_label_names"] == 1
+
+    def test_an_appellation_naming_an_ego_outside_the_manifest_marks_nothing(
+        self, tmp_path
+    ):
+        batch, _coverage, _extractor = self.extract_names(tmp_path)
+        assert {e.id: e for e in batch.entities}["e2"].label == "Opa"
+
+    def test_a_record_part_that_is_an_appellation_is_counted(self, tmp_path):
+        _batch, coverage, _extractor = self.extract_names(tmp_path)
+        assert coverage["records"]["appellation_parts"] == 1
+
     def test_coverage_counts_the_labels_it_replaced(self, tmp_path):
         _batch, coverage = self.extract(tmp_path)
         assert coverage["records"]["appellation_labels"] == 1
@@ -795,6 +901,8 @@ class TestTheManifestsRecords:
             "set_aside_records": 0,
             "set_aside": {},
             "appellation_labels": 0,
+            "appellation_label_names": 0,
+            "appellation_parts": 0,
         }
 
     def test_a_record_that_adds_a_word_is_set_aside_not_the_entity(
@@ -824,6 +932,8 @@ class TestTheManifestsRecords:
             "set_aside_records": 3,
             "set_aside": {"addition": 1, "kind": 1, "schema": 1},
             "appellation_labels": 0,
+            "appellation_label_names": 0,
+            "appellation_parts": 0,
         }
         # the claims are extracted as ever
         assert len(batch.claims) == 2
@@ -901,6 +1011,8 @@ class TestTheManifestsRecords:
             "unsplit_forms": 2,
             "set_aside_records": 2,
             "appellation_labels": 0,
+            "appellation_label_names": 0,
+            "appellation_parts": 0,
             "set_aside": {
                 "addition": 3,
                 "initial": 1,
@@ -958,6 +1070,8 @@ class TestTheManifestsRecords:
             "set_aside_records": 1,
             "set_aside": {"dropped": 3, "no toponym": 1},
             "appellation_labels": 0,
+            "appellation_label_names": 0,
+            "appellation_parts": 0,
         }
 
     def test_a_manifest_with_bad_records_is_never_refused(self):

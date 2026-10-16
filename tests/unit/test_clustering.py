@@ -1801,6 +1801,33 @@ class TestRecordless:
             pair(unmarked[0], "e1", unmarked[1], "e1")
         }
 
+    def test_marks_on_an_organisation_change_nothing(self):
+        """Appellations are a person's: a recordless organisation keys on
+        an alias its document marks as it does on any other."""
+
+        def firm(name: str, label: str) -> Doc:
+            said = {"text": "die Firma", "language": "de"}
+            return register(
+                name,
+                [entity("e1", label, "organization", aliases=("die Firma",))],
+                [
+                    (
+                        "e1",
+                        "referred_to_as",
+                        {"type": "monolingual", "value": said},
+                    )
+                ],
+                {"e1": name},
+            )
+
+        firms = [
+            firm("hatters", "Hutmacherei zum Blauen Hut"),
+            firm("brickworks", "it tichelwurk fan Snylsjum"),
+        ]
+        assert blocked_pairs([doc.manifest for doc in firms]) == {
+            pair(firms[0], "e1", firms[1], "e1")
+        }
+
     def test_a_recordless_mention_keys_on_its_exact_name_alone(self):
         """Two line-range batches that each name 'Hildegard Löbig' pair,
         but never merge, even on a date that agrees; a 'Hilde Löbig'

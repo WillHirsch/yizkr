@@ -36,24 +36,29 @@ add something, in their order and verbatim spelling:
     form included, since a place is looked up by its toponym;
 * an entity without a record keeps every other alias: nothing says which
   of its words are parts;
-* an appellation, a form the document gives as one by a `referred_to_as`
-  claim about the entity (ADR-0018), is kept whatever the record says,
-  so long as it holds a word that is no name part of the record: a
-  kinship term alone ("Omama"), one with a name ("Tante Rahel", beside
-  the label "Rahel Löbig") and a courtesy name ("Nana Maisie") stay.
-  One made only of the record's name parts is judged by the rules above,
-  so a derivable reordering stays dropped however it is marked.
+* a person's appellation, a form the document gives as one by a
+  `referred_to_as` claim about the person (ADR-0018), is kept whatever
+  the record says, so long as it holds a word that is no name part of the
+  record: a kinship term alone ("Omama"), one with a name ("Tante Rahel",
+  beside the label "Rahel Löbig") and a courtesy name ("Nana Maisie")
+  stay. One made only of the record's name parts is judged by the rules
+  above, so a derivable reordering stays dropped however it is marked.
+  An appellation the alias bag lacks is added to it first. A place's,
+  an organisation's or a family's marks count for nothing: appellations
+  are a person's.
 
 **The appellation label.** A person whose label is one of the document's
 appellations for them, and whose record stands with the status `name`,
-takes the name the record gives as its label (`appellation_label`): the
-fullest of its forms, the label and its aliases, made only of the
-record's name parts, one that is no appellation first, or else the
-label's words that are name parts, in the label's order. The
-appellation stays an alias. The rule reads the `referred_to_as` claims
-only, never a word the record merely leaves out, so a label that holds
-a name part its record omits is left alone, and a label with no name
-part and no such form beside it stays as it is.
+takes the name the record gives as its label (`appellation_label`).
+Every form, the label and each alias, competes: one made only of the
+record's name parts as itself, any other with its longest run of
+name-part words, never joined across a word that is none ("Rahel Löbig"
+of "Frau Rahel Löbig geb. Tarle"). One that is no appellation wins, then
+the one of most words, a whole form before a run, most letters, least
+punctuation. The appellation stays an alias. The rule reads the
+`referred_to_as` claims only, never a word the record merely leaves out,
+so a label that holds a name part its record omits is left alone, and a
+label beside no form that holds a name word stays as it is.
 
 Whether a record stands is judged on the alias bag as it comes, before
 this cleanup (ADR-0035 §5 before §8), and never again after it: a
@@ -66,6 +71,7 @@ surname stays whole. Idempotent: cleaning a cleaned bag changes nothing.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections.abc import Iterable
 
@@ -194,9 +200,11 @@ def normalize_aliases(
                 and given <= in_label
                 and _spelled_given(alias, parts) <= spelled_in_label
             )
-            # an appellation holding a word that is no name part
+            # a person's appellation holding a word that is no name part
             keep = keep or (
-                key in marked and not _only_names(alias, name_words)
+                isinstance(record, PersonStructure)
+                and key in marked
+                and not _only_names(alias, name_words)
             )
         found.append((alias, keep))
     if isinstance(record, PersonStructure):
@@ -294,16 +302,52 @@ def appellations_of(claims: Iterable) -> dict[str, list[str]]:
     return found
 
 
+def _letters(form: str) -> int:
+    """How many letters and digits a form's words hold."""
+    return sum(len(word) for word in _words(form))
+
+
+def _punctuation(form: str) -> int:
+    """How many marks a form holds that are neither a word character nor
+    a space."""
+    return len(re.findall(r"[^\w\s]", form))
+
+
+def _name_run(form: str, name_words: frozenset[str]) -> str:
+    """The longest run of consecutive words of `form` that are each made
+    only of name parts, as the form writes it with the punctuation at its
+    edges trimmed; the first of the longest; "" when no word is. A word
+    that is no name part ("geb.", "Frau") ends a run, so no run is
+    composed across it."""
+    runs: list[list[re.Match]] = [[]]
+    for token in re.finditer(r"\S+", form):
+        if _only_names(token.group().strip(_EDGES), name_words):
+            runs[-1].append(token)
+        elif runs[-1]:
+            runs.append([])
+    longest = max(runs, key=len)
+    if not longest:
+        return ""
+    return form[longest[0].start() : longest[-1].end()].strip(_EDGES + " ")
+
+
 def appellation_label(
     label: str, aliases: Iterable[str], record, appellations: Iterable[str]
 ) -> str:
     """The label a person takes when its label is one of the document's
     appellations for them and its record (`record`, one that stands) has
     the status `name` (the module docstring says how); else `label`
-    itself. Of the forms made only of name parts, one that is no
-    appellation comes first (a pet name the record holds as a nickname
-    gives way to a name), then the one of most words, then of most
-    characters, then the first."""
+    itself.
+
+    Every form, the label and each alias, competes: one made only of the
+    record's name parts as itself, any other with its longest run of
+    name-part words (`_name_run`). The candidate that is no appellation
+    comes first (a pet name the record holds as a nickname gives way to
+    a name), then the one of most words, then a whole form before a
+    run, then the one of most letters in its words, then of least
+    punctuation (so "Rahel Löbig" before "Löbig, Rahel"), then the
+    first. With no candidate, no form holding a name word, the label
+    stays."""
     from yizkr.pipeline.writer import stored_term
 
     if not isinstance(record, PersonStructure) or record.status != "name":
@@ -312,28 +356,28 @@ def appellation_label(
     if stored_term(label).lower() not in marked:
         return label
     name_words = _name_words(_parts(record))
-    forms = [
-        form
-        for form in dict.fromkeys(
-            text.strip() for text in (label, *aliases) if text.strip()
-        )
-        if _only_names(form, name_words)
-    ]
-    if forms:
-        return max(
-            forms,
-            key=lambda form: (
-                stored_term(form).lower() not in marked,
-                len(_words(form)),
-                len(stored_term(form)),
-            ),
-        )
-    kept = [
-        word
-        for raw in label.split()
-        if (word := raw.strip(_EDGES)) and _only_names(word, name_words)
-    ]
-    return " ".join(kept) or label
+    forms = dict.fromkeys(
+        text.strip() for text in (label, *aliases) if text.strip()
+    )
+    candidates: list[tuple[str, bool]] = []
+    for form in forms:
+        if _only_names(form, name_words):
+            candidates.append((form, True))
+        elif run := _name_run(form, name_words):
+            candidates.append((run, False))
+    if not candidates:
+        return label
+    best, _whole = max(
+        candidates,
+        key=lambda candidate: (
+            stored_term(candidate[0]).lower() not in marked,
+            len(_words(candidate[0])),
+            candidate[1],
+            _letters(candidate[0]),
+            -_punctuation(candidate[0]),
+        ),
+    )
+    return best
 
 
 def _standing(entity: dict):
@@ -348,17 +392,52 @@ def _standing(entity: dict):
     return None if structure_problems(parsed) else parsed.structure
 
 
+def _unlisted(
+    label: str, aliases: list[str], appellations: list[str]
+) -> list[str]:
+    """The appellations neither the label nor an alias holds, compared as
+    the instance keeps a term, each once, in their order."""
+    from yizkr.pipeline.writer import stored_term
+
+    held = {stored_term(form).lower() for form in (label, *aliases)}
+    found: list[str] = []
+    for form in appellations:
+        key = stored_term(form).lower()
+        if key and key not in held:
+            held.add(key)
+            found.append(form)
+    return found
+
+
+def appellation_parts(entity: dict, appellations: Iterable[str]) -> int:
+    """How many name parts of a person's record that stands are, whole,
+    one of the forms the document gives as the person's appellations: a
+    form one person calls another filed as a name part."""
+    from yizkr.pipeline.writer import stored_term
+
+    record = _standing(entity)
+    if not isinstance(record, PersonStructure):
+        return 0
+    marked = {stored_term(form).lower() for form in appellations}
+    return sum(
+        stored_term(part).lower() in marked for part, _open in _parts(record)
+    )
+
+
 def normalize_entity_dict(
     entity: dict, appellations: Iterable[str] = ()
 ) -> dict:
     """`entity` with its label set by `appellation_label` and its alias
     bag cleaned (normalize_aliases) by the record it has, if that record
     stands, and the forms the document gives as its `appellations`. A
-    label the rule replaces stays among the aliases."""
+    person's appellation the bag lacks joins it, and a label the rule
+    replaces stays among the aliases."""
     appellations = list(appellations)
     record = _standing(entity)
     label = entity.get("label", "") or ""
     aliases = list(entity.get("aliases") or [])
+    if entity.get("kind") == "human":
+        aliases += _unlisted(label, aliases, appellations)
     named = appellation_label(label, aliases, record, appellations)
     if named == label:
         return {

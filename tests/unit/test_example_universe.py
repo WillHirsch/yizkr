@@ -292,28 +292,45 @@ class TestNames:
         assert aunt.source == called.source
         assert dict(aunt.qualifiers) == {"kinship_type": "aunt"}
 
-    def test_a_kinship_term_is_never_an_appellation(self):
-        # ADR-0018 Ruling 2: a literal kinship term is recorded as the
-        # kinship (`relative` + `kinship_type`, or an ADR-0014 primitive
-        # such as `father`), and `referred_to_as` is kept for appellations
-        # that are not kinship.  A kinship word in one makes it a courtesy
-        # title: the referent is no relation of the ego.
+    def test_a_kinship_appellation_states_its_relation_apart(self):
+        # ADR-0018 as amended by #499: every form that names or addresses
+        # a person and is no plain name form is a `referred_to_as`, a
+        # literal kinship term included; the kinship itself is a separate
+        # assertion (`relative` + `kinship_type`, or an ADR-0014
+        # primitive such as `father`) of the same source. So an
+        # appellation holding a kinship word between two people the
+        # universe relates comes with that source's kinship, and one
+        # between two it does not is a courtesy title.
         edges = {"father", "mother", "child", "sibling", "spouse", "relative"}
-        related = {
-            frozenset((a.subject, a.value))
-            for a in u.ASSERTIONS
-            if a.property in edges
-        }
-        appellations = [
-            a for a in u.ASSERTIONS if a.property == "referred_to_as"
-        ]
-        courtesy = []
-        for a in appellations:
-            if set(re.findall(r"\w+", a.value.lower())) & KINSHIP_WORDS:
-                ego = dict(a.qualifiers).get("perspective")
-                assert frozenset((a.subject, ego)) not in related, a
+        related: dict[frozenset, set[str]] = {}
+        for a in u.ASSERTIONS:
+            if a.property in edges:
+                pair = frozenset((a.subject, a.value))
+                related.setdefault(pair, set()).add(a.source)
+        courtesy, literal = [], []
+        for a in u.ASSERTIONS:
+            if a.property != "referred_to_as":
+                continue
+            if not set(re.findall(r"\w+", a.value.lower())) & KINSHIP_WORDS:
+                continue
+            ego = dict(a.qualifiers).get("perspective")
+            sources = related.get(frozenset((a.subject, ego)))
+            if sources is None:
                 courtesy.append(a.value)
+            else:
+                assert a.source in sources, a
+                literal.append(a.value)
         assert courtesy == ["Nana Maisie"]
+        assert literal == []
+
+    def test_the_postcards_pet_name_is_an_appellation(self):
+        (greeting,) = [
+            a
+            for a in u.ASSERTIONS
+            if a.source == "postcard-1938" and a.value == "Pünktchen"
+        ]
+        assert greeting.property == "referred_to_as"
+        assert dict(greeting.qualifiers) == {"perspective": "sebastian-loebig"}
 
 
 class TestFamily:

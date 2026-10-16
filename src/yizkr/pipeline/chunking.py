@@ -316,10 +316,13 @@ Rules — these mirror the archive's non-negotiable conventions:
   never invent an entity to fill it. Then:
   * If it holds a LITERAL kinship term, record the kinship too, as
     above: "Tante Rahel", where Rahel is the aunt, also gives `relative`
-    + `kinship_type` "Tante" with the ego as the object.
+    + `kinship_type` "Tante" + `kinship_class` kin_aunt_or_uncle, with
+    the ego as the object.
   * If it is NOT a literal relation (a courtesy title such as a "Tante"
     who is no aunt, "Nana Maisie", a pet name, or a name one person
-    calls another, "Bubele"), `referred_to_as` is all it gives.
+    calls another, "Bubele"), it gives no kinship: `referred_to_as`
+    alone, beside a `nickname` claim where the source marks a pet name
+    as what the person is called.
   When unsure whether a term is literal kinship, give `referred_to_as`
   alone (it asserts only that the term was used, never a relation). A
   description ("meine Oma", "our great grandmother") gives no
@@ -338,11 +341,13 @@ Rules — these mirror the archive's non-negotiable conventions:
   For example: a letter to Klara that writes "Tante Rahel" and
   elsewhere "Rahel Löbig" gives Rahel the claims `referred_to_as` "Tante
   Rahel", with Klara as its `perspective`, and `relative` to Klara with
-  the kinship_type "Tante". A letter of Nicholas's that calls his
-  grandmother Hildegard "Omama" gives her `referred_to_as` "Omama", with
-  Nicholas as its `perspective`, and `relative` to Nicholas with the
-  kinship_type "Omama", whether it names her elsewhere ("Hildegard
-  Löbig", her label) or never (when "Omama" is her label). The
+  the kinship_type "Tante" and the kinship_class kin_aunt_or_uncle. A
+  letter of Nicholas's that calls his grandmother Hildegard "Omama"
+  gives her `referred_to_as` "Omama", with Nicholas as its
+  `perspective`, and `relative` to Nicholas with the kinship_type
+  "Omama" and the kinship_class kin_grandparent, whether it names her
+  elsewhere ("Hildegard Löbig", her label) or never (when "Omama" is her
+  label). The
   postcard's "Liebes Pünktchen!" gives Klara `referred_to_as`
   "Pünktchen", with its writer as its `perspective`: a pet name, and no
   relation.
@@ -1190,8 +1195,8 @@ class ChunkedClaimExtractor:
         # entities whose mention record was set aside
         self._set_aside: dict[str, int] = {}
         self._set_aside_records = 0
-        # the persons whose label was an appellation and became a name
-        self._appellation_labels = 0
+        # what settling the manifest's names counted (_settle_names)
+        self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
         # how chunk calls saw the document: fork, inline or compressed
         self.context_mode: str | None = None
         self.attention: list[str] = []
@@ -1637,7 +1642,7 @@ class ChunkedClaimExtractor:
         self._unread = {}
         self._set_aside = {}
         self._set_aside_records = 0
-        self._appellation_labels = 0
+        self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
 
         entities, segmentation, handle = self._phase_one(
             transcription, artifact
@@ -1924,18 +1929,23 @@ class ChunkedClaimExtractor:
             mode="json"
         )
 
-        relabelled = 0
+        settled_rejects: list[dict] = []
+        self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
         if entities is not None:
-            deduped, entities_payload, relabelled = _settle_names(
-                deduped, entities, run
-            )
+            settled = _settle_names(deduped, entities, run)
+            deduped, entities_payload = settled.claims, settled.entities
+            settled_rejects = settled.rejects
+            self._appellations = {
+                "labels": settled.labels,
+                "label_names": settled.label_names,
+                "parts": settled.parts,
+            }
         else:
             entities_payload = []
-        self._appellation_labels = relabelled
         batch, rejects = salvage_valid_claims(
             deduped, run, entities=entities_payload
         )
-        rejects = transform_rejects + rejects
+        rejects = transform_rejects + settled_rejects + rejects
         self._rejects = rejects
         extras: dict[str, str] = {}
         if rejects:
@@ -1970,7 +1980,9 @@ class ChunkedClaimExtractor:
         hold; the mentions recordless; the records set aside, and the
         reasons they and the notes were set aside by, by category; the
         labels the appellation label rule replaced with a name
-        (names.appellation_label); and the notes by category. A mention
+        (names.appellation_label), the `name` claims dropped for
+        restating one, and the record name parts that are an
+        appellation; and the notes by category. A mention
         of a kind that takes a record but has none is recordless: its
         record was set aside, or never given. Nothing in it quotes a label."""
         subject_ids = {
@@ -2013,7 +2025,9 @@ class ChunkedClaimExtractor:
                 ),
                 "set_aside_records": self._set_aside_records,
                 "set_aside": dict(sorted(self._set_aside.items())),
-                "appellation_labels": self._appellation_labels,
+                "appellation_labels": self._appellations["labels"],
+                "appellation_label_names": self._appellations["label_names"],
+                "appellation_parts": self._appellations["parts"],
             },
             "notes": dict(sorted(notes.items())),
         }
@@ -2052,40 +2066,110 @@ class ChunkedClaimExtractor:
         }
 
 
+class _Settled(NamedTuple):
+    """What settling a manifest's names gives (_settle_names): the claims
+    to validate, the entities as the batch carries them, the claims
+    rejected already, and the counts coverage.json gives: the labels that
+    became a name, the `name` claims dropped for restating one, and the
+    record name parts that are an appellation."""
+
+    claims: list[dict]
+    entities: list[dict]
+    rejects: list[dict]
+    labels: int
+    label_names: int
+    parts: int
+
+
+def _name_text(claim: dict) -> str | None:
+    """The text a `name` or `referred_to_as` claim dict gives, if any."""
+    value = claim.get("value")
+    inner = value.get("value") if isinstance(value, dict) else None
+    text = inner.get("text") if isinstance(inner, dict) else None
+    return text if isinstance(text, str) else None
+
+
+def _subject_id(claim: dict) -> str | None:
+    subject = claim.get("subject")
+    if isinstance(subject, dict) and subject.get("kind") == "local":
+        local_id = subject.get("local_id")
+        return local_id if isinstance(local_id, str) else None
+    return None
+
+
 def _settle_names(
     claims: list[dict], entities: list[EntityRecord], run: dict
-) -> tuple[list[dict], list[dict], int]:
-    """(the claims, the manifest's entities as the batch carries them,
-    how many labels changed), once the chunks' claims exist: each
-    entity's label set and its alias bag cleaned (ADR-0022 §4, ADR-0035
-    §8; names.normalize_entity_dict), the deterministic safety net over
-    the model's manifest, by the forms the document gives as its
-    appellations (ADR-0018). Those are the values of the `referred_to_as`
-    claims about it that validate (names.appellations_of), so the claims
-    are checked once against the manifest as the model gave it. A label
-    that changes changes in every local ref to the entity too."""
-    from yizkr.pipeline.names import appellations_of, normalize_entity_dict
+) -> _Settled:
+    """Each entity's label set and its alias bag cleaned (ADR-0022 §4,
+    ADR-0035 §8; names.normalize_entity_dict), once the chunks' claims
+    exist: the deterministic safety net over the model's manifest, by
+    the forms the document gives as its appellations (ADR-0018). Those
+    are the values of the `referred_to_as` claims about it that validate
+    against the manifest as the model gave it (names.appellations_of);
+    only those claims and the `name` claims are checked here, each on its
+    own. A label that changes changes in every local ref to the entity
+    too. A `name` claim on such a person that the first check rejected
+    (one restating the model's own label) keeps that reject, and one that
+    restates the new label is dropped and counted, never a reject of the
+    model's."""
+    from yizkr.claims import name_form_key
+    from yizkr.pipeline.names import (
+        appellation_parts,
+        appellations_of,
+        normalize_entity_dict,
+    )
 
     given = [record.model_dump() for record in entities]
-    checked, _rejects = salvage_valid_claims(claims, run, entities=given)
-    forms = appellations_of(checked.claims)
+    valid: list[dict] = []
+    first_rejects: dict[int, dict] = {}
+    for index, claim in enumerate(claims):
+        if claim.get("property") not in ("referred_to_as", "name"):
+            continue
+        checked, rejected = salvage_valid_claims([claim], run, entities=given)
+        if checked.claims:
+            valid.append(claim)
+        else:
+            first_rejects[index] = rejected[0]
+    forms = appellations_of(
+        claim for claim in valid if claim["property"] == "referred_to_as"
+    )
     settled = [
         normalize_entity_dict(entity, forms.get(entity["id"], ()))
         for entity in given
     ]
+    parts = sum(
+        appellation_parts(entity, forms.get(entity["id"], ()))
+        for entity in given
+    )
     labels = {
         entity["id"]: entity["label"]
         for entity, before in zip(settled, given, strict=True)
         if entity["label"] != before["label"]
     }
+    kept: list[dict] = []
+    rejects: list[dict] = []
+    label_names = 0
+    for index, claim in enumerate(claims):
+        subject = _subject_id(claim)
+        if claim.get("property") == "name" and subject in labels:
+            if index in first_rejects:
+                rejects.append(first_rejects[index])
+                continue
+            text = _name_text(claim)
+            if text is not None and name_form_key(text) == name_form_key(
+                labels[subject]
+            ):
+                label_names += 1
+                continue
+        kept.append(claim)
     if labels:
 
         def fix(ref: dict) -> None:
             if ref["local_id"] in labels:
                 ref["label"] = labels[ref["local_id"]]
 
-        claims = [_rewrite_local_refs(claim, fix) for claim in claims]
-    return claims, settled, len(labels)
+        kept = [_rewrite_local_refs(claim, fix) for claim in kept]
+    return _Settled(kept, settled, rejects, len(labels), label_names, parts)
 
 
 class _Manifest(NamedTuple):

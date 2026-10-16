@@ -70,14 +70,25 @@ an alias the document gives as an appellation (the value of a
 holds a word that is no name part of the record, while role labels,
 deictic references and derivable reorderings still go. Where a person's
 label is one of those appellations and its record stands with the
-status `name`, the label becomes the name the record gives: the fullest
-form, the label or an alias, made only of the record's name parts, one
-that is no appellation first (a pet name the record holds as a nickname
-gives way to a name), else the label's own name words in its order; the
-appellation stays an alias, and every local ref takes the new label.
+status `name`, the label becomes the name the record gives. Every form,
+the label and each alias, competes: one made only of the record's name
+parts as itself, any other with its longest run of name-part words,
+never joined across a word that is none ("Rahel Löbig" of "Frau Rahel
+Löbig geb. Tarle"). One that is no appellation wins (a pet name the
+record holds as a nickname gives way to a name), then the one of most
+words, a whole form before a run, most letters, least punctuation (so
+"Rahel Löbig" before "Löbig, Rahel"); with no form holding a name word,
+the label stays. The appellation stays an alias, and every local ref
+takes the new label; a `name` claim restating the model's label stays a
+reject, and one restating the new label is dropped and counted
+(`records.appellation_label_names`). An appellation the manifest turn
+did not list joins the person's aliases. Appellations are a person's:
+the cleanup and clustering ignore marks on a place, an organisation or a
+family.
 Both run where the batch is assembled, once the chunks' claims exist;
-`coverage.json` counts the labels replaced (`records.appellation_labels`),
-and the run report sums them. A form one person calls another, or one
+`coverage.json` counts the labels replaced (`records.appellation_labels`)
+and the record name parts that are appellations
+(`records.appellation_parts`), and the run report sums both. A form one person calls another, or one
 through a relation, is never a record name part (§2.1), and a kinship
 word before a name ("Tante", "Onkel") is neither a name part nor a
 title. Identity is unchanged: clustering keys on the record's name
@@ -123,7 +134,8 @@ the person through a relation but is no literal kinship term, is
 ADR-0018's `referred_to_as`, never an alias and never a record nickname
 (§2.1). A nickname that is a form of a given name is also that given
 name. The `courtesy` status is a courtesy title or other relational
-appellation that is no literal relation.
+appellation that is no literal relation. (Superseded in part by #499:
+such a form is an alias too; it stays out of the record's name parts.)
 
 Amended by #408 (2026-09-29): the GEDCOM adapter fills §6 as follows.
 The label of a NAME leaves out its bracketed parts, each of which is an
@@ -1312,6 +1324,8 @@ and brackets in a NAME value, which §10 names.
      without a record, never one with a record, and for the four kinds
      that take records such a link is never confident. Two line-range
      batches that each name "Hildegard Löbig" pair, but never merge.
+     (Amended by #499: never on a form its document gives as an
+     appellation, as label or alias.)
 2. **Sex and civil status only block.** Stated sexes that differ, or civil
    statuses that cannot both hold, make a pair ambiguous, and a closure
    that joins them a contradiction. They never corroborate. Statuses

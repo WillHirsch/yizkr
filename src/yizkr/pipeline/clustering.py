@@ -32,10 +32,10 @@ label. A person, a place, an organisation or a family without a record
 another kind, or a batch without a manifest) is *recordless*
 (ADR-0035 §7, rule 1): it keys on its exact normalised name, from its
 label and each alias, meets only mentions without a record, and never
-links confidently. A form its document gives as an appellation of it (a
-`referred_to_as` claim's value, ADR-0018: "Oma", "Tante Rahel") is no
-name it keys on, as label or alias, so two people called "Oma" never
-meet by it. The summary counts recordless mentions by kind.
+links confidently. A form its document gives as an appellation of a
+person (a `referred_to_as` claim's value, ADR-0018: "Oma", "Tante
+Rahel") is no name the person keys on, as label or alias, so two people
+called "Oma" never meet by it. The summary counts recordless mentions by kind.
 
 **Lifting.** Relations the manifest states between its own local ids are
 lifted into mention space: kin (father, mother, child, spouse and
@@ -756,8 +756,8 @@ class _Node:
     # whether its manifest keeps it apart from the manifest's other ids
     exclusive: bool
     aliases: list[str]
-    # the forms its document gives as appellations of it, as
-    # name_form_key compares them: never a name it keys on
+    # for a person, the forms its document gives as appellations of it,
+    # as name_form_key compares them: never a name it keys on
     appellations: frozenset[str] = frozenset()
     # the mention record, when its entity has one of its own kind
     record: Any = None
@@ -924,6 +924,7 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
             appellations=frozenset(
                 name_form_key(form)
                 for form in appellations.get(mention.local_id, ())
+                if mention.kind == HUMAN
             ),
         )
     for claim in batch.claims:

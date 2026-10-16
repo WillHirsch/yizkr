@@ -674,6 +674,7 @@ def records(
     set_aside_records=None,
     unsplit_forms=None,
     appellation_labels=None,
+    appellation_parts=None,
 ) -> dict:
     """coverage.json's records; with no `set_aside_records`,
     `unsplit_forms` or `appellation_labels`, as one written before it
@@ -684,6 +685,7 @@ def records(
             ("set_aside_records", set_aside_records),
             ("unsplit_forms", unsplit_forms),
             ("appellation_labels", appellation_labels),
+            ("appellation_parts", appellation_parts),
         )
         if count is not None
     }
@@ -769,6 +771,7 @@ def views() -> dict[str, dict[str, object]]:
                     set_aside_records=1,
                     unsplit_forms=3,
                     appellation_labels=2,
+                    appellation_parts=1,
                 ),
                 notes={"identity": 2, "date_reading": 3},
             ),
@@ -1998,6 +2001,7 @@ class TestContent:
             "unsplit_forms": 3,
             "set_aside_records": 2,
             "appellation_labels": 2,
+            "appellation_parts": 1,
             "set_aside_reasons": 4,
             "set_aside_by_reason": {
                 "initial": 2,
@@ -2005,13 +2009,14 @@ class TestContent:
                 "no toponym": 1,
             },
             # the deck's coverage predates the three newer counts, the
-            # postcard's those of unsplit forms and appellation labels
+            # postcard's those of unsplit forms and the appellation counts
             "absent": {
                 "predating": 1,
                 "line_range": 1,
                 "set_aside_records": 1,
                 "unsplit_forms": 2,
                 "appellation_labels": 2,
+                "appellation_parts": 2,
             },
         }
         assert content["notes"] == {
@@ -2031,7 +2036,7 @@ class TestContent:
             "mentions (no record given, or it was set aside): 2\n"
             "- Unsplit name forms in the records given: 3\n"
             "- Labels that were appellations, replaced with the name the "
-            "record gives: 2\n"
+            "record gives: 2; record name parts that are appellations: 1\n"
             "- Records set aside: 2; reasons records were set aside: 4 (a "
             "record can give several)\n"
             "- Judgement notes: 7; notes set aside: 5\n"
@@ -2040,7 +2045,7 @@ class TestContent:
             "recordless)\n"
             "- Extractions counted whose coverage gives no count of it, so "
             "left out of that count: records set aside 1; unsplit name "
-            "forms 2; appellation labels 2\n\n"
+            "forms 2; appellation labels 2; appellation parts 2\n\n"
             "| Record status | Records |\n"
             "|---|---:|\n"
             "| name | 3 |\n"
@@ -2067,6 +2072,7 @@ class TestContent:
             "unsplit_forms": 3,
             "set_aside_records": 1,
             "appellation_labels": 2,
+            "appellation_parts": 1,
             "set_aside_by_reason": {"initial": 2, "addition": 1},
         }
         assert cert["notes"] == {
@@ -2081,6 +2087,7 @@ class TestContent:
             "unsplit_forms": None,
             "set_aside_records": None,
             "appellation_labels": None,
+            "appellation_parts": None,
             "set_aside_by_reason": {},
         }
         assert deck["notes"] == {"by_category": {}, "set_aside": 0}
@@ -2090,7 +2097,8 @@ class TestContent:
         # the drill-down lists each count the most frequent first
         assert (
             "Mention records given: 3, by status: name 2, toponym 1; "
-            "unsplit name forms: 3; appellation labels: 2; recordless: 1; "
+            "unsplit name forms: 3; appellation labels: 2; appellation "
+            "parts: 1; recordless: 1; "
             "records set aside: 1; reasons set aside: initial 2, addition 1; "
             "judgement notes: "
             "date_reading 3, identity 2; notes set aside: 3"
@@ -2099,13 +2107,15 @@ class TestContent:
         assert (
             "Mention records given: 1, by status: name 1; unsplit name "
             f"forms: {predates}; appellation labels: {predates}; "
+            f"appellation parts: {predates}; "
             "recordless: 0; records set aside: "
             f"{predates}; reasons set aside: none; judgement notes: none; "
             "notes set aside: 0"
         ) in drilled(made, DECK)
         assert (
             "Mention records given: 0, by status: none; unsplit name forms: "
-            f"{predates}; appellation labels: {predates}; recordless: 1; "
+            f"{predates}; appellation labels: {predates}; appellation parts: "
+            f"{predates}; recordless: 1; "
             "records set aside: 1; reasons set "
             "aside: no toponym 1; judgement notes: kind 1, relation 1; notes "
             "set aside: 2"
@@ -2178,6 +2188,7 @@ class TestContent:
             "unsplit_forms": 2,
             "set_aside_records": 1,
             "appellation_labels": 0,
+            "appellation_parts": 0,
             "set_aside_reasons": 2,
             "set_aside_by_reason": {"addition": 2},
             "absent": {
@@ -2186,6 +2197,7 @@ class TestContent:
                 "set_aside_records": 0,
                 "unsplit_forms": 0,
                 "appellation_labels": 0,
+                "appellation_parts": 0,
             },
         }
         assert content["notes"] == {
@@ -2199,7 +2211,7 @@ class TestContent:
             "mentions (no record given, or it was set aside): 1\n"
             "- Unsplit name forms in the records given: 2\n"
             "- Labels that were appellations, replaced with the name the "
-            "record gives: 0\n"
+            "record gives: 0; record name parts that are appellations: 0\n"
             "- Records set aside: 1; reasons records were set aside: 2 (a "
             "record can give several)\n"
             "- Judgement notes: 1; notes set aside: 1\n"
@@ -2208,7 +2220,7 @@ class TestContent:
             "recordless)\n"
             "- Extractions counted whose coverage gives no count of it, so "
             "left out of that count: records set aside 0; unsplit name "
-            "forms 0; appellation labels 0\n\n"
+            "forms 0; appellation labels 0; appellation parts 0\n\n"
             "| Record status | Records |\n"
             "|---|---:|\n"
             "| name | 1 |\n\n"
@@ -2225,7 +2237,8 @@ class TestContent:
         # often than the fixture's own file names and labels hold it
         assert (
             "Mention records given: 1, by status: name 1; unsplit name "
-            "forms: 2; appellation labels: 0; recordless: 1; records set "
+            "forms: 2; appellation labels: 0; appellation parts: 0; "
+            "recordless: 1; records set "
             "aside: 1; reasons set aside: addition 2; judgement notes: "
             "identity 1; notes set aside: 1"
         ) in drilled(made, CERT)
@@ -2329,6 +2342,7 @@ class TestContent:
                     set_aside_records=0,
                     unsplit_forms=0,
                     appellation_labels=0,
+                    appellation_parts=0,
                 ),
                 notes={},
             ),
@@ -2347,6 +2361,7 @@ class TestContent:
             "unsplit_forms": 0,
             "set_aside_records": 0,
             "appellation_labels": 0,
+            "appellation_parts": 0,
             "set_aside_reasons": 0,
             "set_aside_by_reason": {},
             "absent": {
@@ -2355,6 +2370,7 @@ class TestContent:
                 "set_aside_records": 1,
                 "unsplit_forms": 1,
                 "appellation_labels": 1,
+                "appellation_parts": 1,
             },
         }
         assert content["notes"] == {
@@ -2369,7 +2385,7 @@ class TestContent:
             "mentions (no record given, or it was set aside): 0\n"
             "- Unsplit name forms in the records given: 0\n"
             "- Labels that were appellations, replaced with the name the "
-            "record gives: 0\n"
+            "record gives: 0; record name parts that are appellations: 0\n"
             "- Records set aside: 0; reasons records were set aside: 0 (a "
             "record can give several)\n"
             "- Judgement notes: 0; notes set aside: 0\n"
@@ -2378,7 +2394,7 @@ class TestContent:
             "recordless)\n"
             "- Extractions counted whose coverage gives no count of it, so "
             "left out of that count: records set aside 1; unsplit name "
-            "forms 1; appellation labels 1\n\n"
+            "forms 1; appellation labels 1; appellation parts 1\n\n"
             "| Record status | Records |\n"
             "|---|---:|\n"
             "| name | 1 |\n\n"
@@ -2392,11 +2408,13 @@ class TestContent:
             "unsplit_forms": 0,
             "set_aside_records": 0,
             "appellation_labels": 0,
+            "appellation_parts": 0,
             "set_aside_by_reason": {},
         }
         assert (
             "Mention records given: 0, by status: none; unsplit name forms: "
-            "0; appellation labels: 0; recordless: 0; records set aside: 0;"
+            "0; appellation labels: 0; appellation parts: 0; recordless: 0; "
+            "records set aside: 0;"
         ) in drilled(made, CARD)
         assert card["notes"] == {"by_category": {}, "set_aside": 0}
         for half in (CERT, POSTCARD):
@@ -2457,6 +2475,7 @@ class TestContent:
             "unsplit_forms": None,
             "set_aside_records": None,
             "appellation_labels": None,
+            "appellation_parts": None,
             "set_aside_by_reason": {"kind": 1, "addition": 0},
         }
         assert cert["notes"] == {"by_category": {"kind": 2}, "set_aside": 0}
@@ -2472,6 +2491,7 @@ class TestContent:
             "unsplit_forms": 0,
             "set_aside_records": 0,
             "appellation_labels": 0,
+            "appellation_parts": 0,
             "set_aside_reasons": 1,
             "set_aside_by_reason": {"kind": 1, "addition": 0},
             "absent": {
@@ -2480,6 +2500,7 @@ class TestContent:
                 "set_aside_records": 1,
                 "unsplit_forms": 1,
                 "appellation_labels": 1,
+                "appellation_parts": 1,
             },
         }
         assert content["notes"] == {
@@ -2515,6 +2536,7 @@ class TestContent:
             "set_aside_records": 1,
             "unsplit_forms": 2,
             "appellation_labels": 2,
+            "appellation_parts": 2,
         }
         assert content["rejects"]["extractions"] == 4
 
@@ -2535,6 +2557,7 @@ class TestContent:
             "unsplit_forms": 0,
             "set_aside_records": 0,
             "appellation_labels": 0,
+            "appellation_parts": 0,
             "set_aside_reasons": 0,
             "set_aside_by_reason": {},
             "absent": {
@@ -2543,6 +2566,7 @@ class TestContent:
                 "set_aside_records": 0,
                 "unsplit_forms": 0,
                 "appellation_labels": 0,
+                "appellation_parts": 0,
             },
         }
         assert content["notes"] == {
@@ -3439,6 +3463,7 @@ class TestAScratchRun:
             "unsplit_forms": 0,
             "set_aside_records": 0,
             "appellation_labels": 0,
+            "appellation_parts": 0,
             "set_aside_reasons": 0,
             "set_aside_by_reason": {},
             "absent": {
@@ -3447,6 +3472,7 @@ class TestAScratchRun:
                 "set_aside_records": 0,
                 "unsplit_forms": 0,
                 "appellation_labels": 0,
+                "appellation_parts": 0,
             },
         }
         assert content["notes"] == {

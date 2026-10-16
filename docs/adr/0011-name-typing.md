@@ -63,7 +63,10 @@ alias bag — additive, not a replacement.
   are also the reconciliation blocking substrate and the label lookup
   key. Unchanged. (Amended by #499: so is every other form a source uses
   to name or address the person, an appellation, which is also a
-  `referred_to_as` statement; clustering never keys on an appellation.)
+  `referred_to_as` statement. A recordless mention never keys on a form
+  its document gives as an appellation; a person with a record keys on
+  its name parts; a pet name the person is called by anyone stays a
+  record nickname and keys as one.)
 - **Typed name statements are the source-first record.** When a source
   states a name's *type*, that becomes an ordinary referenced statement
   — carrying the `stated in → artifact` reference (and, for machine

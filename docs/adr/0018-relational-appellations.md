@@ -65,9 +65,13 @@ The label stays the display name: a name form wherever the document
 names the person, the document's own words only for a person it never
 names. Where extraction labels a person by one of the document's
 appellations and the person's record names them, the label becomes the
-name (ADR-0035 §8, as amended). Identity is unchanged: clustering keys on
-the record's name parts, and never on an appellation, however many
-people are called "Oma". A form one person calls another, or one
+name (ADR-0035 §8, as amended). Identity is unchanged: a recordless
+mention never keys on a form its document gives as an appellation, so
+however many people are called "Oma" they never meet by it; a person
+with a record keys on its name parts; and a pet name the person is
+called by anyone stays a record nickname and keys as one. Appellations
+are a person's: marks on a place, an organisation or a family change
+nothing. A form one person calls another, or one
 through a relation, is never a record name part, and a kinship word
 before a name is never a record title. The critic's `kinship_term_alias`
 flags a kinship form as the label of a person the document names, and a

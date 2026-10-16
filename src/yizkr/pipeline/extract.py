@@ -89,7 +89,8 @@ Rules — these mirror the archive's non-negotiable conventions:
   the form verbatim, with a `perspective` qualifier naming the ego only
   where the source gives it as an entity; a literal kinship term also
   gives the kinship ("Tante Rahel", where Rahel is the aunt, also gives
-  `relative` with the kinship_type "Tante"). A description that is no
+  `relative` with the kinship_type "Tante" and the kinship_class
+  kin_aunt_or_uncle). A description that is no
   form of address ("the deceased", "my husband") gives none.
 - Kinds: a group of people is never one human. "The Löbig children" is
   a family where the source presents a family or household, else each

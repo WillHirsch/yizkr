@@ -1685,7 +1685,15 @@ ASSERTIONS = tuple(
             "[postmark] Flörburg 19.8.38",
         ),
         ("klara-loebig", "father", "sebastian-loebig", "Dein Vater"),
-        ("klara-loebig", "nickname", "Pünktchen", "Liebes Pünktchen!"),
+        # a pet name the writer greets her by: an appellation, from his
+        # view (ADR-0018 as amended by #499)
+        (
+            "klara-loebig",
+            "referred_to_as",
+            "Pünktchen",
+            {"perspective": "sebastian-loebig"},
+            "Liebes Pünktchen!",
+        ),
         (
             "emigration-1938",
             "participant",
