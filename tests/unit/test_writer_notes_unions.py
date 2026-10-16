@@ -721,7 +721,7 @@ class TestKinshipQualifiers:
         `kinship_type` aunt, of class aunt or uncle, degree 0 (ADR-0035
         §3.3); a quantity qualifier of 0 is found again on a re-run."""
         klara = local("i1", "Klara Löbig", "human")
-        nicholas = local("i2", "Nicholas Cutmore", "human")
+        nicholas = local("i2", "Nicholas Lobig", "human")
         batch = batch_of(
             {
                 "subject": klara,
@@ -839,3 +839,120 @@ class TestARetiredPropertyIsRefused:
         )
         # no item but the run item
         assert (result.created_items, result.minted) == ({}, [])
+
+
+LATER_RUN = dict(RUN, model_identifier="fake-model-later")
+
+
+def court_pair(
+    first: dict | None, second: dict | None, *, reverse=False, run=RUN
+) -> ClaimBatch:
+    """Two mentions of the court in one document, e6 with the note
+    `first` and e8 with `second`, each in a claim of its own, those claims
+    in the batch's order or `reverse`d."""
+    records = [
+        {"id": "e5", "label": DIVORCE["label"], "kind": "divorce"},
+        {"id": "e6", "label": COURT["label"], "kind": "organization"},
+        {"id": "e8", "label": COURT["label"], "kind": "organization"},
+    ]
+    for record, note in ((records[1], first), (records[2], second)):
+        if note:
+            record["note"] = note
+    claims = [
+        {
+            "subject": DIVORCE,
+            "property": "carried_out_by",
+            "value": {
+                "type": "item",
+                "value": local(local_id, COURT["label"], "organization"),
+            },
+            "source": source(excerpt=EXCERPT, page=page),
+        }
+        for local_id, page in (("e6", "1"), ("e8", "2"))
+    ]
+    if reverse:
+        claims.reverse()
+    return batch_of(*claims, entities=records, run=run)
+
+
+class TestTheBatchsOrderChangesNothing:
+    """A noted and a note-less claim (or mention) of one run on one
+    statement give the same blocks in either order, for the run that wrote
+    the statement and for a later one, and writing the batch again adds
+    nothing (step 4 of the writer's module docstring)."""
+
+    @pytest.mark.parametrize("noted_first", [True, False])
+    def test_a_later_runs_noted_and_bare_claims(self, noted_first):
+        wiki = NotedWiki()
+        first = write_mapped(BatchWriter(wiki), batch_of(wedding_date()))
+        claims = [wedding_date(DATE_NOTE), wedding_date()]
+        if not noted_first:
+            claims.reverse()
+        later = batch_of(*claims, run=LATER_RUN)
+        result = write_mapped(BatchWriter(wiki), later)
+        assert (result.referenced, result.skipped) == (2, 0)
+        assert result.notes_written == 1
+        statement = the_wedding_date(wiki, result)
+        assert run_blocks(statement) == sorted(
+            [
+                (first.run_qid, None, None),
+                (result.run_qid, None, None),
+                (result.run_qid, "Q42", DATE_NOTE["text"]),
+            ],
+            key=lambda shown: tuple(part or "" for part in shown),
+        )
+        writes = wiki.wbi.item.writes
+        again = write_mapped(BatchWriter(wiki), later)
+        assert (again.referenced, again.skipped) == (0, 2)
+        assert wiki.wbi.item.writes == writes
+
+    @pytest.mark.parametrize("noted_first", [True, False])
+    def test_the_same_runs_claims_written_again_add_nothing(self, noted_first):
+        wiki = NotedWiki()
+        claims = [wedding_date(DATE_NOTE), wedding_date()]
+        if not noted_first:
+            claims.reverse()
+        batch = batch_of(*claims)
+        write_mapped(BatchWriter(wiki), batch)
+        writes = wiki.wbi.item.writes
+        again = write_mapped(BatchWriter(wiki), batch)
+        assert (again.referenced, again.skipped) == (0, 2)
+        assert wiki.wbi.item.writes == writes
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_an_entitys_noted_and_bare_mentions(self, reverse):
+        wiki = NotedWiki()
+        batch = court_pair(KIND_NOTE, None, reverse=reverse)
+        identity = joined(mapped(batch), COURT["label"])
+        result = write_mapped(BatchWriter(wiki), batch, identity=identity)
+        (kind,) = statements(wiki, result.created_items["e6"], "instance_of")
+        assert run_blocks(kind) == [
+            (result.run_qid, None, None),
+            (result.run_qid, "Q40", KIND_NOTE["text"]),
+        ]
+        assert result.notes_written == 1
+        writes = wiki.wbi.item.writes
+        again = write_mapped(BatchWriter(wiki), batch, identity=identity)
+        assert again.notes_written == 0
+        assert wiki.wbi.item.writes == writes
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_a_later_runs_noted_and_bare_mentions(self, reverse):
+        wiki = NotedWiki()
+        earlier = court_pair(None, None)
+        identity = joined(mapped(earlier), COURT["label"])
+        first = write_mapped(BatchWriter(wiki), earlier, identity=identity)
+        later = court_pair(KIND_NOTE, None, reverse=reverse, run=LATER_RUN)
+        result = write_mapped(BatchWriter(wiki), later, identity=identity)
+        court = result.created_items["e6"]
+        assert court == first.created_items["e6"]
+        (kind,) = statements(wiki, court, "instance_of")
+        assert run_blocks(kind) == [
+            (first.run_qid, None, None),
+            (result.run_qid, None, None),
+            (result.run_qid, "Q40", KIND_NOTE["text"]),
+        ]
+        assert result.notes_written == 1
+        writes = wiki.wbi.item.writes
+        write_mapped(BatchWriter(wiki), later, identity=identity)
+        assert wiki.wbi.item.writes == writes

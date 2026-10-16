@@ -59,6 +59,7 @@ from yizkr.queries.publish import load_templates, render_for_instance
 
 from .conftest import (
     fixture_mark,
+    legacy_spouse_writes,
     register_fictional,
     run_sparql,
     wait_for_query_service,
@@ -238,8 +239,10 @@ def set_rank(client, subject: str, prop_key: str, value: str, rank) -> None:
 def fixture_graph(client, config) -> dict[str, str]:
     """Write the fixture (idempotent: a re-run within the session reuses
     and skips everything), apply the curator's ranks, and wait until the
-    query service holds every person's latest revision. Returns their QIDs
-    by universe key."""
+    query service holds every person's latest revision. Its spouse claim
+    goes through legacy_spouse_writes, as a statement an instance holds
+    from before ADR-0036, which the kinship query reads until #520.
+    Returns their QIDs by universe key."""
     source = register_fictional(
         client, f"Kinship fixture source {MARK}", "artifact"
     ).ref
@@ -281,9 +284,12 @@ def fixture_graph(client, config) -> dict[str, str]:
             "claims": claims,
         }
     )
-    written = write_mapped(BatchWriter(client), batch)
-    # written again, the batch finds every person and statement
-    again = write_mapped(BatchWriter(client), batch)
+    # the fixture's spouse statement is one an instance holds from before
+    # ADR-0036, which the kinship query reads until #520
+    with legacy_spouse_writes():
+        written = write_mapped(BatchWriter(client), batch)
+        # written again, the batch finds every person and statement
+        again = write_mapped(BatchWriter(client), batch)
     assert (again.written, again.referenced) == (0, 0)
     assert again.created_items == written.created_items
     qids = {key: written.created_items[f"kinship-{key}"] for key in PEOPLE}

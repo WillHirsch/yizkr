@@ -50,7 +50,12 @@ from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.staticsite import PEOPLE_QUERY, SiteBuilder
 
-from .conftest import fixture_mark, register_fictional, wait_for_query_service
+from .conftest import (
+    fixture_mark,
+    legacy_spouse_writes,
+    register_fictional,
+    wait_for_query_service,
+)
 
 pytestmark = pytest.mark.live
 
@@ -144,7 +149,9 @@ def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
     bytes), so each session writes items of its own: what an earlier session
     wrote, a live mutant's run included, never meets it, and a re-run within
     the session finds its own items again. The curator ranks set afterwards are
-    not in the marker. Returns the write's result."""
+    not in the marker. Its spouse claims go through legacy_spouse_writes,
+    as the statements an instance holds from before ADR-0036, which the
+    readers read until #520. Returns the write's result."""
     content = [
         {
             **claim,
@@ -172,19 +179,23 @@ def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
             value = [marked(item) for item in value]
         return value
 
-    return write_mapped(
-        BatchWriter(client),
-        ClaimBatch.model_validate(
-            {
-                "extraction_run": {
-                    "model_identifier": "integration-test",
-                    "pipeline_version": "0.0.0",
-                    "started_at": datetime.now(UTC).isoformat(),
-                },
-                "claims": marked(claims),
-            }
-        ),
-    )
+    # the fixture's spouse statements, the export test's among them, are
+    # those an instance holds from before ADR-0036, which the privacy check
+    # and the export read until #520
+    with legacy_spouse_writes():
+        return write_mapped(
+            BatchWriter(client),
+            ClaimBatch.model_validate(
+                {
+                    "extraction_run": {
+                        "model_identifier": "integration-test",
+                        "pipeline_version": "0.0.0",
+                        "started_at": datetime.now(UTC).isoformat(),
+                    },
+                    "claims": marked(claims),
+                }
+            ),
+        )
 
 
 def set_rank(client, subject: str, year: int, rank: WikibaseRank) -> None:

@@ -200,24 +200,31 @@ Per batch, the writer:
    its page number, printed page number, region and excerpt, is compared
    whole with the statement's reference blocks as the instance stores
    them:
-   * the statement already carries that block: the claim is skipped
+   * the statement already carries that block: the claim adds no
+     source block, and its run block only as the paragraph below says
      (safe re-run);
    * otherwise the claim's blocks are APPENDED to the statement, each
      only if the statement does not already carry it, so a second claim
-     of the same run adds its source block but not the run's block
-     again. The same artifact under another page, region or excerpt
-     thus adds a block of its own beside the first, as another artifact
-     does. No block the statement carries is changed or removed.
+     of the same run adds its source block, and the run's block only
+     where its note differs. The same artifact under another page,
+     region or excerpt thus adds a block of its own beside the first, as
+     another artifact does. No block the statement carries is changed or
+     removed.
    The run block is compared whole too, with its judgement note, in NFC
    (ADR-0035 §4). Where the statement carries the claim's source block,
    the claim's run block is appended when no block of the statement
    carries it whole, and it carries a note or the statement cites its run
-   in a block with another note: so a second claim of the same run adds
-   its own run block where its note differs, a note-less claim beside a
-   noted one of its run adds the bare block, in either order, and a later
-   run without a note adds nothing where its source agrees. One statement
-   can thus carry several run blocks of one run; a reader counts runs by
-   run item, never by blocks. A batch written again adds nothing.
+   in a block with another note. A machine claim without a note that this
+   leaves out is looked at again once the batch's other claims are
+   written, so it joins a block of its run that a noted claim after it
+   gave the statement. So a second claim of the same run adds its own run
+   block where its note differs, a run's noted and note-less claims give
+   the same blocks in whatever order the batch gives them, for the run
+   that wrote the statement and for a later one, and a later run's
+   note-less claims alone add nothing where their source agrees. One
+   statement can thus carry several run blocks of one run; a reader
+   counts runs by run item, never by blocks. A batch written again adds
+   nothing.
    A curated statement, one with no extraction-run reference (a
    curator's own write, until a machine claim's blocks join it) or
    whose rank a curator changed, is compared by artifact alone: the
@@ -245,9 +252,12 @@ Per batch, the writer:
    case, Unicode form and spacing), so a qualified statement never
    matches:
    * a matching statement already referenced to that artifact: nothing
-     to add (safe re-run), but a note's run block that none of those
-     statements carries whole, which a machine one of them gains, so
-     two mentions of an entity, each with its own note, both give theirs;
+     to add (safe re-run), but a run block that none of those statements
+     carries whole, which a machine one of them gains where it carries a
+     note or that statement cites its run already, as a claim's does
+     (step 4); the noted witnesses of an item go first, so two mentions
+     of an entity, each with its own note or none, give the same blocks
+     in either order;
    * a matching machine statement at normal rank: it gains this
      source's two reference blocks, each only if not already there;
    * otherwise (a different value, or a same value held only by curated
@@ -2844,29 +2854,30 @@ class BatchWriter:
             s for s in same if self._has_artifact_reference(s, artifact_qid)
         ]
         if cited:
-            # the artifact witnesses the kind already: a note of the run no
-            # block of those statements carries joins a machine one in its
-            # run block (ADR-0035 §4), and nothing else is added
-            noted = [
+            # the artifact witnesses the kind already: a run block none of
+            # those statements carries whole joins the machine one where it
+            # carries a note, or that statement cites its run already, as a
+            # claim's does (step 4 of the module docstring), and nothing
+            # else is added
+            target = next((s for s in cited if not self._is_curated(s)), None)
+            carried = {
+                self._reference_key(reference)
+                for s in cited
+                for reference in s.references.references
+            }
+            added = [
                 block
                 for block in references.references[1:]
-                if self._noted(block)
-                and not any(
-                    self._reference_key(block)
-                    in {
-                        self._reference_key(reference)
-                        for reference in s.references.references
-                    }
-                    for s in cited
-                )
+                if target is not None
+                and self._reference_key(block) not in carried
+                and (self._noted(block) or self._cites_run(target, block))
             ]
-            target = next((s for s in cited if not self._is_curated(s)), None)
-            if not noted or target is None:
+            if not added:
                 return
-            for block in noted:
+            for block in added:
                 target.references.add(block)
-            entity.write(summary="ingest: judgement note on a type statement")
-            result.notes_written += len(noted)
+            entity.write(summary="ingest: run block on a type statement")
+            result.notes_written += sum(map(self._noted, added))
             self._entity_cache[qid] = self.client.wbi.item.get(qid)
             return
         target = next((s for s in same if not self._is_curated(s)), None)
@@ -2901,7 +2912,13 @@ class BatchWriter:
         from wikibaseintegrator.datatypes import String
 
         for qid, witnesses in self._kinds_given().items():
-            for kind, type_hint, artifact_qid, note in witnesses:
+            # the noted witnesses first, so a bare one of the same run that
+            # an artifact already gave the kind finds its run's noted block,
+            # in whatever order the batch gave them (the run block rule of
+            # step 4 of the module docstring)
+            for kind, type_hint, artifact_qid, note in sorted(
+                witnesses, key=lambda witness: not _sent_note(witness[3])
+            ):
                 # a kind the vocabulary lacks is left out, with the warning
                 # write_batch gave before its first write, and so is the
                 # entity's note, which goes on its `instance of` alone
@@ -3202,6 +3219,9 @@ class BatchWriter:
             flags=flags,
             refused_terms=refused_terms,
         )
+        # the machine claims without a note that a statement's blocks
+        # already recorded, looked at again after the loop
+        withheld: list[tuple] = []
         for index, claim in enumerate(batch.claims):
             if index in refused:
                 # before any of its refs resolves: an item only a refused
@@ -3252,22 +3272,16 @@ class BatchWriter:
                 )
                 if not blocks:
                     result.skipped += 1
+                    if not claim.curated and not _sent_note(claim.note):
+                        # a machine claim without a note whose run block
+                        # may join once a noted claim of its run has (the
+                        # module docstring, step 4): looked at again after
+                        # the loop, so the batch's order changes nothing
+                        withheld.append(
+                            (subject_qid, wbi_claim, references, artifact_qid)
+                        )
                     continue
-                result.notes_written += sum(map(self._noted, blocks))
-                # an agreeing source, or the same source in another place:
-                # the statement stays one statement, and gains this
-                # claim's blocks (R2 — who asserts a fact, and where, is
-                # knowledge, not just the fact)
-                for block in blocks:
-                    existing.references.add(block)
-                entity = self._entity_cache[subject_qid]
-                entity.write(
-                    summary="ingest: additional source for existing statement"
-                )
-                self._entity_cache[subject_qid] = self.client.wbi.item.get(
-                    subject_qid
-                )
-                result.referenced += 1
+                self._add_blocks(subject_qid, existing, blocks, result)
                 continue
             wbi_claim.references = references
             if not self.dry_run:
@@ -3283,6 +3297,33 @@ class BatchWriter:
                     map(self._noted, references.references)
                 )
             result.written += 1
+        for subject_qid, wbi_claim, references, artifact_qid in withheld:
+            existing = self._find_matching_statement(subject_qid, wbi_claim)
+            blocks = (
+                self._blocks_to_add(existing, references, artifact_qid)
+                if existing is not None
+                else []
+            )
+            if blocks:
+                self._add_blocks(subject_qid, existing, blocks, result)
+                result.skipped -= 1
         if not self.dry_run:
             self._record_kinds(result)
         return result
+
+    def _add_blocks(
+        self, subject_qid: str, statement, blocks: list, result: WriteResult
+    ) -> None:
+        """Add a claim's `blocks` to the equal statement it matches, and
+        write its item (step 4 of the module docstring): an agreeing
+        source, or the same source in another place, or the run's block
+        with another note, and the statement stays one statement (R2: who
+        asserts a fact, and where, is knowledge, not just the fact)."""
+        for block in blocks:
+            statement.references.add(block)
+        self._entity_cache[subject_qid].write(
+            summary="ingest: additional source for existing statement"
+        )
+        self._entity_cache[subject_qid] = self.client.wbi.item.get(subject_qid)
+        result.referenced += 1
+        result.notes_written += sum(map(self._noted, blocks))

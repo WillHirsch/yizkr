@@ -36,7 +36,9 @@ import struct
 import tempfile
 import time
 import zlib
-from dataclasses import dataclass, field
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import ModuleType
 
@@ -48,6 +50,8 @@ from yizkr.core import sparql
 from yizkr.core.config import USER_AGENT, Config
 from yizkr.core.instance import clear_contents
 from yizkr.core.wiki import WikiClient
+from yizkr.model.schema import load_acceptance
+from yizkr.pipeline import writer
 from yizkr.pipeline.registrar import register_artifact
 
 from .live_lock import hold_for_session
@@ -59,6 +63,21 @@ LIVE_TESTS = "live tests"
 # mutant is a session of its own, so it never writes onto the items a
 # later session reads
 SESSION_BYTES = os.urandom(8)
+
+
+@contextmanager
+def legacy_spouse_writes() -> Iterator[None]:
+    """Within it, the writer writes a `spouse` claim, which it otherwise
+    refuses as a retired property's (ADR-0036): a fixture writes so the
+    spouse statements an instance holds from before ADR-0036, which the
+    readers (the disagreement report, the kinship and timeline queries,
+    the privacy check and the export) still read until they read unions
+    instead (#520). Only the retirement is lifted: a reference property
+    is still refused."""
+    lifted = replace(load_acceptance(), retired=frozenset())
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(writer, "load_acceptance", lambda: lifted)
+        yield
 
 
 def fixture_mark(fixture: str, *modules: ModuleType) -> str:

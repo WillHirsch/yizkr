@@ -41,6 +41,7 @@ from yizkr.queries.publish import load_templates, render_for_instance
 
 from .conftest import (
     fixture_mark,
+    legacy_spouse_writes,
     register_fictional,
     run_sparql,
     wait_for_query_service,
@@ -125,7 +126,9 @@ def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
     the writer's source and the session's random bytes), so each session writes
     items of its own: what an earlier session wrote, a live mutant's run
     included, never meets it, and a re-run within the session finds its own
-    items again. Returns the write's result and the marker."""
+    items again. Its spouse claims go through legacy_spouse_writes, as the
+    statements an instance holds from before ADR-0036, which the readers
+    read until #520. Returns the write's result and the marker."""
     content = [
         {
             **claim,
@@ -153,19 +156,22 @@ def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
             value = [marked(item) for item in value]
         return value
 
-    written = write_mapped(
-        BatchWriter(client),
-        ClaimBatch.model_validate(
-            {
-                "extraction_run": {
-                    "model_identifier": "integration-test",
-                    "pipeline_version": "0.0.0",
-                    "started_at": datetime.now(UTC).isoformat(),
-                },
-                "claims": marked(claims),
-            }
-        ),
-    )
+    # the fixture's spouse statements are those an instance holds from
+    # before ADR-0036, which the readers read until #520
+    with legacy_spouse_writes():
+        written = write_mapped(
+            BatchWriter(client),
+            ClaimBatch.model_validate(
+                {
+                    "extraction_run": {
+                        "model_identifier": "integration-test",
+                        "pipeline_version": "0.0.0",
+                        "started_at": datetime.now(UTC).isoformat(),
+                    },
+                    "claims": marked(claims),
+                }
+            ),
+        )
     return written, marker
 
 
