@@ -29,7 +29,12 @@ Per batch, the writer:
    other document, or sits on a property the manifest does not mark
    `document_subject`, and a claim of such a property whose subject is
    anything but its own source document, are refused before the first
-   write, as a claim whose text the instance cannot hold is (below);
+   write, as a claim whose text the instance cannot hold is (below). So
+   is a claim of a property the manifest marks retired (`spouse`, which
+   takes no new claim: a marriage is an entity, ADR-0036), or of a
+   reference property (`stated_in`, a judgement note's), as its own
+   property or a qualifier's: validation refuses both, and `yizkr write`
+   takes a batch without validating it;
 1. mints an extraction-run item from the batch metadata (idempotent:
    matched by a deterministic label containing the batch content hash,
    which must name one item alone: when two items hold it the write
@@ -97,7 +102,9 @@ Per batch, the writer:
    write, with its label, its description, its aliases, its `instance of`,
    and an unclassified entity's `type hint`, the last two with two
    references (_kind_references): stated in -> the artifact of the claim
-   that mints it, and inferred from extraction run -> the run item; so a
+   that mints it, and inferred from extraction run -> the run item, the
+   run block of its `instance of` with the entity's judgement note, a kind
+   or an identity call, where its record gives one (step 3); so a
    write that fails leaves no item, and none without its kind. An entity's
    kind is the extraction's proposal, a machine write like any claim
    (ADR-0003). A local ref resolves through the batch's entity-manifest
@@ -166,7 +173,17 @@ Per batch, the writer:
      region / excerpt qualifiers inside the reference, the printed page
      number only where the claim's source gives one (the extractor reads
      it from the transcription's record, ADR-0037);
-   * inferred from extraction run -> the run item;
+   * inferred from extraction run -> the run item, with the claim's
+     judgement note, where it gives one, beside it in this run block
+     (ADR-0035 §4): `judgement`, the item of the note's category, and
+     `judgement_note`, its sentence, in NFC, on one line, cleaned up and
+     cut to TEXT_LIMIT as a locator is (_locator_text), so a long note
+     never refuses its claim. A note is never in the `stated in` block,
+     never a qualifier, never on the run item. A note whose sentence holds
+     nothing the instance keeps, or a character Python's Unicode tables do
+     not know (below), is left out, with a warning, and its claim written
+     without it (_sent_note). A curated claim has no run block, and so no
+     note;
 4. when a statement with the same property, value, AND qualifiers
    already exists, the claim is recorded on that statement rather than
    beside it: an agreeing second source is knowledge, and so is each
@@ -191,6 +208,16 @@ Per batch, the writer:
      again. The same artifact under another page, region or excerpt
      thus adds a block of its own beside the first, as another artifact
      does. No block the statement carries is changed or removed.
+   The run block is compared whole too, with its judgement note, in NFC
+   (ADR-0035 §4). Where the statement carries the claim's source block,
+   the claim's run block is appended when no block of the statement
+   carries it whole, and it carries a note or the statement cites its run
+   in a block with another note: so a second claim of the same run adds
+   its own run block where its note differs, a note-less claim beside a
+   noted one of its run adds the bare block, in either order, and a later
+   run without a note adds nothing where its source agrees. One statement
+   can thus carry several run blocks of one run; a reader counts runs by
+   run item, never by blocks. A batch written again adds nothing.
    A curated statement, one with no extraction-run reference (a
    curator's own write, until a machine claim's blocks join it) or
    whose rank a curator changed, is compared by artifact alone: the
@@ -211,12 +238,16 @@ Per batch, the writer:
    of the manifest record an approved equivalence names are recorded on
    its item too, cited to the artifact of the first claim that mentions
    it (_kinds_given).
-   A kind or type hint is compared with the item's unqualified
+   A kind carries the judgement note of the manifest record that gives
+   it, in its run block, as a claim's does (step 3), and a type hint
+   none. A kind or type hint is compared with the item's unqualified
    statements on the same property (a type hint as free text, ignoring
    case, Unicode form and spacing), so a qualified statement never
    matches:
    * a matching statement already referenced to that artifact: nothing
-     to add (safe re-run);
+     to add (safe re-run), but a note's run block that none of those
+     statements carries whole, which a machine one of them gains, so
+     two mentions of an entity, each with its own note, both give theirs;
    * a matching machine statement at normal rank: it gains this
      source's two reference blocks, each only if not already there;
    * otherwise (a different value, or a same value held only by curated
@@ -347,6 +378,7 @@ from yizkr.claims import (
     EntityRef,
     ExternalIdValue,
     ItemValue,
+    JudgementNote,
     LocalRef,
     MonolingualValue,
     QidRef,
@@ -631,6 +663,11 @@ class WriteResult:
     # statement two artifacts witness counts twice)
     type_statements_written: int = 0
     type_statements_referenced: int = 0
+    # the run blocks with a judgement note this write added (ADR-0035 §4):
+    # a claim's, on its statement, and an entity's, on the `instance of`
+    # statement of its item (steps 3 to 5 of the module docstring); a dry
+    # run adds none
+    notes_written: int = 0
     # what the writer left out and why, such as a kind the vocabulary
     # lacks (step 2 of the module docstring), a claim it refused, or the
     # description of an item it minted when that is the item's label
@@ -1122,6 +1159,12 @@ def is_artifact_item(
     )
 
 
+# what a local ref, or an approved equivalence's record, gives its item
+# (step 5 of the module docstring): its kind, its type hint, the artifact
+# QID of the claim it is in, and the entity's judgement note
+_Witness = tuple[str | None, str | None, str, JudgementNote | None]
+
+
 @dataclass(frozen=True)
 class _Placement:
     """Where step 2 of the module docstring puts the item of a cluster of
@@ -1266,6 +1309,12 @@ def pre_plan_refusals(
     batch, each with the warning that names it by its claim id and
     property and says why (the module docstring):
 
+    * a claim of a property the manifest marks retired (`spouse`,
+      ADR-0036), which takes no new claim, or of a reference property
+      (`stated_in`, the judgement note's), which is written only in a
+      statement's references (ADR-0035 §4), as the claim's property or a
+      qualifier's: validation refuses both, and `yizkr write` takes a
+      batch without validating it;
     * a document subject that is not the claim's own source, or on a
       property the manifest does not mark `document_subject`, and a
       claim of such a property with any other subject (ADR-0035
@@ -1285,9 +1334,32 @@ def pre_plan_refusals(
       from finding or minting its item (`unnamed`, from unnamed_entities).
 
     The warning quotes none of the texts."""
-    document_subjects = load_acceptance().document_subjects
+    acceptance = load_acceptance()
+    document_subjects = acceptance.document_subjects
     refusals = {}
     for index, claim in enumerate(batch.claims):
+        uses = [
+            ("its property", claim.property),
+            *(
+                (f"its {qualifier.property} qualifier", qualifier.property)
+                for qualifier in claim.qualifiers
+            ),
+        ]
+        misused = [
+            f"{where} is retired and takes no claim (ADR-0036)"
+            if prop in acceptance.retired
+            else f"{where} is a reference property, written only in a "
+            f"statement's references (ADR-0035 §4)"
+            for where, prop in uses
+            if prop in acceptance.retired or prop in acceptance.references
+        ]
+        if misused:
+            refusals[index] = (
+                f"claim {claim_id(claim)} ({claim.property}) is "
+                f"refused, and nothing of it is written: "
+                f"{'; '.join(misused)}"
+            )
+            continue
         if isinstance(claim.subject, ArtifactRef):
             reasons = []
             if claim.subject.sha1 != claim.source.artifact.sha1:
@@ -1403,6 +1475,19 @@ def _hint_sent(text: str) -> str:
     if len(hint) > TEXT_LIMIT or unknown_characters(hint):
         return ""
     return hint
+
+
+def _sent_note(note: JudgementNote | None) -> str:
+    """A judgement note's sentence as the writer sends it in its run
+    block (_locator_text), or "" when it sends no note: none is given, or
+    the sentence holds nothing the instance keeps, or a character Python's
+    Unicode tables do not know (unknown_characters), which the instance
+    may keep in another form, so that a re-run would add the block again.
+    A note left out never refuses its claim or its entity's kind (ADR-0035
+    §4); write_batch warns of each before its first write."""
+    if note is None or unknown_characters(note.text):
+        return ""
+    return _locator_text(note.text)
 
 
 def _cut(text: str, limit: int) -> str:
@@ -1615,14 +1700,13 @@ class BatchWriter:
         # the instance's lag-free media SHA-1 index, read on first need
         self._media_sha1_index: dict[str, str] | None = None
         # per write_batch call: item QID -> artifact QID of the first
-        # claim that mentions the item; item QID -> each (kind, type hint,
-        # artifact QID) a local ref resolved to it gives, on the artifact of
-        # the claim the ref is in; and the one a minted item was made with
+        # claim that mentions the item; item QID -> each witness (kind,
+        # type hint, artifact QID, judgement note) a local ref resolved to
+        # it gives, on the artifact of the claim the ref is in; and the one
+        # a minted item was made with
         self._mentions: dict[str, str] = {}
-        self._witnesses: dict[
-            str, list[tuple[str | None, str | None, str]]
-        ] = {}
-        self._minted_with: dict[str, tuple[str | None, str | None, str]] = {}
+        self._witnesses: dict[str, list[_Witness]] = {}
+        self._minted_with: dict[str, _Witness] = {}
         # per write_batch call: local id -> the id of its mention's cluster
         # in the identity map, the document the batch's mentions are mapped
         # under, and each cluster's terms (cluster_terms)
@@ -1705,6 +1789,7 @@ class BatchWriter:
                     record.kind if record else ref.instance_of,
                     record.type_hint if record else None,
                     source_artifact_qid,
+                    record.note if record else None,
                 )
                 witnesses = self._witnesses.setdefault(qid, [])
                 if witness not in witnesses:
@@ -1790,13 +1875,18 @@ class BatchWriter:
         ]
         if names:
             item.aliases.set("en", names)
+        # the entity's judgement note, a kind or an identity call, goes in
+        # the run block of its `instance of` (ADR-0035 §4)
+        note = record.note if record else None
+        noted = False
         if instance_of in self.items and source_artifact_qid:
             claim = self._item_claim(
                 self.properties["instance_of"], self.items[instance_of]
             )
             claim.references = self._kind_references(
-                source_artifact_qid, result.run_qid
+                source_artifact_qid, result.run_qid, note
             )
+            noted = any(map(self._noted, claim.references.references))
             self._append(item, claim)
         # open-schema escape hatch (ADR-0013): record what an unclassified
         # entity actually is, so the gap is queryable, not lost. It goes
@@ -1817,12 +1907,14 @@ class BatchWriter:
             self._append(item, hint)
         item = item.write(summary="ingest: entity proposed by extraction")
         qid = item.id
+        result.notes_written += noted
         self._items[(label, description)] = qid
         if source_artifact_qid:
             self._minted_with[qid] = (
                 instance_of,
                 record.type_hint if record else None,
                 source_artifact_qid,
+                note,
             )
         self._aliased.add(placement.cluster)
         self._flag_held(placement, qid, result)
@@ -1830,12 +1922,20 @@ class BatchWriter:
         result.minted.append(qid)
         return qid
 
-    def _kind_references(self, artifact_qid: str, run_qid: str | None):
+    def _kind_references(
+        self,
+        artifact_qid: str,
+        run_qid: str | None,
+        note: JudgementNote | None = None,
+    ):
         """The references of a kind or type hint an item is made with or
         gains (step 5 of the module docstring): stated in the artifact of
-        the claim whose ref gives it, and inferred from the run
+        the claim whose ref gives it, and inferred from the run, with the
+        entity's judgement note on its kind, if any, in the run block
         (_references). The one place an entity's kind is referenced."""
-        return self._references(artifact_qid=artifact_qid, run_qid=run_qid)
+        return self._references(
+            artifact_qid=artifact_qid, run_qid=run_qid, note=note
+        )
 
     def _cluster_item(self, placement: _Placement) -> str | None:
         """The item of a cluster placed so (_Placement): the item the write
@@ -2351,7 +2451,13 @@ class BatchWriter:
         artifact_qid: str,
         run_qid: str | None = None,
         claim: Claim | None = None,
+        note: JudgementNote | None = None,
     ):
+        """A statement's two reference blocks (ADR-0003): its source
+        block, `stated in` the artifact with the claim's locators and
+        excerpt, and its run block, `inferred from extraction run` the run
+        item with the judgement note `note`, if any (_note_snaks). A dry
+        run's placeholder run item gives no run block."""
         from wikibaseintegrator.datatypes import Item, MonolingualText, String
         from wikibaseintegrator.models import Reference, References
 
@@ -2412,8 +2518,30 @@ class BatchWriter:
                     value=run_qid,
                 )
             )
+            for snak in self._note_snaks(note):
+                run_ref.add(snak)
             references.add(run_ref)
         return references
+
+    def _note_snaks(self, note: JudgementNote | None) -> list:
+        """The snaks of a judgement note in its run block (ADR-0035 §4):
+        `judgement`, the item of its category, and `judgement_note`, its
+        sentence as the writer sends a locator (_locator_text: in NFC, on
+        one line, cleaned up, and cut to TEXT_LIMIT with the digest of the
+        whole). None for no note, and for one the writer leaves out
+        (_sent_note)."""
+        from wikibaseintegrator.datatypes import Item, String
+
+        text = _sent_note(note)
+        if not text:
+            return []
+        return [
+            Item(
+                prop_nr=self.properties["judgement"],
+                value=self.items[f"judgement_{note.category}"],
+            ),
+            String(prop_nr=self.properties["judgement_note"], value=text),
+        ]
 
     # -- extraction-run item -------------------------------------------------
 
@@ -2553,41 +2681,71 @@ class BatchWriter:
         claim is already recorded there.
 
         `references` are the claim's blocks as `_references` builds them,
-        its source block first. The source block is compared whole with
-        the statement's blocks: `stated in` with the page number, printed
-        page number, region and excerpt. So the same artifact under
+        its source block first, then its run block, if any. Each is
+        compared whole with the statement's blocks: the source block's
+        `stated in` with the page number, printed page number, region and
+        excerpt, and the run block's `inferred from extraction run` with
+        its judgement note (ADR-0035 §4). So the same artifact under
         another locator or excerpt, another place where it asserts the
-        value, adds a block of its own. A curated statement is compared
-        by artifact alone: a block that cites the claim's artifact under
-        any locator records the claim. The blocks returned are those the
-        statement does not already carry, so a run's block is not
-        repeated for a second claim of the same run.
+        value, adds a block of its own, and so does a note of the run that
+        no block of the statement carries. The blocks returned are those
+        the statement does not already carry, so a run's block is not
+        repeated for a second claim of the same run with the same note, or
+        none. Where the statement carries the claim's source block, its run
+        block is added only when it carries a note or the statement cites
+        its run in another block (one with another note): a later run
+        without a note adds nothing to a block its source agrees with.
+        A curated statement is compared by artifact alone: a block that
+        cites the claim's artifact under any locator records the claim.
         """
         present = {
             self._reference_key(block)
             for block in statement.references.references
         }
-        source = references.references[0]
-        if (
-            self._has_artifact_reference(statement, artifact_qid)
-            if self._is_curated(statement)
-            else self._reference_key(source) in present
-        ):
-            return []
+        source, *runs = references.references
+        if self._is_curated(statement):
+            if self._has_artifact_reference(statement, artifact_qid):
+                return []
+        elif self._reference_key(source) in present:
+            return [
+                run
+                for run in runs
+                if self._reference_key(run) not in present
+                and (self._noted(run) or self._cites_run(statement, run))
+            ]
         return [
             block
             for block in references.references
             if self._reference_key(block) not in present
         ]
 
+    def _noted(self, block) -> bool:
+        """Does the reference block carry a judgement note? None does on
+        an instance whose vocabulary has no `judgement`."""
+        judgement = self.properties.get("judgement")
+        return bool(judgement and block.snaks.get(judgement))
+
+    def _cites_run(self, statement, run_block) -> bool:
+        """Does any of the statement's reference blocks cite the run item
+        that `run_block` cites?"""
+        prop = self.properties["inferred_from_extraction_run"]
+        runs = {
+            ((snak.datavalue or {}).get("value") or {}).get("id")
+            for snak in run_block.snaks.get(prop) or []
+        }
+        return any(
+            ((snak.datavalue or {}).get("value") or {}).get("id") in runs
+            for block in statement.references.references
+            for snak in block.snaks.get(prop) or []
+        )
+
     # -- the kinds the refs and records give their items ---------------------
 
-    def _kinds_given(
-        self,
-    ) -> dict[str, list[tuple[str | None, str | None, str]]]:
-        """Each item a claim of the batch mentions, with each (kind, type
-        hint, artifact QID) the batch gives it (step 5 of the module
-        docstring): every local ref resolved to it, on the artifact of the
+    def _kinds_given(self) -> dict[str, list[_Witness]]:
+        """Each item a claim of the batch mentions, with each witness (kind,
+        type hint, artifact QID, judgement note) the batch gives it (step 5
+        of the module docstring): every local ref resolved to it, on the
+        artifact of the
         claim the ref is in (_resolve_ref), and every manifest record an
         approved equivalence names, on the artifact of the first claim that
         mentions its item, but one of which nothing is sent
@@ -2606,6 +2764,7 @@ class BatchWriter:
                     record.kind,
                     record.type_hint,
                     self._mentions[record.qid],
+                    record.note,
                 )
                 witnesses = given.setdefault(record.qid, [])
                 if witness not in witnesses:
@@ -2661,10 +2820,16 @@ class BatchWriter:
         return None
 
     def _record_type_statement(
-        self, qid: str, claim, artifact_qid: str, result: WriteResult
+        self,
+        qid: str,
+        claim,
+        artifact_qid: str,
+        result: WriteResult,
+        note: JudgementNote | None = None,
     ) -> None:
         """Record that `artifact_qid` gives the item `claim`'s kind or
-        type hint (step 5 of the module docstring)."""
+        type hint, a kind with its entity's judgement note `note` in its
+        run block (step 5 of the module docstring)."""
         entity = self._entity(qid)
         value = self._type_value(claim)
         same = [
@@ -2674,36 +2839,72 @@ class BatchWriter:
             if self._type_value(statement) == value
             and not self._qualifier_snapshot(statement)
         ]
-        if any(self._has_artifact_reference(s, artifact_qid) for s in same):
+        references = self._kind_references(artifact_qid, result.run_qid, note)
+        cited = [
+            s for s in same if self._has_artifact_reference(s, artifact_qid)
+        ]
+        if cited:
+            # the artifact witnesses the kind already: a note of the run no
+            # block of those statements carries joins a machine one in its
+            # run block (ADR-0035 §4), and nothing else is added
+            noted = [
+                block
+                for block in references.references[1:]
+                if self._noted(block)
+                and not any(
+                    self._reference_key(block)
+                    in {
+                        self._reference_key(reference)
+                        for reference in s.references.references
+                    }
+                    for s in cited
+                )
+            ]
+            target = next((s for s in cited if not self._is_curated(s)), None)
+            if not noted or target is None:
+                return
+            for block in noted:
+                target.references.add(block)
+            entity.write(summary="ingest: judgement note on a type statement")
+            result.notes_written += len(noted)
+            self._entity_cache[qid] = self.client.wbi.item.get(qid)
             return
-        references = self._kind_references(artifact_qid, result.run_qid)
         target = next((s for s in same if not self._is_curated(s)), None)
         if target is not None:
             present = {
                 self._reference_key(reference)
                 for reference in target.references.references
             }
-            for reference in references.references:
-                if self._reference_key(reference) not in present:
-                    target.references.add(reference)
+            added = [
+                reference
+                for reference in references.references
+                if self._reference_key(reference) not in present
+            ]
+            for reference in added:
+                target.references.add(reference)
             entity.write(
                 summary="ingest: additional source for existing type statement"
             )
             result.type_statements_referenced += 1
+            result.notes_written += sum(map(self._noted, added))
         else:
             claim.references = references
             self._append(entity, claim, beside_equal=True)
             entity.write(summary="ingest: type statement from another source")
             result.type_statements_written += 1
+            result.notes_written += sum(
+                map(self._noted, references.references)
+            )
         self._entity_cache[qid] = self.client.wbi.item.get(qid)
 
     def _record_kinds(self, result: WriteResult) -> None:
         from wikibaseintegrator.datatypes import String
 
         for qid, witnesses in self._kinds_given().items():
-            for kind, type_hint, artifact_qid in witnesses:
+            for kind, type_hint, artifact_qid, note in witnesses:
                 # a kind the vocabulary lacks is left out, with the warning
-                # write_batch gave before its first write
+                # write_batch gave before its first write, and so is the
+                # entity's note, which goes on its `instance of` alone
                 if kind in self.items:
                     self._record_type_statement(
                         qid,
@@ -2712,6 +2913,7 @@ class BatchWriter:
                         ),
                         artifact_qid,
                         result,
+                        note,
                     )
                 # and so is a type hint the instance cannot hold, or may
                 # keep in another form; one it holds goes with its spacing
@@ -2836,6 +3038,41 @@ class BatchWriter:
             if kind and kind not in self.items
         ]
 
+    def _notes_left_out(
+        self, batch: ClaimBatch, refused: Collection[int]
+    ) -> list[str]:
+        """A warning for each judgement note the writer leaves out
+        (_sent_note), quoting none of it: a claim's, of a claim it writes
+        with a run block (not refused, not curated), and an entity's, of a
+        record of which something is sent (_unsent_records). Its claim is
+        written, and its entity's kind recorded, without it (ADR-0035
+        §4)."""
+
+        def why(note: JudgementNote) -> str:
+            unknown = unknown_characters(note.text)
+            if unknown:
+                return _unknown_fault(unknown)
+            return "holds nothing the instance keeps"
+
+        warnings = [
+            f"claim {claim_id(claim)} ({claim.property}) has a judgement "
+            f"note that {why(claim.note)}: the claim is written without it"
+            for index, claim in enumerate(batch.claims)
+            if index not in refused
+            and not claim.curated
+            and claim.note is not None
+            and not _sent_note(claim.note)
+        ]
+        warnings += [
+            f"entity {record.id!r} has a judgement note that "
+            f"{why(record.note)}: its kind is recorded without it"
+            for record in self._entity_records.values()
+            if record.id not in self._unsent
+            and record.note is not None
+            and not _sent_note(record.note)
+        ]
+        return warnings
+
     def _type_hints_over_limit(self) -> list[str]:
         """A warning for each manifest record whose type hint the instance
         cannot hold, as the writer sends it (_hint_text), which is left out
@@ -2946,6 +3183,7 @@ class BatchWriter:
             *refusals.values(),
             *blocked,
             *self._type_hints_over_limit(),
+            *self._notes_left_out(batch, refused),
         ]
         refused_terms, term_warnings = self._unknown_terms(unnamed)
         warnings += term_warnings
@@ -2999,8 +3237,13 @@ class BatchWriter:
             # no extraction-run reference (ADR-0003 — process provenance
             # is for machine writes)
             run_qid = None if claim.curated else result.run_qid
+            # the claim's judgement note, in its run block (ADR-0035 §4): a
+            # curated claim has no run block, and so no note
             references = self._references(
-                artifact_qid=artifact_qid, run_qid=run_qid, claim=claim
+                artifact_qid=artifact_qid,
+                run_qid=run_qid,
+                claim=claim,
+                note=claim.note,
             )
             existing = self._find_matching_statement(subject_qid, wbi_claim)
             if existing is not None:
@@ -3010,6 +3253,7 @@ class BatchWriter:
                 if not blocks:
                     result.skipped += 1
                     continue
+                result.notes_written += sum(map(self._noted, blocks))
                 # an agreeing source, or the same source in another place:
                 # the statement stays one statement, and gains this
                 # claim's blocks (R2 — who asserts a fact, and where, is
@@ -3034,6 +3278,9 @@ class BatchWriter:
                 entity.write(summary=claim_summary)
                 self._entity_cache[subject_qid] = self.client.wbi.item.get(
                     subject_qid
+                )
+                result.notes_written += sum(
+                    map(self._noted, references.references)
                 )
             result.written += 1
         if not self.dry_run:

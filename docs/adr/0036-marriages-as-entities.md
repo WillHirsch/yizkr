@@ -80,6 +80,17 @@ Amended by #409 (2026-09-29), decided by the orchestrator (the owner may
 override): a union that names only one of its couple stays ambiguous,
 as the line above says; that can only keep two unions apart.
 
+Amended by #410 (2026-10-16): the writer refuses a claim of the retired
+`spouse` itself, before the first write, naming it in its `refused` list
+with a warning, as validation does, since `yizkr write` takes a batch
+without validating it; the rest of the batch is written. A union and its
+events, from extraction as from the GEDCOM adapter, are written through
+the writer's general path: their items, minted through the identity map
+with their kinds, the couple's `participant` statements with their
+roles, `started_by`, `ended_by` (a partner's own `death` event
+included), and each event's own date, place and `carried_out_by`, each
+with both references (ADR-0003).
+
 ## Context
 
 MODELING.md dates a marriage as Wikidata dates spouse (P26): a statement

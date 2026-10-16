@@ -505,6 +505,30 @@ is not made yet. The writer's line in the readers' list of §8 below (it
 "finds them by exact label until #109") is so settled
 (docs/MODELING.md, "General approach").
 
+Amended by #410 (2026-10-16): the writer writes judgement notes as §4
+says. A claim's note goes in its statement's run block, beside
+`inferred from extraction run`, as `judgement` and `judgement_note`, and
+an entity's note in the run block of its item's `instance of`, minted
+(writer step 2) or witnessed again (step 5). The run block is compared
+whole, in NFC, with its note, so a batch written again adds nothing, and
+a second claim of the run, from the same place or another, adds its own
+run block where its note differs. Where the statement already carries
+the claim's source block, its run block is added only when it carries a
+note, or when the statement cites its run in a block with another note,
+so a note-less claim beside a noted one of its run adds the bare block
+in either order, and a later run without a note adds nothing there, as
+before notes. A note's sentence is cut at 400 characters as a locator is;
+one that holds nothing the instance keeps, or a character Python's
+Unicode tables do not know, is left out with a warning, never refusing
+its claim. The write's result counts the noted run blocks it added
+(`notes_written`): the writer's count §4 and #420's line name, which
+the run report does not read yet. The writer also refuses a claim of a
+retired property (§3.5) or of a reference property, as its own property
+or a qualifier's, before the first write, as validation does, since
+`yizkr write` takes a batch without validating it. The roles, kinship
+classes, sides, degrees and removes of §3.2 and §3.3 are written as
+qualifiers through the writer's general path, with no code of their own.
+
 **Decided by the owner (2026-09-29):**
 
 - Before scratch run 1 (#145), extraction hands over the structure of

@@ -3316,8 +3316,10 @@ class TestWriterAliases:
     ):
         # one writer wrote the certificate and holds its copy of
         # Sebastian's item; another wrote the tree's birth year and put
-        # "Wastl" on it. The first writer's next batch, the tree's marriage
-        # line, finds the alias already there, and edits from that read
+        # "Wastl" on it. The first writer's next batch, the tree's line
+        # naming a relative of his, finds the alias already there, and edits
+        # from that read (a `spouse` claim, which this once wrote, is
+        # refused: the property is retired, ADR-0036)
         wiki = FakeWiki({MEDIA_SHA1: "Q23", TREE_SHA1: "Q29"}, detached=True)
         tree = _tree_batch()
         hildegard = {
@@ -3325,12 +3327,12 @@ class TestWriterAliases:
             "label": "Hildegard Laudler",
             "kind": "human",
         }
-        married = tree.model_copy(
+        related = tree.model_copy(
             update={
                 "claims": [
                     tree.claims[0].model_copy(
                         update={
-                            "property": "spouse",
+                            "property": "relative",
                             "value": ItemValue(
                                 value=LocalRef(
                                     local_id="e04",
@@ -3341,8 +3343,8 @@ class TestWriterAliases:
                             "source": tree.claims[0].source.model_copy(
                                 update={
                                     "transcription_excerpt": MonolingualText(
-                                        text="1862–1945 = Hildegard 'Hilde' "
-                                        "Laudler",
+                                        text="1862–1945, a relative of "
+                                        "Hildegard 'Hilde' Laudler",
                                         language="en",
                                     )
                                 }
@@ -3357,8 +3359,8 @@ class TestWriterAliases:
             }
         )
 
-        # the tree's marriage line holds every mention of its birth year's
-        identity = corpus(_certificate_batch(), married, entities=(SEBASTIAN,))
+        # the tree's relative line holds every mention of its birth year's
+        identity = corpus(_certificate_batch(), related, entities=(SEBASTIAN,))
         writer = BatchWriter(wiki)
         sebastian = write_mapped(
             writer, _certificate_batch(), identity=identity
@@ -3366,10 +3368,10 @@ class TestWriterAliases:
         write_mapped(BatchWriter(wiki), _tree_batch(), identity=identity)
         assert _aliases(wiki, sebastian) == ["Wastl"]
 
-        write_mapped(writer, married, identity=identity)
+        write_mapped(writer, related, identity=identity)
 
         assert _aliases(wiki, sebastian) == ["Wastl"]
-        assert len(_statements(wiki, sebastian, "spouse")) == 1
+        assert len(_statements(wiki, sebastian, "relative")) == 1
         # the other writer's birth year is there too
         assert len(_statements(wiki, sebastian, "date_of_birth")) == 2
 

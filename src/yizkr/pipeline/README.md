@@ -471,7 +471,13 @@ re-running one step in isolation — but for a normal ingest you only ever run
   by #444 and #109). It writes each claim
   at normal rank with two references: `stated in → artifact/fragment`
   (with page/region/excerpt locator qualifiers) and `inferred from
-  extraction run → run item`. Re-runs skip existing statements.
+  extraction run → run item`, the run block holding a claim's judgement
+  note, and the run block of an item's `instance of` its entity's note
+  (ADR-0035 §4, #410). Re-runs skip existing statements: each block is
+  compared whole, so a second claim of the run adds its run block only
+  where its note differs. A claim of a retired property (`spouse`) or a
+  reference property is refused before the first write, as validation
+  refuses it (#410).
 
 ## Resolving entities across artifacts
 
