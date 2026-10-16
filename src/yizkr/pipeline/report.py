@@ -1621,7 +1621,7 @@ def _aggregate_write(written: Mapping[str, Any] | None) -> dict[str, Any]:
             if isinstance(record.get(key), int)
         )
 
-    return {
+    counted = {
         "skipped": False,
         "documents_written": len(documents),
         "statements_written": total("written"),
@@ -1633,6 +1633,14 @@ def _aggregate_write(written: Mapping[str, Any] | None) -> dict[str, Any]:
         "documents_failed": len(written.get("failed") or {}),
         "contents_recorded": bool(written.get("recorded")),
     }
+    # of the claims refused, those whose item value is their subject's
+    # item (yizkr.pipeline.writer.self_references): a record of a write
+    # that did not count them holds none, so the figure is absent, not 0
+    if not documents or any(
+        isinstance(record.get("self_references"), int) for record in documents
+    ):
+        counted["claims_self_referencing"] = total("self_references")
+    return counted
 
 
 def _clusters(path: Path, fold: _Fold) -> dict[str, Any]:
@@ -3112,8 +3120,14 @@ def _write_sections(content: Mapping[str, Any]) -> list[_Section]:
             f"{_n(write['statements_written'])} statements new, "
             f"{_n(write['statements_referenced'])} gained a reference, "
             f"{_n(write['claims_skipped'])} claims already there, "
-            f"{_n(write['claims_refused'])} refused; "
-            f"{_n(write['items_minted'])} items minted. "
+            f"{_n(write['claims_refused'])} refused"
+            + (
+                f", {_n(write['claims_self_referencing'])} of them for an "
+                "item value that is their subject's item; "
+                if "claims_self_referencing" in write
+                else "; "
+            )
+            + f"{_n(write['items_minted'])} items minted. "
             f"{_n(write['batches_refused'])} batches refused whole, "
             f"{_n(write['documents_failed'])} documents failed; the "
             "instance-contents key is "

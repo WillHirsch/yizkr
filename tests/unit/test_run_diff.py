@@ -393,6 +393,33 @@ class TestReports:
         assert rows["stages.critique.computed"]["baseline"] == ABSENT
         assert rows["calls.engine"]["delta"] == -1
 
+    def test_the_writers_self_references_are_a_figure_of_their_own(self):
+        # the claims the writer refused for an item value that is their
+        # subject's item (#491), apart from its other refusals and from
+        # extraction's rejects; absent from a write that did not count them
+        def write(documents: dict) -> dict:
+            record = {"depicts_left_out": 0, "documents": documents}
+            content = report._aggregate_content(
+                {}, {}, {}, report._Vocabulary.of({}), record
+            )
+            return {"content": content}
+
+        older = write({"a" * 40: {"written": 3, "refused": 1}})
+        before = write(
+            {"a" * 40: {"written": 3, "refused": 1, "self_references": 0}}
+        )
+        after = write(
+            {"a" * 40: {"written": 1, "refused": 3, "self_references": 1}}
+        )
+        name = "content.write.claims_self_referencing"
+        rows = {r["figure"]: r for r in rundiff.figures(before, after)}
+        assert rows[name]["delta"] == 1
+        assert rows["content.write.claims_refused"]["delta"] == 2
+        assert rows["content.rejects.rejected_claims"]["delta"] == 0
+        rows = {r["figure"]: r for r in rundiff.figures(older, after)}
+        assert rows[name]["baseline"] == ABSENT
+        assert rows[name]["delta"] is None
+
     def test_a_report_older_than_the_run_is_built_afresh(
         self, tmp_path, engine, monkeypatch
     ):

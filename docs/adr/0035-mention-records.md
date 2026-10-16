@@ -1000,7 +1000,24 @@ property, none of which takes its subject as its value. Each is a counted
 reject, and the claim is the unit of rejection. A local ref whose entity
 record carries the subject's QID names the subject too; no pipeline path
 sets a record's QID before validation, so that branch applies to claims
-files validated by hand or built beforehand. `country_of_citizenship` keeps accepting a place, since the place
+files validated by hand or built beforehand. Amended by #491
+(2026-10-16): the writer checks the rule again before its first write,
+after the steps that put two refs on one item, which validation reads
+the batch before: the identity map (a cluster holding both the claim's
+subject and its value, as clustering merges a father and a son of one
+name), an approved equivalence (two records given one item's QID, as a
+curator's correction of the equivalence sheet's QID can make them), and
+a cluster whose found item is the QID another ref names. Two refs are
+one item when they name one QID, one vocabulary item, one artifact or
+one cluster of the map, or when the plan finds a cluster's item to be
+the QID the other names. Such a claim, by its value or a qualifier's, is
+refused whole before anything is written, in a dry run too, with a
+warning that says why: the writer's result names it among its refused
+claims and again among its self-references, the scratch write's record
+counts those per document, and the run report and the run-to-run diff
+count them apart from the writer's other refusals and from extraction's
+rejects. The batch is never failed, and its other claims are written.
+`country_of_citizenship` keeps accepting a place, since the place
 model has no country class: the prompt, through its description, asks for
 a country.
 

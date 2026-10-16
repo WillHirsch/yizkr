@@ -164,7 +164,11 @@ state and attention labels, or `not run`; a run with none says so.
 **Write.** Once the run's write stage has run (#200;
 yizkr.pipeline.scratchwrite): the documents written, the statements
 written new, those that gained a reference, the claims already there and
-those the writer refused, the items minted, the batches refused whole
+those the writer refused, and of them those whose item value is their
+subject's item, as the identity map may make it
+(`aggregate.content.write.claims_self_referencing`, absent for a write
+that did not count them; #491), apart from extraction's rejects, the
+items minted, the batches refused whole
 before registration, the documents that failed, and whether the
 instance-contents key was recorded; or that the instance held what the
 run's write key makes, so nothing was reset or written. In both, the

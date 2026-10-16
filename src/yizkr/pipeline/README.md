@@ -468,7 +468,12 @@ re-running one step in isolation — but for a normal ingest you only ever run
   entity that may take neither its label nor its tagged label, as a
   media object whose tagged label a registered item holds too, is
   refused, with its claims, before the first write (ADR-0010 as amended
-  by #444 and #109). It writes each claim
+  by #444 and #109). A claim whose item value, its own or a
+  qualifier's, is its subject's item once the map, an approved
+  equivalence or a curator's correction puts both on one item, as
+  clustering may merge a father and a son of one name, is refused before
+  the first write and counted apart (docs/MODELING.md; #491). It writes
+  each claim
   at normal rank with two references: `stated in → artifact/fragment`
   (with page/region/excerpt locator qualifiers) and `inferred from
   extraction run → run item`. Re-runs skip existing statements.

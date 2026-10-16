@@ -337,7 +337,9 @@ with `--until clustering` (or an earlier stage) needs none.
   with no review and no approval file, at normal rank, with both
   references (stated in the artifact or fragment with its locator,
   inferred from the run item), through the run's one identity map.
-  Depicts claims are left out and counted in the run report. Each run
+  Depicts claims are left out and counted in the run report, and so
+  are the claims the writer refused, and of them those whose item value
+  the map makes their subject's item. Each run
   item is marked `unratified scratch run → <run id>`, and records the
   `run manifest hash` (the run manifest's settings) and the `identity
   map hash`, each stated in the run item itself. When every document is
