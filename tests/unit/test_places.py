@@ -972,6 +972,43 @@ class TestPlanContainment:
 class TestNames:
     """How the prompt names a place: never by its QID (#201)."""
 
+    def test_the_graph_s_places_carry_their_descriptions(self, monkeypatch):
+        """The query reads each place's English description, by the full
+        schema.org IRI, which numbers namesakes (decision FD)."""
+        from yizkr.pipeline import places
+
+        asked = []
+
+        def rows(config, query):
+            asked.append(query)
+            return [
+                {
+                    "place": {"value": "http://x/entity/Q30"},
+                    "placeLabel": {"value": "Rekau"},
+                    "description": {"value": "place named in an artifact"},
+                },
+                {
+                    "place": {"value": "http://x/entity/Q31"},
+                    "placeLabel": {"value": "Rekau"},
+                },
+            ]
+
+        class Client:
+            def vocabulary(self):
+                return (
+                    {"instance_of": "P1", "part_of": "P3", "location": "P9"},
+                    {"place": "Q10"},
+                )
+
+        config = type("C", (), {"concept_uri": "http://x"})()
+        monkeypatch.setattr(places, "_run_query", rows)
+        found = places.fetch_places(Client(), config)
+        assert [(p.qid, p.description) for p in found] == [
+            ("Q30", "place named in an artifact"),
+            ("Q31", ""),
+        ]
+        assert "<http://schema.org/description>" in asked[0]
+
     def test_namesakes_read_apart_by_their_records(self):
         one = PlaceRecord(qid="Q2", label="Flörburg")
         one.state(["Kreis Peiltal"], ["a" * 40])
