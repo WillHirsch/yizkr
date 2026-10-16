@@ -94,6 +94,15 @@ utilization reported past a warning threshold, and the #101 amendment's
 limits on it stand; pacing from `unifiedWindows` is not part of this
 change.
 
+Amended by #526 (2026-10-16): the pass runs on claude CLI 2.1.296, the
+version installed on the run machine, which the engine runs unchanged.
+Its `rate_limit_event` carries `unifiedWindows` as 2.1.288's does, and
+`limitScope` only when the server reports one (#452's line above says
+every event carries it); its `rate_limit_info` may also carry
+`overageEnabled`. The engine reads none of them; the usage-credits
+pause still follows `isUsingOverage` alone. The CLI version is in
+every cache key (ADR-0032), so the next run redoes every call.
+
 Amended by #197 (2026-10-04): §4's claim fingerprints are defined in
 `pipeline/fingerprints.py`, beside the mention fingerprints and cluster
 ids. A claim's fingerprint hashes:

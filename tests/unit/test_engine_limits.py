@@ -844,8 +844,9 @@ class TestAskingAgain:
         ],
     )
     def test_a_pause_describes_the_window(self, cli, clock, window, described):
-        """Each window name CLI 2.1.288 reports is described in words; a
-        name it does not know is given as the CLI names it (#452)."""
+        """Each window name CLI 2.1.296 reports, as 2.1.288 did, is described
+        in words; a name it does not know is given as the CLI names it
+        (#452, #526)."""
         cli.script = [usage_window(START + 3 * 24 * HOUR, window)]
         with pytest.raises(UsageLimitReached) as paused:
             ClaudeCodeClient().complete("Read the letter.")
@@ -1038,11 +1039,11 @@ class TestReserve:
         assert clock.slept == []
 
     def test_unified_windows_are_not_paced_from(self, pacer, clock):
-        """CLI 2.1.288 reports every window's use in unifiedWindows, past
-        the warning thresholds or not (#452). The engine paces from
-        rate_limit_info's utilization alone, so a report whose
-        unifiedWindows say a window is nearly used up, and whose
-        utilization is absent, paces nothing."""
+        """CLI 2.1.296, like 2.1.288, reports every window's use in
+        unifiedWindows, past the warning thresholds or not (#452, #526).
+        The engine paces from rate_limit_info's utilization alone, so a
+        report whose unifiedWindows say a window is nearly used up, and
+        whose utilization is absent, paces nothing."""
         resets = START + HOUR
         info = report(resets_at=resets) | {
             "unifiedWindows": {
@@ -1351,6 +1352,18 @@ class TestOverage:
         assert paused.value.reason == OVERAGE
         assert paused.value.resumes_at is None
 
+    def test_overage_enabled_is_not_overage(self, pacer, clock):
+        """CLI 2.1.296 says on an allowed_warning report whether usage
+        credits are enabled (overageEnabled, #526). That a call could run
+        on them is not that it did: only isUsingOverage pauses the pass."""
+        info = report(0.5, resets_at=START + 3 * 24 * HOUR, window="seven_day")
+        info["overageEnabled"] = True
+        assert info["isUsingOverage"] is False
+        pacer.done([info])
+        record = admit(pacer, max_wait=0)
+        assert record["held"] is None
+        assert clock.slept == []
+
 
 class TestOverageDocs:
     """The overage guarantee, wherever it is written down, admits what
@@ -1441,10 +1454,10 @@ class TestUtilizationDocs:
 
 
 class TestUnifiedWindowsDocs:
-    """CLI 2.1.288 reports a window's use below its warning thresholds in
-    unifiedWindows (#452), so nothing here says it reports none, and
-    every description of what it reports says the engine reads neither
-    unifiedWindows nor limitScope."""
+    """CLI 2.1.296, like 2.1.288, reports a window's use below its warning
+    thresholds in unifiedWindows (#452, #526), so nothing here says it
+    reports none, and every description of what it reports says the
+    engine reads neither unifiedWindows nor limitScope."""
 
     # the wordings of the claim that the CLI reports no use below its
     # warning thresholds, or that the reserve paces from whatever it sends
@@ -1502,16 +1515,16 @@ class TestUnifiedWindowsDocs:
 
 
 class TestPinDocs:
-    """The docs name 2.1.288 as the pin and say how to install it, and the
+    """The docs name 2.1.296 as the pin and say how to install it, and the
     pipeline README names both settings that keep a call as it ran on
-    2.1.237 (#452 review)."""
+    2.1.237 (#452 review, #526)."""
 
     RUNBOOK = ROOT / "docs" / "runbooks" / "scratch-run.md"
     README = ROOT / "src" / "yizkr" / "pipeline" / "README.md"
 
     def test_the_runbook_installs_exactly_the_pin(self):
         text = self.RUNBOOK.read_text()
-        assert "npm install -g @anthropic-ai/claude-code@2.1.288" in text
+        assert "npm install -g @anthropic-ai/claude-code@2.1.296" in text
         assert "export DISABLE_AUTOUPDATER=1" in text
         flat = " ".join(text.split())
         assert "the binary an editor bundles" in flat
@@ -1526,13 +1539,18 @@ class TestPinDocs:
         }
         for name, text in texts.items():
             flat = " ".join(text.split())
-            for old in ("pinned 2.1.237", "claude-code@2.1.237"):
+            for old in (
+                "pinned 2.1.237",
+                "claude-code@2.1.237",
+                "pinned 2.1.288",
+                "claude-code@2.1.288",
+            ):
                 assert old not in flat, (name, old)
-            assert "2.1.288" in flat, name
+            assert "2.1.296" in flat, name
 
     def test_the_readme_names_the_pin_and_both_settings(self):
         text = self.README.read_text()
-        assert "Install 2.1.288, which `claude-opus-5-5`" in " ".join(
+        assert "Install 2.1.296, which `claude-opus-5-5`" in " ".join(
             text.split()
         )
         assert "`--permission-mode default`" in text

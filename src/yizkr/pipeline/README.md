@@ -805,12 +805,12 @@ Two Anthropic-backed providers, differing in how usage is billed:
   docs/LLM_CACHE.md, Subscription limits) — best-effort, since the engine
   reads only the utilization the CLI reports once one of its own warning
   thresholds is passed, so the reserve gives no protection below the first of
-  those. (CLI 2.1.288 also reports each window's use in its
+  those. (CLI 2.1.296 also reports each window's use in its
   `rate_limit_event`'s `unifiedWindows`, whatever the thresholds; the
   engine does not read it.)
 
   A pass runs on one **pinned** CLI version (#133): the one installed
-  when its first client starts. Install 2.1.288, which `claude-opus-5-5`
+  when its first client starts. Install 2.1.296, which `claude-opus-5-5`
   needs (2.1.280 or newer; docs/runbooks/scratch-run.md). The engine
   does not compare the version with the model's needs, but a call the
   API refuses with status 400 because the CLI does not support its model
@@ -834,8 +834,9 @@ Two Anthropic-backed providers, differing in how usage is billed:
   hooks, permission rules, plugins or CLAUDE.md), `--strict-mcp-config`
   (no MCP servers, claude.ai connectors included),
   `--disable-slash-commands` (no skills), `--permission-mode default`
-  (the mode 2.1.237 started `-p` in; 2.1.288 starts it in auto mode
-  when telemetry is off, whose availability depends on the account),
+  (the mode 2.1.237 started `-p` in; 2.1.296, like 2.1.288, starts it in
+  auto mode when telemetry is off, whose availability depends on the
+  account),
   `--settings
   '{"autoCompactEnabled":true}'` (see below), and a child environment
   built from an **allowlist**. A call inherits only `PATH`; `HOME`,
@@ -867,7 +868,7 @@ Two Anthropic-backed providers, differing in how usage is billed:
   (see below), `CLAUDE_CODE_DISABLE_AUTO_MEMORY`,
   `DISABLE_ERROR_REPORTING`, `DISABLE_TELEMETRY` and
   `CLAUDE_CODE_HARBOR_KITE=0` (the CLI's internal name for its
-  cross-session messaging socket: on 2.1.288, 0 keeps a telemetry-off
+  cross-session messaging socket: on 2.1.296, 0 keeps a telemetry-off
   `-p` call from listening on a socket your other Claude Code sessions
   can reach; it has no effect on 2.1.237, which has no socket). Calls
   run in
