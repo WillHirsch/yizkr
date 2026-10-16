@@ -396,8 +396,8 @@ Still to do, each keeping the two witnesses separable:
    states it (CLAUDE.md rules 1 and 5). Only who a person is could come
    from the caption safely, since that is identity, which reconciliation
    decides (ADR-0007), not a value the excerpt is cited for.
-   Proposed (2026-10-16): ADR-0039 §5 answers no, and writes the
-   caption's claims on the excerpt's item instead (#456).
+   Proposed (2026-10-16): ADR-0039 §5 answers no, and keeps the
+   caption verbatim on the excerpt's item instead (#456).
 3. An original that a compilation reproduces only as a whole page, or as
    part of a scanned page. An image that fills a page has bytes of its
    own, but so does each page of a scanned PDF, so telling an original
@@ -427,9 +427,10 @@ Still to do, each keeping the two witnesses separable:
    artifact by its SHA-1, resolved at write time as a source is, or do
    such statements wait? The people and places a caption names are
    claims about them, and can be made meanwhile.
-   Proposed (2026-10-16): ADR-0039 §2 and §3 answer yes, for the
-   claim's own source or an artifact it places, on the artifact-subject
-   properties only, for a PDF's images and a deck's alike (#456).
+   Proposed (2026-10-16): ADR-0039 §2 answers: a container's claim
+   about an excerpt is its verbatim `caption` only, and what the excerpt
+   is (its author, date, place) is the excerpt's own claim about itself,
+   for a PDF's images and a deck's alike (#456).
 7. For follow-up A to settle: where an excerpt's views live, and how its
    status relates to the compilation's, given that content dedup seeds
    only from `written` documents (ADR-0010), that each document passes
