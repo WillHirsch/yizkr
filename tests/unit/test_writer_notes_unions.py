@@ -1403,3 +1403,34 @@ class TestMoreKinds:
         again = write_mapped(BatchWriter(wiki), later, identity=identity)
         assert again.notes_written == 0
         assert wiki.wbi.item.writes == writes
+
+
+class WikiWithoutDateReadings(NotedWiki):
+    """An instance whose vocabulary lacks the `judgement_date_reading`
+    item, so a date reading's note is left out and its claim's run block
+    goes bare."""
+
+    def vocabulary(self):
+        properties, items = super().vocabulary()
+        del items["judgement_date_reading"]
+        return properties, items
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_a_note_its_vocabulary_cannot_hold_meets_a_noted_claim(reverse):
+    """A later run's date-reading note, left out on this instance, and its
+    claim of another category, noted: the bare and the noted run block
+    both land, in either order (#410)."""
+    wiki = WikiWithoutDateReadings()
+    first = write_mapped(BatchWriter(wiki), batch_of(wedding_date()))
+    other = {"category": "other", "text": "the date read as the wedding's"}
+    claims = [wedding_date(DATE_NOTE), wedding_date(other)]
+    if reverse:
+        claims.reverse()
+    later = batch_of(*claims, run=LATER_RUN)
+    result = write_mapped(BatchWriter(wiki), later)
+    assert run_blocks(the_wedding_date(wiki, result)) == [
+        (first.run_qid, None, None),
+        (result.run_qid, None, None),
+        (result.run_qid, NOTE_ITEMS["judgement_other"], other["text"]),
+    ]
