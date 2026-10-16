@@ -363,9 +363,8 @@ READ_ERRORS = [
     ),
     # as CLI 2.1.296 words them (#526): the binary-file message with its
     # second sentence as seen live, the refusal of a pages list (2.1.292),
-    # and the token message with the allow_large refusal appended (its
-    # appended words here are a stand-in; the check found the prefix
-    # unchanged in the binary)
+    # and the token message with the allow_large hint the binary appends
+    # when the file would fit in the context left, or its refusal when not
     (
         "This tool cannot read binary files. The file appears to be a binary "
         ".tif file. Use a skill for this file type if one is available, or a "
@@ -382,7 +381,19 @@ READ_ERRORS = [
         "File content (41200 tokens) exceeds maximum allowed tokens (25000). "
         "Use offset and limit parameters to read specific portions of the "
         "file, or search for specific content instead of reading the whole "
-        "file. Pass allow_large to read the whole file in one call.",
+        "file. To read it anyway, up to what still fits in your context, "
+        "call Read again with allow_large: true \u2014 only if you genuinely "
+        "need all of it or the user asked for the whole file.",
+        "too-many-tokens",
+        REQUEST_ERROR,
+    ),
+    (
+        "File content (41200 tokens) exceeds maximum allowed tokens (25000). "
+        "Use offset and limit parameters to read specific portions of the "
+        "file, or search for specific content instead of reading the whole "
+        "file. Even with allow_large, this is more than fits in the context "
+        "you have left this turn (other large reads in the same turn share "
+        "that room).",
         "too-many-tokens",
         REQUEST_ERROR,
     ),

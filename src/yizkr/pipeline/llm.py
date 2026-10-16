@@ -1340,12 +1340,12 @@ def tool_failures(
 #   CLI's own warning thresholds: for the five-hour window, 90%, and only while
 #   at most 72% of it has elapsed; for the weekly window, 75%, 50% or 25%,
 #   early in the week. Short of that threshold, or past its elapsed-time gate,
-#   rate_limit_info carries no utilization. Every rate_limit_event also
-#   carries unifiedWindows, the use of the five_hour and seven_day windows
-#   ({utilization, resetsAt} each) whatever the thresholds, and, when
-#   the server reports one, limitScope;
-#   the engine reads neither. An allowed_warning report that is not on
-#   usage credits also says whether they are enabled (overageEnabled),
+#   rate_limit_info carries no utilization. Every rate_limit_event also carries
+#   unifiedWindows, the use of the five_hour and seven_day windows
+#   ({utilization, resetsAt} each) whatever the thresholds, and, when the
+#   server reports one, limitScope; the engine reads neither. An
+#   allowed_warning report whose window (rateLimitType) is not overage may also
+#   say whether usage credits are enabled on the account (overageEnabled),
 #   which the engine does not read either;
 # * a call the API refuses for a limit ends its turn on an API error: an
 #   assistant event whose error is rate_limit (overloaded, for an
