@@ -698,8 +698,11 @@ class TestAppellationLabel:
                 ),
                 "Ida Sörne",
             ),
+            # a whole form of name parts holding a bracket competes by
+            # its runs
+            ("Tante Rahel", ["Rahel (Löbig)"], RAHEL, "Rahel"),
         ],
-        ids=["trailing", "inner", "gloss", "quotes", "register"],
+        ids=["trailing", "inner", "gloss", "quotes", "register", "whole"],
     )
     def test_a_run_holds_no_unbalanced_bracket_or_quote(
         self, label, aliases, structure, named
