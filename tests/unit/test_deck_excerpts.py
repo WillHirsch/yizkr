@@ -296,17 +296,17 @@ class TestReadSlides:
     def test_images_take_the_order_the_slide_paints_them_in(self, tmp_path):
         """A slide's images are placed in the order its XML refers to
         them, whatever order its relationships list them in; the same
-        image twice on a slide is one place, and on two slides one image
-        with a place on each."""
+        image twice on a slide, painted twice or held under two names, is
+        one place, and on two slides one image with a place on each."""
         first, second = png_of(120, 120, "first"), png_of(120, 120, "second")
         path = deck(
             tmp_path / "talk.pptx",
             [
-                (("Wastl and Hilde",), ["a.png", "b.png"], ""),
+                (("Wastl and Hilde",), ["a.png", "b.png", "c.png"], ""),
                 (("Stupfield",), ["a.png"], ""),
             ],
-            {"a.png": first, "b.png": second},
-            painted={1: ["b.png", "a.png", "b.png"]},
+            {"a.png": first, "b.png": second, "c.png": first},
+            painted={1: ["b.png", "a.png", "b.png", "c.png"]},
         )
         (tmp_path / "out").mkdir()
         read = read_slides(path, tmp_path / "out")
