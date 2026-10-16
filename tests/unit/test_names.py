@@ -607,6 +607,23 @@ class TestAppellationLabel:
         settled = normalize_entity_dict(entity, ["Oma Hilde"])
         assert settled["label"] == "Hildegard Löbig"
 
+    def test_a_whole_form_beats_a_run_of_as_many_words(self):
+        """'Hilde Löbig' is a whole name form, 'Hildegard Löbig' only a run
+        inside 'Frau Hildegard Löbig': the whole form wins, letters
+        aside."""
+        record = person(
+            given=[{"written": "Hildegard"}],
+            nicknames=["Hilde"],
+            surnames=[{"written": "Löbig"}],
+            titles=["Frau"],
+        )
+        entity = rahel(
+            "Oma Hilde", ["Frau Hildegard Löbig", "Hilde Löbig"], record
+        )
+        assert normalize_entity_dict(entity, ["Oma Hilde"])["label"] == (
+            "Hilde Löbig"
+        )
+
     def test_the_label_matches_as_the_instance_keeps_a_term(self):
         settled = normalize_entity_dict(
             rahel("Tante\nRahel", ["Rahel Löbig"]), ["Tante Rahel"]
