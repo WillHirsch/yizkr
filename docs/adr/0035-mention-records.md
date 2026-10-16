@@ -976,7 +976,7 @@ ADR-0031 §1 leaves both to this revision.
 
 Proposed (2026-10-16): ADR-0039 widens the document subject to an
 artifact the claim's source places, and adds `author`, `addressee`,
-`inception`, `location_of_creation` and `main_subject` beside
+`inception`, `location_of_creation`, `main_subject` and `shows` beside
 `issued_by` (#456). This section stands until the owner accepts it.
 
 - **`issued_by`** (P2378): a document → the organisation that issued it.

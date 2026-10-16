@@ -9,6 +9,12 @@ It covers both kinds of container: a PDF whose pages place images
 (ADR-0008, as amended by #176 and #397) and a deck whose slides embed
 them, which #502 makes excerpts too.
 
+Revised 2026-10-16 with the owner's answers on #517: owner questions 2
+to 6 are accepted as recommended; on question 1, who an image shows is
+split from what an artifact is about, so `shows` joins the
+artifact-subject properties beside `main_subject` (§2), and question 1
+now asks the owner to confirm that split.
+
 ## In brief
 
 - **A container speaks about the artifacts it places.** A caption under
@@ -24,6 +30,10 @@ them, which #502 makes excerpts too.
 - **A document may say the same of itself.** The letter's own greeting
   names its addressee, so the same properties take a document's own
   claims about itself, as `issued_by` already does.
+- **Who an image shows is `shows`; what a work is about is
+  `main_subject`.** A group photograph gets one `shows` statement per
+  person its source names; `depicts` stays the faces flow's confirmed,
+  region-bound statement (ADR-0005).
 - **No value is built from both** by the pipeline. Who a caption's
   "Wastl" is stays clustering's and curation's question (ADR-0007).
 - **A slide's caption is the same question** as a compilation's, and has
@@ -119,7 +129,7 @@ the container's.**
 
 ### 2. Which properties take an artifact as subject
 
-**The artifact-subject properties.** The manifest gains five properties,
+**The artifact-subject properties.** The manifest gains six properties,
 each marked `document_subject: true`, beside `issued_by`:
 
 | Key | What it states | Accepts | Wikidata |
@@ -128,7 +138,8 @@ each marked `document_subject: true`, beside `issued_by`:
 | `addressee` | the artifact → whom it was addressed to | human, organization, family | P1817 |
 | `inception` | the artifact → when it was made | a time | P571 |
 | `location_of_creation` | the artifact → where it was made | place | P1071 |
-| `main_subject` | the artifact → what or whom it is about, or shows | any kind | P921 |
+| `main_subject` | the artifact → what it is about: a letter's topic, the district a map covers, the family a booklet is about | any kind | P921 |
+| `shows` | the image → who or what it shows, as a source states it (a caption, an inscription on a print) | any kind | none (below) |
 | `issued_by` (already) | the document → the organisation that issued it | organization | P2378 |
 
 Each accepts `unclassified_entity` too, wherever it accepts a real kind
@@ -138,14 +149,38 @@ Brüsrich, stamped on the studio portrait's mount, is the portrait's
 takes (`earliest_date`, `latest_date`, `sourcing_circumstances`),
 precision as the source gives it (MODELING.md, "Uncertainty and time").
 
-**Not `depicts`.** A caption that names who a photograph shows gives
-`main_subject`, never `depicts`. `depicts` stays ADR-0005's: a
-human-confirmed depiction, with a region, written only through the faces
-flow, and never in a scratch run. A caption says what an image is of, not
-where in it a face is, and the writer refuses an unapproved `depicts`
-anyway (ADR-0005, as amended by #226). The faces flow may later read a
-caption's `main_subject` as a hint for whom to propose; that is outside
-the graph until a human confirms it (owner question 1).
+**What a work is about, and whom an image shows, are two properties.**
+`main_subject` says what a document or an image is *about*: the topic of
+a letter, the district a map covers, the family a booklet is about.
+Naming every person in a group photograph as its "main subject" would
+stretch that meaning and mix the two questions, so who or what an image
+*shows*, as a source states it, is `shows`:
+
+- one `shows` statement per person or thing the source names, each
+  stated in its source with its locator. The studio portrait's reverse
+  reads "Muckel · Cilli · Wastl · Rahel · Felix": five `shows`
+  statements on the portrait's item, each cited to the portrait itself,
+  whose own text it is. A list gives no positions, and none is read into
+  its order;
+- where a caption words a position ("left to right: …", "seated, centre"),
+  the statement may keep it in the qualifier `stated_position` (a string,
+  verbatim as the caption words it, in the caption's language). It is
+  never a computed region, and never `relative position within image`,
+  which is the faces flow's measured box;
+- no Wikidata mapping. Wikidata's nearest property is P180 *depicts*,
+  which the manifest already maps to `depicts`; mapping `shows` to P180
+  as well would make an export or a federated query read a caption's
+  claim as a confirmed depiction, the very difference this split keeps.
+  `stated_position` is unmapped too: P2677 *relative position within
+  image* is a measured region.
+
+**Not `depicts`.** `depicts` stays ADR-0005's: a depiction confirmed by a
+person, tied to a region, written only through the faces flow, and never
+in a scratch run. CLAUDE.md's rule that nothing writes `depicts` without
+a person confirming it is untouched, and the writer refuses an
+unapproved `depicts` anyway (ADR-0005, as amended by #226). The faces
+flow may later read `shows` as a hint for whom to propose; that stays
+outside the graph until a person confirms it (owner question 1).
 
 **Not `instance_of`.** A caption that calls the image "a letter" is a
 claim about its class, which ADR-0008's open question 4 still holds
@@ -231,8 +266,8 @@ cited to the deck with the slide as `page number`. Until then the deck's
 prompt lists no images, so it gives no claim about one. Slide 2's notes,
 "Photograph from the family album", say where the image came from,
 which no listed property expresses, so they give no claim; its title,
-"Wastl and Hilde", over the slide's one image, may give `main_subject`
-→ Sebastian and `main_subject` → Hildegard on the photograph's item,
+"Wastl and Hilde", over the slide's one image, may give `shows` →
+Sebastian and `shows` → Hildegard on the photograph's item,
 stated in the deck, page 2, with a judgement note.
 
 **Where nothing changes.** An image on a page read by vision is read as
@@ -341,7 +376,9 @@ qualifiers and references, and its transcription excerpt leaves only
 with a statement it attests (ADR-0020, as amended by #364 and #412). An
 artifact-subject property marks no one as a person: its values are like
 `depicts`'s, which mark no one (ADR-0020 as amended by #344), since an
-author or an addressee may be an organisation. So a possibly living
+author or an addressee may be an organisation and an image may show a
+building. `shows` is the same: a person a caption names as shown in a
+photograph is not thereby released. So a possibly living
 person named only as a caption's addressee is not released by it, and
 an item the check never assessed is dropped, failing closed.
 
@@ -364,7 +401,8 @@ an item the check never assessed is dropped, failing closed.
 
 ### 8. What this costs and checks
 
-- The manifest's five properties, the prompts' paragraph and the list
+- The manifest's six properties, the `stated_position` qualifier, the
+  prompts' paragraph and the list
   of placed artifacts change the extraction stage: `stage:extraction`
   and `needs:scratch-diff` (ADR-0025 §4). Validation and the writer each
   check the rule (§2), and a live test writes a container's claim about
@@ -393,55 +431,70 @@ an item the check never assessed is dropped, failing closed.
 
 **ADR-0035 §3.4.** "`issued_by`" becomes "the artifact-subject
 properties (`issued_by`, `author`, `addressee`, `inception`,
-`location_of_creation`, `main_subject`; ADR-0039)". The subject is the
-source artifact itself, or an artifact the source places by its record
+`location_of_creation`, `main_subject`, `shows`; ADR-0039)". The
+subject is the source artifact itself, or an artifact the source places by its record
 of derived media, named by its SHA-1, and resolved to its item at write.
-§3.5's table gains the five rows of §2. §3.6's vocabulary gains them and
-`determination_method` and `combined_from_sources` (§4).
+§3.5's table gains the six rows of §2. §3.6's vocabulary gains them,
+`stated_position` (§2), and `determination_method` and
+`combined_from_sources` (§4).
 
 **MODELING.md.**
 
-- The paragraph on `document_subject` (core classes): it names the six
-  properties, and the subject may be the source or an artifact it
+- The paragraph on `document_subject` (core classes): it names the
+  seven properties (`issued_by` and the six of §2), and the subject may be the source or an artifact it
   places.
 - "Compound artifacts": a bullet that a container's claims about an
   artifact it places are written on that artifact's item, `stated in`
   the container with its page, beside the artifact's own claims, which
   cite the artifact; neither is moved into the other.
 - "Artifact coverage": "subject coverage reuses `depicts`" becomes
-  "subject coverage uses `main subject`; `depicts` is the faces flow's
+  "subject coverage uses `main subject`; who or what an image shows, as
+  a source states it, is `shows`; `depicts` is the faces flow's
   confirmed depiction (ADR-0005)".
+- "Faces and depiction": a bullet that `shows` is a source's statement
+  of whom an image shows, never a depiction, and may seed a face
+  proposal outside the graph.
 - "Contradictions": the example of a caption's and a letter's dates on
   one artifact item.
 
 ## Owner questions
 
-1. **`main_subject`, not `depicts`, for a caption's "shows".**
-   Recommended: a caption naming who or what an image shows gives
-   `main_subject`; `depicts` stays the faces flow's human-confirmed,
-   region-qualified statement (ADR-0005), and a caption's `main_subject`
-   may later seed a face proposal outside the graph. The alternative,
-   `depicts` without a region and cited to the container, would make
-   ADR-0005's writer rule tell two kinds of `depicts` apart.
-2. **Derived assertions.** Recommended: none by the pipeline; from the
+1. **`shows` for whom an image shows, `main_subject` for what a work is
+   about** (reopened by the owner, 2026-10-16: "Does main_subject not
+   create an awkward issue of contrivance for, say a group photo?").
+   Recommended: confirm the split of §2. `shows` takes one statement per
+   person or thing a source names as shown, with a caption's worded
+   position kept verbatim in `stated_position`, never a computed region,
+   and maps to no Wikidata property. `main_subject` keeps only "what it
+   is about". `depicts` stays the faces flow's confirmed, region-bound
+   statement (ADR-0005), and `shows` may seed a face proposal outside
+   the graph. The alternatives: `main_subject` for both, contrived for a
+   group photograph; or `depicts` without a region, cited to the
+   container, which would make ADR-0005's writer rule tell two kinds of
+   `depicts` apart.
+2. **Derived assertions.** Accepted by the owner, 2026-10-16.
+   Recommended: none by the pipeline; from the
    keeper run on, a curator may write one with two references and
    `determination_method` → `combined_from_sources` (§4). A deterministic
    pass that proposes them for a curator waits until someone asks for it.
-3. **Clustering on a shared artifact role.** Recommended: two mentions
+3. **Clustering on a shared artifact role.** Accepted by the owner,
+   2026-10-16. Recommended: two mentions
    that are the same property's value on the same artifact meet, so the
    pair is judged, but the role alone never makes a confident link (§6).
    The alternative, counting it as agreement, would merge two sources
    that name different addressees of one letter.
-4. **A caption's class for an image.** Recommended: `instance_of` is not
+4. **A caption's class for an image.** Accepted by the owner,
+   2026-10-16. Recommended: `instance_of` is not
    an artifact-subject property until ADR-0008's question 4 (the class of
    a compilation's images) is settled; then a caption's "letter" could be
    the container's `instance_of` claim, beside the registrar's.
 5. **The caption never reaches the excerpt's extraction** (ADR-0008
-   question 2). Recommended: not at all, not even as identity hints (§5).
+   question 2). Accepted by the owner, 2026-10-16. Recommended: not at all, not even as identity hints (§5).
    The alternative, identity hints only, would change the excerpt's
    prompt and its cache key with every container that places it, and
    steer the excerpt's own readings.
-6. **Only the source itself, or what it places.** Recommended: a claim
+6. **Only the source itself, or what it places.** Accepted by the
+   owner, 2026-10-16. Recommended: a claim
    may name as its subject only its own source or an artifact its source
    places by bytes. A document that writes about a held artifact without
    placing it (a narrative recalling a letter) gives no claim about it; a
@@ -458,10 +511,14 @@ of derived media, named by its SHA-1, and resolved to its item at write.
 - A document's own claims about itself (a letter's date and place, its
   greeting's addressee, a photograph's studio) become statements on its
   own item, beside the people and events it speaks of.
+- A group photograph's named people are each a `shows` statement on its
+  item, attributed to the source that names them, and none of them is a
+  depiction until a person confirms a face through the faces flow.
 - Two witnesses of one artifact stay separable: no reference cites a
   source for what it never said, and no excerpt's claim depends on any
   container's text.
-- The manifest gains five properties, a qualifier and its value, and the
+- The manifest gains six properties, two qualifiers (`stated_position`
+  and `determination_method`) and one value, and the
   rule of ADR-0035 §3.4 widens from "the source itself" to "the source,
   or what it places by bytes", still checked twice, before and at write.
 - A deck's images gain container claims only with #502; until then its
@@ -486,5 +543,8 @@ of derived media, named by its SHA-1, and resolved to its item at write.
   for an artifact that already has one, keyed by its bytes (ADR-0010),
   and leaves the link to curation.
 - **`depicts` from captions.** See owner question 1.
+- **`main_subject` for whom an image shows.** Contrived for a group
+  photograph, whose five named people are not five "main subjects", and
+  it mixes what a work is about with whom an image shows.
 - **Combining values by a pass after write.** See §4: it would narrow
   what each source says, and write a value no source states.
