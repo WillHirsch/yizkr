@@ -1263,27 +1263,55 @@ class TestKindsAndCuratedStatementsInOneWrite:
         assert wiki.wbi.item.writes == writes
 
     @pytest.mark.parametrize(
-        "x",
+        "x, y",
         [
-            wedding_date(DATE_NOTE),
-            wedding_date(DATE_NOTE, page="2"),
-            dict(wedding_date(page="2"), curated=True),
+            # X and Y from the burial register, Y bare on page 1
+            (
+                wedding_date(DATE_NOTE, sha1=BURIAL_SHA1),
+                wedding_date(sha1=BURIAL_SHA1),
+            ),
+            (
+                wedding_date(DATE_NOTE, sha1=BURIAL_SHA1, page="2"),
+                wedding_date(sha1=BURIAL_SHA1),
+            ),
+            (
+                dict(wedding_date(sha1=BURIAL_SHA1, page="2"), curated=True),
+                wedding_date(sha1=BURIAL_SHA1),
+            ),
+            # X from the judgment, Y bare from the burial register, page 1
+            (wedding_date(DATE_NOTE), wedding_date(sha1=BURIAL_SHA1)),
+            (
+                wedding_date(DATE_NOTE, page="2"),
+                wedding_date(sha1=BURIAL_SHA1),
+            ),
+            (wedding_date(page="2"), wedding_date(sha1=BURIAL_SHA1)),
+            (
+                dict(wedding_date(page="2"), curated=True),
+                wedding_date(sha1=BURIAL_SHA1),
+            ),
         ],
-        ids=["noted, page 1", "noted, page 2", "curated, page 2"],
+        ids=[
+            "burial: noted, page 1",
+            "burial: noted, page 2",
+            "burial: curated, page 2",
+            "judgment: noted, page 1",
+            "judgment: noted, page 2",
+            "judgment: bare, page 2",
+            "judgment: curated, page 2",
+        ],
     )
-    def test_a_curated_statement_and_a_later_runs_claims(self, x):
+    def test_a_curated_statement_and_a_later_runs_claims(self, x, y):
         """The curator's wedding date from the judgment's page 1, then a
-        later run's claims X and Y from the burial register, Y bare on
-        page 1: the same blocks in both orders, and a rewrite adds
-        nothing."""
+        later run's claims X and Y, Y bare from the burial register's page
+        1: the same blocks in both orders, and a rewrite writes nothing."""
         shown = []
         for reverse in (False, True):
             wiki = NotedWiki()
             curated = batch_of(dict(wedding_date(), curated=True))
-            claims = [x, wedding_date()]
+            claims = [x, y]
             if reverse:
                 claims.reverse()
-            later = cited_to(batch_of(*claims, run=LATER_RUN), BURIAL_SHA1)
+            later = batch_of(*claims, run=LATER_RUN)
             identity = joined(mapped(curated, later), WEDDING["label"])
             write_mapped(BatchWriter(wiki), curated, identity=identity)
             result = write_mapped(BatchWriter(wiki), later, identity=identity)
@@ -1434,3 +1462,206 @@ def test_a_note_its_vocabulary_cannot_hold_meets_a_noted_claim(reverse):
         (result.run_qid, None, None),
         (result.run_qid, NOTE_ITEMS["judgement_other"], other["text"]),
     ]
+
+
+IDENTITY_NOTE = {
+    "category": "identity",
+    "text": "the court of the second page read as the judgment's own court",
+}
+
+
+class WikiWithoutKindNotes(NotedWiki):
+    """An instance whose vocabulary lacks the `judgement_kind` item, so a
+    kind note is left out and its witness's run block goes bare."""
+
+    def vocabulary(self):
+        properties, items = super().vocabulary()
+        del items["judgement_kind"]
+        return properties, items
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_a_kind_note_its_vocabulary_cannot_hold_meets_a_noted_one(reverse):
+    """The kinds' mirror of the claims' test above: a later run's kind
+    note, left out on this instance, and an identity note, written, give
+    the same blocks in either order, and a rewrite writes nothing."""
+    wiki = WikiWithoutKindNotes()
+    earlier = court_pair(None, None)
+    identity = joined(mapped(earlier), COURT["label"])
+    first = write_mapped(BatchWriter(wiki), earlier, identity=identity)
+    later = court_pair(
+        KIND_NOTE, IDENTITY_NOTE, reverse=reverse, run=LATER_RUN
+    )
+    result = write_mapped(BatchWriter(wiki), later, identity=identity)
+    (kind,) = statements(wiki, result.created_items["e6"], "instance_of")
+    assert run_blocks(kind) == [
+        (first.run_qid, None, None),
+        (result.run_qid, None, None),
+        (result.run_qid, "Q43", IDENTITY_NOTE["text"]),
+    ]
+    writes = wiki.wbi.item.writes
+    write_mapped(BatchWriter(wiki), later, identity=identity)
+    assert wiki.wbi.item.writes == writes
+
+
+def curated_and_bare(sha1=JUDGMENT_SHA1, run=RUN, reverse=False):
+    """A curated wedding date and a machine one, both bare, from one place
+    of `sha1`'s page 1, in the batch's order or `reverse`d."""
+    claims = [
+        dict(wedding_date(sha1=sha1), curated=True),
+        wedding_date(sha1=sha1),
+    ]
+    if reverse:
+        claims.reverse()
+    return batch_of(*claims, run=run)
+
+
+class TestACuratedAndABareClaimFromOnePlace:
+    """A curated claim beside a bare machine claim from the same place
+    gives the same blocks in either order, fresh or on a statement an
+    earlier run wrote, and a rewrite writes nothing: a claim's source
+    block counts as carried only where the statement carried it before
+    the write."""
+
+    def shown(self, wiki, result) -> list[str]:
+        return sorted(
+            json.dumps(block, sort_keys=True)
+            for block in blocks(the_wedding_date(wiki, result))
+        )
+
+    def test_fresh(self):
+        shown = []
+        for reverse in (False, True):
+            wiki = NotedWiki()
+            batch = curated_and_bare(reverse=reverse)
+            identity = mapped(batch)
+            result = write_mapped(BatchWriter(wiki), batch, identity=identity)
+            shown.append(self.shown(wiki, result))
+            writes = wiki.wbi.item.writes
+            write_mapped(BatchWriter(wiki), batch, identity=identity)
+            assert wiki.wbi.item.writes == writes, reverse
+        assert shown[0] == shown[1]
+
+    def test_after_an_earlier_machine_run(self):
+        shown = []
+        for reverse in (False, True):
+            wiki = NotedWiki()
+            earlier = batch_of(wedding_date(sha1=BURIAL_SHA1))
+            later = curated_and_bare(run=LATER_RUN, reverse=reverse)
+            identity = joined(mapped(earlier, later), WEDDING["label"])
+            write_mapped(BatchWriter(wiki), earlier, identity=identity)
+            result = write_mapped(BatchWriter(wiki), later, identity=identity)
+            shown.append(self.shown(wiki, result))
+            writes = wiki.wbi.item.writes
+            write_mapped(BatchWriter(wiki), later, identity=identity)
+            assert wiki.wbi.item.writes == writes, reverse
+        assert shown[0] == shown[1]
+
+    def test_an_explicit_kind_after_an_earlier_run(self):
+        shown = []
+        for reverse in (False, True):
+            wiki = NotedWiki()
+            earlier = explicit_kind()
+            identity = mapped(earlier)
+            write_mapped(BatchWriter(wiki), earlier, identity=identity)
+            plain = explicit_kind().model_dump(mode="json")
+            kind = plain["claims"][-1]
+            claims = [
+                *plain["claims"][:-1],
+                dict(kind, curated=True),
+                kind,
+            ]
+            if reverse:
+                claims.reverse()
+            later = batch_of(
+                *claims, entities=plain["entities"], run=LATER_RUN
+            )
+            result = write_mapped(BatchWriter(wiki), later, identity=identity)
+            (statement,) = statements(
+                wiki, result.created_items["e6"], "instance_of"
+            )
+            shown.append(
+                sorted(
+                    json.dumps(block, sort_keys=True)
+                    for block in blocks(statement)
+                )
+            )
+            writes = wiki.wbi.item.writes
+            write_mapped(BatchWriter(wiki), later, identity=identity)
+            assert wiki.wbi.item.writes == writes, reverse
+        assert shown[0] == shown[1]
+
+
+class TestTheStateBeforeTheWrite:
+    """_before_write keeps each statement's state under its subject, value
+    and qualifiers alike, and afresh for each write."""
+
+    @pytest.mark.parametrize("differs", ["subject", "value", "qualifiers"])
+    def test_a_statement_differing_in_one_part_is_its_own(self, differs):
+        wiki = NotedWiki()
+        curated = batch_of(dict(wedding_date(), curated=True))
+        other = wedding_date(DATE_NOTE, sha1=BURIAL_SHA1)
+        if differs == "subject":
+            other["subject"] = DIVORCE
+        elif differs == "value":
+            other["value"] = {"type": "time", "year": 1948}
+        else:
+            other["qualifiers"] = [
+                {
+                    "property": "location",
+                    "value": {"type": "item", "value": FLOERBURG},
+                }
+            ]
+        second = dict(other, note=OTHER_DATE_NOTE)
+        # the other statement first, then the curated one's own place
+        later = batch_of(other, second, wedding_date(), run=LATER_RUN)
+        identity = joined(mapped(curated, later), WEDDING["label"])
+        first = write_mapped(BatchWriter(wiki), curated, identity=identity)
+        before = blocks(the_wedding_date(wiki, first))
+        result = write_mapped(BatchWriter(wiki), later, identity=identity)
+        wedding = result.created_items["e4"]
+        dates = statements(wiki, wedding, "point_in_time")
+        curated_date = next(
+            s
+            for s in dates
+            if s.mainsnak.datavalue["value"]["time"].startswith("+1947-02-08")
+            and not s.qualifiers.qualifiers
+        )
+        assert blocks(curated_date) == before
+        if differs == "value":
+            (later_date,) = [s for s in dates if s is not curated_date]
+            assert run_blocks(later_date) == sorted(
+                [
+                    (result.run_qid, "Q42", DATE_NOTE["text"]),
+                    (result.run_qid, "Q42", OTHER_DATE_NOTE["text"]),
+                ]
+            )
+
+    def test_one_writer_reads_each_write_afresh(self):
+        """One BatchWriter writes the curated wedding date, then a later
+        run's bare date from the judgment's page 2: the second write reads
+        the statement as curated, and it gains nothing."""
+        wiki = NotedWiki()
+        writer = BatchWriter(wiki)
+        curated = batch_of(dict(wedding_date(), curated=True))
+        later = batch_of(wedding_date(page="2"), run=LATER_RUN)
+        identity = joined(mapped(curated, later), WEDDING["label"])
+        first = write_mapped(writer, curated, identity=identity)
+        before = blocks(the_wedding_date(wiki, first))
+        result = write_mapped(writer, later, identity=identity)
+        assert (result.skipped, result.referenced) == (1, 0)
+        assert blocks(the_wedding_date(wiki, result)) == before
+
+    def test_a_dry_run_records_no_kinds(self):
+        from yizkr.pipeline.reconcile import apply_equivalences
+
+        wiki = NotedWiki()
+        court_of = TestCuratedAndOtherStatements().court
+        first = write_mapped(BatchWriter(wiki), court_of())
+        court = first.created_items["e6"]
+        writes = wiki.wbi.item.writes
+        later = apply_equivalences(
+            court_of(KIND_NOTE, sha1=BURIAL_SHA1), {"e6": court}
+        )
+        write_mapped(BatchWriter(wiki, dry_run=True), later)
+        assert wiki.wbi.item.writes == writes

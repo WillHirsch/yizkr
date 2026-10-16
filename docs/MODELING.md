@@ -375,34 +375,35 @@ Machine-written statements add a second reference:
   document and the run report sums
 
 On the claims path, a value asserted more than once, by several
-artifacts or by one artifact in several places (two pages, two
-passages, two regions of a scan), is one statement for each set of
-qualifiers. It carries a `stated in` reference for each place, with that
-place's locators and excerpt, and the run reference of each run that
-added one, one block for each of its notes (and one without a note,
-where a claim of the run gave none); writing a batch again adds no
-reference (#335). The run block is compared whole, with its note: a
-second claim of the same run on the statement adds its own run block
-where its note differs, so one statement can carry several blocks of one
-run, and a reader counts runs by run item, never by blocks. A claim from
-a place the statement already cites adds its run block only when it
+artifacts or by one artifact in several places (two pages, two passages,
+two regions of a scan), is one statement for each set of qualifiers. It
+carries a `stated in` reference for each place, with that place's
+locators and excerpt, and the run reference of each run that added one,
+one block for each of its notes (and one without a note, where a claim
+of the run gave none); writing a batch again adds no reference (#335).
+The run block is compared whole, with its note: a second claim of the
+same run on the statement adds its own run block where its note differs,
+so one statement can carry several blocks of one run, and a reader
+counts runs by run item, never by blocks. A claim from a place the
+statement already cited before the write adds its run block only when it
 carries a note, or when a noted claim of its run gave the statement a
 block of that run, in this write or an earlier one. Whether a statement
-is a curator's, and the artifacts it cites for that comparison (below),
-are read as it stood before the write, and a claim that adds nothing is
-looked at again once the batch's other claims are written and its kinds
-recorded, so a run's noted and note-less claims, and a
-curator's claims beside machine claims, give the same blocks in whatever
-order the batch gives them, for the run that wrote the statement and for
-a later one, and a later run's note-less claims alone add nothing there
-(#410). An entity's kind takes its run blocks by the same rule. No block
-is edited to add or remove a note. The exception is a statement with no
-run reference (a curator's own write, before any machine claim joins it)
-or whose rank a curator changed: the writer adds nothing to it for
-another place of an artifact it already cites (the writer's module
-docstring, `src/yizkr/pipeline/writer.py`, gives the rule). The kinds
-and type hints the writer records after the claims, from an entity
-manifest or a ref, follow ADR-0007 instead.
+is a curator's, the artifacts it cites for that comparison (below) and
+the places it cites are read as it stood before the write, and a claim
+that adds nothing is looked at again once the batch's other claims are
+written and its kinds recorded, so a run's noted and note-less claims,
+and a curator's claims beside machine claims, from one place or several,
+give the same blocks in whatever order the batch gives them, for the run
+that wrote the statement and for a later one, and a later run's
+note-less claims alone add nothing there (#410). An entity's kind takes
+its run blocks by the same rule. No block is edited to add or remove a
+note. The exception is a statement with no run reference (a curator's
+own write, before any machine claim joins it) or whose rank a curator
+changed: the writer adds nothing to it for another place of an artifact
+it already cites (the writer's module docstring,
+`src/yizkr/pipeline/writer.py`, gives the rule). The kinds and type
+hints the writer records after the claims, from an entity manifest or a
+ref, follow ADR-0007 instead.
 
 Wikibase holds at most 400 characters in the text of a string,
 external-id or monolingual text value, a reference's page number,

@@ -13,10 +13,9 @@ without validating it. The interview's relative claim, Klara as
 Nicholas's aunt, lands with its kinship type, kinship class and degree
 as qualifiers (ADR-0035 §3.3). The tests write fictional fixture data
 only (the universe's 1957 divorce judgment and the interview, under test
-labels). Every title and
-label carries the session's marker (conftest.fixture_mark), so each
-session meets the fixture as a first write and a re-run within it
-reuses its entities.
+labels). Every title and label carries the session's marker
+(conftest.fixture_mark), so each session meets the fixture as a first
+write and a re-run within it reuses its entities.
 """
 
 from __future__ import annotations

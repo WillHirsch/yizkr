@@ -211,32 +211,34 @@ Per batch, the writer:
      another artifact does. No block the statement carries is changed or
      removed.
    The run block is compared whole too, with its judgement note, in NFC
-   (ADR-0035 §4). Where the statement carries the claim's source block,
-   the claim's run block is appended when no block of the statement
-   carries it whole, and it carries a note or the statement cites its run
-   in a block with another note. A curated statement, one with no
-   extraction-run reference (a curator's own write, until a machine
-   claim's blocks join it) or whose rank a curator changed, is compared
-   by artifact alone: the claim is skipped when any of the statement's
-   blocks cites the claim's artifact, under whatever locator, and
-   otherwise its blocks are appended as above. Whether a statement is
-   curated, and the artifacts it cites for that comparison, are read as
-   the statement stood before the write (_before_write), so what the
-   write's own claims do to it, a machine claim joining it or a curated
-   claim citing an artifact, changes nothing another claim of the write
-   adds. A claim that adds nothing is looked at again once the batch's
-   other claims are written and its kinds recorded (step 5), so it joins
-   a block of its run that a noted claim after it, or a kind, gave the
-   statement, as it would had it come after them. So a second claim of
-   the same run adds its own run block where its note differs, a run's
-   noted and note-less claims, and a curator's claims beside machine
-   claims, give the same blocks in whatever order the batch gives them,
-   for the run that wrote the statement and for a later one, and a later
-   run's note-less claims alone add nothing where their source agrees.
-   One statement can thus carry several run blocks of one run; a reader
+   (ADR-0035 §4). Where the statement carried the claim's source block
+   before the write, the claim's run block is appended when no block of
+   the statement carries it whole, and it carries a note or the
+   statement cites its run in a block with another note. A curated
+   statement, one with no extraction-run reference (a curator's own
+   write, until a machine claim's blocks join it) or whose rank a
+   curator changed, is compared by artifact alone: the claim is skipped
+   when any of the statement's blocks cites the claim's artifact, under
+   whatever locator, and otherwise its blocks are appended as above.
+   Whether a statement is curated (before the write, and still), the
+   artifacts it cites for that comparison and the blocks it carried are
+   read as the statement stood before the write (_before_write), so what
+   the write's own claims do to it, a machine claim joining it, a
+   curated claim citing an artifact or a block added, changes nothing
+   another claim of the write adds. A claim that adds nothing is looked
+   at again once the batch's other claims are written and its kinds
+   recorded (step 5), so it joins a block of its run that a noted claim
+   after it, or a kind, gave the statement, as it would had it come
+   after them. So a second claim of the same run adds its own run block
+   where its note differs, a run's noted and note-less claims, and a
+   curator's claims beside machine claims, from one place or several,
+   give the same blocks in whatever order the batch gives them, for the
+   run that wrote the statement and for a later one, and a later run's
+   note-less claims alone add nothing where their source agrees. One
+   statement can thus carry several run blocks of one run; a reader
    counts runs by run item, never by blocks. A batch written again adds
-   nothing. Same value but different qualifiers is a
-   different assertion and coexists as its own statement (ADR-0002);
+   nothing. Same value but different qualifiers is a different assertion
+   and coexists as its own statement (ADR-0002);
 5. after the claims, records the kind every local ref of a written
    claim gives the item it resolves to, minted or found, and a record's
    type hint, each cited to the artifact of the claim the ref is in, so
@@ -260,9 +262,9 @@ Per batch, the writer:
      to add (safe re-run), but a run block that none of those statements
      carries whole, which a machine one of them gains where it carries a
      note or that statement cites its run already, as a claim's does
-     (step 4); the noted witnesses of an item go first, so two mentions
-     of an entity, each with its own note or none, give the same blocks
-     in either order;
+     (step 4); the witnesses whose note is written go first, so two
+     mentions of an entity, each with its own note or none, give the
+     same blocks in either order;
    * a matching machine statement at normal rank: it gains this
      source's two reference blocks, each only if not already there;
    * otherwise (a different value, or a same value held only by curated
@@ -1748,7 +1750,9 @@ class BatchWriter:
         self._aliased: set[str] = set()
         # per write_batch call: how each statement a claim matches stood
         # before the write (_before_write)
-        self._before: dict[tuple, tuple[bool, frozenset[str]] | None] = {}
+        self._before: dict[
+            tuple, tuple[bool, frozenset[str], frozenset] | None
+        ] = {}
 
     # -- artifact resolution (content-addressed sources) -------------------
 
@@ -2716,7 +2720,7 @@ class BatchWriter:
         statement,
         references,
         artifact_qid: str,
-        before: tuple[bool, frozenset[str]] | None = None,
+        before: tuple[bool, frozenset[str], frozenset] | None = None,
     ) -> list:
         """The reference blocks of a claim that the equal statement it
         matches gains (step 4 of the module docstring); none when the
@@ -2733,29 +2737,32 @@ class BatchWriter:
         no block of the statement carries. The blocks returned are those
         the statement does not already carry, so a run's block is not
         repeated for a second claim of the same run with the same note, or
-        none. Where the statement carries the claim's source block, its run
-        block is added only when it carries a note or the statement cites
-        its run in another block (one with another note): a later run
-        without a note adds nothing to a block its source agrees with.
-        A statement that was curated before the write (`before`, from
-        _before_write) is compared by artifact alone, by the artifacts it
-        cited then: one of them that is the claim's records the claim, and
-        otherwise the claim adds each of its blocks the statement does not
-        carry now. So what this write's own claims did to the statement,
-        a machine claim joining it or a curated claim citing an artifact,
-        changes nothing another claim of the write adds, whatever their
-        order.
+        none. Where the statement carried the claim's source block before
+        the write (`before`, from _before_write), its run block is added
+        only when it carries a note or the statement cites its run in
+        another block (one with another note): a later run without a note
+        adds nothing to a block its source agrees with. A statement that
+        was curated before the write, and still is, is compared by artifact
+        alone, by the artifacts it cited then: one of them that is the
+        claim's records the claim, and otherwise the claim adds each of its
+        blocks the statement does not carry now. So what this write's own
+        claims did to the statement, a machine claim joining it, a curated
+        claim citing an artifact or a block added, changes nothing another
+        claim of the write adds, whatever their order.
         """
         present = {
             self._reference_key(block)
             for block in statement.references.references
         }
         source, *runs = references.references
-        curated, cited = before or (False, frozenset())
+        curated, cited, carried = before or (False, frozenset(), frozenset())
+        # a statement curated before the write that a machine claim of the
+        # write has joined since is compared as a machine one
+        curated = curated and self._is_curated(statement)
         if curated:
             if artifact_qid in cited:
                 return []
-        elif self._reference_key(source) in present:
+        elif self._reference_key(source) in carried:
             return [
                 run
                 for run in runs
@@ -2770,10 +2777,12 @@ class BatchWriter:
 
     def _before_write(self, subject_qid: str, wbi_claim, statement):
         """How the statement equal to `wbi_claim` on `subject_qid` stood
-        before this write: whether it was curated (_is_curated) and the
-        artifacts its blocks cited then, or None when the write made it.
-        Kept the first time a claim of the write looks for it, before
-        anything of the write changes it."""
+        before this write: whether it was curated (_is_curated), the
+        artifacts its blocks cited, and its blocks (_reference_key). Kept
+        the first time a claim of the write looks for it, before anything
+        of the write changes it. None when no statement matched at the
+        claim's first look; a statement the write minted an item with is
+        read as minted, which is never curated."""
         key = (
             subject_qid,
             wbi_claim.mainsnak.property_number,
@@ -2794,6 +2803,10 @@ class BatchWriter:
                         ((snak.datavalue or {}).get("value") or {}).get("id")
                         for block in statement.references.references
                         for snak in block.snaks.get(stated_in) or []
+                    ),
+                    frozenset(
+                        self._reference_key(block)
+                        for block in statement.references.references
                     ),
                 )
             )
@@ -2982,12 +2995,12 @@ class BatchWriter:
         from wikibaseintegrator.datatypes import String
 
         for qid, witnesses in self._kinds_given().items():
-            # the noted witnesses first, so a bare one of the same run that
-            # an artifact already gave the kind finds its run's noted block,
-            # in whatever order the batch gave them (the run block rule of
-            # step 4 of the module docstring)
+            # the witnesses whose note is written go first, so a bare one of
+            # the same run that an artifact already gave the kind finds its
+            # run's noted block, in whatever order the batch gave them (the
+            # run block rule of step 4 of the module docstring)
             for kind, type_hint, artifact_qid, note in sorted(
-                witnesses, key=lambda witness: not _sent_note(witness[3])
+                witnesses, key=lambda witness: not self._note_snaks(witness[3])
             ):
                 # a kind the vocabulary lacks is left out, with the warning
                 # write_batch gave before its first write, and so is the

@@ -512,17 +512,18 @@ an entity's note in the run block of its item's `instance of`, minted
 (writer step 2) or witnessed again (step 5). The run block is compared
 whole, in NFC, with its note, so a batch written again adds nothing, and
 a second claim of the run, from the same place or another, adds its own
-run block where its note differs. Where the statement already carries
-the claim's source block, its run block is added only when it carries a
-note, or when the statement cites its run in a block with another note;
-a curated statement is compared by the artifacts it cited before the
-write, and a claim that adds nothing is looked at again once the batch's
+run block where its note differs. Where the statement carried the
+claim's source block before the write, its run block is added only when
+it carries a note, or when the statement cites its run in a block with
+another note; a statement curated before the write, and still, is
+compared by the artifacts it cited then, and a claim that adds nothing is looked at again once the batch's
 other claims are written and its kinds recorded. So a run's noted and
-note-less claims, and a curator's claims beside machine claims, give the
-same blocks in whatever order the batch gives them, for the run that
+note-less claims, and a curator's claims beside machine claims, from
+one place or several, give the same blocks in whatever order the batch gives them, for the run that
 wrote the statement and for a later one, and a later run's note-less
 claims alone add nothing there, as before notes. An entity's kind takes
-its run blocks by the same rule, its noted witnesses first. A note's
+its run blocks by the same rule, the witnesses whose note is written
+first. A note's
 sentence is cut at 400 characters as a locator is; one that holds
 nothing the instance keeps, or a character Python's Unicode tables do
 not know, is left out with a warning, never refusing its claim, and so
