@@ -667,6 +667,11 @@ class TestADeckSImages:
         assert reader.read == []
         doc = document(second, "library-talk-2018.pptx")
         assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+        (aside,) = this_run(second, "set-aside")
+        assert aside["reason"] == (
+            f"the never-ingest list names image {LETTER_SHA1[:12]}, which "
+            "it marks"
+        )
         assert transcription_of(doc).pages[1].images == []
         assert derived_transcription(doc.dir, LETTER_SHA1).exists()
         assert second._excerpts == {}
@@ -717,9 +722,10 @@ class TestADeckSImages:
     def test_a_deck_with_little_text_takes_the_fallback_language(
         self, tmp_path
     ):
-        """The language is found in the slides' text alone, never in the
-        markers: a deck whose slides hold under 12 characters has too
-        little to detect a language in, and takes the fallback."""
+        """The language is found in the slides' text alone, outside the
+        markers, as before decks were read slide by slide: a deck whose
+        slides hold under 12 characters has too little to detect a
+        language in, and takes the fallback."""
         corpus = tmp_path / "corpus"
         corpus.mkdir()
         deck(corpus / "talk.pptx", [(("Oma Hilde",), [], "")], {})
