@@ -681,12 +681,11 @@ def extract(tmp_path, *entities: dict):
     return batch, side_output(tmp_path, "coverage.json")
 
 
-def appellation(local_id: str, label: str, text: str, typed="monolingual"):
-    value = (
-        {"type": "monolingual", "value": {"text": text, "language": "de"}}
-        if typed == "monolingual"
-        else {"type": "string", "value": text}
-    )
+def appellation(local_id: str, label: str, text: str, language="de"):
+    value = {
+        "type": "monolingual",
+        "value": {"text": text, "language": language},
+    }
     return {
         "subject": {
             "kind": "local",
@@ -732,12 +731,12 @@ class TestTheAppellationLabel:
                         appellation("e1", "Omama", "Omama"),
                     ]
                 ),
-                # a referred_to_as of the wrong datatype is a reject, and
-                # marks nothing
+                # a referred_to_as whose language is no tag is a reject,
+                # and marks nothing
                 ndjson(
                     [
                         claim("e2", "Opa", 1862),
-                        appellation("e2", "Opa", "Opa", typed="string"),
+                        appellation("e2", "Opa", "Opa", language="Deutsch"),
                     ]
                 ),
             ]

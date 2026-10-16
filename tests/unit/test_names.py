@@ -478,10 +478,14 @@ class TestAppellationLabel:
 
     @pytest.mark.parametrize("status", ["kinship", "courtesy", "role"])
     def test_only_a_name_record_renames(self, status):
-        """'Omama' for a person the document never names keeps its label:
-        its record names no one."""
-        record = person(status=status)
-        entity = rahel("Omama", [], record)
+        """A label whose record's status says it names no one keeps it,
+        even beside a name form the record's parts make."""
+        record = person(
+            status=status,
+            given=[{"written": "Hildegard"}],
+            surnames=[{"written": "Löbig"}],
+        )
+        entity = rahel("Omama", ["Hildegard Löbig"], record)
         assert normalize_entity_dict(entity, ["Omama"])["label"] == "Omama"
 
     def test_a_record_that_does_not_stand_renames_nothing(self):
