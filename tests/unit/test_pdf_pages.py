@@ -665,7 +665,10 @@ class TestImages:
             if event["stage"] == "transcription"
         ]
         (reason,) = done["attention"]
-        assert reason.startswith(f"page 6, image 1 (sha1 {LETTER_SHA1[:12]})")
+        assert reason.startswith(
+            "image reading failed the check: page 6, image 1 (sha1 "
+            f"{LETTER_SHA1[:12]})"
+        )
         assert "(not-a-record)" in reason
         assert not derived_transcription(doc.dir, LETTER_SHA1).exists()
         assert LETTER_SHA1 in read_derived_media(doc.dir).media

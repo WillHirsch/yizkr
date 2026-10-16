@@ -58,7 +58,7 @@ from tests.unit.test_scratch_estimate import (  # noqa: F401
 from tests.unit.test_scratch_estimate import run as run_scratch
 from yizkr.claims import ClaimBatch
 from yizkr.core.corpus import ExclusionList
-from yizkr.pipeline import presentation
+from yizkr.pipeline import presentation, report
 from yizkr.pipeline.containers import (
     MIN_IMAGE_PIXELS,
     MIN_IMAGE_SIDE,
@@ -451,14 +451,14 @@ class TestReadSlides:
     def test_the_same_bytes_under_two_names_take_the_record_s_suffix(
         self, tmp_path
     ):
-        """One JPEG held as a.jpeg and as b.jpg is one image, its file
+        """One JPEG held as A.JPEG and as b.jpg is one image, its file
         named with the suffix the record of the deck's derived media takes:
-        the first name's."""
+        the first name's, lowercased."""
         data = jpeg_of(300, 120, "the shop front")
         path = deck(
             tmp_path / "talk.pptx",
-            [(("Hutmacherei",), ["a.jpeg", "b.jpg"], "")],
-            {"a.jpeg": data, "b.jpg": data},
+            [(("Hutmacherei",), ["A.JPEG", "b.jpg"], "")],
+            {"A.JPEG": data, "b.jpg": data},
         )
         (tmp_path / "out").mkdir()
         (image,) = read_slides(path, tmp_path / "out").images.values()
@@ -695,7 +695,10 @@ class TestADeckSImages:
             and event["stage"] == "transcription"
         ]
         assert any(
-            reason.startswith(f"slide 2, image 1 (sha1 {LETTER_SHA1[:12]})")
+            reason.startswith(
+                "image reading failed the check: slide 2, image 1 (sha1 "
+                f"{LETTER_SHA1[:12]})"
+            )
             for reason in done["attention"]
         )
 
@@ -722,24 +725,29 @@ class TestADeckSImages:
     def test_a_deck_with_little_text_takes_the_fallback_language(
         self, tmp_path
     ):
-        """The language is found in the slides' text alone, outside the
-        markers, as before decks were read slide by slide: a deck whose
-        slides hold under 12 characters has too little to detect a
-        language in, and takes the fallback."""
+        """The language is found in the slides' text alone, joined by
+        blank lines: two slides, "1938" and "Taufe", hold 11 characters so
+        joined, too few to detect a language in, so the deck takes the
+        fallback, though what detection leaves of the markers once brought
+        the marked transcript to 12, which it read as German."""
         corpus = tmp_path / "corpus"
         corpus.mkdir()
-        deck(corpus / "talk.pptx", [(("Oma Hilde",), [], "")], {})
+        deck(
+            corpus / "talk.pptx",
+            [(("1938",), [], ""), (("Taufe",), [], "")],
+            {},
+        )
         doc = document(
             run(
                 tmp_path,
                 corpus,
                 RefusingReader({}),
                 language="auto",
-                fallback_language="de",
+                fallback_language="en",
             ),
             "talk.pptx",
         )
-        assert transcription_of(doc).language == "de"
+        assert transcription_of(doc).language == "en"
         assert doc.state.detail["language"]["source"] == "fallback"
 
 
@@ -813,6 +821,42 @@ class TestTheRunReport:
             methods[method] = methods.get(method, 0) + 1
         assert documents["pdf_pages"] == dict(
             sorted(methods.items(), key=lambda item: (-item[1], item[0]))
+        )
+
+    def test_an_image_not_read_is_one_attention_label(
+        self,
+        tmp_path,
+        fakes,  # noqa: F811
+    ):
+        """A TIFF on a slide leaves the deck's transcription needing
+        attention, and the report shows its reason by the fixed label
+        alone, as it shows a PDF's image PDFium cannot give."""
+        corpus = Corpus(tmp_path / "corpus")
+        path = deck(
+            corpus.folder / "talk.pptx",
+            [(LETTER_SLIDE, ["scan.tif"], "")],
+            {"scan.tif": b"II*\x00 the album page as a tiff"},
+        )
+        corpus.texts["talk.pptx"] = slide_transcript(unpack_pptx(path))
+        driver = a_run(tmp_path, corpus, fakes)
+        assert driver.run() == EXIT_OK
+        stages = build(driver.state_dir)["aggregate"]["stages"]
+        (row,) = [row for row in stages if row["name"] == "transcription"]
+        assert row["attention_labels"] == {"image not read on its own": 1}
+        assert (
+            report._attention_label(
+                "image not read on its own: page 6, image 1: PDFium could "
+                "not give its bytes, so it is not read"
+            )
+            == "image not read on its own"
+        )
+        assert (
+            report._attention_label(
+                "image reading failed the check: slide 2, image 1 (sha1 "
+                f"{LETTER_SHA1[:12]}): its reading failed the transcription "
+                "check (refusal), so it has no transcription of its own"
+            )
+            == "image reading failed the check"
         )
 
 

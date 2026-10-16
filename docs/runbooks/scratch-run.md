@@ -189,12 +189,12 @@ and `yizkr.reset` for the reset.
     cache answers) calls every page blank or not a document page is left
     out, as the run makes no excerpt of it; an image whose earlier
     reading failed the check is read again, and counted. In a run
-    invoked again, a PDF whose transcription stands is not read again:
-    its excerpts are those its directory holds, and each counts the
-    stages whose views do not stand, and every stage after the first of
-    them. An image of a PDF whose transcription is made again counts
-    every excerpt stage, though an excerpt the run holds for it may have
-    views that stand. Each excerpt stage (as `--until` plans them) is
+    invoked again, a container (PDF or deck) whose transcription stands is not
+    read again: its excerpts are those its directory holds, and each counts the
+    stages whose views do not stand, and every stage after the first of them.
+    An image of a container whose transcription is made again counts every
+    excerpt stage, though an excerpt the run holds for it may have views that
+    stand. Each excerpt stage (as `--until` plans them) is
     counted by the mean for excerpts over every run in the runs
     directory that measured the stage for one, pooled, so a run made
     under older prompts or models counts too, else as typical (none, an
@@ -304,7 +304,7 @@ with `--until clustering` (or an earlier stage) needs none.
   instance: the identity map's hash, each document's SHA-1 with the
   content hash of its batch and what registration reads of it (its kind,
   its title, its file name, its derived media's record, an excerpt's
-  PDFs), the never-ingest list's hash, the writer's version and the
+  PDFs and decks), the never-ingest list's hash, the writer's version and the
   source of the whole package but the modules that only read, and the
   model manifest's hash. A batch's run stamps are in it, so every new run
   resets and writes again; only a later invocation of the run that wrote
@@ -331,9 +331,8 @@ with `--until clustering` (or an earlier stage) needs none.
   the identity map does not hold, an unsupported date, a run item's
   term the instance may keep in another form) is refused first, before
   anything of its document is registered, and counted. Nothing of a
-  refused batch is written; a refused PDF's artifact may still be
-  registered as the container of an excerpt whose batch was not
-  refused.
+  refused batch is written; a refused PDF's or deck's artifact may still be
+  registered as the container of an excerpt whose batch was not refused.
 - **write** writes every claim of each registered document's batch,
   with no review and no approval file, at normal rank, with both
   references (stated in the artifact or fragment with its locator,

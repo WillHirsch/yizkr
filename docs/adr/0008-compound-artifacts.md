@@ -739,9 +739,13 @@ only a PDF's image was read and extracted. Both now take one path
   image read by the vision engine on its own. A deck's slides are
   joined by one line break, so a deck that reads no image has the text
   its slide text always had. Its language is found in the slides' text
-  alone, never in the markers, as a PDF's is in its pages' text, so a
-  deck whose slides hold under 12 characters, too few to detect a language
-  in, takes the fallback language. A note of an image not read starts
+  alone, joined by blank lines, never in the markers, as a PDF's is in
+  its pages' text: a deck whose slides' text so joined, the blank lines
+  counted, is under the 12 characters a language is detected in takes the
+  fallback language. The markers once counted: what detection left of
+  them (a space and a line break each) could bring a near-empty deck to
+  12, so such a deck, detected before, now falls back, and its
+  extraction's calls get new keys. A note of an image not read starts
   with the fixed phrase "image not read on its own", what the archive
   calls the image after it, so the monitor shows no file's name.
 - **Every image read on its own is an excerpt, whatever the container.**

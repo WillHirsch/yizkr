@@ -163,10 +163,10 @@ FIRST_TURNS = 4
 # terminal sentinel the chunk prompt asks for, alone, so whole and empty,
 # and the chunks after it are keyed and counted too
 EMPTY_CHUNK = '{"done": true}'
-# the reading the estimate gives a page or an image of a PDF read page by
-# page that the cache cannot answer: one the transcription check passes (a
-# transcription record of one illegible page, whose text is a single
-# editorial mark), so that the calls after it are keyed and counted too
+# the reading the estimate gives a page of a PDF, or an image of a PDF or a
+# deck, read page by page, that the cache cannot answer: one the transcription
+# check passes (a transcription record of one illegible page, whose text is a
+# single editorial mark), so that the calls after it are keyed and counted too
 STAND_IN_READING = json.dumps(
     {
         "document_class": "unclassified",
@@ -362,7 +362,8 @@ class _Keyed:
     prompt and call text are the client's own. A call the cache cannot
     answer reaches it, and it ends the stage there (_Unanswered); or, for
     a chunk, answers it empty (EMPTY_CHUNK), while `answering`; or, for a
-    page or an image of a PDF read page by page, while `reading_pages`,
+    page of a PDF, or an image of a PDF or a deck, read page by page,
+    while `reading_pages`,
     stands in for the engine's reading (STAND_IN_READING), and counts it
     in `stood_in`."""
 

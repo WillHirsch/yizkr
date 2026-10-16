@@ -162,8 +162,12 @@ a TIFF, say, or an image whose header gives no size). Each image read is
 marked below its slide's marker by its SHA-1 (`[Slide 2, image 1:
 sha1:…]`), in the order the slide paints it. Slides are joined by one
 line break, so a deck that reads no image has its slide text as before.
-Its language is found in the slides' text alone, never in the markers, so
-a deck whose slides hold under 12 characters takes the fallback language.
+Its language is found in the slides' text alone, joined by blank lines,
+never in the markers: a deck whose slides' text so joined, the blank
+lines counted, is under 12 characters takes the fallback language. What
+detection left of the markers (a space and a line break each) once counted
+too, so a near-empty deck detected before may now fall back, and its
+extraction's calls then get new keys.
 A deck's transcription always has a page per slide: one of its slide text
 alone, with no pages, is made again whatever the deck embeds.
 The transcription's `engine` is `pptx-adapter`, and each slide's

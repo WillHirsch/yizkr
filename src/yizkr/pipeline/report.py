@@ -312,6 +312,9 @@ ATTENTION_LABELS = frozenset(
         # a container's image its reading does not read on its own
         # (presentation.UNREAD_IMAGE, and a PDF's image PDFium cannot give)
         "image not read on its own",
+        # an image whose own reading the check failed
+        # (transcribe.READING_FAILED)
+        "image reading failed the check",
     }
 )
 # the leading labels of a document's failure outside its stages; any

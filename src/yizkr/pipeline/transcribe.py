@@ -660,6 +660,10 @@ class TextFileTranscriber(_CheckedTranscriber):
 # the route a PDF read page by page names first in its transcription's
 # `engine`, before the text-layer method it reads pages with
 PDF_PAGES = "pdf-pages"
+# the leading phrase of the note a container's reading makes of an image
+# whose own reading the transcription check failed, so that a reason's
+# label is one phrase, whatever the image's place
+READING_FAILED = "image reading failed the check"
 # what reads a deck's slides from its XML: its transcription's `engine`,
 # and the engine of each slide's provenance
 DECK_ENGINE = "pptx-adapter"
@@ -720,9 +724,9 @@ class PagedReading:
         the transcription check, and so has no transcription of its own,
         and each image that could not be read."""
         failed = [
-            f"{image.names[0]} (sha1 {image.sha1[:12]}): its reading failed "
-            f"the transcription check ({image.failure}), so it has no "
-            "transcription of its own"
+            f"{READING_FAILED}: {image.names[0]} (sha1 {image.sha1[:12]}): "
+            f"its reading failed the transcription check ({image.failure}), "
+            "so it has no transcription of its own"
             for image in self.images
             if image.failure is not None
         ]
