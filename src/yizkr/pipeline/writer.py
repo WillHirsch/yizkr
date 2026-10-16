@@ -2538,12 +2538,13 @@ class BatchWriter:
         `judgement`, the item of its category, and `judgement_note`, its
         sentence as the writer sends a locator (_locator_text: in NFC, on
         one line, cleaned up, and cut to TEXT_LIMIT with the digest of the
-        whole). None for no note, and for one the writer leaves out
-        (_sent_note)."""
+        whole). None for no note, for one the writer leaves out
+        (_sent_note), and for one whose terms the vocabulary lacks
+        (_note_terms_missing)."""
         from wikibaseintegrator.datatypes import Item, String
 
         text = _sent_note(note)
-        if not text:
+        if not text or self._note_terms_missing(note):
             return []
         return [
             Item(
@@ -2551,6 +2552,22 @@ class BatchWriter:
                 value=self.items[f"judgement_{note.category}"],
             ),
             String(prop_nr=self.properties["judgement_note"], value=text),
+        ]
+
+    def _note_terms_missing(self, note: JudgementNote) -> list[str]:
+        """The keys a judgement note is written with that the instance's
+        vocabulary lacks: `judgement`, `judgement_note` and the item of
+        its category. A note with one is left out, as a kind the
+        vocabulary lacks is (write_batch warns once before its first
+        write)."""
+        return [
+            key
+            for key, terms in (
+                ("judgement", self.properties),
+                ("judgement_note", self.properties),
+                (f"judgement_{note.category}", self.items),
+            )
+            if key not in terms
         ]
 
     # -- extraction-run item -------------------------------------------------
@@ -3063,7 +3080,10 @@ class BatchWriter:
         with a run block (not refused, not curated), and an entity's, of a
         record of which something is sent (_unsent_records). Its claim is
         written, and its entity's kind recorded, without it (ADR-0035
-        §4)."""
+        §4); the kind of a record no written claim mentions is not
+        recorded at all, and its warning says so. One warning more names
+        the note terms the vocabulary lacks, if any, and how many notes
+        are left out for them (_note_terms_missing)."""
 
         def why(note: JudgementNote) -> str:
             unknown = unknown_characters(note.text)
@@ -3071,23 +3091,72 @@ class BatchWriter:
                 return _unknown_fault(unknown)
             return "holds nothing the instance keeps"
 
-        warnings = [
-            f"claim {claim_id(claim)} ({claim.property}) has a judgement "
-            f"note that {why(claim.note)}: the claim is written without it"
+        written = [
+            claim
             for index, claim in enumerate(batch.claims)
             if index not in refused
-            and not claim.curated
-            and claim.note is not None
-            and not _sent_note(claim.note)
         ]
-        warnings += [
-            f"entity {record.id!r} has a judgement note that "
-            f"{why(record.note)}: its kind is recorded without it"
+        named = {
+            ref.local_id for claim in written for ref in local_refs(claim)
+        }
+        cited = {
+            ref.qid
+            for claim in written
+            for ref in (
+                claim.subject,
+                *(
+                    value.value
+                    for value in (
+                        claim.value,
+                        *(q.value for q in claim.qualifiers),
+                    )
+                    if isinstance(value, ItemValue)
+                ),
+            )
+            if isinstance(ref, QidRef)
+        }
+        notes = [
+            (
+                f"claim {claim_id(claim)} ({claim.property})",
+                "the claim is written without it",
+                claim.note,
+            )
+            for claim in written
+            if not claim.curated and claim.note is not None
+        ]
+        notes += [
+            (
+                f"entity {record.id!r}",
+                "its kind is recorded without it"
+                if record.id in named or (record.qid and record.qid in cited)
+                else "it is not recorded",
+                record.note,
+            )
             for record in self._entity_records.values()
-            if record.id not in self._unsent
-            and record.note is not None
-            and not _sent_note(record.note)
+            if record.id not in self._unsent and record.note is not None
         ]
+        warnings = [
+            f"{whose} has a judgement note that {why(note)}: {outcome}"
+            for whose, outcome, note in notes
+            if not _sent_note(note)
+        ]
+        missing = [
+            (note, self._note_terms_missing(note))
+            for _, _, note in notes
+            if _sent_note(note) and self._note_terms_missing(note)
+        ]
+        if missing:
+            keys = dict.fromkeys(key for _, lacks in missing for key in lacks)
+            warnings.append(
+                f"the vocabulary lacks {_listed(list(keys))}: "
+                + (
+                    "1 judgement note is left out, and its claim or kind is "
+                    "written without it"
+                    if len(missing) == 1
+                    else f"{len(missing)} judgement notes are left out, and "
+                    f"their claims and kinds are written without them"
+                )
+            )
         return warnings
 
     def _type_hints_over_limit(self) -> list[str]:

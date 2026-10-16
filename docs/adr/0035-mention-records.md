@@ -514,15 +514,21 @@ whole, in NFC, with its note, so a batch written again adds nothing, and
 a second claim of the run, from the same place or another, adds its own
 run block where its note differs. Where the statement already carries
 the claim's source block, its run block is added only when it carries a
-note, or when the statement cites its run in a block with another note,
-so a note-less claim beside a noted one of its run adds the bare block
-in either order, and a later run without a note adds nothing there, as
-before notes. A note's sentence is cut at 400 characters as a locator is;
-one that holds nothing the instance keeps, or a character Python's
-Unicode tables do not know, is left out with a warning, never refusing
-its claim. The write's result counts the noted run blocks it added
+note, or when the statement cites its run in a block with another note;
+a note-less claim this leaves out is looked at again once the batch's
+other claims are written. So a run's noted and note-less claims give the
+same blocks in whatever order the batch gives them, for the run that
+wrote the statement and for a later one, and a later run's note-less
+claims alone add nothing there, as before notes. An entity's kind takes
+its run blocks by the same rule, its noted witnesses first. A note's
+sentence is cut at 400 characters as a locator is; one that holds
+nothing the instance keeps, or a character Python's Unicode tables do
+not know, is left out with a warning, never refusing its claim, and so
+is every note on an instance whose vocabulary lacks a note term, with
+one warning. The write's result counts the noted run blocks it added
 (`notes_written`): the writer's count §4 and #420's line name, which
-the run report does not read yet. The writer also refuses a claim of a
+the scratch write stage records for each document and the run report
+sums in its write section. The writer also refuses a claim of a
 retired property (§3.5) or of a reference property, as its own property
 or a qualifier's, before the first write, as validation does, since
 `yizkr write` takes a batch without validating it. The roles, kinship

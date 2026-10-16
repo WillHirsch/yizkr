@@ -1191,3 +1191,26 @@ def test_the_record_counts_only_the_items_a_document_s_write_made(
     # Gustav's item alone
     assert documents[letter.sha1]["items_minted"] == 1
     assert len(by_label(run.wiki, "Leopold Löbig")) == 1
+
+
+def test_the_record_counts_the_judgement_notes_written(run, monkeypatch):
+    """Each document's record gives the noted run blocks its write added
+    (WriteResult.notes_written, #410), and the stage's log line their
+    total."""
+    from yizkr.pipeline.writer import BatchWriter
+
+    original = BatchWriter.write_batch
+
+    def noted(self, *args, **options):
+        result = original(self, *args, **options)
+        result.notes_written = 2
+        return result
+
+    monkeypatch.setattr(BatchWriter, "write_batch", noted)
+    run.past_the_barrier()
+    documents = run.record("write")["documents"].values()
+    assert [d["notes_written"] for d in documents] == [2, 2]
+    assert any(
+        "claims refused, 4 judgement notes written;" in line
+        for line in run.lines
+    )

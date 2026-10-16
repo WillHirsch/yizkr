@@ -368,8 +368,11 @@ Machine-written statements add a second reference:
   a locator is (below), and never refuses its claim; one that holds
   nothing the instance keeps, or a character Python's Unicode tables do
   not know, is left out with a warning, and its claim written without
-  it. A curated claim has no run block, so no note. The write's result
-  counts the noted run blocks it added (`notes_written`, #410)
+  it, as every note is, with one warning, on an instance whose
+  vocabulary lacks a note term. A curated claim has no run block, so no
+  note. The write's result counts the noted run blocks it added
+  (`notes_written`, #410), which the scratch write stage records for each
+  document and the run report sums
 
 On the claims path, a value asserted more than once, by several
 artifacts or by one artifact in several places (two pages, two

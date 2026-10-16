@@ -110,7 +110,7 @@ from yizkr.pipeline.stages import (
 # the version of what the write side writes for the same inputs: a change
 # that writes something else for them bumps it, as does a change to the
 # package's source, which the key hashes too (code_digest)
-WRITER_VERSION = 1
+WRITER_VERSION = 2
 # the package whose source the key hashes, and the modules it leaves out:
 # those that only read the run directory or the instance, and decide
 # nothing a write puts on it
@@ -714,6 +714,7 @@ def run_write(context: Any) -> list[str]:
                     "refused": len(result.refused),
                     "depicts_left_out": left_out,
                     "items_minted": len(result.minted),
+                    "notes_written": result.notes_written,
                 }
                 record["failed"].pop(doc.sha1, None)
                 context.driver._raise_flags(doc, result.flags)
@@ -738,7 +739,9 @@ def run_write(context: Any) -> list[str]:
         f"{WRITE}: {len(record['documents'])} documents written: "
         f"{sum(d['written'] for d in written)} statements new, "
         f"{sum(d['referenced'] for d in written)} referenced, "
-        f"{sum(d['refused'] for d in written)} claims refused; "
+        f"{sum(d['refused'] for d in written)} claims refused, "
+        f"{sum(d.get('notes_written', 0) for d in written)} judgement notes "
+        f"written; "
         f"{depicts} depicts claims left out"
         + ("" if complete else "; the instance-contents key is not recorded")
     )

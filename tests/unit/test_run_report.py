@@ -3437,3 +3437,24 @@ class TestAScratchRun:
         assert "Löbig" not in text and "Eugen" not in text
         for name in (TEXT, PHOTO, LETTER, STONE):
             assert name not in text and Path(name).stem not in text
+
+
+def test_the_write_section_counts_the_judgement_notes_written():
+    """The write stage's notes written, summed over its documents (#410),
+    in the report's write section; a document record without the count, as
+    a write before it was kept gives, adds nothing."""
+    written = report._aggregate_write(
+        {
+            "documents": {
+                "a": {"written": 3, "notes_written": 2},
+                "b": {"written": 1, "notes_written": 1},
+                "c": {"written": 1},
+            }
+        }
+    )
+    assert written["notes_written"] == 3
+    (section,) = report._write_sections(
+        {"write": written, "depicts": {"left_out": 0}}
+    )
+    ((line, _),) = section.blocks
+    assert "0 items minted, 3 judgement notes written." in line

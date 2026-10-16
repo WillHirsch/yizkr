@@ -414,3 +414,57 @@ def test_a_spouse_claim_is_refused(client):
         client, result.created_items["e4"], "point_in_time"
     )
     assert blocks(client, statement)[0]["stated_in"] == [judgment.qid]
+
+
+def test_kinship_class_qualifiers_land_and_a_rerun_adds_nothing(client):
+    """The interview's "Aunt Pünktchen": Klara, Nicholas's relative, with
+    `kinship_type` aunt, class aunt or uncle, and degree 0 (ADR-0035 §3.3).
+    The quantity qualifier 0 lands as "+0" and is found again on a
+    re-run."""
+    interview = register_fictional(
+        client, f"Yizkr Notes Test Interview with Nicholas {MARK}", "artifact"
+    )
+    properties, items = client.vocabulary()
+    klara = local("i1", "Yizkr Notes Test Klara Löbig", "human")
+    nicholas = local("i2", "Yizkr Notes Test Nicholas Lobig", "human")
+    batch = batch_of(
+        interview.ref.sha1,
+        {
+            "subject": klara,
+            "property": "relative",
+            "value": item(nicholas),
+            "qualifiers": [
+                {
+                    "property": "kinship_type",
+                    "value": {"type": "string", "value": "aunt"},
+                },
+                {
+                    "property": "kinship_class",
+                    "value": item(
+                        {"kind": "vocab", "key": "kin_aunt_or_uncle"}
+                    ),
+                },
+                {
+                    "property": "degree",
+                    "value": {"type": "quantity", "amount": 0},
+                },
+            ],
+        },
+    )
+    assert validate_against_manifest(batch) == []
+    result = write_mapped(BatchWriter(client), batch)
+    assert result.written == 1
+    (statement,) = statements(client, result.created_items["i1"], "relative")
+    assert (
+        statement["mainsnak"]["datavalue"]["value"]["id"]
+        == result.created_items["i2"]
+    )
+    qualifiers = statement["qualifiers"]
+    (kin,) = qualifiers[properties["kinship_class"]]
+    assert kin["datavalue"]["value"]["id"] == items["kin_aunt_or_uncle"]
+    (degree,) = qualifiers[properties["degree"]]
+    assert degree["datavalue"]["value"]["amount"] == "+0"
+    (term,) = qualifiers[properties["kinship_type"]]
+    assert term["datavalue"]["value"] == "aunt"
+    again = write_mapped(BatchWriter(client), batch)
+    assert (again.written, again.skipped) == (0, 1)

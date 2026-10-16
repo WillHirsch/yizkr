@@ -956,3 +956,256 @@ class TestTheBatchsOrderChangesNothing:
         writes = wiki.wbi.item.writes
         write_mapped(BatchWriter(wiki), later, identity=identity)
         assert wiki.wbi.item.writes == writes
+
+
+UNKNOWN_NOTE = {"category": "other", "text": "read as ͸"}
+
+
+def cited_to(batch: ClaimBatch, sha1: str) -> ClaimBatch:
+    """`batch`'s claims cited to the document `sha1` instead."""
+    return ClaimBatch.model_validate_json(
+        batch.model_dump_json().replace(JUDGMENT_SHA1, sha1)
+    )
+
+
+def note_warnings(result) -> list[str]:
+    return [w for w in result.warnings if "judgement note" in w]
+
+
+class TestCuratedAndOtherStatements:
+    def test_a_curated_statement_gains_no_note_from_its_artifact(self):
+        wiki = NotedWiki()
+        curated = write_mapped(
+            BatchWriter(wiki), batch_of(dict(wedding_date(), curated=True))
+        )
+        before = blocks(the_wedding_date(wiki, curated))
+        noted = write_mapped(
+            BatchWriter(wiki), batch_of(wedding_date(DATE_NOTE))
+        )
+        assert (noted.skipped, noted.notes_written) == (1, 0)
+        assert blocks(the_wedding_date(wiki, noted)) == before
+
+    def test_a_curated_statement_gains_another_artifacts_noted_blocks(self):
+        wiki = NotedWiki()
+        curated = batch_of(dict(wedding_date(), curated=True))
+        noted = cited_to(batch_of(wedding_date(DATE_NOTE)), BURIAL_SHA1)
+        identity = joined(mapped(curated, noted), WEDDING["label"])
+        write_mapped(BatchWriter(wiki), curated, identity=identity)
+        result = write_mapped(BatchWriter(wiki), noted, identity=identity)
+        assert (result.referenced, result.notes_written) == (1, 1)
+        statement = the_wedding_date(wiki, result)
+        assert [
+            b["stated_in"] for b in blocks(statement) if "stated_in" in b
+        ] == [
+            ["Q23"],
+            ["Q24"],
+        ]
+        assert run_blocks(statement) == [
+            (result.run_qid, "Q42", DATE_NOTE["text"])
+        ]
+
+    def court(self, note=None, sha1=JUDGMENT_SHA1) -> ClaimBatch:
+        return cited_to(TestAnEntitysNote().court_batch(note), sha1)
+
+    def test_a_deprecated_kind_gains_no_note(self):
+        from wikibaseintegrator.wbi_enums import WikibaseRank
+
+        wiki = NotedWiki()
+        identity = joined(mapped(self.court()), COURT["label"])
+        first = write_mapped(
+            BatchWriter(wiki), self.court(), identity=identity
+        )
+        court = first.created_items["e6"]
+        item = wiki.wbi.item.get(court)
+        (kind,) = item.claims.get(NOTE_PROPERTIES["instance_of"])
+        kind.rank = WikibaseRank.DEPRECATED
+        item.write()
+        before = blocks(statements(wiki, court, "instance_of")[0])
+        result = write_mapped(
+            BatchWriter(wiki), self.court(KIND_NOTE), identity=identity
+        )
+        assert result.notes_written == 0
+        (kind,) = statements(wiki, court, "instance_of")
+        assert blocks(kind) == before
+
+    def test_a_new_kind_beside_a_curated_one_carries_the_note(self):
+        wiki = NotedWiki()
+        earlier = self.court(sha1=BURIAL_SHA1)
+        later = self.court(KIND_NOTE)
+        identity = joined(
+            mapped(earlier, later), COURT["label"], DIVORCE["label"]
+        )
+        first = write_mapped(BatchWriter(wiki), earlier, identity=identity)
+        court = first.created_items["e6"]
+        # a curator's own kind statement: its run block taken off
+        item = wiki.wbi.item.get(court)
+        (kind,) = item.claims.get(NOTE_PROPERTIES["instance_of"])
+        kind.references.references = kind.references.references[:1]
+        item.write()
+        result = write_mapped(BatchWriter(wiki), later, identity=identity)
+        assert result.notes_written == 1
+        kinds = statements(wiki, court, "instance_of")
+        assert [run_blocks(kind) for kind in kinds] == [
+            [],
+            [(result.run_qid, "Q40", KIND_NOTE["text"])],
+        ]
+
+    def test_an_approved_equivalences_note_goes_on_its_kind(self):
+        from yizkr.pipeline.reconcile import apply_equivalences
+
+        wiki = NotedWiki()
+        first = write_mapped(BatchWriter(wiki), self.court())
+        court = first.created_items["e6"]
+        later = apply_equivalences(
+            self.court(KIND_NOTE, sha1=BURIAL_SHA1), {"e6": court}
+        )
+        result = write_mapped(BatchWriter(wiki), later)
+        assert result.notes_written == 1
+        (kind,) = statements(wiki, court, "instance_of")
+        assert run_blocks(kind) == sorted(
+            [
+                (first.run_qid, None, None),
+                (result.run_qid, "Q40", KIND_NOTE["text"]),
+            ],
+            key=lambda shown: tuple(part or "" for part in shown),
+        )
+
+    def test_a_type_hint_carries_no_note(self):
+        """The compensation file's Wiedergutmachungsamt Peiltal, an
+        unclassified entity with a type hint: its kind takes the note, its
+        type hint none."""
+        wiki = NotedWiki()
+        office = local(
+            "o1", "Wiedergutmachungsamt Peiltal", "unclassified_entity"
+        )
+        batch = batch_of(
+            {
+                "subject": DIVORCE,
+                "property": "carried_out_by",
+                "value": {"type": "item", "value": office},
+                "source": source(),
+            },
+            entities=[
+                {"id": "e5", "label": DIVORCE["label"], "kind": "divorce"},
+                {
+                    "id": "o1",
+                    "label": office["label"],
+                    "kind": "unclassified_entity",
+                    "type_hint": "compensation office",
+                    "note": KIND_NOTE,
+                },
+            ],
+        )
+        result = write_mapped(BatchWriter(wiki), batch)
+        qid = result.created_items["o1"]
+        (kind,) = statements(wiki, qid, "instance_of")
+        (hint,) = statements(wiki, qid, "type_hint")
+        assert run_blocks(kind) == [(result.run_qid, "Q40", KIND_NOTE["text"])]
+        assert run_blocks(hint) == [(result.run_qid, None, None)]
+
+
+class TestNoteWarnings:
+    def test_none_for_a_curated_claim(self):
+        claim = dict(wedding_date(UNKNOWN_NOTE), curated=True)
+        result = write_mapped(BatchWriter(NotedWiki()), batch_of(claim))
+        assert note_warnings(result) == []
+
+    def test_none_for_a_refused_claim_or_an_unsent_record(self):
+        """A `spouse` claim with a note, whose value's record, which only
+        it names, has one too: both are refused or unsent, so neither note
+        is warned of."""
+        claim = {
+            "subject": LEOPOLD,
+            "property": "spouse",
+            "value": {"type": "item", "value": AGNES},
+            "source": source(),
+            "note": UNKNOWN_NOTE,
+        }
+        entities = [
+            {"id": "e1", "label": LEOPOLD["label"], "kind": "human"},
+            {
+                "id": "e2",
+                "label": AGNES["label"],
+                "kind": "human",
+                "note": UNKNOWN_NOTE,
+            },
+        ]
+        result = write_mapped(
+            BatchWriter(NotedWiki()), batch_of(claim, entities=entities)
+        )
+        assert len(result.refused) == 1
+        assert note_warnings(result) == []
+
+    def test_a_record_no_claim_mentions_is_not_recorded(self):
+        entities = [
+            {"id": "e4", "label": WEDDING["label"], "kind": "civil_wedding"},
+            {
+                "id": "e9",
+                "label": "Standesamt Flörburg",
+                "kind": "organization",
+                "note": UNKNOWN_NOTE,
+            },
+        ]
+        result = write_mapped(
+            BatchWriter(NotedWiki()),
+            batch_of(wedding_date(), entities=entities),
+        )
+        (warning,) = note_warnings(result)
+        assert warning.startswith(
+            "entity 'e9' has a judgement note that holds U+0378"
+        )
+        assert warning.endswith(": it is not recorded")
+
+    def test_a_vocabulary_without_the_note_terms_leaves_notes_out(self):
+        """An instance whose vocabulary has no `judgement` (the unit tests'
+        plain one): the notes are left out with one warning, and the claims
+        and kinds written."""
+        wiki = FakeWiki({JUDGMENT_SHA1: "Q23"})
+        person = local("p1", "Leopold Löbig", "human")
+        born = {
+            "subject": person,
+            "property": "date_of_birth",
+            "value": {"type": "time", "year": 1914, "month": 5},
+            "source": source(),
+        }
+        batch = batch_of(
+            dict(born, note=DATE_NOTE),
+            dict(born, source=source(page="2"), note=OTHER_DATE_NOTE),
+            entities=[
+                {
+                    "id": "p1",
+                    "label": person["label"],
+                    "kind": "human",
+                    "note": KIND_NOTE,
+                }
+            ],
+        )
+        result = write_mapped(BatchWriter(wiki), batch)
+        assert (result.written, result.notes_written) == (1, 0)
+        assert note_warnings(result) == [
+            "the vocabulary lacks judgement, judgement_note, "
+            "judgement_date_reading and judgement_kind: 3 judgement notes "
+            "are left out, and their claims and kinds are written without "
+            "them"
+        ]
+
+
+class TestARetiredQualifier:
+    def test_it_is_refused(self):
+        claim = dict(
+            wedding_date(),
+            qualifiers=[
+                {
+                    "property": "spouse",
+                    "value": {"type": "item", "value": AGNES},
+                }
+            ],
+        )
+        batch = batch_of(claim)
+        result = write_mapped(BatchWriter(NotedWiki()), batch)
+        assert result.refused == [claim_id(batch.claims[0])]
+        assert (
+            f"claim {claim_id(batch.claims[0])} (point_in_time) is refused, "
+            f"and nothing of it is written: its spouse qualifier is retired "
+            f"and takes no claim (ADR-0036)"
+        ) in result.warnings
