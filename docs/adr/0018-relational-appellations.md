@@ -45,6 +45,37 @@ label is rightly the document's own words for them, so the postcard's
 "Dein Vater" is no finding, while "Tante Rahel" as Rahel's label is one.
 The critic's entity rows show each person's mention-record status
 (ADR-0035 §2.1), which says whether the document names them.
+Amended by #499 (2026-10-16, the owner's decision): a relational or
+perspectival form is an alias too. A person's aliases hold every form a
+source uses to name or address them, without structural distinction: a
+name form, a kinship term with a name ("Tante Rahel"), a kinship term
+alone ("Omama"), a pet name ("Pünktchen", "Bubele") and a courtesy name
+("Nana Maisie"); that the person was known by it, to at least someone,
+is what needs keeping. (B) is widened to literal kinship terms and pet
+names: each form that is no plain name form (a name, or a spelling, a
+shortening, a diminutive or an initial of one) is also one
+`referred_to_as` statement, verbatim, in its document with its locator,
+with `perspective` where the source gives the ego. The alias is the
+lookup; the statement is the evidence. A literal kinship term still also
+gives (A), `relative` + `kinship_type`, where the ego is an entity. A
+description that is no form of address ("the deceased", "the
+informant", "my husband", "our great grandmother", a role or form-field
+label) stays out of the aliases, and its kinship goes to (A) as before.
+The label stays the display name: a name form wherever the document
+names the person, the document's own words only for a person it never
+names. Where extraction labels a person by one of the document's
+appellations and the person's record names them, the label becomes the
+name (ADR-0035 §8, as amended). Identity is unchanged: clustering keys on
+the record's name parts, and never on an appellation, however many
+people are called "Oma". A form one person calls another, or one
+through a relation, is never a record name part, and a kinship word
+before a name is never a record title. The critic's `kinship_term_alias`
+flags a kinship form as the label of a person the document names, and a
+description as an alias; a kinship form among the aliases is no
+finding. The "never an alias" rule below, and the #434 and #459
+amendments' rulings that a relational appellation or a kinship word is
+never an alias, are superseded so far; appellations of possibly-living
+people ride the possibly-living exclusion, as before (ADR-0020).
 
 ## Context
 
@@ -81,7 +112,10 @@ becomes a resolution key.
 ## Decision
 
 A relational reference to a person is **never an alias**. It is one of two
-things, and the extractor routes it accordingly:
+things, and the extractor routes it accordingly (amended by #499: a form
+that names or addresses the person is an alias as well, and (B) is given
+for every such form that is no plain name form, a literal kinship term
+included; see the amendment above):
 
 ### (A) A derivable kinship description → `relative` + `kinship_type`
 
@@ -144,6 +178,8 @@ sending a courtesy "Tante" there would fabricate a relation. `referred_to_as`
 asserts only that the term was used — it never narrows or invents (rules 5
 & 6). When in doubt, (B) is safe. Aliases keep only genuine **name** forms
 (spellings, maiden/married names); the label stays the fullest real name.
+(Amended by #499: aliases keep every form that names or addresses the
+person; the label stays the fullest real name.)
 
 ### Reciprocal / dyadic naming (each party names the other)
 

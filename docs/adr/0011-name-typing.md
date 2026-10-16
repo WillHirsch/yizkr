@@ -15,6 +15,15 @@ Amended by #435 (2026-10-02, the owner's decision on the bracket
 question): a name form a source gives without stating its type becomes a
 referenced statement of a generic **name** property (P2561), in addition
 to its alias; see "Name forms of no stated type" below.
+Amended by #499 (2026-10-16, the owner's decision): aliases hold every
+form a source uses to name or address a person, without structural
+distinction: name forms, a kinship term with a name ("Tante Rahel") or
+alone ("Omama"), pet names ("Pünktchen") and courtesy names ("Nana
+Maisie"). Each that is no plain name form is also a referenced
+`referred_to_as` statement (ADR-0018, as amended), which gives the alias
+its source. Descriptions that are no form of address ("the deceased",
+"the informant", role or form-field labels) stay out. The label stays
+the display name, a name form wherever a source names the person.
 
 ## Context
 
@@ -52,7 +61,9 @@ alias bag — additive, not a replacement.
 - **Aliases stay the match index.** Every name form a document uses is
   still contributed to the item's aliases (append-only), because aliases
   are also the reconciliation blocking substrate and the label lookup
-  key. Unchanged.
+  key. Unchanged. (Amended by #499: so is every other form a source uses
+  to name or address the person, an appellation, which is also a
+  `referred_to_as` statement; clustering never keys on an appellation.)
 - **Typed name statements are the source-first record.** When a source
   states a name's *type*, that becomes an ordinary referenced statement
   — carrying the `stated in → artifact` reference (and, for machine

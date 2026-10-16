@@ -581,8 +581,9 @@ refuses). The module docstring is the full account; in short:
   of those kinds without a record is *recordless* (so a document's
   mention whose record was set aside never meets the GEDCOM export, whose
   people and places have records): it keys on its exact
-  normalised name, meets only mentions without a record, never links
-  confidently, and is counted. Whether a record stands (ADR-0035 §5) is
+  normalised name, never on a form its document gives as an appellation
+  (a `referred_to_as` value, ADR-0018), meets only mentions without a
+  record, never links confidently, and is counted. Whether a record stands (ADR-0035 §5) is
   extraction's verdict, taken before the alias cleanup; clustering reads
   any record of its entity's kind. No word list and no token length
   remains.

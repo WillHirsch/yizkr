@@ -113,10 +113,10 @@ properties:
   nickname:
     label: nickname
     description: >-
-      a name the source gives as what the person is called, by anyone,
-      or a writer simply uses for them ("Liebes Pünktchen!"); never their
-      formal name, never what one person calls another, and never a name
-      through a relation (`referred_to_as`)
+      a name the source marks as what the person is called, by anyone
+      ("Peppi", "Gustl"); never their formal name, and never what one
+      person calls another or a name through a relation
+      (`referred_to_as` alone)
     datatype: monolingualtext
     wikidata: P1449
 
@@ -132,10 +132,10 @@ properties:
   referred_to_as:
     label: referred to as
     description: >-
-      a name the source gives as what one person calls another, with
-      or without a stated perspective, or that names the person through a
-      relation, no literal kinship term; verbatim, qualified with
-      `perspective` when the ego is known (ADR-0018)
+      a form naming or addressing the person that is no plain name
+      form: a kinship term with a name ("Tante Rahel") or alone
+      ("Omama"), a pet name, a courtesy name ("Nana Maisie"); verbatim,
+      with `perspective` when the ego is known (ADR-0018)
     datatype: monolingualtext
     wikidata: P1810
 
@@ -252,10 +252,10 @@ properties:
   perspective:
     label: perspective
     description: >-
-      qualifier on `referred_to_as`: the person or family whose
-      relational term it is (a child who calls a non-relative "Nana
-      Maisie"); a family's own name for a member is a nickname. Optional;
-      omit when the ego is no modelled entity; never mint one.
+      qualifier on `referred_to_as`: the person or family whose term it
+      is (a grandchild who calls a grandmother "Omama"; a child who calls
+      a non-relative "Nana Maisie"). Optional; omit when the ego is no
+      modelled entity; never mint one.
     datatype: wikibase-item
     accepts: [human, family, unclassified_entity]
 

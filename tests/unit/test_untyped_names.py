@@ -69,7 +69,7 @@ def test_the_extraction_prompt_offers_it():
         "A form the source sets apart without saying its kind is `name` "
         "even where it reads like a nickname; a nickname with no `name` is "
         "one used in running text or a greeting, and follows the nickname "
-        "and referred_to_as rules below",
+        "and appellation rules below",
         "A shortening, an initial, a spelling variant or a part of the "
         "label is an alias alone, never `name`, and so is a stand-in for "
         'an unknown name ("N.N.")',

@@ -32,7 +32,10 @@ label. A person, a place, an organisation or a family without a record
 another kind, or a batch without a manifest) is *recordless*
 (ADR-0035 §7, rule 1): it keys on its exact normalised name, from its
 label and each alias, meets only mentions without a record, and never
-links confidently. The summary counts recordless mentions by kind.
+links confidently. A form its document gives as an appellation of it (a
+`referred_to_as` claim's value, ADR-0018: "Oma", "Tante Rahel") is no
+name it keys on, as label or alias, so two people called "Oma" never
+meet by it. The summary counts recordless mentions by kind.
 
 **Lifting.** Relations the manifest states between its own local ids are
 lifted into mention space: kin (father, mother, child, spouse and
@@ -264,6 +267,7 @@ from yizkr.claims import (
     PlaceStructure,
     TimeValue,
     VocabRef,
+    name_form_key,
 )
 from yizkr.pipeline.fingerprints import (
     Mention,
@@ -272,6 +276,7 @@ from yizkr.pipeline.fingerprints import (
     mention_map,
     mentions_of,
 )
+from yizkr.pipeline.names import appellations_of
 from yizkr.pipeline.orchestrate import BATCH_VOLATILE
 from yizkr.pipeline.reconcile import (
     PLACE_KIND,
@@ -290,7 +295,7 @@ from yizkr.pipeline.writer import stored_term
 # what cluster_corpus makes of a set of manifests: bumped whenever the same
 # manifests and thresholds would give another identity map, so that a
 # stored map is made again
-VERSION = 2
+VERSION = 3
 # the layout of identity-map.json
 FORMAT = 1
 STAGE = "clustering"
@@ -303,8 +308,15 @@ DEFAULTS = PACKAGE / "clustering.yaml"
 # this one and fingerprints.py import reach the key through the batches'
 # hashes: yizkr.claims parses the batches, orchestrate says what a hash
 # leaves out, and stages makes it. writer.py gives the form the instance
-# keeps a term in (stored_term), which names are compared in.
-CODE = ("clustering.py", "fingerprints.py", "reconcile.py", "writer.py")
+# keeps a term in (stored_term), which names are compared in, and names.py
+# which forms are appellations (appellations_of).
+CODE = (
+    "clustering.py",
+    "fingerprints.py",
+    "reconcile.py",
+    "writer.py",
+    "names.py",
+)
 
 # what a manifest is the extraction of
 DOCUMENT = "document"
@@ -744,6 +756,9 @@ class _Node:
     # whether its manifest keeps it apart from the manifest's other ids
     exclusive: bool
     aliases: list[str]
+    # the forms its document gives as appellations of it, as
+    # name_form_key compares them: never a name it keys on
+    appellations: frozenset[str] = frozenset()
     # the mention record, when its entity has one of its own kind
     record: Any = None
     kin: set[tuple[str, str]] = field(default_factory=set)
@@ -819,7 +834,12 @@ class _Node:
 
     @property
     def names(self) -> list[str]:
-        return [name for name in (self.label, *self.aliases) if name]
+        """Its label and aliases, save each that is an appellation."""
+        return [
+            name
+            for name in (self.label, *self.aliases)
+            if name and name_form_key(name) not in self.appellations
+        ]
 
     @property
     def kin_ids(self) -> set[str]:
@@ -882,6 +902,7 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
                 stored_term, aliases[ref.local_id]
             ):
                 aliases[ref.local_id].append(ref.label)
+    appellations = appellations_of(batch.claims)
     by_local: dict[str, _Node] = {}
     for mention in mentions:
         # an alias the instance would keep as the label is the label
@@ -900,6 +921,10 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
                 if stored_term(alias) != label
             ],
             record=records.get(mention.local_id),
+            appellations=frozenset(
+                name_form_key(form)
+                for form in appellations.get(mention.local_id, ())
+            ),
         )
     for claim in batch.claims:
         subject = by_local.get(_local_id(claim.subject) or "")

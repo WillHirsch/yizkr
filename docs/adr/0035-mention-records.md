@@ -62,6 +62,28 @@ stands after a drop is not counted in `records.set_aside_records`. The
 entity-manifest prompt says to omit a field the model cannot fill,
 never to write it as "".
 
+Amended by #499 (2026-10-16): every form a source uses to name or
+address a person is an alias, and each that is no plain name form is
+also a `referred_to_as` claim (ADR-0018, as amended). §8's cleanup keeps
+an alias the document gives as an appellation (the value of a
+`referred_to_as` claim of the same document about the entity) when it
+holds a word that is no name part of the record, while role labels,
+deictic references and derivable reorderings still go. Where a person's
+label is one of those appellations and its record stands with the
+status `name`, the label becomes the name the record gives: the fullest
+form, the label or an alias, made only of the record's name parts, one
+that is no appellation first (a pet name the record holds as a nickname
+gives way to a name), else the label's own name words in its order; the
+appellation stays an alias, and every local ref takes the new label.
+Both run where the batch is assembled, once the chunks' claims exist;
+`coverage.json` counts the labels replaced (`records.appellation_labels`),
+and the run report sums them. A form one person calls another, or one
+through a relation, is never a record name part (§2.1), and a kinship
+word before a name ("Tante", "Onkel") is neither a name part nor a
+title. Identity is unchanged: clustering keys on the record's name
+parts, and a recordless mention (§7, rule 1) never keys on a form its
+document gives as an appellation, as label or alias.
+
 Amended by #389 (2026-09-29): the transcription check, the stream
 assembly and language detection no longer read wording (§10): the check
 reads the transcription record (ADR-0037), and no wording fails a
@@ -720,7 +742,8 @@ to `toponym`, and a surname's type to `other`.
   standard form. A name the source gives as what one person calls
   another, or that names the person through a relation but is no
   literal kinship term ("Bubele", "Nana Maisie", "Рудольфиха"), is no
-  nickname: it is `referred_to_as` (ADR-0018), never an alias.
+  nickname: it is `referred_to_as` (ADR-0018). (Amended by #499: it is
+  an alias too, never a record name part.)
 - **A patronymic** is a name part of its own, never a surname. The
   relation it states is a `father` claim where the source names the
   father (§3.1). (An example follows when #400 adds a patronymic to the
@@ -1405,6 +1428,18 @@ change to ADR-0022 §4. For a place or an organisation, an alias that
 gives no part (a deictic or generic reference, #42) is dropped, while a
 short form is kept for lookup, since a place is looked up by its
 toponym.
+
+(Amended by #499, 2026-10-16.) **An appellation stays.** An alias the
+document gives as an appellation, the value of a `referred_to_as` claim
+of the same document about the entity (ADR-0018), is kept when it holds
+a word that is no name part of the record: "Tante Rahel" beside "Rahel
+Löbig", and "Omama", which gives no part at all. One made only of name
+parts is judged by the rules above, so "Löbig, Rahel" beside "Rahel
+Löbig" goes however it is marked. A label that is such an appellation,
+on a person whose record stands with the status `name`, becomes the name
+the record gives (the amendment above says how), and the appellation
+stays an alias. Nothing else is read: no field marks an appellation, and
+a word the record merely leaves out never moves a label.
 
 ### 9. What the same prompt revision takes in
 

@@ -81,6 +81,16 @@ Rules — these mirror the archive's non-negotiable conventions:
   "Dein Vater" ("your father") takes the father's name where the
   document gives it. Only a person the document never
   names is labelled with its kinship words ("Mem").
+- Every form the document uses to name or address a person that is no
+  plain name form (a name, or a spelling, a shortening, a diminutive or
+  an initial of one) is an appellation: a kinship term with a name
+  ("Tante Rahel") or alone ("Omama"), a pet name ("Pünktchen") or a
+  courtesy name ("Nana Maisie"). Give each as ONE `referred_to_as` claim,
+  the form verbatim, with a `perspective` qualifier naming the ego only
+  where the source gives it as an entity; a literal kinship term also
+  gives the kinship ("Tante Rahel", where Rahel is the aunt, also gives
+  `relative` with the kinship_type "Tante"). A description that is no
+  form of address ("the deceased", "my husband") gives none.
 - Kinds: a group of people is never one human. "The Löbig children" is
   a family where the source presents a family or household, else each
   child it names. A count of children the source states is the parent's

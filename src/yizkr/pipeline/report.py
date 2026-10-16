@@ -1107,7 +1107,8 @@ def _records(coverage: dict) -> dict[str, Any]:
     """The mention records and judgement notes an extraction's coverage
     counts (ADR-0035 §4, §5): the records given, by status, and the
     unsplit name forms they hold, the mentions recordless, the records set
-    aside and the reasons they were set aside by, by category; and the
+    aside and the reasons they were set aside by, by category, and the
+    labels that were appellations and became names (ADR-0018); and the
     notes by category, and the notes set aside. Each name is folded into
     the report's fixed vocabulary, OTHER for one it does not know.
 
@@ -1119,8 +1120,9 @@ def _records(coverage: dict) -> dict[str, Any]:
     The extraction writes its records and its notes together, so both
     are None unless the coverage holds both, as the line-range tier's and
     one written before these counts do not: absent, never zero. The
-    records set aside and the unsplit forms are each None when the
-    coverage, though it holds both, gives no count of them."""
+    records set aside, the unsplit forms and the appellation labels are
+    each None when the coverage, though it holds both, gives no count of
+    them."""
     records, notes = coverage.get("records"), _tally(coverage.get("notes"))
     if not isinstance(records, dict) or notes is None:
         return {"records": None, "notes": None}
@@ -1136,6 +1138,7 @@ def _records(coverage: dict) -> dict[str, Any]:
             ),
             "unsplit_forms": _counted(records.get("unsplit_forms")),
             "set_aside_records": _counted(records.get("set_aside_records")),
+            "appellation_labels": _counted(records.get("appellation_labels")),
             "set_aside_by_reason": _folded(
                 reasons, lambda value: _known(value, SET_ASIDE_REASONS)
             ),
@@ -2255,7 +2258,7 @@ def _aggregate_content(
     notes: Counter = Counter()
     absent: Counter = Counter()
     record_extractions = records_given = recordless = notes_set_aside = 0
-    records_set_aside = unsplit_forms = 0
+    records_set_aside = unsplit_forms = appellation_labels = 0
     batches = not_extracted = zero_entities = 0
     extractions = chunks = rejected = unread = with_rejects = given = 0
     failed_rejecting = critiques = with_findings = findings = invalid = 0
@@ -2302,6 +2305,10 @@ def _aggregate_content(
                     absent["unsplit_forms"] += 1
                 else:
                     unsplit_forms += records["unsplit_forms"]
+                if records["appellation_labels"] is None:
+                    absent["appellation_labels"] += 1
+                else:
+                    appellation_labels += records["appellation_labels"]
                 set_aside.update(records["set_aside_by_reason"])
                 notes.update(noted["by_category"])
                 notes_set_aside += noted["set_aside"]
@@ -2356,6 +2363,7 @@ def _aggregate_content(
             "by_status": _by_count(statuses),
             "unsplit_forms": unsplit_forms,
             "set_aside_records": records_set_aside,
+            "appellation_labels": appellation_labels,
             "set_aside_reasons": set_aside.total(),
             "set_aside_by_reason": _by_count(set_aside),
             "absent": {
@@ -2363,6 +2371,7 @@ def _aggregate_content(
                 "line_range": absent["line_range"],
                 "set_aside_records": absent["set_aside_records"],
                 "unsplit_forms": absent["unsplit_forms"],
+                "appellation_labels": absent["appellation_labels"],
             },
         },
         "notes": {
@@ -3137,6 +3146,8 @@ def _records_blocks(
             f"{_n(records['recordless'])}",
             "Unsplit name forms in the records given: "
             f"{_n(records['unsplit_forms'])}",
+            "Labels that were appellations, replaced with the name the "
+            f"record gives: {_n(records['appellation_labels'])}",
             f"Records set aside: {_n(records['set_aside_records'])}; "
             "reasons records were set aside: "
             f"{_n(records['set_aside_reasons'])} (a record can give "
@@ -3150,7 +3161,8 @@ def _records_blocks(
             "Extractions counted whose coverage gives no count of it, so "
             "left out of that count: records set aside "
             f"{_n(absent['set_aside_records'])}; unsplit name forms "
-            f"{_n(absent['unsplit_forms'])}",
+            f"{_n(absent['unsplit_forms'])}; appellation labels "
+            f"{_n(absent['appellation_labels'])}",
         ]
     ]
     if records["by_status"]:
@@ -3712,7 +3724,9 @@ def _html_document(document: Mapping[str, Any]) -> str:
             items.append(
                 f"Mention records given: {records['given']}, by status: "
                 f"{_listed(_by_count(records['by_status']))}; unsplit name "
-                f"forms: {_absent(records['unsplit_forms'])}; recordless: "
+                f"forms: {_absent(records['unsplit_forms'])}; appellation "
+                f"labels: {_absent(records['appellation_labels'])}; "
+                "recordless: "
                 f"{records['recordless']}; records set aside: "
                 f"{_absent(records['set_aside_records'])}; reasons set "
                 "aside: "

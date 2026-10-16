@@ -10,7 +10,11 @@ from yizkr.claims import (
     PlaceStructure,
     set_aside_structure,
 )
-from yizkr.pipeline.names import normalize_aliases, normalize_entity_dict
+from yizkr.pipeline.names import (
+    appellations_of,
+    normalize_aliases,
+    normalize_entity_dict,
+)
 
 
 def person(**parts) -> PersonStructure:
@@ -342,4 +346,189 @@ class TestNormalizeEntityDict:
         assert normalize_entity_dict({"kind": "human"}) == {
             "kind": "human",
             "aliases": [],
+        }
+
+
+# -- appellations (ADR-0018 as amended by #499) ------------------------------
+
+RAHEL = person(given=[{"written": "Rahel"}], surnames=[{"written": "Löbig"}])
+HILDEGARD = person(
+    given=[{"written": "Hildegard"}], surnames=[{"written": "Löbig"}]
+)
+
+
+def rahel(label, aliases, structure=RAHEL) -> dict:
+    return {
+        "id": "e1",
+        "kind": "human",
+        "label": label,
+        "aliases": aliases,
+        "structure": structure.model_dump(),
+    }
+
+
+class TestAppellationAliases:
+    def test_an_appellation_with_a_name_is_kept(self):
+        """'Tante Rahel' gives no part the label lacks, so a plain alias
+        would be derivable; as an appellation it stays."""
+        assert normalize_aliases(
+            "Rahel Löbig", ["Tante Rahel"], RAHEL, ["Tante Rahel"]
+        ) == ["Tante Rahel"]
+
+    def test_an_appellation_with_no_name_part_is_kept(self):
+        """'Omama' gives no part at all, and 'Nana Maisie' none the label
+        lacks: both stay as the appellations they are."""
+        assert normalize_aliases(
+            "Hildegard Löbig", ["Omama"], HILDEGARD, ["Omama"]
+        ) == ["Omama"]
+        maisie = person(
+            given=[{"written": "Maisie"}], surnames=[{"written": "Cutmore"}]
+        )
+        assert normalize_aliases(
+            "Maisie Cutmore", ["Nana Maisie"], maisie, ["Nana Maisie"]
+        ) == ["Nana Maisie"]
+
+    def test_an_unmarked_kinship_term_is_still_dropped(self):
+        """The rule reads the claims, never the word: a kinship term no
+        `referred_to_as` claim gives is dropped as before."""
+        assert (
+            normalize_aliases(
+                "Hildegard Löbig", ["Omama", "Tante Hildegard"], HILDEGARD
+            )
+            == []
+        )
+
+    def test_a_role_label_and_a_reordering_are_still_dropped(self):
+        """A role label nothing marks goes, and so does a derivable
+        reordering even where it is marked: its words are all name
+        parts, so the record's rules judge it."""
+        assert normalize_aliases(
+            "Rahel Löbig",
+            ["INFORMANT", "Löbig, Rahel", "Tante Rahel"],
+            RAHEL,
+            ["Löbig, Rahel", "Tante Rahel"],
+        ) == ["Tante Rahel"]
+
+    def test_an_appellation_matches_as_the_instance_keeps_a_term(self):
+        assert normalize_aliases(
+            "Rahel Löbig", ["TANTE\nRahel"], RAHEL, ["Tante Rahel"]
+        ) == ["TANTE\nRahel"]
+
+    def test_a_recordless_entity_keeps_its_appellations(self):
+        assert normalize_aliases("Rahel", ["Tante Rahel"], None, []) == [
+            "Tante Rahel"
+        ]
+
+
+class TestAppellationLabel:
+    def test_the_fullest_name_form_takes_the_label(self):
+        """'Tante Rahel' as Rahel's label, with 'Rahel Löbig' and 'Rahel'
+        beside it: the fullest form made only of name parts is the
+        label, and the appellation stays an alias."""
+        settled = normalize_entity_dict(
+            rahel("Tante Rahel", ["Rahel", "Rahel Löbig"]), ["Tante Rahel"]
+        )
+        assert settled["label"] == "Rahel Löbig"
+        assert settled["aliases"] == ["Tante Rahel"]
+
+    def test_else_the_labels_own_name_words(self):
+        """With no other form, the label's words that are name parts, in
+        its order."""
+        record = person(given=[{"written": "Rahel"}])
+        settled = normalize_entity_dict(
+            rahel("Tante Rahel", [], record), ["Tante Rahel"]
+        )
+        assert settled["label"] == "Rahel"
+        assert settled["aliases"] == ["Tante Rahel"]
+
+    def test_a_kinship_word_filed_as_a_title_changes_nothing(self):
+        """A record that files 'Tante' as a title still stands, and the
+        label is still taken from the name parts, never the title (as
+        scratch run 2's two such records would be)."""
+        record = person(given=[{"written": "Rahel"}], titles=["Tante"])
+        settled = normalize_entity_dict(
+            rahel("Tante Rahel", [], record), ["Tante Rahel"]
+        )
+        assert settled["label"] == "Rahel"
+        assert settled["aliases"] == ["Tante Rahel"]
+
+    def test_a_pet_name_label_gives_way_to_a_name(self):
+        """'Pünktchen' is a record nickname, so made of name parts, but an
+        appellation too: a name form that is none comes first."""
+        klara = person(given=[{"written": "Klara"}], nicknames=["Pünktchen"])
+        entity = rahel("Pünktchen", ["Klara"], klara)
+        settled = normalize_entity_dict(entity, ["Pünktchen"])
+        assert settled["label"] == "Klara"
+        assert settled["aliases"] == ["Pünktchen"]
+        # with no other form, the pet name is the record's only name
+        alone = rahel("Pünktchen", [], person(nicknames=["Pünktchen"]))
+        assert normalize_entity_dict(alone, ["Pünktchen"])["label"] == (
+            "Pünktchen"
+        )
+
+    def test_a_label_no_claim_marks_is_left_alone(self):
+        """A label holding a word the record leaves out (a middle name it
+        omits) is untouched: the rule fires on appellations only."""
+        entity = rahel("Rahel Henriette Löbig", ["Tante Rahel"])
+        settled = normalize_entity_dict(entity, ["Tante Rahel"])
+        assert settled["label"] == "Rahel Henriette Löbig"
+        assert settled["aliases"] == ["Tante Rahel"]
+        unmarked = normalize_entity_dict(rahel("Tante Rahel", ["Rahel Löbig"]))
+        assert unmarked["label"] == "Tante Rahel"
+
+    @pytest.mark.parametrize("status", ["kinship", "courtesy", "role"])
+    def test_only_a_name_record_renames(self, status):
+        """'Omama' for a person the document never names keeps its label:
+        its record names no one."""
+        record = person(status=status)
+        entity = rahel("Omama", [], record)
+        assert normalize_entity_dict(entity, ["Omama"])["label"] == "Omama"
+
+    def test_a_record_that_does_not_stand_renames_nothing(self):
+        """A record giving a part no form holds is set aside (ADR-0035
+        §5): no record, no rename."""
+        record = person(given=[{"written": "Klara"}])
+        entity = rahel("Tante Rahel", [], record)
+        settled = normalize_entity_dict(entity, ["Tante Rahel"])
+        assert settled["label"] == "Tante Rahel"
+
+    def test_with_no_name_word_to_take_the_label_stays(self):
+        """'Omama' with a name record whose parts only another
+        appellation holds: nothing made of name parts, no name word in
+        the label, so it stays."""
+        record = person(given=[{"written": "Hildegard"}])
+        entity = rahel("Omama", ["Oma Hildegard"], record)
+        settled = normalize_entity_dict(entity, ["Omama", "Oma Hildegard"])
+        assert settled["label"] == "Omama"
+        assert settled["aliases"] == ["Oma Hildegard"]
+
+    def test_it_is_idempotent(self):
+        once = normalize_entity_dict(
+            rahel("Tante Rahel", ["Rahel Löbig"]), ["Tante Rahel"]
+        )
+        assert normalize_entity_dict(once, ["Tante Rahel"]) == once
+
+
+class TestAppellationsOf:
+    def test_the_referred_to_as_values_by_local_id(self):
+        def given(local_id, prop, text):
+            return {
+                "subject": {"kind": "local", "local_id": local_id},
+                "property": prop,
+                "value": {
+                    "type": "monolingual",
+                    "value": {"text": text, "language": "de"},
+                },
+            }
+
+        claims = [
+            given("e1", "referred_to_as", "Tante Rahel"),
+            given("e1", "referred_to_as", " Tante Rahel "),
+            given("e1", "nickname", "Pünktchen"),
+            given("e2", "referred_to_as", "Omama"),
+            {"property": "referred_to_as", "subject": "e3", "value": None},
+        ]
+        assert appellations_of(claims) == {
+            "e1": ["Tante Rahel"],
+            "e2": ["Omama"],
         }

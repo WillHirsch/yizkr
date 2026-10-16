@@ -891,10 +891,10 @@ Names are modelled in **two layers**:
   event):
   - `birth name` (P1477) — name/maiden name given at birth;
   - `married name` (P2562) — family name taken on marriage;
-  - `nickname` (P1449) — a name the source gives as what the person is
+  - `nickname` (P1449) — a name the source marks as what the person is
     called, by anyone ("Peppi", "Gustl"), or an "aka"; what one person
-    calls another, or a name that names the person through a relation
-    but is no literal kinship term, is `referred_to_as` instead (below);
+    calls another, or a name that names the person through a relation,
+    is `referred_to_as` alone (below);
   - `official name` (P1448) — a formally adopted or legally changed name.
 - **A name form of no stated type** (ADR-0011, amended by #435): where a
   source gives a person a name form without stating its type, beside the
@@ -914,8 +914,10 @@ Names are modelled in **two layers**:
 - So each kind of name form goes here: the label's own form, to the
   label alone; a form the source types, to an alias and its typed
   statement; a further form of no stated type, to an alias and a `name`
-  statement; and a relational appellation, to `referred_to_as` alone
-  (below).
+  statement; and an appellation, any other form a source uses to name or
+  address the person (a kinship term with a name or alone, a pet name, a
+  courtesy name), to an alias and a `referred_to_as` statement (below;
+  ADR-0018 as amended by #499).
 - Typing adds structure where a source marks it; it never narrows or
   infers (a maiden name is recorded only when the source says so, never
   derived from gender + marriage).
@@ -975,8 +977,19 @@ parts the label already gives ("Löbig, Ida" beside "Ida Löbig"); one that
 adds a part is kept ("Wastl"), as is one that spells a part otherwise
 than the label ("Gustav Lobig" beside "Gustav Löbig"), and so is the
 first that alone holds a title or suffix the record gives ("Frau Löbig" beside "Ida Löbig", her
-record titling her Frau). The GEDCOM adapter cleans by the record it
-fills, as extraction does. A place's or an organisation's alias that
+record titling her Frau). An alias the document gives as an appellation
+(the value of a `referred_to_as` claim of the same document about the
+entity) is kept when it holds a word that is no name part ("Tante
+Rahel" beside "Rahel Löbig", "Omama"); one made only of name parts is
+judged as any other, so a reordering stays dropped. Where a person's
+label is one of those appellations and its record stands with the status
+`name`, the label becomes the name the record gives: the fullest of its
+forms made only of name parts (one that is no appellation first), or
+else the label's own name words, in its order; the appellation stays an
+alias, and every local ref takes the new label. This runs where the
+batch is assembled, once the chunks' claims exist, and fires on marked
+appellations only, never on a word the record merely leaves out. The
+GEDCOM adapter cleans by the record it fills, as extraction does. A place's or an organisation's alias that
 gives no part (a deictic or generic reference) is dropped, and a short form
 kept. An entity without a record keeps its aliases, blanks and duplicates
 aside. It never splits a name, so compound/particle surnames stay whole
@@ -997,8 +1010,10 @@ language:
   particles; patronymics, a name part of their own (the 1941
   certificate's *Лёбиг Рудольф Феликсович* gives the given name Рудольф,
   the surname Лёбиг and the patronymic Феликсович); nicknames, the names
-  the person is called by anyone, each also an alias (never a
-  `referred_to_as` appellation, ADR-0018); titles and
+  the person is called by anyone, each also an alias (a pet name among
+  them also a `referred_to_as` appellation; a form through a relation,
+  such as "Tante Rahel" or "Nana Maisie", is never a record part,
+  ADR-0018); titles, honorifics and ranks and never a kinship word, and
   suffixes, which never key; and `unsplit` forms whose given name and
   surname the source does not tell apart;
 - **a place:** a status (`toponym`, `deictic` or `generic`); its names,
@@ -1046,30 +1061,41 @@ document's own words for them (the postcard's *Dein Vater*, status
 or `other`) and one sentence in English, only where the extractor made a
 call a careful reader could make differently. `coverage.json` counts the
 records given (and by status, and the `unsplit` forms they hold),
-recordless and set aside (the records, and the reasons by category), and
-the notes by category.
+recordless and set aside (the records, and the reasons by category), the
+labels the appellation rule replaced with a name (`appellation_labels`),
+and the notes by category.
 
-**Relational and perspectival appellations are NOT names** (ADR-0018).
-"our great grandmother", "meine Oma", "Nana Maisie", "my husband" describe
-a relationship or viewpoint, so they never enter the alias bag. A literal
-kinship term is a `relative` + `kinship_type` claim with the ego as
-object (§Kinship); a spousal term ("my husband") gives a marriage
-(ADR-0036); any other relational appellation (a name the
-source gives as what one person calls another, with or without a stated
-perspective, or that names the person through a relation: a courtesy
-title, "Bubele", "Рудольфиха") is a
-`referred_to_as` (P1810) statement on the referent — verbatim, source-
-referenced — qualified by `perspective` (the person/family ego) when the
-ego is a modelled entity, and unqualified otherwise. Both are
-multi-valued and coexist (ADR-0002): many people may call one person many
-things. Because each appellation is a statement whose *subject* is the
-referent and whose ego (the `relative` object or the `perspective`
-qualifier) is the other party, reciprocal naming
-(a grandmother "Oma" to a grandchild who is "Bubele" to her) is just two
-independent statements — no dyad object, and the kinship inverse is
-derived, not stored. With the ego anchored, a later bare reference
-resolves: compositional terms by kinship derivation, idiosyncratic ones
-via the appellation table.
+**Appellations are aliases and sourced statements** (ADR-0018, amended
+by #499). Every form a source uses to name or address a person is an
+alias, with no structural distinction: a name form, a kinship term with
+a name ("Tante Rahel"), a kinship term alone ("Omama"), a pet name
+("Pünktchen") and a courtesy name ("Nana Maisie"); that the person was
+known by it, to at least someone, is what the alias keeps. Each form
+that is no plain name form (a name, or a spelling, a shortening, a
+diminutive or an initial of one) is also one `referred_to_as` (P1810)
+statement on the referent: verbatim, referenced to the artifact with its
+locator, and qualified by `perspective` (the person/family ego) when the
+source gives an ego that is a modelled entity, unqualified otherwise.
+The alias is the lookup; the statement is the evidence. A literal
+kinship term also gives a `relative` + `kinship_type` claim with the ego
+as object (§Kinship); a spousal term ("my husband") gives a marriage
+(ADR-0036). A description that is no form of address ("the deceased",
+"the informant", "my husband", "our great grandmother", a role or
+form-field label) is never an alias. The label stays the display name: a
+name form wherever the document names the person, and the document's own
+words only for a person it never names. Identity never reads an
+appellation: clustering keys on the mention record's name parts, and a
+recordless mention never on an appellation (ADR-0035 §7). Appellations
+are multi-valued and coexist (ADR-0002): many people may call one person
+many things. Because each appellation is a statement whose *subject* is
+the referent and whose ego (the `relative` object or the `perspective`
+qualifier) is the other party, reciprocal naming (a grandmother "Oma" to
+a grandchild who is "Bubele" to her) is just two independent statements
+— no dyad object, and the kinship inverse is derived, not stored. With
+the ego anchored, a later bare reference resolves: compositional terms
+by kinship derivation, idiosyncratic ones via the appellation table.
+Appellations of possibly-living people ride the possibly-living
+exclusion (ADR-0020).
 
 ## Kinship (see ADR-0014)
 
@@ -1295,8 +1321,9 @@ not a signal to grow the schema on.
   only when they would link as places or one lies in the other; an umlaut
   also written out (DIN 5007-2). A person, place, organisation or family
   without a record (none given, or one extraction set aside under
-  ADR-0035 §5, before the alias cleanup) meets only its exact name, and
-  never merges; so a document's mention whose record was set aside never
+  ADR-0035 §5, before the alias cleanup) meets only its exact name, never
+  one its document gives as an appellation (two people called "Oma" never
+  meet by it), and never merges; so a document's mention whose record was set aside never
   meets the GEDCOM export, whose people and places all have records; the
   kinds that take no record (occupations, vessels and the like) still
   merge on an exact name. A union is keyed by its couple,

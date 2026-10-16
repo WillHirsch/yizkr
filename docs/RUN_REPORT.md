@@ -228,7 +228,10 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   record was set aside. `coverage.json` counts an entity's note set aside
   among the same reasons, once, as `note`; the report counts it as a note
   set aside, never as a record's reason (a claim whose note fails is a
-  counted reject instead). A reason, status or category the report does
+  counted reject instead). `records.appellation_labels` counts the
+  persons whose label was one of the document's appellations of them and
+  became the name their record gives (ADR-0018, ADR-0035 §8, as amended
+  by #499). A reason, status or category the report does
   not know is counted as `other`, as everywhere in the aggregates; since
   `other` is also a note category, the notes' `other` holds both. An
   extraction whose coverage holds no such counts is counted apart,
@@ -246,12 +249,13 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   object is in none of these figures, as in none of the rejects'. Nor
   are the judgement notes counted that a line-range fallback's claims
   carry: its coverage counts no notes. A coverage that holds its records
-  and notes but predates `records.set_aside_records` or
-  `records.unsplit_forms` (or gives one that is no count) still counts
+  and notes but predates `records.set_aside_records`,
+  `records.unsplit_forms` or `records.appellation_labels` (or gives one
+  that is no count) still counts
   its other figures, but is counted in none of the counts it lacks,
   never as zero: the report says how many extractions it counted lack
   each (`absent.set_aside_records`,
-  `absent.unsplit_forms`), and a document's own view gives the count as
+  `absent.unsplit_forms`, `absent.appellation_labels`), and a document's own view gives the count as
   null and its drill-down says it is not counted. A reason, status or
   category whose count is no count (not a whole number of at least 0) is
   dropped, never a 0 row; a genuine 0 stays.
@@ -259,9 +263,9 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   reasons, statuses and categories folded as the aggregates' are, and
   `report.json`'s `aggregate.content.records` (`extractions`, `given`,
   `recordless`, `by_status`, `unsplit_forms`, `set_aside_records`,
-  `set_aside_reasons`, `set_aside_by_reason`, `absent.predating`,
-  `absent.line_range`, `absent.set_aside_records`,
-  `absent.unsplit_forms`) and `aggregate.content.notes`
+  `appellation_labels`, `set_aside_reasons`, `set_aside_by_reason`,
+  `absent.predating`, `absent.line_range`, `absent.set_aside_records`,
+  `absent.unsplit_forms`, `absent.appellation_labels`) and `aggregate.content.notes`
   (`total`, `by_category`, `set_aside`) sit beside the rejects, chunks
   and fallback tiers, where the run-to-run diff (#198) is to compare them
   with the other extraction counts;
