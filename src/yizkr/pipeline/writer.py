@@ -207,11 +207,11 @@ Per batch, the writer:
      one another claim of the write has given it since, as on a
      statement the write made) the claim's blocks are APPENDED to the
      statement, each only if the statement does not already carry it, so
-     a second claim of the same run adds its source block, and the run's
-     block only where its note differs. The same artifact under another
-     page, region or excerpt thus adds a block of its own beside the
-     first, as another artifact does. No block the statement carries is
-     changed or removed.
+     a second claim of the same run adds its source block only where it
+     cites another place, and the run's block only where its note
+     differs. The same artifact under another page, region or excerpt
+     thus adds a block of its own beside the first, as another artifact
+     does. No block the statement carries is changed or removed.
    The run block is compared whole too, with its judgement note, in NFC
    (ADR-0035 §4). Where the statement carried the claim's source block
    before the write, the claim's run block is appended when no block of
@@ -228,24 +228,24 @@ Per batch, the writer:
    there is judged by the statement before the write, never by what
    another claim of the write gave it. It is compared as curated only
    while it still is one: a machine claim of the write joining a
-   curator's own write makes it a machine statement for every claim of
-   the write, while one whose rank a curator changed stays curated. A
-   claim that adds nothing is looked at again once the batch's other
-   claims are written and its kinds recorded (step 5), so it meets the
-   statement as the batch left it: it joins a block of its run that a
-   noted claim after it, or a kind, gave the statement, and meets as a
-   machine statement a curated one that a machine claim after it joined,
-   as it would had it come after them. So a second claim of the same run
-   adds its own run block where its note differs, a run's noted and
-   note-less claims, and a curator's claims beside machine claims, from
-   one place or several, give the same blocks in whatever order the
-   batch gives them, for the run that wrote the statement and for a
-   later one, and a later run's note-less claims alone add nothing where
-   their source agrees. One statement can thus carry several run blocks
-   of one run; a reader counts runs by run item, never by blocks. A
-   batch written again adds nothing. Same value but different qualifiers
-   is a different assertion and coexists as its own statement
-   (ADR-0002);
+   curator's own write at normal rank makes it a machine statement for
+   every claim of the write, while one whose rank a curator changed
+   stays curated. A claim that adds nothing is looked at again once the
+   batch's other claims are written and its kinds recorded (step 5), so
+   it meets the statement as the batch left it: it joins a block of its
+   run that a noted claim after it, or a kind, gave the statement, and
+   meets as a machine statement a curator's own write at normal rank
+   that a machine claim after it joined, as it would had it come after
+   them. So a second claim of the same run adds its own run block where
+   its note differs, a run's noted and note-less claims, and a curator's
+   claims beside machine claims, from one place or several, give the
+   same blocks in whatever order the batch gives them, for the run that
+   wrote the statement and for a later one, and a later run's note-less
+   claims alone add nothing where their source agrees. One statement can
+   thus carry several run blocks of one run; a reader counts runs by run
+   item, never by blocks. A batch written again adds nothing. Same value
+   but different qualifiers is a different assertion and coexists as its
+   own statement (ADR-0002);
 5. after the claims, records the kind every local ref of a written
    claim gives the item it resolves to, minted or found, and a record's
    type hint, each cited to the artifact of the claim the ref is in, so
@@ -2759,9 +2759,9 @@ class BatchWriter:
         its blocks the statement does not carry now. So a curated claim
         citing an artifact, or a source block the write added, changes
         nothing another claim of the write adds; a machine claim joining
-        a curator's own write does, making it a machine statement, and
-        write_batch's re-check of the claims that added nothing makes
-        the order irrelevant.
+        a curator's own write at normal rank does, making it a machine
+        statement, and write_batch's re-check of the claims that added
+        nothing makes the order irrelevant.
         """
         present = {
             self._reference_key(block)
@@ -2769,8 +2769,9 @@ class BatchWriter:
         }
         source, *runs = references.references
         curated, cited, carried = before or (False, frozenset(), frozenset())
-        # a statement curated before the write that a machine claim of the
-        # write has joined since is compared as a machine one
+        # a curator's own write at normal rank that a machine claim of the
+        # write has joined since is compared as a machine one; one whose
+        # rank a curator changed stays curated
         curated = curated and self._is_curated(statement)
         if curated:
             if artifact_qid in cited:

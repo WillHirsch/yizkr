@@ -389,24 +389,24 @@ statement already cited before the write adds its run block only when it
 carries a note, or when a noted claim of its run gave the statement a
 block of that run, in this write or an earlier one. A statement is
 compared as a curator's when it was one before the write and still is: a
-machine claim of the write that joins a curator's own write makes it a
-machine one for every claim of the write, while one whose rank a curator
-changed stays a curator's. The artifacts it cites for that comparison
-(below) and the places it cites are read as it stood before the write,
-and a claim that adds nothing is looked at again once the batch's other
-claims are written and its kinds recorded, so a run's noted and
-note-less claims, and a curator's claims beside machine claims, from one
-place or several, give the same blocks in whatever order the batch gives
-them, for the run that wrote the statement and for a later one, and a
-later run's note-less claims alone add nothing there (#410). An entity's
-kind takes its run blocks by the same rule. No block is edited to add or
-remove a note. The exception is a statement with no run reference (a
-curator's own write, until a machine claim of this write or an earlier
-one joins it) or whose rank a curator changed: the writer adds nothing
-to it for another place of an artifact it already cites (the writer's
-module docstring, `src/yizkr/pipeline/writer.py`, gives the rule). The
-kinds and type hints the writer records after the claims, from an entity
-manifest or a ref, follow ADR-0007 instead.
+machine claim of the write that joins a curator's own write at normal
+rank makes it a machine one for every claim of the write, while one
+whose rank a curator changed stays a curator's. The artifacts it cites
+for that comparison (below) and the places it cites are read as it stood
+before the write, and a claim that adds nothing is looked at again once
+the batch's other claims are written and its kinds recorded, so a run's
+noted and note-less claims, and a curator's claims beside machine
+claims, from one place or several, give the same blocks in whatever
+order the batch gives them, for the run that wrote the statement and for
+a later one, and a later run's note-less claims alone add nothing there
+(#410). An entity's kind takes its run blocks by the same rule. No block
+is edited to add or remove a note. The exception is a statement with no
+run reference (a curator's own write, until a machine claim of this
+write or an earlier one joins it) or whose rank a curator changed: the
+writer adds nothing to it for another place of an artifact it already
+cites (the writer's module docstring, `src/yizkr/pipeline/writer.py`,
+gives the rule). The kinds and type hints the writer records after the
+claims, from an entity manifest or a ref, follow ADR-0007 instead.
 
 Wikibase holds at most 400 characters in the text of a string,
 external-id or monolingual text value, a reference's page number,
