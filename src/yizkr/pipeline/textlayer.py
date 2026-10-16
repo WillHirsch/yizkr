@@ -831,8 +831,9 @@ def _write_images(
                 data, suffix = image_bytes(objects[at][0])
             except (pdfium.PdfiumError, ValueError):
                 read.notes.append(
-                    f"page {layout.number}, image {place}: PDFium could not "
-                    "give its bytes, so it is not read"
+                    f"image not read on its own: page {layout.number}, image "
+                    f"{place}: PDFium could not give its bytes, so it is not "
+                    "read"
                 )
                 continue
             sha1 = hashlib.sha1(data).hexdigest()

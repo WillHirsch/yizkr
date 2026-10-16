@@ -686,8 +686,8 @@ class TestImages:
             if event["stage"] == "transcription"
         ]
         assert done["attention"] == [
-            "page 6, image 1: PDFium could not give its bytes, so it is not "
-            "read"
+            "image not read on its own: page 6, image 1: PDFium could not "
+            "give its bytes, so it is not read"
         ]
 
     def test_nothing_is_written_until_the_stage_keeps_it(self, tmp_path):

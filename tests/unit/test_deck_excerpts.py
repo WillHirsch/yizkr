@@ -21,15 +21,24 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures import pdfs
+from tests.unit.test_orchestrate import this_run
 from tests.unit.test_pdf_pages import (
+    CAPTION,
+    COMMENT,
     EXCERPT,
     LETTER_IMAGE,
     LETTER_SHA1,
+    REFUSAL,
+    SOURCES,
+    TRANSLATION,
+    Raw,
     Reader,
     RefusingReader,
     booklet,
     document,
     excerpt_of,
+    extract,
     run,
     transcription_of,
 )
@@ -44,7 +53,9 @@ from tests.unit.test_scratch import Corpus, a_run, fakes  # noqa: F401
 from tests.unit.test_scratch_estimate import (  # noqa: F401
     engine,
     estimate_of,
+    runs_dir,
 )
+from tests.unit.test_scratch_estimate import run as run_scratch
 from yizkr.claims import ClaimBatch
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import presentation
@@ -55,6 +66,7 @@ from yizkr.pipeline.containers import (
     image_size,
     is_decoration,
 )
+from yizkr.pipeline.monitor import reason_label
 from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
     PAGED,
@@ -66,6 +78,7 @@ from yizkr.pipeline.orchestrate import (
     EXCERPT as EXCERPT_KIND,
 )
 from yizkr.pipeline.presentation import (
+    UNREAD_IMAGE,
     derived_transcription,
     read_derived_media,
     read_slides,
@@ -209,6 +222,40 @@ def library_talk(path: Path, *, letter: bytes = LETTER_PNG) -> Path:
     )
 
 
+def gif_of(width: int, height: int) -> bytes:
+    """A GIF's header, which gives its size, and a trailer."""
+    return b"GIF89a" + struct.pack("<HH", width, height) + b"\x00\x00\x00;"
+
+
+def webp_of(width: int, height: int) -> bytes:
+    """An extended WebP's header (VP8X), which gives its size."""
+    return (
+        b"RIFF"
+        + struct.pack("<I", 22)
+        + b"WEBPVP8X"
+        + struct.pack("<I", 10)
+        + b"\x00" * 4
+        + (width - 1).to_bytes(3, "little")
+        + (height - 1).to_bytes(3, "little")
+    )
+
+
+def jpeg_of(width: int, height: int, caption: str = "") -> bytes:
+    """A JPEG's start, a comment and a start of frame, which gives its
+    size."""
+    comment = caption.encode()
+    return (
+        b"\xff\xd8"
+        + b"\xff\xfe"
+        + struct.pack(">H", len(comment) + 2)
+        + comment
+        + b"\xff\xc0"
+        + struct.pack(">HBHH", 11, 8, height, width)
+        + b"\x01\x01\x11\x00"
+        + b"\xff\xd9"
+    )
+
+
 def talk_folder(tmp_path: Path, **files: bytes) -> Path:
     corpus = tmp_path / "corpus"
     corpus.mkdir(exist_ok=True)
@@ -330,16 +377,99 @@ class TestReadSlides:
         )
         (tmp_path / "out").mkdir()
         read = read_slides(
-            path, tmp_path / "out", excluded=lambda s: s == LETTER_SHA1
+            path,
+            tmp_path / "out",
+            excluded=lambda s, names=(): s == LETTER_SHA1,
         )
         assert read.images == {}
         assert read.notes == [
-            f"slide 1, scan.tif (sha1 {sha1(tiff)[:12]}): a .tif image, a "
-            "format the vision engine does not read, so it is not read",
-            f"slide 1, odd.png (sha1 {sha1(unsized)[:12]}): an image whose "
-            "size its header does not give, so it is not read",
+            f"{UNREAD_IMAGE}: slide 1, scan.tif (sha1 {sha1(tiff)[:12]}): a "
+            ".tif image, a format the vision engine does not read, so it is "
+            "not read",
+            f"{UNREAD_IMAGE}: slide 1, odd.png (sha1 {sha1(unsized)[:12]}): "
+            "an image whose size its header does not give, so it is not read",
         ]
+        # the monitor shows a fixed phrase, never what the archive calls
+        # the image
+        assert {reason_label(note) for note in read.notes} == {
+            "image not read on its own"
+        }
         assert list((tmp_path / "out").iterdir()) == []
+
+    def test_a_folder_of_the_archive_tells_two_images_apart(self, tmp_path):
+        """Two images of one basename in two folders of the archive are two
+        images, each marked on the slide that embeds it."""
+        first, second = png_of(120, 120, "first"), png_of(120, 120, "second")
+        path = deck(
+            tmp_path / "talk.pptx",
+            [
+                (("Wastl and Hilde",), ["a/pic.png"], ""),
+                (("Stupfield",), ["b/pic.png"], ""),
+            ],
+            {"a/pic.png": first, "b/pic.png": second},
+        )
+        (tmp_path / "out").mkdir()
+        read = read_slides(path, tmp_path / "out")
+        assert [page.images for page in read.pages] == [
+            [(1, sha1(first))],
+            [(1, sha1(second))],
+        ]
+
+    def test_an_image_its_xml_does_not_paint_is_read(self, tmp_path):
+        """An image only the slide's relationships name is still the
+        slide's, and read."""
+        path = deck(
+            tmp_path / "talk.pptx",
+            [(("Wastl and Hilde",), [], ""), (LETTER_SLIDE, ["l.png"], "")],
+            {"l.png": LETTER_PNG},
+            painted={2: []},
+        )
+        (tmp_path / "out").mkdir()
+        read = read_slides(path, tmp_path / "out")
+        assert read.pages[1].images == [(1, LETTER_SHA1)]
+
+    def test_every_vision_format_is_read(self, tmp_path):
+        """A JPEG, a GIF and a WebP of a readable size are each read, with
+        no note."""
+        images = {
+            "a.jpeg": jpeg_of(300, 120),
+            "b.gif": gif_of(300, 120),
+            "c.webp": webp_of(300, 120),
+        }
+        path = deck(
+            tmp_path / "talk.pptx",
+            [(("Wastl and Hilde",), list(images), "")],
+            images,
+        )
+        (tmp_path / "out").mkdir()
+        read = read_slides(path, tmp_path / "out")
+        assert read.notes == []
+        assert [s for _place, s in read.pages[0].images] == [
+            sha1(data) for data in images.values()
+        ]
+
+    def test_the_same_bytes_under_two_names_take_the_record_s_suffix(
+        self, tmp_path
+    ):
+        """One JPEG held as a.jpeg and as b.jpg is one image, its file
+        named with the suffix the record of the deck's derived media takes:
+        the first name's."""
+        data = jpeg_of(300, 120, "the shop front")
+        path = deck(
+            tmp_path / "talk.pptx",
+            [(("Hutmacherei",), ["a.jpeg", "b.jpg"], "")],
+            {"a.jpeg": data, "b.jpg": data},
+        )
+        (tmp_path / "out").mkdir()
+        (image,) = read_slides(path, tmp_path / "out").images.values()
+        assert image.suffix == ".jpeg"
+        record = presentation.record_derived_media(
+            unpack_pptx(path),
+            source_sha1=sha1(path.read_bytes()),
+            title="Hutmacherei",
+            directory=tmp_path / "doc",
+        )
+        assert record.media[sha1(data)].file.endswith(".jpeg")
 
 
 class TestTheRoute:
@@ -484,20 +614,127 @@ class TestADeckSImages:
             "library-talk-2018.pptx",
         ]
 
-    def test_an_image_the_never_ingest_list_names_is_not_read(self, tmp_path):
-        """It reaches no engine and is no excerpt; the record keeps it, and
-        the write leaves it out (registrar.register_derived_media)."""
+    @pytest.mark.parametrize(
+        "listed",
+        [LETTER_SHA1, "image2.png", "image*"],
+        ids=["by sha1", "by name", "by glob"],
+    )
+    def test_an_image_the_never_ingest_list_names_is_not_read(
+        self, tmp_path, listed
+    ):
+        """By its SHA-1 or by a glob on its name in the archive, as the
+        write leaves it out (registrar.register_derived_media): it reaches
+        no engine and is no excerpt, though the record keeps it; a second
+        run reuses the deck's view, setting nothing aside."""
+        corpus = talk_folder(tmp_path)
+        exclusions = ExclusionList.parse(f"{listed}\n")
         orchestrator = run(
-            tmp_path,
-            talk_folder(tmp_path),
-            reader := Reader({}),
-            exclusions=ExclusionList(sha1s=frozenset({LETTER_SHA1})),
+            tmp_path, corpus, reader := Reader({}), exclusions=exclusions
         )
         doc = document(orchestrator, "library-talk-2018.pptx")
         assert doc.state.status == AWAITING_CLAIMS, doc.state.error
         assert orchestrator._excerpts == {}
         assert reader.read == []
         assert transcription_of(doc).pages[1].images == []
+        assert LETTER_SHA1 in read_derived_media(doc.dir).media
+        second = run(
+            tmp_path, corpus, RefusingReader({}), exclusions=exclusions
+        )
+        assert this_run(second, "set-aside") == []
+        assert not (doc.dir / "transcription.superseded-1.json").exists()
+        reused = [
+            event
+            for event in this_run(second, "reused")
+            if event["subject"] == doc.sha1
+        ]
+        assert reused[0]["stage"] == "transcription"
+
+    def test_an_image_the_list_names_after_its_reading_is_dropped(
+        self, tmp_path
+    ):
+        """The list names the image by its name in the archive after a run
+        read it: the deck's view that marks it is made again without it
+        (its text is then extracted again), the image is not read, and the
+        reading kept of it makes no excerpt, though it stays on disk."""
+        corpus = talk_folder(tmp_path)
+        run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
+        second = run(
+            tmp_path,
+            corpus,
+            reader := Reader({}),
+            exclusions=ExclusionList.parse("image2.png\n"),
+        )
+        assert reader.read == []
+        doc = document(second, "library-talk-2018.pptx")
+        assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+        assert transcription_of(doc).pages[1].images == []
+        assert derived_transcription(doc.dir, LETTER_SHA1).exists()
+        assert second._excerpts == {}
+
+    def test_a_failed_reading_is_noted_by_its_slide(self, tmp_path):
+        """An image whose reading the check fails has no reading of its
+        own: the stage's attention names it by its slide, the deck goes on,
+        and no excerpt is made."""
+        orchestrator = run(
+            tmp_path,
+            talk_folder(tmp_path),
+            Reader({LETTER_SHA1: Raw(REFUSAL)}),
+        )
+        doc = document(orchestrator, "library-talk-2018.pptx")
+        assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+        assert orchestrator._excerpts == {}
+        (done,) = [
+            event
+            for event in this_run(orchestrator, "done")
+            if event["subject"] == doc.sha1
+            and event["stage"] == "transcription"
+        ]
+        assert any(
+            reason.startswith(f"slide 2, image 1 (sha1 {LETTER_SHA1[:12]})")
+            for reason in done["attention"]
+        )
+
+    def test_a_deck_s_view_without_pages_is_made_again(self, tmp_path):
+        """Every deck's view takes the paged shape: one of its slide text
+        alone is set aside and made again, with a page per slide, though
+        the deck reads no image and no engine is asked."""
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        path = library_talk(corpus / "talk.pptx", letter=png_of(10, 400))
+        doc = document(run(tmp_path, corpus, RefusingReader({})), "talk.pptx")
+        old = Transcription(
+            artifact=transcription_of(doc).artifact,
+            text=slide_transcript(unpack_pptx(path)),
+            engine="pptx-adapter",
+        )
+        doc.transcription.write_text(old.model_dump_json())
+        doc = document(run(tmp_path, corpus, RefusingReader({})), "talk.pptx")
+        assert [p.provenance.method for p in transcription_of(doc).pages] == [
+            SLIDE_XML
+        ] * 3
+        assert (doc.dir / "transcription.superseded-1.json").exists()
+
+    def test_a_deck_with_little_text_takes_the_fallback_language(
+        self, tmp_path
+    ):
+        """The language is found in the slides' text alone, never in the
+        markers: a deck whose slides hold under 12 characters has too
+        little to detect a language in, and takes the fallback."""
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        deck(corpus / "talk.pptx", [(("Oma Hilde",), [], "")], {})
+        doc = document(
+            run(
+                tmp_path,
+                corpus,
+                RefusingReader({}),
+                language="auto",
+                fallback_language="de",
+            ),
+            "talk.pptx",
+        )
+        assert transcription_of(doc).language == "de"
+        assert doc.state.detail["language"]["source"] == "fallback"
 
 
 class TestTheRunReport:
@@ -528,6 +765,50 @@ class TestTheRunReport:
         assert documents["pdf_images"]["pdfs"] == 0
         assert documents["excerpts"] == 1
 
+    def test_pdf_pages_count_the_pages_of_pdfs_read_page_by_page(
+        self,
+        tmp_path,
+        fakes,  # noqa: F811
+    ):
+        """The report's pages by method are those of the PDFs read page by
+        page alone: never a deck's slides, a PDF read whole, a
+        photograph's page or an excerpt's."""
+        corpus = Corpus(tmp_path / "corpus")
+        path = library_talk(corpus.folder / "library-talk-2018.pptx")
+        corpus.texts["library-talk-2018.pptx"] = slide_transcript(
+            unpack_pptx(path)
+        )
+        corpus.texts[f"{LETTER_SHA1}.png"] = EXCERPT
+        (corpus.folder / "booklet.pdf").write_bytes(booklet())
+        corpus.texts["booklet.pdf"] = "\n".join(
+            pdfs.lines(CAPTION, TRANSLATION, COMMENT)
+        )
+        (corpus.folder / "extract.pdf").write_bytes(extract())
+        corpus.texts["extract.pdf"] = SOURCES["birth-extract-1938"].text
+        corpus.image("studio-photo-1890s.png", "studio-photo-1890s")
+        driver = a_run(tmp_path, corpus, fakes)
+        assert driver.run() == EXIT_OK
+        documents = build(driver.state_dir)["aggregate"]["documents"]
+        assert documents["by_kind"] == {
+            "presentation": 1,
+            "pdf": 2,
+            "media": 1,
+            EXCERPT_KIND: 1,
+        }
+        (booklet_dir,) = [
+            d for d in driver.state_dir.iterdir() if d.name == "booklet"
+        ]
+        held = Transcription.model_validate_json(
+            (booklet_dir / "transcription.json").read_text()
+        )
+        methods: dict[str, int] = {}
+        for page in held.pages:
+            method = page.provenance.method
+            methods[method] = methods.get(method, 0) + 1
+        assert documents["pdf_pages"] == dict(
+            sorted(methods.items(), key=lambda item: (-item[1], item[0]))
+        )
+
 
 class TestTheCallEstimate:
     def test_a_deck_s_image_may_be_an_excerpt(
@@ -544,4 +825,53 @@ class TestTheCallEstimate:
         )
         corpus.texts[f"{LETTER_SHA1}.png"] = EXCERPT
         excerpts = estimate_of(tmp_path, corpus, engine).excerpts
+        assert (excerpts.images, excerpts.containers) == (1, 1)
+
+    def test_a_gif_on_a_slide_is_counted(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        """A GIF the deck embeds is read as a PNG is, and counted."""
+        corpus = Corpus(tmp_path / "corpus")
+        gif = gif_of(300, 120)
+        path = deck(
+            corpus.folder / "talk.pptx",
+            [(LETTER_SLIDE, ["letter.gif"], "")],
+            {"letter.gif": gif},
+        )
+        corpus.texts["talk.pptx"] = slide_transcript(unpack_pptx(path))
+        corpus.texts[f"{sha1(gif)}.gif"] = EXCERPT
+        excerpts = estimate_of(tmp_path, corpus, engine).excerpts
+        assert (excerpts.images, excerpts.containers) == (1, 1)
+
+    def test_a_reused_view_is_checked_again(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        """A deck's view held from an earlier invocation that marks none
+        of the images it reads is made again, as the run would make it:
+        it is not counted as reused, and its letter is counted."""
+        corpus = Corpus(tmp_path / "corpus")
+        path = library_talk(corpus.folder / "library-talk-2018.pptx")
+        corpus.texts["library-talk-2018.pptx"] = slide_transcript(
+            unpack_pptx(path)
+        )
+        corpus.texts[f"{LETTER_SHA1}.png"] = EXCERPT
+        run_scratch(tmp_path, corpus, engine, until="transcription")
+        (view,) = runs_dir(tmp_path).glob(
+            "*/library-talk-2018/transcription.json"
+        )
+        held = Transcription.model_validate_json(view.read_text())
+        view.write_text(
+            Transcription(
+                artifact=held.artifact,
+                text=slide_transcript(unpack_pptx(path)),
+                engine="pptx-adapter",
+            ).model_dump_json()
+        )
+        counted = estimate_of(tmp_path, corpus, engine)
+        assert counted.stages["transcription"].reused == 0
+        excerpts = counted.excerpts
         assert (excerpts.images, excerpts.containers) == (1, 1)

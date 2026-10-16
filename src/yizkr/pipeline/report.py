@@ -17,8 +17,9 @@ the wiki, the engine, the LLM cache or the corpus:
     <document>/      a document's state.json and its views:
                      transcription.json, batch.json, critique.json and
                      the extraction's extraction/coverage.json
-    excerpts/<sha1>/ the same, for an image a PDF places within a page
-                     read as a document of its own (ADR-0008)
+    excerpts/<sha1>/ the same, for an image a PDF or a deck places on a
+                     page or a slide, read as a document of its own
+                     (ADR-0008)
     corpus/<stage>/  a corpus stage's outputs: the clustering stage's
                      identity-map.json
 
@@ -308,6 +309,9 @@ ATTENTION_LABELS = frozenset(
         "conflicting clusters not merged",
         "ambiguous pairs to adjudicate",
         "hub keys not blocked on",
+        # a container's image its reading does not read on its own
+        # (presentation.UNREAD_IMAGE, and a PDF's image PDFium cannot give)
+        "image not read on its own",
     }
 )
 # the leading labels of a document's failure outside its stages; any

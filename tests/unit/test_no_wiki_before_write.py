@@ -596,6 +596,33 @@ def test_a_pdf_s_excerpt_leaves_the_wiki_alone(
     assert {states[stage].status for stage in stages(excerpt)} == {DONE}
 
 
+def test_a_deck_s_excerpt_leaves_the_wiki_alone(tmp_path, refusals):
+    """A deck read slide by slide and the scan it embeds, extracted as a
+    document of its own (#502): neither asks anything of the wiki before
+    the write, on a first run or a second that reuses their views."""
+    from tests.unit.test_deck_excerpts import library_talk
+    from tests.unit.test_pdf_pages import LETTER_SHA1
+    from yizkr.pipeline.orchestrate import EXCERPT
+
+    folder = tmp_path / "decks"
+    folder.mkdir()
+    library_talk(folder / "library-talk-2018.pptx")
+
+    class Talk(BeforeTheWrite):
+        def _llm(self, role, doc):
+            return ScriptedEngine(doc.sha1, *PEOPLE["postcard-1938.txt"])
+
+    for _run in range(2):
+        orchestrator = Talk(folder, tmp_path / "state", refusals)
+        assert orchestrator.run() == 2
+        assert refusals.asked == []
+        excerpt = orchestrator._excerpts[LETTER_SHA1]
+        assert excerpt.kind == EXCERPT
+        assert excerpt.state.status == AWAITING_CLAIMS, excerpt.state.error
+        states = run_state(orchestrator.rundir)
+        assert {states[stage].status for stage in stages(excerpt)} == {DONE}
+
+
 def test_adjudication_given_a_roster_asks_nothing_of_the_wiki(refusals):
     """The per-document blocking and adjudication (reconcile.adjudicate)
     take the roster as an input: given one, they read nothing from the

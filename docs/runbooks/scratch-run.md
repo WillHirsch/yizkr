@@ -251,7 +251,7 @@ uv run yizkr scratch run
 - **Failed documents.** A run that went to the end with failed documents
   is complete: the bare command then starts a new run, and only `--resume`
   tries the failed documents again in the same run.
-- **The order.** One document of each kind (text file, image or PDF,
+- **The order.** One document of each kind (text file, image, PDF,
   deck, GEDCOM file), the first by name, goes through all its stages
   first: the canaries. A misalignment of any kind shows within the first
   calls, and the monitor has a rate for each kind early. The rest follow

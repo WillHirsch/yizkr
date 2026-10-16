@@ -266,10 +266,11 @@ PageMethod = Literal["text-layer", "slide-xml", "vision", "none"]
 
 
 class PageProvenance(BaseModel):
-    """What read one page of a PDF read page by page: its method, what
-    made its text (the text-layer method with its version and the
-    library's, or the vision client), and how many annotations the page
-    shows that its text layer leaves unread (a text-layer page's)."""
+    """What read one page of a container read page by page (a PDF's
+    page, a deck's slide): its method, what made its text (the text-layer
+    method with its version and the library's, the deck's adapter, or the
+    vision client), and how many annotations the page shows that its text
+    layer leaves unread (a PDF's text-layer page's)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -306,14 +307,14 @@ class Transcription(BaseModel):
     artifact by the SHA-1 of the media's bytes: the key its claims cite,
     and part of the transcription's content, which depends on no
     instance. `pages` are its pages in order (`TranscribedPage`): a vision
-    transcription's, from its record, and a PDF read page by page's; a
-    transcription with no pages (a text file's, a correction, a deck's
-    slide text) holds no `pages` key. `document_class` is the class its
-    record gives (a vision transcription made whole), and is absent
-    otherwise. `flag` names the signature the transcription check flagged
-    its wording by, when it did (yizkr.pipeline.transcription_check), and
-    is absent otherwise; like the provenance, it is no part of its
-    content hash."""
+    transcription's, from its record, and a container's read page by page
+    (a PDF's pages, a deck's slides); a transcription with no pages (a
+    text file's, a correction) holds no `pages` key. `document_class` is
+    the class its record gives (a vision transcription made whole), and is
+    absent otherwise. `flag` names the signature the transcription check
+    flagged its wording by, when it did (yizkr.pipeline.
+    transcription_check), and is absent otherwise; like the provenance, it
+    is no part of its content hash."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -372,8 +373,8 @@ class Transcription(BaseModel):
     def record(self) -> TranscriptionRecord | None:
         """The transcription record this transcription was made from: its
         class and its pages, each with its text; None for one that has no
-        class (no record, or a PDF read page by page), and for a stored
-        one whose fields the record no longer accepts (a class the
+        class (no record, or a container read page by page), and for a
+        stored one whose fields the record no longer accepts (a class the
         manifest has since dropped, say), which the check then fails as
         holding no record."""
         if self.document_class is None or not self.pages:
@@ -399,7 +400,7 @@ class Transcription(BaseModel):
     def page_record(self, page: TranscribedPage) -> TranscriptionRecord | None:
         """The one-page record of one of its pages, as the reading of
         one image with no class: the page's text and its record's fields,
-        numbered 1. A page of a PDF read page by page that the vision
+        numbered 1. A page of a container read page by page that the vision
         engine read is checked by it, as its reading was when the page was
         made. None when the page's fields are not a record's page (a page
         called transcribed with no text)."""
@@ -749,7 +750,8 @@ class PagedTranscriber:
     an image is to be read by vision, so a container read wholly from its
     own text, with no image read on its own, starts no engine. `excluded`
     says whether the never-ingest list names an image by the SHA-1 of its
-    bytes: such an image is never read, kept or marked.
+    bytes, or, for a deck's, by any of its names in the archive (given as
+    a second argument): such an image is never read, kept or marked.
 
     The reading of each vision page is checked, as any vision
     transcription is, and one that fails raises: the container's
@@ -768,12 +770,12 @@ class PagedTranscriber:
         client: Callable[[], LlmClient],
         language: str = "en",
         fallback_language: str = "en",
-        excluded: Callable[[str], bool] | None = None,
+        excluded: Callable[..., bool] | None = None,
     ) -> None:
         self._client = client
         self.language = language
         self.fallback_language = fallback_language
-        self.excluded = excluded or (lambda sha1: False)
+        self.excluded = excluded or (lambda sha1, names=(): False)
         # the resolution behind the last transcribe(), for callers to log
         self.last_resolution: LanguageResolution | None = None
         self._vision: LlmVisionTranscriber | None = None

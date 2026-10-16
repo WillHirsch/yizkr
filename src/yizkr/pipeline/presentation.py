@@ -51,7 +51,7 @@ import os
 import re
 import xml.etree.ElementTree as ET
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
@@ -78,6 +78,10 @@ IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff", ".webp"}
 # why an image is not read on its own when it is too small to hold
 # legible text (unread_reason)
 DECORATION = "decoration"
+# the leading phrase of the note a deck's reading makes of an image it
+# does not read on its own; what the archive calls the image follows its
+# first colon, so that a reason's label never shows a file's name
+UNREAD_IMAGE = "image not read on its own"
 
 
 @dataclass
@@ -96,6 +100,14 @@ class EmbeddedMedium:
     name: str  # basename inside the archive, e.g. image1.jpeg
     data: bytes
     slides: list[int] = field(default_factory=list)
+    # its path inside the archive, e.g. ppt/media/image1.jpeg: what a
+    # slide's relationships name it by, since two folders may each hold a
+    # medium of one basename
+    target: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.target:
+            self.target = f"ppt/media/{self.name}"
 
     @property
     def is_image(self) -> bool:
@@ -224,6 +236,7 @@ def unpack_pptx(path: Path) -> PresentationContent:
                 name=name,
                 data=archive.read(target),
                 slides=media_slides[target],
+                target=target,
             )
             if medium.is_image:
                 media.append(medium)
@@ -262,6 +275,13 @@ def slide_transcript(content: PresentationContent) -> str:
     return "\n".join(blocks)
 
 
+def record_suffix(names: Iterable[str]) -> str:
+    """The suffix the file of a medium known by `names` takes in the
+    record of a deck's derived media: its first name's, in code-point
+    order, lowercased."""
+    return PurePosixPath(min(names)).suffix.lower()
+
+
 def unread_reason(suffix: str, data: bytes) -> str | None:
     """Why a deck's image is not read on its own, or None when it is
     (yizkr.pipeline.containers): `DECORATION` for an image too small to
@@ -281,11 +301,15 @@ def unread_reason(suffix: str, data: bytes) -> str | None:
     return None
 
 
+def _never(sha1: str, names: Sequence[str] = ()) -> bool:
+    return False
+
+
 def read_slides(
     path: Path,
     directory: Path,
     *,
-    excluded: Callable[[str], bool] = lambda sha1: False,
+    excluded: Callable[[str, Sequence[str]], bool] = _never,
 ) -> ContainerPages:
     """Read the deck at `path` slide by slide, as a paged container
     (yizkr.pipeline.containers): each slide a page read from its XML
@@ -293,10 +317,11 @@ def read_slides(
     are read on their own, in the order it paints them, each written into
     `directory` once, as ``<sha1><suffix>``. Each image is known by the
     SHA-1 of its bytes and takes the suffix its file in the record of the
-    deck's derived media takes (`record_derived_media`). An image the
-    never-ingest list names (`excluded`), or that `unread_reason` gives a
+    deck's derived media takes (`record_suffix`). An image the
+    never-ingest list names by its SHA-1 or by any of its names in the
+    archive (`excluded`, given both), or that `unread_reason` gives a
     reason for, is not read; the reader notes each of the latter but
-    decoration, once."""
+    decoration, once, behind the phrase `UNREAD_IMAGE`."""
     return slide_pages(unpack_pptx(path), directory, excluded=excluded)
 
 
@@ -304,37 +329,35 @@ def slide_pages(
     content: PresentationContent,
     directory: Path,
     *,
-    excluded: Callable[[str], bool] = lambda sha1: False,
+    excluded: Callable[[str, Sequence[str]], bool] = _never,
 ) -> ContainerPages:
-    """`read_slides` of a deck already unpacked."""
+    """`read_slides` of a deck already unpacked. Its media are known by
+    their paths in the archive, as the slides' relationships name them."""
     media: dict[str, tuple[str, bytes]] = {}
     names: dict[str, list[str]] = {}
     for medium in content.media:
         sha1 = hashlib.sha1(medium.data).hexdigest()
         names.setdefault(sha1, []).append(medium.name)
-        media[medium.name] = (sha1, medium.data)
-    suffix = {
-        sha1: PurePosixPath(min(found)).suffix.lower()
-        for sha1, found in names.items()
-    }
+        media[medium.target] = (sha1, medium.data)
+    suffix = {sha1: record_suffix(found) for sha1, found in names.items()}
     read = ContainerPages([])
     noted: set[str] = set()
     for slide in content.slides:
         page = ContainerPage(slide.number, SLIDE_XML, slide_text(slide))
         read.pages.append(page)
         for target in slide.media:
-            name = PurePosixPath(target).name
-            if name not in media:
+            if target not in media:
                 continue
-            sha1, data = media[name]
-            if excluded(sha1):
+            sha1, data = media[target]
+            if excluded(sha1, names[sha1]):
                 continue
             reason = unread_reason(suffix[sha1], data)
             if reason is not None:
                 if reason != DECORATION and sha1 not in noted:
                     noted.add(sha1)
                     read.notes.append(
-                        f"slide {slide.number}, {name} (sha1 {sha1[:12]}): "
+                        f"{UNREAD_IMAGE}: slide {slide.number}, "
+                        f"{PurePosixPath(target).name} (sha1 {sha1[:12]}): "
                         f"{reason}, so it is not read"
                     )
                 continue
@@ -357,16 +380,17 @@ def read_on_their_own(
     record: DerivedMediaRecord,
     directory: Path,
     *,
-    excluded: Callable[[str], bool] = lambda sha1: False,
+    excluded: Callable[[str, Sequence[str]], bool] = _never,
 ) -> set[str]:
     """The SHA-1s of the images of a deck's record kept in `directory`
     (`read_derived_media`) that its transcription reads on their own, as
-    `read_slides` chooses them: each the never-ingest list does not name
-    and `unread_reason` gives no reason for."""
+    `read_slides` chooses them: each the never-ingest list names neither
+    by its SHA-1 nor by any of its names, and `unread_reason` gives no
+    reason for."""
     return {
         sha1
         for sha1, medium in record.media.items()
-        if not excluded(sha1)
+        if not excluded(sha1, medium.names)
         and unread_reason(
             PurePosixPath(medium.file).suffix,
             (directory / medium.file).read_bytes(),
@@ -376,8 +400,8 @@ def read_on_their_own(
 
 
 # The record of a container's derived media in its document's directory,
-# and the folder beside it that keeps their bytes and, for a PDF's images,
-# their transcriptions.
+# and the folder beside it that keeps their bytes and, for the images a
+# container reads on their own, their transcriptions.
 DERIVED_MEDIA = "derived-media.json"
 DERIVED_MEDIA_DIR = "derived-media"
 DERIVED_TRANSCRIPTION = ".transcription.json"
@@ -463,7 +487,7 @@ def record_derived_media(
                 names=sorted(names[sha1]),
                 slides=sorted(slides[sha1]),
                 file=f"{DERIVED_MEDIA_DIR}/{sha1}"
-                + PurePosixPath(min(names[sha1])).suffix.lower(),
+                + record_suffix(names[sha1]),
             )
             for sha1 in sorted(data)
         },
@@ -496,8 +520,8 @@ def keep_derived_media(
 
 
 def derived_transcription(directory: Path, sha1: str) -> Path:
-    """Where the transcription of a PDF's image is kept, beside its bytes:
-    ``derived-media/<sha1>.transcription.json``."""
+    """Where the transcription of a container's image is kept, beside its
+    bytes: ``derived-media/<sha1>.transcription.json``."""
     return directory / DERIVED_MEDIA_DIR / f"{sha1}{DERIVED_TRANSCRIPTION}"
 
 

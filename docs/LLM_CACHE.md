@@ -155,13 +155,17 @@ route reads a deck as it reads a PDF page by page: each slide is a page
 read from its XML (the method `slide-xml`), with no model call, behind its
 `[Slide N]` marker, its speaker notes behind `[Slide N notes]`, and each
 image it embeds is read by one vision call of its own, once however many
-slides embed it, unless it is decoration by the PDF's floor, the
-never-ingest list names its SHA-1, or it is in a format the vision engine
-does not read (PNG, JPEG, GIF and WebP only; the stage's attention notes
+slides embed it, unless it is decoration by the PDF's floor, the never-ingest
+list names it by any of its names or its SHA-1, or it is in a format the vision
+engine does not read (PNG, JPEG, GIF and WebP only; the stage's attention notes
 a TIFF, say, or an image whose header gives no size). Each image read is
 marked below its slide's marker by its SHA-1 (`[Slide 2, image 1:
 sha1:…]`), in the order the slide paints it. Slides are joined by one
 line break, so a deck that reads no image has its slide text as before.
+Its language is found in the slides' text alone, never in the markers, so
+a deck whose slides hold under 12 characters takes the fallback language.
+A deck's transcription always has a page per slide: one of its slide text
+alone, with no pages, is made again whatever the deck embeds.
 The transcription's `engine` is `pptx-adapter`, and each slide's
 provenance names it too. The deck's record of its derived media
 (`derived-media.json`) is made before the transcription and names every
@@ -1293,19 +1297,19 @@ made without a call counts 0), else the baseline's mean for documents of
 its kind, else typical: a vision call per scan or PDF and none for a
 text file or a deck, the entity manifest and a chunk per 2000 characters for
 extraction, and a critique each. These are the pipeline's calls,
-counted without their keys; a PDF read page by page makes a call for
-each page and image vision reads, which only the count by keys below
-sees. `yizkr scratch estimate` (docs/runbooks/scratch-run.md, Before a
+counted without their keys; a PDF read page by page, or a deck, makes a
+call for each page and image vision reads, which only the count by keys
+below sees. `yizkr scratch estimate` (docs/runbooks/scratch-run.md, Before a
 run) counts a planned scratch run's calls by their keys: it takes each
 stale stage through the pipeline's own code with the cache as it is
 (`llm.read_cache`), so each call the cache answers, and each it cannot,
 is known. It estimates only
 the calls whose keys wait on an answer the engine has yet to give: by
 `llm.estimate_calls`, or, for the forks after a conversation it replays,
-by the chunks the cache kept. The excerpts a PDF's placed images may
-become (ADR-0008), which no plan names until the PDF is transcribed, it
-counts from the PDF's own reading of the file, or, for a transcription
-that stands, from the excerpts its directory holds, and gives their
+by the chunks the cache kept. The excerpts a PDF's or a deck's images
+may become (ADR-0008), which no plan names until the container is
+transcribed, it counts from the container's own reading of the file, or,
+for a transcription that stands, from the excerpts its directory holds, and gives their
 calls, by the mean for excerpts over the runs measured, else as typical,
 as up to so many more.
 

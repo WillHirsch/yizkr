@@ -738,7 +738,12 @@ only a PDF's image was read and extracted. Both now take one path
   naming an image of the container's record of derived media; and each
   image read by the vision engine on its own. A deck's slides are
   joined by one line break, so a deck that reads no image has the text
-  its slide text always had.
+  its slide text always had. Its language is found in the slides' text
+  alone, never in the markers, as a PDF's is in its pages' text, so a
+  deck whose slides hold under 12 characters, too few to detect a language
+  in, takes the fallback language. A note of an image not read starts
+  with the fixed phrase "image not read on its own", what the archive
+  calls the image after it, so the monitor shows no file's name.
 - **Every image read on its own is an excerpt, whatever the container.**
   A deck's image is read, kept beside its bytes and taken as an excerpt
   exactly as the #397 amendment takes a PDF's: one witness per SHA-1,
@@ -753,7 +758,9 @@ only a PDF's image was read and extracted. Both now take one path
   with its slides and its derived media as before.
 - **Which of a deck's images are read** is the PDF's rule: an image
   under 24 pixels on a side or 10,000 in all is decoration, and one the
-  never-ingest list names is not read. A deck holds its images as files
+  never-ingest list names, by its SHA-1 or by any of its names in the
+  archive (as the #103 amendment's registration leaves it out), is not
+  read. A deck holds its images as files
   of their own, and the image is read as the deck holds it, so one in a
   format the vision engine does not read (anything but PNG, JPEG, GIF
   and WebP: a TIFF, say) or whose header gives no size is not read, and
@@ -766,8 +773,9 @@ only a PDF's image was read and extracted. Both now take one path
   read page by page is: each image's kept reading by the check, and the
   images it marks against its record. A deck's record names all its
   images, so the transcription must mark exactly those it would read now;
-  one that marks none, as a transcription of its slide text alone does,
-  is set aside and made again. The images' readings go through the LLM
+  one that marks none, or has no pages, as a transcription of its slide
+  text alone does, is set aside and made again, whatever the deck embeds,
+  so every deck's transcription takes the paged shape. The images' readings go through the LLM
   cache, keyed by what each call sends (ADR-0032): the image's bytes and
   the prompt, so the same bytes are one call whichever container gives
   them, and the same deck gives the same keys in every run.
@@ -783,7 +791,10 @@ only a PDF's image was read and extracted. Both now take one path
   lumped them with photographs. So the monitor, the run report, the
   estimate, `pause --kind pdf` and the run diff tell PDFs from
   photographs. A run diff against a baseline made before this amendment
-  shows its PDFs moved from `media` to `pdf`.
+  shows its PDFs moved from `media` to `pdf`. The anomaly checks compare
+  an unclassified document within its kind, so a PDF with no record
+  class is now compared with PDFs, apart from images, and its findings
+  may move for that reason alone.
 - **Plain route naming.** A PDF and a deck take the route `paged`
   (`orchestrate.PAGED`), read by their format's reader; `vision` is the
   route of an image read whole. A PDF none of whose pages has a usable

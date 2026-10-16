@@ -893,7 +893,7 @@ class Orchestrator:
         # again once
         self._views: dict[tuple[str, str], Any] = {}
         # image SHA-1 -> the excerpt found for it in this run
-        # (_excerpts_of): one document however many PDFs place the image
+        # (_excerpts_of): one document however many containers place it
         self._excerpts: dict[str, ExcerptRun] = {}
         # the run's documents, their SHA-1s, and the identity map their
         # writes resolve their entities through, made once an invocation
@@ -1502,7 +1502,7 @@ class Orchestrator:
 
     def _route(self, doc: DocumentRun) -> str:
         """The route the document's transcription takes: an excerpt's is
-        the reading its PDF made of it (EXCERPT), unless a curator's
+        the reading its container made of it (EXCERPT), unless a curator's
         correction routes it to the correction."""
         route = route_transcription(doc.source, doc.correction)
         if isinstance(doc, ExcerptRun) and route == "vision":
@@ -1584,8 +1584,11 @@ class Orchestrator:
         read again. A PDF's record names the images its transcription
         marks, and those only. A deck's names every image it embeds, so
         its transcription is to mark exactly those of them it reads on
-        their own (presentation.read_on_their_own): one made by an older
-        reader that read none is made again. Its pages and images the
+        their own (presentation.read_on_their_own), and has a page per
+        slide: one made by an older reader of its slide text alone, which
+        has no pages, is made again, whatever it embeds. The never-ingest
+        list is asked of a deck's image by its names in the archive too
+        (`_image_names`). Its pages and images the
         vision engine read are read again through the LLM cache, which
         answers the calls it answered before."""
         from yizkr.pipeline.presentation import (
@@ -1601,16 +1604,20 @@ class Orchestrator:
                 for sha1 in page.images
             )
         )
+        deck = doc.kind == "presentation"
+        if deck and transcription.pages is None:
+            return "it has no pages, one per slide"
+        record = read_derived_media(doc.dir)
         for sha1 in images:
-            if self._excluded_image(sha1):
+            if self._excluded_image(
+                sha1, self._image_names(doc, record, sha1)
+            ):
                 return (
                     f"the never-ingest list names image {sha1[:12]}, which "
                     "it marks"
                 )
-        deck = doc.kind == "presentation"
         if not images and not deck:
             return None
-        record = read_derived_media(doc.dir)
         if (
             record is None
             or record.container != ("presentation" if deck else "pdf")
@@ -1810,14 +1817,28 @@ class Orchestrator:
         transcription = transcriber.transcribe(doc.source)
         return transcription, transcriber.last_resolution
 
-    def _excluded_image(self, sha1: str) -> bool:
+    def _excluded_image(self, sha1: str, names: Sequence[str] = ()) -> bool:
         """Does the never-ingest list name an image a paged container
-        places on a page, by the SHA-1 of its bytes? Such an image is never
-        read on its own, kept as the container's reading of it, or
+        places on a page, by the SHA-1 of its bytes or by any of its
+        `names` (a deck's image's names in the archive, which its globs
+        match, as registration matches them)? Such an image is never read
+        on its own, kept as the container's reading of it, or
         extracted."""
-        return self.exclusions is not None and is_excluded(
-            self.exclusions, sha1=sha1
+        return self.exclusions is not None and any(
+            is_excluded(self.exclusions, name=name, sha1=sha1)
+            for name in names or [None]
         )
+
+    @staticmethod
+    def _image_names(doc: DocumentRun, record: Any, sha1: str) -> list[str]:
+        """The names the never-ingest list's globs are matched against for
+        an image of the container's record: a deck's image's names in the
+        archive; none for a PDF's, whose names are its places ("page 6,
+        image 1"), not files, so it is asked by its SHA-1 alone."""
+        if doc.kind != "presentation" or record is None:
+            return []
+        medium = record.media.get(sha1)
+        return list(medium.names) if medium is not None else []
 
     def _keep_reading(self, doc: DocumentRun, transcription) -> None:
         """Keep what a container read page by page made beside its
@@ -2210,10 +2231,10 @@ class Orchestrator:
     def _identity_map(self):
         """The identity map every write of the invocation resolves its
         entities through (yizkr.pipeline.writer, step 2): the map of every
-        document of the run whose batch is made, the excerpts its PDFs'
-        transcriptions have found among them (_excerpts_of), as serial mode
-        finds them first, kept in the run directory's corpus folder as a
-        scratch run's clustering stage keeps it (clustering.
+        document of the run whose batch is made, the excerpts its
+        containers' transcriptions have found among them (_excerpts_of), as
+        serial mode finds them first, kept in the run directory's corpus
+        folder as a scratch run's clustering stage keeps it (clustering.
         ensure_identity_map), and reused while its inputs stand. It is made
         once an invocation, at its first write, and never again within it:
         a document whose batch is made or changed after that is not in it,
@@ -2268,7 +2289,9 @@ class Orchestrator:
         for sha1, medium in sorted(record.media.items()):
             if (
                 sha1 in corpus
-                or self._excluded_image(sha1)
+                or self._excluded_image(
+                    sha1, self._image_names(doc, record, sha1)
+                )
                 or not derived_transcription(doc.dir, sha1).is_file()
                 or self._image_failure(doc, sha1) is not None
                 or not self._image_shows_a_page(doc, sha1)
@@ -2858,8 +2881,8 @@ class Orchestrator:
             if self.serial:
                 docs = self._serial_sequence(docs, corpus)
                 found.extend(doc for doc in docs if doc not in found)
-            # an excerpt joins the documents once its PDF's transcription
-            # has read it, after the documents of the folder
+            # an excerpt joins the documents once its container's
+            # transcription has read it, after the documents of the folder
             for doc in docs:
                 control = self.rundir.control()
                 stopped = control.stopped()
@@ -2954,7 +2977,7 @@ class Orchestrator:
         """Extract every document, then order them by greedy entity overlap.
 
         Extraction must run for all documents up front (the sequencer reads
-        their manifests), the excerpts their PDFs' transcriptions find
+        their manifests), the excerpts their containers' transcriptions find
         (`_excerpts_of`, `corpus` the folder's SHA-1s) after them; the
         actual reconcile/review/write then proceeds in the returned order,
         hubs first (ADR-0019)."""

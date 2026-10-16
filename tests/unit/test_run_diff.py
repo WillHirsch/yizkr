@@ -377,14 +377,19 @@ class TestReports:
         baseline["stages"] = [
             {"name": "critique", "computed": 1, "reused_by": {"key match": 2}}
         ]
-        baseline["documents"] = {"routes": {"vision": 2}}
-        run["documents"] = {"routes": {}}
+        baseline["documents"] = {
+            "routes": {"vision": 2},
+            "deck_images": {"per_deck": {"1": 2}},
+        }
+        run["documents"] = {"routes": {}, "deck_images": {"per_deck": {}}}
         run["stages"][0]["reused_by"] = {}
         rows = {r["figure"]: r for r in rundiff.figures(baseline, run)}
         assert rows["calls.misses_by_reason.absent"]["run"] == 0
         # tallies named `..._by` and the report's own tallies
         assert rows["stages.critique.reused_by.key match"]["run"] == 0
         assert rows["documents.routes.vision"]["run"] == 0
+        # a deck's images per deck are a tally too (#502)
+        assert rows["documents.deck_images.per_deck.1"]["run"] == 0
         assert rows["calls.misses_by_reason.refresh"]["baseline"] == 0
         assert rows["content.claims.by_property.father"]["delta"] == 1
         # a section one report lacks is absent

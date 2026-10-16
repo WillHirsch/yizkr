@@ -20,10 +20,10 @@ fails, an answer cut off before its sentinel), a call another document
 asks earlier in the run, which the run's cache answers by then, and the
 replay of a conversation whose session was not kept, for its forks. A
 chunk the cache cannot answer is answered empty, so that the chunks after
-it are keyed and counted too. So is a page or an image of a PDF read page
-by page (yizkr.pipeline.textlayer), each a call of its own: one the cache
-cannot answer is given a reading that stands in for the engine's, which
-the transcription check passes, so that every page and image after it is
+it are keyed and counted too. So is a page or an image of a PDF or a deck read
+page by page (yizkr.pipeline.containers), each a call of its own: one the cache
+cannot answer is given a reading that stands in for the engine's, which the
+transcription check passes, so that every page and image after it is
 keyed and counted too, and the transcription is then the engine's to
 make. The images and pages such a reading keeps in a scratch folder are
 removed when its transcription is counted.
@@ -65,19 +65,19 @@ plan names it beforehand. The container's transcription stage, taken
 through the pipeline's own code, reads it page by page as the run does
 (yizkr.pipeline.containers: a PDF with pypdfium2, a deck from its XML,
 with no model call), so the estimate knows each image it places from the
-file itself: by the SHA-1 of its bytes, once however many PDFs
-place it, and none that the never-ingest list names or whose bytes a
+file itself: by the SHA-1 of its bytes, once however many PDFs and
+decks place it, and none that the never-ingest list names or whose bytes a
 document of the corpus has. An image whose kept reading (one that passed
 the check, which the cache answers) calls every page blank or not a
 document page is left out, as the run makes no excerpt of it; an image
 whose reading the cache cannot answer, or answers with one the check
-fails, is read again and counted. A PDF whose transcription stands
-reads nothing again: its excerpts are those its directory holds, read
+fails, is read again and counted. A container whose transcription
+stands reads nothing again: its excerpts are those its directory holds, read
 from files as the driver reads them (ScratchDriver._known_excerpts), and
 each counts the stages whose views do not stand, and every stage after
-the first of them. An image of a PDF whose transcription is made again
-counts every excerpt stage, though an excerpt the run holds for it may
-have views that stand. Each excerpt stage's calls are counted by the mean
+the first of them. An image of a container whose transcription is made again
+counts every excerpt stage, though an excerpt the run holds for it may have
+views that stand. Each excerpt stage's calls are counted by the mean
 for excerpts over every run in the runs directory that measured the
 stage for one, older runs, on other prompts or models, among them, else
 as typical (llm.estimate_calls), rounded up, and given as up to so many
@@ -261,8 +261,8 @@ class _Made:
     # CRITIQUE), and the length of the text an extraction reads
     estimated: str | None = None
     size: int | None = None
-    # the SHA-1s of the images a PDF's transcription read on its own that
-    # may each become an excerpt (_may_be_excerpt)
+    # the SHA-1s of the images a container's transcription read on its own
+    # that may each become an excerpt (_may_be_excerpt)
     images: list[str] = field(default_factory=list)
 
 
@@ -780,7 +780,7 @@ class Estimator(ScratchDriver):
         finally:
             if paged:
                 keyed.reading_pages = False
-        # a PDF read page by page keeps its images in a scratch folder,
+        # a container read page by page keeps its images in a scratch folder,
         # which the estimate keeps nothing of but their SHA-1s
         if transcription.reading is not None:
             made.images = [
@@ -976,9 +976,9 @@ class Estimator(ScratchDriver):
         docs: list[DocumentRun],
     ) -> ExcerptCalls:
         """The excerpts the planned run may make, and their calls (the
-        module docstring says how): each image once, however many PDFs
-        place it, and none whose bytes a document of the corpus (`docs`)
-        has, as the driver takes them (Orchestrator._excerpts_of)."""
+        module docstring says how): each image once, however many containers
+        place it, and none whose bytes a document of the corpus (`docs`) has,
+        as the driver takes them (Orchestrator._excerpts_of)."""
         corpus = frozenset(doc.sha1 for doc in docs)
         planned = [s for s in DOCUMENT_STAGES[EXCERPT] if self._within(s)]
         # image SHA-1 -> the excerpt stages it counts
@@ -1106,7 +1106,7 @@ def _finished(rundir: RunDir) -> dict[tuple[str, str], int]:
 
 
 def _may_be_excerpt(image: ImageReading) -> bool:
-    """Whether the run may make an excerpt of an image a PDF's
+    """Whether the run may make an excerpt of an image a container's
     transcription read on its own, as the driver judges the reading it
     keeps (Orchestrator._excerpts_of): one whose record calls some page
     transcribed or illegible, not every page blank or not a document

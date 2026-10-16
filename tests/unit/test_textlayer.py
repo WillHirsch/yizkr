@@ -815,8 +815,8 @@ class TestImages:
         assert result.images == {}
         assert result.pages[0].images == []
         assert result.notes == [
-            "page 1, image 1: PDFium could not give its bytes, so it is not "
-            "read"
+            "image not read on its own: page 1, image 1: PDFium could not "
+            "give its bytes, so it is not read"
         ]
 
     def test_no_image_is_read_on_a_page_read_by_vision(self, tmp_path):
