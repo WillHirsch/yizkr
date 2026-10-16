@@ -444,6 +444,19 @@ def check(
 GAVE_UP = f"critique {CUT_OFF_AT_LIMIT}: no findings"
 
 
+def offered_properties() -> list[str]:
+    """The manifest's property keys the critique prompt lists: every one
+    the manifest offers (`offered`), retired and reference properties
+    among them, which a suggestion may name as the claim's property to
+    leave. A property held back from the prompts (`offered: false`), such
+    as a run item's statement, is never listed."""
+    from yizkr.model.schema import load_manifest
+
+    return sorted(
+        key for key, spec in load_manifest().properties.items() if spec.offered
+    )
+
+
 def run_critique(
     client: LlmClient,
     batch: ClaimBatch,
@@ -454,7 +467,9 @@ def run_critique(
     """Review the batch; return its findings (possibly none), each valid
     or kept verbatim as `Invalid`, in the order the critic gave them.
     `vocabulary` is the model manifest's (property key -> datatype, item
-    keys), loaded when not given.
+    keys), loaded when not given; the prompt then lists the properties
+    the manifest offers (offered_properties), and the answer is checked
+    against them all.
 
     Advisory only — an unfinished answer never raises (unlike chunk
     extraction): the critic must never block the pipeline, only inform
@@ -474,14 +489,17 @@ def run_critique(
     """
     if not batch.entities and not batch.claims:
         return []
-    properties, items = (
-        vocabulary if vocabulary is not None else load_vocabulary()
-    )
+    if vocabulary is None:
+        properties, items = load_vocabulary()
+        listed = offered_properties()
+    else:
+        properties, items = vocabulary
+        listed = list(properties)
     vocabulary = (properties, frozenset(items))
     prompt = CRITIQUE_PROMPT.format(
         categories_block=_categories_block(),
         kinds=", ".join(sorted(vocabulary[1])),
-        properties=", ".join(sorted(properties)),
+        properties=", ".join(sorted(listed)),
         entities_block=_entities_block(batch) or "(none)",
         claims_block=_claims_block(batch) or "(none)",
         containment_block=_containment_block(batch) or "(none)",

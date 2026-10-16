@@ -160,6 +160,34 @@ either; §2 is amended in place. Items are keyed within one identity
 map: a scratch run resets the instance before it writes its map, and
 its write stage (#200) passes the clustering stage's map to the writer.
 
+Amended by #200 (2026-10-06): the write side is the scratch driver's
+corpus stages after clustering, in order: reset, register, write and
+site (`pipeline/scratchwrite.py`; docs/runbooks/scratch-run.md, The
+write side). Each touches the wiki and makes no model call. The write
+key hashes the identity map's hash, each document's SHA-1 with its
+batch's content hash, whole, and what registration reads of it, the
+never-ingest list's hash, the writer's version with the source of the
+whole package but the modules that only read, and the model manifest's
+hash; §2 is amended in place. Register and write refuse, before they
+write anything, unless the instance's write-phase state names this run,
+this key and the epoch of the reset the run's reset stage recorded, and
+the instance's newest revision and log entry are those this run's last
+write left. The reset stage takes the live-stack lock across the reset
+and the state it records, so no session that takes the lock writes
+between them; register and write each hold it for the whole of their
+writes, so a scratch write keeps `make test-live` waiting while it
+lasts (decision EY). A batch the
+writer would refuse whole is refused before anything of it is written,
+and before its document is registered. A write cut short within a
+document leaves a revision the state does not record, so the next
+invocation resets again. The run items carry three marks, `unratified
+scratch run` (the run id), `run manifest hash` and `identity map hash`,
+string properties of the manifest that it holds back from the prompts
+(`offered: false`): the extraction prompts list only the properties a
+claim may use, and the critique prompt only those the manifest offers
+(decision EZ), so every prompt of the stages before write is as it was,
+byte for byte; §1 and §3 are amended in place.
+
 ## Context
 
 ADR-0024 §7 set up a *development stage*: until the owner declares a
@@ -236,7 +264,10 @@ The owner replaced that plan on 2026-09-27, for four reasons.
   `stated in` the artifact or fragment with its locator, and `inferred
   from` the run item (CLAUDE.md rules 1, 2 and 4). The run item is marked
   as an unratified scratch run, and the LAN site says the instance holds
-  a development-stage scratch run and names it.
+  a development-stage scratch run and names it. Amended by #200
+  (2026-10-06): each run item states `unratified scratch run → <run id>`,
+  `run manifest hash` and `identity map hash`, stated in itself, and the
+  site's header names every run the run items name.
 - **Scratch graphs are development artefacts, never confirmations.**
   Nothing in one is kept, published or exported: no backup, public
   export or public site is ever made from it, and the next reset
@@ -376,7 +407,24 @@ a second store of assertions: the graph stays the system of record.
   versions. A run skips reset and write only when that key equals the
   recorded instance-contents key and no other write has cleared it
   (#200). Amended by #225 (2026-09-27): the batches' canonical content
-  hashes take the place of the batch keys (ADR-0032 §11).
+  hashes take the place of the batch keys (ADR-0032 §11). Amended by
+  #200 (2026-10-06), superseding #225's stamp-free hashing for the write
+  key (decision EX): a batch's hash is of the batch whole, its run stamps
+  included, since its run item's label and description hold them, so a
+  batch whose stamps differ writes another run item, and a key that left
+  them out would call an instance holding the old run items current. So
+  every new run that reaches the write resets and writes again, and only
+  a later invocation of the run that wrote finds the instance holding
+  what its key makes; a write makes no model call, so this costs only
+  the reset's and the write's time. Beside the batches, the key hashes
+  what registration reads of each document (its kind, title, file name,
+  derived media's record and, for an excerpt, its PDFs) and the
+  never-ingest list's hash; the writer's version is a declared number
+  with the source of the whole package but the modules that only read
+  the run directory or the instance (the report, the diff, the monitor,
+  the estimate, the site, the disagreement report and the command line),
+  since what is written reaches far into it; and the manifest's version
+  is the model manifest's hash.
 
 This keeps the stateless, file-based core of ADR-0019 §4: a run
 re-derives what to do from durable files and resumes by re-running. What
@@ -461,7 +509,9 @@ futile, and explain itself afterwards.
   each recompute (input, stage or method version, prompt, manifest,
   model or parameters); anomalies by check, new and carried; calls and
   wall time; and content counts (documents, entities, claims, rejects,
-  critic findings, clusters, and held depicts proposals). It writes
+  critic findings, clusters, and held depicts proposals; amended by #200:
+  the depicts claims the write left out, and the write's counts). It
+  writes
   `report.html` and `report.json`, which stay local, and an
   aggregate-only `report.md` that is safe to post. Amended by #225
   (2026-09-27): a recompute is attributed through the LLM cache's entries

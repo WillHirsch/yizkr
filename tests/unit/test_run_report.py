@@ -2628,7 +2628,7 @@ class TestContent:
             assert content[key]["why"]
         text = render_markdown(made["aggregate"])
         assert "Flags by tier and class: not available" in text
-        assert "Depicts proposals held: not available" in text
+        assert "Depicts claims left out: not available" in text
 
 
 # -- calls, time and the run --------------------------------------------------

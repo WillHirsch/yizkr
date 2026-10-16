@@ -42,7 +42,11 @@ Per batch, the writer:
    label without that statement, as a write cut short between the two
    leaves it, gains it then; one that states it already, at any rank
    and under any reference, is left as it is (`ensure_self_typed` in
-   yizkr.pipeline.registrar). A dry run writes neither;
+   yizkr.pipeline.registrar). A writer given `run_marks` states them of
+   the run item in that second write too, each stated in the item: a
+   scratch run marks its run items as an unratified scratch run's and
+   records the hashes of its run manifest and identity map (ADR-0025
+   §1). A dry run writes neither;
 2. finds or makes the item of every unresolved `local` subject or value
    through the identity map the batch is written with, and through it alone
    (yizkr.pipeline.clustering, ADR-0035): each local id is a mention of the
@@ -618,6 +622,9 @@ class WriteResult:
     created_items: dict[str, str] = field(
         default_factory=dict
     )  # local_id -> QID
+    # the items this write made, never one it found: a subset of
+    # created_items' values, in the order they were made
+    minted: list[str] = field(default_factory=list)
     # step 5 of the module docstring, on the `instance of` and `type hint`
     # statements of items a ref or record found: the statements written,
     # and each artifact whose references an existing statement gained (a
@@ -1544,18 +1551,58 @@ def mapped_clusters(
     return clusters, document, cluster_terms(identity)
 
 
+def check_batch(
+    batch: ClaimBatch,
+    identity: IdentityMap | None,
+    mapped_from: ClaimBatch | None = None,
+) -> tuple[dict[str, str], str | None, dict[str, ClusterTerms], str]:
+    """What write_batch checks of `batch` before it reads from or writes
+    to the instance, in its order, raising as it does: a depicts claim
+    without its row approval (UnapprovedDepictsError), an unsupported date
+    (UnsupportedDate), a mention the map does not hold (UnmappedMention,
+    mapped_clusters), and a run item's term the instance may keep in
+    another form (ValueError, _run_terms). Reads the batch and the map
+    alone, so a caller can refuse the batch with it before anything of
+    its document is registered. Returns what mapped_clusters returns,
+    and the hash of the map the batch is written with ("" for a batch
+    that names no local entity)."""
+    unapproved = unapproved_depicts(batch)
+    if unapproved:
+        raise UnapprovedDepictsError(unapproved)
+    unsupported = unsupported_dates(batch)
+    if unsupported:
+        raise UnsupportedDate(
+            "the batch holds unsupported dates, and nothing was "
+            "written: " + "; ".join(unsupported)
+        )
+    # the batch's mentions, each in its cluster of the identity map,
+    # before anything is read or written: an unmapped one refuses the
+    # batch whole
+    clusters, document, terms = mapped_clusters(batch, identity, mapped_from)
+    identity_hash = identity.hash if identity and clusters else ""
+    # the run item's terms are machine text: one the instance may keep in
+    # another form refuses the batch before anything is read or written
+    _run_terms(batch, identity_hash)
+    return clusters, document, terms, identity_hash
+
+
 class BatchWriter:
     def __init__(
         self,
         client: WikiClient,
         dry_run: bool = False,
         artifact_qids: Mapping[str, str] | None = None,
+        run_marks: Mapping[str, str] | None = None,
     ) -> None:
         """`artifact_qids` maps media SHA-1 to artifact QID for artifacts
         the caller has just registered. A cited SHA-1 it does not hold is
-        looked up in the instance's `media SHA-1` index."""
+        looked up in the instance's `media SHA-1` index. `run_marks` gives
+        string statements, by property key, that each run item the writer
+        makes or finds states of itself (step 1 of the module
+        docstring)."""
         self.client = client
         self.dry_run = dry_run
+        self.run_marks = dict(run_marks or {})
         self.properties, self.items = client.vocabulary()
         self._entity_cache: dict[str, object] = {}
         # entity manifest of the batch being written (ADR-0007):
@@ -1780,6 +1827,7 @@ class BatchWriter:
         self._aliased.add(placement.cluster)
         self._flag_held(placement, qid, result)
         result.created_items[ref.local_id] = qid
+        result.minted.append(qid)
         return qid
 
     def _kind_references(self, artifact_qid: str, run_qid: str | None):
@@ -2392,6 +2440,7 @@ class BatchWriter:
                 "extraction_run",
                 summary="ingest: run item statements",
                 dry_run=self.dry_run,
+                marks=self.run_marks,
             )
             return existing
         if self.dry_run:
@@ -2409,6 +2458,7 @@ class BatchWriter:
             item.id,
             "extraction_run",
             summary="ingest: run item statements",
+            marks=self.run_marks,
         )
         return item.id
 
@@ -2812,6 +2862,7 @@ class BatchWriter:
         identity: IdentityMap | None = None,
         mapped_from: ClaimBatch | None = None,
         one_map: bool = True,
+        claim_summary: str | None = None,
     ) -> WriteResult:
         """Write `batch`, finding or minting the item of each of its local
         entities through the identity map `identity` alone (step 2 of the
@@ -2835,37 +2886,21 @@ class BatchWriter:
         refused alone, and the rest of the batch is written (the module
         docstring); so is an entity that may take neither its label nor its
         tagged label, refused with the claims that name it (step 2 of the
-        module docstring)."""
-        unapproved = unapproved_depicts(batch)
-        if unapproved:
-            raise UnapprovedDepictsError(unapproved)
-        unsupported = unsupported_dates(batch)
-        if unsupported:
-            raise UnsupportedDate(
-                "the batch holds unsupported dates, and nothing was "
-                "written: " + "; ".join(unsupported)
-            )
-        # the batch's mentions, each in its cluster of the identity map,
-        # before anything is read or written: an unmapped one refuses the
-        # batch whole (_map)
-        self._clusters, self._document, self._terms = mapped_clusters(
-            batch, identity, mapped_from
+        module docstring). `claim_summary` is the edit summary of each
+        claim's write, by default one that says whether its batch was
+        reviewed row by row or accepted whole."""
+        self._clusters, self._document, self._terms, self._identity_hash = (
+            check_batch(batch, identity, mapped_from)
         )
-        self._identity_hash = (
-            identity.hash if identity and self._clusters else ""
-        )
-        # the run item's terms are machine text: one the instance may keep
-        # in another form refuses the batch before anything is read or
-        # written (_run_terms)
-        _run_terms(batch, self._identity_hash)
         # a bulk-accepted batch (whole-sheet accept-all, ADR-0023) gets a
         # distinct edit summary so MediaWiki history is the low-scrutiny
         # reappraisal queue — no graph flag, no staleness.
-        claim_summary = (
-            "ingest: write bulk-accepted claim"
-            if bulk_accepted
-            else "ingest: write reviewed claim"
-        )
+        if claim_summary is None:
+            claim_summary = (
+                "ingest: write bulk-accepted claim"
+                if bulk_accepted
+                else "ingest: write reviewed claim"
+            )
         # every cited artifact must resolve before the first write
         self.resolve_artifacts(batch)
         # the manifest as the depicts gate read it (ADR-0005): one lookup

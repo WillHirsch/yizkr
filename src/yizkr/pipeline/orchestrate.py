@@ -1287,7 +1287,7 @@ class Orchestrator:
             artifact_type=artifact_type,
             title=doc.state.title,
             description=(
-                f"ingested by `yizkr ingest run` from {doc.source.name}"
+                f"ingested by `{self.command}` from {doc.source.name}"
             ),
             pages=pages,
             sha1=doc.sha1,
@@ -2042,6 +2042,9 @@ class Orchestrator:
         return sheet_notes(
             entries(json.loads(doc.critique.read_text())), extracted, rows
         )
+
+    # the command an artifact's description says ingested it
+    command = "yizkr ingest run"
 
     # whether a write refuses an instance that holds the writes of another
     # identity map (yizkr.pipeline.writer.OtherIdentityMap): an instance

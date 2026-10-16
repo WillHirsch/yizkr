@@ -123,7 +123,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
@@ -517,6 +517,7 @@ def ensure_self_typed(
     *,
     summary: str,
     dry_run: bool = False,
+    marks: Mapping[str, str] | None = None,
 ) -> bool:
     """Make the item `qid` state its kind, ``instance of -> kind`` (a
     manifest item key), referenced ``stated in -> the item itself``: a run
@@ -533,19 +534,32 @@ def ensure_self_typed(
     kind then. An item that states ``instance of -> kind`` already, at any
     rank and under any reference, is left as it is: a curator's
     deprecation of that statement, or a reference of their own on it,
-    stands (CLAUDE.md rules 3 and 4). Returns whether the item lacked the
+    stands (CLAUDE.md rules 3 and 4).
+
+    `marks` gives string statements the item states of itself as well,
+    by property key: a scratch run's run item names the run and the
+    hashes of its run manifest and identity map (ADR-0025 §1). Each is
+    stated in the item itself, in the same write as its kind, and one the
+    item states already with that value, at any rank and under any
+    reference, is left as it is. Returns whether the item lacked a
     statement; a dry run reads the item and writes nothing.
     """
     properties, items = client.vocabulary()
+    stated_in = properties["stated_in"]
     instance_of, kind_qid = properties["instance_of"], items[kind]
     item = client.wbi.item.get(qid)
-    if kind_qid in _existing_claim_targets(item, instance_of):
+    missing = []
+    if kind_qid not in _existing_claim_targets(item, instance_of):
+        missing.append(_item_claim(instance_of, kind_qid, stated_in, qid))
+    for key, value in (marks or {}).items():
+        pid = properties[key]
+        if value not in _existing_claim_strings(item, pid):
+            missing.append(_string_claim(pid, value, stated_in, qid))
+    if not missing:
         return False
     if not dry_run:
-        _append(
-            item,
-            _item_claim(instance_of, kind_qid, properties["stated_in"], qid),
-        )
+        for claim in missing:
+            _append(item, claim)
         item.write(summary=summary)
     return True
 
