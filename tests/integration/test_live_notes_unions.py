@@ -5,19 +5,19 @@ A claim's judgement note lands in the run block of its statement, beside
 qualifier, and a batch written again adds nothing, while a second claim
 of the run with another note adds its own run block (ADR-0035 §4). A
 later run's noted and bare claims from the place a statement already
-cites add their run blocks, in either order. An entity's note lands
-in the run block of its item's `instance of`. A
-union and its events, from an extraction's batch, land as items with
-their kinds, roles, bounds, dates, places and court, each statement with
-both references (ADR-0036, ADR-0003). A `spouse` claim, which validation
-refuses, is refused by the writer too, since `yizkr write` takes a batch
-without validating it. The interview's relative claim, Klara as
-Nicholas's aunt, lands with its kinship type, kinship class and degree
-as qualifiers (ADR-0035 §3.3). The tests write fictional fixture data
-only (the universe's 1957 divorce judgment and the interview, under test
-labels). Every title and label carries the session's marker
-(conftest.fixture_mark), so each session meets the fixture as a first
-write and a re-run within it reuses its entities.
+cites add their run blocks, in either order. An entity's note lands in
+the run block of its item's `instance of`. A union and its events, from
+an extraction's batch, land as items with their kinds, roles, bounds,
+dates, places and court, each statement with both references (ADR-0036,
+ADR-0003). A `spouse` claim, which validation refuses, is refused by the
+writer too, since `yizkr write` takes a batch without validating it. The
+interview's relative claim, Klara as Nicholas's aunt, lands with its
+kinship type, kinship class and degree as qualifiers (ADR-0035 §3.3).
+The tests write fictional fixture data only (the universe's 1957 divorce
+judgment and the interview, under test labels). Every title and label
+carries the session's marker (conftest.fixture_mark), so each session
+meets the fixture as a first write and a re-run within it reuses its
+entities.
 """
 
 from __future__ import annotations

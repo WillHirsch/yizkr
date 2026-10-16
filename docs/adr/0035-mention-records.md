@@ -506,9 +506,9 @@ is not made yet. The writer's line in the readers' list of §8 below (it
 (docs/MODELING.md, "General approach").
 
 Amended by #410 (2026-10-16): the writer writes judgement notes as §4
-says. A claim's note goes in its statement's run block, beside
-`inferred from extraction run`, as `judgement` and `judgement_note`, and
-an entity's note in the run block of its item's `instance of`, minted
+says. A claim's note goes in its statement's run block, beside `inferred
+from extraction run`, as `judgement` and `judgement_note`, and an
+entity's note in the run block of its item's `instance of`, minted
 (writer step 2) or witnessed again (step 5). The run block is compared
 whole, in NFC, with its note, so a batch written again adds nothing, and
 a second claim of the run, from the same place or another, adds its own
@@ -516,27 +516,27 @@ run block where its note differs. Where the statement carried the
 claim's source block before the write, its run block is added only when
 it carries a note, or when the statement cites its run in a block with
 another note; a statement curated before the write, and still, is
-compared by the artifacts it cited then, and a claim that adds nothing is looked at again once the batch's
-other claims are written and its kinds recorded. So a run's noted and
-note-less claims, and a curator's claims beside machine claims, from
-one place or several, give the same blocks in whatever order the batch gives them, for the run that
-wrote the statement and for a later one, and a later run's note-less
-claims alone add nothing there, as before notes. An entity's kind takes
-its run blocks by the same rule, the witnesses whose note is written
-first. A note's
-sentence is cut at 400 characters as a locator is; one that holds
+compared by the artifacts it cited then, and a claim that adds nothing
+is looked at again once the batch's other claims are written and its
+kinds recorded. So a run's noted and note-less claims, and a curator's
+claims beside machine claims, from one place or several, give the same
+blocks in whatever order the batch gives them, for the run that wrote
+the statement and for a later one, and a later run's note-less claims
+alone add nothing there, as before notes. An entity's kind takes its run
+blocks by the same rule, the witnesses whose note is written go first. A
+note's sentence is cut at 400 characters as a locator is; one that holds
 nothing the instance keeps, or a character Python's Unicode tables do
 not know, is left out with a warning, never refusing its claim, and so
 is every note on an instance whose vocabulary lacks a note term, with
 one warning. The write's result counts the noted run blocks it added
-(`notes_written`): the writer's count §4 and #420's line name, which
-the scratch write stage records for each document and the run report
-sums in its write section. The writer also refuses a claim of a
-retired property (§3.5) or of a reference property, as its own property
-or a qualifier's, before the first write, as validation does, since
-`yizkr write` takes a batch without validating it. The roles, kinship
-classes, sides, degrees and removes of §3.2 and §3.3 are written as
-qualifiers through the writer's general path, with no code of their own.
+(`notes_written`): the writer's count §4 and #420's line name, which the
+scratch write stage records for each document and the run report sums in
+its write section. The writer also refuses a claim of a retired property
+(§3.5) or of a reference property, as its own property or a qualifier's,
+before the first write, as validation does, since `yizkr write` takes a
+batch without validating it. The roles, kinship classes, sides, degrees
+and removes of §3.2 and §3.3 are written as qualifiers through the
+writer's general path, with no code of their own.
 
 **Decided by the owner (2026-09-29):**
 

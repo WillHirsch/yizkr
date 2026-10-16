@@ -1238,8 +1238,9 @@ def explicit_kind(note: dict | None = None, *, reverse=False, run=RUN):
 
 class TestKindsAndCuratedStatementsInOneWrite:
     """The kinds are recorded before the claims that added nothing are
-    looked at again, and a statement is compared as it stood before the
-    write, so neither an explicit `instance of` claim nor a curated
+    looked at again, and a statement is compared by the artifacts and
+    blocks it had before the write, as a curator's only while it still is
+    one, so neither an explicit `instance of` claim nor a curated
     statement makes the blocks depend on the batch's order (#410)."""
 
     @pytest.mark.parametrize("reverse", [False, True])
@@ -1537,6 +1538,10 @@ class TestACuratedAndABareClaimFromOnePlace:
             identity = mapped(batch)
             result = write_mapped(BatchWriter(wiki), batch, identity=identity)
             shown.append(self.shown(wiki, result))
+            # the bare claim's run block is added, in either order
+            assert run_blocks(the_wedding_date(wiki, result)) == [
+                (result.run_qid, None, None)
+            ]
             writes = wiki.wbi.item.writes
             write_mapped(BatchWriter(wiki), batch, identity=identity)
             assert wiki.wbi.item.writes == writes, reverse
@@ -1558,12 +1563,18 @@ class TestACuratedAndABareClaimFromOnePlace:
         assert shown[0] == shown[1]
 
     def test_an_explicit_kind_after_an_earlier_run(self):
+        """An earlier run gives the court its kind from the mention alone,
+        so the kind statement lacks the explicit claims' page-1 block
+        before the later write: a curated and a bare explicit `instance
+        of` claim from that place give the same blocks in either order,
+        the bare one's run block among them, and a rewrite writes
+        nothing."""
         shown = []
         for reverse in (False, True):
             wiki = NotedWiki()
-            earlier = explicit_kind()
+            earlier = TestAnEntitysNote().court_batch(None)
             identity = mapped(earlier)
-            write_mapped(BatchWriter(wiki), earlier, identity=identity)
+            first = write_mapped(BatchWriter(wiki), earlier, identity=identity)
             plain = explicit_kind().model_dump(mode="json")
             kind = plain["claims"][-1]
             claims = [
@@ -1580,6 +1591,10 @@ class TestACuratedAndABareClaimFromOnePlace:
             (statement,) = statements(
                 wiki, result.created_items["e6"], "instance_of"
             )
+            assert run_blocks(statement) == [
+                (first.run_qid, None, None),
+                (result.run_qid, None, None),
+            ]
             shown.append(
                 sorted(
                     json.dumps(block, sort_keys=True)
@@ -1593,16 +1608,20 @@ class TestACuratedAndABareClaimFromOnePlace:
 
 
 class TestTheStateBeforeTheWrite:
-    """_before_write keeps each statement's state under its subject, value
-    and qualifiers alike, and afresh for each write."""
+    """_before_write keeps each statement's state under its subject,
+    property, value and qualifiers alike, and afresh for each write."""
 
-    @pytest.mark.parametrize("differs", ["subject", "value", "qualifiers"])
+    @pytest.mark.parametrize(
+        "differs", ["subject", "property", "value", "qualifiers"]
+    )
     def test_a_statement_differing_in_one_part_is_its_own(self, differs):
         wiki = NotedWiki()
         curated = batch_of(dict(wedding_date(), curated=True))
         other = wedding_date(DATE_NOTE, sha1=BURIAL_SHA1)
         if differs == "subject":
             other["subject"] = DIVORCE
+        elif differs == "property":
+            other["property"] = "start_time"
         elif differs == "value":
             other["value"] = {"type": "time", "year": 1948}
         else:
