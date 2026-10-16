@@ -16,7 +16,6 @@ from yizkr.pipeline.places import (
     PlaceRecord,
     Question,
     adjudicate,
-    adjudicate_places,
     build_worklist,
     ensure_places_run_item,
     export_places_csv,
@@ -498,7 +497,7 @@ class TestAdjudication:
         ]
         llm = ScriptedLlm("\n".join(lines))
         questions = [Question(kind="parent", qid_a="Q3", qid_b="Q2")]
-        proposals = adjudicate_places(llm, questions, places())
+        proposals = adjudicate(llm, questions, places()).proposals
         assert [(p.qid_a, p.qid_b, p.verdict) for p in proposals] == [
             ("Q3", "Q2", "a_within_b")
         ]
@@ -514,7 +513,7 @@ class TestAdjudication:
             Question(kind="parent", qid_a="Q3", qid_b="Q2", context="c1"),
             Question(kind="parent", qid_a="Q6", qid_b="Q4", context="c2"),
         ]
-        adjudicate_places(llm, questions, places())
+        adjudicate(llm, questions, places())
         (prompt,) = llm.prompts
         assert not re.search(r"\bQ\d+\b", prompt)
         assert (
@@ -557,7 +556,7 @@ class TestAdjudication:
                 found, [], stated_parent_candidates(found)
             )
             llm = ScriptedLlm('{"done": true}')
-            adjudicate_places(llm, worklist, found)
+            adjudicate(llm, worklist, found)
             prompts.append(llm.prompts)
         assert prompts[0] == prompts[1]
 
@@ -597,6 +596,27 @@ class TestAdjudication:
                     )
                 )
             found.append(PlaceRecord(qid=qid("Q9"), label="Lager Klurnau"))
+            # two Rekaus no record places, told apart by their items'
+            # descriptions alone, each in a pair of its own (decision FD)
+            for rekau, description, other, context in (
+                ("Q30", "place named in an artifact", "Q4", "of Gustav"),
+                ("Q31", "place named in an artifact (2)", "Q7", "of Ida"),
+            ):
+                found.append(
+                    PlaceRecord(
+                        qid=qid(rekau), label="Rekau", description=description
+                    )
+                )
+                a, b = sorted((qid(rekau), qid(other)))
+                competing.append(
+                    Question(
+                        kind="competing",
+                        qid_a=a,
+                        qid_b=b,
+                        context=f"both asserted as place of birth {context}",
+                    )
+                )
+            random.Random(seed).shuffle(found)
             random.Random(seed).shuffle(competing)
             return found, competing
 
@@ -607,9 +627,44 @@ class TestAdjudication:
                 found, competing, stated_parent_candidates(found)
             )
             llm = ScriptedLlm('{"done": true}')
-            adjudicate_places(llm, worklist, found)
+            adjudicate(llm, worklist, found)
             prompts.append(llm.prompts)
         assert prompts[0] == prompts[1] == prompts[2]
+        assert "'Rekau' [1]" in prompts[0][0]
+        assert "'Rekau' [2]" in prompts[0][0]
+
+    def test_a_pair_whose_values_are_not_places_is_left_out(self):
+        """Two competing pairs whose values are no places (unclassified
+        entities, say) have no names: asked, they would read '?' and be
+        ordered by their QIDs, which a reset turns round across Q99 and
+        Q100. They are left out and counted (decision FC)."""
+        prompts = []
+        for unplaced in (("Q99", "Q100"), ("Q100", "Q99")):
+            found = places()
+            competing = [
+                Question(
+                    kind="competing",
+                    qid_a=unplaced[0],
+                    qid_b=unplaced[1],
+                    context="both asserted as place of birth of Ida",
+                ),
+                Question(
+                    kind="competing",
+                    qid_a=unplaced[0],
+                    qid_b="Q4",
+                    context="both asserted as place of death of Ida",
+                ),
+            ]
+            kept, unnamed = places_module().named_pairs(competing, found)
+            assert (kept, unnamed) == ([], 2)
+            worklist = build_worklist(
+                found, kept, stated_parent_candidates(found)
+            )
+            llm = ScriptedLlm('{"done": true}')
+            adjudicate(llm, worklist, found)
+            assert "'?'" not in llm.prompts[0] and ": ?" not in llm.prompts[0]
+            prompts.append(llm.prompts)
+        assert prompts[0] == prompts[1]
 
     def test_a_stated_pair_asked_from_two_chains_keeps_the_least_context(
         self,
@@ -633,6 +688,55 @@ class TestAdjudication:
             for order in ([one, two, hesse], [hesse, two, one])
         }
         assert len(contexts) == 1
+        # Flörburg within Hesse is asked by both records: the least of
+        # their contexts is kept
+        ((kept,),) = {
+            tuple(c for a, b, c in found if (a, b) == ("Q2", "Q7"))
+            for found in contexts
+        }
+        assert kept == min(
+            "a record states it within 'Hesse', which names an existing place",
+            "a record states 'Flörburg' within 'Hesse', each naming an "
+            "existing place",
+        )
+
+    def test_a_pair_asked_as_stated_and_competing_keeps_the_stated(self):
+        """A pair a record states and the graph holds as competing values
+        is asked once, as the stated container's question, with its
+        context and documents, whatever text the competing one has
+        (#201)."""
+        found = [
+            PlaceRecord(qid="Q2", label="Flörburg"),
+            PlaceRecord(qid="Q7", label="Hesse"),
+        ]
+        stated = Question(
+            kind="parent",
+            qid_a="Q2",
+            qid_b="Q7",
+            context="a record states it within 'Hesse', which names an "
+            "existing place",
+            sources=["x"],
+        )
+        # a context that sorts before the stated one's
+        competing = Question(
+            kind="competing",
+            qid_a="Q7",
+            qid_b="Q2",
+            context="Ida's place of birth, twice",
+        )
+        for order in ((stated, competing), (competing, stated)):
+            (kept,) = build_worklist(
+                found,
+                [q for q in order if q.kind == "competing"],
+                [q for q in order if q.kind == "parent"],
+            )
+            assert (kept.kind, kept.qid_a, kept.qid_b) == (
+                "parent",
+                "Q2",
+                "Q7",
+            )
+            assert kept.context == stated.context
+            assert kept.stated() == {("Q2", "Q7"): ["x"], ("Q7", "Q2"): []}
 
     def test_answers_outside_the_schema_are_counted(self):
         question = Question(kind="parent", qid_a="Q3", qid_b="Q2")
@@ -683,7 +787,7 @@ class TestAdjudication:
         gate: a count of the proposals gated nothing (#7)."""
         llm = ScriptedLlm('{"done": true}')
         question = Question(kind="parent", qid_a="Q3", qid_b="Q2")
-        assert adjudicate_places(llm, [question], places()) == []
+        assert adjudicate(llm, [question], places()).proposals == []
         assert 'End with exactly:\n{"done": true}\n' in llm.prompts[0]
         assert "emitted" not in llm.prompts[0]
 
@@ -697,15 +801,15 @@ class TestAdjudication:
         question = Question(kind="parent", qid_a="Q3", qid_b="Q2")
         llm = Stopping(f"{verdict}\n{done}", "max_tokens")
         with pytest.raises(ValueError, match="cut off at max_tokens"):
-            adjudicate_places(llm, [question], places())
+            adjudicate(llm, [question], places())
         llm = Stopping(f"{verdict}\n{done}", "end_turn")
-        (proposal,) = adjudicate_places(llm, [question], places())
+        (proposal,) = adjudicate(llm, [question], places()).proposals
         assert proposal.verdict == "same"
 
     def test_missing_sentinel_raises(self):
         llm = ScriptedLlm(json.dumps({"question": 1, "verdict": "distinct"}))
         with pytest.raises(ValueError, match="sentinel"):
-            adjudicate_places(
+            adjudicate(
                 llm,
                 [Question(kind="parent", qid_a="Q3", qid_b="Q2")],
                 places(),
@@ -881,17 +985,23 @@ class TestNames:
             "'Flörburg' (a record places it in 'Kreis Mockburg')"
         )
 
-    def test_namesakes_nothing_tells_apart_are_numbered_by_their_documents(
+    def test_namesakes_nothing_tells_apart_are_numbered_by_descriptions(
         self,
     ):
-        one = PlaceRecord(qid="Q2", label="Rekau")
-        one.state([], ["b" * 40])
-        two = PlaceRecord(qid="Q8", label="Rekau")
-        two.state([], ["a" * 40])
-        for order in ([one, two], [two, one]):
-            names = places_module().place_names(order)
-            # the place the earlier document names is [1], whatever its QID
-            assert names == {"Q8": "'Rekau' [1]", "Q2": "'Rekau' [2]"}
+        """Two Rekaus no record places: numbered by their items'
+        descriptions, whatever their QIDs and the order the graph gives
+        them in (decision FD)."""
+        first = "place named in an artifact"
+        second = "place named in an artifact (2)"
+        for qids in (("Q2", "Q8"), ("Q8", "Q2")):
+            one = PlaceRecord(qid=qids[0], label="Rekau", description=second)
+            two = PlaceRecord(qid=qids[1], label="Rekau", description=first)
+            for order in ([one, two], [two, one]):
+                names = places_module().place_names(order)
+                assert names == {
+                    two.qid: "'Rekau' [1]",
+                    one.qid: "'Rekau' [2]",
+                }
 
 
 def places_module():
@@ -1124,7 +1234,12 @@ class TestCommand:
         assert cli.cmd_reconcile_places(args) == 0
         assert asked == [("Q20", "Q21"), ("Q21", "Q7")]
 
-    def test_it_says_what_it_left_out(self, tmp_path, monkeypatch, capsys):
+    @pytest.mark.parametrize(
+        ("rejected", "conflicts"), [(2, 1), (0, 1), (2, 0)]
+    )
+    def test_it_says_what_it_left_out(
+        self, tmp_path, monkeypatch, capsys, rejected, conflicts
+    ):
         """Conflicting answers and answers outside the schema are counted
         where the command says what it wrote (#201)."""
         import argparse
@@ -1144,7 +1259,7 @@ class TestCommand:
             places,
             "adjudicate",
             lambda client, worklist, found: places.Adjudication(
-                rejected=2, conflicts=list(worklist)
+                rejected=rejected, conflicts=list(worklist)[:conflicts]
             ),
         )
         monkeypatch.setattr(llm, "make_client", lambda name: None)
@@ -1157,8 +1272,9 @@ class TestCommand:
         )
         assert cli.cmd_reconcile_places(args) == 0
         assert (
-            "left out: 1 question(s) answered with two verdicts, 2 answer "
-            "line(s) outside the answer's schema"
+            f"left out: {conflicts} question(s) answered with two verdicts, "
+            f"{rejected} answer line(s) outside the answer's schema, 0 "
+            "competing pair(s) whose values are not both places"
         ) in capsys.readouterr().out
 
     def test_run_takes_several_directories(self):

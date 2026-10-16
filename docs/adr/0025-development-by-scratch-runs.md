@@ -191,42 +191,47 @@ byte for byte; §1 and §3 are amended in place.
 Amended by #201 (2026-10-06): the write side gains a fifth stage,
 `places`, after the write and before the site, so the site shows the
 containment: ADR-0009's place-hierarchy reconciliation, run unattended.
-It is the write side's one stage that calls the engine, in the
-`extract` role, through the run's LLM cache, so a subscription limit
-pauses it as any stage, and the next invocation applies what it had
-proposed without asking again. Its calls are keyed as the `extract`
-role's, and the run's events name them under the role and stage
-`places`, so the report counts them apart. Its prompt names places by
-their labels, with what the graph and their records say contains them,
-and questions by their numbers, never by a QID; it orders competing
-pairs' places by their names and questions by their text among equals,
-never by a QID, so the same batches ask the same prompts after any
-reset, items renumbered across a digit boundary included. An answer the
-cache kept that does not parse is rejected and asked once more. The
-stage proposes only over a complete write: until the write records its
-key, it does nothing and records nothing (decision FB). Its key, the
-place key, is the write key with
-the prompt's template, the batch size and the engine, model and effort of
-its role; the instance-contents record takes it once the stage has
-applied every proposal, and the reset stage looks for it, so a rerun of
-the run that wrote resets nothing and asks nothing. An invocation run
-`--until write` leaves the write key recorded, not the place key: a
-later invocation of the same run goes on where it stopped, and another
-run resets and writes again. It runs under the write's guard, holding the live-stack lock
-for the whole stage, its model calls included (decision EY), and clears
-the instance-contents record before its first write. Every containment
-proposal is applied at normal rank with no review CSV, `stated in` each
-document whose mention record states it in the direction written, where
-one does, and `inferred from` the stage's run item, which records the
-proposing model and carries the scratch-run marks; a containment no
-document states so cites the run item alone, and `stated in` carries no
-page, since a place's mention record has no locator (decision FA, which
-the owner confirms before the keeper run). Cycles (through the graph,
-the batch or both), conflicting answers and answer lines outside the
-schema are refused and counted, never written. The
-proposals, raw answers and counts are kept in the stage's directory of
-the run; the run report counts them and the run diff compares them. §1
-and §2 are amended in place.
+It is the write side's one stage that calls the engine, in the `extract`
+role, through the run's LLM cache. A subscription limit met while it
+asks leaves nothing proposed: the next invocation reads the graph and
+asks again, the batches already answered coming from the cache; a stage
+cut short after proposing applies the rest without asking again. Its
+calls are keyed as the `extract` role's, and the run's events name them
+under the role and stage `places`, so the report counts them apart. Its
+prompt names places by their labels, with what the graph and their
+records say contains them, namesakes nothing else tells apart numbered
+in the order of their items' descriptions (decision FD), and questions
+by their numbers, never by a QID; it orders competing pairs' places by
+their names and questions by their text among equals, never by a QID,
+and leaves out a competing pair whose values are not both places,
+counting it (decision FC), so the same batches ask the same prompts
+after any reset, items renumbered across a digit boundary included. An
+answer the cache kept that does not parse is rejected and asked once
+more; one the engine gave in this run is rejected and fails the stage.
+The stage proposes only over a complete write: until the write records
+its key, it does nothing and records nothing (decision FB). Its key, the
+place key, is the write key with the prompt's template, the batch size
+and the engine, model and effort of its role; the instance-contents
+record takes it once the stage has applied every proposal, and the reset
+stage looks for it, so a rerun of the run that wrote resets nothing and
+asks nothing. An invocation run `--until write` leaves the write key
+recorded, not the place key: a later invocation of the same run goes on
+where it stopped, and another run resets and writes again. It runs under
+the write's guard, holding the live-stack lock for the whole stage, its
+model calls included (decision EY), and clears the instance-contents
+record before its first write. Every containment proposal is applied at
+normal rank with no review CSV, `stated in` each document whose mention
+record states it in the direction written, where one does, and `inferred
+from` the stage's run item, which records the proposing model and
+carries the scratch-run marks; a containment no document states so cites
+the run item alone, and `stated in` carries no page, since a place's
+mention record has no locator (decision FA, which the owner confirms
+before the keeper run). Cycles (through the graph, the batch or both),
+conflicting answers and answer lines outside the schema are refused and
+counted, never written. The proposals, raw answers and counts are kept
+in the stage's directory of the run, for one reset of the instance; the
+run report counts them and the run diff compares them. §1 and §2 are
+amended in place.
 
 ## Context
 

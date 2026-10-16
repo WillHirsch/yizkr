@@ -74,7 +74,7 @@ from yizkr.pipeline.llm import (
     stream_report,
 )
 from yizkr.pipeline.llmcache import call_key
-from yizkr.pipeline.places import Question, adjudicate_places
+from yizkr.pipeline.places import Question, adjudicate
 from yizkr.pipeline.rundir import RunDir, usage_counts
 
 PINNED = "2.1.237"
@@ -2068,6 +2068,4 @@ class TestCallersOfAnAnswerTheCliGaveUpOn:
         cli.edit = gave_up
         question = Question(kind="parent", qid_a="Q3", qid_b="Q2")
         with pytest.raises(OutputLimitReached, match="cut off at max_tokens"):
-            adjudicate_places(
-                ClaudeCodeClient(model=MODEL), [question], places()
-            )
+            adjudicate(ClaudeCodeClient(model=MODEL), [question], places())

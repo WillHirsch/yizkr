@@ -19,8 +19,10 @@ run's LLM cache, and no stack.
   proposal. The stage refuses, writing nothing, unless this run's reset
   and write left the instance, and it holds the live-stack lock while it
   reads, calls and writes.
-* A subscription limit pauses it; the next invocation applies what was
-  proposed and asks nothing again.
+* A subscription limit met while it asks leaves nothing proposed: the
+  next invocation reads the graph and asks again, the batches already
+  answered coming from the LLM cache. A stage cut short after proposing
+  applies the rest without asking again.
 
 Every document is fictional (docs/EXAMPLES.md): Leopold Löbig's birth
 register extract, which places Flörburg in Kreis Peiltal, Hesse, Germany,
@@ -125,6 +127,10 @@ def graph(wiki) -> tuple[list, list]:
             qid=qid,
             label=label(wiki, qid),
             parents=item_values(wiki, qid, "part_of"),
+            description=wiki.entities[qid]
+            .get("descriptions", {})
+            .get("en", {})
+            .get("value", ""),
         )
         for qid in sorted(wiki.entities, key=lambda q: int(q[1:]))
         if place in item_values(wiki, qid, "instance_of")
@@ -348,6 +354,62 @@ def run(tmp_path, monkeypatch):
     return PlaceRun(tmp_path, monkeypatch)
 
 
+def pair_labels(wiki) -> list[tuple[str, str, str]]:
+    """Each competing pair the graph gives, as the labels of its values in
+    the order the query service gives them, and its context."""
+    return [
+        (label(wiki, q.qid_a), label(wiki, q.qid_b), q.context)
+        for q in graph(wiki)[1]
+    ]
+
+
+def flipped(before, after) -> bool:
+    return any((b, a, c) in after for a, b, c in before if a != b)
+
+
+def first_qid(run, name: str) -> str:
+    return run.flörburg if name == "Flörburg" else run.qid(name)
+
+
+def rerun(tmp_path, monkeypatch, documents=None, next_qid=94):
+    """A run, then another of the same batches after a reset that mints
+    the items from `next_qid` (Q94: some below Q100 and some above, so
+    the QIDs' order as strings turns round for some pairs) and reads the
+    places in reverse order, through the first run's LLM cache: (first,
+    second, the competing pairs' labels before each place stage)."""
+    first = PlaceRun(tmp_path, monkeypatch, documents=documents)
+    first.past_the_barrier(until="write")
+    before = pair_labels(first.wiki)
+    first.flörburg = (by_label(first.wiki, "Flörburg") or [None])[0]
+    first.stage("places")
+    first.stage("site")
+    # a write the stage did not make voids the record; the next run
+    # resets, and the instance mints its items afresh
+    clear_contents(CONFIG, "a live test")
+    (tmp_path / "again").mkdir()
+    second = PlaceRun(
+        tmp_path / "again",
+        monkeypatch,
+        wiki=first.wiki,
+        run_id="run-2",
+        documents=documents,
+    )
+    second.wiki._next_qid = next_qid
+    monkeypatch.setattr(
+        scratchwrite,
+        "place_graph",
+        lambda wiki: (list(reversed(graph(wiki)[0])), graph(wiki)[1]),
+    )
+    # the one LLM cache both runs call through
+    second.driver.cache_dir = first.driver.cache_dir
+    second.driver._engines[scratchwrite.PLACE_ROLE] = second.engine
+    second.past_the_barrier(until="write")
+    after = pair_labels(second.wiki)
+    second.stage("places")
+    second.stage("site")
+    return first, second, before, after
+
+
 def competing(run, monkeypatch, a: str, b: str) -> None:
     """The graph also holds the places `a` and `b` as competing values of
     one fact, which no record nests."""
@@ -495,6 +557,32 @@ class TestApplied:
             for response in kept["responses"]
         )
 
+    def test_a_reset_removes_the_raw_answers(self, run, monkeypatch):
+        """The raw answers are kept for one reset of the instance: after a
+        reset whose write fails, no answers of the reset before are left
+        (#201)."""
+        from yizkr.pipeline import writer
+
+        run.past_the_barrier()
+        kept = run.run_dir / CORPUS_DIR / "places" / "responses.json"
+        assert (
+            json.loads(kept.read_text())["epoch"]
+            == run.record("places")["epoch"]
+        )
+        # another session writes to the instance: the next invocation
+        # resets it, and the letter's write then fails
+        run.wiki.item("Brunnenring 35")
+
+        def write_batch(self, batch, **kwargs):
+            raise RuntimeError("the write failed")
+
+        monkeypatch.setattr(writer.BatchWriter, "write_batch", write_batch)
+        for name in ("reset", "register", "write", "places"):
+            run.stage(name)
+        assert run.record("reset")["action"] == scratchwrite.RESET_DONE
+        assert not kept.exists()
+        assert run.record("places") == {}
+
     def test_the_site_waits_for_the_place_stage_s_revision(
         self, run, monkeypatch
     ):
@@ -565,6 +653,86 @@ class TestRefusedAndCounted:
         assert run.record("places")["counts"]["cycles"] == 1
         assert item_values(run.wiki, run.qid("Germany"), "part_of") == []
 
+    def test_a_cycle_through_the_graph_and_the_batch_is_refused(
+        self, tmp_path, monkeypatch
+    ):
+        """The graph read puts Kreis Peiltal in Hesse; the batch puts
+        Hesse in Fläckfeld, then Fläckfeld in Kreis Peiltal, which closes
+        a cycle through both, refused (#201)."""
+        run = PlaceRun(tmp_path, monkeypatch)
+        run.engine.verdicts = {
+            ("Hesse", "Fläckfeld"): "a_within_b",
+            ("Fläckfeld", "Kreis Peiltal"): "a_within_b",
+        }
+
+        def read(wiki):
+            found, pairs = graph(wiki)
+            kreis, hesse = run.qid("Kreis Peiltal"), run.qid("Hesse")
+            for record in found:
+                if record.qid == kreis:
+                    record.parents = [hesse]
+            # pairs the containment connects are no competing pairs, as
+            # the query service leaves them out
+            ancestors = places._ancestors(found)
+            pairs = [
+                q
+                for q in pairs
+                if q.qid_a not in ancestors.get(q.qid_b, ())
+                and q.qid_b not in ancestors.get(q.qid_a, ())
+            ]
+            pairs.append(
+                Question(
+                    kind="competing",
+                    qid_a=hesse,
+                    qid_b=run.qid("Fläckfeld"),
+                    context="both asserted as place of birth",
+                )
+            )
+            return found, pairs
+
+        monkeypatch.setattr(scratchwrite, "place_graph", read)
+        run.past_the_barrier()
+        assert run.record("places")["counts"]["cycles"] == 1
+        flackfeld = run.qid("Fläckfeld")
+        assert run.qid("Kreis Peiltal") not in item_values(
+            run.wiki, flackfeld, "part_of"
+        )
+
+    def test_a_pair_whose_values_are_not_places_is_left_out(
+        self, tmp_path, monkeypatch
+    ):
+        """Two competing pairs whose values are no places of the graph
+        (here, the artifacts' items) have no names to be asked by: they
+        are left out and counted, never asked as '?' (decision FC)."""
+        run = PlaceRun(tmp_path, monkeypatch)
+
+        def read(wiki):
+            found, pairs = graph(wiki)
+            a, b = run.artifact(EXTRACT), run.artifact(LETTER)
+            for qid_a, qid_b in ((a, b), (b, run.qid("Hesse"))):
+                pairs.append(
+                    Question(
+                        kind="competing",
+                        qid_a=qid_a,
+                        qid_b=qid_b,
+                        context="both asserted as place of death",
+                    )
+                )
+            return found, pairs
+
+        monkeypatch.setattr(scratchwrite, "place_graph", read)
+        run.past_the_barrier()
+        (prompt,) = run.engine.prompts
+        assert "'?'" not in prompt and ": ?" not in prompt
+        assert "place of death" not in prompt
+        record = run.record("places")
+        assert record["counts"]["unnamed"] == 2
+        placed = report._placed(run.run_dir)
+        content = report._aggregate_content(
+            {}, {}, {}, _vocabulary(), run.record("write"), placed
+        )
+        assert content["place_hierarchy"]["unnamed_pairs_left_out"] == 2
+
     def test_conflicts_and_schema_rejections_are_counted(
         self, tmp_path, monkeypatch
     ):
@@ -597,6 +765,7 @@ class TestRefusedAndCounted:
         counts = run.record("places")["counts"]
         assert counts == {
             "questions": counts["questions"],
+            "unnamed": 0,
             "calls": 1,
             "made": counts["questions"],
             "applied": 3,
@@ -651,6 +820,16 @@ class TestKeys:
         assert {e.get("role") for e in calls} == {"places"}
         assert {e.get("stage") for e in calls if "stage" in e} <= {"places"}
 
+    def test_the_report_counts_the_calls_under_places(self, run):
+        run.past_the_barrier()
+        fold = report._Fold()
+        for event in run.driver.rundir.events():
+            fold.fold(event)
+        calls = report._aggregate_calls(fold, _vocabulary())
+        assert set(calls["by_role"]) == {"places"}
+        assert calls["by_role"]["places"]["engine"] == 1
+        assert calls["engine_calls"]["by_role"] == {"places": 1}
+
     def test_no_prompt_names_a_qid(self, run):
         run.past_the_barrier()
         (prompt,) = run.engine.prompts
@@ -661,37 +840,60 @@ class TestKeys:
     ):
         """The same batches after a reset make the same prompts, which
         the LLM cache answers: the items' QIDs are no part of them."""
-        first = PlaceRun(tmp_path, monkeypatch)
-        first.past_the_barrier()
+        first, second, before, after = rerun(tmp_path, monkeypatch)
+        # the competing pairs' QIDs, read as strings, come in another
+        # order for some pair: the query's order is turned round
+        assert flipped(before, after)
         assert len(first.engine.prompts) == 1
-        before = first.qid("Flörburg")
-        # a write the stage did not make voids the record; the next run
-        # resets, and the instance mints its items afresh
-        clear_contents(CONFIG, "a live test")
-        (tmp_path / "again").mkdir()
-        second = PlaceRun(
-            tmp_path / "again", monkeypatch, wiki=first.wiki, run_id="run-2"
-        )
-        # the items' QIDs cross a digit boundary (Q1xx to Q1xxx), which
-        # turns round the order of the competing pairs' QIDs as strings,
-        # and the query service gives its places in another order
-        second.wiki._next_qid = 1000
-        monkeypatch.setattr(
-            scratchwrite,
-            "place_graph",
-            lambda wiki: (list(reversed(graph(wiki)[0])), graph(wiki)[1]),
-        )
-        # the one LLM cache both runs call through
-        second.driver.cache_dir = first.driver.cache_dir
-        second.driver._engines[scratchwrite.PLACE_ROLE] = second.engine
-        second.past_the_barrier()
         assert second.resets == 1
         # other QIDs, the same prompt
-        assert second.qid("Flörburg") != before
+        assert second.qid("Flörburg") != first_qid(first, "Flörburg")
         assert second.engine.prompts == []
         counts = second.record("places")["counts"]
         assert counts["applied"] == 3
         assert counts == first.record("places")["counts"]
+
+    def test_namesakes_ask_the_same_after_another_reset(
+        self, tmp_path, monkeypatch
+    ):
+        """Two documents each name a Rekau no record places, each in a
+        competing pair with another place: the two items are numbered by
+        their descriptions, so the prompts are the same after a reset
+        that renumbers them and gives them in another order (decision
+        FD)."""
+        a = b"\x89PNG synthetic scan of a 1902 baptism entry from Rekau"
+        c = b"\x89PNG synthetic scan of a 1905 baptism entry from Rekau"
+
+        def naming(data, other, local):
+            return ClaimBatch.model_validate(
+                {
+                    "extraction_run": RUN,
+                    "entities": [
+                        {
+                            "id": "leopold",
+                            "label": "Leopold Löbig",
+                            "kind": "human",
+                        },
+                        entity("rekau", "Rekau"),
+                        entity(local, other),
+                    ],
+                    "claims": [
+                        born_at(data, place("rekau", "Rekau")),
+                        born_at(data, place(local, other)),
+                    ],
+                }
+            )
+
+        documents = (
+            ("baptism-1902.png", a, naming(a, "Hesse", "h")),
+            ("baptism-1905.png", c, naming(c, "Germany", "g")),
+        )
+        first, second, before, after = rerun(
+            tmp_path, monkeypatch, documents=documents
+        )
+        (prompt,) = first.engine.prompts
+        assert "'Rekau' [1]" in prompt and "'Rekau' [2]" in prompt
+        assert second.engine.prompts == []
 
     def test_the_key_is_the_write_key_with_the_prompt_and_the_model(
         self, run, monkeypatch
@@ -770,7 +972,7 @@ class TestDirection:
                 }
             )
 
-        for verdict, cited_doc in (("a_within_b", x), ("b_within_a", y)):
+        for verdict in ("a_within_b", "b_within_a"):
             base = tmp_path / verdict
             base.mkdir()
             run = PlaceRun(base, monkeypatch, documents=())
@@ -786,28 +988,38 @@ class TestDirection:
             )
             run.engine.verdicts = {("Fläckfeld", "Kreis Mockburg"): verdict}
             run.past_the_barrier()
-            child, parent = (
-                ("Fläckfeld", "Kreis Mockburg")
-                if verdict == "a_within_b"
-                else ("Kreis Mockburg", "Fläckfeld")
+            documents = run.record("write")["documents"]
+            f_x, k_x = (
+                documents[sha1(x)]["created_items"][local] for local in "fk"
             )
-            # one item of each name in each document: the map keeps a
-            # document's places apart from another's, so look at the
-            # statements whatever item holds them
-            written = [
-                statement
-                for qid in by_label(run.wiki, child)
+            f_y, k_y = (
+                documents[sha1(y)]["created_items"][local] for local in "fk"
+            )
+            artifact = {x: run.artifact(x), y: run.artifact(y)}
+            written = {
+                (qid, statement["mainsnak"]["datavalue"]["value"]["id"]): (
+                    cited(statement, "stated_in")
+                )
+                for qid in (f_x, k_x, f_y, k_y)
                 for statement in containment(run.wiki, qid)
-            ]
-            assert written, verdict
-            other = y if cited_doc is x else x
-            cites = [cited(statement, "stated_in") for statement in written]
-            # the document stating the other direction is never cited; the
-            # one stating this direction is, where its record names both
-            # places (a pair only the other document's record joins cites
-            # no document)
-            assert all(run.artifact(other) not in c for c in cites), verdict
-            assert [run.artifact(cited_doc)] in cites, verdict
+            }
+            # X's record names Fläckfeld (its own) within Kreis Mockburg
+            # (either), Y's Kreis Mockburg (its own) within Fläckfeld
+            # (either): each containment cites the documents stating its
+            # direction, and the pair only the other direction joins
+            # cites none
+            if verdict == "a_within_b":
+                assert written == {
+                    (f_x, k_x): [artifact[x]],
+                    (f_x, k_y): [artifact[x]],
+                    (f_y, k_y): [],
+                }, verdict
+            else:
+                assert written == {
+                    (k_x, f_x): [],
+                    (k_y, f_x): [artifact[y]],
+                    (k_y, f_y): [artifact[y]],
+                }, verdict
             clear_contents(CONFIG, "the next case")
 
 
@@ -866,10 +1078,12 @@ def tmp_path_of(run) -> Path:
 
 
 class TestKeptAnswer:
-    def test_a_malformed_answer_kept_is_asked_again(self, run):
+    def test_a_malformed_engine_answer_does_not_block_the_next_invocation(
+        self, run
+    ):
         """The engine's answer lacks its terminal sentinel: the stage
-        fails. Invoked again, the LLM cache's kept answer is rejected and
-        asked once more, and the engine's new answer is taken (#201)."""
+        fails, and the answer is rejected from the LLM cache. The next
+        invocation asks the engine afresh and takes its answer (#201)."""
         run.past_the_barrier(until="write")
         run.engine.broken = True
         with pytest.raises(ValueError, match="sentinel"):
@@ -891,6 +1105,68 @@ class TestKeptAnswer:
         events = [e["event"] for e in run.driver.rundir.events()]
         assert events.count("cache-miss") == 1
         assert "cache-hit" not in events
+
+    @staticmethod
+    def kept_malformed_answer(run) -> int:
+        """Leave a malformed answer in the LLM cache, as an earlier
+        invocation whose rejection was lost would, and return the event
+        count after it."""
+        run.past_the_barrier(until="write")
+        run.engine.broken = True
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(
+                places, "reject_response", lambda client, response, why: False
+            )
+            with pytest.raises(ValueError, match="sentinel"):
+                run.stage("places")
+        return len(run.driver.rundir.events())
+
+    @staticmethod
+    def cache_events(run, start: int) -> list[str]:
+        return [
+            e["event"]
+            for e in run.driver.rundir.events()[start:]
+            if e["event"]
+            in ("cache-miss", "cache-hit", "call", "cache-reject")
+        ]
+
+    def test_a_kept_malformed_answer_is_asked_again_at_once(self, run):
+        """The cache answers with the malformed answer it kept: it is
+        rejected, and the same call asked of the engine at once (#201)."""
+        start = self.kept_malformed_answer(run)
+        run.engine.broken = False
+        run.stage("places")
+        assert self.cache_events(run, start)[:4] == [
+            "cache-hit",
+            "cache-reject",
+            "cache-miss",
+            "call",
+        ]
+        assert len(run.engine.prompts) == 2
+        assert run.record("places")["counts"]["applied"] == 3
+
+    def test_a_malformed_retry_fails_and_is_not_kept(self, run):
+        """The engine answers the retry badly too: the stage fails with
+        nothing proposed, and the retry's answer is rejected from the
+        cache, so the next invocation asks the engine again (#201)."""
+        start = self.kept_malformed_answer(run)
+        with pytest.raises(ValueError, match="sentinel"):
+            run.stage("places")
+        assert len(run.engine.prompts) == 2
+        assert "proposals" not in run.record("places")
+        again = len(run.driver.rundir.events())
+        run.engine.broken = False
+        run.stage("places")
+        assert self.cache_events(run, again)[:2] == ["cache-miss", "call"]
+        assert start < again
+
+    def test_a_retry_cut_off_at_the_output_limit_fails(self, run):
+        self.kept_malformed_answer(run)
+        run.engine.broken = False
+        run.engine.last_report = lambda: {"stop_reason": "max_tokens"}
+        with pytest.raises(ValueError, match="cut off"):
+            run.stage("places")
+        assert "proposals" not in run.record("places")
 
 
 # -- the guard ----------------------------------------------------------------
@@ -953,11 +1229,13 @@ class TestPauses:
         run.stage("places")
         assert run.record("places")["counts"]["applied"] == 3
 
-    def test_a_pause_mid_way_resumes_where_it_stopped(self, run, monkeypatch):
-        """Paused after its first containment is written, the run is
-        invoked again: the reset finds the instance holding this run's
-        writes alone and goes on, the write records no key over the
-        containment written, and the place stage applies the rest of
+    def test_a_stage_cut_short_mid_way_resumes_where_it_stopped(
+        self, run, monkeypatch
+    ):
+        """Cut short after its first containment is written (Ctrl-C, say),
+        the run is invoked again: the reset finds the instance holding
+        this run's writes alone and goes on, the write records no key over
+        the containment written, and the place stage applies the rest of
         what it proposed without reading the graph or asking again."""
         run.past_the_barrier(until="write")
         real = scratchwrite._containment
@@ -966,17 +1244,20 @@ class TestPauses:
         def containment(*args, **kwargs):
             made.append(args)
             if len(made) == 2:
-                raise UsageLimitReached(
-                    "the five-hour window is used up",
-                    resumes_at=datetime(2026, 10, 6, 15, tzinfo=UTC),
-                )
+                raise KeyboardInterrupt
             return real(*args, **kwargs)
 
         monkeypatch.setattr(scratchwrite, "_containment", containment)
-        with pytest.raises(UsageLimitReached):
+        with pytest.raises(KeyboardInterrupt):
             run.stage("places")
         assert len(run.record("places")["applied"]) == 1
         proposals = run.record("places")["proposals"]
+        read = []
+        monkeypatch.setattr(
+            scratchwrite,
+            "place_graph",
+            lambda wiki: read.append(1) or graph(wiki),
+        )
         # the next invocation
         for name in ("reset", "register", "write"):
             run.stage(name)
@@ -988,25 +1269,63 @@ class TestPauses:
         assert record["counts"]["applied"] == 3
         assert record["proposals"] == proposals
         assert len(run.engine.prompts) == 1
+        assert read == []
         assert recorded_contents(run.wiki).key == record["key"]
 
-    def test_an_invocation_after_a_pause_asks_nothing_again(
+    def test_a_stage_cut_short_after_proposing_asks_nothing_again(
         self, run, monkeypatch
     ):
         run.past_the_barrier(until="write")
         real = places.ensure_places_run_item
 
-        def paused(*args, **kwargs):
-            raise UsageLimitReached(
-                "the five-hour window is used up",
-                resumes_at=datetime(2026, 10, 6, 15, tzinfo=UTC),
-            )
+        def failing(*args, **kwargs):
+            raise RuntimeError("the run item's write failed")
 
-        monkeypatch.setattr(places, "ensure_places_run_item", paused)
-        with pytest.raises(UsageLimitReached):
+        monkeypatch.setattr(places, "ensure_places_run_item", failing)
+        with pytest.raises(RuntimeError):
             run.stage("places")
         assert len(run.engine.prompts) == 1
         monkeypatch.setattr(places, "ensure_places_run_item", real)
         run.stage("places")
         assert len(run.engine.prompts) == 1
         assert run.record("places")["counts"]["applied"] == 3
+
+    def test_a_limit_met_while_asking_asks_again_from_the_cache(
+        self, run, monkeypatch
+    ):
+        """In batches of two questions, a subscription limit meets the
+        second batch: nothing is proposed. The next invocation reads the
+        graph and asks again; the first batch comes from the LLM cache,
+        and the engine is asked only the batches it had not answered."""
+        import functools
+
+        monkeypatch.setattr(
+            places,
+            "adjudicate",
+            functools.partial(places.adjudicate, batch_pairs=2),
+        )
+        run.past_the_barrier(until="write")
+        real = run.engine.complete
+        calls = []
+
+        def complete(prompt, image_paths=()):
+            calls.append(prompt)
+            if len(calls) == 2:
+                run.engine.pause = True
+            return real(prompt, image_paths)
+
+        run.engine.complete = complete
+        with pytest.raises(UsageLimitReached):
+            run.stage("places")
+        assert "proposals" not in run.record("places")
+        answered = list(run.engine.prompts)
+        assert len(answered) == 1
+        run.stage("places")
+        record = run.record("places")
+        assert record["counts"]["applied"] == 3
+        batches = record["counts"]["calls"]
+        assert batches >= 3
+        # the first batch came from the cache: the engine answered each
+        # batch once, over the two invocations
+        assert run.engine.prompts[0] == answered[0]
+        assert len(run.engine.prompts) == batches

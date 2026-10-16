@@ -52,31 +52,39 @@ applied at normal rank and no review CSV; `same`, `distinct` and
 `uncertain` verdicts write nothing, and a proposal that would close a
 cycle (through the graph's containment as read, the batch's earlier
 proposals, or both at once), a question answered with two verdicts (a
-conflict) and an answer line outside the answer's schema are refused
-and counted. The cycle guard of the command's `--apply` walks the
-graph's containment beside the batch's edges in the same way. Where a
-mention record states the containment applied, in the direction
-written, child within parent, the statement is also `stated in` the
-artifact of each document whose record states it so, a reference block
-of its own beside `inferred from` the run item; a document whose record
-states the reverse is never cited, and a competing pair's containment,
-or a verdict that turns every stated containment round, cites the run
-item alone (decision FA, which the owner confirms before the keeper
-run). The run item's label names the proposing model. The pass runs
-over a complete write only (decision FB). The prompt names each place
-by its label, with the labels of the places the graph puts it in and the
-chains of containers its records state, and places whose names still
-coincide by [1], [2], ... in the order of the documents that name them;
-each question by its number within the batch; a competing pair with its
-places in the order of their names; and of a pair asked twice, the
-question that sorts first by its text. It never names a QID, nor orders
-anything by one, so the LLM cache answers the same graph's questions
-after any reset, renumbered items included (ADR-0032); among questions
-of equal scale, a stated container's comes before a competing pair's,
-and then the order of their text decides. An answer the cache kept that
-does not parse is rejected and asked once more. The command's own
-rounds and its review CSV are unchanged; it now prints how many
-conflicting answers and answers outside the schema it left out.
+conflict) and an answer line outside the answer's schema are refused and
+counted. The cycle guard of the command's `--apply` walks the graph's
+containment beside the batch's edges in the same way. Where a mention
+record states the containment applied, in the direction written, child
+within parent, the statement is also `stated in` the artifact of each
+document whose record states it so, a reference block of its own beside
+`inferred from` the run item; a document whose record states the reverse
+is never cited, and a containment no document states in the direction
+written, such as a competing pair's, cites the run item alone (decision
+FA, which the owner confirms before the keeper run). The run item's
+label names the proposing model. The pass runs over a complete write
+only (decision FB). The prompt names each place by its label, with the
+labels of the places the graph puts it in and the chains of containers
+its records state; places whose names still coincide are numbered [1],
+[2], ... in the order of their items' English descriptions, then of the
+documents that name them (decision FD). The instance keeps an item's
+label and description unique together, and the writer makes a minted
+item's description from the identity map alone, so the numbering holds
+across a reset for every item the writer minted; the command, over
+curated items with no description, makes no such promise. Each question
+is named by its number within the batch; a competing pair is asked with
+its places in the order of their names, and one whose values are not
+both places of the graph, having no names to be asked by, is left out
+and counted (decision FC); of a pair asked twice, the question that
+sorts first by its text is kept. The prompt never names a QID, nor
+orders anything by one, so the LLM cache answers the same graph's
+questions after any reset, renumbered items included (ADR-0032); among
+questions of equal scale, a stated container's comes before a competing
+pair's, and then the order of their text decides. An answer the cache
+kept that does not parse is rejected and asked once more; one the engine
+gave in this run is rejected and fails the pass. The command's own
+rounds and its review CSV are unchanged; it prints how many conflicting
+answers, answers outside the schema and unnamed pairs it left out.
 
 ## Context
 

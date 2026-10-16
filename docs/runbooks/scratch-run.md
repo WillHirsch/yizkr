@@ -349,45 +349,53 @@ with `--until clustering` (or an earlier stage) needs none.
   written, the instance-contents record takes the write key.
 - **places** reconciles the place hierarchy (ADR-0009) unattended, after
   the write and before the site, so the site shows the containment. It
-  waits for a complete write: while a document's write has failed, it
-  does nothing and records nothing, and the next invocation that
-  completes the write proposes over all of it. Once the query service
-  shows the write, it reads the graph's places,
-  their containment and the competing place values, gives each written
-  place the chains of containers its mention records state, and asks the
-  adjudicator the questions `yizkr reconcile-places` would ask, in
-  batches of 40, in the role `extract`, through the LLM cache; the run's
-  events, the monitor and the report name these calls `places`. Its
-  prompt names each place by its label (with the labels of the places
-  the graph puts it in and the containers its records state, and [1],
-  [2], ... for namesakes nothing else tells apart) and each question by
+  waits for a complete write: while a document's registration or write
+  has failed, it does nothing and records nothing, and the next
+  invocation that completes the write proposes over all of it. Once the
+  query service shows the write, it reads the graph's places, their
+  containment and descriptions, and the competing place values, leaves
+  out a competing pair whose values are not both places (counted as
+  unnamed), gives each written place the chains of containers its
+  mention records state, and asks the adjudicator the questions `yizkr
+  reconcile-places` would ask, in batches of 40, in the role `extract`,
+  through the LLM cache; the run's events, the monitor and the report
+  name these calls `places`. Its prompt names each place by its label
+  (with the labels of the places the graph puts it in and the containers
+  its records state, and [1], [2], ... for namesakes nothing else tells
+  apart, in the order of their items' descriptions) and each question by
   its number, and orders nothing by a QID, so a run on the same batches
   after another reset asks the engine nothing. An answer the cache kept
-  that does not parse is rejected and asked once more. The
-  questions, the proposals and their counts go in
-  `corpus/places/record.json`, and the raw answers in
-  `corpus/places/responses.json`. Every containment proposal is applied,
-  with no review CSV, as a `part_of` statement at normal rank, `stated
-  in` each document whose mention record states that containment in the
-  direction written (none for a competing pair's, or for one only stated
-  the other way round), and
-  `inferred from` the stage's run item, `place-hierarchy run <model>
-  <key>`, marked as the write's run items are. A cycle (through the
-  graph's containment, another proposal, or both), a question answered
-  with two
-  verdicts (a conflict) and an answer line outside the answer's schema
-  are refused and counted, never written; `same`, `distinct` and
-  `uncertain` verdicts write nothing. It holds the live-stack lock for
-  the whole stage, its model calls included, and refuses as register
-  and write do (the guard, below). A subscription limit pauses it like
-  any stage: the driver waits, invokes the run again, and the stage
-  applies what it proposed before the pause without asking again. It
-  clears the instance-contents record before its first write, and once
-  it has applied every proposal the record takes the place key. A run
-  invoked `--until write` leaves the write key recorded, not the place
-  key: invoking the same run again goes on where it stopped, and
-  another run resets and writes again. The stages before the write never read this containment:
-  they use only what the manifests assert.
+  that does not parse is rejected and asked once more; one the engine
+  gave in this run is rejected and fails the stage. The questions, the
+  proposals and their counts go in `corpus/places/record.json`, and the
+  raw answers in `corpus/places/responses.json`, both for this reset; a
+  reset removes both. Every containment proposal is applied, with no
+  review CSV, as a `part_of` statement at normal rank, `stated in` each
+  document whose mention record states that containment in the direction
+  written (none for a competing pair's, or for one only stated the other
+  way round), and `inferred from` the stage's run item, `place-hierarchy
+  run <model> <key>`, marked as the write's run items are. A cycle
+  (through the graph's containment, another proposal, or both), a
+  question answered with two verdicts (a conflict) and an answer line
+  outside the answer's schema are refused and counted, never written;
+  `same`, `distinct` and `uncertain` verdicts write nothing. It holds
+  the live-stack lock for the whole stage, its model calls included, and
+  refuses as register and write do (the guard, below). A subscription
+  limit met while the stage asks leaves nothing proposed: the driver
+  waits, invokes the run again, and the stage reads the graph and asks
+  again, the batches already answered coming from the LLM cache. A stage
+  cut short after proposing (Ctrl-C, say) applies the rest of its
+  proposals without asking again. It clears the instance-contents record
+  before its first write, and once it has applied every proposal the
+  record takes the place key. A run invoked `--until write` leaves the
+  write key recorded, not the place key: invoking the same run again
+  goes on where it stopped, and another run resets and writes again. A
+  run whose write failed a document ends complete (exit 0), with the
+  write's and the place stage's attention labels; `yizkr scratch run
+  --resume <run>` invokes it again, which retries the write and then
+  reconciles the places, while the bare command starts a new run. The
+  stages before the write never read this containment: they use only
+  what the manifests assert.
 - **The guard.** Register, write and places each refuse, before they
   write anything, unless the write-phase state names this run and this key,
   and the instance's newest revision and log entry are still those this

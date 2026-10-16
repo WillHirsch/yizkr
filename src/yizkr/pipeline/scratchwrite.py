@@ -87,36 +87,41 @@ state and the live-stack lock, held for the whole stage), over the whole
 of what the write wrote: until the write record says the write is
 complete, the stage does nothing and records nothing, so its proposals
 are never made over part of a write. Once the query service shows the
-write, it reads the graph's places and their containment and the
-unresolved competing place values (yizkr.pipeline.places), gives each
-written place the chains of containers its documents' mention records
-state, with the documents that state each, and asks the adjudicator,
-through the run's LLM cache in the role PLACE_ROLE, the questions the
-worklist derives from them. Its calls are keyed as that role's are, and
-reported to the run's events under the role and stage `places`. The
-prompts name no QID and order their places and questions by what the
-graph and the records say of them, so the same batches ask the same
-prompts after any reset. An answer the cache kept from an earlier
-invocation that does not parse is rejected and asked once more. The
-questions, the parsed proposals, the documents stating each direction
-of each containment asked and the counts go in the stage's record, and
-each batch's raw answer in RESPONSES beside it, for this reset of the
-instance and this place key: an invocation after a pause applies the
-proposals it made, and asks nothing again. Every containment proposal
-is applied, with no review CSV, as a `part_of` statement at normal rank
-with two kinds of reference: `stated in` each document whose record
-states that containment in the direction written, child within parent,
-where one does, and `inferred from` the stage's run item, which records
-the proposing model in its label and is marked as the write's run items
-are. A proposal that would close a cycle (through the graph's
-containment as read, the batch's earlier proposals, or both), a
-question answered with two verdicts, and an answer line outside the
-answer's schema are refused and counted, never written; `same`,
-`distinct` and `uncertain` verdicts are counted and write nothing.
-Before its first write the stage clears the instance-contents record,
-and once it has applied every proposal it records the place key. The
-stages before write never read this containment: they use only what the
-manifests assert.
+write, it reads the graph's places, their containment and descriptions,
+and the unresolved competing place values (yizkr.pipeline.places),
+leaves out a competing pair whose values are not both places (counted as
+`unnamed`), gives each written place the chains of containers its
+documents' mention records state, with the documents that state each,
+and asks the adjudicator, through the run's LLM cache in the role
+PLACE_ROLE, the questions the worklist derives from them. Its calls are
+keyed as that role's are, and reported to the run's events under the
+role and stage `places`. The prompts name no QID and order their places
+and questions by what the graph and the records say of them, namesakes
+by their items' descriptions, so the same batches ask the same prompts
+after any reset. An answer the cache kept from an earlier invocation
+that does not parse is rejected and asked once more; one the engine gave
+in this run is rejected and fails the stage. The questions, the parsed
+proposals, the documents stating each direction of each containment
+asked and the counts go in the stage's record, and each batch's raw
+answer in RESPONSES beside it, both for this reset of the instance and
+this place key; the reset removes both. A subscription limit met while
+the stage asks leaves nothing proposed: the next invocation reads the
+graph and asks again, the batches already answered coming from the LLM
+cache. A stage cut short after proposing applies the rest of its
+proposals without asking again. Every containment proposal is applied,
+with no review CSV, as a `part_of` statement at normal rank with two
+kinds of reference: `stated in` each document whose record states that
+containment in the direction written, child within parent, where one
+does, and `inferred from` the stage's run item, which records the
+proposing model in its label and is marked as the write's run items are.
+A proposal that would close a cycle (through the graph's containment as
+read, the batch's earlier proposals, or both), a question answered with
+two verdicts, and an answer line outside the answer's schema are refused
+and counted, never written; `same`, `distinct` and `uncertain` verdicts
+are counted and write nothing. Before its first write the stage clears
+the instance-contents record, and once it has applied every proposal it
+records the place key. The stages before write never read this
+containment: they use only what the manifests assert.
 
 **site** builds the LAN site (yizkr.staticsite) from the instance into
 the stage's directory of the run, once the query service shows the run
@@ -627,6 +632,7 @@ def run_reset(context: Any) -> list[str]:
     for stage in (REGISTER, WRITE, PLACES, SITE):
         with contextlib.suppress(FileNotFoundError):
             (context.directory.parent / stage / RECORD).unlink()
+    (context.directory.parent / PLACES / RESPONSES).unlink(missing_ok=True)
     # the reset and the state it records under one hold of the lock, so
     # no session that takes the lock writes between them, where the state
     # would take its write for this run's
@@ -985,13 +991,16 @@ def _stated_chains(context: Any, written: dict, places: list[Any]) -> None:
                 by_qid[qid].state(chain, [doc.sha1])
 
 
-def _propose(context: Any, key: str, written: dict, record: dict) -> None:
+def _propose(
+    context: Any, key: str, epoch: str, written: dict, record: dict
+) -> None:
     """Read the graph, ask the adjudicator, and keep what it proposed in
     the record, and its raw answers in RESPONSES. A write that wrote no
     document leaves nothing to read or ask."""
     from yizkr.pipeline import places as hierarchy
 
     places, competing, stated, worklist = [], [], [], []
+    unnamed = 0
     found = hierarchy.Adjudication()
     if written.get("documents"):
         client = client_of(context)
@@ -1002,6 +1011,7 @@ def _propose(context: Any, key: str, written: dict, record: dict) -> None:
             "no place was reconciled",
         )
         places, competing = place_graph(client)
+        competing, unnamed = hierarchy.named_pairs(competing, places)
         _stated_chains(context, written, places)
         stated = hierarchy.stated_parent_candidates(places)
         worklist = hierarchy.build_worklist(places, competing, stated)
@@ -1012,7 +1022,10 @@ def _propose(context: Any, key: str, written: dict, record: dict) -> None:
     context.directory.mkdir(parents=True, exist_ok=True)
     atomic_write_text(
         context.directory / RESPONSES,
-        json.dumps({"key": key, "responses": found.responses}, indent=2)
+        json.dumps(
+            {"key": key, "epoch": epoch, "responses": found.responses},
+            indent=2,
+        )
         + "\n",
     )
     # the documents whose records state each containment asked, by its
@@ -1026,6 +1039,7 @@ def _propose(context: Any, key: str, written: dict, record: dict) -> None:
     record.update(
         parents={place.qid: list(place.parents) for place in places},
         questions=len(worklist),
+        unnamed=unnamed,
         calls=len(found.responses),
         proposals=[
             {
@@ -1073,6 +1087,7 @@ def _counts(record: dict, whys: list[str]) -> dict:
 
     return {
         "questions": record.get("questions", 0),
+        "unnamed": record.get("unnamed", 0),
         "calls": record.get("calls", 0),
         "made": len(record["proposals"]),
         "applied": len(record["applied"]),
@@ -1125,7 +1140,7 @@ def run_places(context: Any) -> list[str]:
         record = _place_record(context, target, epoch)
         record["run_id"] = run_id
         if "proposals" not in record:
-            _propose(context, target, written, record)
+            _propose(context, target, epoch, written, record)
         rows = [
             {**proposal, "decision": "approve"}
             for proposal in record["proposals"]

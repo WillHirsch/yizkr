@@ -208,6 +208,7 @@ def cmd_reconcile_places(args) -> int:
         export_places_csv,
         fetch_competing_pairs,
         fetch_places,
+        named_pairs,
         record_containers,
         stated_parent_candidates,
     )
@@ -245,7 +246,9 @@ def cmd_reconcile_places(args) -> int:
             place.chains.extend(
                 c for c in stated.get(place.qid, ()) if c not in place.chains
             )
-    competing = fetch_competing_pairs(client, config)
+    competing, unnamed = named_pairs(
+        fetch_competing_pairs(client, config), places
+    )
     parents = stated_parent_candidates(places)
     worklist = build_worklist(places, competing, parents)
     print(
@@ -260,11 +263,12 @@ def cmd_reconcile_places(args) -> int:
         return 0
     found = adjudicate(make_client(args.llm), worklist, places)
     rows = export_places_csv(found.proposals, worklist, places, args.out)
-    if found.conflicts or found.rejected:
+    if found.conflicts or found.rejected or unnamed:
         print(
             f"left out: {len(found.conflicts)} question(s) answered with "
             f"two verdicts, {found.rejected} answer line(s) outside the "
-            "answer's schema"
+            f"answer's schema, {unnamed} competing pair(s) whose values "
+            "are not both places"
         )
     print(
         f"wrote {args.out} ({rows} proposals). Fill the 'decision' column, "

@@ -13,12 +13,17 @@ through the graph's `(location|part_of)+` closure — transitive
 elimination between rounds.
 
 Verdicts extend ADR-0007: same | a_within_b | b_within_a | distinct |
-uncertain. The prompt names each place by its label alone, with the
-labels of the places the graph puts it in, and numbers the questions
-of a batch: an answer names its question by that number, never by a
-QID, so the prompt is the same for the same graph whatever QIDs an
-instance gave its items (ADR-0032). The questions are put in an order
-the graph's labels decide, for the same reason.
+uncertain. The prompt names each place by its label, with the labels
+of the places the graph puts it in and the chains of containers its
+records state, and numbers namesakes nothing else tells apart by their
+items' descriptions (place_names); it numbers the questions of a batch,
+and an answer names its question by that number, never by a QID.
+Competing pairs are asked with their places in the order of their
+names, and the questions in an order their scale and text decide, so
+the prompt is the same for the same graph whatever QIDs an instance
+gave its items (ADR-0032). A competing pair whose values are not both
+places of the graph has no name to be asked by, and is left out
+(named_pairs).
 
 The command (`yizkr reconcile-places`) writes only human-approved
 containment rows (`part_of`, referenced to the pass's run item — world
@@ -75,6 +80,9 @@ class PlaceRecord:
     label: str
     aliases: list[str] = field(default_factory=list)
     parents: list[str] = field(default_factory=list)  # existing containment
+    # the item's English description, which the instance keeps unique with
+    # its label, and which the writer makes from the identity map alone
+    description: str = ""
     # each of its mention records' chains of containers, as written,
     # nearest first, in the source's order (ADR-0035 §2.2); never
     # written to the graph
@@ -133,10 +141,15 @@ SELECT ?place ?placeLabel
        (GROUP_CONCAT(DISTINCT ?alias; separator="|") AS ?aliases)
        (GROUP_CONCAT(DISTINCT STRAFTER(STR(?parent), "/entity/");
                       separator="|") AS ?parents)
+       (SAMPLE(?about) AS ?description)
 WHERE {{
   ?place wdt:{instance_of} wd:{place} .
   ?place rdfs:label ?placeLabel . FILTER(LANG(?placeLabel) = "en")
   OPTIONAL {{ ?place skos:altLabel ?alias . FILTER(LANG(?alias) = "en") }}
+  OPTIONAL {{
+    ?place <http://schema.org/description> ?about .
+    FILTER(LANG(?about) = "en")
+  }}
   OPTIONAL {{ ?place (wdt:{part_of}|wdt:{location}) ?parent . }}
 }}
 GROUP BY ?place ?placeLabel
@@ -205,9 +218,26 @@ def fetch_places(client: WikiClient, config: Config) -> list[PlaceRecord]:
                     for p in row.get("parents", {}).get("value", "").split("|")
                     if p
                 ],
+                description=row.get("description", {}).get("value", ""),
             )
         )
     return records
+
+
+def named_pairs(
+    competing: list[Question], places: list[PlaceRecord]
+) -> tuple[list[Question], int]:
+    """The competing pairs whose two values are both places of the graph,
+    and how many others were left out. A value that is no place (an
+    unclassified entity, say) has no name in the prompt, so two such
+    values would be asked by their QIDs' order, which a reset changes."""
+    known = {place.qid for place in places}
+    kept = [
+        question
+        for question in competing
+        if question.qid_a in known and question.qid_b in known
+    ]
+    return kept, len(competing) - len(kept)
 
 
 def fetch_competing_pairs(
@@ -526,8 +556,14 @@ def place_names(places: list[PlaceRecord]) -> dict[str, str]:
     the places the graph puts it in, and the chains of containers its
     records state, each in order, so two places of one name read apart
     where the graph or their records tell them apart. Places whose names
-    still coincide are numbered [1], [2], ... in the order of the
-    documents whose records name them, never of their QIDs."""
+    still coincide are numbered [1], [2], ... in the order of their
+    items' English descriptions, then of the documents whose records
+    name them, never of their QIDs. The instance keeps an item's label
+    and description unique together, and the writer makes a minted
+    item's description from the identity map alone, so items the writer
+    minted are numbered alike after any reset; namesakes with no
+    description and no stating document (curated items, say) are
+    numbered in the order they are given."""
     labels = {place.qid: place.label for place in places}
     names = {}
     for place in places:
@@ -552,8 +588,11 @@ def place_names(places: list[PlaceRecord]) -> dict[str, str]:
         if len(same) < 2:
             continue
         same.sort(
-            key=lambda place: sorted(
-                sha1 for found in place.chain_sources for sha1 in found
+            key=lambda place: (
+                place.description,
+                sorted(
+                    sha1 for found in place.chain_sources for sha1 in found
+                ),
             )
         )
         for number, place in enumerate(same, start=1):
@@ -632,14 +671,18 @@ def adjudicate(
             )
         except ValueError as exc:
             # an answer the LLM cache kept from an earlier invocation is
-            # rejected and asked once more; one the engine gave in this
-            # run fails the batch
+            # rejected and asked once more; an answer the engine gave in
+            # this run is rejected and fails the batch
             if not reject_response(client, response, f"places: {exc}"):
                 raise
             response = client.complete(prompt)
-            parsed = parse_answers(
-                response, chunk, cut_off=at_output_limit(client, response)
-            )
+            try:
+                parsed = parse_answers(
+                    response, chunk, cut_off=at_output_limit(client, response)
+                )
+            except ValueError as again:
+                reject_response(client, response, f"places: {again}")
+                raise
         found.responses.append(response)
         print(
             f"  batch {index}/{len(batches)}: {len(chunk)} questions -> "
@@ -650,15 +693,6 @@ def adjudicate(
         found.rejected += parsed.rejected
         found.conflicts.extend(parsed.conflicts)
     return found
-
-
-def adjudicate_places(
-    client: LlmClient,
-    questions: list[Question],
-    places: list[PlaceRecord],
-    batch_pairs: int = BATCH_PAIRS,
-) -> list[PlaceProposal]:
-    return adjudicate(client, questions, places, batch_pairs).proposals
 
 
 def _number(value) -> bool:
@@ -795,16 +829,22 @@ def plan(
     notes: list[tuple[str, str]] = []
     planned_parents: dict[str, set[str]] = {}
 
-    def reaches(node: str, target: str, seen=None) -> bool:
+    def reaches(node: str, target: str) -> bool:
         """Walking UP the planned edges and the graph's from `node`, do we
-        hit `target`?"""
-        seen = seen or set()
-        if node in seen:
-            return False
-        seen.add(node)
-        for parent in planned_parents.get(node, set()) | set(parents_of(node)):
-            if parent == target or reaches(parent, target, seen):
-                return True
+        hit `target`? Iterative, so a chain of any depth is walked."""
+        seen: set[str] = set()
+        stack = [node]
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            for parent in planned_parents.get(current, set()) | set(
+                parents_of(current)
+            ):
+                if parent == target:
+                    return True
+                stack.append(parent)
         return False
 
     for row in rows:

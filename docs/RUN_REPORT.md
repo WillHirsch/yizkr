@@ -176,7 +176,8 @@ alone, never a document, a QID or a label.
 **Place hierarchy.** Once the run's place stage has run (#201;
 yizkr.pipeline.scratchwrite, ADR-0009), in
 `aggregate.content.place_hierarchy`: the place questions asked and the
-calls they took, the proposals made, those applied, those already in the
+calls they took, the competing pairs left out because their values are
+not both places (`unnamed_pairs_left_out`), the proposals made, those applied, those already in the
 graph, the identity verdicts and the other verdicts (`distinct`,
 `uncertain`) not applied, the answer lines rejected by the answer's
 schema, the proposals refused as cycles and the questions refused as
@@ -349,7 +350,7 @@ never counted as none:
 
 - depicts claims left out, and the write's counts: until the write stage
   has run (above);
-- place-hierarchy proposals: until the place stage has run (below);
+- place-hierarchy proposals: until the place stage has run (above);
 - different-source contradictions: they are read from a written graph;
 - flags by tier and class: no stage makes flags yet. `_flags` in
   `yizkr.pipeline.report` is where the report reads them once the flags

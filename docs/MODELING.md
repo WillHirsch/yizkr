@@ -522,9 +522,11 @@ artifact a new QID, changes neither.
   where one does, and always `inferred from extraction run →` the
   stage's run item, labelled `place-hierarchy run <model> <key>` and
   described as the scratch run's place stage, which carries the three
-  scratch-run marks. A competing pair's containment, or one the
-  adjudicator turned round from what a record states, cites the run item
-  alone. Each write has the edit summary `scratch run: unratified place
+  scratch-run marks. A verdict turned round from one record's statement
+  is still stated in any document that states the direction written; a
+  containment no document states in that direction (a competing pair's,
+  say) cites the run item alone (decision FA, which the owner confirms
+  before the keeper run). Each write has the edit summary `scratch run: unratified place
   containment`. Cycles, conflicting answers and answers outside the
   schema are never written. The stages before the write read no graph
   containment: only what the manifests assert.

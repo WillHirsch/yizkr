@@ -213,6 +213,7 @@ PLACE_STAGE = "places"
 # the counts of the place stage's record, as the report names them
 PLACE_COUNTS = {
     "questions": "questions",
+    "unnamed": "unnamed_pairs_left_out",
     "calls": "calls",
     "made": "proposals_made",
     "applied": "applied",
@@ -3183,7 +3184,9 @@ def _write_sections(content: Mapping[str, Any]) -> list[_Section]:
     else:
         shown = [
             f"{_n(places['questions'])} place questions asked in "
-            f"{_n(places['calls'])} calls; "
+            f"{_n(places['calls'])} calls "
+            f"({_n(places['unnamed_pairs_left_out'])} competing pairs "
+            "left out, their values not both places); "
             f"{_n(places['proposals_made'])} proposals made: "
             f"{_n(places['applied'])} applied, "
             f"{_n(places['already_present'])} already there, "
