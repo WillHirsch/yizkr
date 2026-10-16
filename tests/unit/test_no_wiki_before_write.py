@@ -196,7 +196,7 @@ def tiny_png(caption: str) -> bytes:
 
 
 SHOP_FRONT = tiny_png("synthetic: the shop front at Brunnenring 35")
-PORTRAIT = tiny_png("synthetic: Photograph Brusrich, Peiltal")
+PORTRAIT = tiny_png("synthetic: Photograph Brüsrich, Peiltal")
 FILM = b"synthetic film"
 
 
