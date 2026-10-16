@@ -1198,6 +1198,20 @@ def test_the_record_counts_the_claims_naming_their_own_subjects_item(
 ):
     from tests.fixtures.identity import joined
 
+    extract, letter = run.documents
+    # the letter's batch gains a claim the writer refuses for another
+    # reason: a date of birth of the letter itself
+    misplaced = claim(
+        LETTER,
+        {"kind": "artifact", "sha1": sha1(LETTER)},
+        "date_of_birth",
+        {"type": "time", "year": 1952},
+    )
+    letter.batch.write_text(
+        batch(
+            brothers(LETTER), born(LETTER, 1913), depicts(LETTER), misplaced
+        ).model_dump_json(indent=2)
+    )
     run.past_the_barrier(until="clustering")
     # the map puts Gustav and Leopold in one cluster: the letter's
     # `sibling` claim between them would make the one item its own sibling
@@ -1208,11 +1222,16 @@ def test_the_record_counts_the_claims_naming_their_own_subjects_item(
     monkeypatch.setattr(scratchwrite, "identity_map", lambda _: identity)
     for stage in ("reset", "register", "write"):
         run.stage(stage)
-    extract, letter = run.documents
     record = run.record("write")
     documents = record["documents"]
-    assert documents[letter.sha1]["refused"] == 1
+    # counted apart from the letter's other refusal
+    assert documents[letter.sha1]["refused"] == 2
     assert documents[letter.sha1]["self_references"] == 1
+    assert any(
+        "2 claims refused, 1 of them for an item value that is their "
+        "subject's item;" in line
+        for line in run.lines
+    )
     assert documents[extract.sha1]["self_references"] == 0
     assert not record["failed"]
     (leopold,) = by_label(run.wiki, "Leopold Löbig")
@@ -1221,13 +1240,21 @@ def test_the_record_counts_the_claims_naming_their_own_subjects_item(
     assert len(statements(run.wiki, leopold, "date_of_birth")) == 2
     # the run report counts them apart from extraction's rejects
     content = report._aggregate_content({}, {}, {}, _vocabulary(), record)
-    assert content["write"]["claims_refused"] == 1
+    assert content["write"]["claims_refused"] == 2
     assert content["write"]["claims_self_referencing"] == 1
     (section,) = report._write_sections(content)
     assert (
-        "1 refused, 1 of them for an item value that is their subject's item"
+        "2 refused, 1 of them for an item value that is their subject's item"
         in section.blocks[0][0]
     )
+
+
+def test_a_write_of_no_documents_counts_no_self_references():
+    # a write that wrote no document counted none: 0, never absent
+    record = {"depicts_left_out": 0, "documents": {}}
+    content = report._aggregate_content({}, {}, {}, _vocabulary(), record)
+    assert content["write"]["claims_self_referencing"] == 0
+    assert content["write"]["claims_refused"] == 0
 
 
 def test_a_record_that_does_not_count_self_references_holds_no_figure():

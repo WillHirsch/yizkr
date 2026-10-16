@@ -280,11 +280,11 @@ on one item after validation: a father and a son of one name that
 clustering merges, with a `father` claim between them. A claim whose
 value or qualifier's value is then its subject's item is refused whole,
 nothing of it written, the rest of the batch written; the writer's
-result names it in `refused` and again in `self_references`, and the
-scratch write's record, the run report (`content.write.
-claims_self_referencing`) and the run-to-run diff count these apart from
-the writer's other refusals and from extraction's rejects. (Amended by
-#491, 2026-10-16.)
+result names it in `refused` and again in `self_references`, as `ingest
+run`'s write step record does, and the scratch write's record, the run
+report (`content.write.claims_self_referencing`) and the run-to-run diff
+count these apart from the writer's other refusals and from
+extraction's rejects. (Amended by #491, 2026-10-16.)
 A `time_period` claim from extraction is, for now, a counted reject:
 `time_period` accepts only a period, an entity of `time_period_class`, no
 entity kind offers one and no QID exists before write.

@@ -2157,6 +2157,9 @@ class Orchestrator:
             "type_statements_referenced": result.type_statements_referenced,
             "created_items": result.created_items,
             "refused": result.refused,
+            # of `refused`, the claims whose item value is their subject's
+            # item (yizkr.pipeline.writer.self_references)
+            "self_references": result.self_references,
             "refused_terms": result.refused_terms,
             "approved_claims": len(approved.claims),
         }

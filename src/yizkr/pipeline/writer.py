@@ -154,12 +154,14 @@ Per batch, the writer:
    label, is the warning and `refused` alone (ADR-0010). The plan is made
    of the claims the writer writes, without those refused before it
    (pre_plan_refusals: for their text, or as a misplaced document subject,
-   ADR-0035 §3.4): an entity, such as a media object, that only such claims
-   name is never placed, so it is neither blocked nor flagged. Of a
-   manifest record that only refused claims name, refused before the plan
-   or with an entity the plan blocks, nothing is sent, so none of its
-   aliases or type hint is named in the result's `refused_terms`
-   (_unsent_records);
+   ADR-0035 §3.4), and then without those whose item value the plan finds
+   to be their subject's item (self_references, below), made again each
+   time: an entity, such as a media object, that only such claims name is
+   never placed, so it is neither blocked nor flagged. Of a manifest record
+   that only refused claims name, refused before the plan, with an entity
+   the plan blocks or as naming their subject's item, nothing is sent, so
+   none of its aliases or type hint is named in the result's
+   `refused_terms` (_unsent_records);
 3. writes each claim as a statement at NORMAL rank (the contract has
    no rank field — ADR-0002) with TWO references (ADR-0003):
    * stated in -> artifact, with page number / printed page number /
@@ -245,9 +247,11 @@ claim whose text the instance cannot hold is: nothing of it is written,
 no item only it names is made, the result's `refused` names it and its
 `self_references` names it again, apart from the other refusals, and a
 warning says which of its values names the subject's item. The rest of
-the batch is written. The check reads the items as the plan finds
-them, and is made again each time the plan is made again without the
-claims it refuses, until it refuses no other.
+the batch is written. A claim refused already, for its text or with an
+entity the plan blocks, is counted there and not read again, so each
+refused claim is counted for one reason. The check reads the items as
+the plan finds them, and is made again each time the plan is made again
+without the claims it refuses, until it refuses no other.
 
 Wikibase holds at most TEXT_LIMIT (400) characters in the text of a
 string, external-id or monolingual text value, whether the value is a
@@ -2849,8 +2853,9 @@ class BatchWriter:
         mentions it, as the writer may send them to an item the resolve
         step matched the record to, but for a record of which nothing is
         sent (_unsent_records): the claims that name it by a local ref
-        are all refused, before the plan (pre_plan_refusals) or with an
-        entity the plan blocks."""
+        are all refused, before the plan (pre_plan_refusals), with an
+        entity the plan blocks, or as naming their subject's item
+        (self_references)."""
         named: list[str] = []
         warnings: list[str] = []
 
@@ -2889,8 +2894,9 @@ class BatchWriter:
         """The local ids of the manifest records without an approved
         equivalence that claims of `batch` name by a local ref, but only claims
         at the places `refused`, which the writer refuses, before the plan
-        (pre_plan_refusals: for their text, or as a misplaced document subject)
-        or with an entity the plan blocks (step 2 of the module docstring): no
+        (pre_plan_refusals: for their text, or as a misplaced document
+        subject), with an entity the plan blocks (step 2 of the module
+        docstring), or as naming their subject's item (self_references): no
         item is found or made for such a record, and none of its terms, kind or
         type hint is sent anywhere (_kinds_given). A record counts as written
         only through a local ref to it in a claim the writer writes: one that
@@ -3054,10 +3060,10 @@ class BatchWriter:
         # found before the first write too: the kinds the vocabulary lacks
         # (a manifest record's whatever its claims, and the kind of a ref
         # without a record only when a claim the writer writes mentions it:
-        # all but those refused before the plan and those the plan
-        # refuses), the type hints the instance cannot hold, and the terms
-        # it may keep in another form, each skipped wherever the writer
-        # would record it
+        # all but those refused before the plan, those the plan refuses
+        # and those naming their subject's item), the type hints the
+        # instance cannot hold, and the terms it may keep in another form,
+        # each skipped wherever the writer would record it
         warnings = self._unknown_kinds(batch, refused)
         warnings += [
             *refusals.values(),

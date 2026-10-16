@@ -228,6 +228,32 @@ class TestWriteStepSummary:
             for line in step.lines
         )
 
+    def test_the_claims_naming_their_subjects_item_are_named(self, tmp_path):
+        # the run's map merges the master hatter and his son of one name:
+        # the son's `father` claim and the pet name whose perspective is the
+        # son are refused, named in `refused` and again apart (#491)
+        from tests.unit.test_writer_self_references import (
+            FATHER_CLAIM,
+            MUCKEL_CLAIM,
+            _family_wiki,
+            _history,
+            _merged,
+        )
+
+        history = _history()
+        step = WriteStep(
+            tmp_path, _family_wiki(), "history.txt", identity=_merged()
+        )
+        step.review(history, decide=lambda row: "approve")
+
+        summary = step.write(history)
+
+        loops = [
+            claim_id(history.claims[i]) for i in (FATHER_CLAIM, MUCKEL_CLAIM)
+        ]
+        assert summary["written"] == 2
+        assert summary["refused"] == summary["self_references"] == loops
+
     @pytest.mark.skipif(
         unicodedata.category("\U0001e08f") != "Cn",
         reason="this interpreter's Unicode tables assign U+1E08F",

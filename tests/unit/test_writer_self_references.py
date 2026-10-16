@@ -20,6 +20,7 @@ side; the 1984 family tree's Eugen; and Flörburg.
 from __future__ import annotations
 
 import csv
+import hashlib
 
 import pytest
 
@@ -184,7 +185,9 @@ class TestOneClusterOfTheMap:
         father, muckel = loops
         assert any(
             f"claim {father} (father)" in w
-            and "its value names its subject's item" in w
+            and "its value names its subject's item (its cluster's item in "
+            "the identity map)"
+            in w
             for w in written.warnings
         )
         assert any(
@@ -472,3 +475,188 @@ class TestTheCheck:
 
         assert written.self_references == _ids(batch, FATHER_CLAIM)
         assert written.refused == _ids(batch, FATHER_CLAIM, MUCKEL_CLAIM)
+
+
+# -- the plan made again ------------------------------------------------------
+
+PHOTOGRAPH = "Q93"
+# a scan of the studio portrait, registered under the media object's
+# tagged label
+SCAN_SHA1 = hashlib.sha1(b"fictional scan: the studio portrait").hexdigest()
+OTHER_SCAN_SHA1 = hashlib.sha1(b"fictional scan: its rescan").hexdigest()
+
+
+class PortraitWiki(FamilyWiki):
+    """FamilyWiki, whose vocabulary has `photograph` too."""
+
+    def vocabulary(self):
+        properties, items = super().vocabulary()
+        return properties, {**items, "photograph": PHOTOGRAPH}
+
+
+def _portrait_wiki(*scans: tuple[str, str]) -> PortraitWiki:
+    """The identity-map tests' instance, with a registered scan, an
+    `instance of` photograph with its media SHA-1, under each (label,
+    SHA-1) of `scans`."""
+    from wikibaseintegrator.datatypes import Item, String
+
+    wiki = _wiki()
+    wiki.__class__ = PortraitWiki
+    for label, sha1 in scans:
+        scan = wiki.wbi.item.new()
+        scan.labels.set("en", label)
+        scan.claims.add(
+            Item(prop_nr=PROPERTIES["instance_of"], value=PHOTOGRAPH)
+        )
+        scan.claims.add(String(prop_nr=PROPERTIES["media_sha1"], value=sha1))
+        wiki.media[sha1] = scan.write().id
+    return wiki
+
+
+def _photo(local_id: str) -> dict:
+    return {
+        "id": local_id,
+        "label": EUGEN,
+        "kind": "photograph",
+        "summary": "studio portrait of the master hatter",
+        "mention_lines": [9],
+    }
+
+
+def _portraits(*claims: tuple[str, str, str]) -> ClaimBatch:
+    """The family history's batch of `claims`, each (subject, property,
+    value) by local id, naming the two Eugens, two photographs of the
+    master hatter, the studio portrait and a print of it, each under his
+    name, and the studio, a place."""
+    entities = {
+        record["id"]: record for record in _history().model_dump()["entities"]
+    }
+    entities.update(
+        portrait=_photo("portrait"),
+        print=_photo("print"),
+        studio={
+            "id": "studio",
+            "label": "Atelier Tarle, Flörburg",
+            "kind": "place",
+            "mention_lines": [10],
+        },
+    )
+    named = {ref for claim in claims for ref in (claim[0], claim[2])}
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": RUN,
+            "claims": [
+                {
+                    "subject": _ref(subject),
+                    "property": prop,
+                    "value": {"type": "item", "value": _ref(value)},
+                    "source": SOURCE,
+                }
+                for subject, prop, value in claims
+            ],
+            "entities": [
+                record for key, record in entities.items() if key in named
+            ],
+        }
+    )
+
+
+def _merged_by_kind(batch: ClaimBatch, *kinds: str):
+    """The map of `batch`, with the mentions under EUGEN of each of `kinds`
+    in one cluster of their own, as clustering merges the mentions of one
+    entity and keeps another kind apart."""
+    from yizkr.pipeline.clustering import CONFIDENT, IdentityMap, identity_hash
+    from yizkr.pipeline.fingerprints import canonical_label, cluster_id
+
+    data = mapped(batch).data
+    mentions, clusters = data["mentions"], data["clusters"]
+    for kind in kinds:
+        members = sorted(
+            fingerprint
+            for fingerprint, mention in mentions.items()
+            if mention["label"] == canonical_label(EUGEN)
+            and mention["kind"] == kind
+        )
+        assert len(members) == 2
+        for fingerprint in members:
+            clusters.pop(mentions[fingerprint]["cluster"], None)
+        cid = cluster_id(members)
+        clusters[cid] = {"kind": kind, "method": CONFIDENT, "members": members}
+        for fingerprint in members:
+            mentions[fingerprint].update(cluster=cid, method=CONFIDENT)
+    data["clusters"] = dict(sorted(clusters.items()))
+    data["hash"] = identity_hash(mentions)
+    return IdentityMap(data)
+
+
+def _label(wiki, qid: str) -> str:
+    return str(wiki.wbi.item.get(qid).labels.get("en"))
+
+
+class TestThePlanMadeAgain:
+    def test_a_label_only_a_loop_named_is_free_again(self):
+        # the two Eugens, merged, are named by their loop alone: once it is
+        # refused, the plan made again places no person under his name,
+        # and the portrait takes it rather than its tagged label
+        wiki = _portrait_wiki()
+        batch = _portraits(
+            ("son", "father", "father"), ("portrait", "location", "studio")
+        )
+
+        written = BatchWriter(wiki).write_batch(
+            batch, identity=_merged_by_kind(batch, "human")
+        )
+
+        assert written.self_references == written.refused == _ids(batch, 0)
+        assert written.written == 1
+        assert _label(wiki, written.created_items["portrait"]) == EUGEN
+        assert "son" not in written.created_items
+
+    def test_a_loop_the_plan_made_again_reveals_is_counted(self):
+        # first plan: the merged Eugens take his name, the portrait's tagged
+        # label is a registered scan's, so the portrait is blocked and its
+        # claims stopped. Made again without the Eugens' loop, the portrait
+        # takes his name, and the portrait-print loop shows: refused too,
+        # nothing blocked, nothing flagged
+        wiki = _portrait_wiki((f"{EUGEN} [media object]", SCAN_SHA1))
+        batch = _portraits(
+            ("son", "father", "father"),
+            ("portrait", "location", "print"),
+            ("portrait", "location", "studio"),
+        )
+
+        written = BatchWriter(wiki).write_batch(
+            batch, identity=_merged_by_kind(batch, "human", "photograph")
+        )
+
+        assert written.self_references == _ids(batch, 0, 1)
+        assert written.refused == _ids(batch, 0, 1)
+        assert written.written == 1
+        assert written.flags == []
+        assert not [w for w in written.warnings if "(ADR-0010)" in w]
+        assert _label(wiki, written.created_items["portrait"]) == EUGEN
+
+    def test_a_loop_naming_a_blocked_entity_is_counted_as_blocked(self):
+        # the merged photographs may take neither his name nor its tagged
+        # label, both registered scans': the plan blocks them, and their
+        # loop is refused as blocked, never read as a loop
+        wiki = _portrait_wiki(
+            (EUGEN, SCAN_SHA1), (f"{EUGEN} [media object]", OTHER_SCAN_SHA1)
+        )
+        batch = _portraits(("portrait", "location", "print"))
+
+        written = BatchWriter(wiki).write_batch(
+            batch, identity=_merged_by_kind(batch, "photograph")
+        )
+
+        assert written.refused == _ids(batch, 0)
+        assert written.self_references == []
+        assert written.written == 0
+        (flag,) = written.flags
+        assert (flag.artifact, flag.sha1, flag.others) == (
+            wiki.media[SCAN_SHA1],
+            SCAN_SHA1,
+            (wiki.media[OTHER_SCAN_SHA1],),
+        )
+        assert any("(ADR-0010)" in w for w in written.warnings)
+        assert not [w for w in written.warnings if "subject's item" in w]

@@ -472,7 +472,8 @@ re-running one step in isolation — but for a normal ingest you only ever run
   qualifier's, is its subject's item once the map, an approved
   equivalence or a curator's correction puts both on one item, as
   clustering may merge a father and a son of one name, is refused before
-  the first write and counted apart (docs/MODELING.md; #491). It writes
+  the first write and counted apart (docs/MODELING.md; #491): the step's
+  record names it in `refused` and again in `self_references`. It writes
   each claim
   at normal rank with two references: `stated in → artifact/fragment`
   (with page/region/excerpt locator qualifiers) and `inferred from
