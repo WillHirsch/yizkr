@@ -39,6 +39,7 @@ from tests.unit.test_pdf_pages import (
     document,
     excerpt_of,
     extract,
+    renderer,  # noqa: F401
     run,
     transcription_of,
 )
