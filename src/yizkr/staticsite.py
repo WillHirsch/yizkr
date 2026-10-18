@@ -1003,11 +1003,13 @@ class SiteBuilder:
             '<p class="sub">every dated assertion, labeled by its source — '
             "the same fact from two sources appears twice, on purpose. "
             "Beside a date is the range its source states for it, if any: "
-            "its earliest and latest date, or for a start or end time the "
+            "its earliest and latest date, or for the start or end time a "
+            "statement carries (a marriage, a residence, an occupation) the "
             "bounds of that end, a start running from its earliest date to "
             "its latest start date and an end from its earliest end date to "
-            "its latest date. A date its source gives as circa says so "
-            "there too.</p>",
+            "its latest date. An event's own start or end time, like any "
+            "other date, runs from its earliest date to its latest date. A "
+            "date its source gives as circa says so there too.</p>",
             '<div class="timeline">',
         ]
         current_year = None
@@ -1015,8 +1017,11 @@ class SiteBuilder:
             date = cell(row, "date")
             person = qid_of(row, "person")
             where = f"{person} timeline date"
-            # the header names the date's year, or the decade, century or
-            # millennium a coarser date gives, never a year it does not
+            # the header names the date's year, or a coarser date as
+            # format_time shows it: its decade, century or millennium, or,
+            # coarser than a millennium, its stored year with the span its
+            # precision allows ("1900, to within 10,000 years"), never a
+            # bare stored year
             precision = min(int(cell(row, "precision") or 11), 9)
             year = format_time(date, str(precision), where) if date else "?"
             if year != current_year:
@@ -1048,8 +1053,11 @@ class SiteBuilder:
         display_date, as HTML, so each is escaped. A date its source gives
         a range or a sourcing circumstance (circa) for carries a
         display_date, the date with its range and circumstances as the
-        timeline page shows them, and so does a decade, century or
-        millennium, which TimelineJS would show as its stored year;
+        timeline page shows them, and so does any date coarser than a year,
+        which TimelineJS would show as a bare stored year: it shows as
+        ``format_time`` shows it, its decade, century or millennium, or,
+        coarser than a millennium, its stored year with the span its
+        precision allows ("1900, to within 10,000 years");
         TimelineJS shows any other date from its year, and from its month
         and day when its precision reaches them. A date before the common
         era raises UnsupportedDate, naming its person (ADR-0034), as on the

@@ -718,10 +718,11 @@ artifact a new QID, changes neither.
   circumstances after the range beside each of its dates, as the person
   page does: Cäcilie's birth "c. 1833" per the family tree shows as "1833
   (sourcing circumstances: circa)", never as an exact year. A date coarser
-  than a year shows as its decade, century or millennium in the feed's
-  display date and in the timeline page's header over it, never as the
-  year it is stored as (a 19th century stored as 1801 is headed "19th
-  century").
+  than a year shows in the feed's display date and in the timeline page's
+  header over it as `format_time` shows it: its decade, century or
+  millennium, or, coarser than a millennium, its stored year with the span
+  its precision allows ("1900, to within 10,000 years"), never as a bare
+  stored year (a 19th century stored as 1801 is headed "19th century").
 - Redundant-but-asserted values (e.g. "Alter: 73 Jahre" alongside a death
   date) are kept verbatim as qualifiers (`age at death`), never derived or
   dropped: sources assert them, so the archive records them.

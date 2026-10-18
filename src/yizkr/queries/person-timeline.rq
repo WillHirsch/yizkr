@@ -24,8 +24,9 @@
 # end date; its row names the time beside the event's type
 # ("imprisonment (start time)"), and its point in time's row the type
 # alone. ?circumstances holds the statement's sourcing circumstances
-# (circa), each label URI-encoded and "|"-separated: circa qualifies the
-# whole statement, so each of its rows carries it (docs/MODELING.md).
+# (circa), each by its English label (its id when it has none),
+# URI-encoded and "|"-separated: circa qualifies the whole statement, so
+# each of its rows carries it (docs/MODELING.md).
 # For a single person, append e.g.: FILTER(?person = wd:Q26)
 #defaultView:Timeline
 SELECT DISTINCT ?person ?personLabel ?what ?date ?precision

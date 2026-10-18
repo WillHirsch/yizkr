@@ -67,11 +67,11 @@ uv run yizkr publish-queries             # or: make publish-queries
   ("1946 (earliest date: 1946; latest start date: 1947)"). Each row also
   carries its statement's sourcing circumstances (`?circumstances`: circa
   qualifies the whole statement, so its start and end rows both carry
-  it), folded into one cell, each label URI-encoded and `|`-separated, so
-  that a second value adds no row; the site shows them after the range
-  ("1833 (sourcing circumstances: circa)"). Rendered and URL-encoded, it
-  is about 11.5 KB, more than the query service accepts in
-  a GET request line, so a client sends it by POST, as the site and the
+  it), folded into one cell, each by its English label (its id when it
+  has none), URI-encoded and `|`-separated, so that a second value adds
+  no row; the site shows them after the range ("1833 (sourcing
+  circumstances: circa)"). Rendered and URL-encoded, it is about 11.5 KB,
+  more than the query service accepts in a GET request line, so a client sends it by POST, as the site and the
   live tests do.
 - **kinship** — how each person is related to a subject, derived from
   the kinship primitives and gendered by the relative's `sex_or_gender`

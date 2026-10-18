@@ -260,7 +260,14 @@ class TestThePersonTimeline:
     def test_an_events_start_and_end_name_the_time_beside_its_type(self, q):
         # "imprisonment (start time)", and its point in time the bare type
         arm = event_arm(q)
-        assert "?dated rdfs:label ?claimName ." in arm
+        assert (
+            "?eventType rdfs:label ?typeName .\n"
+            '    FILTER(LANG(?typeName) = "en")'
+        ) in arm
+        assert (
+            "?dated rdfs:label ?claimName .\n"
+            '    FILTER(LANG(?claimName) = "en")'
+        ) in arm
         assert (
             "BIND(IF(?dated = wd:{P:point_in_time}, ?typeName,\n"
             '            CONCAT(?typeName, " (", ?claimName, ")"))\n'
@@ -272,14 +279,28 @@ class TestThePersonTimeline:
         # the UNION, where every arm has bound ?st; folded, a second
         # circumstance adds no row to the SELECT DISTINCT
         after = q[q.index("# the date at its stated precision") :]
-        fold = group_at(after, "?st pq:{P:sourcing_circumstances}")
-        assert "GROUP BY ?st" in after
-        assert "?st pq:{P:sourcing_circumstances} ?circumstance ." in fold
         assert (
-            "SELECT ?st (GROUP_CONCAT(DISTINCT ?circumstanceCell; "
-            'separator="|")'
+            "  OPTIONAL {\n"
+            "    SELECT ?st (GROUP_CONCAT(DISTINCT ?circumstanceCell; "
+            'separator="|")\n'
+            "                AS ?circumstances)\n"
+            "    WHERE {\n"
+            "      ?st pq:{P:sourcing_circumstances} ?circumstance .\n"
+            "      OPTIONAL { ?circumstance rdfs:label ?circumstanceName .\n"
+            '                 FILTER(LANG(?circumstanceName) = "en") }\n'
+            "      BIND(ENCODE_FOR_URI(COALESCE(?circumstanceName,\n"
+            "                                   REPLACE(STR(?circumstance), "
+            '"^.*/", "")))\n'
+            "           AS ?circumstanceCell)\n"
+            "    }\n"
+            "    GROUP BY ?st\n"
+            "  }\n"
         ) in after
-        assert "ENCODE_FOR_URI(COALESCE(?circumstanceName," in after
+        # nothing from the fold on asks which date a row is, so a
+        # statement's start and end rows carry the same cell
+        fold_on = q[q.index("# the statement's sourcing circumstances") :]
+        assert "?dated" not in fold_on
+        assert q.count("AS ?circumstances)") == 1
 
     def test_a_point_in_time_beside_a_start_or_end_takes_no_range(self, q):
         ranged = q[q.index("BIND(?dated") : q.index("AS ?ranged)")]
