@@ -901,6 +901,17 @@ class TestPrincipalsByEvent:
             participant_rows("Q323", "death", [("Q324", [], "DeprecatedRank")])
         )["death"] == {"Q323": set()}
 
+    def test_a_death_counts_only_at_the_best_rank(self):
+        rows = participant_rows(
+            "Q320",
+            "death",
+            [
+                ("Q321", ["principal"]),
+                ("Q322", ["informant"], "PreferredRank"),
+            ],
+        )
+        assert principals_by_event(rows)["death"] == {"Q320": set()}
+
     def test_a_row_per_role_gives_the_statement_every_role(self):
         rows = participant_rows(
             "Q320", "death", [("Q321", ["principal", "witness"])]
