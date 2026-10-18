@@ -209,12 +209,13 @@
   prompt/pipeline version, software commit)
 
 **Manifest descriptions are extraction-prompt surface**, not only
-documentation. Every property and item in `src/yizkr/model/manifest.yaml` carries
-a description, and the extractor is shown it verbatim beside the key: a
-property's description is what tells the model which way a relation
-points (`employer` takes the organization, not the employee) and what
-kind of entity the value must be (`location` takes a place). Write them
-for that reader as well as for a human.
+documentation. Every property and item in
+`src/yizkr/model/manifest.yaml` carries a description, and the
+extractor is shown it verbatim beside the key: a property's
+description is what tells the model which way a relation points
+(`employer` takes the organization, not the employee) and what kind of
+entity the value must be (`location` takes a place). Write them for
+that reader as well as for a human.
 
 Items flagged **`entity_kind: true`** are the kinds the extractor may
 type a document-mentioned entity as (the ADR-0007 manifest pass), and
@@ -1090,9 +1091,9 @@ primitive network and the *same* term set describes any pair:
 - **A derivation calculus (query/frontend layer — NOT vocabulary):**
   second-order relations (grandparent, aunt/uncle, cousin, in-law) are
   property PATHS over the primitives, mapped to a shared gendered term
-  set. See `queries/kinship.rq`; the full pairwise calculus with degrees
-  (great-, once-removed, half-) is a frontend build over the same
-  primitives. Never store a derivable relation.
+  set. See `src/yizkr/queries/kinship.rq`; the full pairwise calculus
+  with degrees (great-, once-removed, half-) is a frontend build over
+  the same primitives. Never store a derivable relation.
 - **A source-asserted compound fallback:** `relative` (P1038) with a
   verbatim `kinship_type` qualifier holds a compound relation a source
   states but that primitives cannot yet capture unambiguously ("maternal
@@ -1255,13 +1256,13 @@ dating below is the convention its readers still interpret:
 
 The disagreement report compares a residence's or a spouse's start and
 end times, each through its own range ("Contradictions" below); the
-person timeline (`queries/person-timeline.rq`) lists each start, end and
-point in time with the range stated for it, which the static site's
-timeline page and feed show beside the date, each bound under its
-qualifier's label ("1946 (earliest date: 1946; latest start date:
-1947)"); and the extraction prompts give the extractor this convention
-for residences and other periods, and date a marriage by its wedding and
-end events instead.
+person timeline (`src/yizkr/queries/person-timeline.rq`) lists each
+start, end and point in time with the range stated for it, which the
+static site's timeline page and feed show beside the date, each bound
+under its qualifier's label ("1946 (earliest date: 1946; latest start
+date: 1947)"); and the extraction prompts give the extractor this
+convention for residences and other periods, and date a marriage by its
+wedding and end events instead.
 
 ## Persecution and displacement as events (see ADR-0014)
 

@@ -763,8 +763,9 @@ structural in the schema:
   19th as 1801), and a century given by any other year is refused.
 
 Properties and vocabulary items are referenced by **manifest key**
-(`spouse`, `circa` — see `src/yizkr/model/manifest.yaml`), never by local P/Q id:
-ids are per-instance and only the writer resolves them, at write time.
+(`spouse`, `circa` — see `src/yizkr/model/manifest.yaml`), never by
+local P/Q id: ids are per-instance and only the writer resolves them,
+at write time.
 
 ```sh
 uv run yizkr claims --json-schema           # JSON Schema, used in LLM prompts

@@ -67,7 +67,7 @@ under so the baked concept URIs match — see Restore). Then:
 
 ```sh
 make up-local                 # stack up; hostnames resolve in-network
-make cli ARGS="smoke-test"     # then bootstrap, backup, publish-site, ...
+make cli ARGS="smoke-test"     # then bootstrap, publish-site, ...
 make cli ARGS="bootstrap"
 ```
 
@@ -203,8 +203,10 @@ in `docker-compose.https.yml` to avoid rate limits.
   (data lives in named volumes and survives `down`)
 - **Upgrades:** images are pinned to major versions (`wikibase:7`,
   `wdqs:2`, ...). Before upgrading majors, read the upstream release
-  notes — MediaWiki upgrades can require `update.php` runs. Take a
-  backup first (`yizkr backup`, below).
+  notes — MediaWiki upgrades can require `update.php` runs. From the
+  kept-state stage on, take a backup first (`yizkr backup`, below). In
+  the development stage, take none: a scratch graph is never backed up
+  (ADR-0025 §1), and the next scratch run regenerates it.
 - **Generated config:** first boot writes `config/LocalSettings.php`,
   `config/wdqs-frontend-config.json`, and `config/wikibase-php.ini`
   (all gitignored). Local settings tweaks go in
@@ -330,8 +332,10 @@ policy by stage"); each move to a later stage is an owner decision:
 
 - *Development stage* (whole-corpus scratch runs, ADR-0025): no routine
   backups. The graph and run state are regenerated rather than restored;
-  take a one-off backup only where a decision asks for one (for example a
-  stack recovery, docs/runbooks/stack-recovery.md).
+  take a one-off backup only where a decision asks for one (as the
+  archive-and-reset decision did at the first stack recovery, #16,
+  docs/runbooks/stack-recovery.md), and never of a scratch graph
+  (ADR-0025 §1).
 - *Kept-state stage* (from the keeper run, #159): a backup at each
   milestone close.
 - *Production-curation stage* (a production instance used for bulk human
@@ -413,6 +417,7 @@ replayed; a full reload needs an RDF dump import):
 
 ```sh
 docker compose stop wdqs wdqs-updater
+docker compose rm -f wdqs wdqs-updater   # stopped containers pin the volume
 docker volume rm yizkr-wikibase_wdqs-data
 docker compose up -d
 ```

@@ -8,9 +8,9 @@ sources contradict each other.
 
 **Status:** development by whole-corpus scratch runs (ADR-0025): each
 run resets the one instance, runs the pipeline over the whole corpus
-unattended and is judged by its report and its diff against the last
-run, until the owner declares a keeper run. The plan lives in GitHub
-issues and the Project (ADR-0024).
+unattended and is judged by its report and its diff against the latest
+completed run on main, until the owner declares a keeper run. The plan
+lives in GitHub issues and the Project (ADR-0024).
 
 Start here:
 - `CLAUDE.md` – standing instructions for AI-assisted development
@@ -35,7 +35,8 @@ Start here:
 - `deploy/` – Wikibase Suite deployment (Docker Compose + runbook)
 - `docs/runbooks/stack-recovery.md` – recovering a stopped or crashed
   stack: volume archives first, then the database, the full stack, the
-  derived indexes, a smoke test and a one-off backup
+  derived indexes and a smoke test, and a backup only where the stage
+  or a decision asks for one
 - `src/yizkr/` – the tooling package: model manifest + bootstrap
   (`model/`), the claim JSON contract (`claims.py`), the ingestion
   pipeline (`pipeline/`), and the SPARQL query library (`queries/`)
