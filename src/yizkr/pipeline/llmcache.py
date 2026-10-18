@@ -757,13 +757,22 @@ class EngineCache:
         the one moved aside: one that is not `response` goes back, unless
         the key has since been given another, in which case it is kept
         aside as replaced. The next call under the key goes to the
-        engine. Returns whether `response` was moved aside."""
+        engine. Returns whether `response` was moved aside. An entry in a
+        key folder this user cannot write in, which a hit may still be
+        served from, cannot be moved: that is refused (CacheRefused,
+        check_storable), and the entry stays where it is."""
         path = self.path(key)
         held = path.with_name(f".{path.name}.{uuid.uuid4().hex}.rejecting")
         try:
             os.rename(path, held)
         except FileNotFoundError:
             return False
+        except PermissionError:
+            # a hit served from a key folder this user cannot write in is
+            # refused as a miss under it is (check_storable): the entry
+            # stays where it is, and the pass pauses
+            self.check_storable(key)
+            raise
         entry = _read(held, key)
         if entry is not None and entry["response"] == response:
             rejection = {"at": _now(), "reason": reason}
@@ -1035,14 +1044,13 @@ class CacheAsIs(EngineCache):
     though nothing is stored here: the estimate stops where the run would
     pause. A kept session is given by its files' names, without their
     bytes: whether they can resume a conversation is all a reader of it
-    asks. A kept session is read
-    through its folder, opened once, so a process that replaces it
-    meanwhile (keep_session: the folder found there renamed aside, the new
-    one renamed in) never tears the listing; and where that replacement
-    leaves the answer's path with no folder, between its two renames, the
-    session is read from the folder kept aside. So a session kept for an
-    answer is read whole however a keep of it falls against the read
-    (kept_session)."""
+    asks. A kept session is read through its folder, opened once, so a
+    process that replaces it meanwhile (keep_session: the folder found
+    there renamed aside, the new one renamed in) never tears the listing;
+    and where that replacement leaves the answer's path with no folder,
+    between its two renames, the session is read from the folder kept
+    aside. So a session kept for an answer is read whole however a keep
+    of it falls against the read (kept_session)."""
 
     def __init__(
         self,

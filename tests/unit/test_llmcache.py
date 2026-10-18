@@ -253,6 +253,12 @@ class AnswerKeepingEngine(Engine):
         return session
 
 
+def at_the_limit(kind, prompt, opening):
+    """A scripted model that gives up on every call at its output
+    limit."""
+    raise OutputLimitReached()
+
+
 def made_on(fork: str) -> str:
     """The opening answer an AnswerKeepingEngine fork was made on."""
     return re.search(r"made on \[(.*)\]$", fork).group(1)
@@ -945,8 +951,15 @@ class TestTheCacheFolder:
         shard = cache.path(caching.complete_key("Read it.")).parent
         private_folder(shard, 0o755)
         assert caching.complete("Read it.") == ".ti daeR"
-        other = ("00" if shard.name != "00" else "11") + "0" * 62
-        cache.put(other, {"key": other, "response": "another answer"})
+        # a miss whose key folder is not there yet: the cache checks the
+        # root through the link that names it, and makes the folder
+        elsewhere = next(
+            prompt
+            for prompt in (f"Read part {n}." for n in range(100_000))
+            if caching.complete_key(prompt)[:2] != shard.name
+        )
+        other = caching.complete(elsewhere).key
+        assert (root / other[:2] / f"{other}.json").is_file()
         assert mode_of(root / other[:2]) == 0o700
         assert mode_of(root) == 0o1700
         assert mode_of(shard) == 0o755
@@ -1148,6 +1161,21 @@ class TestTheCacheFolder:
         assert engine.calls == []
         assert folder.read_text() == ""
 
+    def test_a_key_folder_that_links_to_nothing_is_refused(self, tmp_path):
+        engine = Engine()
+        caching = client(tmp_path, engine)
+        folder = caching.cache.path(caching.complete_key("Read it.")).parent
+        folder.symlink_to(tmp_path / "nowhere", target_is_directory=True)
+        with pytest.raises(CacheRefused) as refused:
+            caching.complete("Read it.")
+        message = str(refused.value)
+        assert message.startswith(
+            f"the LLM cache cannot store an answer in {folder}: [Errno "
+        )
+        assert "\n" not in message
+        assert engine.calls == []
+        assert folder.is_symlink() and not folder.exists()
+
     def test_a_replay_it_cannot_store_is_refused(self, tmp_path):
         """A fork whose conversation must be replayed stores a replay that
         answers differently under the opening turn's key: where the
@@ -1177,6 +1205,199 @@ class TestTheCacheFolder:
         finally:
             folder.chmod(0o700)
         assert engine.calls == []
+
+    def test_an_opening_turn_it_cannot_store_is_refused(self, tmp_path):
+        run = RunDir(tmp_path / "run")
+        engine = Engine(conversation_answers)
+        caching = client(tmp_path, engine, run=run)
+        key = call_key(caching.components(OPEN, "the document"))
+        folder = private_folder(caching.cache.path(key).parent, 0o500)
+        try:
+            if os.access(folder, os.W_OK | os.X_OK):
+                pytest.skip("this user writes to any folder")
+            with pytest.raises(CacheRefused, match=re.escape(str(folder))):
+                caching.open_conversation("the document")
+            assert mode_of(folder) == 0o500
+        finally:
+            folder.chmod(0o700)
+        assert engine.calls == []
+        assert events(run, "cache-miss") == []
+
+    def test_a_fork_it_cannot_store_is_refused(self, tmp_path):
+        run = RunDir(tmp_path / "run")
+        engine = Engine(conversation_answers)
+        caching = client(tmp_path, engine, run=run)
+        opening, handle = caching.open_conversation("the document")
+
+        def fork_key(prompt):
+            return call_key(
+                caching.components(
+                    FORK,
+                    prompt,
+                    parent=handle.chain,
+                    opening=handle.opening_sha256,
+                )
+            )
+
+        prompt = next(
+            prompt
+            for prompt in (f"c{n}" for n in range(1, 100_000))
+            if fork_key(prompt)[:2] != opening.key[:2]
+        )
+        folder = private_folder(
+            caching.cache.path(fork_key(prompt)).parent, 0o500
+        )
+        try:
+            if os.access(folder, os.W_OK | os.X_OK):
+                pytest.skip("this user writes to any folder")
+            with pytest.raises(CacheRefused, match=re.escape(str(folder))):
+                caching.fork(handle, prompt)
+            assert mode_of(folder) == 0o500
+        finally:
+            folder.chmod(0o700)
+        assert kinds(engine) == [OPEN]
+        assert [e["call"] for e in events(run, "cache-miss")] == [OPEN]
+
+    def test_an_attempt_it_cannot_store_is_refused(self, tmp_path):
+        """An attempt's give-up at the output limit is stored, so it is
+        refused before the engine is asked, not raised as the give-up."""
+        engine = Engine(at_the_limit)
+        attempt = for_attempt(client(tmp_path, engine), 1)
+        folder = attempt.cache.path(attempt.complete_key("Read it.")).parent
+        private_folder(folder, 0o500)
+        try:
+            if os.access(folder, os.W_OK | os.X_OK):
+                pytest.skip("this user writes to any folder")
+            with pytest.raises(CacheRefused, match=re.escape(str(folder))):
+                attempt.complete("Read it.")
+            assert mode_of(folder) == 0o500
+        finally:
+            folder.chmod(0o700)
+        assert engine.calls == []
+
+    def test_a_rejected_miss_it_cannot_store_is_refused(self, tmp_path):
+        first = client(tmp_path, Engine())
+        response = first.complete("Read it.")
+        llm.reject_response(first, response, "failed the check")
+        folder = entry_path(tmp_path, response.key).parent
+        (aside,) = first.cache.rejected(response.key)
+        kept = aside.read_bytes()
+        engine = Engine()
+        caching = client(tmp_path, engine)
+        folder.chmod(0o500)
+        try:
+            if os.access(folder, os.W_OK | os.X_OK):
+                pytest.skip("this user writes to any folder")
+            with pytest.raises(CacheRefused, match=re.escape(str(folder))):
+                caching.complete("Read it.")
+            assert mode_of(folder) == 0o500
+        finally:
+            folder.chmod(0o700)
+        assert engine.calls == []
+        assert first.cache.rejected(response.key) == [aside]
+        assert aside.read_bytes() == kept
+
+    def test_a_give_up_kept_in_a_closed_folder_is_still_given_up(
+        self, tmp_path
+    ):
+        """A kept give-up is a hit: under a closed folder it still raises
+        OutputLimitReached, without the engine."""
+        attempt = for_attempt(client(tmp_path, Engine(at_the_limit)), 1)
+        with pytest.raises(OutputLimitReached):
+            attempt.complete("Read it.")
+        folder = attempt.cache.path(attempt.complete_key("Read it.")).parent
+        folder.chmod(0o500)
+        try:
+            again = for_attempt(client(tmp_path, Refusing()), 1)
+            with pytest.raises(OutputLimitReached):
+                again.complete("Read it.")
+        finally:
+            folder.chmod(0o700)
+
+    def test_a_fork_that_resumes_is_not_refused_for_its_opening_folder(
+        self, tmp_path
+    ):
+        """A fork that resumes its conversation from the session kept
+        under the opening turn stores nothing there: a closed opening
+        folder does not refuse it."""
+        first = client(tmp_path, ResumableEngine(conversation_answers))
+        _, handle = first.open_conversation("the document")
+        first.fork(handle, "c1")
+        engine = ResumableEngine(conversation_answers)
+        caching = client(tmp_path, engine)
+        opening, handle = caching.open_conversation("the document")
+
+        def fork_key(prompt):
+            return call_key(
+                caching.components(
+                    FORK,
+                    prompt,
+                    parent=handle.chain,
+                    opening=handle.opening_sha256,
+                )
+            )
+
+        prompt = next(
+            prompt
+            for prompt in (f"c{n}" for n in range(2, 100_000))
+            if fork_key(prompt)[:2] != opening.key[:2]
+        )
+        folder = entry_path(tmp_path, opening.key).parent
+        folder.chmod(0o500)
+        try:
+            if os.access(folder, os.W_OK | os.X_OK):
+                pytest.skip("this user writes to any folder")
+            answer = caching.fork(handle, prompt)
+            assert mode_of(folder) == 0o500
+        finally:
+            folder.chmod(0o700)
+        assert answer == f"fork:{prompt} after the document"
+        assert kinds(engine) == [FORK]
+        assert len(engine.resumed) == 1
+        assert caching.cache.get(fork_key(prompt))["response"] == answer
+
+    def test_a_key_folder_it_can_write_in_and_pass_through_is_not_refused(
+        self, tmp_path
+    ):
+        """A folder this user can write in and pass through, though not
+        list, holds an answer: only those two rights are checked."""
+        engine = Engine()
+        caching = client(tmp_path, engine)
+        key = caching.complete_key("Read it.")
+        folder = private_folder(caching.cache.path(key).parent, 0o300)
+        try:
+            if os.access(folder, os.R_OK):
+                pytest.skip("this user reads any folder")
+            assert caching.complete("Read it.") == "Read it."[::-1]
+            assert entry_path(tmp_path, key).is_file()
+            assert mode_of(folder) == 0o300
+        finally:
+            folder.chmod(0o700)
+        assert kinds(engine) == [COMPLETE]
+
+    def test_a_hit_it_cannot_move_aside_is_refused(self, tmp_path):
+        """A hit is served from a closed folder, but its rejection cannot
+        move it aside: it is refused, as a miss there is, and the entry
+        stays as it was."""
+        first = client(tmp_path, Engine()).complete("Read it.")
+        path = entry_path(tmp_path, first.key)
+        before = path.read_bytes()
+        folder = path.parent
+        caching = client(tmp_path, Refusing())
+        folder.chmod(0o500)
+        try:
+            if os.access(folder, os.W_OK | os.X_OK):
+                pytest.skip("this user writes to any folder")
+            response = caching.complete("Read it.")
+            assert response.hit
+            with pytest.raises(CacheRefused, match="chmod u\\+rwx") as refused:
+                llm.reject_response(caching, response, "failed the check")
+            assert isinstance(refused.value, PassPaused)
+            assert mode_of(folder) == 0o500
+        finally:
+            folder.chmod(0o700)
+        assert os.listdir(folder) == [path.name]
+        assert path.read_bytes() == before
 
     def test_the_read_only_view_refuses_where_the_run_would(self, tmp_path):
         """The estimate's view of the cache stores nothing, but refuses a
@@ -3163,14 +3384,14 @@ class TestThePipeline:
         engine is never asked, and the folders keep their mode (#341)."""
         folder = folder_of_three(tmp_path)
         cache = private_folder(tmp_path / "cache")
-        folders = [cache / f"{n:02x}" for n in range(256)]
-        for key_folder in folders:
-            private_folder(key_folder, 0o500)
         engine = Engine(pipeline_answers)
         orchestrator = CachedRun(
             folder, tmp_path / "state", engine=engine, cache_dir=cache,
             log=quiet,
         )  # fmt: skip
+        folders = [cache / f"{n:02x}" for n in range(256)]
+        for key_folder in folders:
+            private_folder(key_folder, 0o500)
         try:
             if os.access(folders[0], os.W_OK):
                 pytest.skip("this user writes to any folder")
