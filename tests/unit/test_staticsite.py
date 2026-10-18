@@ -40,10 +40,11 @@ from yizkr import disagreement
 from yizkr.backup import exclusion_report
 from yizkr.core import sparql
 from yizkr.core.config import Config
+from yizkr.core.dates import UnsupportedDate
 from yizkr.core.privacy import BIRTHS_QUERY, family_type, people_selection
 from yizkr.model.schema import read_manifest_data
 from yizkr.queries.publish import load_templates, prefix_block
-from yizkr.staticsite import SiteBuilder, format_time
+from yizkr.staticsite import SiteBuilder, format_time, ordinal
 
 
 @pytest.fixture(scope="module")
@@ -197,6 +198,25 @@ def property_id(key: str) -> str:
     return f"P{list(raw['properties']).index(key) + 1}"
 
 
+def qualifier_cells(*qualifiers: tuple[str, str, str]) -> str:
+    """Qualifiers as STATEMENTS_QUERY gives them (staticsite.QUALIFIER_CELL):
+    each (manifest key, value, precision) a cell of the property's id, its
+    label and the value, percent-encoded as ENCODE_FOR_URI encodes them, and
+    the precision ("" for a value that is not a time), "|"-separated."""
+    labels = disagreement.property_labels()
+    return "|".join(
+        " ".join(
+            (
+                property_id(key),
+                urllib.parse.quote(labels[key], safe=""),
+                urllib.parse.quote(value, safe=""),
+                precision,
+            )
+        )
+        for key, value, precision in qualifiers
+    )
+
+
 STATEMENTS = [
     {
         "person": uri("Q7"),
@@ -206,7 +226,7 @@ STATEMENTS = [
         "value": time_literal("+1909-03-16T00:00:00Z"),
         "precision": literal("11"),
         "sources": literal("Q23~burial register"),
-        "qualifierTexts": literal(""),
+        "qualifierCells": literal(""),
     },
     {
         "person": uri("Q7"),
@@ -216,7 +236,7 @@ STATEMENTS = [
         "value": time_literal("+1909-01-01T00:00:00Z"),
         "precision": literal("9"),
         "sources": literal("Q29~gravestone photograph"),
-        "qualifierTexts": literal(""),
+        "qualifierCells": literal(""),
     },
     {
         "person": uri("Q7"),
@@ -226,7 +246,9 @@ STATEMENTS = [
         "value": uri("Q9"),
         "valueLabel": literal("Cäcilie Löbig"),
         "sources": literal("Q23~burial register|Q31~family tree"),
-        "qualifierTexts": literal("start time: 1859"),
+        "qualifierCells": literal(
+            qualifier_cells(("start_time", "1859-01-01T00:00:00Z", "9"))
+        ),
     },
     {
         "person": uri("Q7"),
@@ -236,7 +258,7 @@ STATEMENTS = [
         "value": uri("Q1"),
         "valueLabel": literal("human"),
         "sources": literal("Q23~burial register"),
-        "qualifierTexts": literal(""),
+        "qualifierCells": literal(""),
     },
 ]
 
@@ -261,14 +283,26 @@ ARTIFACTS = [
     }
 ]
 
+
+def excerpt(text: str, language: str = "de") -> dict:
+    """A transcription excerpt as the query service gives a monolingual
+    text."""
+    return {"type": "literal", "value": text, "xml:lang": language}
+
+
 ASSERTIONS = [
     {
         "artifact": uri("Q23"),
+        "source": uri("Q23"),
+        "st": uri("s1"),
+        "reference": uri("r1"),
         "subject": uri("Q7"),
         "subjectLabel": literal("Eugen Löbig"),
         "propLabel": literal("date of death"),
         "value": time_literal("+1909-03-16T00:00:00Z"),
         "precision": literal("11"),
+        "page": literal("4"),
+        "excerpt": excerpt("gestorben am 16. März 1909"),
     }
 ]
 
@@ -415,12 +449,12 @@ EUGENS_BIRTH = birth_rows("Q7", [(("1836-01-01T00:00:00Z", 9), [], [])])
 RESPONSES = {
     "GROUP_CONCAT(DISTINCT ?alias": PEOPLE,
     'BIND("value" AS ?bound)': EUGENS_BIRTH,  # the privacy module's births
-    "GROUP_CONCAT(DISTINCT ?qualifierText": STATEMENTS,
+    "GROUP_CONCAT(DISTINCT ?sourceLabel": STATEMENTS,
     'date of birth"@en': TIMELINE,  # person-timeline UNION arm marker
     "Special:FilePath": GALLERY,  # photo-gallery builds this URL
     "?kind wdt:": ARTIFACTS,  # artifacts query walks the subclass path
-    # assertions query (not the disagreement report's ?statement)
-    "?st prov:wasDerivedFrom/pr:": ASSERTIONS,
+    # the assertions query, the one query that reads a printed page number
+    "?printedPage": ASSERTIONS,
     # the disagreement report's statements and the recorded containment
     "wikibase:rank ?rank": FETCHED,
     "?item ?link ?target": CONTAINED,
@@ -471,7 +505,7 @@ class TestPersonPage:
         site, _ = build(
             tmp_path,
             vocabulary,
-            {**RESPONSES, "GROUP_CONCAT(DISTINCT ?qualifierText": statements},
+            {**RESPONSES, "GROUP_CONCAT(DISTINCT ?sourceLabel": statements},
         )
         text = (site / "people/Q7.html").read_text()
         assert "ist ein" not in text
@@ -485,6 +519,115 @@ class TestPersonPage:
 
         assert "SELECT ?person ?prop ?propLabel" in STATEMENTS_QUERY
         assert "GROUP BY ?person ?prop ?propLabel" in STATEMENTS_QUERY
+
+    def qualified(self, tmp_path, vocabulary, cells: str) -> str:
+        """Q7's page when its first death statement carries `cells`; the
+        statement's qualifier text, unescaped."""
+        statements = [
+            {**STATEMENTS[0], "qualifierCells": literal(cells)},
+            *STATEMENTS[1:],
+        ]
+        site, _ = build(
+            tmp_path,
+            vocabulary,
+            {**RESPONSES, "GROUP_CONCAT(DISTINCT ?sourceLabel": statements},
+        )
+        (entry,) = [
+            dd
+            for dd in re.findall(
+                r"<dd>(.*?)</dd>", (site / "people/Q7.html").read_text()
+            )
+            if dd.startswith("1909-03-16")
+        ]
+        (shown,) = re.findall(
+            r'<span class="qualifiers">\((.*?)\)</span>', entry
+        )
+        return html.unescape(shown)
+
+    @pytest.mark.parametrize(
+        ("value", "precision", "shown"),
+        [
+            # each at its own precision, never cut to its first year (#317)
+            ("1890-01-01T00:00:00Z", "8", "1890s"),
+            ("1801-01-01T00:00:00Z", "7", "19th century"),
+            ("1900-01-01T00:00:00Z", "7", "19th century"),
+            ("2001-01-01T00:00:00Z", "7", "21st century"),
+            ("1001-01-01T00:00:00Z", "6", "2nd millennium"),
+            ("1908-01-01T00:00:00Z", "9", "1908"),
+            ("1909-03-01T00:00:00Z", "10", "1909-03"),
+            ("1909-03-14T00:00:00Z", "11", "1909-03-14"),
+        ],
+    )
+    def test_a_time_qualifier_shows_at_its_own_precision(
+        self, tmp_path, vocabulary, value, precision, shown
+    ):
+        cells = qualifier_cells(("earliest_date", value, precision))
+        assert self.qualified(tmp_path, vocabulary, cells) == (
+            f"earliest date: {shown}"
+        )
+
+    def test_qualifiers_are_sorted_whatever_order_they_come_in(
+        self, tmp_path, vocabulary
+    ):
+        # GROUP_CONCAT gives its cells in no set order: a period's start
+        # and its bounds, then its end and its bounds, then the rest by
+        # label (docs/MODELING.md, "Marriages, residences and other
+        # periods")
+        qualifiers = [
+            ("start_time", "1938-01-01T00:00:00Z", "9"),
+            ("earliest_date", "1937-01-01T00:00:00Z", "9"),
+            ("latest_start_date", "1939-01-01T00:00:00Z", "9"),
+            ("end_time", "1952-01-01T00:00:00Z", "9"),
+            ("earliest_end_date", "1950-01-01T00:00:00Z", "9"),
+            ("latest_date", "1950-01-01T00:00:00Z", "8"),
+            ("sourcing_circumstances", "circa", ""),
+            ("age_at_death", "73 Jahre", ""),
+        ]
+        expected = (
+            "start time: 1938; earliest date: 1937; latest start date: 1939; "
+            "end time: 1952; earliest end date: 1950; latest date: 1950s; "
+            "age at death: 73 Jahre; sourcing circumstances: circa"
+        )
+        for order in (qualifiers, qualifiers[::-1]):
+            cells = qualifier_cells(*order)
+            assert self.qualified(tmp_path, vocabulary, cells) == expected
+
+    def test_a_qualifier_value_is_shown_whole_and_escaped(
+        self, tmp_path, vocabulary
+    ):
+        # the cells are percent-encoded, so a value's spaces, "|" and
+        # markup survive the GROUP_CONCAT whole, and are escaped on the page
+        cells = qualifier_cells(
+            ("age_at_death", "73 Jahre | <alt> & mehr", ""),
+            ("sourcing_circumstances", "circa", ""),
+        )
+        assert self.qualified(tmp_path, vocabulary, cells) == (
+            "age at death: 73 Jahre | <alt> & mehr; "
+            "sourcing circumstances: circa"
+        )
+        site = tmp_path / "site"
+        assert (
+            "&lt;alt&gt; &amp; mehr" in (site / "people/Q7.html").read_text()
+        )
+
+    def test_a_qualifier_before_the_common_era_is_refused(
+        self, tmp_path, vocabulary
+    ):
+        # format_time's backstop (ADR-0034) names the statement
+        cells = qualifier_cells(
+            ("earliest_date", "-1909-01-01T00:00:00Z", "9")
+        )
+        with pytest.raises(UnsupportedDate, match="Q7 statement s1"):
+            self.qualified(tmp_path, vocabulary, cells)
+
+    def test_the_statements_query_formats_no_date_itself(self):
+        from yizkr.staticsite import STATEMENTS_QUERY
+
+        # the value and precision of each time qualifier, formatted in
+        # Python; never a substring of the date (#317)
+        assert "SUBSTR" not in STATEMENTS_QUERY
+        assert "wikibase:timePrecision ?qualifierPrecision" in STATEMENTS_QUERY
+        assert "AS ?qualifierCells" in STATEMENTS_QUERY
 
     def test_labels_are_escaped(self, tmp_path, vocabulary):
         site, _ = build(tmp_path, vocabulary, RESPONSES)
@@ -610,7 +753,7 @@ class TestThePeopleAreTheExports:
         truthy = f"?person wdt:{properties['instance_of']} "
         for marker in (
             "GROUP_CONCAT(DISTINCT ?alias",  # the roster
-            "GROUP_CONCAT(DISTINCT ?qualifierText",  # their statements
+            "GROUP_CONCAT(DISTINCT ?sourceLabel",  # their statements
         ):
             (query,) = [query for query in calls if marker in query]
             assert selection in query
@@ -719,6 +862,299 @@ class TestSections:
         assert (site / "index.html").exists()
         assert "no place carries" in (site / "places.html").read_text()
         assert summary["people"] == 0
+
+
+def asserted(row: dict, **cells: dict) -> dict:
+    """An ASSERTIONS_QUERY row of the burial register (Q23), `row`'s cells
+    with `cells` over them; a cell given as None is left out."""
+    merged = {"artifact": uri("Q23"), "source": uri("Q23"), **row, **cells}
+    return {name: value for name, value in merged.items() if value is not None}
+
+
+# Gustav's residence in Australia as the family tree dates it (#316), a
+# statement of its own beside the same residence as another reading dates
+# it: the start "1938, by 1939 at the latest" (its earliest date and latest
+# start date bound it), the end "after 1950, by the 1950s" (its earliest end
+# date and latest date bound it), circa
+RESIDENCE = {
+    "st": uri("s10"),
+    "reference": uri("r10"),
+    "subject": uri("Q12"),
+    "subjectLabel": literal("Gustav Löbig"),
+    "propLabel": literal("residence"),
+    "value": uri("Q40"),
+    "valueLabel": literal("Australia"),
+    "page": literal("2"),
+    "qualifierCells": literal(
+        qualifier_cells(
+            ("sourcing_circumstances", "circa", ""),
+            ("latest_date", "1950-01-01T00:00:00Z", "8"),
+            ("end_time", "1952-01-01T00:00:00Z", "9"),
+            ("earliest_end_date", "1950-01-01T00:00:00Z", "9"),
+            ("latest_start_date", "1939-01-01T00:00:00Z", "9"),
+            ("earliest_date", "1937-01-01T00:00:00Z", "9"),
+            ("start_time", "1938-01-01T00:00:00Z", "9"),
+        )
+    ),
+}
+
+
+class TestArtifactPage:
+    """The artifact page's table of what the artifact asserts: a row per
+    statement, never per reference block (#351), each value with its
+    qualifiers (#316) and each place the artifact asserts it."""
+
+    def page_of(self, tmp_path, vocabulary, rows: list[dict]) -> str:
+        site, _ = build(
+            tmp_path, vocabulary, {**RESPONSES, "?printedPage": rows}
+        )
+        return (site / "artifacts/Q23.html").read_text()
+
+    def rows_of(self, page: str) -> list[str]:
+        """The table's rows, its header left out."""
+        return re.findall(r"<tr><td>(.*?)</tr>", page)
+
+    def test_two_blocks_citing_one_artifact_are_one_statement(
+        self, tmp_path, vocabulary
+    ):
+        # one birth the certificate gives twice, on page 1 and on its back,
+        # each block with its own excerpt: one statement, one row, both
+        # places
+        birth = {
+            "st": uri("s20"),
+            "subject": uri("Q12"),
+            "subjectLabel": literal("Gustav Löbig"),
+            "propLabel": literal("date of birth"),
+            "value": time_literal("+1862-02-15T00:00:00Z"),
+            "precision": literal("11"),
+        }
+        page = self.page_of(
+            tmp_path,
+            vocabulary,
+            [
+                asserted(
+                    birth,
+                    reference=uri("r20"),
+                    page=literal("1"),
+                    excerpt=excerpt("geboren am 15. Februar 1862 zu Flörburg"),
+                ),
+                asserted(
+                    birth,
+                    reference=uri("r21"),
+                    page=literal("Rückseite"),
+                    excerpt=excerpt("geb. 15.2.1862 in Flörburg"),
+                ),
+            ],
+        )
+        assert "What this artifact asserts (1)" in page
+        (row,) = self.rows_of(page)
+        assert "1862-02-15" in row
+        assert (
+            '<td>page number: 1: <q lang="de">geboren am 15. Februar 1862 '
+            "zu Flörburg</q><br>"
+            'page number: Rückseite: <q lang="de">geb. 15.2.1862 in '
+            "Flörburg</q></td>"
+        ) in row
+
+    def test_same_value_statements_that_differ_by_a_qualifier_stay_two(
+        self, tmp_path, vocabulary
+    ):
+        # ADR-0002: two residences in Australia, dated differently, are two
+        # assertions, each with its own range
+        other = {
+            **RESIDENCE,
+            "st": uri("s11"),
+            "reference": uri("r11"),
+            "page": literal("3"),
+            "qualifierCells": literal(
+                qualifier_cells(("start_time", "1939-01-01T00:00:00Z", "9"))
+            ),
+        }
+        page = self.page_of(
+            tmp_path, vocabulary, [asserted(RESIDENCE), asserted(other)]
+        )
+        assert "What this artifact asserts (2)" in page
+        first, second = self.rows_of(page)
+        assert '<span class="qualifiers">(start time: 1939)</span>' in second
+        assert "page number: 3" in second
+        assert "start time: 1939" not in first
+
+    def test_a_value_shows_its_stated_range_each_end_with_its_bounds(
+        self, tmp_path, vocabulary
+    ):
+        # #316: the start with its earliest date and latest start date, the
+        # end with its earliest end date and latest date, each at its own
+        # precision, and circa — in the person page's `label: value` form
+        (row,) = self.rows_of(
+            self.page_of(tmp_path, vocabulary, [asserted(RESIDENCE)])
+        )
+        assert (
+            "<td>Australia"
+            ' <span class="qualifiers">(start time: 1938; '
+            "earliest date: 1937; latest start date: 1939; end time: 1952; "
+            "earliest end date: 1950; latest date: 1950s; "
+            "sourcing circumstances: circa)</span></td>"
+        ) in row
+
+    def test_a_dated_value_shows_its_range_and_point_in_time(
+        self, tmp_path, vocabulary
+    ):
+        # Rahel's death "after 1945" per the family tree: the bare year
+        # never stands alone; and an event's point in time is shown
+        death = {
+            "st": uri("s30"),
+            "reference": uri("r30"),
+            "subject": uri("Q13"),
+            "subjectLabel": literal("Rahel Löbig"),
+            "propLabel": literal("date of death"),
+            "value": time_literal("+1945-01-01T00:00:00Z"),
+            "precision": literal("9"),
+            "qualifierCells": literal(
+                qualifier_cells(
+                    ("earliest_date", "1945-01-01T00:00:00Z", "9"),
+                )
+            ),
+        }
+        event = {
+            "st": uri("s31"),
+            "reference": uri("r31"),
+            "subject": uri("Q14"),
+            "subjectLabel": literal("Emigration 1938"),
+            "propLabel": literal("participant"),
+            "value": uri("Q12"),
+            "valueLabel": literal("Gustav Löbig"),
+            "qualifierCells": literal(
+                qualifier_cells(("point_in_time", "1938-01-01T00:00:00Z", "9"))
+            ),
+        }
+        rows = self.rows_of(
+            self.page_of(
+                tmp_path, vocabulary, [asserted(death), asserted(event)]
+            )
+        )
+        assert (
+            '<td>1945 <span class="qualifiers">(earliest date: 1945)</span>'
+            "</td>"
+        ) in rows[0]
+        assert (
+            '<td>Gustav Löbig <span class="qualifiers">'
+            "(point in time: 1938)</span></td>"
+        ) in rows[1]
+
+    def test_every_locator_of_a_block_is_shown(self, tmp_path, vocabulary):
+        # a block's rows are its locators' values: one block, one place,
+        # each locator once, under its label
+        block = {
+            **RESIDENCE,
+            "printedPage": literal("iv"),
+            "region": literal("10%,20%,30%,40%"),
+            "excerpt": excerpt("Australien 1938", "de"),
+        }
+        page = self.page_of(
+            tmp_path,
+            vocabulary,
+            [
+                asserted(block),
+                asserted(block, page=literal("5")),
+                asserted(block, excerpt=excerpt("Australia 1938", "en")),
+            ],
+        )
+        assert "What this artifact asserts (1)" in page
+        (row,) = self.rows_of(page)
+        assert row.endswith(
+            "<td>page number: 2, 5; printed page number: iv; "
+            "relative position within image: 10%,20%,30%,40%: "
+            '<q lang="en">Australia 1938</q> '
+            '<q lang="de">Australien 1938</q></td>'
+        )
+
+    def test_an_excerpt_is_kept_whole_and_escaped(self, tmp_path, vocabulary):
+        # the writer turns a line break into " | ": the excerpt is its own
+        # cell, never split on it, and is escaped; one with no language
+        # has no lang attribute, and a block with no locator cites the
+        # whole artifact
+        (row,) = self.rows_of(
+            self.page_of(
+                tmp_path,
+                vocabulary,
+                [
+                    asserted(
+                        RESIDENCE,
+                        page=None,
+                        excerpt={
+                            "type": "literal",
+                            "value": "Australien | <seit> 1938 & später",
+                        },
+                    ),
+                    asserted(RESIDENCE, reference=uri("r12"), page=None),
+                ],
+            )
+        )
+        assert row.endswith(
+            "<td><q>Australien | &lt;seit&gt; 1938 &amp; später</q><br>"
+            "the artifact as a whole</td>"
+        )
+
+    def test_a_fragment_is_named_on_its_wholes_page(
+        self, tmp_path, vocabulary
+    ):
+        # the query lists a statement citing a fragment under its whole
+        # (?artifact), with the fragment's label (?fragmentLabel)
+        (row,) = self.rows_of(
+            self.page_of(
+                tmp_path,
+                vocabulary,
+                [
+                    asserted(
+                        RESIDENCE,
+                        source=uri("Q24"),
+                        fragmentLabel=literal("burial register, page 2"),
+                    )
+                ],
+            )
+        )
+        assert row.endswith(
+            "<td>fragment: burial register, page 2; page number: 2</td>"
+        )
+
+    def test_a_qualifier_before_the_common_era_is_refused(
+        self, tmp_path, vocabulary
+    ):
+        bce = asserted(
+            RESIDENCE,
+            qualifierCells=literal(
+                qualifier_cells(("start_time", "-1938-01-01T00:00:00Z", "9"))
+            ),
+        )
+        with pytest.raises(UnsupportedDate, match="Q12 statement s10 as Q23"):
+            self.page_of(tmp_path, vocabulary, [bce])
+
+    def test_the_query_reads_each_statement_and_block(self):
+        from yizkr.staticsite import ASSERTIONS_QUERY
+
+        projection = ASSERTIONS_QUERY.split("WHERE", 1)[0]
+        assert set(re.findall(r"\?(\w+)", projection)) >= {
+            "artifact",
+            "fragmentLabel",
+            "st",
+            "reference",
+            "page",
+            "printedPage",
+            "region",
+            "excerpt",
+            "qualifierCells",
+        }
+        # the reference node is bound, never walked past as a path
+        assert "prov:wasDerivedFrom ?reference" in ASSERTIONS_QUERY
+        assert "?reference pr:{transcription_excerpt} ?excerpt" in (
+            ASSERTIONS_QUERY
+        )
+        assert "BIND(COALESCE(?whole, ?source) AS ?artifact)" in (
+            ASSERTIONS_QUERY
+        )
+        # the only GROUP_CONCAT packs qualifier cells, never a locator
+        assert ASSERTIONS_QUERY.count("GROUP_CONCAT") == 1
+        assert "GROUP_CONCAT(DISTINCT ?qualifierCell;" in ASSERTIONS_QUERY
 
 
 class TestInconsistencies:
@@ -1221,3 +1657,87 @@ class TestTimeFormatting:
     )
     def test_a_century_is_the_one_wikibase_counts(self, stored, shown):
         assert format_time(stored, "7") == shown
+
+    @pytest.mark.parametrize(
+        ("stored", "shown"),
+        [
+            # English ordinals (#319): 1st, 2nd and 3rd, and 11th, 12th
+            # and 13th, which are the exceptions to them
+            ("0001-01-01T00:00:00Z", "1st century"),
+            ("0200-01-01T00:00:00Z", "2nd century"),
+            ("0201-01-01T00:00:00Z", "3rd century"),
+            ("0400-01-01T00:00:00Z", "4th century"),
+            ("1100-01-01T00:00:00Z", "11th century"),
+            ("1101-01-01T00:00:00Z", "12th century"),
+            ("1300-01-01T00:00:00Z", "13th century"),
+            ("2001-01-01T00:00:00Z", "21st century"),
+            ("2200-01-01T00:00:00Z", "22nd century"),
+            ("2201-01-01T00:00:00Z", "23rd century"),
+            ("+10001-01-01T00:00:00Z", "101st century"),
+            ("+11100-01-01T00:00:00Z", "111th century"),
+        ],
+    )
+    def test_a_century_takes_its_english_ordinal(self, stored, shown):
+        assert format_time(stored, "7") == shown
+
+    @pytest.mark.parametrize(
+        ("number", "shown"),
+        [
+            (1, "1st"),
+            (2, "2nd"),
+            (3, "3rd"),
+            (4, "4th"),
+            (10, "10th"),
+            (11, "11th"),
+            (12, "12th"),
+            (13, "13th"),
+            (21, "21st"),
+            (22, "22nd"),
+            (23, "23rd"),
+            (101, "101st"),
+            (102, "102nd"),
+            (103, "103rd"),
+            (111, "111th"),
+            (112, "112th"),
+            (113, "113th"),
+        ],
+    )
+    def test_ordinals(self, number, shown):
+        assert ordinal(number) == shown
+
+    @pytest.mark.parametrize(
+        ("stored", "shown"),
+        [
+            # a millennium is counted from year 1, as Wikibase counts it
+            # and as docs/MODELING.md and core/privacy.py do: 1001 to 2000
+            # is the 2nd millennium, whichever year in it is stored (#319)
+            ("0001-01-01T00:00:00Z", "1st millennium"),
+            ("1000-01-01T00:00:00Z", "1st millennium"),
+            ("1001-01-01T00:00:00Z", "2nd millennium"),
+            ("1919-01-07T00:00:00Z", "2nd millennium"),
+            ("2000-01-01T00:00:00Z", "2nd millennium"),
+            ("2001-01-01T00:00:00Z", "3rd millennium"),
+            ("+11000-01-01T00:00:00Z", "11th millennium"),
+            ("+21000-01-01T00:00:00Z", "21st millennium"),
+        ],
+    )
+    def test_a_millennium_is_shown_as_a_millennium(self, stored, shown):
+        assert format_time(stored, "6") == shown
+
+    @pytest.mark.parametrize(
+        ("precision", "shown"),
+        [
+            ("5", "1919, to the nearest 10,000 years"),
+            ("4", "1919, to the nearest 100,000 years"),
+            ("3", "1919, to the nearest 1,000,000 years"),
+            ("2", "1919, to the nearest 10,000,000 years"),
+            ("1", "1919, to the nearest 100,000,000 years"),
+            ("0", "1919, to the nearest 1,000,000,000 years"),
+        ],
+    )
+    def test_a_precision_coarser_than_a_millennium_is_never_narrowed(
+        self, precision, shown
+    ):
+        # no century or millennium: the stored year with the span its
+        # precision allows, so nothing reads narrower than the source
+        assert format_time("1919-01-07T00:00:00Z", precision) == shown

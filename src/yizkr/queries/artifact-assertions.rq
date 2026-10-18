@@ -1,14 +1,37 @@
-# Artifact assertions: everything each artifact (or fragment) asserts —
-# the inventory behind one-click verification (ADR-0003): statement →
-# reference → fragment. Useful when re-examining a source.
-SELECT ?artifact ?artifactLabel ?entityLabel ?propertyLabel ?value ?valueLabel
+# Artifact assertions: everything each artifact asserts, and where in it — the
+# inventory behind one-click verification (ADR-0003): statement → reference →
+# fragment. Useful when re-examining a source. A row for each statement and
+# reference block that cites the artifact: ?statement keeps two same-value
+# statements that differ by a qualifier apart (ADR-0002), and the block's page
+# number, printed page number, image region and transcription excerpt, each a
+# column of its own, tell apart the places a statement cites one artifact at
+# (two pages, say); a block with two values of one locator gives a row for
+# each. A statement citing a fragment of an artifact is listed under its whole,
+# with the fragment as ?source. A time value carries its stated precision
+# (display must never pad or narrow).
+SELECT ?artifact ?artifactLabel ?source ?statement ?reference ?entity
+       ?entityLabel ?propertyLabel ?value ?valueLabel ?precision
+       ?page ?printedPage ?region ?excerpt
 WHERE {
   ?statement prov:wasDerivedFrom ?reference .
-  ?reference pr:{P:stated_in} ?artifact .
+  ?reference pr:{P:stated_in} ?source .
+  OPTIONAL { ?source wdt:{P:instance_of} wd:{Q:artifact_fragment} ;
+                     wdt:{P:part_of} ?whole . }
+  BIND(COALESCE(?whole, ?source) AS ?artifact)
   ?entity ?p ?statement .
   ?property wikibase:claim ?p ;
             wikibase:statementProperty ?ps .
   ?statement ?ps ?value .
+  OPTIONAL {
+    ?property wikibase:statementValue ?psv .
+    ?statement ?psv ?valueNode .
+    ?valueNode wikibase:timePrecision ?precision .
+  }
+  OPTIONAL { ?reference pr:{P:page_number} ?page . }
+  OPTIONAL { ?reference pr:{P:printed_page_number} ?printedPage . }
+  OPTIONAL { ?reference pr:{P:relative_position_within_image} ?region . }
+  OPTIONAL { ?reference pr:{P:transcription_excerpt} ?excerpt . }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }
 }
-ORDER BY ?artifactLabel ?entityLabel ?propertyLabel
+ORDER BY ?artifactLabel ?entityLabel ?propertyLabel ?statement ?page
+         ?printedPage ?region ?excerpt

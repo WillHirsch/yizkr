@@ -454,6 +454,56 @@ def test_sources_hyperlink_to_artifact_pages_with_downloads(site):
         assert any(shown(birth.value) in row for row in about_person)
 
 
+def asserted_rows(site: Site, source: str) -> list[str]:
+    """The rows of `source`'s artifact page's table, its header left out;
+    the page's count of what it asserts must be theirs."""
+    artifact = site.read(f"artifacts/{site.sources[source]}.html")
+    rows = re.findall(r"<tr><td>(.*?)</tr>", artifact)
+    (count,) = re.findall(r"What this artifact asserts \((\d+)\)", artifact)
+    assert int(count) == len(rows)
+    return rows
+
+
+def test_a_qualifier_shows_at_its_own_precision_on_the_person_page(site):
+    # the person page reads each time qualifier's value and precision and
+    # formats it in Python (#317): Rahel's death "after 1945" names its one
+    # bound, under its qualifier's label, beside its source
+    (entry,) = elements(site.read(f"people/{site.rahel}.html"), "dd")
+    assert entry.startswith(
+        '1945 <span class="qualifiers">(earliest date: 1945)</span>'
+    )
+    assert source_link(site, TREE, root="../") in entry
+
+
+def test_the_artifact_page_shows_each_statement_with_its_place(site):
+    # the tree's page gives Rahel's death with the range its source states
+    # (#316), and where in the tree it says so: the page and excerpt the
+    # claim cites (#351)
+    rahel = f'href="../people/{site.rahel}.html"'
+    (row,) = [
+        row
+        for row in asserted_rows(site, TREE)
+        if rahel in row and "<td>date of death</td>" in row
+    ]
+    assert (
+        '<td>1945 <span class="qualifiers">(earliest date: 1945)</span></td>'
+        f'<td>page number: 1: <q lang="{UNIVERSE[TREE].lang}">'
+        f"{html.escape(RAHEL_DIED.excerpt)}</q></td>"
+    ) in row
+    # each birth is one statement, one row, with its page and excerpt
+    person = f'href="../people/{site.person}.html"'
+    for source, birth in BIRTHS.items():
+        (row,) = [
+            row
+            for row in asserted_rows(site, source)
+            if person in row and shown(birth.value) in row
+        ]
+        assert row.endswith(
+            f'<td>page number: 1: <q lang="{UNIVERSE[source].lang}">'
+            f"{html.escape(birth.excerpt)}</q></td>"
+        )
+
+
 def test_inconsistencies_suppress_recorded_containment(site, client, config):
     rows = [
         row
