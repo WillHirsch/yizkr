@@ -16,6 +16,8 @@
                            driver to stop or go on
     yizkr scratch report   what a scratch run did, per stage and per
                            document, from its run directory alone
+    yizkr scratch recheck  check a scratch run's stored outputs again with
+                           the anomaly thresholds as they are now
     yizkr scratch diff     what changed between two scratch runs, and why
     yizkr scratch reset    reset the instance and repopulate it for a
                            scratch run; refuses on a kept instance
@@ -961,6 +963,20 @@ def cmd_scratch_report(args) -> int:
     return 0
 
 
+def cmd_scratch_recheck(args) -> int:
+    from yizkr.pipeline import anomalies
+
+    run = _scratch_run_dir(args)
+    try:
+        config = anomalies.load_config(args.config)
+    except anomalies.AnomalyConfigError as exc:
+        sys.exit(str(exc))
+    alerts = anomalies.recheck(run, config)
+    for line in anomalies.recheck_lines(run, config, alerts):
+        print(line)
+    return 0
+
+
 def cmd_scratch_diff(args) -> int:
     from yizkr.pipeline import rundiff, scratch
 
@@ -1800,7 +1816,8 @@ def _scratch_parsers(sub, effort_choices) -> None:
     """`yizkr scratch`: the scratch driver and its call estimate
     (docs/runbooks/scratch-run.md), the import of archived transcriptions
     for its calls (docs/LLM_CACHE.md, Seeding), the run monitor's
-    commands (docs/MONITOR.md), and the reset of the instance for a run."""
+    commands (docs/MONITOR.md), the anomaly recheck (docs/ANOMALIES.md),
+    and the reset of the instance for a run."""
     from yizkr.pipeline import scratch
     from yizkr.pipeline.rundir import CONTROL_ACTIONS
 
@@ -1808,7 +1825,8 @@ def _scratch_parsers(sub, effort_choices) -> None:
         "scratch",
         help="whole-corpus scratch runs: import archived transcriptions for "
         "one's calls, estimate its calls, run it, follow it, pause, resume "
-        "or abort it, report it, diff it with another, and reset the "
+        "or abort it, report it, check its outputs again for anomalies, "
+        "diff it with another, and reset the "
         "instance for it "
         "(docs/runbooks/scratch-run.md)",
     )
@@ -1937,6 +1955,26 @@ def _scratch_parsers(sub, effort_choices) -> None:
         "--runs", type=Path, default=scratch.DEFAULT_RUNS, help=runs_help
     )
     p.set_defaults(func=cmd_scratch_report)
+
+    p = ssub.add_parser(
+        "recheck",
+        help="check a scratch run's (the latest by default) stored outputs "
+        "again with the anomaly thresholds as they are now, without "
+        "recomputing any stage, and append the alerts they raise to its "
+        "alerts (docs/ANOMALIES.md, Recheck)",
+    )
+    p.add_argument("run", nargs="?", help="a run id or directory")
+    p.add_argument(
+        "--runs", type=Path, default=scratch.DEFAULT_RUNS, help=runs_help
+    )
+    p.add_argument(
+        "--config",
+        type=Path,
+        metavar="FILE",
+        help="a file of thresholds over the defaults, in place of the one "
+        "$YIZKR_ANOMALIES names",
+    )
+    p.set_defaults(func=cmd_scratch_recheck)
 
     p = ssub.add_parser(
         "diff",

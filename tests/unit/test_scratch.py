@@ -1936,6 +1936,132 @@ class TestPreflight:
             driver.run()
         assert not driver.state_dir.exists()
 
+    @pytest.mark.parametrize(
+        "thresholds, why",
+        [
+            (b"chars-per-pages: 900\n", "chars-per-pages"),
+            (b"chars-per-page: 0\n", "greater than or equal to 1"),
+            (b"\xff\xfe not a text\n", "cannot be read"),
+        ],
+        ids=["unknown key", "out of range", "unreadable"],
+    )
+    def test_anomaly_thresholds_the_checks_cannot_load(
+        self, tmp_path, fakes, monkeypatch, thresholds, why
+    ):
+        """A file `$YIZKR_ANOMALIES` names that the checks cannot use is
+        refused in one line, with the other problems, before run.json, a
+        document's directory or an event is written, and before any call
+        (#327)."""
+        overrides = tmp_path / "anomalies.yaml"
+        overrides.write_bytes(thresholds)
+        monkeypatch.setenv("YIZKR_ANOMALIES", str(overrides))
+        monkeypatch.setenv("YIZKR_CLAUDE_RESERVE", "2")
+        driver = a_run(tmp_path, small(tmp_path), fakes)
+        with pytest.raises(PreflightFailed) as refused:
+            driver.run()
+        problems = refused.value.problems
+        assert len(problems) == 2
+        (problem,) = [p for p in problems if str(overrides) in p]
+        assert why in problem and "\n" not in problem
+        assert not driver.state_dir.exists()
+        assert fakes.calls == [] and fakes.preflights == []
+
+    @pytest.mark.parametrize("why", ["git work tree", "open to other users"])
+    def test_a_cache_folder_the_cache_refuses(
+        self, tmp_path, fakes, monkeypatch, why
+    ):
+        """A cache folder git would track, or one open to other users, is
+        refused at the preflight, before the preflight's calls and before
+        run.json, a document's directory or an event is written: a new
+        run leaves no run directory, and a resume no invocation. The
+        folder is left as it was (#327)."""
+        from tests.unit.test_llmcache import a_repository
+
+        corpus = small(tmp_path)
+        assert command(tmp_path, corpus, fakes, until="transcription") == 0
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        recorded = RunDir(run).manifest()
+        written = len(RunDir(run).events())
+        if why == "git work tree":
+            cache = a_repository(tmp_path, monkeypatch) / "cache"
+        else:
+            cache = tmp_path / "shared"
+            cache.mkdir()
+            cache.chmod(0o750)
+        fakes.preflights.clear()
+        for resume in (None, run.name):
+            calls = len(fakes.calls)
+            with pytest.raises(PreflightFailed, match=why) as refused:
+                command(
+                    tmp_path, corpus, fakes, cache_dir=cache,
+                    new=resume is None, resume=resume,
+                )  # fmt: skip
+            (problem,) = refused.value.problems
+            assert "\n" not in problem
+            assert len(fakes.calls) == calls
+        assert fakes.preflights == []
+        assert scratch.runs_in(runs_dir(tmp_path)) == [run]
+        assert RunDir(run).manifest() == recorded
+        assert len(RunDir(run).events()) == written
+        if why == "git work tree":
+            assert not cache.exists()
+        else:
+            assert stat.S_IMODE(cache.stat().st_mode) == 0o750
+            assert list(cache.iterdir()) == []
+
+    def test_a_cache_folder_it_cannot_write_in(self, tmp_path, fakes):
+        """A cache folder closed to this user, or one it cannot make, is
+        refused at the preflight too, with nothing written (#327)."""
+        closed = tmp_path / "closed"
+        closed.mkdir(mode=0o700)
+        closed.chmod(0o500)
+        try:
+            if os.access(closed, os.W_OK):
+                pytest.skip("this user writes to any folder")
+            for cache, why in (
+                (closed, "cannot write in it"),
+                (closed / "cache", "cannot make it in"),
+            ):
+                driver = a_run(tmp_path, small(tmp_path), fakes,
+                               cache_dir=cache)  # fmt: skip
+                with pytest.raises(PreflightFailed, match=why):
+                    driver.run()
+                assert not driver.state_dir.exists()
+        finally:
+            closed.chmod(0o700)
+        assert fakes.calls == [] and fakes.preflights == []
+
+    @pytest.mark.parametrize("calls_engine", [False, True])
+    def test_past_the_barrier_only_the_cache_is_checked_for_the_engine(
+        self, tmp_path, fakes, monkeypatch, calls_engine
+    ):
+        """An invocation past the barrier only, whose corpus stages call no
+        engine, never opens the cache, so a folder the cache refuses does
+        not refuse it; one whose corpus stage may call the engine is
+        refused, as its preflight calls are made (#327)."""
+        corpus = small(tmp_path)
+        assert command(tmp_path, corpus, fakes) == EXIT_OK
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        other = dict(RunDir(run).manifest()["code"], commit="f" * 40)
+        monkeypatch.setattr(scratch, "code_version", lambda: dict(other))
+        cache = tmp_path / "shared"
+        cache.mkdir()
+        cache.chmod(0o750)
+        stages = [
+            CorpusStage("clustering", Recorder(), calls_engine=calls_engine)
+        ]
+        options = {"resume": run.name, "corpus_stages": stages}
+        if calls_engine:
+            with pytest.raises(PreflightFailed, match="open to other users"):
+                command(tmp_path, corpus, fakes, cache_dir=cache, **options)
+        else:
+            assert (
+                command(tmp_path, corpus, fakes, cache_dir=cache, **options)
+                == EXIT_OK
+            )
+            assert RunDir(run).manifest()["scratch"]["past_barrier_only"]
+        assert list(cache.iterdir()) == []
+
 
 class TestPreflightCalls:
     """The preflight's one trivial call per distinct (model, effort) pair

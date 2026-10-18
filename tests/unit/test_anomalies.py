@@ -56,7 +56,7 @@ from yizkr.pipeline.chunking import (
 from yizkr.pipeline.critique import Finding
 from yizkr.pipeline.language import resolve_language
 from yizkr.pipeline.orchestrate import Orchestrator
-from yizkr.pipeline.rundir import RunDir, fold_control
+from yizkr.pipeline.rundir import ALERTS, RunDir, fold_control
 from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.transcription_check import (
     TranscriptionCheckFailed,
@@ -3968,30 +3968,69 @@ class TestRecheck:
             ]
         )
 
-    def test_the_module_s_command(self, tmp_path, capsys):
+    def test_the_scratch_command(self, tmp_path, capsys):
+        """`yizkr scratch recheck` re-checks the run it names, a directory
+        or a run id in --runs, the latest by default, with --config over
+        the defaults, and prints what it appended (#327)."""
+        from yizkr import cli
+
         folder = a_folder(tmp_path, brief_txt=MARRIAGE)
-        orchestrator = Run(folder, tmp_path / "state")
+        orchestrator = Run(folder, tmp_path / "runs" / "run-1")
         orchestrator.run()
         thresholds = tmp_path / "thresholds.yaml"
         thresholds.write_text(
             "checks:\n  language-unexpected:\n    expected: [en]\n"
         )
-        state = str(orchestrator.state_dir)
-        command = ["recheck", state, "--config", str(thresholds)]
-        assert anomalies.main(command) == 0
+        state = orchestrator.state_dir
+
+        def recheck_of(*argv):
+            args = cli.build_parser().parse_args(["scratch", "recheck", *argv])
+            assert args.func is cli.cmd_scratch_recheck
+            return args.func(args)
+
+        def rechecks():
+            return {
+                alert["invocation"]
+                for alert in orchestrator.rundir.alerts()
+                if alert["invocation"].startswith("recheck-")
+            }
+
+        assert recheck_of(str(state), "--config", str(thresholds)) == 0
         out = capsys.readouterr().out
-        assert out.startswith("2 alerts appended to ")
-        assert re.search(r"language-unexpected\s+1", out)
-        assert re.search(r"zero-claims\s+1", out)
+        assert out.startswith(f"2 alerts appended to {state / ALERTS} ")
+        digest = load_config(thresholds).digest()
+        assert out.splitlines()[0].endswith(f"(thresholds {digest})")
+        assert re.search(r"^  language-unexpected\s+1$", out, re.M)
+        assert re.search(r"^  zero-claims\s+1$", out, re.M)
         # the transcription's alert and the batch's, both carried
         assert {
             alert["status"]
             for alert in orchestrator.rundir.alerts()
             if alert["invocation"].startswith("recheck-")
         } == {"carried"}
-        assert anomalies.main(["recheck", str(tmp_path)]) == 2
+        assert len(rechecks()) == 1
+        # a run id in --runs, and the latest run there, under the defaults
+        runs = str(tmp_path / "runs")
+        assert recheck_of("run-1", "--runs", runs) == 0
+        assert recheck_of("--runs", runs) == 0
+        out = capsys.readouterr().out
+        assert out.count(f"alert appended to {state / ALERTS} ") == 2
+        assert f"(thresholds {load_config().digest()})" in out
+        assert len(rechecks()) == 3
+        # no run, and thresholds that cannot be used, are refused in one
+        # line, with nothing appended
+        events = len(orchestrator.rundir.events())
+        with pytest.raises(SystemExit, match="no scratch run in"):
+            recheck_of("--runs", str(tmp_path / "nowhere"))
+        with pytest.raises(SystemExit, match="no run there"):
+            recheck_of(str(tmp_path), "--runs", runs)
         thresholds.write_text("checks:\n  no-such-check: {}\n")
-        assert anomalies.main(command) == 2
+        with pytest.raises(SystemExit) as refused:
+            recheck_of(str(state), "--config", str(thresholds))
+        assert "no-such-check" in str(refused.value.code)
+        assert "\n" not in str(refused.value.code)
+        assert len(orchestrator.rundir.events()) == events
+        assert len(rechecks()) == 3
 
 
 # -- the unit tests' own default ----------------------------------------------

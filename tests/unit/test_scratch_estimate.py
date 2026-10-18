@@ -1476,6 +1476,29 @@ class TestRefusals:
         with pytest.raises(PreflightFailed, match="YIZKR_CLAUDE_RESERVE"):
             estimate_of(tmp_path, small(tmp_path), engine)
 
+    @pytest.mark.parametrize(
+        "thresholds, why",
+        [
+            (b"chars-per-pages: 900\n", "chars-per-pages"),
+            (b"chars-per-page: 0\n", "greater than or equal to 1"),
+            (b"\xff\xfe not a text\n", "cannot be read"),
+        ],
+        ids=["unknown key", "out of range", "unreadable"],
+    )
+    def test_anomaly_thresholds_the_checks_cannot_load(
+        self, tmp_path, engine, monkeypatch, thresholds, why
+    ):
+        """The run's preflight refuses a file `$YIZKR_ANOMALIES` names that
+        the checks cannot use, and so does the estimate, first (#327)."""
+        overrides = tmp_path / "anomalies.yaml"
+        overrides.write_bytes(thresholds)
+        monkeypatch.setenv("YIZKR_ANOMALIES", str(overrides))
+        with pytest.raises(PreflightFailed) as refused:
+            estimate_of(tmp_path, small(tmp_path), engine)
+        (problem,) = refused.value.problems
+        assert str(overrides) in problem and why in problem
+        assert not runs_dir(tmp_path).exists()
+
     def test_a_runs_directory_the_run_refuses(self, tmp_path, engine):
         """A runs directory open to other users, a file, a path under
         one, a link to nothing, and a folder that cannot be written: the
@@ -1580,7 +1603,7 @@ class TestRefusals:
             ):
                 pass
             usable(runs / ".lock")
-            with pytest.raises(CacheRefused, match="cannot open its lock"):
+            with pytest.raises(PreflightFailed, match="cannot open its lock"):
                 estimate_of(tmp_path, corpus, engine)
             with pytest.raises(CacheRefused, match="cannot open its lock"):
                 llm.open_cache(cache)
@@ -1594,8 +1617,8 @@ class TestRefusals:
         self, tmp_path, engine
     ):
         """A cache folder closed to writing, even with its lock file in it:
-        the cache writes its entries there, so the run refuses it as it
-        opens the cache, and so does the estimate."""
+        the cache writes its entries there, so the run refuses it at its
+        preflight, and so does the estimate."""
         corpus = small(tmp_path)
         cache = tmp_path / "cache"
         cache.mkdir(mode=0o700)
@@ -1604,7 +1627,7 @@ class TestRefusals:
         try:
             if os.access(cache, os.W_OK):
                 pytest.skip("this user writes to any folder")
-            with pytest.raises(CacheRefused, match="cannot write in it"):
+            with pytest.raises(PreflightFailed, match="cannot write in it"):
                 estimate_of(tmp_path, corpus, engine)
             with pytest.raises(CacheRefused, match="cannot write in it"):
                 llm.open_cache(cache)
@@ -1627,17 +1650,20 @@ class TestRefusals:
             )  # fmt: skip
         assert sorted(path.name for path in repo.iterdir()) == [".git"]
 
-    def test_a_cache_folder_the_cache_refuses(self, tmp_path, engine):
+    def test_a_cache_folder_the_cache_refuses(
+        self, tmp_path, engine, monkeypatch
+    ):
         """A cache folder open to other users, one this user cannot write
         in, and one under a folder it cannot make it in: the run refuses
-        each as its first stale stage opens the cache, and so does the
-        estimate, leaving the folder as it was. With nothing stale, the
-        run opens no cache, and the estimate reads none."""
+        each at its preflight, a resume with nothing stale included, and
+        so does the estimate, leaving the folder as it was. An invocation
+        past the barrier only, whose corpus stages call no engine, opens
+        no cache, and the estimate reads none (#327)."""
         corpus = small(tmp_path)
         shared = tmp_path / "shared"
         shared.mkdir(mode=0o750)
         shared.chmod(0o750)
-        with pytest.raises(CacheRefused, match="open to other users"):
+        with pytest.raises(PreflightFailed, match="open to other users"):
             estimate_of(tmp_path, corpus, engine, cache_dir=shared)
         assert stat.S_IMODE(shared.stat().st_mode) == 0o750
         assert list(shared.iterdir()) == []
@@ -1651,15 +1677,23 @@ class TestRefusals:
                 (closed, "cannot write in it"),
                 (closed / "cache", "cannot make it in"),
             ):
-                with pytest.raises(CacheRefused, match=why):
+                with pytest.raises(PreflightFailed, match=why):
                     estimate_of(tmp_path, corpus, engine, cache_dir=cache)
         finally:
             closed.chmod(0o700)
         run(tmp_path, corpus, engine)
+        with pytest.raises(PreflightFailed, match="open to other users"):
+            estimate_of(
+                tmp_path, corpus, engine, resume=LATEST, cache_dir=shared
+            )
+        run_dir = scratch.runs_in(runs_dir(tmp_path))[-1]
+        other = dict(RunDir(run_dir).manifest()["code"], commit="f" * 40)
+        monkeypatch.setattr(scratch, "code_version", lambda: dict(other))
         counted = estimate_of(
             tmp_path, corpus, engine, resume=LATEST, cache_dir=shared
         )
-        assert counted.total().engine_calls == 0
+        assert counted.past_barrier_only
+        assert list(shared.iterdir()) == []
 
     def test_a_cache_folder_git_would_track(
         self, tmp_path, engine, monkeypatch
@@ -1670,7 +1704,7 @@ class TestRefusals:
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
         corpus = small(tmp_path)
         monkeypatch.chdir(repo)
-        with pytest.raises(CacheRefused, match="git work tree"):
+        with pytest.raises(PreflightFailed, match="git work tree"):
             estimate_of(tmp_path, corpus, engine, cache_dir=repo / "cache")
         assert sorted(path.name for path in repo.iterdir()) == [".git"]
 

@@ -424,17 +424,24 @@ A folder that cannot be made, is not a folder, or is private but not
 writable by this user (another user's, or one closed to its owner) is
 refused too, and so is a lock file that cannot be opened. The checks run
 as the cache opens, and every command opens its cache before its first
-call: `ingest extract --cache` before it asks the engine, `ingest run`
-and `scratch run` when a stage first needs the engine. The refusal's
-message is one line, and it is raised as `CacheRefused`, a pause
-(`PassPaused`) like `CacheInUse`: it ends the pass rather than failing
-each document in turn, the invocation ends `paused` (`scratch run`
-prints the line and exits 2), and the pass goes on once the folder can
-hold the cache, or with another. `yizkr scratch estimate` refuses the
-same folders, and a lock file there already that this user cannot open
-to read and write, found without making or changing anything
-(`llm.read_cache`), where the run would meet them, as a stale stage
-first needs the engine; it prints the line and exits 1.
+call: `ingest extract --cache` before it asks the engine, and `ingest
+run` when a stage first needs the engine. The refusal's message is one
+line, and it is raised as `CacheRefused`, a pause (`PassPaused`) like
+`CacheInUse`: it ends the pass rather than failing each document in
+turn, the invocation ends `paused`, and the pass goes on once the folder
+can hold the cache, or with another. `scratch run` checks the folder
+earlier, at its preflight, as it checks its runs directory: it refuses
+the same folders, a lock file there already that this user cannot open
+to read and write among them, found without making or changing anything
+(`llm.read_cache`), before its preflight calls and before run.json, a
+document's directory or an event is written, so a refused folder leaves
+nothing behind; it prints the line and exits 1 (#327). The check is made
+for every invocation whose range holds a per-document stage, or a corpus
+stage that may call the engine, a resume that reuses every view
+included; an invocation past the barrier only, whose corpus stages call
+no engine, opens no cache, and its folder is not checked. `yizkr scratch estimate` refuses the same
+folders where the run's preflight would; it too prints the line and
+exits 1.
 
 **Folders the cache makes are private** (mode 700, whatever the umask):
 the root and any missing folder above it, a key's folder for an answer

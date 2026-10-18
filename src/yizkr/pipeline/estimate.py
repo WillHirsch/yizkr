@@ -542,16 +542,18 @@ class Estimator(ScratchDriver):
         """The calls of the invocation `yizkr scratch run` would make now.
         Refuses as the driver would, before any call: without a
         never-ingest list (ExclusionConfigError); with a role whose model
-        is no full id, a pacing setting the engine refuses, or a PDF and
-        no renderer (PreflightFailed); with other settings, or another
+        is no full id, a pacing setting the engine refuses, anomaly
+        thresholds the checks cannot load, a PDF and no renderer, or a
+        cache folder the cache refuses, for an invocation that calls the
+        engine (PreflightFailed); with other settings, or another
         claude CLI, than the run it would invoke again recorded
         (RunSettingsConflict); with an engine client that cannot start
-        (ScratchRefused), or a pause as one starts (llm.PassPaused), a
-        cache folder the cache refuses among them. A corpus with no
-        document is no call, as it is to the driver."""
+        (ScratchRefused), or a pause as one starts (llm.PassPaused). A
+        corpus with no document is no call, as it is to the driver."""
         if self.exclusions is None:
             raise ExclusionConfigError(MISSING_LIST)
         problems = self._model_problems() + self._pacing_problems()
+        problems += self._anomaly_problems()
         if problems:
             raise PreflightFailed(problems)
         self._recorded = self.rundir.manifest()
@@ -580,6 +582,9 @@ class Estimator(ScratchDriver):
             conflicts = settings_conflicts(self._recorded, fields)
             if conflicts:
                 raise RunSettingsConflict(self.state_dir, conflicts)
+        problems = self._cache_problems(past)
+        if problems:
+            raise PreflightFailed(problems)
         estimate.past_barrier_only = past
         estimate.duplicates = len(duplicates)
         estimate.unreadable = len(found) - len(docs)
@@ -621,9 +626,10 @@ class Estimator(ScratchDriver):
         since among them (RunSettingsConflict, as RunDir.record_engine
         refuses it), stops the estimate where it would stop the run, and
         nothing stale starts none. The cache is read from here on, as the
-        run opens it here: a cache folder the cache refuses stops the
-        estimate too (llmcache.CacheRefused, a pause). Called before a
-        stage's own code, whose failures are the stage's."""
+        run opens it here; a cache folder the cache refuses was refused
+        already, as the run's preflight refuses it
+        (ScratchDriver._cache_problems). Called before a stage's own
+        code, whose failures are the stage's."""
         if role in self._keyed:
             return
         effort, model = self._engine_settings(role)
