@@ -16,6 +16,15 @@ evidence from its own dump and drops every such item the check did not
 release, every item that states no type, and every family; and it
 refuses to run while the query service, where the check runs, does not
 hold the dump's revisions (§4, Ruling 6).
+Amended by #345 (2026-10-18): a birth or a death event is its
+principal's own (ADR-0035 §3.2), and no one else's. A death event is
+death evidence only for the participant whose statement's every role is
+`principal`, or, where no participant statement of the event states a
+role, for its one participant when it has only one who may be a person;
+an informant or a witness at someone else's death stays possibly living.
+A dated birth event is read as a further birth of its principal, by the
+same rule, which can only keep them possibly living. The export and the
+site read both with `yizkr.core.privacy.read_evidence` (§2, §4).
 Amended by [ADR-0035](0035-mention-records.md) (owner decision
 2026-09-29, #385): a stated
 civil status (`civil_status`) is person evidence for the check (ADR-0035
@@ -280,7 +289,8 @@ early birth hide a normal later one. Now:
 
 `has_death_evidence` is true when the person has any of a **date of
 death**, **place of death**, **cause of death**, or **place of burial**,
-or is a **participant in a `death` event**. Crucially, none of these
+or is the **principal of a `death` event** (amended by #345: see the
+note below). Crucially, none of these
 requires *both* a date and a place — so a person can be recorded as
 **deceased with no time or place of death**: a burial place, a cause of
 death, or an even-undated death event each marks them dead. Death is an
@@ -288,6 +298,24 @@ event like any other (ADR-0014), so "died, nothing else known" is simply
 a death event with the person as participant. This is the affordance that
 replaces `living person = no`: to include someone, assert their death the
 ordinary source-first way, not by flipping a flag.
+
+Amended by #345 (2026-10-18): a death event marks dead only the one it
+happened to, read from the role qualifier (`object_has_role`) of each
+`participant` statement, through its statement node, never from the
+truthy triple, which carries no qualifiers. Its principal is the
+participant whose statement states roles, every one of them `principal`;
+a statement of any other role (an informant, a witness, an unknown role)
+never counts. Where no participant statement of the event states a role,
+the event is its one participant's when every statement that names
+someone names that one item and no other that may be a person (an item
+typed a vessel, a military unit or an organization at normal or preferred
+rank is not one; an unknown value is). Roles and participants are read at
+every rank, so a deprecated one can only take a release away; a death's
+principal statement counts at the best rank, as a truthy value would, and
+a birth's at any rank a curator has not deprecated. A dated birth event's `point in time` is read, as a `date of birth`
+statement is (§1), as a further birth of its principal by the same rule,
+so that an 1850 date of birth beside a 1990 birth event keeps the person
+possibly living. When in doubt, the person stays possibly living.
 
 ### 3. No curation duty
 
@@ -618,8 +646,9 @@ is strictly safer, since the determination is now absence-of-death only.
 2. **Conservative, override-free.** Unknown means excluded; there is no
    `living = yes/no` escape hatch in either direction.
 3. **Death is asserted, not flagged.** A date/place/cause of death, a
-   burial place, or a death-event participation each marks a person
-   deceased; a bare death event needs no date or place.
+   burial place, or a death event of which they are the principal (as
+   amended by #345) each marks a person deceased; a bare death event
+   needs no date or place.
 4. **No reviewer duty.** The review CSV has no `living` column; `warning`
    becomes `critique_notes`.
 5. **One predicate, shared.** `yizkr.core.privacy.is_possibly_living` is

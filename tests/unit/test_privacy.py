@@ -17,22 +17,32 @@ import re
 import yaml
 
 from yizkr.core.privacy import (
+    BIRTH_EVENT_DATES_QUERY,
     BIRTHS_QUERY,
     CENTURY,
     DECADE,
     FAMILY_CLASS,
     MILLENNIUM,
     NON_PERSON_CLASSES,
+    PARTICIPANTS_QUERY,
     PEOPLE_SELECTION,
     PERSON_CLASS,
     PERSON_EVENTS,
     PERSON_SUBJECT_PROPERTIES,
     PERSON_VALUE_PROPERTIES,
+    PRINCIPAL_ROLE,
+    UNKNOWN,
     YEAR,
+    Participation,
+    birth_event_dates_query,
+    event_principals,
     is_possibly_living,
     latest_birth_year,
     latest_births,
+    participants_query,
     people_selection,
+    principals_by_event,
+    read_evidence,
     year_of,
     years_allowed,
 )
@@ -188,6 +198,110 @@ BIRTHS = [
     row for qid, case in CASES.items() for row in birth_rows(qid, case[1])
 ]
 EXCLUDED = {qid for qid, case in CASES.items() if case[3]}
+
+WIKIBASE = "http://wikiba.se/ontology#"
+
+
+def participant_rows(event: str, kind: str, parts) -> list[dict]:
+    """PARTICIPANTS_QUERY's rows for one event: `parts` holds each
+    participant statement as (its value's QID, "" for no value or "?" for
+    an unknown one; its roles; its rank, by default normal; whether its
+    value is typed a non-person)."""
+    rows = []
+    for n, (value, roles, *rest) in enumerate(parts):
+        rank = rest[0] if rest else "NormalRank"
+        non_person = rest[1] if len(rest) > 1 else False
+        base = {
+            "event": uri(event),
+            "eventKind": literal(kind),
+            "part": {
+                "type": "uri",
+                "value": f"{CONCEPT}/entity/statement/{event}-p{n}",
+            },
+            "partRank": {"type": "uri", "value": f"{WIKIBASE}{rank}"},
+            "nonPerson": literal("true" if non_person else "false"),
+        }
+        if value == "?":
+            base["value"] = {"type": "bnode", "value": f"b{event}{n}"}
+        elif value:
+            base["value"] = uri(value)
+        for role in roles or [None]:
+            row = dict(base)
+            if role is not None:
+                row["role"] = (
+                    {"type": "bnode", "value": "unknown"}
+                    if role == "?"
+                    else uri(f"role-{role}")
+                )
+                row["principal"] = literal(
+                    "true" if role == "principal" else "false"
+                )
+            rows.append(row)
+    return rows
+
+
+# Fictional birth and death events, content-marked by their QIDs (the
+# Q32x range), each with its participant statements and, for a birth, its
+# date: who takes part, in which role.
+EVENTS = {
+    # Florence's death, with an informant who was born in 1990
+    "Q320": ("death", [("Q321", ["principal"]), ("Q322", ["informant"])]),
+    # a death that states no role and has one participant
+    "Q323": ("death", [("Q324", [])]),
+    # a death that states no role and has two
+    "Q325": ("death", [("Q326", []), ("Q327", [])]),
+    # a birth in 1990, with its principal and an informant
+    "Q328": ("birth", [("Q329", ["principal"]), ("Q331", ["informant"])]),
+}
+EVENT_DATES = {"Q328": [(at(1990), [], [])]}
+# The people of EVENTS, as CASES gives a person: each one's own birth
+# statements, and whether both the export and the site must take them for
+# possibly living. None has death evidence of their own.
+EVENT_CASES = {
+    "Q321": ("the principal of a death", [(at(1990), [], [])], False),
+    "Q322": (
+        "an informant at someone else's death",
+        [(at(1990), [], [])],
+        True,
+    ),
+    "Q324": (
+        "the one participant of a role-less death",
+        [(at(1990), [], [])],
+        False,
+    ),
+    "Q326": ("one of two in a role-less death", [(at(1990), [], [])], True),
+    "Q327": (
+        "the other of two in a role-less death",
+        [(at(1990), [], [])],
+        True,
+    ),
+    "Q329": (
+        "born 1850, and the principal of a birth in 1990",
+        [(at(1850), [], [])],
+        True,
+    ),
+    "Q331": (
+        "born 1850, and an informant at a birth in 1990",
+        [(at(1850), [], [])],
+        False,
+    ),
+}
+EVENT_PARTICIPANTS = [
+    row
+    for event, (kind, parts) in EVENTS.items()
+    for row in participant_rows(event, kind, parts)
+]
+EVENT_BIRTHS = [
+    row
+    for event, births in EVENT_DATES.items()
+    for row in birth_rows(event, births)
+]
+EVENT_PEOPLE_BIRTHS = [
+    row
+    for qid, case in EVENT_CASES.items()
+    for row in birth_rows(qid, case[1])
+]
+EVENT_EXCLUDED = {qid for qid, case in EVENT_CASES.items() if case[2]}
 
 
 class TestYearOf:
@@ -655,3 +769,278 @@ class TestThePeopleSelection:
         assert "family" not in NON_PERSON_CLASSES
         assert "unclassified_entity" not in NON_PERSON_CLASSES
         assert PERSON_CLASS not in NON_PERSON_CLASSES
+
+
+# -- birth and death events: whose own each is (#345) -----------------------
+
+
+def part(value, *roles, rank="NormalRank", non_person=False, n=0):
+    """A participant statement: `roles` each "principal" or another role."""
+    return Participation(
+        statement=f"s{n}-{value}",
+        value=value,
+        rank=rank,
+        roles=frozenset((role, role == "principal") for role in roles),
+        non_person=non_person,
+    )
+
+
+class TestEventPrincipals:
+    """A birth or death event is its principal's own (ADR-0035 §3.2), and
+    no one else's: an informant or a witness at someone else's death is not
+    released by it (#345)."""
+
+    def own(self, *parts, best_rank_only=True):
+        return event_principals(parts, best_rank_only=best_rank_only)
+
+    def test_the_principal_alone_counts(self):
+        assert self.own(
+            part("Q321", "principal"), part("Q322", "informant")
+        ) == {"Q321"}
+
+    def test_an_informant_or_a_witness_never_counts(self):
+        assert self.own(part("Q322", "informant")) == set()
+        assert self.own(part("Q322", "witness")) == set()
+
+    def test_a_role_beside_the_principal_takes_it_away(self):
+        # a statement that also states another role is not read as the
+        # principal's: when in doubt, possibly living
+        assert self.own(part("Q321", "principal", "informant")) == set()
+
+    def test_an_unknown_role_is_another_role(self):
+        unknown = Participation("s", "Q321", roles=frozenset({("_:b", False)}))
+        assert self.own(unknown) == set()
+
+    def test_a_role_less_event_with_one_participant_is_theirs(self):
+        assert self.own(part("Q324")) == {"Q324"}
+
+    def test_a_role_less_event_with_two_participants_is_no_ones(self):
+        assert self.own(part("Q326"), part("Q327")) == set()
+
+    def test_a_role_on_any_participant_makes_the_roles_decide(self):
+        # one participant states a role, so the other, stating none, is not
+        # taken for the event's one participant
+        assert self.own(part("Q326"), part("Q327", "informant")) == set()
+
+    def test_an_unknown_participant_is_someone_else(self):
+        assert self.own(part("Q324"), part(UNKNOWN, n=1)) == set()
+
+    def test_two_unknown_participants_are_two(self):
+        assert self.own(part(UNKNOWN, n=1), part(UNKNOWN, n=2)) == set()
+
+    def test_a_statement_of_no_value_names_no_one(self):
+        assert self.own(part("Q324"), part("", n=1)) == {"Q324"}
+
+    def test_a_non_person_is_no_other_participant(self):
+        # a vessel in someone's death at sea leaves it theirs
+        assert self.own(part("Q324"), part("Q340", non_person=True)) == {
+            "Q324"
+        }
+
+    def test_one_item_twice_is_one_participant(self):
+        assert self.own(part("Q324", n=1), part("Q324", n=2)) == {"Q324"}
+
+    def test_a_deprecated_statement_never_counts(self):
+        assert (
+            self.own(part("Q321", "principal", rank="DeprecatedRank")) == set()
+        )
+        assert self.own(part("Q324", rank="DeprecatedRank")) == set()
+
+    def test_a_deprecated_participant_or_role_still_takes_a_release_away(self):
+        assert (
+            self.own(part("Q326"), part("Q327", rank="DeprecatedRank"))
+            == set()
+        )
+        assert (
+            self.own(
+                part("Q326"), part("Q327", "witness", rank="DeprecatedRank")
+            )
+            == set()
+        )
+
+    def test_a_death_counts_only_at_the_best_rank(self):
+        parts = (
+            part("Q321", "principal"),
+            part("Q322", "informant", rank="PreferredRank"),
+        )
+        assert self.own(*parts) == set()
+        assert self.own(*parts, best_rank_only=False) == {"Q321"}
+        preferred = part("Q321", "principal", rank="PreferredRank")
+        assert self.own(preferred, part("Q322", "informant")) == {"Q321"}
+
+    def test_the_role_is_the_manifests(self):
+        assert PRINCIPAL_ROLE in MANIFEST["items"]
+        assert "object_has_role" in MANIFEST["properties"]
+
+
+class TestPrincipalsByEvent:
+    def test_each_event_gives_its_principals(self):
+        found = principals_by_event(EVENT_PARTICIPANTS)
+        assert found["death"] == {
+            "Q320": {"Q321"},
+            "Q323": {"Q324"},
+            "Q325": set(),
+        }
+        assert found["birth"] == {"Q328": {"Q329"}}
+
+    def test_an_unknown_value_is_read_as_someone(self):
+        rows = participant_rows("Q323", "death", [("Q324", []), ("?", [])])
+        assert principals_by_event(rows)["death"] == {"Q323": set()}
+
+    def test_a_birth_counts_at_any_rank_but_deprecated(self):
+        rows = participant_rows(
+            "Q328",
+            "birth",
+            [
+                ("Q329", ["principal"]),
+                ("Q331", ["principal"], "PreferredRank"),
+            ],
+        )
+        assert principals_by_event(rows)["birth"] == {"Q328": {"Q329", "Q331"}}
+        assert principals_by_event(
+            participant_rows("Q323", "death", [("Q324", [], "DeprecatedRank")])
+        )["death"] == {"Q323": set()}
+
+    def test_a_row_per_role_gives_the_statement_every_role(self):
+        rows = participant_rows(
+            "Q320", "death", [("Q321", ["principal", "witness"])]
+        )
+        assert len(rows) == 2
+        assert principals_by_event(rows)["death"] == {"Q320": set()}
+
+    def test_a_non_person_value_is_read(self):
+        rows = participant_rows(
+            "Q323", "death", [("Q324", []), ("Q340", [], "NormalRank", True)]
+        )
+        assert principals_by_event(rows)["death"] == {"Q323": {"Q324"}}
+
+
+def evidence_runner(calls=None, *, participants=EVENT_PARTICIPANTS):
+    """A query runner that answers the evidence queries with the event
+    cases."""
+
+    def run(query: str) -> list[dict]:
+        if calls is not None:
+            calls.append(query)
+        if "?eventKind" in query:
+            return participants
+        if "/ps:" in query:
+            return EVENT_BIRTHS
+        if 'BIND("value" AS ?bound)' in query:
+            return EVENT_PEOPLE_BIRTHS
+        raise AssertionError(f"unexpected query: {query}")
+
+    return run
+
+
+class TestReadEvidence:
+    """Both the export and the site read the evidence here (#345)."""
+
+    def vocabulary(self):
+        properties = {
+            key: f"P{n}" for n, key in enumerate(MANIFEST["properties"], 1)
+        }
+        items = {key: f"Q{n}" for n, key in enumerate(MANIFEST["items"], 1)}
+        return properties, items
+
+    def test_a_death_event_marks_its_principal_alone(self):
+        found = read_evidence(evidence_runner(), "", *self.vocabulary())
+        assert found.died == {"Q321", "Q324"}
+
+    def test_a_birth_event_is_a_further_birth_of_its_principal(self):
+        found = read_evidence(evidence_runner(), "", *self.vocabulary())
+        assert sorted(found.births["Q329"]) == [1850, 1990]
+        assert found.births["Q331"] == [1850]
+
+    def test_each_person_is_decided_as_the_cases_say(self):
+        found = read_evidence(evidence_runner(), "", *self.vocabulary())
+        possibly = {
+            qid
+            for qid in EVENT_CASES
+            if is_possibly_living(
+                found.births.get(qid, []), qid in found.died, CUTOFF
+            )[0]
+        }
+        assert possibly == EVENT_EXCLUDED
+
+    def test_the_queries_are_read_with_the_prefixes(self):
+        calls = []
+        properties, items = self.vocabulary()
+        read_evidence(evidence_runner(calls), "PREFIXES\n", properties, items)
+        assert calls == [
+            "PREFIXES\n" + BIRTHS_QUERY.format(**properties),
+            "PREFIXES\n" + participants_query(properties, items),
+            "PREFIXES\n" + birth_event_dates_query(properties, items),
+        ]
+
+    def test_no_birth_event_reads_no_event_dates(self):
+        calls = []
+        read_evidence(
+            evidence_runner(calls, participants=[]), "", *self.vocabulary()
+        )
+        assert len(calls) == 2
+
+
+class TestTheEventQueries:
+    def test_a_death_event_is_read_by_its_truthy_type(self):
+        assert "?event wdt:{instance_of} wd:{death} ." in PARTICIPANTS_QUERY
+        assert "wd:{death}" not in PARTICIPANTS_QUERY.split("UNION")[1]
+
+    def test_a_birth_event_is_read_by_its_type_at_any_rank(self):
+        assert (
+            "?event p:{instance_of} ?birthTyping .\n"
+            "    ?birthTyping ps:{instance_of}/{same_as}* wd:{birth} ."
+        ) in PARTICIPANTS_QUERY
+
+    def test_every_participant_statement_is_read_with_its_rank(self):
+        assert "?event p:{participant} ?part .\n" in PARTICIPANTS_QUERY
+        assert "?part wikibase:rank ?partRank ." in PARTICIPANTS_QUERY
+        assert "wdt:{participant}" not in PARTICIPANTS_QUERY
+        # a statement of no value or unknown value still gives a row
+        assert "OPTIONAL {{ ?part ps:{participant} ?value . }}" in (
+            PARTICIPANTS_QUERY
+        )
+
+    def test_the_role_is_read_from_the_statements_qualifier(self):
+        assert "?part pq:{object_has_role} ?role ." in PARTICIPANTS_QUERY
+        assert (
+            "BIND(EXISTS {{ ?role {same_as}* wd:{principal} . }} "
+            "AS ?principal)" in PARTICIPANTS_QUERY
+        )
+
+    def test_a_non_person_is_typed_at_normal_or_preferred_rank(self):
+        assert "BIND(BOUND(?value) && EXISTS {{" in PARTICIPANTS_QUERY
+        assert (
+            "FILTER(?partTypingRank != wikibase:DeprecatedRank)"
+            in PARTICIPANTS_QUERY
+        )
+        assert (
+            "VALUES ?partKind {{ {non_person_kinds} }}" in PARTICIPANTS_QUERY
+        )
+
+    def test_every_id_is_filled_in(self):
+        properties, items = TestReadEvidence().vocabulary()
+        filled = participants_query(properties, items)
+        assert "{" not in filled.replace("{\n", "").replace("{ ", "")
+        assert f"wd:{items['principal']}" in filled
+        assert f"pq:{properties['object_has_role']}" in filled
+        for key in NON_PERSON_CLASSES:
+            assert f"wd:{items[key]}" in filled
+        dated = birth_event_dates_query(properties, items)
+        assert f"wd:{items['birth']}" in dated
+
+    def test_a_birth_events_date_is_read_as_a_birth_is(self):
+        assert (
+            BIRTH_EVENT_DATES_QUERY.count(
+                "?person p:{instance_of}/ps:{instance_of}/{same_as}* "
+                "wd:{birth} .\n"
+                "    ?person p:{point_in_time} ?statement ."
+            )
+            == 3
+        )
+        assert "date_of_birth" not in BIRTH_EVENT_DATES_QUERY
+        assert (
+            "wd:{point_in_time} wikibase:statementValue"
+            in BIRTH_EVENT_DATES_QUERY
+        )
+        assert BIRTH_EVENT_DATES_QUERY.endswith(BIRTHS_QUERY[-120:])

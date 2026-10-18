@@ -37,6 +37,11 @@ from tests.unit.test_privacy import (
     DOCUMENTED_PERSON_EVENTS,
     DOCUMENTED_SUBJECT_EVIDENCE,
     DOCUMENTED_VALUE_EVIDENCE,
+    EVENT_BIRTHS,
+    EVENT_CASES,
+    EVENT_EXCLUDED,
+    EVENT_PARTICIPANTS,
+    EVENT_PEOPLE_BIRTHS,
     EXCLUDED,
     MANIFEST,
     XSD,
@@ -68,7 +73,11 @@ from yizkr.backup import (
 )
 from yizkr.core.config import Config
 from yizkr.core.dates import UNSUPPORTED_QUERY, UnsupportedDate
-from yizkr.core.privacy import BIRTHS_QUERY, people_selection
+from yizkr.core.privacy import (
+    BIRTHS_QUERY,
+    participants_query,
+    people_selection,
+)
 from yizkr.model.schema import load_manifest, read_manifest_data
 from yizkr.queries.publish import prefix_block
 
@@ -179,7 +188,15 @@ class TestExclusionReport:
     query lists, with the births the privacy module's query reads (#334).
     The cutoff year is read from a clock the test sets."""
 
-    def report(self, vocabulary, facts=FACTS, births=BIRTHS, **options):
+    def report(
+        self,
+        vocabulary,
+        facts=FACTS,
+        births=BIRTHS,
+        participants=(),
+        event_births=(),
+        **options,
+    ):
         calls = []
         options.setdefault("now", at(NOW))
 
@@ -187,6 +204,10 @@ class TestExclusionReport:
             calls.append(query)
             if "SAMPLE(?deathDate)" in query:
                 return facts
+            if "?eventKind" in query:
+                return list(participants)
+            if "/ps:" in query and 'BIND("value" AS ?bound)' in query:
+                return list(event_births)
             if 'BIND("value" AS ?bound)' in query:
                 return births
             if UNSUPPORTED_SELECT in query:
@@ -274,17 +295,33 @@ class TestExclusionReport:
         assert "Q304" in found.included
 
     def test_births_are_read_with_the_privacy_modules_query(self, vocabulary):
-        properties, _ = vocabulary
+        properties, items = vocabulary
         _, calls = self.report(vocabulary)
-        assert len(calls) == 3
+        assert len(calls) == 4
         assert prefix_block(CONCEPT) + BIRTHS_QUERY.format(**properties) in (
             calls
         )
+        assert prefix_block(CONCEPT) + participants_query(
+            properties, items
+        ) in (calls)
 
     def test_the_facts_query_reads_no_birth(self):
         # births are read statement by statement, never sampled here
         assert "SAMPLE(?birthDate)" not in PERSON_FACTS_QUERY
         assert "date_of_birth" not in PERSON_FACTS_QUERY
+
+    def test_the_facts_query_reads_no_death_event(self):
+        # a death event is read apart, for its principal alone (#345): a
+        # participant of any role is never taken for the one who died
+        assert "participant" not in PERSON_FACTS_QUERY
+        assert "{death}" not in PERSON_FACTS_QUERY
+        assert "deathEvent" not in PERSON_FACTS_QUERY
+        assert backup._DEATH_BINDINGS == (
+            "death",
+            "deathPlace",
+            "deathCause",
+            "burial",
+        )
 
     def test_people_are_selected_through_their_statements(self, vocabulary):
         # every item with person evidence, at every rank (#344), never the
@@ -295,6 +332,41 @@ class TestExclusionReport:
         assert people_selection(properties, items) in facts
         # nor any truthy type beside the selection
         assert f"?person wdt:{properties['instance_of']} " not in facts
+
+
+class TestEventsInTheExclusionReport:
+    """A birth or death event is its principal's own (#345): the export
+    releases the principal of a death, never an informant or a witness at
+    it, nor anyone in a death that states no role and has several
+    participants, and reads a dated birth event as a further birth of its
+    principal."""
+
+    def report(self, vocabulary):
+        facts = [{"person": uri(qid)} for qid in EVENT_CASES]
+        found, _ = TestExclusionReport().report(
+            vocabulary,
+            facts=facts,
+            births=EVENT_PEOPLE_BIRTHS,
+            participants=EVENT_PARTICIPANTS,
+            event_births=EVENT_BIRTHS,
+        )
+        return found
+
+    def test_each_person_is_decided_as_the_cases_say(self, vocabulary):
+        found = self.report(vocabulary)
+        assert found.excluded == EVENT_EXCLUDED
+        assert found.included == set(EVENT_CASES) - EVENT_EXCLUDED
+
+    def test_an_informant_at_someone_elses_death_stays_out(self, vocabulary):
+        found = self.report(vocabulary)
+        assert "Q322" in found.excluded
+        assert found.reasons["Q321"] == "death recorded"
+
+    def test_a_later_birth_event_keeps_its_principal_out(self, vocabulary):
+        found = self.report(vocabulary)
+        assert found.reasons["Q329"] == (
+            "born as late as 1990, with no death evidence"
+        )
 
 
 REF_DEAD = "a" * 40  # reference used only by the excluded person
@@ -3066,6 +3138,8 @@ class ExportRun:
             return [
                 facts_row(qid, qid in self.released) for qid in self.selected
             ]
+        if "?eventKind" in query:
+            return []
         if 'BIND("value" AS ?bound)' in query:
             return birth_rows("Q404", [(("1990-01-01T00:00:00Z", 9), [], [])])
         if UNSUPPORTED_SELECT in query:
@@ -4434,12 +4508,13 @@ class TestExportNonprivileged:
         _, runner = self.export(
             tmp_path, vocabulary, revisions=[behind, behind, dumped]
         )
-        # two waits, then the check (unsupported dates, facts, births),
-        # then one more look
+        # two waits, then the check (unsupported dates, facts, births,
+        # event participants), then one more look
         assert [query == REVISIONS_QUERY for query in runner.queries] == [
             True,
             True,
             True,
+            False,
             False,
             False,
             False,
