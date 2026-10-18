@@ -72,7 +72,10 @@ class TestLibrary:
         # locators and excerpt, so a statement citing one artifact twice
         # gives rows that say where (#351); a fragment folds into its whole
         q = templates["artifact-assertions"]
-        projection = set(re.findall(r"\?(\w+)", q.split("WHERE", 1)[0]))
+        query = "\n".join(
+            line for line in q.splitlines() if not line.startswith("#")
+        )
+        projection = set(re.findall(r"\?(\w+)", query.split("WHERE", 1)[0]))
         assert projection >= {
             "artifact",
             "source",
