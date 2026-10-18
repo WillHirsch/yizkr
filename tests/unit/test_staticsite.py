@@ -592,18 +592,43 @@ class TestPersonPage:
             cells = qualifier_cells(*order)
             assert self.qualified(tmp_path, vocabulary, cells) == expected
 
+    def test_a_point_in_time_reads_before_its_bounds_and_each_value_in_order(
+        self, tmp_path, vocabulary
+    ):
+        # a point in time before the bounds of its date, and two values of
+        # one qualifier in one order, by value and then precision
+        qualifiers = [
+            ("latest_date", "1939-01-01T00:00:00Z", "9"),
+            ("latest_date", "1939-01-01T00:00:00Z", "8"),
+            ("earliest_date", "1938-01-01T00:00:00Z", "9"),
+            ("point_in_time", "1938-01-01T00:00:00Z", "9"),
+            ("object_has_role", "witness", ""),
+            ("object_has_role", "informant", ""),
+        ]
+        expected = (
+            "point in time: 1938; earliest date: 1938; latest date: 1930s; "
+            "latest date: 1939; object has role: informant; "
+            "object has role: witness"
+        )
+        for order in (qualifiers, qualifiers[::-1]):
+            cells = qualifier_cells(*order)
+            assert self.qualified(tmp_path, vocabulary, cells) == expected
+
     def test_a_qualifier_value_is_shown_whole_and_escaped(
         self, tmp_path, vocabulary
     ):
         # the cells are percent-encoded, so a value's spaces, "|" and
         # markup survive the GROUP_CONCAT whole, and are escaped on the page
+        # and a value that is not a time is never read as one:
+        # format_time would cut "Cäcilie Tarle" at its "T"
         cells = qualifier_cells(
             ("age_at_death", "73 Jahre | <alt> & mehr", ""),
+            ("perspective", "Cäcilie Tarle", ""),
             ("sourcing_circumstances", "circa", ""),
         )
         assert self.qualified(tmp_path, vocabulary, cells) == (
             "age at death: 73 Jahre | <alt> & mehr; "
-            "sourcing circumstances: circa"
+            "perspective: Cäcilie Tarle; sourcing circumstances: circa"
         )
         site = tmp_path / "site"
         assert (
@@ -1107,14 +1132,46 @@ class TestArtifactPage:
                     asserted(
                         RESIDENCE,
                         source=uri("Q24"),
-                        fragmentLabel=literal("burial register, page 2"),
+                        fragmentLabel=literal(
+                            "burial register <copy> & index, page 2"
+                        ),
+                        page=literal("2 & 3"),
                     )
                 ],
             )
         )
         assert row.endswith(
-            "<td>fragment: burial register, page 2; page number: 2</td>"
+            "<td>fragment: burial register &lt;copy&gt; &amp; index, page 2; "
+            "page number: 2 &amp; 3</td>"
         )
+
+    def test_a_fragment_with_no_english_label_is_named_by_its_id(
+        self, tmp_path, vocabulary
+    ):
+        (row,) = self.rows_of(
+            self.page_of(
+                tmp_path,
+                vocabulary,
+                [asserted(RESIDENCE, source=uri("Q25"), page=None)],
+            )
+        )
+        assert row.endswith("<td>fragment: Q25</td>")
+
+    def test_places_are_in_page_order(self, tmp_path, vocabulary):
+        # page 2 before page 10, in a statement's places and in a block's
+        # values, whatever order the query gives them in
+        rows = [
+            asserted(RESIDENCE, reference=uri("r40"), page=literal("10")),
+            asserted(RESIDENCE, reference=uri("r41"), page=literal("2")),
+            asserted(RESIDENCE, reference=uri("r42"), page=literal("10")),
+            asserted(RESIDENCE, reference=uri("r42"), page=literal("9")),
+        ]
+        for order in (rows, rows[::-1]):
+            (row,) = self.rows_of(self.page_of(tmp_path, vocabulary, order))
+            assert row.endswith(
+                "<td>page number: 2<br>page number: 9, 10<br>"
+                "page number: 10</td>"
+            )
 
     def test_a_qualifier_before_the_common_era_is_refused(
         self, tmp_path, vocabulary
@@ -1143,8 +1200,22 @@ class TestArtifactPage:
             "excerpt",
             "qualifierCells",
         }
-        # the reference node is bound, never walked past as a path
+        # the reference node is bound, never walked past as a path, and
+        # each locator read from it
         assert "prov:wasDerivedFrom ?reference" in ASSERTIONS_QUERY
+        for key, name in (
+            ("page_number", "page"),
+            ("printed_page_number", "printedPage"),
+            ("relative_position_within_image", "region"),
+            ("transcription_excerpt", "excerpt"),
+        ):
+            assert f"?reference pr:{{{key}}} ?{name} ." in ASSERTIONS_QUERY
+        # only a fragment that is part of a whole folds into it
+        assert re.search(
+            r"\?source wdt:\{instance_of\} wd:\{artifact_fragment\} ;"
+            r"\s+wdt:\{part_of\} \?whole \.",
+            ASSERTIONS_QUERY,
+        )
         assert "?reference pr:{transcription_excerpt} ?excerpt" in (
             ASSERTIONS_QUERY
         )
@@ -1726,12 +1797,12 @@ class TestTimeFormatting:
     @pytest.mark.parametrize(
         ("precision", "shown"),
         [
-            ("5", "1919, to the nearest 10,000 years"),
-            ("4", "1919, to the nearest 100,000 years"),
-            ("3", "1919, to the nearest 1,000,000 years"),
-            ("2", "1919, to the nearest 10,000,000 years"),
-            ("1", "1919, to the nearest 100,000,000 years"),
-            ("0", "1919, to the nearest 1,000,000,000 years"),
+            ("5", "1919, to within 10,000 years"),
+            ("4", "1919, to within 100,000 years"),
+            ("3", "1919, to within 1,000,000 years"),
+            ("2", "1919, to within 10,000,000 years"),
+            ("1", "1919, to within 100,000,000 years"),
+            ("0", "1919, to within 1,000,000,000 years"),
         ],
     )
     def test_a_precision_coarser_than_a_millennium_is_never_narrowed(

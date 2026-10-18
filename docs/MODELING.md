@@ -681,7 +681,7 @@ artifact a new QID, changes neither.
   year 1 as above, so one stored as 1001 or 2000 is the 2nd millennium. A
   precision coarser than a millennium (ten thousand years up to a
   billion) shows as the stored year with the span its precision allows
-  ("1900, to the nearest 10,000 years"), never as a narrower century.
+  ("1900, to within 10,000 years"), never as a narrower century.
 - "The 1800s", meaning 1800–1899, is not a century in that count, and
   is stated as a range, earliest date 1800 and latest date 1899, never
   rounded to the 19th century.

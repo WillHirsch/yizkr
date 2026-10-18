@@ -42,6 +42,7 @@ from __future__ import annotations
 import datetime
 import html
 import json
+import re
 import shutil
 import urllib.parse
 from collections import defaultdict
@@ -115,7 +116,8 @@ ORDER BY ?personLabel
 # and, for a time, its precision, separated by spaces. The label and the
 # value are percent-encoded (ENCODE_FOR_URI), so no cell holds a space or a
 # "|" of its own, whatever a label or a string value says; read_qualifiers
-# reads them back. An item's value is its English label, a time's its
+# reads them back. An item's value is its English label (its full IRI when
+# it has none), a time's its
 # xsd:dateTime with its precision beside it (formatted by format_time, so
 # shown at the SOURCE's precision, never padded or narrowed), and any other
 # value its text.
@@ -229,6 +231,12 @@ SELECT ?artifact ?source ?fragmentLabel ?st ?reference ?subject ?subjectLabel
 WHERE {{
   ?st prov:wasDerivedFrom ?reference .
   ?reference pr:{stated_in} ?source .
+  ?subject ?p ?st .
+  ?prop wikibase:claim ?p ;
+        wikibase:statementProperty ?ps ;
+        rdfs:label ?propLabel .
+  FILTER(LANG(?propLabel) = "en")
+  ?st ?ps ?value .
   OPTIONAL {{
     ?source wdt:{instance_of} wd:{artifact_fragment} ;
             wdt:{part_of} ?whole .
@@ -238,12 +246,6 @@ WHERE {{
     }}
   }}
   BIND(COALESCE(?whole, ?source) AS ?artifact)
-  ?subject ?p ?st .
-  ?prop wikibase:claim ?p ;
-        wikibase:statementProperty ?ps ;
-        rdfs:label ?propLabel .
-  FILTER(LANG(?propLabel) = "en")
-  ?st ?ps ?value .
   OPTIONAL {{
     ?subject rdfs:label ?subjectLabel .
     FILTER(LANG(?subjectLabel) = "en")
@@ -404,7 +406,7 @@ def format_time(
     2nd millennium. A precision coarser than a millennium (Wikibase's 0
     to 5, ten thousand years up to a billion) names no span the site has
     a word for, so it shows the stored year with the span its precision
-    allows ("1900, to the nearest 10,000 years"), never a narrower date.
+    allows ("1900, to within 10,000 years"), never a narrower date.
     A date before the common era raises UnsupportedDate naming `where`
     (ADR-0034): it is never shown. This is a backstop: the build has
     already refused a graph holding one, naming its item and statement."""
@@ -415,7 +417,7 @@ def format_time(
     month = rest.split("-")[0] if rest else ""
     p = int(precision) if precision else 11
     if p <= 5:
-        return f"{int(year)}, to the nearest {10 ** (9 - p):,} years"
+        return f"{int(year)}, to within {10 ** (9 - p):,} years"
     if p == 6:
         return f"{ordinal((int(year) + 999) // 1000)} millennium"
     if p == 7:
@@ -459,6 +461,14 @@ DATE_QUALIFIERS = (
     "earliest_end_date",
     "latest_date",
 )
+
+
+def natural_order(text: str) -> tuple[list[str | int], str]:
+    """A sort key that reads each run of digits in `text` as its number,
+    so page 2 sorts before page 10, and then `text` itself, so texts whose
+    numbers are equal ("02" and "2") still keep one order."""
+    runs = re.split(r"(\d+)", text)
+    return [int(run) if n % 2 else run for n, run in enumerate(runs)], text
 
 
 def read_qualifiers(encoded: str) -> list[tuple[str, str, str, str]]:
@@ -798,6 +808,14 @@ class SiteBuilder:
             )
             for name in ("fragmentLabel", "page", "printedPage", "region"):
                 text = cell(row, name)
+                if (
+                    name == "fragmentLabel"
+                    and not text
+                    and cell(row, "source") != cell(row, "artifact")
+                ):
+                    # a fragment folded into its whole that has no English
+                    # label is named by its id
+                    text = qid_of(row, "source")
                 if text and text not in block[name]:
                     block[name].append(text)
             excerpt = row.get("excerpt")
@@ -808,20 +826,25 @@ class SiteBuilder:
         return [
             (
                 first[st],
-                sorted(self.place_html(block) for block in by_block.values()),
+                sorted(
+                    (self.place_html(block) for block in by_block.values()),
+                    key=natural_order,
+                ),
             )
             for st, by_block in blocks.items()
         ]
 
     def place_html(self, block: dict[str, list]) -> str:
         """Where one reference block cites the artifact, as HTML: its
-        fragment, page number, printed page number and image region, each
+        fragment (by its English label, or its id when it has none), page
+        number, printed page number and image region, each
         in the `label: value` form, then its excerpt, quoted, in a
         ``q`` element whose ``lang`` is the excerpt's language. A block
         with none of them reads "the artifact as a whole"."""
         labels = disagreement.property_labels()
         parts = [
-            f"{esc(label)}: {esc(', '.join(block[name]))}"
+            f"{esc(label)}: "
+            + esc(", ".join(sorted(block[name], key=natural_order)))
             for name, label in (
                 ("fragmentLabel", "fragment"),
                 ("page", labels["page_number"]),

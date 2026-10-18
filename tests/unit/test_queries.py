@@ -86,6 +86,13 @@ class TestLibrary:
             "printedPage",
             "region",
             "excerpt",
+            "artifactLabel",
+            "entity",
+            "entityLabel",
+            "propertyLabel",
+            "value",
+            "valueLabel",
+            "sourceLabel",
         }
         assert "?statement prov:wasDerivedFrom ?reference ." in q
         for key, name in (
@@ -96,6 +103,11 @@ class TestLibrary:
         ):
             assert f"?reference pr:{{P:{key}}} ?{name} ." in q
         assert "BIND(COALESCE(?whole, ?source) AS ?artifact)" in q
+        # the fold is optional, and only for a fragment part of a whole
+        marker = "?source wdt:{P:instance_of} wd:{Q:artifact_fragment}"
+        guard = group_at(q, marker)
+        assert "wdt:{P:part_of} ?whole" in guard
+        assert q[: q.index(guard)].rstrip().endswith("OPTIONAL")
         assert "GROUP_CONCAT" not in q
 
     def test_under_witnessed_query_keys_on_provenance(self, templates):

@@ -7,10 +7,10 @@
 # column of its own, tell apart the places a statement cites one artifact at
 # (two pages, say); a block with two values of one locator gives a row for
 # each. A statement citing a fragment of an artifact is listed under its whole,
-# with the fragment as ?source. A time value carries its stated precision
-# (display must never pad or narrow).
+# with the fragment as ?source and its label as ?sourceLabel. A time value
+# carries its stated precision (display must never pad or narrow).
 SELECT ?artifact ?artifactLabel ?source ?statement ?reference ?entity
-       ?entityLabel ?propertyLabel ?value ?valueLabel ?precision
+       ?sourceLabel ?entityLabel ?propertyLabel ?value ?valueLabel ?precision
        ?page ?printedPage ?region ?excerpt
 WHERE {
   ?statement prov:wasDerivedFrom ?reference .
