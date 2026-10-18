@@ -379,9 +379,13 @@ the output limit is kept as a give-up entry (Attempts, below): its
 the call's stream reported (`llm.ClaudeCodeClient.last_stream`), its
 `stop_reason` and `api_error` among them; an entry whose `gave_up` is
 anything but a boolean is damaged, read as no entry, so the call misses,
-and the next entry stored under its key moves it aside as replaced. An
-entry is served only
-under the key it records.
+and the next entry stored under its key moves it aside as replaced. So
+is an entry that is not whole JSON, or one nested too deep to decode
+(#339): it is moved aside with its bytes as they were. Every reader of
+the cache's files reads such a file as unreadable rather than failing:
+`asides` (and so `scratch diff`) leaves it out, and a lock file nested
+too deep names no holder. An entry is served only under the key it
+records.
 
 **Writes are atomic, and nothing is overwritten.** An entry is written to
 a staging file beside it, flushed, and published by a link that fails
@@ -438,6 +442,26 @@ or an adoption, and a kept session's folders, however deep. A folder
 there already keeps its mode, one another process makes first included,
 so the cache changes the mode of no folder it did not make; a private
 root keeps the folders under it from other users, whatever their modes.
+
+**A key's folder it cannot store in is refused before the engine is
+asked** (#341). A folder inside a private root can still be closed to
+its owner later, by a chmod, a restore or a copy (say mode 500). On a
+miss, before the engine is asked, the call checks the key's folder: one
+there that is not a folder, or that this user cannot write in or pass
+through, is refused in one line naming the folder and its mode, with the
+fix (`chmod u+rwx <folder>`), as `CacheRefused`, so the invocation ends
+`paused`, exit 2, rather than spending an engine answer that could not
+be stored and then failing the document, run after run. Where the key's
+folder is not there yet, the nearest folder above it, in which storing
+would make it (the root, as a rule), is checked the same way. The check
+costs one access check per miss and catches a chmod made during a run.
+It covers every miss: an absent, rejected or refreshed key, an opening
+turn, a fork, an attempt's give-up, and a fork's replay of its opening
+turn, whose answer is stored under the opening turn's key. Its mode is
+left as it is, since the cache cannot tell a folder it made from one
+changed since; a hit under it is still served. `yizkr scratch estimate`
+refuses such a miss too, where the run would pause, though it stores
+nothing.
 
 ## One process per cache
 

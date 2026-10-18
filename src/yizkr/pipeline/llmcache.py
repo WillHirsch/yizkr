@@ -54,7 +54,11 @@ makes, the root and any missing folder above it included, is made
 private to its owner (mode 700, whatever the umask); a folder there
 already keeps its mode, so the cache changes the mode of no folder it did
 not make. A private root keeps the folders under it from other users,
-whatever their modes.
+whatever their modes. A call that misses under a key whose folder is
+there but is no folder, or one this user cannot write in or pass
+through (a chmod made since, say), is refused too (CacheRefused), before
+the engine is asked, so that no answer is asked for that could not be
+stored; its mode is left alone, and a hit under it is still served.
 
 One process at a time uses a cache (ADR-0032 §3). Opening it locks
 ``.lock`` exclusively (flock) for the rest of the process and records the
@@ -236,10 +240,11 @@ def _dump(entry: Mapping[str, Any]) -> str:
 
 def _read(path: Path, key: str) -> dict | None:
     """The entry at `path` if it is a whole entry for `key`, else None.
-    An entry whose ``gave_up`` is there but no boolean is damaged."""
+    An entry whose ``gave_up`` is there but no boolean is damaged, as is
+    one nested too deep to decode."""
     try:
         entry = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     if (
         not isinstance(entry, dict)
@@ -262,8 +267,12 @@ def call_key(components: Mapping[str, Any]) -> str:
 class CacheRefused(PassPaused):
     """The folder named for a cache cannot hold one: a git work tree would
     track it, it exists and is open to other users, or it cannot be made,
-    is not a folder, or is one this user cannot write in or lock. Like
-    CacheInUse, it is a pause: it ends the pass before its first call,
+    is not a folder, or is one this user cannot write in or lock. Or a
+    call misses under a key whose answer could not be stored, because the
+    key's folder inside the root is no folder, or one this user cannot
+    write in or pass through (EngineCache.check_storable), found before
+    the engine is asked. Like CacheInUse, it is a pause: it ends the pass
+    before its first call, or before the call that could not be stored,
     rather than failing each document in turn, and the pass can go on once
     the folder is fit to hold the cache, or with another."""
 
@@ -483,7 +492,7 @@ def _record_text(fd: int) -> str:
 def _parse_record(text: str) -> dict | None:
     try:
         record = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     return record if isinstance(record, dict) else None
 
@@ -669,6 +678,38 @@ class EngineCache:
         """The entry a call with this key is served, or None."""
         return _read(self.path(key), key)
 
+    def check_storable(self, key: str) -> None:
+        """Refuse (CacheRefused) a call under `key` whose answer could not
+        be stored: the key's folder is there but is no folder, or one this
+        user cannot write in or pass through; or, while it is not there
+        yet, the nearest folder above it, in which storing would make it,
+        is such a one. A caller asks this on a miss before it asks the
+        engine, so that no answer is asked for that would be lost, a chmod
+        made while the process runs included. The folder's mode is left as
+        it is: the cache cannot tell a folder it made from one a restore, a
+        copy or its owner changed since."""
+        folder = self.path(key).parent
+        while not os.path.lexists(folder) and folder.parent != folder:
+            folder = folder.parent
+        try:
+            info = folder.stat()
+        except OSError as exc:
+            raise CacheRefused(
+                f"the LLM cache cannot store an answer in {folder}: {exc}"
+            ) from None
+        if not stat.S_ISDIR(info.st_mode):
+            raise CacheRefused(
+                f"the LLM cache cannot store an answer in {folder}: it is "
+                "not a folder; move it out of the cache"
+            )
+        if not os.access(folder, os.W_OK | os.X_OK):
+            raise CacheRefused(
+                f"the LLM cache cannot store an answer in {folder}: this "
+                "user cannot write in it or pass through it (mode "
+                f"{stat.S_IMODE(info.st_mode):o}); give it back with chmod "
+                f"u+rwx {folder}"
+            )
+
     def rejected(self, key: str) -> list[Path]:
         """The entries under this key that callers rejected."""
         path = self.path(key)
@@ -683,7 +724,7 @@ class EngineCache:
         for aside in sorted(path.parent.glob(f"{key}.*.json")):
             try:
                 entry = json.loads(aside.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
+            except (OSError, ValueError, RecursionError):
                 continue
             if isinstance(entry, dict) and entry.get("key") == key:
                 found.append(entry)
@@ -973,7 +1014,7 @@ class EngineCache:
             return False
         try:
             entry = json.loads(aside.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             return True
         if isinstance(entry, dict):
             atomic_write_text(aside, _dump(entry | dict(note)))
@@ -989,9 +1030,12 @@ class CacheAsIs(EngineCache):
     reading of an entry, from EngineCache, but none of its opening, which
     makes the root and holds its lock; a root the cache would refuse
     (_root_refusal) it refuses too, with CacheRefused, so that it reads no
-    folder a run would refuse to use. A kept session is given by its
-    files' names, without their bytes: whether they can resume a
-    conversation is all a reader of it asks. A kept session is read
+    folder a run would refuse to use. A miss whose answer a run could not
+    store is refused as the run refuses it (check_storable, inherited),
+    though nothing is stored here: the estimate stops where the run would
+    pause. A kept session is given by its files' names, without their
+    bytes: whether they can resume a conversation is all a reader of it
+    asks. A kept session is read
     through its folder, opened once, so a process that replaces it
     meanwhile (keep_session: the folder found there renamed aside, the new
     one renamed in) never tears the listing; and where that replacement
@@ -1406,7 +1450,10 @@ class CachingClient:
         an attempt's give-up at the output limit (OutputLimitReached),
         which is kept as a give-up entry (_gave_up_entry). A hit on a
         give-up entry, whose event says ``gave_up``, raises
-        OutputLimitReached, as the engine did, and asks nothing."""
+        OutputLimitReached, as the engine did, and asks nothing. A miss
+        under a key whose answer could not be stored is refused
+        (EngineCache.check_storable) before `ask` is called, with no miss
+        event; a hit is served however the key's folder is set."""
         key = call_key(components)
         refresh = self.cache.refreshing(self.role, key)
         if not refresh:
@@ -1430,6 +1477,7 @@ class CachingClient:
                     made_by=None if origin == ENGINE else _made_by(entry),
                     stop_reason=_stop_reason(entry),
                 ), False
+        self.cache.check_storable(key)
         if refresh:
             reason = REFRESH
         elif self.cache.rejected(key):
@@ -1713,6 +1761,10 @@ class ConversationalCachingClient(CachingClient):
             replay = getattr(self.client, "replay_conversation", None)
             if not callable(replay):
                 replay = self.client.open_conversation
+            # a replay that answers differently is stored under the
+            # opening turn's key, whose folder may be another than the
+            # fork's
+            self.cache.check_storable(key)
             try:
                 response, session = replay(conversation.prompt)
             except Exception as exc:
