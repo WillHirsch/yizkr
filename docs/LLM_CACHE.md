@@ -439,9 +439,9 @@ nothing behind; it prints the line and exits 1 (#327). The check is made
 for every invocation whose range holds a per-document stage, or a corpus
 stage that may call the engine, a resume that reuses every view
 included; an invocation past the barrier only, whose corpus stages call
-no engine, opens no cache, and its folder is not checked. `yizkr scratch estimate` refuses the same
-folders where the run's preflight would; it too prints the line and
-exits 1.
+no engine, opens no cache, and its folder is not checked.
+`yizkr scratch estimate` refuses the same folders where the run's
+preflight would; it too prints the line and exits 1.
 
 **Folders the cache makes are private** (mode 700, whatever the umask):
 the root and any missing folder above it, a key's folder for an answer

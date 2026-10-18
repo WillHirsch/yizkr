@@ -613,12 +613,14 @@ uv run yizkr scratch recheck [<run>] [--runs DIR] [--config FILE]
 ```
 
 takes the run as the other `scratch` commands do: a run directory (an
-`ingest run`'s state directory too), or a run's id in the runs directory (`--runs`, `var/scratch` by default), and
-the latest run there when none is named (#327). It checks the outputs
-stored in the run directory's document directories again, the excerpts' directories (`excerpts/<sha1>/`, ADR-0008)
-included, under the thresholds as they are now (`--config` names a file
-of thresholds in place of the one `$YIZKR_ANOMALIES` names), without
-dispatching anything or recomputing any stage (`anomalies.recheck`).
+`ingest run`'s state directory too), or a run's id in the runs directory
+(`--runs`, `var/scratch` by default), and the latest run there when none
+is named (#327). It checks the outputs stored in the run directory's
+document directories again, the excerpts' directories
+(`excerpts/<sha1>/`, ADR-0008) included, under the thresholds as they
+are now (`--config` names a file of thresholds in place of the one
+`$YIZKR_ANOMALIES` names), without dispatching anything or recomputing
+any stage (`anomalies.recheck`).
 Each stored vision or text-file transcription meets the transcription
 check as it is now, as a run's reuse of it would, and each stored
 transcription, a PDF read page by page's included, carries the flag the
