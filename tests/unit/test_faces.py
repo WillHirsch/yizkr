@@ -781,6 +781,41 @@ class TestApplyReviewRefusesBulkAcceptedDepicts:
         for claim in depicts:
             assert f"claim {claim_id(claim)}" in str(refusal.value)
 
+    def test_cli_exits_non_zero_and_writes_no_approved_batch(self, tmp_path):
+        # the refusal is one line on stderr, not a traceback (#220)
+        text = portrait_text()
+        _, *depicts = text.claims
+        batch = tmp_path / "batch.json"
+        batch.write_text(text.model_dump_json(indent=2))
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(text, review_csv)
+        edit_rows(review_csv, set_depicts_cells("point_in_time"))
+        reviewed = tmp_path / "review.reviewed.csv"
+        accept_all(review_csv, reviewed)
+        approved = tmp_path / "approved.json"
+        args = build_parser().parse_args(
+            [
+                "ingest",
+                "apply-review",
+                "--batch",
+                str(batch),
+                "--csv",
+                str(reviewed),
+                "--out",
+                str(approved),
+            ]
+        )
+
+        with pytest.raises(SystemExit) as exit_:
+            args.func(args)
+
+        message = exit_.value.code
+        assert isinstance(message, str)
+        assert "\n" not in message
+        for claim in depicts:
+            assert f"claim {claim_id(claim)}" in message
+        assert not approved.exists()
+
     def test_sheet_posing_as_equivalences_gets_bulk_accept_then_refused(
         self, tmp_path
     ):
