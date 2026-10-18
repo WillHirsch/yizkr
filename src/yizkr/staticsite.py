@@ -617,6 +617,12 @@ class SiteBuilder:
             )
         return range_text(bounds, f"{qid_of(row, 'person')} timeline date")
 
+    @cached_property
+    def _circumstances_label(self) -> str:
+        """The manifest's label for the sourcing circumstances qualifier,
+        as the person page names it."""
+        return disagreement.property_labels()["sourcing_circumstances"]
+
     def timeline_qualifiers(self, row: dict) -> str:
         """What a person-timeline row shows beside its date: the range its
         source states (``timeline_range``), then each sourcing
@@ -625,7 +631,7 @@ class SiteBuilder:
         circumstances into ?circumstances, each label URI-encoded and
         "|"-separated; they are sorted, since GROUP_CONCAT gives them in
         no set order."""
-        name = disagreement.property_labels()["sourcing_circumstances"]
+        name = self._circumstances_label
         circumstances = sorted(
             urllib.parse.unquote(each)
             for each in cell(row, "circumstances").split("|")
