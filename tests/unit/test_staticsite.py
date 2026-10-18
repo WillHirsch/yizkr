@@ -1210,8 +1210,10 @@ class TestArtifactPage:
             ("transcription_excerpt", "excerpt"),
         ):
             assert f"?reference pr:{{{key}}} ?{name} ." in ASSERTIONS_QUERY
-        # only a fragment that is part of a whole folds into it
+        # only a fragment that is part of a whole folds into it, and the
+        # fold is optional
         assert re.search(
+            r"OPTIONAL \{\{\s+"
             r"\?source wdt:\{instance_of\} wd:\{artifact_fragment\} ;"
             r"\s+wdt:\{part_of\} \?whole \.",
             ASSERTIONS_QUERY,
