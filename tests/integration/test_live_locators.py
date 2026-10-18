@@ -262,7 +262,8 @@ def test_the_site_and_the_query_show_each_place(
         and cell(row, "subject") == entity + person
         and cell(row, "propLabel") == "date of birth"
     ]
-    assert len({cell(row, "st") for row in births}) == 1
+    (statement,) = {cell(row, "st") for row in births}
+    assert statement.startswith(f"{config.concept_uri}/entity/statement/")
     assert (
         sorted((cell(row, "page"), cell(row, "excerpt")) for row in births)
         == places
@@ -307,7 +308,10 @@ def test_the_site_and_the_query_show_each_place(
         and cell(row, "entity") == entity + person
         and cell(row, "propertyLabel") == "date of birth"
     ]
-    assert len({cell(row, "statement") for row in listed}) == 1
+    # the same statement as the site's query gives
+    assert {cell(row, "statement") for row in listed} == {
+        cell(row, "st") for row in births
+    }
     assert (
         sorted((cell(row, "page"), cell(row, "excerpt")) for row in listed)
         == places

@@ -928,33 +928,32 @@ class TestArtifactPage:
             "value": time_literal("+1862-02-15T00:00:00Z"),
             "precision": literal("11"),
         }
-        page = self.page_of(
-            tmp_path,
-            vocabulary,
-            [
-                asserted(
-                    birth,
-                    reference=uri("r20"),
-                    page=literal("1"),
-                    excerpt=excerpt("geboren am 15. Februar 1862 zu Flörburg"),
-                ),
-                asserted(
-                    birth,
-                    reference=uri("r21"),
-                    page=literal("Rückseite"),
-                    excerpt=excerpt("geb. 15.2.1862 in Flörburg"),
-                ),
-            ],
-        )
-        assert "What this artifact asserts (1)" in page
-        (row,) = self.rows_of(page)
-        assert "1862-02-15" in row
-        assert (
-            '<td>page number: 1: <q lang="de">geboren am 15. Februar 1862 '
-            "zu Flörburg</q><br>"
-            'page number: Rückseite: <q lang="de">geb. 15.2.1862 in '
-            "Flörburg</q></td>"
-        ) in row
+        blocks = [
+            asserted(
+                birth,
+                reference=uri("r20"),
+                page=literal("1"),
+                excerpt=excerpt("geboren am 15. Februar 1862 zu Flörburg"),
+            ),
+            asserted(
+                birth,
+                reference=uri("r21"),
+                page=literal("Rückseite"),
+                excerpt=excerpt("geb. 15.2.1862 in Flörburg"),
+            ),
+        ]
+        # the query gives the blocks in no set order: the places are sorted
+        for rows in (blocks, blocks[::-1]):
+            page = self.page_of(tmp_path, vocabulary, rows)
+            assert "What this artifact asserts (1)" in page
+            (row,) = self.rows_of(page)
+            assert "1862-02-15" in row
+            assert row.endswith(
+                '<td>page number: 1: <q lang="de">geboren am 15. Februar '
+                "1862 zu Flörburg</q><br>"
+                'page number: Rückseite: <q lang="de">geb. 15.2.1862 in '
+                "Flörburg</q></td>"
+            )
 
     def test_same_value_statements_that_differ_by_a_qualifier_stay_two(
         self, tmp_path, vocabulary

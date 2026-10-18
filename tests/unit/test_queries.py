@@ -65,6 +65,36 @@ class TestLibrary:
         assert "prov:wasDerivedFrom" in templates["disagreement-report"]
         assert "{P:stated_in}" in templates["disagreement-report"]
 
+    def test_artifact_assertions_say_where_each_statement_is_cited(
+        self, templates
+    ):
+        # a row for each statement and reference block, with the block's
+        # locators and excerpt, so a statement citing one artifact twice
+        # gives rows that say where (#351); a fragment folds into its whole
+        q = templates["artifact-assertions"]
+        projection = set(re.findall(r"\?(\w+)", q.split("WHERE", 1)[0]))
+        assert projection >= {
+            "artifact",
+            "source",
+            "statement",
+            "reference",
+            "precision",
+            "page",
+            "printedPage",
+            "region",
+            "excerpt",
+        }
+        assert "?statement prov:wasDerivedFrom ?reference ." in q
+        for key, name in (
+            ("page_number", "page"),
+            ("printed_page_number", "printedPage"),
+            ("relative_position_within_image", "region"),
+            ("transcription_excerpt", "excerpt"),
+        ):
+            assert f"?reference pr:{{P:{key}}} ?{name} ." in q
+        assert "BIND(COALESCE(?whole, ?source) AS ?artifact)" in q
+        assert "GROUP_CONCAT" not in q
+
     def test_under_witnessed_query_keys_on_provenance(self, templates):
         # ADR-0023: reappraisal is a structural query — machine-written
         # (run reference) and under-witnessed (one source, no curator sibling)
