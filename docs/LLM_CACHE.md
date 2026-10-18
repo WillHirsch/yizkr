@@ -450,8 +450,8 @@ miss, before the engine is asked, the call checks the key's folder: one
 there that is not a folder, or that this user cannot write in or pass
 through, is refused in one line naming the folder and its mode, with the
 fix (`chmod u+rwx <folder>`), as `CacheRefused`, so the invocation ends
-`paused`, exit 2, rather than spending an engine answer that could not
-be stored and then failing the document, run after run. Where the key's
+`paused` (`scratch run` exits 2), rather than spending an answer that
+could not be stored and then failing the document, run after run. Where the key's
 folder is not there yet, the nearest folder above it, in which storing
 would make it (the root, as a rule), is checked the same way. The check
 costs one access check per miss and catches a chmod made during a run.
