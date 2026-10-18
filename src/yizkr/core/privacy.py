@@ -626,7 +626,6 @@ class Participation:
     `principal`; `non_person` is whether its value is typed as one of
     ``NON_PERSON_CLASSES``."""
 
-    statement: str
     value: str
     rank: str = "NormalRank"
     roles: frozenset[tuple[str, bool]] = frozenset()
@@ -668,9 +667,7 @@ def event_principals(
         ]
     else:
         people = {
-            part.value if part.value != UNKNOWN else part.statement
-            for part in parts
-            if part.value and not part.non_person
+            part.value for part in parts if part.value and not part.non_person
         }
         own = [part for part in counted if people == {part.value}]
     return {part.value for part in own if part.value not in ("", UNKNOWN)}
@@ -698,13 +695,12 @@ def principals_by_event(
         if kind not in events:
             continue
         participations = []
-        for statement, part in parts.items():
+        for part in parts.values():
             row = part["row"]
             value = _cell(row, "value")
             item = _ENTITY.search(value) if value else None
             participations.append(
                 Participation(
-                    statement=statement,
                     value=item.group(1) if item else UNKNOWN if value else "",
                     rank=_cell(row, "partRank").rsplit("#", 1)[-1],
                     roles=frozenset(part["roles"]),

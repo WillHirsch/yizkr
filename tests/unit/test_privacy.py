@@ -774,10 +774,9 @@ class TestThePeopleSelection:
 # -- birth and death events: whose own each is (#345) -----------------------
 
 
-def part(value, *roles, rank="NormalRank", non_person=False, n=0):
+def part(value, *roles, rank="NormalRank", non_person=False):
     """A participant statement: `roles` each "principal" or another role."""
     return Participation(
-        statement=f"s{n}-{value}",
         value=value,
         rank=rank,
         roles=frozenset((role, role == "principal") for role in roles),
@@ -808,7 +807,7 @@ class TestEventPrincipals:
         assert self.own(part("Q321", "principal", "informant")) == set()
 
     def test_an_unknown_role_is_another_role(self):
-        unknown = Participation("s", "Q321", roles=frozenset({("_:b", False)}))
+        unknown = Participation("Q321", roles=frozenset({("_:b", False)}))
         assert self.own(unknown) == set()
 
     def test_a_role_less_event_with_one_participant_is_theirs(self):
@@ -823,13 +822,13 @@ class TestEventPrincipals:
         assert self.own(part("Q326"), part("Q327", "informant")) == set()
 
     def test_an_unknown_participant_is_someone_else(self):
-        assert self.own(part("Q324"), part(UNKNOWN, n=1)) == set()
+        assert self.own(part("Q324"), part(UNKNOWN)) == set()
 
     def test_two_unknown_participants_are_two(self):
-        assert self.own(part(UNKNOWN, n=1), part(UNKNOWN, n=2)) == set()
+        assert self.own(part(UNKNOWN), part(UNKNOWN)) == set()
 
     def test_a_statement_of_no_value_names_no_one(self):
-        assert self.own(part("Q324"), part("", n=1)) == {"Q324"}
+        assert self.own(part("Q324"), part("")) == {"Q324"}
 
     def test_a_non_person_is_no_other_participant(self):
         # a vessel in someone's death at sea leaves it theirs
@@ -838,13 +837,14 @@ class TestEventPrincipals:
         }
 
     def test_one_item_twice_is_one_participant(self):
-        assert self.own(part("Q324", n=1), part("Q324", n=2)) == {"Q324"}
+        assert self.own(part("Q324"), part("Q324")) == {"Q324"}
 
     def test_a_deprecated_statement_never_counts(self):
-        assert (
-            self.own(part("Q321", "principal", rank="DeprecatedRank")) == set()
-        )
-        assert self.own(part("Q324", rank="DeprecatedRank")) == set()
+        for best_rank_only in (True, False):
+            principal = part("Q321", "principal", rank="DeprecatedRank")
+            alone = part("Q324", rank="DeprecatedRank")
+            assert self.own(principal, best_rank_only=best_rank_only) == set()
+            assert self.own(alone, best_rank_only=best_rank_only) == set()
 
     def test_a_deprecated_participant_or_role_still_takes_a_release_away(self):
         assert (
@@ -854,6 +854,14 @@ class TestEventPrincipals:
         assert (
             self.own(
                 part("Q326"), part("Q327", "witness", rank="DeprecatedRank")
+            )
+            == set()
+        )
+        # a role a curator deprecated still makes the roles decide: the
+        # one participant's other statement states none
+        assert (
+            self.own(
+                part("Q324"), part("Q324", "informant", rank="DeprecatedRank")
             )
             == set()
         )
