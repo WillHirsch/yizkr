@@ -310,6 +310,20 @@ tests = ["tests/unit/test_example.py::test_blank_names_are_dropped"]
   different number of times than `count`, or overlapping. It restores
   each file byte for byte, with its mode and modification time, even
   after a timeout or Ctrl-C, and git must show the file clean again.
+- **Tests leave the checkout alone** (#536). Before the baseline and
+  after each run (baseline, mutant and live runs alike), the harness
+  lists what `git status --porcelain -z --untracked-files=all
+  --ignored=no` shows, one git call, with each path's type, size and
+  modification time. A path that a run made new or changed, outside the
+  mutated file, is a stray write: a test wrote into its working
+  directory, and a later commit could pick the file up. The harness
+  names the run and the paths, leaves the files for you to look at, and
+  stops with exit 2, even under `--keep-going`; the table's detail and
+  the JSON report's `stray` list name them too. Ignored paths (`var/`,
+  `import/`, `.venv/`, `__pycache__/`) are not listed: they are runtime
+  state that no commit picks up, and walking `.venv/` on every run would
+  cost more than the run. Uncommitted changes from before the run are
+  fine as long as no run changes them. A test writes under `tmp_path`.
 - **Write code in literal strings.** TOML's single-quoted strings
   (`'...'`, or three quotes around several lines) keep every character
   as written. In double-quoted ones a backslash starts an escape, and in

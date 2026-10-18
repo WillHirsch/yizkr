@@ -286,6 +286,32 @@ def test_add_on_the_stack(live_stack_lock):
 
 LIVE = "tests/integration/test_stack.py"
 
+# Where a run's files go, and a test that writes there. A mutant that
+# drops the base makes the test write run-1/events.jsonl in its working
+# directory, the checkout, as a run id resolved as a path would (#536).
+RUNS = """\
+from pathlib import Path
+
+
+def run_dir(base, run_id):
+    \"\"\"Where a run's files go: a folder named by its id, under base.\"\"\"
+    return Path(base) / run_id
+"""
+
+TEST_RUNS = """\
+from runs import run_dir
+
+
+def test_events_go_under_the_base(tmp_path):
+    where = run_dir(tmp_path, "run-1")
+    where.mkdir(parents=True, exist_ok=True)
+    (where / "events.jsonl").write_text('{"event": "start"}\\n')
+    assert where.parent == tmp_path
+"""
+
+# as the repository's .gitignore has it: bytecode is runtime state
+GITIGNORE = "__pycache__/\nvar/\n"
+
 # Live tests whose first starts a shell's background job, which outlives
 # the run, before any test uses the stack: os.system passes the job every
 # inheritable descriptor. It notes the job's pid in the file that $JOB_PID
@@ -388,7 +414,10 @@ def template(tmp_path_factory):
     root.mkdir()
     lock_module = REPO / "tests" / "integration" / "live_lock.py"
     files = {
+        ".gitignore": GITIGNORE,
         "pytest.ini": PYTEST_INI,
+        "runs.py": RUNS,
+        "test_runs.py": TEST_RUNS,
         "calc.py": CALC,
         "test_calc.py": TEST_CALC,
         "test_bytecode.py": TEST_BYTECODE,
@@ -776,6 +805,16 @@ def test_a_spec_without_live_mutations_never_takes_the_lock(default_run):
     assert not default_run.lock.parent.exists()
 
 
+def test_a_clean_run_reports_no_stray_writes(default_run):
+    """The tests cache bytecode under __pycache__/, which git ignores, and
+    the harness's own report goes outside the checkout."""
+    assert "wrote into the checkout" not in default_run.result.stderr
+    data = json.loads(default_run.report.read_text())
+    assert [entry["stray"] for entry in data["baseline"]] == [[]]
+    assert [entry["stray"] for entry in data["mutations"]] == [[]]
+    assert git(default_run.repo, "status", "--porcelain").stdout == ""
+
+
 def test_the_json_report(default_run):
     data = json.loads(default_run.report.read_text())
     head = git(default_run.repo, "rev-parse", "HEAD").stdout.strip()
@@ -903,6 +942,177 @@ def test_a_file_git_does_not_show_clean_after_its_restore_is_an_error(
         "untested double": "not run",
     }
     assert calc.read_bytes() == CALC.encode()
+
+
+# -- stray writes -------------------------------------------------------------
+
+STRAY = mutation(
+    "the base is dropped",
+    "Path(base) / run_id",
+    "Path(run_id)",
+    ["test_runs.py"],
+    file="runs.py",
+)
+
+
+def test_a_mutant_that_writes_into_the_checkout_fails_the_run(repo, tmp_path):
+    """The mutant's test writes run-1/events.jsonl at the repository root.
+    The harness names the mutation and the path, leaves the file there,
+    and stops, even under --keep-going: a stray file can change how later
+    runs end."""
+    report = tmp_path / "report.json"
+    result = harness(repo, STRAY + SUM, "--keep-going", "--json", str(report))
+    assert result.returncode == 2, result.stdout + result.stderr
+    rows = results(result.stdout)
+    assert [row["result"] for row in rows.values()] == ["killed", "not run"]
+    assert rows["the base is dropped"]["detail"].endswith(
+        "; left in the checkout: run-1/events.jsonl"
+    )
+    assert (
+        "mutation 1 ('the base is dropped') wrote into the checkout, which "
+        "tests must leave alone (write under tmp_path instead):\n"
+        "    run-1/events.jsonl\n" in result.stderr
+    )
+    assert (repo / "run-1" / "events.jsonl").read_text() == (
+        '{"event": "start"}\n'
+    )
+    data = json.loads(report.read_text())
+    assert [entry["stray"] for entry in data["baseline"]] == [[], []]
+    assert data["mutations"][0]["stray"] == ["run-1/events.jsonl"]
+    assert data["exit_status"] == 2
+    assert (repo / "runs.py").read_text() == RUNS
+
+
+def test_the_same_mutant_without_the_stray_write_passes(repo):
+    """The control: a mutant that the same test kills without writing into
+    the checkout passes the run."""
+    clean = mutation(
+        "the run id is dropped",
+        "Path(base) / run_id",
+        "Path(base)",
+        ["test_runs.py"],
+        file="runs.py",
+    )
+    result = harness(repo, clean)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert outcomes(result.stdout) == {"the run id is dropped": "killed"}
+    assert git(repo, "status", "--porcelain").stdout == ""
+
+
+def killing_run(writes):
+    """A scripted test run that kills its mutant, and first writes into
+    the working directory each (path, text) in `writes`, on its nth call
+    for the nth list there."""
+    calls = iter(writes)
+
+    def run(self, tests, live=False):
+        for rel, text in next(calls, []):
+            path = Path(rel)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        return mutate.Run(
+            1,
+            SUMMARY + "FAILED test_calc.py::test_add - assert -1 == 5\n",
+            0.1,
+        )
+
+    return run
+
+
+def test_a_baseline_run_that_writes_into_the_checkout_fails_it(
+    repo, monkeypatch, capsys
+):
+    passing = []
+
+    def run(self, tests, live=False):
+        passing.append(tests)
+        Path("events.jsonl").write_text("{}\n")
+        return mutate.Run(
+            0, "=========== 1 passed in 0.01s ===========\n", 0.1
+        )
+
+    spec = scripted(monkeypatch, repo, SUM, run)
+    report = repo.parent / "report.json"
+    assert mutate.main([spec, "--json", str(report)]) == 2
+    captured = capsys.readouterr()
+    assert (
+        "the baseline run of test_calc.py::test_add wrote into the checkout"
+        in captured.err
+    )
+    [baseline] = json.loads(report.read_text())["baseline"]
+    assert (baseline["result"], baseline["stray"]) == (
+        "failed",
+        ["events.jsonl"],
+    )
+    # no mutant ran
+    assert passing == [["test_calc.py::test_add"]]
+    assert (repo / "events.jsonl").exists()
+
+
+def test_what_was_there_before_is_fine_unless_a_run_changes_it(
+    repo, monkeypatch, capsys
+):
+    """An untracked file and an uncommitted change from before the run stay
+    out of the report until a run changes one. Ignored paths, such as
+    var/ and __pycache__/, are never reported."""
+    (repo / "notes.txt").write_text("before\n")
+    (repo / "test_a.py").write_text(TEST_A + "# a change of my own\n")
+    writes = [
+        [("var/cache.json", "{}\n"), ("__pycache__/x.pyc", "")],
+        [("notes.txt", "changed by the run\n")],
+    ]
+    spec = scripted(monkeypatch, repo, SUM + DOUBLE, killing_run(writes))
+    assert mutate.main([spec, "--no-baseline", "--keep-going"]) == 2
+    captured = capsys.readouterr()
+    rows = results(captured.out)
+    assert rows["sum becomes difference"]["detail"] == "1 failed"
+    assert rows["untested double"]["detail"].endswith(
+        "; left in the checkout: notes.txt"
+    )
+    assert "\n    notes.txt\n" in captured.err
+    assert "var/cache.json" not in captured.err
+    assert (repo / "notes.txt").read_text() == "changed by the run\n"
+
+
+def test_stray_writes_are_new_or_changed_entries():
+    before = {"kept.txt": ("??", (1, 2, 3)), "edited.py": (" M", (1, 5, 6))}
+    after = {
+        "kept.txt": ("??", (1, 2, 3)),
+        "edited.py": (" M", (1, 5, 7)),
+        "calc.py": (" M", (1, 9, 9)),
+        "run-1/events.jsonl": ("??", (1, 1, 1)),
+    }
+    assert mutate.stray_writes(before, after, "calc.py") == [
+        "edited.py",
+        "run-1/events.jsonl",
+    ]
+
+
+def test_the_checkout_state_is_one_git_status_call(repo, monkeypatch):
+    calls = []
+    real = mutate.git
+
+    def counting(root, *args):
+        calls.append(args)
+        return real(root, *args)
+
+    monkeypatch.setattr(mutate, "git", counting)
+    (repo / "dir with space").mkdir()
+    (repo / "dir with space" / "new.txt").write_text("x\n")
+    (repo / "calc.py").unlink()
+    git(repo, "mv", "test_a.py", "test_c.py")
+    (repo / "var").mkdir()
+    (repo / "var" / "ignored.txt").write_text("x\n")
+    state, problem = mutate.checkout_state(repo)
+    assert problem is None
+    assert len(calls) == 1
+    assert {rel: entry[0] for rel, entry in state.items()} == {
+        "calc.py": " D",
+        "dir with space/new.txt": "??",
+        "test_a.py": "D ",
+        "test_c.py": "A ",
+    }
+    assert state["calc.py"][1] is None
 
 
 # -- the baseline ------------------------------------------------------------
@@ -1566,6 +1776,9 @@ def test_a_live_mutation_runs_its_tests_with_the_live_marker(live_run):
         (BOTH, False, "passed", "1 passed, 1 deselected"),
     ]
     assert [entry["live"] for entry in data["mutations"]] == [True, False]
+    # the stray-write check runs after the live runs too
+    assert [entry["stray"] for entry in data["baseline"]] == [[], []]
+    assert [entry["stray"] for entry in data["mutations"]] == [[], []]
     # the live test ran in the live baseline and the live mutant's run only
     assert len(live_run.notes) == 2
     assert snapshot(live_run.calc) == live_run.before
