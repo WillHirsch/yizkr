@@ -665,7 +665,8 @@ def cmd_accept_all(args) -> int:
     else:
         print(
             f"wrote {out} ({result.approved} claims set to bulk-accept; "
-            f"the write path marks these low-scrutiny for reappraisal)"
+            f"`ingest run` writes them as low-scrutiny for reappraisal "
+            f"while no row has another decision)"
         )
     return 0
 
@@ -1518,9 +1519,10 @@ def build_parser() -> argparse.ArgumentParser:
         "accept-all",
         help=(
             "curator bulk-accept of a review CSV: write bulk-accept on every "
-            "claim (review.csv), an approval the writer gives a distinct "
-            "low-scrutiny edit summary (ADR-0023), or ratify each machine "
-            "verdict (equivalences.csv); refuses a whole claims sheet with "
+            "claim (review.csv), which `ingest run` writes under a distinct "
+            "low-scrutiny edit summary while no row has another decision "
+            "(ADR-0023), or ratify each machine verdict (equivalences.csv); "
+            "refuses a whole claims sheet with "
             "any depicts row (ADR-0005), or without an exact claim_id and "
             "exactly one property column"
         ),
