@@ -468,16 +468,18 @@ and `version`, the file's layout, which is 1. `pause-timeout-s` is a
 number of seconds up to the longest wait a thread can make
 (`threading.TIMEOUT_MAX`, about 292 years), or `null`; infinity is
 refused. To change some, write a YAML file with just those keys, nested
-as in `anomalies.yaml`, and name it in `$YIZKR_ANOMALIES`; the scratch
-driver may pass one of its own (`anomalies.load_config`,
-`anomalies.attach`). Its values replace the defaults, a list replacing
-the whole list. A key the defaults do not have is refused, and so is a
-value out of range (a `min-count` larger than its `window`, a share
-above one), so a misspelt key never passes silently. A scratch run's
-preflight loads the thresholds, and refuses a file that cannot be read, a
-key the defaults do not have or a value out of range in one line, before
-anything is written; `yizkr ingest run` falls back to the defaults with
-an `anomaly-config` alert (The configuration itself, above).
+as in `anomalies.yaml`, and name it in `$YIZKR_ANOMALIES`, which every
+run's checks load (`anomalies.load_config`, through
+`anomalies.checks_for`), a scratch run's and an `ingest run`'s alike;
+`yizkr scratch recheck --config FILE` names a file in its place. Its
+values replace the defaults, a list replacing the whole list. A key the
+defaults do not have is refused, and so is a value out of range (a
+`min-count` larger than its `window`, a share above one), so a misspelt
+key never passes silently. A scratch run's preflight loads the
+thresholds, and refuses a file that cannot be read, a key the defaults
+do not have or a value out of range in one line, before anything is
+written; `yizkr ingest run` falls back to the defaults with an
+`anomaly-config` alert (The configuration itself, above).
 
 The thresholds decide only which alerts are raised and which slices are
 paused, never what a stage makes: no view and no LLM cache key depends on
@@ -640,7 +642,8 @@ read (a `batch.json` that does not hold a batch's shape, say) is an
 into a document's directory. It prints how many alerts it appended,
 where, and the thresholds' digest, then the count of each check. A file
 of thresholds that cannot be used (`--config`, or the one
-`$YIZKR_ANOMALIES` names) is refused in one line, with nothing appended.
+`$YIZKR_ANOMALIES` names) is refused in one line, with nothing appended,
+and so is a run whose events or alerts this user cannot append to.
 
 ## What the checks never do
 

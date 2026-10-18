@@ -83,39 +83,39 @@ and `yizkr.reset` for the reset.
   at clustering or before needs none. A refusal lists every problem it
   found.
 
-  The LLM cache's folder is checked next, without making or changing
-  anything, as its runs directory is: a folder the cache would refuse to
-  open (one a git work tree would track, one open to other users, one
-  this user cannot write in or make, or a lock file in it this user
-  cannot open) is refused in one line, before the preflight's calls and
-  before `run.json`, a document's directory or an event is written, and
-  the driver exits 1 (#327; docs/LLM_CACHE.md, The cache folder). It is
-  checked for every invocation whose range holds a per-document stage,
-  or a corpus stage that may call the engine, a resume that reuses every
-  view included; an invocation past the barrier only, whose corpus
-  stages call no engine, opens no cache, and its folder is not checked.
+  Once those checks pass, the settings are checked against those a
+  resumed run recorded: other settings are refused as
+  `RunSettingsConflict` before any call. Then the LLM cache's folder is
+  checked, without making or changing anything, as its runs directory
+  is: a folder the cache would refuse to open (one a git work tree would
+  track, one open to other users, one this user cannot write in or make,
+  or a lock file in it this user cannot open) is refused in one line,
+  before the preflight's calls and before `run.json`, a document's
+  directory or an event is written, and the driver exits 1 (#327;
+  docs/LLM_CACHE.md, The cache folder). It is checked for every
+  invocation whose range holds a per-document stage, or a corpus stage
+  that may call the engine, a resume that reuses every view included;
+  an invocation past the barrier only, whose corpus stages call no
+  engine, opens no cache, and its folder is not checked.
 
-  Once those checks pass, and once the settings are checked against
-  those a resumed run recorded (other settings are refused as
-  `RunSettingsConflict` before any call), and still before any document
-  is dispatched or anything written, the driver makes **one trivial
-  call per distinct (model, effort) pair** that the roles of the
-  invocation's range run, through the engine as the run calls it: the
-  same engine, model and effort as the first role that runs the pair,
-  and the claude CLI it would use, but not through the LLM cache, so
-  the call reaches the engine. The roles are those of the per-document
-  stages within `--until` (`transcribe` for transcription, `extract`
-  for extraction and GEDCOM, `critique`), and every role when a corpus
-  stage in range may call the engine. Two roles on one model at one
-  effort make one call; at two efforts, two. The preflight reads no run
-  state: **a resume makes these calls even when it will reuse every
-  view**, a few trivial calls accepted as the cost of a check that
-  never predicts what the run will reuse. An invocation past the
-  barrier only, whose corpus stages call no engine (clustering), makes
-  none. Every invocation whose range holds a per-document stage, or a
-  corpus stage that may call the engine, makes them, the driver's own
-  after a subscription limit included, unless the installed claude CLI
-  is not the run's (below).
+  Then, still before any document is dispatched or anything written, the
+  driver makes **one trivial call per distinct (model, effort) pair**
+  that the roles of the invocation's range run, through the engine as
+  the run calls it: the same engine, model and effort as the first role
+  that runs the pair, and the claude CLI it would use, but not through
+  the LLM cache, so the call reaches the engine. The roles are those of
+  the per-document stages within `--until` (`transcribe` for
+  transcription, `extract` for extraction and GEDCOM, `critique`), and
+  every role when a corpus stage in range may call the engine. Two roles
+  on one model at one effort make one call; at two efforts, two. The
+  preflight reads no run state: **a resume makes these calls even when
+  it will reuse every view**, a few trivial calls accepted as the cost
+  of a check that never predicts what the run will reuse. An invocation
+  past the barrier only, whose corpus stages call no engine
+  (clustering), makes none. Every invocation whose range holds a
+  per-document stage, or a corpus stage that may call the engine, makes
+  them, the driver's own after a subscription limit included, unless the
+  installed claude CLI is not the run's (below).
 
   When the installed claude CLI is not the one the run recorded, the
   preflight checks no model, refuses nothing, and says so in one line.

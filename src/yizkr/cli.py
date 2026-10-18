@@ -971,7 +971,10 @@ def cmd_scratch_recheck(args) -> int:
         config = anomalies.load_config(args.config)
     except anomalies.AnomalyConfigError as exc:
         sys.exit(str(exc))
-    alerts = anomalies.recheck(run, config)
+    try:
+        alerts = anomalies.recheck(run, config)
+    except OSError as exc:
+        sys.exit(str(exc))
     for line in anomalies.recheck_lines(run, config, alerts):
         print(line)
     return 0

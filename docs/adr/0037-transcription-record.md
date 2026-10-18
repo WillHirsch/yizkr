@@ -108,7 +108,7 @@ and extraction is made again. Each page's provenance (the method that
 read it and the engine) and the check's flag are not, as the engine is
 not (`TRANSCRIPTION_VOLATILE`). A stored flag is recomputed everywhere
 it is read: a run's reuse of a view, an excerpt made from a kept image
-reading (ADR-0008, as amended by #397) and `yizkr anomalies recheck`
+reading (ADR-0008, as amended by #397) and `yizkr scratch recheck`
 each carry the flag of the check made now, not the one stored with the
 view or the reading, so a change to the flag tier reaches every stored
 transcription without making any of them again.
@@ -309,7 +309,7 @@ override):
 
 - **A. Stored flags** are recomputed everywhere they are read: a run's
   reuse, an excerpt made from a stored image reading, and `yizkr
-  anomalies recheck` (§2).
+  scratch recheck` (§2).
 - **B. Illegible embedded images** stay excerpts, so that a reader sees
   they were there. Only an image whose record calls every page `blank`
   or `not-a-document-page` is no excerpt; a record of a transcribed page

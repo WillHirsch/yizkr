@@ -1482,22 +1482,43 @@ class TestRefusals:
             (b"chars-per-pages: 900\n", "chars-per-pages"),
             (b"chars-per-page: 0\n", "greater than or equal to 1"),
             (b"\xff\xfe not a text\n", "cannot be read"),
+            (
+                b"checks: " + b"[" * 1000 + b"]" * 1000 + b"\n",
+                "cannot be read",
+            ),
         ],
-        ids=["unknown key", "out of range", "unreadable"],
+        ids=["unknown key", "out of range", "unreadable", "too deep"],
     )
     def test_anomaly_thresholds_the_checks_cannot_load(
         self, tmp_path, engine, monkeypatch, thresholds, why
     ):
         """The run's preflight refuses a file `$YIZKR_ANOMALIES` names that
-        the checks cannot use, and so does the estimate, first (#327)."""
+        the checks cannot use, with its other problems, and so does the
+        estimate, first: before it starts any engine client (#327)."""
         overrides = tmp_path / "anomalies.yaml"
         overrides.write_bytes(thresholds)
         monkeypatch.setenv("YIZKR_ANOMALIES", str(overrides))
+        monkeypatch.setenv("YIZKR_CLAUDE_RESERVE", "2")
         with pytest.raises(PreflightFailed) as refused:
             estimate_of(tmp_path, small(tmp_path), engine)
-        (problem,) = refused.value.problems
-        assert str(overrides) in problem and why in problem
+        problems = refused.value.problems
+        assert len(problems) == 2
+        (problem,) = [p for p in problems if str(overrides) in p]
+        assert why in problem and "\n" not in problem
+        assert engine.closed == 0 and engine.calls == []
         assert not runs_dir(tmp_path).exists()
+
+    def test_anomaly_thresholds_are_refused_for_a_corpus_with_no_document(
+        self, tmp_path, engine, monkeypatch
+    ):
+        """No document is no call, but the thresholds are refused all the
+        same, as the run's preflight refuses them before it looks for a
+        document (#327)."""
+        overrides = tmp_path / "anomalies.yaml"
+        overrides.write_text("chars-per-pages: 900\n")
+        monkeypatch.setenv("YIZKR_ANOMALIES", str(overrides))
+        with pytest.raises(PreflightFailed, match="chars-per-pages"):
+            estimate_of(tmp_path, Corpus(tmp_path / "empty"), engine)
 
     def test_a_runs_directory_the_run_refuses(self, tmp_path, engine):
         """A runs directory open to other users, a file, a path under
@@ -1650,15 +1671,11 @@ class TestRefusals:
             )  # fmt: skip
         assert sorted(path.name for path in repo.iterdir()) == [".git"]
 
-    def test_a_cache_folder_the_cache_refuses(
-        self, tmp_path, engine, monkeypatch
-    ):
+    def test_a_cache_folder_the_cache_refuses(self, tmp_path, engine):
         """A cache folder open to other users, one this user cannot write
         in, and one under a folder it cannot make it in: the run refuses
-        each at its preflight, a resume with nothing stale included, and
-        so does the estimate, leaving the folder as it was. An invocation
-        past the barrier only, whose corpus stages call no engine, opens
-        no cache, and the estimate reads none (#327)."""
+        each at its preflight, and so does the estimate, leaving the
+        folder as it was (#327)."""
         corpus = small(tmp_path)
         shared = tmp_path / "shared"
         shared.mkdir(mode=0o750)
@@ -1681,18 +1698,65 @@ class TestRefusals:
                     estimate_of(tmp_path, corpus, engine, cache_dir=cache)
         finally:
             closed.chmod(0o700)
+
+    def test_a_cache_folder_the_cache_refuses_on_a_resume(
+        self, tmp_path, engine
+    ):
+        """A resume with nothing stale is refused for a cache folder the
+        cache refuses, as the run's preflight refuses it, and so is one
+        whose documents' states cannot be read (#327)."""
+        corpus = small(tmp_path)
         run(tmp_path, corpus, engine)
+        shared = tmp_path / "shared"
+        shared.mkdir(mode=0o750)
+        shared.chmod(0o750)
         with pytest.raises(PreflightFailed, match="open to other users"):
             estimate_of(
                 tmp_path, corpus, engine, resume=LATEST, cache_dir=shared
             )
         run_dir = scratch.runs_in(runs_dir(tmp_path))[-1]
+        states = sorted(run_dir.rglob("state.json"))
+        assert states
+        for state in states:
+            state.write_text("{")
+        with pytest.raises(PreflightFailed, match="open to other users"):
+            estimate_of(
+                tmp_path, corpus, engine, resume=LATEST, cache_dir=shared
+            )
+        assert list(shared.iterdir()) == []
+
+    @pytest.mark.parametrize("calls_engine", [False, True])
+    def test_past_the_barrier_only_the_cache_folder_is_checked_for_the_engine(
+        self, tmp_path, engine, monkeypatch, calls_engine
+    ):
+        """An invocation past the barrier only reads no cache unless a
+        corpus stage in range may call the engine: the folder is refused
+        then, as the run's preflight refuses it, and otherwise left alone
+        (#327)."""
+        corpus = small(tmp_path)
+        run(tmp_path, corpus, engine)
+        run_dir = scratch.runs_in(runs_dir(tmp_path))[-1]
         other = dict(RunDir(run_dir).manifest()["code"], commit="f" * 40)
         monkeypatch.setattr(scratch, "code_version", lambda: dict(other))
-        counted = estimate_of(
-            tmp_path, corpus, engine, resume=LATEST, cache_dir=shared
-        )
-        assert counted.past_barrier_only
+        shared = tmp_path / "shared"
+        shared.mkdir(mode=0o750)
+        shared.chmod(0o750)
+        options = {
+            "resume": LATEST,
+            "cache_dir": shared,
+            "corpus_stages": [
+                scratch.CorpusStage(
+                    "clustering", lambda context: None,
+                    calls_engine=calls_engine,
+                )
+            ],
+        }  # fmt: skip
+        if calls_engine:
+            with pytest.raises(PreflightFailed, match="open to other users"):
+                estimate_of(tmp_path, corpus, engine, **options)
+        else:
+            counted = estimate_of(tmp_path, corpus, engine, **options)
+            assert counted.past_barrier_only
         assert list(shared.iterdir()) == []
 
     def test_a_cache_folder_git_would_track(

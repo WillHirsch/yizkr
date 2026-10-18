@@ -1942,8 +1942,12 @@ class TestPreflight:
             (b"chars-per-pages: 900\n", "chars-per-pages"),
             (b"chars-per-page: 0\n", "greater than or equal to 1"),
             (b"\xff\xfe not a text\n", "cannot be read"),
+            (
+                b"checks: " + b"[" * 1000 + b"]" * 1000 + b"\n",
+                "cannot be read",
+            ),
         ],
-        ids=["unknown key", "out of range", "unreadable"],
+        ids=["unknown key", "out of range", "unreadable", "too deep"],
     )
     def test_anomaly_thresholds_the_checks_cannot_load(
         self, tmp_path, fakes, monkeypatch, thresholds, why
@@ -1966,6 +1970,45 @@ class TestPreflight:
         assert not driver.state_dir.exists()
         assert fakes.calls == [] and fakes.preflights == []
 
+    def test_anomaly_thresholds_are_refused_for_a_corpus_with_no_document(
+        self, tmp_path, fakes, monkeypatch
+    ):
+        """The thresholds are checked before the driver looks for a
+        document: a corpus with no document is refused for them too, with
+        the other problems (#327)."""
+        overrides = tmp_path / "anomalies.yaml"
+        overrides.write_text("chars-per-pages: 900\n")
+        monkeypatch.setenv("YIZKR_ANOMALIES", str(overrides))
+        monkeypatch.setenv("YIZKR_CLAUDE_RESERVE", "2")
+        driver = a_run(tmp_path, Corpus(tmp_path / "empty"), fakes)
+        with pytest.raises(PreflightFailed) as refused:
+            driver.run()
+        assert len(refused.value.problems) == 2
+        assert not driver.state_dir.exists()
+
+    def test_other_settings_are_refused_before_a_cache_folder(
+        self, tmp_path, fakes
+    ):
+        """A resume asking for other settings is refused for them first
+        (RunSettingsConflict), before the cache folder is checked and
+        before any preflight call, with nothing written (#327)."""
+        corpus = small(tmp_path)
+        assert command(tmp_path, corpus, fakes, until="transcription") == 0
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        recorded = RunDir(run).manifest()
+        cache = tmp_path / "shared"
+        cache.mkdir()
+        cache.chmod(0o750)
+        fakes.preflights.clear()
+        with pytest.raises(RunSettingsConflict, match="review_effort"):
+            command(
+                tmp_path, corpus, fakes, cache_dir=cache, resume=run.name,
+                review_effort="max",
+            )  # fmt: skip
+        assert fakes.preflights == []
+        assert RunDir(run).manifest() == recorded
+        assert list(cache.iterdir()) == []
+
     @pytest.mark.parametrize("why", ["git work tree", "open to other users"])
     def test_a_cache_folder_the_cache_refuses(
         self, tmp_path, fakes, monkeypatch, why
@@ -1982,6 +2025,7 @@ class TestPreflight:
         (run,) = scratch.runs_in(runs_dir(tmp_path))
         recorded = RunDir(run).manifest()
         written = len(RunDir(run).events())
+        listed = sorted(runs_dir(tmp_path).iterdir())
         if why == "git work tree":
             cache = a_repository(tmp_path, monkeypatch) / "cache"
         else:
@@ -2000,7 +2044,7 @@ class TestPreflight:
             assert "\n" not in problem
             assert len(fakes.calls) == calls
         assert fakes.preflights == []
-        assert scratch.runs_in(runs_dir(tmp_path)) == [run]
+        assert sorted(runs_dir(tmp_path).iterdir()) == listed
         assert RunDir(run).manifest() == recorded
         assert len(RunDir(run).events()) == written
         if why == "git work tree":

@@ -359,7 +359,9 @@ def load_config(
     if source:
         try:
             loaded = yaml.safe_load(Path(source).read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        # ValueError covers a file that is not UTF-8 and a date or a
+        # number YAML cannot make; RecursionError, nesting too deep
+        except (OSError, ValueError, yaml.YAMLError, RecursionError) as exc:
             raise AnomalyConfigError(
                 f"the anomaly thresholds in {source} cannot be read "
                 f"({type(exc).__name__})"
