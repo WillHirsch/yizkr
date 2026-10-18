@@ -325,15 +325,27 @@ made. The directory holds:
   as an alias of `--no-nonprivileged-export`, until the keeper run
   (#159), and says so on one stderr line each time it is used.
 
-Schedule it with cron on the host, e.g. nightly at 03:15 keeping two
-weeks:
+When to take backups is set by the project's stage (ADR-0024, "Backup
+policy by stage"); each move to a later stage is an owner decision:
+
+- *Development stage* (whole-corpus scratch runs, ADR-0025): no routine
+  backups. The graph and run state are regenerated rather than restored;
+  take a one-off backup only where a decision asks for one (for example a
+  stack recovery, docs/runbooks/stack-recovery.md).
+- *Kept-state stage* (from the keeper run, #159): a backup at each
+  milestone close.
+- *Production-curation stage* (a production instance used for bulk human
+  curation): nightly backups plus an off-machine copy (#172).
+
+Only the last stage schedules it. There, cron on the host does it, e.g.
+nightly at 03:15 keeping two weeks:
 
 ```cron
 15 3 * * * cd /path/to/yizkr && uv run yizkr backup --keep 14 >> var/backups/backup.log 2>&1
 ```
 
-The static site (frontend ladder rung 2) regenerates the same way —
-nightly after the backup, for example:
+The static site (frontend ladder rung 2) regenerates on a schedule too,
+e.g. nightly after the backup:
 
 ```cron
 45 3 * * * cd /path/to/yizkr && uv run yizkr publish-site --clean >> var/site.log 2>&1
@@ -345,8 +357,9 @@ people: serve it on the LAN only (any static server works, e.g.
 needs a public copy, which `nonprivileged.nt.gz` is not: its texts can
 name a possibly living relative of a released person (#163).
 
-Copy `var/backups/` off-machine (rsync, restic, a NAS — anything);
-a backup that lives only on the server it backs up is not a backup.
+From that stage on, copy `var/backups/` off-machine (rsync, restic, a
+NAS — anything); a backup that lives only on the server it backs up is
+not a backup.
 
 **Restore** (new or broken instance):
 

@@ -81,7 +81,8 @@ closed:
   shareable name is always complete and has its exclusions beside it.
 
 Scheduling is the host's job (this is a home-server deployment): see
-deploy/README.md for the cron line. Retention: ``--keep N`` prunes the
+deploy/README.md for when the project's stage calls for backups
+(ADR-0024) and for the cron line. Retention: ``--keep N`` prunes the
 oldest runs. A run's directory is named by the UTC second it starts, and
 always sorts after every run already there (``next_backup_name``), so the
 names order the runs as they were made, whatever the clock does.

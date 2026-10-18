@@ -7,8 +7,8 @@
 - Mirror Wikidata property *semantics* where a good equivalent exists
   (instance of, date of birth, spouse, residence, depicts, coordinate
   location, start/end time, stated in...), using local P-ids. The
-  vocabulary is declared in `model/manifest.yaml` and minted by
-  `model/bootstrap.py`, which maintains the mapping table
+  vocabulary is declared in `src/yizkr/model/manifest.yaml` and minted
+  by `yizkr bootstrap`, which maintains the mapping table
   (local id – Wikidata id) on the wiki page `Project:Model mapping`.
   Local P/Q ids are per-instance and never recorded in the repo.
 - Every entity gets a label and a short description; name variants go
@@ -175,8 +175,8 @@
   unit test checks (writer's INSTANCE_UNICODE; ADR-0010, #431).
 - Schema-level statements (e.g. the subclass hierarchy) carry
   references too (ADR-0003): a `stated in` reference to the *model
-  manifest* item, which represents `model/manifest.yaml` — the document that
-  asserts them.
+  manifest* item, which represents `src/yizkr/model/manifest.yaml` — the
+  document that asserts them.
 
 ## Core classes (items, via "instance of")
 
@@ -209,7 +209,7 @@
   prompt/pipeline version, software commit)
 
 **Manifest descriptions are extraction-prompt surface**, not only
-documentation. Every property and item in `model/manifest.yaml` carries
+documentation. Every property and item in `src/yizkr/model/manifest.yaml` carries
 a description, and the extractor is shown it verbatim beside the key: a
 property's description is what tells the model which way a relation
 points (`employer` takes the organization, not the employee) and what
@@ -863,8 +863,9 @@ and reference the artifact itself or the producing run.
 - Reference identifies the proposer (extraction/detection run) and
   confirmation is implied by the statement existing at all – unconfirmed
   proposals live outside the graph (review queue), never in it.
-- W1 implementation: `python -m ingest detect-faces / enroll-face /
-  match-faces` (see `ingest/faces.py`), feeding the shared review flow.
+- W1 implementation: `yizkr ingest detect-faces / enroll-face /
+  match-faces` (see `src/yizkr/pipeline/faces.py`), feeding the shared
+  review flow.
 - **Associated media vs. depiction (see ADR-0021).** `image` (P18
   semantics) links a person to a medium a source *associates* with them (a
   portrait, an obituary scan) — distinct from `depicts`, which is a

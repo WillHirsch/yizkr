@@ -6,14 +6,11 @@ where every unit of knowledge is an attributed assertion traceable to
 the fragment of the source artifact that makes it – including when
 sources contradict each other.
 
-**Status:** Phase W1 in progress — infrastructure, model bootstrap,
-claim schema, ingestion pipeline (chunked extraction, GEDCOM adapter,
-reconciliation, review with corrections, folder orchestration via
-`yizkr ingest run`), face proposals, query library, and backup/export
-done. The second ingestion trial found LLM vision sufficient for
-handwriting, so the HTR adapter is dropped; its photograph leg waits
-for #160, and German-language documents run with the whole corpus
-(#145).
+**Status:** development by whole-corpus scratch runs (ADR-0025): each
+run resets the one instance, runs the pipeline over the whole corpus
+unattended and is judged by its report and its diff against the last
+run, until the owner declares a keeper run. The plan lives in GitHub
+issues and the Project (ADR-0024).
 
 Start here:
 - `CLAUDE.md` – standing instructions for AI-assisted development
@@ -36,6 +33,9 @@ Start here:
 - `ROADMAP.md` – retired: the plan lives in GitHub issues and the Project
   (ADR-0024), and the stub maps the old item numbers to issues
 - `deploy/` – Wikibase Suite deployment (Docker Compose + runbook)
+- `docs/runbooks/stack-recovery.md` – recovering a stopped or crashed
+  stack: volume archives first, then the database, the full stack, the
+  derived indexes, a smoke test and a one-off backup
 - `src/yizkr/` – the tooling package: model manifest + bootstrap
   (`model/`), the claim JSON contract (`claims.py`), the ingestion
   pipeline (`pipeline/`), and the SPARQL query library (`queries/`)

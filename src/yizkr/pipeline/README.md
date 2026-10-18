@@ -182,8 +182,8 @@ uv run yizkr ingest --help
 ```
 
 Connection settings come from `deploy/.env` (same variables as the
-smoke test); the vocabulary comes from `model/manifest.yaml` resolved
-against the live instance (run `model/bootstrap.py` first).
+smoke test); the vocabulary comes from `src/yizkr/model/manifest.yaml`
+resolved against the live instance (run `yizkr bootstrap` first).
 
 ## Ingestion host prerequisites
 
@@ -711,7 +711,7 @@ wiki, the engine or the corpus, and writes `diff.json` (local) and
 `diff.md` (aggregates, may be posted) into the run's `.diff/<baseline>/`.
 docs/RUN_DIFF.md has the details and the reviewer checklist.
 
-## Face proposals (`ingest/faces.py`, ADR-0005)
+## Face proposals (`src/yizkr/pipeline/faces.py`, ADR-0005)
 
 A face proposal is an ordinary claim — `depicts` on the photograph,
 person as value, `relative position within image` qualifier, the
@@ -763,7 +763,7 @@ structural in the schema:
   19th as 1801), and a century given by any other year is refused.
 
 Properties and vocabulary items are referenced by **manifest key**
-(`spouse`, `circa` — see `model/manifest.yaml`), never by local P/Q id:
+(`spouse`, `circa` — see `src/yizkr/model/manifest.yaml`), never by local P/Q id:
 ids are per-instance and only the writer resolves them, at write time.
 
 ```sh
