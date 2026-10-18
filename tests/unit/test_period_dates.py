@@ -170,7 +170,8 @@ TOKEN = re.compile(r'"[^"]*"@\w+|\S+')
 
 def values_rows(template: str, *variables: str) -> list[tuple[str, ...]]:
     """The rows of every ``VALUES (?a ?b ...) { ... }`` block over exactly
-    these variables, each placeholder as its manifest key (``pq:`` kept)."""
+    these variables, each placeholder as its manifest key (``p:`` and
+    ``pq:`` kept)."""
     head = r"\s+".join(rf"\?{name}" for name in variables)
     rows = []
     for body in re.findall(
@@ -179,11 +180,18 @@ def values_rows(template: str, *variables: str) -> list[tuple[str, ...]]:
         for row in re.findall(r"\(([^()]*)\)", body):
             rows.append(
                 tuple(
-                    re.sub(r"^(pq:)?(?:wd:)?\{P:(\w+)\}$", r"\1\2", token)
+                    re.sub(r"^(pq?:)?(?:wd:)?\{P:(\w+)\}$", r"\1\2", token)
                     for token in TOKEN.findall(row)
                 )
             )
     return rows
+
+
+def event_arm(q: str) -> str:
+    """The person timeline's UNION arm for the events a person took part
+    in, from its VALUES block to the end of its ?what."""
+    start = q.index("VALUES (?eventClaim")
+    return q[start : q.index("AS ?what)", start)]
 
 
 class TestThePersonTimeline:
@@ -233,10 +241,45 @@ class TestThePersonTimeline:
                 "latest_date",
             ),
         ]
-        # an event's own point in time
-        assert values_rows(q, "dated", "low", "high") == [
-            ("point_in_time", "earliest_date", "latest_date")
+        # an event's own point in time, start time and end time (#318):
+        # each its own date claim, which its earliest and latest date bound
+        # like a date of birth, never a latest start date or an earliest
+        # end date (MODELING.md, "Marriages, residences and other periods")
+        assert values_rows(q, "eventClaim", "dated", "low", "high") == [
+            (
+                "p:point_in_time",
+                "point_in_time",
+                "earliest_date",
+                "latest_date",
+            ),
+            ("p:start_time", "start_time", "earliest_date", "latest_date"),
+            ("p:end_time", "end_time", "earliest_date", "latest_date"),
         ]
+        assert "?eventClaim ?st ." in event_arm(q)
+
+    def test_an_events_start_and_end_name_the_time_beside_its_type(self, q):
+        # "imprisonment (start time)", and its point in time the bare type
+        arm = event_arm(q)
+        assert "?dated rdfs:label ?claimName ." in arm
+        assert (
+            "BIND(IF(?dated = wd:{P:point_in_time}, ?typeName,\n"
+            '            CONCAT(?typeName, " (", ?claimName, ")"))\n'
+            "         "
+        ) in arm
+
+    def test_circa_is_folded_into_one_cell_per_statement(self, q):
+        # circa qualifies the whole statement (#315), so it is read after
+        # the UNION, where every arm has bound ?st; folded, a second
+        # circumstance adds no row to the SELECT DISTINCT
+        after = q[q.index("# the date at its stated precision") :]
+        fold = group_at(after, "?st pq:{P:sourcing_circumstances}")
+        assert "GROUP BY ?st" in after
+        assert "?st pq:{P:sourcing_circumstances} ?circumstance ." in fold
+        assert (
+            "SELECT ?st (GROUP_CONCAT(DISTINCT ?circumstanceCell; "
+            'separator="|")'
+        ) in after
+        assert "ENCODE_FOR_URI(COALESCE(?circumstanceName," in after
 
     def test_a_point_in_time_beside_a_start_or_end_takes_no_range(self, q):
         ranged = q[q.index("BIND(?dated") : q.index("AS ?ranged)")]

@@ -49,8 +49,11 @@ uv run yizkr publish-queries             # or: make publish-queries
   resolution (ADR-0009).
 - **person-timeline** — every dated assertion about each person
   (statements, the dates their statements carry as qualifiers, and events
-  participated in), plural-by-default with sources (R6). A qualifier's
-  row names the statement's property, its value and the qualifier: a
+  participated in, by each event's point in time and its own start and
+  end time), plural-by-default with sources (R6). An event's start or end
+  time is a date value its earliest and latest date bound, and its row
+  names the time beside the event's type ("imprisonment (start time)").
+  A qualifier's row names the statement's property, its value and the qualifier: a
   marriage is its spouse statement's start time, its end the end time,
   and a point in time on a spouse or residence statement an observation
   (docs/MODELING.md, "Marriages, residences and other periods"). Each row
@@ -61,8 +64,13 @@ uv run yizkr publish-queries             # or: make publish-queries
   qualifiers that bound the date (`?low` for `?earliest`, `?high` for
   `?latest`), stated or not, and the static site's timeline page and feed
   show each stated bound beside the date under its qualifier's label
-  ("1946 (earliest date: 1946; latest start date: 1947)"). Rendered and
-  URL-encoded, it is about 8.7 KB, more than the query service accepts in
+  ("1946 (earliest date: 1946; latest start date: 1947)"). Each row also
+  carries its statement's sourcing circumstances (`?circumstances`: circa
+  qualifies the whole statement, so its start and end rows both carry
+  it), folded into one cell, each label URI-encoded and `|`-separated, so
+  that a second value adds no row; the site shows them after the range
+  ("1833 (sourcing circumstances: circa)"). Rendered and URL-encoded, it
+  is about 11.5 KB, more than the query service accepts in
   a GET request line, so a client sends it by POST, as the site and the
   live tests do.
 - **kinship** — how each person is related to a subject, derived from

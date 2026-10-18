@@ -617,6 +617,24 @@ class SiteBuilder:
             )
         return range_text(bounds, f"{qid_of(row, 'person')} timeline date")
 
+    def timeline_qualifiers(self, row: dict) -> str:
+        """What a person-timeline row shows beside its date: the range its
+        source states (``timeline_range``), then each sourcing
+        circumstance of its statement in the person page's `label: value`
+        form ("sourcing circumstances: circa"). The query folds the
+        circumstances into ?circumstances, each label URI-encoded and
+        "|"-separated; they are sorted, since GROUP_CONCAT gives them in
+        no set order."""
+        name = disagreement.property_labels()["sourcing_circumstances"]
+        circumstances = sorted(
+            urllib.parse.unquote(each)
+            for each in cell(row, "circumstances").split("|")
+            if each
+        )
+        shown = [self.timeline_range(row)]
+        shown += [f"{name}: {each}" for each in circumstances]
+        return "; ".join(text for text in shown if text)
+
     def qualifier_text(self, encoded: str, where: str) -> str:
         """A statement's qualifier cells (QUALIFIER_CELL) as text to show
         beside its value, each in the `label: value` form, a time at its
@@ -982,19 +1000,22 @@ class SiteBuilder:
             "its earliest and latest date, or for a start or end time the "
             "bounds of that end, a start running from its earliest date to "
             "its latest start date and an end from its earliest end date to "
-            "its latest date.</p>",
+            "its latest date. A date its source gives as circa says so "
+            "there too.</p>",
             '<div class="timeline">',
         ]
         current_year = None
         for row in rows:
             date = cell(row, "date")
-            year = date[:5].lstrip("+") if date else "?"
-            year = year.rstrip("-")
+            person = qid_of(row, "person")
+            where = f"{person} timeline date"
+            # the header names the date's year, or the decade, century or
+            # millennium a coarser date gives, never a year it does not
+            precision = min(int(cell(row, "precision") or 11), 9)
+            year = format_time(date, str(precision), where) if date else "?"
             if year != current_year:
                 current_year = year
                 body.append(f'<div class="year">{esc(year)}</div>')
-            person = qid_of(row, "person")
-            where = f"{person} timeline date"
             source_qid = qid_of(row, "source")
             source_label = cell(row, "sourceLabel")
             source = (
@@ -1007,7 +1028,7 @@ class SiteBuilder:
             body.append(
                 '<div class="entry">'
                 f"{esc(format_time(date, cell(row, 'precision'), where))}"
-                f"{qualifier_span(self.timeline_range(row))} — "
+                f"{qualifier_span(self.timeline_qualifiers(row))} — "
                 f'<a href="people/{esc(person)}.html">'
                 f"{esc(cell(row, 'personLabel'))}</a>, "
                 f"{esc(cell(row, 'what'))}" + source + "</div>"
@@ -1019,11 +1040,14 @@ class SiteBuilder:
         """TimelineJS-compatible JSON, if the user later wants that UI.
         TimelineJS shows an event's headline and text, and a date's
         display_date, as HTML, so each is escaped. A date its source gives
-        a range for carries a display_date, the date with its range as the
-        timeline page shows them; TimelineJS shows any other date from its
-        year, and from its month and day when its precision reaches
-        them. A date before the common era raises UnsupportedDate, naming
-        its person (ADR-0034), as on the timeline page."""
+        a range or a sourcing circumstance (circa) for carries a
+        display_date, the date with its range and circumstances as the
+        timeline page shows them, and so does a decade, century or
+        millennium, which TimelineJS would show as its stored year;
+        TimelineJS shows any other date from its year, and from its month
+        and day when its precision reaches them. A date before the common
+        era raises UnsupportedDate, naming its person (ADR-0034), as on the
+        timeline page."""
         events = []
         for row in rows:
             date = cell(row, "date")
@@ -1038,14 +1062,16 @@ class SiteBuilder:
                 start["month"] = parts[1]
             if precision >= 11:
                 start["day"] = parts[2]
-            stated = self.timeline_range(row)
-            if stated:
+            stated = self.timeline_qualifiers(row)
+            if stated or precision < 9:
                 shown = format_time(
                     date,
                     cell(row, "precision"),
                     f"{qid_of(row, 'person')} timeline date",
                 )
-                start["display_date"] = esc(f"{shown} ({stated})")
+                start["display_date"] = esc(
+                    f"{shown} ({stated})" if stated else shown
+                )
             events.append(
                 {
                     "start_date": start,
