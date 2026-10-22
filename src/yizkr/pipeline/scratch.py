@@ -81,25 +81,28 @@ the corpus stages and whether it went to the end.
 
 **Before any call** the driver refuses to start without a never-ingest
 list, and runs its preflight: the engine's CLI and its login, a full
-model id for every role, the engine's pacing settings, free disk space,
+model id for every role, the engine's pacing settings, anomaly
+thresholds the checks can load (`$YIZKR_ANOMALIES`), free disk space,
 the PDF renderer when the corpus holds a PDF, and, only when a stage
 that touches the wiki is to run, a reachable stack and an instance that
 carries no kept-state marker. Once those pass and the settings match
-those a resumed run recorded, and before any document is dispatched or
-anything written, it makes one trivial call per distinct (model,
-effort) pair the roles this invocation will call run, through the
-engine as the run calls it but not through the cache, and refuses the
-run, naming the model and the engine's reason, when one fails with an
-error that is not a subscription limit or an overload: a model the
-claude CLI does not support among them. The pairs are those of the
-roles whose stages fall within the invocation's range (`--until`), and
-every role when a corpus stage in range may call the engine; it reads no
-run state, so a resume makes them though it reuses every view, and an
-invocation past the barrier only, whose corpus stages call no engine,
-makes none. On a claude CLI other than the run recorded it checks no
-model and refuses nothing: the run's own client refuses the CLI when a
-stage starts the engine. One driver at a time uses a runs directory
-(hold), and a run is invoked only from the runs directory it is in.
+those a resumed run recorded, it refuses an LLM cache folder the cache
+would refuse to open, unless the invocation calls no engine; and before
+any document is dispatched or anything written, it makes one trivial
+call per distinct (model, effort) pair the roles this invocation will
+call run, through the engine as the run calls it but not through the
+cache, and refuses the run, naming the model and the engine's reason,
+when one fails with an error that is not a subscription limit or an
+overload: a model the claude CLI does not support among them. The pairs
+are those of the roles whose stages fall within the invocation's range
+(`--until`), and every role when a corpus stage in range may call the
+engine; it reads no run state, so a resume makes them though it reuses
+every view, and an invocation past the barrier only, whose corpus stages
+call no engine, makes none. On a claude CLI other than the run recorded
+it checks no model and refuses nothing: the run's own client refuses the
+CLI when a stage starts the engine. One driver at a time uses a runs
+directory (hold), and a run is invoked only from the runs directory it
+is in.
 
 Run directories hold transcriptions, claims and the cache's raw model
 output: they are local-only data, kept under var/ (docs/AGENT_PROTOCOL.md
@@ -1023,11 +1026,43 @@ class ScratchDriver(Orchestrator):
             return [str(exc)]
         return []
 
+    def _anomaly_problems(self) -> list[str]:
+        """What is wrong with the anomaly thresholds the run's checks
+        would load (anomalies.load_config: anomalies.yaml, with the file
+        `$YIZKR_ANOMALIES` names over it): a file that cannot be read, a
+        key the defaults do not have, or a value out of range."""
+        from yizkr.pipeline import anomalies
+
+        try:
+            anomalies.load_config()
+        except anomalies.AnomalyConfigError as exc:
+            return [str(exc)]
+        return []
+
+    def _cache_problems(self, past: bool) -> list[str]:
+        """Why the LLM cache's folder cannot hold the cache, as opening it
+        would refuse it, found without making or changing anything
+        (llm.read_cache, which refuses it as a pause, CacheRefused): for
+        an invocation whose range calls the engine (_preflight_pairs).
+        One past the barrier only, whose corpus stages call no engine,
+        never opens the cache, and nothing is refused for it."""
+        from yizkr.pipeline import llm
+
+        if not self._preflight_pairs(past):
+            return []
+        try:
+            llm.read_cache(self.cache_dir)
+        except llm.PassPaused as exc:
+            return [str(exc)]
+        return []
+
     def _preflight_host(self) -> None:
         """Everything that needs no document: the models, the pacing, the
-        engine and its login, disk space, and the wiki when a stage to run
-        touches it. PreflightFailed lists every problem."""
+        anomaly thresholds, the engine and its login, disk space, and the
+        wiki when a stage to run touches it. PreflightFailed lists every
+        problem."""
         problems = self._model_problems() + self._pacing_problems()
+        problems += self._anomaly_problems()
         problems += self._engine_problems()
         problems += self._disk_problems()
         problems += self._wiki_problems()
@@ -1843,6 +1878,11 @@ class ScratchDriver(Orchestrator):
             conflicts = settings_conflicts(recorded, fields)
             if conflicts:
                 raise RunSettingsConflict(self.state_dir, conflicts)
+        # a cache folder the cache would refuse, before the preflight's
+        # calls and before anything is written
+        problems = self._cache_problems(past)
+        if problems:
+            raise PreflightFailed(problems)
         try:
             self._preflight_models(past)
         except UsageLimitReached as exc:

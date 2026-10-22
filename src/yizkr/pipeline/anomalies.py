@@ -82,7 +82,6 @@ a logged warning, never a document's failure.
 
 from __future__ import annotations
 
-import argparse
 import bisect
 import contextlib
 import fcntl
@@ -91,7 +90,6 @@ import logging
 import os
 import re
 import statistics
-import sys
 import threading
 import time
 import uuid
@@ -117,7 +115,6 @@ from yizkr.pipeline.rundir import (
     CALL,
     CONTROL,
     EVENTS,
-    MANIFEST,
     PAUSE,
     RESUME,
     SET_ASIDE,
@@ -362,7 +359,9 @@ def load_config(
     if source:
         try:
             loaded = yaml.safe_load(Path(source).read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        # ValueError covers a file that is not UTF-8 and a date or a
+        # number YAML cannot make; RecursionError, nesting too deep
+        except (OSError, ValueError, yaml.YAMLError, RecursionError) as exc:
             raise AnomalyConfigError(
                 f"the anomaly thresholds in {source} cannot be read "
                 f"({type(exc).__name__})"
@@ -2429,53 +2428,20 @@ def recheck(
     ]
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """`python -m yizkr.pipeline.anomalies recheck <run dir>`."""
-    parser = argparse.ArgumentParser(
-        prog="python -m yizkr.pipeline.anomalies",
-        description=(
-            "Check a run directory's stored outputs again with the anomaly "
-            "thresholds as they are now, without recomputing any stage "
-            "(docs/ANOMALIES.md)."
-        ),
-    )
-    commands = parser.add_subparsers(dest="command", required=True)
-    again = commands.add_parser(
-        "recheck",
-        help="append the alerts the stored outputs raise now",
-    )
-    again.add_argument("run_dir", type=Path, help="the run directory")
-    again.add_argument(
-        "--config",
-        type=Path,
-        help=(
-            f"a file of thresholds over the defaults, in place of the one "
-            f"${CONFIG_VARIABLE} names"
-        ),
-    )
-    args = parser.parse_args(argv)
-    if not (args.run_dir / MANIFEST).is_file():
-        print(
-            f"{args.run_dir} is no run directory: it has no {MANIFEST}",
-            file=sys.stderr,
-        )
-        return 2
-    try:
-        config = load_config(args.config)
-    except AnomalyConfigError as exc:
-        print(exc, file=sys.stderr)
-        return 2
-    alerts = recheck(args.run_dir, config)
-    print(
+def recheck_lines(
+    state_dir: str | os.PathLike[str],
+    config: AnomalyConfig,
+    alerts: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    """What a recheck of `state_dir` under `config` says of the `alerts`
+    it appended: how many, where, under which thresholds' digest, and how
+    many each check raised (`yizkr scratch recheck`)."""
+    lines = [
         f"{len(alerts)} alert{'' if len(alerts) == 1 else 's'} appended to "
-        f"{args.run_dir / ALERTS} (thresholds {config.digest()})"
-    )
+        f"{Path(state_dir) / ALERTS} (thresholds {config.digest()})"
+    ]
     for check, count in sorted(
         Counter(alert.get("check") for alert in alerts).items()
     ):
-        print(f"  {check:24} {count}")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+        lines.append(f"  {check:24} {count}")
+    return lines
