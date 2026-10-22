@@ -937,6 +937,8 @@ def test_a_file_git_does_not_show_clean_after_its_restore_is_an_error(
         "calc.py is restored, but git does not show it clean: calc.py has "
         "unstaged changes" in captured.err
     )
+    # reported once, by that check, not again as a stray write
+    assert "wrote into the checkout" not in captured.err
     assert outcomes(captured.out) == {
         "sum becomes difference": "killed",
         "untested double": "not run",
@@ -1002,12 +1004,13 @@ def test_the_same_mutant_without_the_stray_write_passes(repo):
 def killing_run(writes):
     """A scripted test run that kills its mutant, and first writes into
     the working directory each (path, text) in `writes`, on its nth call
-    for the nth list there."""
+    for the nth list there. A path may be bytes, for a name that is not
+    UTF-8."""
     calls = iter(writes)
 
     def run(self, tests, live=False):
         for rel, text in next(calls, []):
-            path = Path(rel)
+            path = Path(os.fsdecode(rel))
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
         return mutate.Run(
@@ -1019,9 +1022,18 @@ def killing_run(writes):
     return run
 
 
+@pytest.mark.parametrize(
+    "spec, tests",
+    [
+        (SUM, "test_calc.py::test_add"),
+        (LIVE_SUM, f"{LIVE} (-m live)"),
+    ],
+    ids=["unit", "live"],
+)
 def test_a_baseline_run_that_writes_into_the_checkout_fails_it(
-    repo, monkeypatch, capsys
+    repo, tmp_path, monkeypatch, capsys, spec, tests
 ):
+    monkeypatch.setenv(ENV_FILE, str(stack_settings(tmp_path)))
     passing = []
 
     def run(self, tests, live=False):
@@ -1031,13 +1043,12 @@ def test_a_baseline_run_that_writes_into_the_checkout_fails_it(
             0, "=========== 1 passed in 0.01s ===========\n", 0.1
         )
 
-    spec = scripted(monkeypatch, repo, SUM, run)
+    spec = scripted(monkeypatch, repo, spec, run)
     report = repo.parent / "report.json"
     assert mutate.main([spec, "--json", str(report)]) == 2
     captured = capsys.readouterr()
     assert (
-        "the baseline run of test_calc.py::test_add wrote into the checkout"
-        in captured.err
+        f"the baseline run of {tests} wrote into the checkout" in captured.err
     )
     [baseline] = json.loads(report.read_text())["baseline"]
     assert (baseline["result"], baseline["stray"]) == (
@@ -1045,7 +1056,7 @@ def test_a_baseline_run_that_writes_into_the_checkout_fails_it(
         ["events.jsonl"],
     )
     # no mutant ran
-    assert passing == [["test_calc.py::test_add"]]
+    assert len(passing) == 1
     assert (repo / "events.jsonl").exists()
 
 
@@ -1056,10 +1067,13 @@ def test_what_was_there_before_is_fine_unless_a_run_changes_it(
     out of the report until a run changes one. Ignored paths, such as
     var/ and __pycache__/, are never reported."""
     (repo / "notes.txt").write_text("before\n")
+    # the runs' writes keep each file's size, and the old mtime is far
+    # from theirs: only the mtime tells the change
+    os.utime(repo / "notes.txt", ns=(STAMP, STAMP))
     (repo / "test_a.py").write_text(TEST_A + "# a change of my own\n")
     writes = [
         [("var/cache.json", "{}\n"), ("__pycache__/x.pyc", "")],
-        [("notes.txt", "changed by the run\n")],
+        [("notes.txt", "after!\n"), ("registry.py", "HANDLERS = {1: 2}\n")],
     ]
     spec = scripted(monkeypatch, repo, SUM + DOUBLE, killing_run(writes))
     assert mutate.main([spec, "--no-baseline", "--keep-going"]) == 2
@@ -1067,11 +1081,83 @@ def test_what_was_there_before_is_fine_unless_a_run_changes_it(
     rows = results(captured.out)
     assert rows["sum becomes difference"]["detail"] == "1 failed"
     assert rows["untested double"]["detail"].endswith(
-        "; left in the checkout: notes.txt"
+        "; left in the checkout: notes.txt, registry.py"
     )
-    assert "\n    notes.txt\n" in captured.err
+    assert "\n    notes.txt\n    registry.py\n" in captured.err
     assert "var/cache.json" not in captured.err
-    assert (repo / "notes.txt").read_text() == "changed by the run\n"
+    assert (repo / "notes.txt").read_text() == "after!\n"
+
+
+def test_a_live_mutants_run_is_checked_too(
+    repo, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv(ENV_FILE, str(stack_settings(tmp_path)))
+    writes = [[("run-1/events.jsonl", "{}\n")]]
+    spec = scripted(monkeypatch, repo, LIVE_SUM, killing_run(writes))
+    assert mutate.main([spec, "--no-baseline"]) == 2
+    captured = capsys.readouterr()
+    assert (
+        "mutation 1 ('live sum') wrote into the checkout, which tests must "
+        "leave alone (write under tmp_path instead):\n    run-1/events.jsonl"
+        in captured.err
+    )
+
+
+def test_a_checkout_git_cannot_list_after_a_run_stops_it(
+    repo, monkeypatch, capsys
+):
+    real = mutate.checkout_state
+    calls = []
+
+    def failing_after_the_first(root):
+        calls.append(root)
+        if len(calls) > 1:
+            return None, "git status failed: the index is locked"
+        return real(root)
+
+    monkeypatch.setattr(mutate, "checkout_state", failing_after_the_first)
+    spec = scripted(monkeypatch, repo, SUM + DOUBLE, killing_run([]))
+    report = repo.parent / "report.json"
+    assert (
+        mutate.main(
+            [spec, "--no-baseline", "--keep-going", "--json", str(report)]
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert (
+        "cannot list the checkout after mutation 1 ('sum becomes "
+        "difference'): git status failed: the index is locked" in captured.err
+    )
+    rows = results(captured.out)
+    assert rows["sum becomes difference"]["detail"] == (
+        "1 failed; the checkout could not be listed"
+    )
+    assert rows["untested double"]["result"] == "not run"
+    data = json.loads(report.read_text())
+    assert data["mutations"][0]["stray"] is None
+
+
+def test_a_name_that_is_not_utf8_is_listed_and_shown_escaped(
+    repo, monkeypatch, capsys
+):
+    """git prints such a name as raw bytes. One there before the run is
+    fine; one a mutant's run writes is named with a backslash escape."""
+    name = b"\xff-run.txt"
+    before = os.path.join(os.fsencode(repo), b"old-" + name)
+    with open(before, "wb") as out:
+        out.write(b"before\n")
+    spec = scripted(monkeypatch, repo, SUM, killing_run([]))
+    assert mutate.main([spec, "--no-baseline"]) == 0
+    capsys.readouterr()
+    spec = scripted(monkeypatch, repo, SUM, killing_run([[(name, "x")]]))
+    assert mutate.main([spec, "--no-baseline"]) == 2
+    captured = capsys.readouterr()
+    assert results(captured.out)["sum becomes difference"]["detail"].endswith(
+        "; left in the checkout: \\xff-run.txt"
+    )
+    assert "\n    \\xff-run.txt\n" in captured.err
+    assert os.path.exists(os.path.join(os.fsencode(repo), name))
 
 
 def test_stray_writes_are_new_or_changed_entries():
@@ -1088,13 +1174,20 @@ def test_stray_writes_are_new_or_changed_entries():
     ]
 
 
+def test_a_path_gone_from_the_listing_is_a_stray_write():
+    """A run that deletes an untracked file, or reverts an edit, that was
+    there before."""
+    before = {"notes.txt": ("??", (1, 2, 3)), "edited.py": (" M", (1, 5, 6))}
+    assert mutate.stray_writes(before, {}) == ["edited.py", "notes.txt"]
+
+
 def test_the_checkout_state_is_one_git_status_call(repo, monkeypatch):
     calls = []
     real = mutate.git
 
-    def counting(root, *args):
+    def counting(root, *args, **options):
         calls.append(args)
-        return real(root, *args)
+        return real(root, *args, **options)
 
     monkeypatch.setattr(mutate, "git", counting)
     (repo / "dir with space").mkdir()
