@@ -23,12 +23,14 @@ Exclusion is CONSERVATIVE by design and computed at RUNTIME — there is
 no stored "living" flag (ADR-0020). A person is excluded unless the graph
 gives positive evidence they are not living: any death evidence (a date,
 place, or cause of death, a place of burial, or a death event whose
-principal they are: an informant or a witness at someone else's death is
-not released by it), or births that all lie more than ``cutoff_years`` ago
+single principal they are: an informant or a witness at someone else's
+death, or anyone in a death with no role or several principals, is not
+released by it), or births that all lie more than ``cutoff_years`` ago
 (``DEFAULT_CUTOFF_YEARS`` by default), every birth statement a curator has
-not deprecated, and every dated birth event they are the principal of,
-read at the latest year it allows. Unknown means excluded. The
-determination, and the queries that select people and read their births
+not deprecated and every dated birth event they are the single principal
+of (one that is nobody's own adds its date to the births its participants
+have already), read at the latest year it allows. Unknown means excluded.
+The determination, and the queries that select people and read their births
 and events for it, live in ``yizkr.core.privacy``.
 
 The export keeps only the people that check releases, and so fails

@@ -1504,25 +1504,22 @@ not a signal to grow the schema on.
   death event each suffices. Death is an event like any other
   (ADR-0014), so "died, nothing else known" is a death event with the
   person as its principal participant.
-- **A birth or death event is its principal's own** (ADR-0020, as
+- **A birth or death event is its one principal's own** (ADR-0020, as
   amended by #345; ADR-0035 §3.2). A death event releases only the
-  participant whose `participant` statement states roles, every one of
-  them `principal` (`object_has_role`, read from the statement's
-  qualifier, not the truthy triple); an informant or a witness at
-  someone else's death stays possibly living. Where no participant
-  statement of the event states a role, it releases its one participant,
-  when every statement that names someone names that one item and no
-  other that may be a person (a vessel, a military unit or an
-  organization typed so at normal or preferred rank is not one; an
-  unknown value is), and no one when it has several. Roles and
-  participants are read at every rank, so a deprecated one can only take
-  a release away; a death's principal statement counts at the best
-  rank, a birth's at any rank a curator has not deprecated.
-  A dated birth event's `point in time` is a further birth of its
-  principal, by the same rule, read as a `date of birth` is: an 1850
-  date of birth beside a 1990 birth event keeps the person possibly
-  living. The export and the site read both through
-  `yizkr.core.privacy.read_evidence`, so they decide each person alike.
+  single participant its `participant` statements name in the role
+  `principal` (`object_has_role`, read from the statement's qualifier,
+  not the truthy triple), through a statement at the best rank that
+  states no other role; an informant or a witness at someone else's
+  death stays possibly living. A death with no principal, with several,
+  with one of unknown value, or with no role stated at all is nobody's
+  own and releases no one. A dated birth event's `point in time` is a
+  birth of its principal, read as a `date of birth` is: it may release a
+  principal born only by it, and an 1850 date of birth beside a 1990
+  birth event keeps the person possibly living. A birth event that is
+  nobody's own only adds its date to the births of participants who have
+  a birth already, so it can only keep them possibly living. The export
+  and the site read both through `yizkr.core.privacy.read_evidence`, so
+  they decide each person alike.
 - **No curation duty.** There is no `living` column in the review CSV
   and nothing the reviewer must decide. Privacy falls out of what
   sources already assert; a curator who knows a person is dead records

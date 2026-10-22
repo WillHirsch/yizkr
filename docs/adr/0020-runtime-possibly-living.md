@@ -16,15 +16,20 @@ evidence from its own dump and drops every such item the check did not
 release, every item that states no type, and every family; and it
 refuses to run while the query service, where the check runs, does not
 hold the dump's revisions (§4, Ruling 6).
-Amended by #345 (2026-10-18): a birth or a death event is its
+Amended by #345 (2026-10-18): a birth or a death event is its one
 principal's own (ADR-0035 §3.2), and no one else's. A death event is
-death evidence only for the participant whose statement's every role is
-`principal`, or, where no participant statement of the event states a
-role, for its one participant when it has only one who may be a person;
-an informant or a witness at someone else's death stays possibly living.
-A dated birth event is read as a further birth of its principal, by the
-same rule, which can only keep them possibly living. The export and the
-site read both with `yizkr.core.privacy.read_evidence` (§2, §4).
+death evidence only for the single participant its statements name in
+the role `principal`; with no principal, with several, with one of
+unknown value, or with no role stated at all, it is nobody's own, so an
+informant or a witness at someone else's death stays possibly living.
+A dated birth event's date is a birth of its single principal, as a
+`date of birth` is, so it may release them; a birth event that is
+nobody's own only adds its date to the births of participants who have
+a birth already, so it can only keep them possibly living. This is the
+strict reading of #345's acceptance, the orchestrator's choice: the
+issue allowed a role-less death to count for its one participant "until
+roles exist", and roles exist now (ADR-0035). The export and the site
+read both with `yizkr.core.privacy.read_evidence` (§2, §4).
 Amended by [ADR-0035](0035-mention-records.md) (owner decision
 2026-09-29, #385): a stated
 civil status (`civil_status`) is person evidence for the check (ADR-0035
@@ -302,20 +307,25 @@ ordinary source-first way, not by flipping a flag.
 Amended by #345 (2026-10-18): a death event marks dead only the one it
 happened to, read from the role qualifier (`object_has_role`) of each
 `participant` statement, through its statement node, never from the
-truthy triple, which carries no qualifiers. Its principal is the
-participant whose statement states roles, every one of them `principal`;
-a statement of any other role (an informant, a witness, an unknown role)
-never counts. Where no participant statement of the event states a role,
-the event is its one participant's when every statement that names
-someone names that one item and no other that may be a person (an item
-typed a vessel, a military unit or an organization at normal or preferred
-rank is not one; an unknown value is). Roles and participants are read at
-every rank, so a deprecated one can only take a release away; a death's
-principal statement counts at the best rank, as a truthy value would, and
-a birth's at any rank a curator has not deprecated. A dated birth event's `point in time` is read, as a `date of birth`
-statement is (§1), as a further birth of its principal by the same rule,
-so that an 1850 date of birth beside a 1990 birth event keeps the person
-possibly living. When in doubt, the person stays possibly living.
+truthy triple, which carries no qualifiers. Its principal is the one
+value that every statement stating a `principal` role names, at any
+rank; that person's own statement must state no other role, must not be
+deprecated, and must be at the best rank among the event's participant
+statements, as a truthy value would be. A statement of any other role
+(an informant, a witness, an unknown role) never counts. An event with
+no principal, with several, or with one of unknown value is nobody's
+own, and so is one whose participants state no role at all: a death
+naming only its informant releases no one. A deprecated statement can so
+name a second principal and take a release away, but never give one.
+A dated birth event's `point in time` is read, as a `date of birth`
+statement is (§1), as a birth of its principal (at any rank a curator
+has not deprecated), so a principal born only by such an event in 1850
+is released, and an 1850 date of birth beside a 1990 birth event keeps
+the person possibly living. A birth event that is nobody's own (no role,
+several principals) only adds its date to the births of its participants
+who have a birth already, never giving anyone a birth, so it can only
+keep them possibly living. When in doubt, the person stays possibly
+living.
 
 ### 3. No curation duty
 
