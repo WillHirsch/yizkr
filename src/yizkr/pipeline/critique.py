@@ -476,11 +476,12 @@ def run_critique(
     against them all.
 
     Advisory only — an unfinished answer never raises (unlike chunk
-    extraction): the critic must never block the pipeline, only inform
-    the reviewer. An answer the engine stopped at its output limit
-    (llm.at_output_limit), or one without its terminal sentinel (a
-    refusal, an answer cut off, a usage-limit notice), still gives the
-    findings it holds, and is rejected through the client
+    extraction), but for a rejection the cache refuses (a pause, as a
+    call it refuses is; _reject): the critic must never block the
+    pipeline, only inform the reviewer. An answer the engine stopped at
+    its output limit (llm.at_output_limit), or one without its terminal
+    sentinel (a refusal, an answer cut off, a usage-limit notice), still
+    gives the findings it holds, and is rejected through the client
     (llm.reject_response), so that a client that keeps answers asks the
     critic again next time rather than serving it. One the client kept
     from an earlier call is asked for once more, and the engine's answer
@@ -567,7 +568,8 @@ def _reject(client: LlmClient, response: str, reason: str) -> bool:
     """Reject an unfinished critique answer for `reason`; True when it was
     one the client kept from an earlier call (llm.reject_response). A
     rejection that fails is only a warning: the critic never blocks the
-    pipeline."""
+    pipeline. A rejection the cache refuses (llmcache.CacheRefused, a
+    pause) ends the pass, as a call it refuses does."""
     try:
         return reject_response(client, response, reason)
     except Exception as exc:
