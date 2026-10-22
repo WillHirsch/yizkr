@@ -19,7 +19,10 @@ import yaml
 from tests.fixtures import example_universe as u
 from tests.unit.test_backup import FACTS
 from tests.unit.test_disagreement import (
+    CARD,
+    CENTURY,
     INTERVIEW,
+    MILLENNIUM,
     POSTCARD,
     PROPERTIES,
     QIDS,
@@ -1386,13 +1389,18 @@ def on_timeline(
     bounds: tuple[str, str] = DATE_BOUNDS,
     earliest: u.Date | None = None,
     latest: u.Date | None = None,
+    precision: int | None = None,
 ) -> dict:
     """A person-timeline row: `source` dates `person`'s `what` as `date`
     (universe keys, but for `what`), and the qualifiers `bounds` names
     bound it. Its range is the one the date's own qualifier gives
     ("between", "after", "before"), as the GEDCOM adapter writes it, or
-    `earliest` and `latest` when given."""
-    _, precision, ranges = stated(date)
+    `earliest` and `latest` when given; its precision is `date`'s, or
+    `precision` when given. A circa date's statement carries circa as its
+    sourcing circumstance (?circumstances, #315), as the GEDCOM adapter
+    writes it."""
+    _, stated_precision, ranges = stated(date)
+    precision = precision or stated_precision
     row = {
         "person": uri(QIDS[person]),
         "personLabel": literal(label(person)),
@@ -1404,6 +1412,8 @@ def on_timeline(
         "source": uri(QIDS[source]),
         "sourceLabel": literal(label(source)),
     }
+    if date.qualifier == "circa":
+        row["circumstances"] = literal("circa")
     for name, given in (("earliest", earliest), ("latest", latest)):
         bound = at(given) if given else min(ranges.get(name, ()), default=None)
         if bound is not None:
@@ -1463,7 +1473,64 @@ HELD = on_timeline(
     earliest=u.Date(1939, 9, 3),
     latest=u.Date(1939, 10, 1),
 )
+# Cäcilie's birth "c. 1833" per the tree, and (here) as the 19th century
+# per the interview, stored by its first year; and Leopold's imprisonment
+# by its own start and end time per the registration card, each a row of
+# its own (#318)
+CAECILIE_BORN_CIRCA = on_timeline(
+    "caecilie-loebig",
+    "date of birth",
+    u.Date(1833, qualifier="circa"),
+    TREE,
+)
+CAECILIE_BORN_IN_THE_19TH_CENTURY = on_timeline(
+    "caecilie-loebig",
+    "date of birth",
+    u.Date(1801),
+    INTERVIEW,
+    precision=CENTURY,
+)
+HELD_FROM = on_timeline(
+    "leopold-loebig",
+    "imprisonment (start time)",
+    u.Date(1939, 9, 3),
+    CARD,
+)
+HELD_UNTIL = on_timeline(
+    "leopold-loebig",
+    "imprisonment (end time)",
+    u.Date(1939, 10, 1),
+    CARD,
+)
+# (here) dates coarser than a year: the interview gives Eugen's birth as
+# the 1830s and Klara's to within 100,000 years (stored as 1801), and the
+# tree gives Rahel's as the 2nd millennium, stored by its first year
+EUGEN_BORN_IN_THE_1830S = on_timeline(
+    "eugen-loebig",
+    "date of birth",
+    u.Date(1830, decade=True),
+    INTERVIEW,
+)
+RAHEL_BORN_IN_THE_2ND_MILLENNIUM = on_timeline(
+    "rahel-loebig",
+    "date of birth",
+    u.Date(1001),
+    TREE,
+    precision=MILLENNIUM,
+)
+KLARA_BORN_TO_WITHIN_100000_YEARS = on_timeline(
+    "klara-loebig",
+    "date of birth",
+    u.Date(1801),
+    INTERVIEW,
+    precision=4,
+)
 DATED = [
+    RAHEL_BORN_IN_THE_2ND_MILLENNIUM,
+    KLARA_BORN_TO_WITHIN_100000_YEARS,
+    CAECILIE_BORN_IN_THE_19TH_CENTURY,
+    EUGEN_BORN_IN_THE_1830S,
+    CAECILIE_BORN_CIRCA,
     EUGEN_DIED,
     KLARA_LEFT,
     KLARA_LEFT_IN_38_OR_39,
@@ -1472,6 +1539,8 @@ DATED = [
     MARRIED,
     DIVORCED,
     HELD,
+    HELD_FROM,
+    HELD_UNTIL,
 ]
 
 
@@ -1556,6 +1625,105 @@ class TestTimeline:
             "</div>"
         ) in page
 
+    def test_a_circa_date_says_so(self, site):
+        # circa is a sourcing circumstance, not a range (#315): shown as the
+        # person page shows it, never read as an exact year
+        assert self.dated(site, CAECILIE_BORN_CIRCA) == (
+            '1833 <span class="qualifiers">'
+            "(sourcing circumstances: circa)</span>"
+        )
+
+    def test_circa_follows_the_range_and_each_value_shows(
+        self, tmp_path, vocabulary
+    ):
+        # the query folds a statement's circumstances into one cell, each
+        # URI-encoded: each shows, sorted, after the range, and escaped
+        row = {
+            **KLARA_LEFT_IN_38_OR_39,
+            "circumstances": literal("vague%20%3Cb%3E%7C%20%26|circa"),
+        }
+        site, _ = build(
+            tmp_path, vocabulary, {**RESPONSES, 'date of birth"@en': [row]}
+        )
+        assert self.dated(site, row) == (
+            '1938 <span class="qualifiers">(earliest date: 1938; '
+            "latest date: 1939; sourcing circumstances: circa; "
+            "sourcing circumstances: vague &lt;b&gt;| &amp;)</span>"
+        )
+        (event,) = json.loads((site / "timeline.json").read_text())["events"]
+        assert event["start_date"]["display_date"] == (
+            "1938 (earliest date: 1938; latest date: 1939; "
+            "sourcing circumstances: circa; "
+            "sourcing circumstances: vague &lt;b&gt;| &amp;)"
+        )
+
+    def test_a_coarse_date_is_headed_by_its_span(self, site):
+        # a decade, century or millennium row is headed by its span, and a
+        # coarser one by its stored year with the span its precision
+        # allows, never by a bare stored year (#315); a finer date by its
+        # year
+        page = (site / "timeline.html").read_text()
+        headers = re.findall(r'<div class="year">(.*?)</div>', page)
+        assert headers[:6] == [
+            "2nd millennium",
+            "1801, to within 100,000 years",
+            "19th century",
+            "1830s",
+            "1833",
+            "1909",
+        ]
+        for stored in ("1001", "1801", "1830"):
+            assert stored not in headers
+        for row, shown in (
+            (RAHEL_BORN_IN_THE_2ND_MILLENNIUM, "2nd millennium"),
+            (
+                KLARA_BORN_TO_WITHIN_100000_YEARS,
+                "1801, to within 100,000 years",
+            ),
+            (CAECILIE_BORN_IN_THE_19TH_CENTURY, "19th century"),
+            (EUGEN_BORN_IN_THE_1830S, "1830s"),
+        ):
+            assert self.dated(site, row) == shown
+
+    def test_circa_shows_beside_a_periods_start_and_end_alike(
+        self, tmp_path, vocabulary
+    ):
+        # circa qualifies the whole statement, so its start row and its end
+        # row both carry it, after each end's own bounds (#315)
+        married = {**MARRIED, "circumstances": literal("circa")}
+        divorced = {**DIVORCED, "circumstances": literal("circa")}
+        site, _ = build(
+            tmp_path,
+            vocabulary,
+            {**RESPONSES, 'date of birth"@en': [married, divorced]},
+        )
+        assert self.dated(site, married) == (
+            '1946 <span class="qualifiers">(earliest date: 1946; '
+            "latest start date: 1947; sourcing circumstances: circa)</span>"
+        )
+        assert self.dated(site, divorced) == (
+            '1956 <span class="qualifiers">(earliest end date: 1956; '
+            "sourcing circumstances: circa)</span>"
+        )
+        events = json.loads((site / "timeline.json").read_text())["events"]
+        shown = sorted(event["start_date"]["display_date"] for event in events)
+        assert shown == [
+            "1946 (earliest date: 1946; latest start date: 1947; "
+            "sourcing circumstances: circa)",
+            "1956 (earliest end date: 1956; sourcing circumstances: circa)",
+        ]
+
+    def test_an_event_dated_by_its_start_and_end_shows_both(self, site):
+        # each its own row, with its own source (#318), and the page says
+        # how such a date is bounded
+        page = (site / "timeline.html").read_text()
+        assert (
+            "An event's own start or end time, like any other date, runs "
+            "from its earliest date to its latest date."
+        ) in page
+        assert self.dated(site, HELD_FROM) == "1939-09-03"
+        assert self.dated(site, HELD_UNTIL) == "1939-10-01"
+
     def test_the_feed_gives_each_range_beside_its_date(self, site):
         # TimelineJS places an event by its year, month and day, and shows
         # a date's display_date in place of the date
@@ -1607,6 +1775,36 @@ class TestTimeline:
         assert start(DIVORCED) == {
             "year": "1956",
             "display_date": "1956 (earliest end date: 1956)",
+        }
+        # circa beside its date (#315)
+        assert start(CAECILIE_BORN_CIRCA) == {
+            "year": "1833",
+            "display_date": "1833 (sourcing circumstances: circa)",
+        }
+        # a decade, century or millennium shows as its span, and a coarser
+        # date with the span its precision allows, never as its stored year
+        assert start(CAECILIE_BORN_IN_THE_19TH_CENTURY) == {
+            "year": "1801",
+            "display_date": "19th century",
+        }
+        assert start(EUGEN_BORN_IN_THE_1830S) == {
+            "year": "1830",
+            "display_date": "1830s",
+        }
+        assert start(RAHEL_BORN_IN_THE_2ND_MILLENNIUM) == {
+            "year": "1001",
+            "display_date": "2nd millennium",
+        }
+        assert start(KLARA_BORN_TO_WITHIN_100000_YEARS) == {
+            "year": "1801",
+            "display_date": "1801, to within 100,000 years",
+        }
+        # an event's start and end, each at its day (#318)
+        assert start(HELD_FROM) == {"year": "1939", "month": "09", "day": "03"}
+        assert start(HELD_UNTIL) == {
+            "year": "1939",
+            "month": "10",
+            "day": "01",
         }
         # a ranged date finer than a year keeps its month in start_date,
         # and its display_date shows it at its own precision
@@ -1701,6 +1899,7 @@ class TestTimeline:
             "high",
             "latest",
             "latestPrecision",
+            "circumstances",
             "source",
             "sourceLabel",
         } <= set(re.findall(r"\?(\w+)", select))

@@ -713,7 +713,16 @@ artifact a new QID, changes neither.
   excerpt there.
 - "circa": sourcing circumstances qualifier. A compilation's statement
   that its text was prepared with machine assistance is another
-  sourcing circumstance (planned: "Compound artifacts").
+  sourcing circumstance (planned: "Compound artifacts"). The static
+  site's timeline page and feed show a statement's sourcing
+  circumstances after the range beside each of its dates, as the person
+  page does: Cäcilie's birth "c. 1833" per the family tree shows as "1833
+  (sourcing circumstances: circa)", never as an exact year. A date coarser
+  than a year shows in the feed's display date and in the timeline page's
+  header over it as `format_time` shows it: its decade, century or
+  millennium, or, coarser than a millennium, its stored year with the span
+  its precision allows ("1900, to within 10,000 years"), never as a bare
+  stored year (a 19th century stored as 1801 is headed "19th century").
 - Redundant-but-asserted values (e.g. "Alter: 73 Jahre" alongside a death
   date) are kept verbatim as qualifiers (`age at death`), never derived or
   dropped: sources assert them, so the archive records them.
@@ -1328,7 +1337,8 @@ dating below is the convention its readers still interpret:
 - **Circa** (`sourcing_circumstances`) qualifies the whole statement. On
   a spouse statement with a start and an end, it says that the source
   gives at least one of them approximately, and cannot say which, rather
-  than drop it (rule 5).
+  than drop it (rule 5). So the person timeline shows it beside the
+  statement's start and its end alike.
 
 The disagreement report compares a residence's or a spouse's start and
 end times, each through its own range ("Contradictions" below); the
@@ -1336,9 +1346,11 @@ person timeline (`src/yizkr/queries/person-timeline.rq`) lists each
 start, end and point in time with the range stated for it, which the
 static site's timeline page and feed show beside the date, each bound
 under its qualifier's label ("1946 (earliest date: 1946; latest start
-date: 1947)"); and the extraction prompts give the extractor this
-convention for residences and other periods, and date a marriage by its
-wedding and end events instead.
+date: 1947)"). An event's own start and end time are rows of their own
+there, each bounded by its earliest and latest date ("imprisonment
+(start time)", "imprisonment (end time)"); and the extraction prompts
+give the extractor this convention for residences and other periods,
+and date a marriage by its wedding and end events instead.
 
 ## Persecution and displacement as events (see ADR-0014)
 

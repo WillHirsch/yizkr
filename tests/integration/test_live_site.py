@@ -16,7 +16,10 @@ ADR-0009), so the two places differ in resolution, not in substance. A
 photograph of the family gravestone gives the gallery an image, and
 Rahel Löbig's death, which the family tree gives as "after 1945", gives
 the timeline a date with a range its source states, open at one end
-(#309).
+(#309). Cäcilie Löbig's birth, which the tree gives as "c. 1833", gives it
+a circa date (#315), and Leopold Löbig's imprisonment, which the 1945
+registration card dates by its own start and end time, an event dated by
+start and end (#318).
 
 Every label, title and image carries a marker, eight hex digits of a hash
 over the fixture, over the writer's and the site generator's source and
@@ -72,11 +75,14 @@ EXTRACT = "birth-extract-1938"
 NATURALISATION = "naturalisation-1952"
 PHOTO = "gravestone-photo-1956"
 TREE = "family-tree-1984"
+CARD = "registration-card-1945"
 # what the fixture is; a change to it gives the fixture new items
 FIXTURE = (
     "Gustav Löbig's birth as the 1938 extract and the 1952 naturalisation "
-    "give it, the family gravestone's photograph, and Rahel's death after "
-    "1945 as the 1984 family tree gives it"
+    "give it, the family gravestone's photograph, Rahel's death after "
+    "1945 and Cäcilie's birth circa 1833 as the 1984 family tree gives "
+    "them, and Leopold's imprisonment from its start to its end as the "
+    "1945 registration card dates it"
 )
 MARK = f"(site test {fixture_mark(FIXTURE, writer, staticsite)})"
 
@@ -108,6 +114,13 @@ BIRTHS = {  # the two days, 7 January and 1 July 1919
 }
 NATURALISED_PLACE = said(NATURALISATION, "place_of_birth")
 RAHEL_DIED = said(TREE, "date_of_death", "rahel-loebig")  # after 1945
+CAECILIE_BORN = said(TREE, "date_of_birth", "caecilie-loebig")  # c. 1833
+# the imprisonment's own start and end time, 3 September and 1 October 1939
+HELD = {
+    prop: said(CARD, prop, "imprisonment-1939")
+    for prop in ("start_time", "end_time")
+}
+HELD_BY = said(CARD, "participant", "imprisonment-1939")  # Leopold
 # the extract's own words for the birth at home, and for the address
 HOME = (
     "wohnhaft in Flörburg, Brunnenring 35, zeigte an, daß von seiner "
@@ -196,15 +209,56 @@ RAHEL = "{} ({})".format(
 )
 
 
+# Cäcilie's birth as the tree gives it, "c. 1833", written as the GEDCOM
+# adapter writes it: 1833, with circa as its sourcing circumstance.
+CAECILIE_BIRTH = {
+    "property": "date_of_birth",
+    "value": time_value(CAECILIE_BORN.value),
+    "qualifiers": [
+        {
+            "property": "sourcing_circumstances",
+            "value": item({"kind": "vocab", "key": "circa"}),
+        }
+    ],
+    "source": TREE,
+    "excerpt": CAECILIE_BORN.excerpt,
+}
+# Her label, and the imprisonment's, carry a hash of their claims, as
+# Rahel's does.
+CAECILIE = "{} ({})".format(
+    marked("caecilie-loebig"),
+    hashlib.sha256(
+        json.dumps(CAECILIE_BIRTH, sort_keys=True).encode()
+    ).hexdigest()[:6],
+)
+LEOPOLD = marked("leopold-loebig")
+IMPRISONMENT = "{} ({})".format(
+    marked("imprisonment-1939"),
+    hashlib.sha256(
+        json.dumps(
+            [
+                [a.property, a.value.year, a.value.month, a.value.day]
+                for a in HELD.values()
+            ]
+        ).encode()
+    ).hexdigest()[:6],
+)
+
+
 def fixture_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
     """The two sources' claims about the birth, the extract's placing of
-    the address in the town, and the tree's claim about Rahel's death,
-    each citing its source by the SHA-1 of its media (#102)."""
+    the address in the town, the tree's claims about Rahel's death and
+    Cäcilie's birth, and the card's dating of Leopold's imprisonment by
+    its own start and end time, each citing its source by the SHA-1 of
+    its media (#102)."""
     person = local("person", PERSON, "human")
     address = local("address", ADDRESS, "place")
     street = local("street", STREET, "place")
     town = local("town", TOWN, "place")
     rahel = local("rahel", RAHEL, "human")
+    caecilie = local("caecilie", CAECILIE, "human")
+    leopold = local("leopold", LEOPOLD, "human")
+    imprisonment = local("imprisonment", IMPRISONMENT, "imprisonment")
 
     def claim(subject, prop, value, source, excerpt, qualifiers=()):
         return {
@@ -257,6 +311,23 @@ def fixture_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
             RAHEL_DEATH["excerpt"],
             RAHEL_DEATH["qualifiers"],
         ),
+        claim(
+            caecilie,
+            CAECILIE_BIRTH["property"],
+            CAECILIE_BIRTH["value"],
+            CAECILIE_BIRTH["source"],
+            CAECILIE_BIRTH["excerpt"],
+            CAECILIE_BIRTH["qualifiers"],
+        ),
+        claim(
+            imprisonment, "participant", item(leopold), CARD, HELD_BY.excerpt
+        ),
+        *(
+            claim(
+                imprisonment, prop, time_value(held.value), CARD, held.excerpt
+            )
+            for prop, held in HELD.items()
+        ),
     ]
     return ClaimBatch.model_validate({"extraction_run": RUN, "claims": claims})
 
@@ -267,6 +338,8 @@ class Site:
     summary: dict
     person: str  # the seeded person's QID
     rahel: str  # Rahel's QID, whose death has a stated range
+    caecilie: str  # Cäcilie's QID, whose birth is circa
+    leopold: str  # Leopold's QID, held from a start to an end
     places: dict[str, str]  # "address", "street", "town" -> QID
     sources: dict[str, str]  # universe source key -> artifact QID
     photo_file: str  # the gravestone photograph's file page
@@ -279,6 +352,8 @@ class Site:
 def site(client, config, tmp_path_factory):
     for text in (HOME, ADDRESS_IN_TOWN):
         assert text in UNIVERSE[EXTRACT].text  # quoted, never paraphrased
+    for held in (HELD_BY, *HELD.values()):
+        assert held.excerpt in UNIVERSE[CARD].text
     media = tmp_path_factory.mktemp("media")
     registered, cited = {}, {}
     for key, kind in (
@@ -286,6 +361,7 @@ def site(client, config, tmp_path_factory):
         (NATURALISATION, "certificate"),
         (PHOTO, "photograph"),
         (TREE, UNIVERSE[TREE].artifact_class),
+        (CARD, UNIVERSE[CARD].artifact_class),
     ):
         path = media / f"site-test-{key}.png"
         path.write_bytes(png(f"yizkr live site test: {key} {MARK}"))
@@ -301,7 +377,16 @@ def site(client, config, tmp_path_factory):
     written = write_mapped(BatchWriter(client), fixture_batch(cited))
     seeded = [
         written.created_items[local_id]
-        for local_id in ("person", "address", "street", "town", "rahel")
+        for local_id in (
+            "person",
+            "address",
+            "street",
+            "town",
+            "rahel",
+            "caecilie",
+            "leopold",
+            "imprisonment",
+        )
     ]
     wait_for_query_service(config, client, [*seeded, *sources.values()])
 
@@ -312,6 +397,8 @@ def site(client, config, tmp_path_factory):
             summary=publish_site(config, out),
             person=written.created_items["person"],
             rahel=written.created_items["rahel"],
+            caecilie=written.created_items["caecilie"],
+            leopold=written.created_items["leopold"],
             places={
                 local_id: written.created_items[local_id]
                 for local_id in ("address", "street", "town")
@@ -434,6 +521,84 @@ def test_the_timeline_shows_a_stated_range_beside_its_date(site):
         "display_date": "1945 (earliest date: 1945)",
     }
     assert event["text"]["text"] == f"per {html.escape(marked(TREE))}"
+
+
+def timeline_entries(site: Site, qid: str) -> list[str]:
+    """The timeline page's entries for the person `qid`."""
+    person = f'href="people/{qid}.html"'
+    return [
+        entry
+        for entry in re.findall(
+            r'<div class="entry">(.*?)</div>', site.read("timeline.html")
+        )
+        if person in entry
+    ]
+
+
+def feed_events(site: Site, label: str) -> list[dict]:
+    """The feed's events for the person labelled `label`."""
+    feed = json.loads(site.read("timeline.json"))
+    return [
+        event
+        for event in feed["events"]
+        if event["text"]["headline"].startswith(f"{html.escape(label)}: ")
+    ]
+
+
+def test_the_timeline_says_a_circa_date_is_circa(site):
+    # the tree gives Cäcilie's birth as "c. 1833": the timeline shows its
+    # sourcing circumstance as the person page does, never 1833 alone, on
+    # the page and in the feed (#315)
+    (entry,) = timeline_entries(site, site.caecilie)
+    assert entry.startswith(
+        '1833 <span class="qualifiers">'
+        "(sourcing circumstances: circa)</span> — "
+    )
+    assert source_link(site, TREE, root="") in entry
+
+    (event,) = feed_events(site, CAECILIE)
+    assert event["start_date"] == {
+        "year": "1833",
+        "display_date": "1833 (sourcing circumstances: circa)",
+    }
+
+
+def test_the_timeline_shows_an_event_by_its_start_and_end(site):
+    # the card dates Leopold's imprisonment by its own start and end time:
+    # each is a row of its own, named by the time beside the event's type,
+    # under the card (#318)
+    entries = timeline_entries(site, site.leopold)
+    card = f'<span class="source">{source_link(site, CARD, root="")}</span>'
+    assert sorted(entries) == [
+        f"{shown(HELD[prop].value)} — "
+        f'<a href="people/{site.leopold}.html">{html.escape(LEOPOLD)}</a>, '
+        f"imprisonment ({name}){card}"
+        for prop, name in (
+            ("start_time", "start time"),
+            ("end_time", "end time"),
+        )
+    ]
+
+    events = feed_events(site, LEOPOLD)
+    starts = {
+        event["text"]["headline"]: event["start_date"] for event in events
+    }
+    assert len(starts) == len(events)
+    assert starts == {
+        f"{html.escape(LEOPOLD)}: imprisonment (start time)": {
+            "year": "1939",
+            "month": "09",
+            "day": "03",
+        },
+        f"{html.escape(LEOPOLD)}: imprisonment (end time)": {
+            "year": "1939",
+            "month": "10",
+            "day": "01",
+        },
+    }
+    assert {event["text"]["text"] for event in events} == {
+        f"per {html.escape(marked(CARD))}"
+    }
 
 
 def test_sources_hyperlink_to_artifact_pages_with_downloads(site):

@@ -4,7 +4,8 @@
 # source — nothing is silently picked.
 # Covers: dated statements on the person (birth, death), the dates the
 # person's statements carry as qualifiers, and dated events the person
-# participated in. A qualifier's row names the statement's property, its
+# participated in, each dated by its point in time or by its own start
+# and end time. A qualifier's row names the statement's property, its
 # value and the qualifier: a marriage is dated by the start time of its
 # spouse statement and ends at its end time, and a point in time on a
 # spouse or residence statement dates an observation, never the wedding
@@ -17,12 +18,20 @@
 # or end time takes none, since there those dates bound the start and the
 # end. Each row also names the two qualifiers that bound its date, ?low
 # for ?earliest and ?high for ?latest, stated or not, so a reader can
-# tell a start's latest start date from a latest date.
+# tell a start's latest start date from a latest date. An event's own
+# start or end time is a date value, bounded by its earliest and latest
+# date like a date of birth, never by a latest start date or an earliest
+# end date; its row names the time beside the event's type
+# ("imprisonment (start time)"), and its point in time's row the type
+# alone. ?circumstances holds the statement's sourcing circumstances
+# (circa), each by its English label (its id when it has none),
+# URI-encoded and "|"-separated: circa qualifies the whole statement, so
+# each of its rows carries it (docs/MODELING.md).
 # For a single person, append e.g.: FILTER(?person = wd:Q26)
 #defaultView:Timeline
 SELECT DISTINCT ?person ?personLabel ?what ?date ?precision
        ?low ?earliest ?earliestPrecision ?high ?latest ?latestPrecision
-       ?source ?sourceLabel
+       ?circumstances ?source ?sourceLabel
 WHERE {
   ?person wdt:{P:instance_of} wd:{Q:human} .
   # each arm names the date's property (?dated) and the qualifiers that
@@ -72,14 +81,26 @@ WHERE {
                   CONCAT(?propertyName, " (", ?qualifierName, ")"))
          AS ?what)
   } UNION {
-    VALUES (?dated ?low ?high) {
-      (wd:{P:point_in_time} wd:{P:earliest_date} wd:{P:latest_date})
+    # an event the person took part in, by its own date claims: its point
+    # in time, start time and end time, each a date value
+    VALUES (?eventClaim ?dated ?low ?high) {
+      (p:{P:point_in_time} wd:{P:point_in_time}
+       wd:{P:earliest_date} wd:{P:latest_date})
+      (p:{P:start_time} wd:{P:start_time}
+       wd:{P:earliest_date} wd:{P:latest_date})
+      (p:{P:end_time} wd:{P:end_time}
+       wd:{P:earliest_date} wd:{P:latest_date})
     }
     ?event wdt:{P:participant} ?person ;
            wdt:{P:instance_of} ?eventType ;
-           p:{P:point_in_time} ?st .
-    ?eventType rdfs:label ?what .
-    FILTER(LANG(?what) = "en")
+           ?eventClaim ?st .
+    ?eventType rdfs:label ?typeName .
+    FILTER(LANG(?typeName) = "en")
+    ?dated rdfs:label ?claimName .
+    FILTER(LANG(?claimName) = "en")
+    BIND(IF(?dated = wd:{P:point_in_time}, ?typeName,
+            CONCAT(?typeName, " (", ?claimName, ")"))
+         AS ?what)
   }
   # the date at its stated precision (display must never pad what a
   # source said): the value node of the statement's own date, or of its
@@ -105,6 +126,21 @@ WHERE {
              ?highNode wikibase:timeValue ?latest ;
                        wikibase:timePrecision ?latestPrecision .
              FILTER(?ranged) }
+  # the statement's sourcing circumstances, folded into one cell so that
+  # a second value adds no row
+  OPTIONAL {
+    SELECT ?st (GROUP_CONCAT(DISTINCT ?circumstanceCell; separator="|")
+                AS ?circumstances)
+    WHERE {
+      ?st pq:{P:sourcing_circumstances} ?circumstance .
+      OPTIONAL { ?circumstance rdfs:label ?circumstanceName .
+                 FILTER(LANG(?circumstanceName) = "en") }
+      BIND(ENCODE_FOR_URI(COALESCE(?circumstanceName,
+                                   REPLACE(STR(?circumstance), "^.*/", "")))
+           AS ?circumstanceCell)
+    }
+    GROUP BY ?st
+  }
   OPTIONAL { ?st prov:wasDerivedFrom/pr:{P:stated_in} ?source . }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }
 }
