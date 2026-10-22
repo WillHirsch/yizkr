@@ -17,8 +17,9 @@ the wiki, the engine, the LLM cache or the corpus:
     <document>/      a document's state.json and its views:
                      transcription.json, batch.json, critique.json and
                      the extraction's extraction/coverage.json
-    excerpts/<sha1>/ the same, for an image a PDF places within a page
-                     read as a document of its own (ADR-0008)
+    excerpts/<sha1>/ the same, for an image a PDF or a deck places on a
+                     page or a slide, read as a document of its own
+                     (ADR-0008)
     corpus/<stage>/  a corpus stage's outputs: the clustering stage's
                      identity-map.json
 
@@ -242,8 +243,11 @@ STATUSES = frozenset(
 ROUTES = frozenset(
     {"llm-vision", "pdf-pages", "text-file", "pptx-adapter", "correction"}
 )
-# how a page of a PDF read page by page is read (yizkr.pipeline.textlayer)
-PAGE_METHODS = frozenset({"text-layer", "vision", "none"})
+# the route of a deck's transcription (transcribe.DECK_ENGINE)
+DECK = "pptx-adapter"
+# how a page of a container read page by page is read
+# (yizkr.pipeline.containers)
+PAGE_METHODS = frozenset({"text-layer", "slide-xml", "vision", "none"})
 RESOLUTIONS = frozenset({"record", "detected", "fallback", "override"})
 HIT_REASONS = frozenset({KEY_MATCH, "adopted"})
 MISS_REASONS = frozenset({"absent", "rejected", "refresh"})
@@ -305,6 +309,12 @@ ATTENTION_LABELS = frozenset(
         "conflicting clusters not merged",
         "ambiguous pairs to adjudicate",
         "hub keys not blocked on",
+        # a container's image its reading does not read on its own
+        # (presentation.UNREAD_IMAGE, and a PDF's image PDFium cannot give)
+        "image not read on its own",
+        # an image whose own reading the check failed
+        # (transcribe.READING_FAILED)
+        "image reading failed the check",
     }
 )
 # the leading labels of a document's failure outside its stages; any
@@ -999,13 +1009,13 @@ def _view(document: Document, stage: str, path: Path, kind: type) -> Any:
 
 
 def _pages(pages: Any) -> dict[str, Any]:
-    """A PDF read page by page, as its transcription's `pages` give it:
-    its pages by the method that read them, how many of its text-layer
-    pages show annotations the text layer leaves unread, and the images
-    placed within its pages that were read on their own, by their SHA-1s,
-    each once: its derived images (ADR-0008). Pages whose provenance
-    cannot be read are not counted, and neither is a name of an image that
-    is no SHA-1."""
+    """A container read page by page (a PDF's pages, a deck's slides), as
+    its transcription's `pages` give it: its pages by the method that read
+    them, how many of its text-layer pages show annotations the text layer
+    leaves unread, and the images placed on its pages that were read on
+    their own, by their SHA-1s, each once: its derived images (ADR-0008).
+    Pages whose provenance cannot be read are not counted, and neither is
+    a name of an image that is no SHA-1."""
     methods: Counter = Counter()
     annotated = 0
     images: set[str] = set()
@@ -1107,8 +1117,10 @@ def _records(coverage: dict) -> dict[str, Any]:
     """The mention records and judgement notes an extraction's coverage
     counts (ADR-0035 §4, §5): the records given, by status, and the
     unsplit name forms they hold, the mentions recordless, the records set
-    aside and the reasons they were set aside by, by category; and the
-    notes by category, and the notes set aside. Each name is folded into
+    aside and the reasons they were set aside by, by category, and the
+    labels that were appellations and became names, and the record name
+    parts that are appellations (ADR-0018); and the notes by category,
+    and the notes set aside. Each name is folded into
     the report's fixed vocabulary, OTHER for one it does not know.
 
     The coverage's `set_aside` counts reasons, not records: a record that
@@ -1119,8 +1131,9 @@ def _records(coverage: dict) -> dict[str, Any]:
     The extraction writes its records and its notes together, so both
     are None unless the coverage holds both, as the line-range tier's and
     one written before these counts do not: absent, never zero. The
-    records set aside and the unsplit forms are each None when the
-    coverage, though it holds both, gives no count of them."""
+    records set aside, the unsplit forms, the appellation labels and the
+    appellation parts are each None when the coverage, though it holds
+    both, gives no count of them."""
     records, notes = coverage.get("records"), _tally(coverage.get("notes"))
     if not isinstance(records, dict) or notes is None:
         return {"records": None, "notes": None}
@@ -1136,6 +1149,8 @@ def _records(coverage: dict) -> dict[str, Any]:
             ),
             "unsplit_forms": _counted(records.get("unsplit_forms")),
             "set_aside_records": _counted(records.get("set_aside_records")),
+            "appellation_labels": _counted(records.get("appellation_labels")),
+            "appellation_parts": _counted(records.get("appellation_parts")),
             "set_aside_by_reason": _folded(
                 reasons, lambda value: _known(value, SET_ASIDE_REASONS)
             ),
@@ -1621,7 +1636,7 @@ def _aggregate_write(written: Mapping[str, Any] | None) -> dict[str, Any]:
             if isinstance(record.get(key), int)
         )
 
-    return {
+    counted = {
         "skipped": False,
         "documents_written": len(documents),
         "statements_written": total("written"),
@@ -1634,6 +1649,14 @@ def _aggregate_write(written: Mapping[str, Any] | None) -> dict[str, Any]:
         "documents_failed": len(written.get("failed") or {}),
         "contents_recorded": bool(written.get("recorded")),
     }
+    # of the claims refused, those whose item value is their subject's
+    # item (yizkr.pipeline.writer.self_references): a record of a write
+    # that did not count them holds none, so the figure is absent, not 0
+    if not documents or any(
+        isinstance(record.get("self_references"), int) for record in documents
+    ):
+        counted["claims_self_referencing"] = total("self_references")
+    return counted
 
 
 def _clusters(path: Path, fold: _Fold) -> dict[str, Any]:
@@ -1982,10 +2005,11 @@ def _aggregate_documents(
     resolved: Counter = Counter()
     page_methods: Counter = Counter()
     annotated_pages = 0
-    # each PDF's derived images: how many PDFs place how many images, and
-    # the images themselves, each once however many PDFs place it
-    images_per_pdf: Counter = Counter()
-    images: set[str] = set()
+    # each container's derived images, by the container's route (a PDF
+    # read page by page, a deck): how many containers place how many
+    # images, and the images themselves, each once however many place it
+    images_per: dict[str, Counter] = {"pdf-pages": Counter(), DECK: Counter()}
+    images: dict[str, set[str]] = {"pdf-pages": set(), DECK: set()}
     untranscribed = 0
     for document in planned:
         if "transcription" not in document.stages:
@@ -2002,12 +2026,16 @@ def _aggregate_documents(
         routes[_known(transcription["route"], ROUTES)] += 1
         if transcription["resolved"]:
             resolved[_known(transcription["resolved"], RESOLUTIONS)] += 1
-        page_methods.update(transcription.get("page_methods") or {})
-        annotated_pages += transcription.get("annotated_pages") or 0
+        container = transcription["route"]
+        if container not in images:
+            continue
+        if container == "pdf-pages":
+            page_methods.update(transcription.get("page_methods") or {})
+            annotated_pages += transcription.get("annotated_pages") or 0
         placed = transcription.get("images") or []
         if placed:
-            images_per_pdf[str(len(placed))] += 1
-            images.update(placed)
+            images_per[container][str(len(placed))] += 1
+            images[container].update(placed)
     return {
         "planned": len(planned),
         "files": entries,
@@ -2032,18 +2060,14 @@ def _aggregate_documents(
         "pdf_pages_annotated": annotated_pages,
         # the images placed within the pages of the PDFs read page by page
         # and read on their own, per PDF (ADR-0008): the PDFs that place
-        # any, the images they place (an image counted once per PDF, and
-        # once however many PDFs place it), how many PDFs place how many,
-        # and how many of the images are documents of their own, excerpts
-        "pdf_images": {
-            "pdfs": sum(images_per_pdf.values()),
-            "placed": sum(int(n) * c for n, c in images_per_pdf.items()),
-            "distinct": len(images),
-            "per_pdf": dict(
-                sorted(images_per_pdf.items(), key=lambda item: int(item[0]))
-            ),
-            "excerpts": sum(d.kind == EXCERPT for d in planned),
-        },
+        # any, the images they place (an image counted once per PDF), the
+        # distinct images (once however many PDFs place one), and how many
+        # PDFs place how many; and the same of the images the decks embed
+        # on their slides and read on their own
+        "pdf_images": _placed(images_per["pdf-pages"], images["pdf-pages"]),
+        "deck_images": _placed(images_per[DECK], images[DECK], "deck"),
+        # the images of either that are documents of their own, excerpts
+        "excerpts": sum(d.kind == EXCERPT for d in planned),
         "failed": len(failed),
         # the planned documents that failed, by the kind the plan gives
         # each; the others (a source that could not be read has no SHA-1
@@ -2066,6 +2090,21 @@ def _aggregate_documents(
             )
         ),
         "views_not_read": sum(bool(d.unread) for d in planned),
+    }
+
+
+def _placed(
+    per: Counter, images: set[str], container: str = "pdf"
+) -> dict[str, Any]:
+    """The images a kind of container places and reads on their own, as
+    the documents' aggregates give them (_aggregate_documents)."""
+    return {
+        f"{container}s": sum(per.values()),
+        "placed": sum(int(n) * c for n, c in per.items()),
+        "distinct": len(images),
+        f"per_{container}": dict(
+            sorted(per.items(), key=lambda item: int(item[0]))
+        ),
     }
 
 
@@ -2256,7 +2295,8 @@ def _aggregate_content(
     notes: Counter = Counter()
     absent: Counter = Counter()
     record_extractions = records_given = recordless = notes_set_aside = 0
-    records_set_aside = unsplit_forms = 0
+    records_set_aside = unsplit_forms = appellation_labels = 0
+    appellation_parts = 0
     batches = not_extracted = zero_entities = 0
     extractions = chunks = rejected = unread = with_rejects = given = 0
     failed_rejecting = critiques = with_findings = findings = invalid = 0
@@ -2303,6 +2343,14 @@ def _aggregate_content(
                     absent["unsplit_forms"] += 1
                 else:
                     unsplit_forms += records["unsplit_forms"]
+                if records["appellation_labels"] is None:
+                    absent["appellation_labels"] += 1
+                else:
+                    appellation_labels += records["appellation_labels"]
+                if records["appellation_parts"] is None:
+                    absent["appellation_parts"] += 1
+                else:
+                    appellation_parts += records["appellation_parts"]
                 set_aside.update(records["set_aside_by_reason"])
                 notes.update(noted["by_category"])
                 notes_set_aside += noted["set_aside"]
@@ -2357,6 +2405,8 @@ def _aggregate_content(
             "by_status": _by_count(statuses),
             "unsplit_forms": unsplit_forms,
             "set_aside_records": records_set_aside,
+            "appellation_labels": appellation_labels,
+            "appellation_parts": appellation_parts,
             "set_aside_reasons": set_aside.total(),
             "set_aside_by_reason": _by_count(set_aside),
             "absent": {
@@ -2364,6 +2414,8 @@ def _aggregate_content(
                 "line_range": absent["line_range"],
                 "set_aside_records": absent["set_aside_records"],
                 "unsplit_forms": absent["unsplit_forms"],
+                "appellation_labels": absent["appellation_labels"],
+                "appellation_parts": absent["appellation_parts"],
             },
         },
         "notes": {
@@ -2799,24 +2851,36 @@ def _documents_section(
             "Pages of PDFs read page by page, by method: "
             f"{_listed(documents['pdf_pages'])}; with annotations the text "
             f"layer leaves unread: {_n(documents['pdf_pages_annotated'])}",
-            _images_line(documents["pdf_images"]),
+            _images_line(documents),
             f"Language resolved: {_listed(documents['language_resolved'])}",
         ]
     )
     return _Section("Documents", blocks)
 
 
-def _images_line(images: Mapping[str, Any]) -> str:
-    """The derived images of the PDFs read page by page, as one line."""
-    per_pdf = ", ".join(
-        f"{count} in {_n(pdfs)}" for count, pdfs in images["per_pdf"].items()
-    )
+def _images_line(documents: Mapping[str, Any]) -> str:
+    """The derived images of the PDFs read page by page and of the decks,
+    and the excerpts among them, as one line."""
+    parts = []
+    for key, where, container, name in (
+        ("pdf_images", "placed within PDFs read page by page", "pdf", "PDF"),
+        ("deck_images", "embedded in decks", "deck", "deck"),
+    ):
+        images = documents[key]
+        per = ", ".join(
+            f"{count} in {_n(n)}"
+            for count, n in images[f"per_{container}"].items()
+        )
+        parts.append(
+            f"{'images' if parts else 'Images'} {where} and read on their "
+            "own: "
+            f"{_n(images['placed'])} in {_n(images[f'{container}s'])} "
+            f"{name}s ({_n(images['distinct'])} distinct; images per "
+            f"{name}: {per or 'none'})"
+        )
     return (
-        "Images placed within PDFs read page by page and read on their own: "
-        f"{_n(images['placed'])} in {_n(images['pdfs'])} PDFs "
-        f"({_n(images['distinct'])} distinct; images per PDF: "
-        f"{per_pdf or 'none'}); documents of their own (excerpts): "
-        f"{_n(images['excerpts'])}"
+        "; ".join(parts)
+        + f"; documents of their own (excerpts): {_n(documents['excerpts'])}"
     )
 
 
@@ -3113,8 +3177,14 @@ def _write_sections(content: Mapping[str, Any]) -> list[_Section]:
             f"{_n(write['statements_written'])} statements new, "
             f"{_n(write['statements_referenced'])} gained a reference, "
             f"{_n(write['claims_skipped'])} claims already there, "
-            f"{_n(write['claims_refused'])} refused; "
-            f"{_n(write['items_minted'])} items minted, "
+            f"{_n(write['claims_refused'])} refused"
+            + (
+                f", {_n(write['claims_self_referencing'])} of them for an "
+                "item value that is their subject's item; "
+                if "claims_self_referencing" in write
+                else "; "
+            )
+            + f"{_n(write['items_minted'])} items minted, "
             f"{_n(write.get('notes_written', 0))} judgement notes written. "
             f"{_n(write['batches_refused'])} batches refused whole, "
             f"{_n(write['documents_failed'])} documents failed; the "
@@ -3139,6 +3209,10 @@ def _records_blocks(
             f"{_n(records['recordless'])}",
             "Unsplit name forms in the records given: "
             f"{_n(records['unsplit_forms'])}",
+            "Labels that were appellations, replaced with the name the "
+            f"record gives: {_n(records['appellation_labels'])}; record "
+            "name parts that are appellations: "
+            f"{_n(records['appellation_parts'])}",
             f"Records set aside: {_n(records['set_aside_records'])}; "
             "reasons records were set aside: "
             f"{_n(records['set_aside_reasons'])} (a record can give "
@@ -3152,7 +3226,9 @@ def _records_blocks(
             "Extractions counted whose coverage gives no count of it, so "
             "left out of that count: records set aside "
             f"{_n(absent['set_aside_records'])}; unsplit name forms "
-            f"{_n(absent['unsplit_forms'])}",
+            f"{_n(absent['unsplit_forms'])}; appellation labels "
+            f"{_n(absent['appellation_labels'])}; appellation parts "
+            f"{_n(absent['appellation_parts'])}",
         ]
     ]
     if records["by_status"]:
@@ -3714,7 +3790,11 @@ def _html_document(document: Mapping[str, Any]) -> str:
             items.append(
                 f"Mention records given: {records['given']}, by status: "
                 f"{_listed(_by_count(records['by_status']))}; unsplit name "
-                f"forms: {_absent(records['unsplit_forms'])}; recordless: "
+                f"forms: {_absent(records['unsplit_forms'])}; appellation "
+                f"labels: {_absent(records['appellation_labels'])}; "
+                "appellation parts: "
+                f"{_absent(records['appellation_parts'])}; "
+                "recordless: "
                 f"{records['recordless']}; records set aside: "
                 f"{_absent(records['set_aside_records'])}; reasons set "
                 "aside: "

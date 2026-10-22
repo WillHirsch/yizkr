@@ -94,6 +94,16 @@ utilization reported past a warning threshold, and the #101 amendment's
 limits on it stand; pacing from `unifiedWindows` is not part of this
 change.
 
+Amended by #526 (2026-10-16): the pass runs on claude CLI 2.1.296, the
+version installed on the run machine, which the engine runs unchanged.
+As on 2.1.288, every `rate_limit_event` carries `unifiedWindows`, and
+`limitScope` only when the server reports one: #452's line above, which
+says every event carries `limitScope`, is wrong for 2.1.288 too. On
+2.1.296 its `rate_limit_info` may also carry `overageEnabled`. The
+engine reads none of them; the usage-credits pause still follows
+`isUsingOverage` alone. The CLI version is in every claude-code cache
+key (ADR-0032), so the next run redoes every claude-code call.
+
 Amended by #197 (2026-10-04): §4's claim fingerprints are defined in
 `pipeline/fingerprints.py`, beside the mention fingerprints and cluster
 ids. A claim's fingerprint hashes:
@@ -510,7 +520,11 @@ futile, and explain itself afterwards.
   model or parameters); anomalies by check, new and carried; calls and
   wall time; and content counts (documents, entities, claims, rejects,
   critic findings, clusters, and held depicts proposals; amended by #200:
-  the depicts claims the write left out, and the write's counts). It
+  the depicts claims the write left out, and the write's counts;
+  amended by #491 (2026-10-16): of the claims the writer refused, those
+  whose item value is their subject's item, counted apart from its other
+  refusals and from extraction's rejects, and a figure of the run-to-run
+  diff). It
   writes
   `report.html` and `report.json`, which stay local, and an
   aggregate-only `report.md` that is safe to post. Amended by #225

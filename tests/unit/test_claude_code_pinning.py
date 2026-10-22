@@ -237,8 +237,15 @@ def read_events(
 
 # a neutral placeholder path, as the CLI's messages quote the file's
 PLACEHOLDER = "/srv/intake/scan-0001.pdf"
-# The Read tool's errors, worded as CLI 2.1.237 words them: (message, the
-# class it is named by, its kind)
+# CLI 2.1.296's refusal of a list of pages, which it asks to read one page
+# or range at a time (#526)
+PAGES_LIST_REFUSED = (
+    'Invalid pages parameter: "1,2". Give one page ("3") or one range '
+    '("1-5"), not a list. To read several pages or ranges, read each one '
+    "separately. Pages are 1-indexed."
+)
+# The Read tool's errors, worded as CLI 2.1.237 words them unless marked:
+# (message, the class it is named by, its kind)
 READ_ERRORS = [
     (
         "This PDF has 34 pages, which is too many to read at once. Use the "
@@ -354,6 +361,42 @@ READ_ERRORS = [
         "render-failed",
         FILE_ERROR,
     ),
+    # as CLI 2.1.296 words them (#526): the binary-file message with its
+    # second sentence as seen live, the refusal of a pages list (2.1.292),
+    # and the token message with the allow_large hint the binary appends
+    # when the file would fit in the context left, or its refusal when not
+    (
+        "This tool cannot read binary files. The file appears to be a binary "
+        ".tif file. Use a skill for this file type if one is available, or a "
+        "shell command or script that can read the format.",
+        "unsupported-format",
+        FILE_ERROR,
+    ),
+    (
+        PAGES_LIST_REFUSED,
+        "invalid-page-range",
+        REQUEST_ERROR,
+    ),
+    (
+        "File content (41200 tokens) exceeds maximum allowed tokens (25000). "
+        "Use offset and limit parameters to read specific portions of the "
+        "file, or search for specific content instead of reading the whole "
+        "file. To read it anyway, up to what still fits in your context, "
+        "call Read again with allow_large: true \u2014 only if you genuinely "
+        "need all of it or the user asked for the whole file.",
+        "too-many-tokens",
+        REQUEST_ERROR,
+    ),
+    (
+        "File content (41200 tokens) exceeds maximum allowed tokens (25000). "
+        "Use offset and limit parameters to read specific portions of the "
+        "file, or search for specific content instead of reading the whole "
+        "file. Even with allow_large, this is more than fits in the context "
+        "you have left this turn (other large reads in the same turn share "
+        "that room).",
+        "too-many-tokens",
+        REQUEST_ERROR,
+    ),
     ("An error no CLI words yet.", UNCLASSIFIED, FILE_ERROR),
 ]
 RENDERER_MISSING = READ_ERRORS[7][0]
@@ -374,7 +417,7 @@ class TestIsolation:
         assert command[command.index("--allowedTools") + 1] == "Read"
         assert command[command.index("--tools") + 1] == "Read"
         # the permission mode is named, never left to the CLI version and
-        # the account (2.1.288 starts -p in auto mode with telemetry off)
+        # the account (2.1.296 starts -p in auto mode with telemetry off)
         assert command[command.index("--permission-mode") + 1] == "default"
 
     def test_forks_carry_the_permission_mode_and_the_socket_setting(self, cli):
@@ -768,8 +811,8 @@ class TestEffectiveConfig:
     def test_hash_follows_the_permission_mode_and_the_socket(
         self, cli, monkeypatch
     ):
-        """Both settings that keep a call as 2.1.237 ran it on 2.1.288
-        are in the hashed config (#452)."""
+        """Both settings that keep a call as 2.1.237 ran it on 2.1.288 and
+        2.1.296 are in the hashed config (#452, #526)."""
         before = ClaudeCodeClient().config_hash
         monkeypatch.setitem(
             llm._PINNED_ENVIRONMENT, "CLAUDE_CODE_HARBOR_KITE", "1"
@@ -1416,6 +1459,28 @@ class TestToolErrors:
         ]
         assert tool_failures(stream, []) == []
         assert tool_failures("not json\n{}\n[]", [scan]) == []
+
+    def test_a_pages_list_refused_then_read_page_by_page_is_no_failure(
+        self, cli, tmp_path
+    ):
+        """CLI 2.1.296 refuses a list of pages, and the model then reads
+        each page of the same file, as the check saw live (#526): the
+        refusal is a request error, made up for by those Reads."""
+        scan = a_scan(tmp_path)
+        events = (
+            read_events(scan, pages="1,2", error=PAGES_LIST_REFUSED)
+            + read_events(scan, pages="1")
+            + read_events(scan, pages="2")
+        )
+        stream = "\n".join(json.dumps(event) for event in events)
+        assert tool_failures(stream, [scan]) == []
+        cli.tool_events = events
+        assert ClaudeCodeClient().complete("Transcribe.", [scan]) == "answer"
+        # without the Reads that follow it, the refusal is a failure
+        refused = "\n".join(json.dumps(event) for event in events[:2])
+        assert tool_failures(refused, [scan]) == [
+            ToolFailure("Read", "invalid-page-range", 0)
+        ]
 
 
 class TestStreamEvents:

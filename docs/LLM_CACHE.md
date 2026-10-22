@@ -46,7 +46,7 @@ up to date once per run, each after the view it is made from:
 
 | View | Made by (stage, role) | Made from |
 |---|---|---|
-| `transcription.json` | `transcription`, `transcribe` | the correction `transcription.corrected.txt`, when there is one; otherwise the source, routed (vision, text file, slide text), a PDF with a text layer page by page (below) |
+| `transcription.json` | `transcription`, `transcribe` | the correction `transcription.corrected.txt`, when there is one; otherwise the source, routed (vision, paged, text file): a PDF with a text layer page by page, and a deck slide by slide (below) |
 | `batch.json` | `extraction`, `extract` (a GEDCOM file: `gedcom`) | `transcription.json`, by its canonical content (text, language, the artifact's key, the SHA-1 of its media, and the transcription record's fields, ADR-0037: the document's class, and each page's place in the text, printed page number, status, languages and notes); what stays out is its provenance (the engine, each page's method and engine) and the check's flag; a GEDCOM file: the source alone |
 | `critique.json` | `critique`, `critique` | `batch.json`, by its canonical content (without its run stamps) |
 
@@ -63,8 +63,9 @@ event that gives the reason; its record is forgotten, and it is made
 again in the same run: with the cache, the failing answer it kept is
 rejected and the engine is asked (Rejection, below). When the batch made
 from the new transcription differs, the reviews of the old one are moved
-aside, as below. A curator's correction and slide text are never checked.
-A PDF read page by page (below) is checked again where the vision engine
+aside, as below. A curator's correction is never checked, and neither is
+the text a PDF's text layer or a deck's slide XML holds.
+A container read page by page (below), a PDF or a deck, is checked again where the vision engine
 read it: each page the engine read, with the one-page record its stored
 fields make, as its reading was checked when it was made (a page called
 blank needs no text), and the transcription of each image the
@@ -82,9 +83,9 @@ again with the same content invalidates nothing after it. The extractor's
 side outputs (`extraction/coverage.json`, `rejects.json`, `gaps.ndjson`)
 are written with the batch they describe.
 
-**A PDF read page by page.** The vision route reads a PDF page by page
+**A PDF read page by page.** The paged route reads a PDF page by page
 when any of its pages has a usable text layer, and otherwise reads it
-whole, as it reads an image (`yizkr.pipeline.textlayer` defines each
+whole, as the vision route reads an image (`yizkr.pipeline.textlayer` defines each
 term; ADR-0008 as amended by #176). A page is read:
 
 - by nothing (the method `none`), when it draws nothing and shows no
@@ -147,7 +148,38 @@ own, when the record of its images or their bytes are not kept whole, or
 when the never-ingest list names an image it marks: the cache answers
 what it answered before, and the image with no reading is asked again.
 The readings are made in a scratch folder of their own, and nothing is
-written to the document's directory until the stage keeps them. The call
+written to the document's directory until the stage keeps them.
+
+**A deck read slide by slide** (ADR-0008, as amended by #502). The paged
+route reads a deck as it reads a PDF page by page: each slide is a page
+read from its XML (the method `slide-xml`), with no model call, behind its
+`[Slide N]` marker, its speaker notes behind `[Slide N notes]`, and each
+image it embeds is read by one vision call of its own, once however many
+slides embed it, unless it is decoration by the PDF's floor, the never-ingest
+list names it by any of its names or its SHA-1, or it is in a format the vision
+engine does not read (PNG, JPEG, GIF and WebP only; the stage's attention notes
+a TIFF, say, or an image whose header gives no size). Each image read is
+marked below its slide's marker by its SHA-1 (`[Slide 2, image 1:
+sha1:…]`), in the order the slide paints it. Slides are joined by one
+line break, so a deck that reads no image has its slide text as before.
+Its language is found in the slides' text alone, joined by blank lines,
+never in the markers: a deck whose slides' text so joined, the blank
+lines counted, is under 12 characters takes the fallback language. What
+detection left of the markers (a space and a line break each) once counted
+too, so a near-empty deck detected before may now fall back, and its
+extraction's calls then get new keys.
+A deck's transcription always has a page per slide: one of its slide text
+alone, with no pages, is made again whatever the deck embeds.
+The transcription's `engine` is `pptx-adapter`, and each slide's
+provenance names it too. The deck's record of its derived media
+(`derived-media.json`) is made before the transcription and names every
+image the deck embeds, under its names in the archive; each image read
+has its transcription beside its bytes, and is an excerpt as a PDF's
+image is. A reused deck transcription is made again when the images it
+marks are not exactly those of its record it would read now (as for one
+that marks none), or for the reasons a PDF's is. The call key of an
+image's reading is the PDF's: the same bytes are one call, whichever
+container gives them. The call
 estimate takes the stage through the same code: it counts a call for each
 page and image, standing in for a reading the cache cannot give, keeps
 nothing of the reading, and leaves the extraction after such a
@@ -379,9 +411,13 @@ the output limit is kept as a give-up entry (Attempts, below): its
 the call's stream reported (`llm.ClaudeCodeClient.last_stream`), its
 `stop_reason` and `api_error` among them; an entry whose `gave_up` is
 anything but a boolean is damaged, read as no entry, so the call misses,
-and the next entry stored under its key moves it aside as replaced. An
-entry is served only
-under the key it records.
+and the next entry stored under its key moves it aside as replaced. So
+is an entry that is not whole JSON, or one nested too deep to decode
+(#339): it is moved aside with its bytes as they were. Every reader of
+the cache's files reads such a file as unreadable rather than failing:
+`asides` (and so `scratch diff`) leaves it out, and a lock file nested
+too deep names no holder. An entry is served only under the key it
+records.
 
 **Writes are atomic, and nothing is overwritten.** An entry is written to
 a staging file beside it, flushed, and published by a link that fails
@@ -438,6 +474,35 @@ or an adoption, and a kept session's folders, however deep. A folder
 there already keeps its mode, one another process makes first included,
 so the cache changes the mode of no folder it did not make; a private
 root keeps the folders under it from other users, whatever their modes.
+
+**A key's folder it cannot store in is refused before the engine is
+asked** (#341). A folder inside a private root can still be closed to
+its owner later, by a chmod, a restore or a copy (say mode 500). On a
+miss, before the engine is asked, the call checks the key's folder, and
+refuses it in one line, as `CacheRefused`:
+
+- one this user cannot write in or pass through is refused naming the
+  folder and its mode, with the fix, `chmod u+rwx <folder>`;
+- one that is not a folder (a file, say) is refused naming it, with the
+  fix of moving it out of the cache;
+- a link to nothing is refused naming it and the error.
+
+So the invocation ends `paused` (`scratch run` exits 2), rather than
+spending an answer that could not be stored and then failing the
+document, run after run. Where the key's folder is not there yet, the
+nearest folder above it, in which storing would make it (the root, as a
+rule), is checked the same way. The check costs one access check per
+miss and catches a chmod made during a run. It covers every miss: an
+absent, rejected or refreshed key, an opening turn, a fork, an
+attempt's give-up, and a fork's replay of its opening turn, whose
+answer is stored under the opening turn's key. Its mode is left as it
+is, since the cache cannot tell a folder it made from one changed
+since; a hit under it is still served, a kept give-up included, and a
+fork that resumes a kept session is not checked, since it stores
+nothing in the cache. A caller's rejection of that hit cannot move it
+aside, so it is refused the same way, before anything moves: the run
+pauses where the estimate stops. `yizkr scratch estimate` refuses such
+a miss too, where the run would pause, though it stores nothing.
 
 ## One process per cache
 
@@ -950,8 +1015,8 @@ The run manifest. `ingest run` writes `run_id`, `mode`, `cache` (the
 cache's absolute path, or `null` without one), `config` (the engine,
 languages, efforts, extraction model, `refresh` and `epochs`), and
 `documents`: one entry per planned document, `{sha1, file, kind,
-stages}`, where `kind` is the document's slice (`text`, `media`,
-`presentation`, `gedcom`) and `stages` the stages planned for it; a
+stages}`, where `kind` is the document's slice (`text`, `media`, `pdf`,
+`presentation`, `gedcom`, `excerpt`) and `stages` the stages planned for it; a
 document that cannot be read is not planned (Views, above). The
 full run manifest (#96) adds the rest: stage (development or kept),
 engine and CLI version, per-stage model ids, commit, exclusion-list hash,
@@ -1001,13 +1066,13 @@ in, and the kind of call:
 
 **What a call's stream reported.** A claude-code call's `call` event
 carries what its stream-json output reported of it (`llm.stream_report`,
-as CLI 2.1.288 prints it), each field only when the stream gave it in
+as CLI 2.1.296 prints it), each field only when the stream gave it in
 the form expected of it, whether the call was answered or not. The
 fields are those its final attempt's stream reported: from its init
 event, the `model` it ran on (the model id the configured name resolved
 to, which the `model-mismatch` anomaly check compares with the run
 manifest's, docs/ANOMALIES.md) and the `cli_version`; from its result
-event, its `num_turns` (2.1.288 counts its own retries at the output
+event, its `num_turns` (2.1.296 counts its own retries at the output
 limit among them), its `subtype` (`success`, `error_max_turns`,
 `error_during_execution`; the CLI reports an API error as a `success`
 whose call fails) and its `stop_reason`, why its model stopped on its
@@ -1027,7 +1092,7 @@ off before its init event names no model.
 A call the CLI gave up on at the output limit (Rejection, above) has the
 outcome `error`, its `error` is `OutputLimitReached`, its `api_error` is
 `max_output_tokens`, and its `stop_reason` is the notice's
-(`stop_sequence`), as CLI 2.1.288 prints them. The anomaly checks count
+(`stop_sequence`), as CLI 2.1.296 prints them. The anomaly checks count
 such a chunk call as a truncation, never as a failed call
 (docs/ANOMALIES.md), and the run report counts it, per stage, among the
 calls stopped at the output limit (docs/RUN_REPORT.md). A give-up an
@@ -1154,7 +1219,7 @@ time. A call a limit refuses never fails a document, and the engine
 stops its calls at a reserve of each window left to development
 sessions (#101; `yizkr.pipeline.llm`, "Subscription limits").
 
-**What the CLI reports**, as the pinned 2.1.288 prints it in its
+**What the CLI reports**, as the pinned 2.1.296 prints it in its
 stream-json output:
 
 - a `rate_limit_event` whenever its view of the limits changes, which in
@@ -1167,12 +1232,12 @@ stream-json output:
   passes one of the CLI's own warning thresholds: for the five-hour
   window, 90%, and only while at most 72% of the window has elapsed;
   for the weekly window, 75%, 50% or 25%, early in the week (as CLI
-  2.1.288's `-p` mode reports them). Short of that threshold, or past
+  2.1.296's `-p` mode reports them). Short of that threshold, or past
   its elapsed-time gate, `rate_limit_info` has no `utilization`. Every
   `rate_limit_event` also carries `unifiedWindows`, the use of the
   `five_hour` and `seven_day` windows (`utilization` and `resetsAt`
-  each) whatever the thresholds, and `limitScope`; the engine reads
-  neither;
+  each) whatever the thresholds, and, when the server reports one,
+  `limitScope`; the engine reads neither;
 - a call the API refuses ends on an API error: an assistant event whose
   `error` is `rate_limit` (`overloaded` for an overload), with the CLI's
   notice as its text ("You've hit your session limit · resets 3pm"), and
@@ -1266,22 +1331,22 @@ directories, has none. A document's calls in a stage are those a baseline
 run made for it (`llm.run_calls` over the baseline's `events.jsonl`: the
 cache's hits and misses, or without the cache its `call` events; a stage
 made without a call counts 0), else the baseline's mean for documents of
-its kind, else typical: a vision call per scan and none for a text file
-or slide text, the entity manifest and a chunk per 2000 characters for
+its kind, else typical: a vision call per scan or PDF and none for a
+text file or a deck, the entity manifest and a chunk per 2000 characters for
 extraction, and a critique each. These are the pipeline's calls,
-counted without their keys; a PDF read page by page makes a call for
-each page and image vision reads, which only the count by keys below
-sees. `yizkr scratch estimate` (docs/runbooks/scratch-run.md, Before a
+counted without their keys; a PDF read page by page, or a deck, makes a
+call for each page and image vision reads, which only the count by keys
+below sees. `yizkr scratch estimate` (docs/runbooks/scratch-run.md, Before a
 run) counts a planned scratch run's calls by their keys: it takes each
 stale stage through the pipeline's own code with the cache as it is
 (`llm.read_cache`), so each call the cache answers, and each it cannot,
 is known. It estimates only
 the calls whose keys wait on an answer the engine has yet to give: by
 `llm.estimate_calls`, or, for the forks after a conversation it replays,
-by the chunks the cache kept. The excerpts a PDF's placed images may
-become (ADR-0008), which no plan names until the PDF is transcribed, it
-counts from the PDF's own reading of the file, or, for a transcription
-that stands, from the excerpts its directory holds, and gives their
+by the chunks the cache kept. The excerpts a PDF's or a deck's images
+may become (ADR-0008), which no plan names until the container is
+transcribed, it counts from the container's own reading of the file, or,
+for a transcription that stands, from the excerpts its directory holds, and gives their
 calls, by the mean for excerpts over the runs measured, else as typical,
 as up to so many more.
 

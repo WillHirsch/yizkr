@@ -1,5 +1,5 @@
 # The yizkr CLI as a container image, for driving the Wikibase Suite stack
-# (smoke-test, bootstrap, ingest, backup, publish-site) WITHOUT adding the wiki
+# (smoke-test, bootstrap, ingest, publish-site) WITHOUT adding the wiki
 # and query hostnames to the host's /etc/hosts. Paired with
 # deploy/docker-compose.localhost.yml, which makes those hostnames resolve
 # inside the Docker network. See deploy/README.md ("Run on a single host").

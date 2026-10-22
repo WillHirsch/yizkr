@@ -10,6 +10,16 @@ context). This module extracts:
 * per-slide text runs and speaker notes, in document order;
 * embedded media, mapped to the slide(s) that reference them.
 
+**A deck is a paged container** (yizkr.pipeline.containers):
+`read_slides` gives its slides as pages, each read from its XML, with its
+text (`slide_text`) and the images it embeds that are read on their own,
+in the order the slide paints them. Its transcription marks each such
+image below the slide's marker by its SHA-1 (``[Slide 2, image 1:
+sha1:…]``), reads it by the vision engine on its own and keeps that
+reading beside its bytes, so the image is an excerpt, a document of its
+own, as an image a PDF places is (yizkr.pipeline.transcribe.
+DeckTranscriber; ADR-0008).
+
 Before the write, a deck's derived media are only recorded, in its
 document's directory (`record_derived_media`): each distinct image by
 the SHA-1 of its bytes, with the deck it is part of and the slides it is
@@ -20,7 +30,7 @@ The record is any container's: a PDF read page by page records the images
 placed within its pages in it too (`keep_derived_media`, called by
 yizkr.pipeline.orchestrate), each named for its places, "page 6, image
 1", with the pages it is on where a deck's image has its slides; and
-beside each image's bytes, its own transcription
+beside each image's bytes, a PDF's or a deck's, its own transcription
 (`derived_transcription`), which names the image by its SHA-1.
 
 The write registers a container's derived media from that record
@@ -29,9 +39,9 @@ the container itself: every statement a container contributes to a
 derived item is referenced ``stated in -> that container`` (MODELING.md;
 ADR-0003). Derived items are keyed on content (ADR-0010), so an image
 shared by several decks or PDFs is one item that is ``part of`` each of
-them. A PDF's image with a transcription of its own is also a document of
-its own, whose claims cite the image (yizkr.pipeline.orchestrate,
-ExcerptRun; ADR-0008).
+them. A PDF's or a deck's image with a transcription of its own is also a
+document of its own, whose claims cite the image
+(yizkr.pipeline.orchestrate, ExcerptRun; ADR-0008).
 """
 
 from __future__ import annotations
@@ -41,12 +51,22 @@ import os
 import re
 import xml.etree.ElementTree as ET
 import zipfile
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from yizkr.pipeline.containers import (
+    SLIDE_XML,
+    VISION_SUFFIXES,
+    ContainerPage,
+    ContainerPages,
+    PlacedImage,
+    image_size,
+    is_decoration,
+)
 from yizkr.pipeline.stages import staging_path
 
 A_NS = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
@@ -55,6 +75,13 @@ P_NS = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
 REL_NS = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff", ".webp"}
+# why an image is not read on its own when it is too small to hold
+# legible text (unread_reason)
+DECORATION = "decoration"
+# the leading phrase of the note a deck's reading makes of an image it
+# does not read on its own; what the archive calls the image follows its
+# first colon, so that a reason's label never shows a file's name
+UNREAD_IMAGE = "image not read on its own"
 
 
 @dataclass
@@ -62,6 +89,10 @@ class Slide:
     number: int  # 1-based position in the presentation order
     text: str
     notes: str = ""
+    # the archive paths of the media it uses, each once, in the order the
+    # slide's XML refers to them (its pictures in paint order), then any
+    # its relationships name that its XML does not refer to
+    media: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -69,6 +100,14 @@ class EmbeddedMedium:
     name: str  # basename inside the archive, e.g. image1.jpeg
     data: bytes
     slides: list[int] = field(default_factory=list)
+    # its path inside the archive, e.g. ppt/media/image1.jpeg: what a
+    # slide's relationships name it by, since two folders may each hold a
+    # medium of one basename
+    target: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.target:
+            self.target = f"ppt/media/{self.name}"
 
     @property
     def is_image(self) -> bool:
@@ -124,6 +163,24 @@ def _text_runs(archive: zipfile.ZipFile, part: str) -> str:
     return "\n".join(lines)
 
 
+def _slide_media(
+    archive: zipfile.ZipFile, part: str, rels: dict[str, str]
+) -> list[str]:
+    """The archive paths of the media a slide uses, each once: those its
+    XML refers to (`r:embed`, `r:link` or `r:id` on any element) in
+    document order, which is the order the slide paints them in, then
+    those only its relationships name, in their order there."""
+    root = ET.fromstring(archive.read(part))
+    order: list[str] = []
+    for element in root.iter():
+        for attribute in ("embed", "link", "id"):
+            target = rels.get(element.get(f"{R_NS}{attribute}") or "")
+            if target and target.startswith("ppt/media/"):
+                order.append(target)
+    order += [t for t in rels.values() if t.startswith("ppt/media/")]
+    return list(dict.fromkeys(order))
+
+
 def unpack_pptx(path: Path) -> PresentationContent:
     """Deterministically unpack a .pptx into slides + embedded media."""
     with zipfile.ZipFile(path) as archive:
@@ -165,6 +222,7 @@ def unpack_pptx(path: Path) -> PresentationContent:
                     number=position,
                     text=_text_runs(archive, part),
                     notes=notes,
+                    media=_slide_media(archive, part, rels),
                 )
             )
 
@@ -178,6 +236,7 @@ def unpack_pptx(path: Path) -> PresentationContent:
                 name=name,
                 data=archive.read(target),
                 slides=media_slides[target],
+                target=target,
             )
             if medium.is_image:
                 media.append(medium)
@@ -190,27 +249,159 @@ def unpack_pptx(path: Path) -> PresentationContent:
     )
 
 
-def slide_transcript(content: PresentationContent) -> str:
-    """Slide-by-slide plain text with locator markers.
+def slide_text(slide: Slide) -> str:
+    """A slide's own text, as its page of the deck's transcription holds
+    it below the slide's `[Slide N]` marker: its text runs, then its
+    speaker notes behind a `[Slide N notes]` marker. The markers give the
+    extraction the slide scope, so every claim's `page_number` locator
+    points into the right slide (R2)."""
+    lines = [slide.text] if slide.text else []
+    if slide.notes:
+        lines += [f"[Slide {slide.number} notes]", slide.notes]
+    return "\n".join(lines)
 
-    The extraction prompt carries the claim schema's `page_number`
-    locator; the `[Slide N]` markers give the model the slide scope so
-    every claim's reference points into the right fragment (R2).
-    """
-    blocks: list[str] = []
+
+def slide_transcript(content: PresentationContent) -> str:
+    """The deck's text slide by slide, each slide behind its `[Slide N]`
+    marker (`slide_text`): its transcription's text when it reads no
+    image on its own, which marks each image it reads below the marker of
+    the slide that embeds it (yizkr.pipeline.transcribe.DeckTranscriber)."""
+    blocks = []
     for slide in content.slides:
-        blocks.append(f"[Slide {slide.number}]")
-        if slide.text:
-            blocks.append(slide.text)
-        if slide.notes:
-            blocks.append(f"[Slide {slide.number} notes]")
-            blocks.append(slide.notes)
+        body = slide_text(slide)
+        blocks.append(
+            f"[Slide {slide.number}]" + (f"\n{body}" if body else "")
+        )
     return "\n".join(blocks)
 
 
+def record_suffix(names: Iterable[str]) -> str:
+    """The suffix the file of a medium known by `names` takes in the
+    record of a deck's derived media: its first name's, in code-point
+    order, lowercased."""
+    return PurePosixPath(min(names)).suffix.lower()
+
+
+def unread_reason(suffix: str, data: bytes) -> str | None:
+    """Why a deck's image is not read on its own, or None when it is
+    (yizkr.pipeline.containers): `DECORATION` for an image too small to
+    hold legible text; otherwise a note, for an image in a format the
+    vision engine does not read, or whose size its header does not give.
+    `suffix` is the one its file in the record takes."""
+    if suffix.lower() not in VISION_SUFFIXES:
+        return (
+            f"a {suffix.lower() or 'suffix-less'} image, a format the "
+            "vision engine does not read"
+        )
+    size = image_size(data)
+    if size is None:
+        return "an image whose size its header does not give"
+    if is_decoration(*size):
+        return DECORATION
+    return None
+
+
+def _never(sha1: str, names: Sequence[str] = ()) -> bool:
+    return False
+
+
+def read_slides(
+    path: Path,
+    directory: Path,
+    *,
+    excluded: Callable[[str, Sequence[str]], bool] = _never,
+) -> ContainerPages:
+    """Read the deck at `path` slide by slide, as a paged container
+    (yizkr.pipeline.containers): each slide a page read from its XML
+    (`SLIDE_XML`), its text `slide_text`, with the images it embeds that
+    are read on their own, in the order it paints them, each written into
+    `directory` once, as ``<sha1><suffix>``. Each image is known by the
+    SHA-1 of its bytes and takes the suffix its file in the record of the
+    deck's derived media takes (`record_suffix`). An image the
+    never-ingest list names by its SHA-1 or by any of its names in the
+    archive (`excluded`, given both), or that `unread_reason` gives a
+    reason for, is not read; the reader notes each of the latter but
+    decoration, once, behind the phrase `UNREAD_IMAGE`."""
+    return slide_pages(unpack_pptx(path), directory, excluded=excluded)
+
+
+def slide_pages(
+    content: PresentationContent,
+    directory: Path,
+    *,
+    excluded: Callable[[str, Sequence[str]], bool] = _never,
+) -> ContainerPages:
+    """`read_slides` of a deck already unpacked. Its media are known by
+    their paths in the archive, as the slides' relationships name them."""
+    media: dict[str, tuple[str, bytes]] = {}
+    names: dict[str, list[str]] = {}
+    for medium in content.media:
+        sha1 = hashlib.sha1(medium.data).hexdigest()
+        names.setdefault(sha1, []).append(medium.name)
+        media[medium.target] = (sha1, medium.data)
+    suffix = {sha1: record_suffix(found) for sha1, found in names.items()}
+    read = ContainerPages([])
+    noted: set[str] = set()
+    for slide in content.slides:
+        page = ContainerPage(slide.number, SLIDE_XML, slide_text(slide))
+        read.pages.append(page)
+        for target in slide.media:
+            if target not in media:
+                continue
+            sha1, data = media[target]
+            if excluded(sha1, names[sha1]):
+                continue
+            reason = unread_reason(suffix[sha1], data)
+            if reason is not None:
+                if reason != DECORATION and sha1 not in noted:
+                    noted.add(sha1)
+                    read.notes.append(
+                        f"{UNREAD_IMAGE}: slide {slide.number}, "
+                        f"{PurePosixPath(target).name} (sha1 {sha1[:12]}): "
+                        f"{reason}, so it is not read"
+                    )
+                continue
+            if any(known == sha1 for _place, known in page.images):
+                continue
+            image = read.images.get(sha1)
+            if image is None:
+                path = directory / f"{sha1}{suffix[sha1]}"
+                path.write_bytes(data)
+                image = read.images[sha1] = PlacedImage(
+                    sha1, suffix[sha1], path
+                )
+            place = len(page.images) + 1
+            image.places.append((slide.number, place))
+            page.images.append((place, sha1))
+    return read
+
+
+def read_on_their_own(
+    record: DerivedMediaRecord,
+    directory: Path,
+    *,
+    excluded: Callable[[str, Sequence[str]], bool] = _never,
+) -> set[str]:
+    """The SHA-1s of the images of a deck's record kept in `directory`
+    (`read_derived_media`) that its transcription reads on their own, as
+    `read_slides` chooses them: each the never-ingest list names neither
+    by its SHA-1 nor by any of its names, and `unread_reason` gives no
+    reason for."""
+    return {
+        sha1
+        for sha1, medium in record.media.items()
+        if not excluded(sha1, medium.names)
+        and unread_reason(
+            PurePosixPath(medium.file).suffix,
+            (directory / medium.file).read_bytes(),
+        )
+        is None
+    }
+
+
 # The record of a container's derived media in its document's directory,
-# and the folder beside it that keeps their bytes and, for a PDF's images,
-# their transcriptions.
+# and the folder beside it that keeps their bytes and, for the images a
+# container reads on their own, their transcriptions.
 DERIVED_MEDIA = "derived-media.json"
 DERIVED_MEDIA_DIR = "derived-media"
 DERIVED_TRANSCRIPTION = ".transcription.json"
@@ -296,7 +487,7 @@ def record_derived_media(
                 names=sorted(names[sha1]),
                 slides=sorted(slides[sha1]),
                 file=f"{DERIVED_MEDIA_DIR}/{sha1}"
-                + PurePosixPath(min(names[sha1])).suffix.lower(),
+                + record_suffix(names[sha1]),
             )
             for sha1 in sorted(data)
         },
@@ -329,8 +520,8 @@ def keep_derived_media(
 
 
 def derived_transcription(directory: Path, sha1: str) -> Path:
-    """Where the transcription of a PDF's image is kept, beside its bytes:
-    ``derived-media/<sha1>.transcription.json``."""
+    """Where the transcription of a container's image is kept, beside its
+    bytes: ``derived-media/<sha1>.transcription.json``."""
     return directory / DERIVED_MEDIA_DIR / f"{sha1}{DERIVED_TRANSCRIPTION}"
 
 

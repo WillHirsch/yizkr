@@ -11,7 +11,7 @@ with the canonical content hash of its batch, whole, run stamps included,
 since the run item's label holds them, and what registration reads of it
 (its kind, its title, its file name, which its artifact's description
 gives, the record of its derived media and, for an excerpt, the PDFs
-that place it); the never-ingest list's hash; the writer's version
+and decks that place it); the never-ingest list's hash; the writer's version
 (WRITER_VERSION and the package's source, code_digest); and the model
 manifest's hash. Never a QID, an mtime or a timestamp. A batch's run
 stamps differ from run to run, so a new run resets and writes again,
@@ -54,7 +54,7 @@ writer would refuse whole is refused here first, before anything of its
 document is registered (check_batch): a mention the identity map does
 not hold, an unsupported date, a run item's term the instance may keep
 in another form. Nothing of a refused batch is written; a refused PDF's
-artifact may still be registered as the container of an excerpt whose
+or deck's artifact may still be registered as the container of an excerpt whose
 batch was not refused.
 
 **write** writes every claim of each registered document's batch, the
@@ -62,11 +62,15 @@ extraction's batch, which holds only claims the claim schema and the
 manifest take, through the run's one identity map, at normal rank, with
 both references (stated in the artifact or fragment with its locator,
 inferred from the run item), and no approval file: the development stage
-has no human gate (ADR-0025 §1). Depicts claims are left out of what the
-writer is given, and counted: no scratch run writes a depicts statement
-(ADR-0005). Each run item is marked an unratified scratch run's (the
-`scratch_run` statement, naming the run) and records the hashes of the
-run manifest's settings and of the identity map, each stated in itself.
+has no human gate (ADR-0025 §1). The record counts, per document, the
+claims the writer refused, and of them those whose item value is their
+subject's item, as the map may make it (yizkr.pipeline.writer,
+self_references), apart from extraction's rejects. Depicts claims are
+left out of what the writer is given, and counted: no scratch run writes
+a depicts statement (ADR-0005). Each run item is marked an unratified
+scratch run's (the `scratch_run` statement, naming the run) and records
+the hashes of the run manifest's settings and of the identity map, each
+stated in itself.
 Once every document is written, the instance-contents record takes the
 write key.
 
@@ -110,7 +114,7 @@ from yizkr.pipeline.stages import (
 # the version of what the write side writes for the same inputs: a change
 # that writes something else for them bumps it, as does a change to the
 # package's source, which the key hashes too (code_digest)
-WRITER_VERSION = 2
+WRITER_VERSION = 3
 # the package whose source the key hashes, and the modules it leaves out:
 # those that only read the run directory or the instance, and decide
 # nothing a write puts on it
@@ -712,6 +716,7 @@ def run_write(context: Any) -> list[str]:
                     "referenced": result.referenced,
                     "skipped": result.skipped,
                     "refused": len(result.refused),
+                    "self_references": len(result.self_references),
                     "depicts_left_out": left_out,
                     "items_minted": len(result.minted),
                     "notes_written": result.notes_written,
@@ -740,6 +745,8 @@ def run_write(context: Any) -> list[str]:
         f"{sum(d['written'] for d in written)} statements new, "
         f"{sum(d['referenced'] for d in written)} referenced, "
         f"{sum(d['refused'] for d in written)} claims refused, "
+        f"{sum(d.get('self_references', 0) for d in written)} of them for "
+        f"an item value that is their subject's item; "
         f"{sum(d.get('notes_written', 0) for d in written)} judgement notes "
         f"written; "
         f"{depicts} depicts claims left out"

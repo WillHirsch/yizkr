@@ -62,6 +62,41 @@ stands after a drop is not counted in `records.set_aside_records`. The
 entity-manifest prompt says to omit a field the model cannot fill,
 never to write it as "".
 
+Amended by #499 (2026-10-16): every form a source uses to name or
+address a person is an alias, and each that is no plain name form is
+also a `referred_to_as` claim (ADR-0018, as amended). §8's cleanup keeps
+an alias the document gives as an appellation (the value of a
+`referred_to_as` claim of the same document about the entity) when it
+holds a word that is no name part of the record, while role labels,
+deictic references and derivable reorderings still go. Where a person's
+label is one of those appellations and its record stands with the
+status `name`, the label becomes the name the record gives. Every form,
+the label and each alias, competes: one made only of the record's name
+parts as itself, any other with its longest run of name-part words,
+never joined across a word that is none ("Rahel Löbig" of "Frau Rahel
+Löbig geb. Tarle"). One that is no appellation wins (a pet name the
+record holds as a nickname gives way to a name), then the one of most
+words, a whole form before a run, most letters, least punctuation (so
+"Rahel Löbig" before "Löbig, Rahel"); with no form holding a name word,
+the label stays. The appellation stays an alias, and every local ref
+takes the new label; a `name` claim restating the model's label stays a
+reject, and one restating the new label is dropped and counted
+(`records.appellation_label_names`). An appellation the manifest turn
+did not list joins the aliases of a person, or of an entity of a kind
+that may be one. The cleanup keeps appellations for a person's record
+only. Places, organisations and families, never persons, key on marked
+forms as on any other name; persons and the kinds that may be persons
+(an unclassified entity, a ref with no kind) never do.
+Both run where the batch is assembled, once the chunks' claims exist;
+`coverage.json` counts the labels replaced (`records.appellation_labels`)
+and the record name parts that are appellations
+(`records.appellation_parts`), and the run report sums both. A form one
+person calls another, or one through a relation, is never a record name part (§2.1), and a kinship
+word before a name ("Tante", "Onkel") is neither a name part nor a
+title. Identity is unchanged: clustering keys on the record's name
+parts, and a recordless mention that may be a person (§7, rule 1) never
+keys on a form its document gives as an appellation, as label or alias.
+
 Amended by #389 (2026-09-29): the transcription check, the stream
 assembly and language detection no longer read wording (§10): the check
 reads the transcription record (ADR-0037), and no wording fails a
@@ -101,7 +136,8 @@ the person through a relation but is no literal kinship term, is
 ADR-0018's `referred_to_as`, never an alias and never a record nickname
 (§2.1). A nickname that is a form of a given name is also that given
 name. The `courtesy` status is a courtesy title or other relational
-appellation that is no literal relation.
+appellation that is no literal relation. (Superseded in part by #499:
+such a form is an alias too; it stays out of the record's name parts.)
 
 Amended by #408 (2026-09-29): the GEDCOM adapter fills §6 as follows.
 The label of a NAME leaves out its bracketed parts, each of which is an
@@ -753,7 +789,8 @@ to `toponym`, and a surname's type to `other`.
   standard form. A name the source gives as what one person calls
   another, or that names the person through a relation but is no
   literal kinship term ("Bubele", "Nana Maisie", "Рудольфиха"), is no
-  nickname: it is `referred_to_as` (ADR-0018), never an alias.
+  nickname: it is `referred_to_as` (ADR-0018). (Amended by #499: it is
+  an alias too, never a record name part.)
 - **A patronymic** is a name part of its own, never a surname. The
   relation it states is a `father` claim where the source names the
   father (§3.1). (An example follows when #400 adds a patronymic to the
@@ -1007,6 +1044,12 @@ then reads classes instead of its term table
 
 ADR-0031 §1 leaves both to this revision.
 
+Proposed (2026-10-16): ADR-0039 adds `author`, `addressee`,
+`inception`, `location_of_creation`, `main_subject` and `shows` beside
+`issued_by`, each about the source itself, and `caption`, a container's
+verbatim words about an artifact it places (#456). This section stands
+until the owner accepts it.
+
 - **`issued_by`** (P2378): a document → the organisation that issued it.
   The claim's subject is the source artifact itself, named by the SHA-1
   of its media as a claim's source is (ADR-0010), and resolved to the
@@ -1033,7 +1076,24 @@ property, none of which takes its subject as its value. Each is a counted
 reject, and the claim is the unit of rejection. A local ref whose entity
 record carries the subject's QID names the subject too; no pipeline path
 sets a record's QID before validation, so that branch applies to claims
-files validated by hand or built beforehand. `country_of_citizenship` keeps accepting a place, since the place
+files validated by hand or built beforehand. Amended by #491
+(2026-10-16): the writer checks the rule again before its first write,
+after the steps that put two refs on one item, which validation reads
+the batch before: the identity map (a cluster holding both the claim's
+subject and its value, as clustering merges a father and a son of one
+name), an approved equivalence (two records given one item's QID, as a
+curator's correction of the equivalence sheet's QID can make them), and
+a cluster whose found item is the QID another ref names. Two refs are
+one item when they name one QID, one vocabulary item, one artifact or
+one cluster of the map, or when the plan finds a cluster's item to be
+the QID the other names. Such a claim, by its value or a qualifier's, is
+refused whole before anything is written, in a dry run too, with a
+warning that says why: the writer's result names it among its refused
+claims and again among its self-references, the scratch write's record
+counts those per document, and the run report and the run-to-run diff
+count them apart from the writer's other refusals and from extraction's
+rejects. The batch is never failed, and its other claims are written.
+`country_of_citizenship` keeps accepting a place, since the place
 model has no country class: the prompt, through its description, asks for
 a country.
 
@@ -1322,6 +1382,9 @@ and brackets in a NAME value, which §10 names.
      without a record, never one with a record, and for the four kinds
      that take records such a link is never confident. Two line-range
      batches that each name "Hildegard Löbig" pair, but never merge.
+     (Amended by #499: a mention that may be a person, of any kind but
+     a place, an organisation or a family, never on a form its document
+     gives as an appellation, as label or alias.)
 2. **Sex and civil status only block.** Stated sexes that differ, or civil
    statuses that cannot both hold, make a pair ambiguous, and a closure
    that joins them a contradiction. They never corroborate. Statuses
@@ -1438,6 +1501,20 @@ change to ADR-0022 §4. For a place or an organisation, an alias that
 gives no part (a deictic or generic reference, #42) is dropped, while a
 short form is kept for lookup, since a place is looked up by its
 toponym.
+
+(Amended by #499, 2026-10-16.) **An appellation stays.** An alias the
+document gives as an appellation, the value of a `referred_to_as` claim
+of the same document about the entity (ADR-0018), is kept when it holds
+a word that is no name part of the record: "Tante Rahel" beside "Rahel
+Löbig", and "Omama", which gives no part at all. One made only of name
+parts is judged by the rules above, so "Löbig, Rahel" beside "Rahel
+Löbig" goes however it is marked. A label that is such an appellation,
+on a person whose record stands with the status `name`, becomes the name
+the record gives (the amendment above says how), and the appellation
+stays an alias. Nothing else is read: no field marks an appellation, and
+a word the record merely leaves out never moves a label. The marks are
+read for persons and the kinds that may be persons; a place's, an
+organisation's or a family's alias is judged as before, marked or not.
 
 ### 9. What the same prompt revision takes in
 

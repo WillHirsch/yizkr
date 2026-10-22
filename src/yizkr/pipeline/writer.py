@@ -161,12 +161,14 @@ Per batch, the writer:
    label, is the warning and `refused` alone (ADR-0010). The plan is made
    of the claims the writer writes, without those refused before it
    (pre_plan_refusals: for their text, or as a misplaced document subject,
-   ADR-0035 §3.4): an entity, such as a media object, that only such claims
-   name is never placed, so it is neither blocked nor flagged. Of a
-   manifest record that only refused claims name, refused before the plan
-   or with an entity the plan blocks, nothing is sent, so none of its
-   aliases or type hint is named in the result's `refused_terms`
-   (_unsent_records);
+   ADR-0035 §3.4), and then without those whose item value the plan finds
+   to be their subject's item (self_references, below), made again each
+   time: an entity, such as a media object, that only such claims name is
+   never placed, so it is neither blocked nor flagged. Of a manifest record
+   that only refused claims name, refused before the plan, with an entity
+   the plan blocks or as naming their subject's item, nothing is sent, so
+   none of its aliases or type hint is named in the result's
+   `refused_terms` (_unsent_records);
 3. writes each claim as a statement at NORMAL rank (the contract has
    no rank field — ADR-0002) with TWO references (ADR-0003):
    * stated in -> artifact, with page number / printed page number /
@@ -285,6 +287,30 @@ Per batch, the writer:
    rank a curator changed) is never altered. The claims come first so
    that an explicit `instance of` claim keeps its own locator and
    excerpt.
+
+No statement has its own subject's item as its value. Validation refuses
+a claim whose item value, its own or a qualifier's, names its subject
+(ADR-0035 §3.5), but it reads the batch before the steps that put two
+refs on one item: the identity map, which may put a claim's subject and
+its value, two mentions, in one cluster, as clustering merges a father
+and a son of one name with a `father` claim between them; an approved
+equivalence, which gives the record of each its item's QID, as a
+curator's correction of the equivalence sheet's QID can; and a QID a
+ref carries. So the writer refuses, before the first write and in a dry
+run too, every claim whose value or qualifier's value is, after those
+steps, its subject's item (self_references): two refs are one item when
+they name one QID, one vocabulary item, one artifact or one cluster of
+the map, or when a cluster's item, as the plan finds it (_cluster_item),
+is the item the other ref names. Such a claim is refused whole, as a
+claim whose text the instance cannot hold is: nothing of it is written,
+no item only it names is made, the result's `refused` names it and its
+`self_references` names it again, apart from the other refusals, and a
+warning says which of its values names the subject's item. The rest of
+the batch is written. A claim refused already, for its text or with an
+entity the plan blocks, is counted there and not read again, so each
+refused claim is counted for one reason. The check reads the items as
+the plan finds them, and is made again each time the plan is made again
+without the claims it refuses, until it refuses no other.
 
 Wikibase holds at most TEXT_LIMIT (400) characters in the text of a
 string, external-id or monolingual text value, whether the value is a
@@ -459,6 +485,8 @@ _RUN_LABEL_MAP = re.compile(r"^extraction run \S+ map ([0-9a-f]{12}) ")
 # the content tag registration gives a label another item holds: " [", the
 # first 8 hex digits of the media's SHA-1, "]" (yizkr.pipeline.registrar)
 _CONTENT_TAG = re.compile(r" \[[0-9a-f]{8}\]")
+# an item's QID, as a ref names it (self_references)
+_QID = re.compile(r"Q[1-9][0-9]*")
 # What else Wikibase refuses in a text value, and in a term once it has
 # trimmed it: its `illegal-string-chars` check, /^\s|[\v\t]|\s$/u, finds a
 # line break or a tab anywhere, or whitespace at either end. PHP matches
@@ -726,6 +754,11 @@ class WriteResult:
     # (unknown_characters), named "<local id>: <term>", in the order
     # write_batch finds them before its first write; a warning names each
     refused_terms: list[str] = field(default_factory=list)
+    # the claim id of each claim of `refused` refused because an item
+    # value of it, its own or a qualifier's, is its subject's item
+    # (self_references), in batch order: counted apart from the other
+    # refusals, and apart from extraction's rejects
+    self_references: list[str] = field(default_factory=list)
 
 
 def batch_fingerprint(batch: ClaimBatch) -> str:
@@ -1461,6 +1494,52 @@ def pre_plan_refusals(
     return refusals
 
 
+def self_references(
+    batch: ClaimBatch,
+    item_of: Callable[[EntityRef | ArtifactRef], str | None],
+    skip: Collection[int] = (),
+) -> dict[int, str]:
+    """The claims of `batch` whose item value, the claim's own or a
+    qualifier's, is the item its subject resolves to, by their place in
+    the batch, each with the warning that names it by its claim id and
+    property and says which of its values names that item (the module
+    docstring). `item_of` gives the item a ref resolves to, as a QID or,
+    for a cluster of the identity map whose item is not found, a key of
+    the cluster; None when it cannot tell, which matches nothing. The
+    claims at the places `skip`, refused already, are not read."""
+    found = {}
+    for index, claim in enumerate(batch.claims):
+        if index in skip:
+            continue
+        subject = item_of(claim.subject)
+        if subject is None:
+            continue
+        values = [("its value", claim.value)]
+        values.extend(
+            (f"its {qualifier.property} qualifier", qualifier.value)
+            for qualifier in claim.qualifiers
+        )
+        named = [
+            where
+            for where, value in values
+            if isinstance(value, ItemValue) and item_of(value.value) == subject
+        ]
+        if named:
+            shown = (
+                subject
+                if _QID.fullmatch(subject)
+                else "its cluster's item in the identity map"
+            )
+            found[index] = (
+                f"claim {claim_id(claim)} ({claim.property}) is refused, "
+                f"and nothing of it is written: {' and '.join(named)} "
+                f"{'names' if len(named) == 1 else 'name'} its subject's "
+                f"item ({shown}), and no statement has its own subject as "
+                f"its value (ADR-0035 §3.5)"
+            )
+    return found
+
+
 def side_label(
     label: str, kind: str | None, joins: Callable[[str], bool]
 ) -> tuple[str, bool]:
@@ -1955,6 +2034,33 @@ class BatchWriter:
         result.created_items[ref.local_id] = qid
         result.minted.append(qid)
         return qid
+
+    def _item_of(self, ref: EntityRef | ArtifactRef) -> str | None:
+        """The item `ref` resolves to, before the first write, for
+        self_references: the QID it names, of a vocabulary item, an
+        artifact (resolved in step 0) or an existing item; the QID an
+        approved equivalence gives its record; the item the plan finds for
+        its cluster (_placements, _cluster_item), so it meets a ref naming
+        that item by its QID; and otherwise the key of its cluster in the
+        identity map, whose item the write makes. Reads, never writes."""
+        if isinstance(ref, VocabRef):
+            return self.items.get(ref.key, f"vocabulary {ref.key}")
+        if isinstance(ref, QidRef):
+            return ref.qid
+        if isinstance(ref, ArtifactRef):
+            return self._artifact_qids.get(ref.sha1)
+        if not isinstance(ref, LocalRef):
+            return None
+        record = self._entity_records.get(ref.local_id)
+        if record and record.qid:
+            return record.qid
+        placement = self._placements.get(ref.local_id)
+        if placement is not None:
+            found = self._cluster_item(placement)
+            if found:
+                return found
+        cid = self._clusters.get(ref.local_id)
+        return f"cluster {cid}" if cid else None
 
     def _kind_references(
         self,
@@ -3063,8 +3169,9 @@ class BatchWriter:
         mentions it, as the writer may send them to an item the resolve
         step matched the record to, but for a record of which nothing is
         sent (_unsent_records): the claims that name it by a local ref
-        are all refused, before the plan (pre_plan_refusals) or with an
-        entity the plan blocks."""
+        are all refused, before the plan (pre_plan_refusals), with an
+        entity the plan blocks, or as naming their subject's item
+        (self_references)."""
         named: list[str] = []
         warnings: list[str] = []
 
@@ -3103,8 +3210,9 @@ class BatchWriter:
         """The local ids of the manifest records without an approved
         equivalence that claims of `batch` name by a local ref, but only claims
         at the places `refused`, which the writer refuses, before the plan
-        (pre_plan_refusals: for their text, or as a misplaced document subject)
-        or with an entity the plan blocks (step 2 of the module docstring): no
+        (pre_plan_refusals: for their text, or as a misplaced document
+        subject), with an entity the plan blocks (step 2 of the module
+        docstring), or as naming their subject's item (self_references): no
         item is found or made for such a record, and none of its terms, kind or
         type hint is sent anywhere (_kinds_given). A record counts as written
         only through a local ref to it in a claim the writer writes: one that
@@ -3287,9 +3395,11 @@ class BatchWriter:
         marks do, maps may mix. A
         claim whose own text the instance cannot hold raises nothing: it is
         refused alone, and the rest of the batch is written (the module
-        docstring); so is an entity that may take neither its label nor its
-        tagged label, refused with the claims that name it (step 2 of the
-        module docstring). `claim_summary` is the edit summary of each
+        docstring); so is a claim whose item value, its own or a
+        qualifier's, is its subject's item (self_references), and an entity
+        that may take neither its label nor its tagged label, refused with
+        the claims that name it (step 2 of the module docstring).
+        `claim_summary` is the edit summary of each
         claim's write, by default one that says whether its batch was
         reviewed row by row or accepted whole."""
         self._clusters, self._document, self._terms, self._identity_hash = (
@@ -3319,6 +3429,7 @@ class BatchWriter:
         self._aliased = set()
         self._entity_cache = {}
         self._before = {}
+        self._placements = {}
         # one map an instance: refused before anything is written
         if one_map and self._identity_hash:
             others = self._other_maps()
@@ -3332,8 +3443,20 @@ class BatchWriter:
         # settled before the first write too: where each entity's item is
         # found or made, and the entities that may join neither the item
         # under their label nor the one under their tagged label, refused
-        # with the claims that name them (step 2 of the module docstring)
-        stopped, blocked, flags = self._blocked(batch, refusals)
+        # with the claims that name them (step 2 of the module docstring);
+        # then the claims whose item value is their subject's item, as the
+        # plan finds the items, the plan made again without them until it
+        # finds no other
+        loops: dict[int, str] = {}
+        while True:
+            stopped, blocked, flags = self._blocked(batch, refusals)
+            found = self_references(
+                batch, self._item_of, skip={*refusals, *stopped}
+            )
+            if not found:
+                break
+            loops.update(found)
+            refusals.update(found)
         refused = {*refusals, *stopped}
         # the manifest records that only refused claims name, of which
         # nothing is sent
@@ -3341,10 +3464,10 @@ class BatchWriter:
         # found before the first write too: the kinds the vocabulary lacks
         # (a manifest record's whatever its claims, and the kind of a ref
         # without a record only when a claim the writer writes mentions it:
-        # all but those refused before the plan and those the plan
-        # refuses), the type hints the instance cannot hold, and the terms
-        # it may keep in another form, each skipped wherever the writer
-        # would record it
+        # all but those refused before the plan, those the plan refuses
+        # and those naming their subject's item), the type hints the
+        # instance cannot hold, and the terms it may keep in another form,
+        # each skipped wherever the writer would record it
         warnings = self._unknown_kinds(batch, refused)
         warnings += [
             *refusals.values(),
@@ -3377,6 +3500,8 @@ class BatchWriter:
                 # before any of its refs resolves: an item only a refused
                 # claim mentions is never minted
                 result.refused.append(claim_id(claim))
+                if index in loops:
+                    result.self_references.append(claim_id(claim))
                 continue
             artifact_qid = self._source_artifact_qid(claim.source.artifact)
             subject_qid = self._resolve_ref(

@@ -14,6 +14,12 @@ a claim keeps the physical page as its `page number` and gains the
 printed one, from the record and never guessed, as a `printed page
 number` in its source block (§2, "Page numbers for extraction").
 
+Amended by #502 (2026-10-16): a deck's transcription has pages too, one
+per slide, read from its XML (the page method `slide-xml`): each slide
+`transcribed`, or `blank` when it holds no text, with no printed number,
+languages or notes, and the SHA-1s of the images it reads on its own; a
+deck has no `document_class` (§2, "Pages of a deck").
+
 Amended by #449 (2026-10-05): the claims review sheet shows a claim's
 printed page number in a `printed_page` column beside `page`, empty
 where its source has none. The sheet's locators are never read back, so
@@ -127,6 +133,15 @@ page was made: with the one-page record its stored fields make
 illegible or not a document page, which needed no text then, needs none
 on reuse either. The PDF's flag is its first vision page's.
 
+**Pages of a deck** (ADR-0008, as amended by #502): a deck is read slide
+by slide as a PDF is read page by page, so its transcription's `pages`
+hold one page per slide behind its `[Slide N]` marker: read from the
+slide's XML (method `slide-xml`, engine `pptx-adapter`), `transcribed`,
+or `blank` when the slide holds no text, with no printed number,
+languages or notes, since no engine read it, and the SHA-1s of the
+images on it that are read on their own. A deck has no
+`document_class`, and no flag: no engine read its text.
+
 **Page numbers for extraction** are read from the record through
 `Transcription.printed_pages()`: the printed page numbers by physical
 index. Amended by #424 (2026-10-02): extraction reads them in two
@@ -238,7 +253,7 @@ toward the first language it lists, weighed by its primary subtag (so
 and a tie goes to the language listed first; a record that names none
 takes the fallback code. The resolution is recorded as `record`. An
 explicit `--language` still forces its code. py3langid runs only on a
-text that has no record (a text file, a correction, slide text, a PDF
+text that has no record (a text file, a correction, a deck, a PDF
 read page by page), and reads it outside its editorial marks (ADR-0015,
 as amended). An excerpt (ADR-0008, as amended by #397) is the reading of
 its image, so its language, like its class and its pages, comes from

@@ -35,6 +35,10 @@ Amended by #457 (2026-10-05): the anomaly checks' recheck reads the
 excerpts' directories too, and checks each excerpt's stored outputs as
 a document of its own, of the kind `excerpt` (docs/ANOMALIES.md,
 Recheck); #397's "Left for later" no longer lists it.
+Amended by #502 (2026-10-16): PDFs and decks take one paged-container
+path, a deck's embedded images become excerpts as a PDF's placed images
+are, a PDF is a kind of its own (`pdf`), and both containers take the
+`paged` route: see Amendments.
 
 ## Context
 
@@ -396,6 +400,8 @@ Still to do, each keeping the two witnesses separable:
    states it (CLAUDE.md rules 1 and 5). Only who a person is could come
    from the caption safely, since that is identity, which reconciliation
    decides (ADR-0007), not a value the excerpt is cited for.
+   Proposed (2026-10-16): ADR-0039 §5 answers no, and keeps the
+   caption verbatim on the excerpt's item instead (#456).
 3. An original that a compilation reproduces only as a whole page, or as
    part of a scanned page. An image that fills a page has bytes of its
    own, but so does each page of a scanned PDF, so telling an original
@@ -425,6 +431,10 @@ Still to do, each keeping the two witnesses separable:
    artifact by its SHA-1, resolved at write time as a source is, or do
    such statements wait? The people and places a caption names are
    claims about them, and can be made meanwhile.
+   Proposed (2026-10-16): ADR-0039 §2 answers: a container's claim
+   about an excerpt is its verbatim `caption` only, and what the excerpt
+   is (its author, date, place) is the excerpt's own claim about itself,
+   for a PDF's images and a deck's alike (#456).
 7. For follow-up A to settle: where an excerpt's views live, and how its
    status relates to the compilation's, given that content dedup seeds
    only from `written` documents (ADR-0010), that each document passes
@@ -711,3 +721,109 @@ every run that measured the stage for one, pooled, else as typical,
 rounded up, and reported as up to so many more, since an image the
 engine reads blank or as no document page makes no excerpt
 (docs/runbooks/scratch-run.md, Before a run).
+
+Amended by #502 (2026-10-16): **one paged-container path for PDFs and
+decks.** The Decision and the #289, #176 and #397 amendments model an
+image a deck embeds and an image a PDF places alike, a derived artifact
+keyed by its SHA-1 and `part of` its container per slide or page, but
+only a PDF's image was read and extracted. Both now take one path
+(`yizkr.pipeline.containers`).
+
+- **A reader per format.** Each yields the container's pages in order,
+  each with its method, its own text where the file holds it, the file
+  the vision engine reads where it does not, and the images placed on
+  it that are read on their own: a PDF's, `textlayer.read_pages` (the
+  #176 amendment, unchanged); a deck's, `presentation.read_slides`, each
+  slide read from its XML (the page method `slide-xml`), its text runs
+  then its speaker notes behind `[Slide N notes]`, and the images it
+  embeds in the order the slide's XML paints them. One transcriber
+  (`transcribe.PagedTranscriber`) makes the transcription from either:
+  page by page behind the page's marker (`[Page N]`, `[Slide N]`),
+  each image read on its own marked below it by its SHA-1, `[Page 6,
+  image 1: sha1:…]` or `[Slide 2, image 1: sha1:…]`, each such marker
+  naming an image of the container's record of derived media; and each
+  image read by the vision engine on its own. A deck's slides are
+  joined by one line break, so a deck that reads no image has the text
+  its slide text always had. Its language is found in the slides' text
+  alone, joined by blank lines, never in the markers, as a PDF's is in
+  its pages' text: a deck whose slides' text so joined, the blank lines
+  counted, is under the 12 characters a language is detected in takes the
+  fallback language. The markers once counted: what detection left of
+  them (a space and a line break each) could bring a near-empty deck to
+  12, so such a deck, detected before, now falls back, and its
+  extraction's calls get new keys. A note of an image not read starts
+  with the fixed phrase "image not read on its own", what the archive
+  calls the image after it, so the monitor shows no file's name.
+- **Every image read on its own is an excerpt, whatever the container.**
+  A deck's image is read, kept beside its bytes and taken as an excerpt
+  exactly as the #397 amendment takes a PDF's: one witness per SHA-1,
+  whichever PDFs and decks place it, none whose bytes a corpus document
+  has or the never-ingest list names, none whose reading shows no page
+  of a document; its claims cite the image, and its extraction reads the
+  image's text alone (the #289 amendment's second question, unchanged).
+  So a scanned document on a slide yields claims, cited to the scan. Its
+  title is the deck's record's first name for it ("<deck title> —
+  image2.png"), as its registered item's label is (the #103 amendment).
+  An excerpt's write registers each container that places it, a deck
+  with its slides and its derived media as before.
+- **Which of a deck's images are read** is the PDF's rule: an image
+  under 24 pixels on a side or 10,000 in all is decoration, and one the
+  never-ingest list names, by its SHA-1 or by any of its names in the
+  archive (as the #103 amendment's registration leaves it out), is not
+  read. A deck holds its images as files
+  of their own, and the image is read as the deck holds it, so one in a
+  format the vision engine does not read (anything but PNG, JPEG, GIF
+  and WebP: a TIFF, say) or whose header gives no size is not read, and
+  the transcription's attention says so. Converting such an image is
+  left for later. The deck's record (`derived-media.json`, the #128
+  amendment) still names every image it embeds, under its names in the
+  archive, and the write registers every one the list does not name,
+  read or not.
+- **Reuse.** A deck's transcription is checked again on reuse as a PDF's
+  read page by page is: each image's kept reading by the check, and the
+  images it marks against its record. A deck's record names all its
+  images, so the transcription must mark exactly those it would read now;
+  one that marks none, or has no pages, as a transcription of its slide
+  text alone does, is set aside and made again, whatever the deck embeds,
+  so every deck's transcription takes the paged shape. The images' readings go through the LLM
+  cache, keyed by what each call sends (ADR-0032): the image's bytes and
+  the prompt, so the same bytes are one call whichever container gives
+  them, and the same deck gives the same keys in every run.
+- **A kind of its own for PDFs.** `document_kind` gives a PDF the kind
+  `pdf`, apart from `media`, which is now a photograph or any other
+  image read whole; a deck stays `presentation`. A shared `container`
+  kind was the alternative, and is not taken: a kind is a slice the
+  scratch driver sends its first document of through first as its canary
+  and that `pause --kind` stops, and the two formats fail in different
+  ways (a PDF through PDFium and vision pages, a deck through its XML),
+  so each is a slice of its own; the run report and the monitor count
+  documents by kind, and would otherwise lump PDFs with decks as they
+  lumped them with photographs. So the monitor, the run report, the
+  estimate, `pause --kind pdf` and the run diff tell PDFs from
+  photographs. A run diff against a baseline made before this amendment
+  shows its PDFs moved from `media` to `pdf`. The anomaly checks compare
+  an unclassified document within its kind, so a PDF with no record
+  class is now compared with PDFs, apart from images, and its findings
+  may move for that reason alone.
+- **Plain route naming.** A PDF and a deck take the route `paged`
+  (`orchestrate.PAGED`), read by their format's reader; `vision` is the
+  route of an image read whole. A PDF none of whose pages has a usable
+  text layer is still read whole by the vision engine. What made a
+  transcription stays in its `engine`, as the run report names routes:
+  `pdf-pages:pdf-text-layer/1` for a PDF read page by page,
+  `llm-vision:…` for one read whole, `pptx-adapter` for a deck.
+- **The run report** counts a deck's images as it counts a PDF's, apart
+  (`deck_images`: the decks that embed any read on their own, the images
+  placed, the distinct images and how many decks place how many), keeps
+  `pdf_images` and the PDFs' page methods to PDFs alone, and counts the
+  excerpts once, whatever their container (`excerpts`). The call
+  estimate counts a deck's images among the images that may become
+  excerpts.
+- **Out of scope.** What a container's caption says about an image it
+  places, a slide's caption about its image included, is ADR-0039's
+  question (#456): this amendment makes no claim from a caption, and an
+  excerpt's extraction reads the excerpt alone.
+- **Stage change.** It changes the transcription stage of every deck
+  (its pages, its image markers, its images' readings) and adds
+  excerpts, which take the extraction and the critique; it is checked by
+  a scratch diff (ADR-0025 §4).

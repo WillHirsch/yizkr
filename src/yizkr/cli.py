@@ -626,7 +626,10 @@ def cmd_export_review(args) -> int:
 def cmd_apply_review(args) -> int:
     from yizkr.pipeline.review import apply_review
 
-    approved, warnings = apply_review(_load_batch(args.batch), args.csv)
+    try:
+        approved, warnings = apply_review(_load_batch(args.batch), args.csv)
+    except (OSError, ValueError) as exc:
+        sys.exit(str(exc))
     for warning in warnings:
         print(f"warning: {warning}", file=sys.stderr)
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -662,7 +665,8 @@ def cmd_accept_all(args) -> int:
     else:
         print(
             f"wrote {out} ({result.approved} claims set to bulk-accept; "
-            f"the write path marks these low-scrutiny for reappraisal)"
+            f"`ingest run` writes them as low-scrutiny for reappraisal "
+            f"while no row has another decision)"
         )
     return 0
 
@@ -1514,9 +1518,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = isub.add_parser(
         "accept-all",
         help=(
-            "bulk-accept a review CSV: approve every claim (review.csv), or "
-            "ratify each machine verdict (equivalences.csv) — curator "
-            "bulk-accept"
+            "curator bulk-accept of a review CSV: write bulk-accept on every "
+            "claim (review.csv), which `ingest run` writes under a distinct "
+            "low-scrutiny edit summary while no row has another decision "
+            "(ADR-0023), or ratify each machine verdict (equivalences.csv); "
+            "refuses a whole claims sheet with "
+            "any depicts row (ADR-0005), or without an exact claim_id and "
+            "exactly one property column"
         ),
     )
     p.add_argument(

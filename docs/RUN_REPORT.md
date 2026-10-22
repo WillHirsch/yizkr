@@ -102,7 +102,13 @@ snapshot, and says so.
 **Documents.** The documents planned (a SHA-1 planned twice is one
 document) by kind; languages, by the transcriptions read, and by kind
 (in `report.html` and `report.json` alone: see below);
-the transcription routes (vision, text file, slide text, correction) and
+the transcription routes, by what made each transcription (`llm-vision`,
+`pdf-pages` for a PDF read page by page, `pptx-adapter` for a deck,
+`text-file`, `correction`); the pages of the PDFs read page by page, by
+method, and the images placed within them and read on their own (PDFs
+that place any, images placed, distinct images, images per PDF); the
+images the decks embed on their slides and read on their own, counted
+alike (`deck_images`); the excerpts among the documents; and
 how each language was resolved (record, detected, fallback, override); the
 documents that failed, each once: those whose stage failed, as their
 latest events leave them, and those the latest invocation failed outside
@@ -164,8 +170,12 @@ state and attention labels, or `not run`; a run with none says so.
 **Write.** Once the run's write stage has run (#200;
 yizkr.pipeline.scratchwrite): the documents written, the statements
 written new, those that gained a reference, the claims already there and
-those the writer refused, the items minted, the judgement notes written
-(the noted run blocks, ADR-0035 §4; #410), the batches refused whole
+those the writer refused, and of them those whose item value is their
+subject's item, as the identity map may make it
+(`aggregate.content.write.claims_self_referencing`, absent for a write
+that did not count them; #491), apart from extraction's rejects, the
+items minted, the judgement notes written (the noted run blocks,
+ADR-0035 §4; #410), the batches refused whole
 before registration, the documents that failed, and whether the
 instance-contents key was recorded; or that the instance held what the
 run's write key makes, so nothing was reset or written. In both, the
@@ -229,7 +239,14 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   record was set aside. `coverage.json` counts an entity's note set aside
   among the same reasons, once, as `note`; the report counts it as a note
   set aside, never as a record's reason (a claim whose note fails is a
-  counted reject instead). A reason, status or category the report does
+  counted reject instead). `records.appellation_labels` counts the
+  persons whose label was one of the document's appellations of them and
+  became the name their record gives, and `records.appellation_parts`
+  the record name parts that are, whole, one of the document's
+  appellations of the person (ADR-0018, ADR-0035 §8, as amended by
+  #499). `coverage.json` also gives `records.appellation_label_names`,
+  the `name` claims dropped for restating a new label, which the report
+  does not sum. A reason, status or category the report does
   not know is counted as `other`, as everywhere in the aggregates; since
   `other` is also a note category, the notes' `other` holds both. An
   extraction whose coverage holds no such counts is counted apart,
@@ -247,12 +264,15 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   object is in none of these figures, as in none of the rejects'. Nor
   are the judgement notes counted that a line-range fallback's claims
   carry: its coverage counts no notes. A coverage that holds its records
-  and notes but predates `records.set_aside_records` or
-  `records.unsplit_forms` (or gives one that is no count) still counts
+  and notes but predates `records.set_aside_records`,
+  `records.unsplit_forms`, `records.appellation_labels` or
+  `records.appellation_parts` (or gives one that is no count) still
+  counts
   its other figures, but is counted in none of the counts it lacks,
   never as zero: the report says how many extractions it counted lack
   each (`absent.set_aside_records`,
-  `absent.unsplit_forms`), and a document's own view gives the count as
+  `absent.unsplit_forms`, `absent.appellation_labels`,
+  `absent.appellation_parts`), and a document's own view gives the count as
   null and its drill-down says it is not counted. A reason, status or
   category whose count is no count (not a whole number of at least 0) is
   dropped, never a 0 row; a genuine 0 stays.
@@ -260,9 +280,10 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   reasons, statuses and categories folded as the aggregates' are, and
   `report.json`'s `aggregate.content.records` (`extractions`, `given`,
   `recordless`, `by_status`, `unsplit_forms`, `set_aside_records`,
-  `set_aside_reasons`, `set_aside_by_reason`, `absent.predating`,
-  `absent.line_range`, `absent.set_aside_records`,
-  `absent.unsplit_forms`) and `aggregate.content.notes`
+  `appellation_labels`, `appellation_parts`, `set_aside_reasons`,
+  `set_aside_by_reason`, `absent.predating`, `absent.line_range`,
+  `absent.set_aside_records`, `absent.unsplit_forms`,
+  `absent.appellation_labels`, `absent.appellation_parts`) and `aggregate.content.notes`
   (`total`, `by_category`, `set_aside`) sit beside the rejects, chunks
   and fallback tiers, where the run-to-run diff (#198) is to compare them
   with the other extraction counts;

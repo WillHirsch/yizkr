@@ -74,7 +74,7 @@ Each alert is a line of `alerts.jsonl` in the run directory
 | `subject` | the document: the first 12 hex digits of its SHA-1 (empty for `anomaly-config`) |
 | `value` | the measured value: a number, a language code (`language-unexpected`), a model id (`model-mismatch`), or `true` for a check that measures a presence |
 | `status` | `new` or `carried` |
-| `kind` | the document's kind: `text`, `media`, `presentation`, `gedcom`, or `excerpt` (an image a PDF read page by page places, a document of its own: ADR-0008) |
+| `kind` | the document's kind: `text`, `media`, `pdf`, `presentation`, `gedcom`, or `excerpt` (an image a PDF or a deck places and reads on its own, a document of its own: ADR-0008) |
 | `limit` | the threshold the value crossed |
 | `config` | the first 12 hex digits of the SHA-256 of the thresholds in force, so alerts raised under other thresholds tell apart |
 
@@ -362,14 +362,14 @@ repeats, run after run, until a curator acts on the older item (hashes,
 merges or relabels it, or stops it naming the file), and one a run
 killed before it raised it is raised by the next. Stage `write`;
 subject, the document being written (an excerpt's write registers each
-PDF that places it and every image those PDFs place, so their flags
-carry the excerpt as subject); value `true`; always new; no `limit` or
+container, PDF or deck, that places it and every image those containers
+place, so their flags carry the excerpt as subject); value `true`; always new; no `limit` or
 `config`. Fields: `artifact`, the item's QID; `others`, the QIDs of the
 items it is flagged against, in the order of their numbers; `medium`,
 the first 12 hex digits of the item's media SHA-1. It is the subject's
 own unless the item is one registered with the document: a deck's or
-PDF's image or, for an excerpt, a PDF that places it or another image
-that PDF places; or unless the flag is a GEDCOM write's, whose item is
+PDF's image or, for an excerpt, a container that places it or another
+image that container places; or unless the flag is a GEDCOM write's, whose item is
 the artifact registered before it. One alert per item, check and write,
 so a deck may raise one for itself and one for each image.
 

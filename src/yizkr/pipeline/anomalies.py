@@ -1576,7 +1576,7 @@ class AnomalyChecks:
     def _medium_pages(self, doc: Any) -> int | None:
         """A medium's pages, counted once per document: None for another
         kind of document, or a medium whose count is unknown."""
-        if doc.kind != "media":
+        if doc.kind not in ("media", "pdf"):
             return None
         if doc.sha1 not in self._pages:
             pages = None
@@ -2324,7 +2324,7 @@ def _recheck_document(checks: AnomalyChecks, doc: _Recorded) -> None:
             "engine": transcription.get("engine"),
             "page_count": checks._medium_pages(doc),
             "transcription": transcription,
-            "whole_pdf": doc.kind == "media" and is_pdf(Path(doc.source)),
+            "whole_pdf": doc.kind == "pdf" and is_pdf(Path(doc.source)),
         }
         finding = (
             check_verdict(checks.config, **judged)
