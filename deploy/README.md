@@ -67,7 +67,7 @@ under so the baked concept URIs match — see Restore). Then:
 
 ```sh
 make up-local                 # stack up; hostnames resolve in-network
-make cli ARGS="smoke-test"     # then bootstrap, backup, publish-site, ...
+make cli ARGS="smoke-test"     # then bootstrap, publish-site, ...
 make cli ARGS="bootstrap"
 ```
 
@@ -203,8 +203,10 @@ in `docker-compose.https.yml` to avoid rate limits.
   (data lives in named volumes and survives `down`)
 - **Upgrades:** images are pinned to major versions (`wikibase:7`,
   `wdqs:2`, ...). Before upgrading majors, read the upstream release
-  notes — MediaWiki upgrades can require `update.php` runs. Take a
-  backup first (`yizkr backup`, below).
+  notes — MediaWiki upgrades can require `update.php` runs. From the
+  kept-state stage on, take a backup first (`yizkr backup`, below). In
+  the development stage, take none: a scratch graph is never backed up
+  (ADR-0025 §1), and the next scratch run regenerates it.
 - **Generated config:** first boot writes `config/LocalSettings.php`,
   `config/wdqs-frontend-config.json`, and `config/wikibase-php.ini`
   (all gitignored). Local settings tweaks go in
@@ -325,15 +327,29 @@ made. The directory holds:
   as an alias of `--no-nonprivileged-export`, until the keeper run
   (#159), and says so on one stderr line each time it is used.
 
-Schedule it with cron on the host, e.g. nightly at 03:15 keeping two
-weeks:
+When to take backups is set by the project's stage (ADR-0024, "Backup
+policy by stage"); each move to a later stage is an owner decision:
+
+- *Development stage* (whole-corpus scratch runs, ADR-0025): no routine
+  backups. The graph and run state are regenerated rather than restored;
+  take a one-off backup only where a decision asks for one (as the
+  archive-and-reset decision did at the first stack recovery, #16,
+  docs/runbooks/stack-recovery.md), and never of a scratch graph
+  (ADR-0025 §1).
+- *Kept-state stage* (from the keeper run, #159): a backup at each
+  milestone close.
+- *Production-curation stage* (a production instance used for bulk human
+  curation): nightly backups plus an off-machine copy (#172).
+
+Only the last stage schedules it. There, cron on the host does it, e.g.
+nightly at 03:15 keeping two weeks:
 
 ```cron
 15 3 * * * cd /path/to/yizkr && uv run yizkr backup --keep 14 >> var/backups/backup.log 2>&1
 ```
 
-The static site (frontend ladder rung 2) regenerates the same way —
-nightly after the backup, for example:
+The static site (frontend ladder rung 2) regenerates on a schedule too,
+e.g. nightly after the backup:
 
 ```cron
 45 3 * * * cd /path/to/yizkr && uv run yizkr publish-site --clean >> var/site.log 2>&1
@@ -345,8 +361,9 @@ people: serve it on the LAN only (any static server works, e.g.
 needs a public copy, which `nonprivileged.nt.gz` is not: its texts can
 name a possibly living relative of a released person (#163).
 
-Copy `var/backups/` off-machine (rsync, restic, a NAS — anything);
-a backup that lives only on the server it backs up is not a backup.
+From that stage on, copy `var/backups/` off-machine (rsync, restic, a
+NAS — anything); a backup that lives only on the server it backs up is
+not a backup.
 
 **Restore** (new or broken instance):
 
@@ -400,6 +417,7 @@ replayed; a full reload needs an RDF dump import):
 
 ```sh
 docker compose stop wdqs wdqs-updater
+docker compose rm -f wdqs wdqs-updater   # stopped containers pin the volume
 docker volume rm yizkr-wikibase_wdqs-data
 docker compose up -d
 ```
