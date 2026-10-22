@@ -8,18 +8,22 @@ came to from its status alone:
   itself on an error it does not anticipate (which prints a traceback).
 * EXIT_STOPPED: it stopped short, and invoking it again goes on once the
   reason is dealt with: a pass paused by the engine or its cache
-  (yizkr.pipeline.llm.PassPaused), a run's control file, or, for
-  `ingest run`, a document awaiting a review gate.
+  (yizkr.pipeline.llm.PassPaused), a run's control file (`scratch run`;
+  for `ingest run`, a stage it held), or, for `ingest run`, a document
+  awaiting a review gate.
 * EXIT_REFUSED: it refused before doing what it was asked, and printed
   why: a usage error, an input it will not act on, or a run directory
   that records other settings (yizkr.pipeline.rundir.RunSettingsConflict).
   Invoking it again unchanged is refused again.
 * EXIT_INTERRUPTED: Ctrl-C.
 
-The scratch commands give the refusals of their driver
-(yizkr.pipeline.scratch.ScratchRefused, and RunSettingsConflict)
-EXIT_FAILED, and `scratch estimate` a pause too, since it makes no call
-that could go on.
+The scratch commands give every refusal but a usage error EXIT_FAILED,
+as they do a failure: their own reasons (`sys.exit`), their driver's
+(yizkr.pipeline.scratch.ScratchRefused, RunSettingsConflict),
+`scratch import-transcriptions`' ImportRefused
+(yizkr.pipeline.import_transcriptions) and `scratch reset`'s ResetRefused
+(yizkr.reset). `scratch estimate` and `scratch import-transcriptions` give
+a pause EXIT_FAILED too.
 """
 
 EXIT_OK = 0

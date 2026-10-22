@@ -288,7 +288,8 @@ uv run yizkr scratch run
   0 when it finished and no document failed; 1 when a document or a
   corpus stage failed, or it refused to start; 2 when it stopped short
   (an abort, or a pause of the engine it could not wait out); 130 on
-  Ctrl-C.
+  Ctrl-C. A usage error (an unknown or malformed option) exits 3, as it
+  does for every `yizkr` command (`yizkr --help`).
 
 ## The write side
 
@@ -633,7 +634,8 @@ is about to reset.
   compose file's `name`) and each volume's key;
   `docker compose config --volumes` lists the keys.
 - **Exit status**: 0 when it finished; 1 when it was refused or a step
-  failed, saying which; 130 on Ctrl-C.
+  failed, saying which; 3 on a usage error (an unknown or malformed
+  option), as for every `yizkr` command; 130 on Ctrl-C.
 
 **The record of the instance.** What a scratch run needs to know about
 the instance, outside it, is kept per user, apart from any checkout, so
