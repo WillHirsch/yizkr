@@ -62,11 +62,15 @@ extraction's batch, which holds only claims the claim schema and the
 manifest take, through the run's one identity map, at normal rank, with
 both references (stated in the artifact or fragment with its locator,
 inferred from the run item), and no approval file: the development stage
-has no human gate (ADR-0025 §1). Depicts claims are left out of what the
-writer is given, and counted: no scratch run writes a depicts statement
-(ADR-0005). Each run item is marked an unratified scratch run's (the
-`scratch_run` statement, naming the run) and records the hashes of the
-run manifest's settings and of the identity map, each stated in itself.
+has no human gate (ADR-0025 §1). The record counts, per document, the
+claims the writer refused, and of them those whose item value is their
+subject's item, as the map may make it (yizkr.pipeline.writer,
+self_references), apart from extraction's rejects. Depicts claims are
+left out of what the writer is given, and counted: no scratch run writes
+a depicts statement (ADR-0005). Each run item is marked an unratified
+scratch run's (the `scratch_run` statement, naming the run) and records
+the hashes of the run manifest's settings and of the identity map, each
+stated in itself.
 Once every document is written, the instance-contents record takes the
 write key.
 
@@ -110,7 +114,7 @@ from yizkr.pipeline.stages import (
 # the version of what the write side writes for the same inputs: a change
 # that writes something else for them bumps it, as does a change to the
 # package's source, which the key hashes too (code_digest)
-WRITER_VERSION = 1
+WRITER_VERSION = 2
 # the package whose source the key hashes, and the modules it leaves out:
 # those that only read the run directory or the instance, and decide
 # nothing a write puts on it
@@ -712,6 +716,7 @@ def run_write(context: Any) -> list[str]:
                     "referenced": result.referenced,
                     "skipped": result.skipped,
                     "refused": len(result.refused),
+                    "self_references": len(result.self_references),
                     "depicts_left_out": left_out,
                     "items_minted": len(result.minted),
                 }
@@ -738,7 +743,9 @@ def run_write(context: Any) -> list[str]:
         f"{WRITE}: {len(record['documents'])} documents written: "
         f"{sum(d['written'] for d in written)} statements new, "
         f"{sum(d['referenced'] for d in written)} referenced, "
-        f"{sum(d['refused'] for d in written)} claims refused; "
+        f"{sum(d['refused'] for d in written)} claims refused, "
+        f"{sum(d.get('self_references', 0) for d in written)} of them for "
+        f"an item value that is their subject's item; "
         f"{depicts} depicts claims left out"
         + ("" if complete else "; the instance-contents key is not recorded")
     )

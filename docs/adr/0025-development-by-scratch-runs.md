@@ -510,7 +510,11 @@ futile, and explain itself afterwards.
   model or parameters); anomalies by check, new and carried; calls and
   wall time; and content counts (documents, entities, claims, rejects,
   critic findings, clusters, and held depicts proposals; amended by #200:
-  the depicts claims the write left out, and the write's counts). It
+  the depicts claims the write left out, and the write's counts;
+  amended by #491 (2026-10-16): of the claims the writer refused, those
+  whose item value is their subject's item, counted apart from its other
+  refusals and from extraction's rejects, and a figure of the run-to-run
+  diff). It
   writes
   `report.html` and `report.json`, which stay local, and an
   aggregate-only `report.md` that is safe to post. Amended by #225
