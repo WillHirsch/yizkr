@@ -23,7 +23,7 @@
 Connection settings come from deploy/.env (or $YIZKR_ENV_FILE /
 --env-file); see deploy/README.md.
 
-Exit status, the same for every command (yizkr.core.exits):
+Exit status, one scheme for every command (yizkr.core.exits):
   0    finished, and nothing failed
   1    something failed: a document of a run, or the command itself on an
        error it does not anticipate, with a traceback
