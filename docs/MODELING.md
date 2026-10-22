@@ -736,7 +736,9 @@ artifact a new QID, changes neither.
   (process provenance; a GeoNames-imported edge adds `stated in` → the
   GeoNames dataset item). The inconsistency report suppresses value
   pairs connected by a `(location|part_of)+` path — differences of
-  resolution, not contradictions.
+  resolution, not contradictions. ADR-0038 (proposed) would make each
+  containment a source's time-scoped claim instead; until the owner
+  accepts it, this bullet stands.
 - Extraction gives a place's `part_of` only where the source states it
   (in the place's mention, "Fläckfeld, Kreis Mockburg"; in the fields a
   form gives that place; or as a link of a chain of containers), never
