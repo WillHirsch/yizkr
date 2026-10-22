@@ -13,7 +13,11 @@ own, and reads the statement back through the API:
   reference's text in NFC, Wikibase keeps a string value in NFC, and
   keeps a monolingual text as sent;
 * writing the batch again adds nothing, and nor does a later run's batch
-  that finds the same two places: not even that run's block.
+  that finds the same two places: not even that run's block;
+* the site's artifact page and the `artifact-assertions` query show the
+  statement once and each place the source gives it, its page number and
+  excerpt (#351): the site's query gives a row for each block, and the
+  page one row with both places, its count counting the statement once.
 
 The source is registered with a fictional PNG of its own
 (register_fictional), which the claims cite by SHA-1 (#102). Its title and
@@ -26,7 +30,9 @@ by clearing the recorded instance-contents key (docs/AGENT_PROTOCOL.md §5).
 from __future__ import annotations
 
 import hashlib
+import html
 import json
+import re
 import unicodedata
 
 import pytest
@@ -35,8 +41,15 @@ from tests.fixtures.identity import write_mapped
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
+from yizkr.queries.publish import load_templates, render_for_instance
+from yizkr.staticsite import ASSERTIONS_QUERY, SiteBuilder, cell
 
-from .conftest import fixture_mark, register_fictional
+from .conftest import (
+    fixture_mark,
+    register_fictional,
+    run_sparql,
+    wait_for_query_service,
+)
 
 pytestmark = pytest.mark.live
 
@@ -218,3 +231,88 @@ def test_a_rewrite_adds_nothing(client, fixture_graph):
         assert again.created_items["locator-person"] == person
         assert (again.written, again.referenced, again.skipped) == (0, 0, 2)
     assert births(client, person) == before
+
+
+def nfc(text: str) -> str:
+    return unicodedata.normalize("NFC", text)
+
+
+def test_the_site_and_the_query_show_each_place(
+    client, config, fixture_graph, tmp_path
+):
+    registered, written = fixture_graph
+    person = written.created_items["locator-person"]
+    wait_for_query_service(config, client, [person, registered.qid])
+    properties, items = client.vocabulary()
+    entity = f"{config.concept_uri}/entity/"
+    # each page the source gives the birth at, with its excerpt, stored in
+    # NFC
+    places = sorted((nfc(page), nfc(text)) for page, text in EXCERPTS.items())
+
+    def ours(row: dict) -> bool:
+        return cell(row, "artifact") == entity + registered.qid
+
+    # the site's query: a row for each block, of one statement
+    builder = SiteBuilder(config, tmp_path, vocabulary=(properties, items))
+    rows = builder.run(builder._instance_query(ASSERTIONS_QUERY))
+    births = [
+        row
+        for row in rows
+        if ours(row)
+        and cell(row, "subject") == entity + person
+        and cell(row, "propLabel") == "date of birth"
+    ]
+    (statement,) = {cell(row, "st") for row in births}
+    assert statement.startswith(f"{config.concept_uri}/entity/statement/")
+    assert (
+        sorted((cell(row, "page"), cell(row, "excerpt")) for row in births)
+        == places
+    )
+    assert {row["excerpt"].get("xml:lang") for row in births} == {"de"}
+
+    # the page: the statement once, both places in its row
+    page = builder.artifact_page(
+        {"artifact": {"type": "uri", "value": entity + registered.qid}},
+        [row for row in rows if ours(row)],
+    )
+    table = re.findall(r"<tr><td>(.*?)</tr>", page)
+    (count,) = re.findall(r"What this artifact asserts \((\d+)\)", page)
+    assert int(count) == len(table)
+    (row,) = [
+        row
+        for row in table
+        if f'href="../people/{person}.html"' in row
+        and "<td>date of birth</td>" in row
+    ]
+    assert row.endswith(
+        "<td>"
+        + "<br>".join(
+            f'page number: {html.escape(number)}: <q lang="de">'
+            f"{html.escape(text)}</q>"
+            for number, text in places
+        )
+        + "</td>"
+    )
+
+    # the library query: the statement, and a row for each place
+    query = render_for_instance(
+        load_templates()["artifact-assertions"],
+        properties,
+        items,
+        config.concept_uri,
+    )
+    listed = [
+        row
+        for row in run_sparql(config, query)
+        if ours(row)
+        and cell(row, "entity") == entity + person
+        and cell(row, "propertyLabel") == "date of birth"
+    ]
+    # the same statement as the site's query gives
+    assert {cell(row, "statement") for row in listed} == {
+        cell(row, "st") for row in births
+    }
+    assert (
+        sorted((cell(row, "page"), cell(row, "excerpt")) for row in listed)
+        == places
+    )

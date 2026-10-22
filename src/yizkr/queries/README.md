@@ -99,7 +99,15 @@ uv run yizkr publish-queries             # or: make publish-queries
   missing-reference defect
   (ADR-0003 §3). Expected result: empty.
 - **artifact-assertions** — inventory of everything each artifact
-  asserts, for source re-examination.
+  asserts, and where in it, for source re-examination: a row for each
+  statement and reference block that cites the artifact, with the
+  statement (two same-value statements that differ by a qualifier stay
+  two, ADR-0002) and the block's page number, printed page number, image
+  region and transcription excerpt, so a statement citing one artifact in
+  two blocks gives rows that say where. A statement citing a fragment is
+  listed under its whole, the fragment as `?source` and its label as
+  `?sourceLabel`; time values carry
+  their stated precision.
 - **under-witnessed-statements** — the low-scrutiny reappraisal queue
   (ADR-0023): machine-written statements with a single stated-in
   source and no curator statement on the same subject+property, one
