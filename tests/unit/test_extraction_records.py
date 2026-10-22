@@ -365,51 +365,80 @@ class TestTheChunkPrompt:
         )
 
 
-# -- nicknames and relational appellations (ADR-0018) ------------------------
+# -- appellations, nicknames and the record (ADR-0018) -----------------------
 
-# One distinction, in the same words in every prompt that routes a name
-# (#434): an absolute name is a nickname, a relational one `referred_to_as`.
-NICKNAME_RULE = (
-    "A name the source gives as what the person is called, by anyone, is a "
-    'nickname ("Peppi", "Gustl"): an alias, a record nickname, and a '
-    "`nickname` claim only where the source marks the type."
+# One rule, in the same words in every prompt that routes a name (#434,
+# #499): every form a source uses to name or address a person is an
+# alias, and one that is no plain name form is also `referred_to_as`.
+ALIAS_RULE = (
+    "Every form a source uses to name or address a person is an alias, "
+    "with no distinction between them: a name form, a kinship term with a "
+    'name ("Tante Rahel"), a kinship term alone ("Omama"), a pet name '
+    '("Pünktchen", "Bubele") and a courtesy name ("Nana Maisie").'
 )
 APPELLATION_RULE = (
-    "A name the source gives as what one person calls another, with or "
-    "without a stated perspective, or that names the person through a "
-    "relation but is no literal kinship term "
-    '("Bubele", "Nana Maisie", "Рудольфиха"), is `referred_to_as`: '
-    "never an alias and never a record nickname."
+    "A form that is no plain name form (a name, or a spelling, a "
+    'shortening, a diminutive or an initial of one, such as "Gustl" for '
+    "Gustav) is an appellation: it is also one `referred_to_as` claim, the "
+    "form verbatim with its excerpt, with a `perspective` qualifier where "
+    "the source gives the ego as an entity."
 )
-# the chunk prompt goes on "is their name form (label or alias)", which
-# keeps the rule apart from its `name` property (#435)
+DESCRIPTION_RULE = (
+    'A description that is no form of address is never an alias: "the '
+    'deceased", "the informant", a role or form-field label, "my husband", '
+    '"our great grandmother".'
+)
+NICKNAME_RULE = (
+    "A name the source gives as what the person is called, by anyone "
+    '("Peppi", "Gustl", "Pünktchen"), is also a record nickname, and a '
+    "`nickname` claim only where the source marks the type. A form one "
+    "person calls another, or that names the person through a relation "
+    '("Bubele", "Nana Maisie", "Рудольфиха", "Tante Rahel", "Omama"), is '
+    "never a record nickname."
+)
+# "is their name form (label or alias)" keeps the rule apart from the
+# `name` property (#435)
 GREETING_RULE = (
     "A name a writer simply uses for someone, in a greeting "
-    '("Liebes Pünktchen!") or a mention, is their name'
+    '("Liebes Pünktchen!") or a mention, is their name form (label or '
+    "alias), and an appellation too where it is no plain name form."
 )
 _MANIFEST_ALIASES, _RECORD = flat(ENTITY_MANIFEST_PROMPT).split(
     "The mention record (ADR-0035)"
 )
 NAME_ROUTING_SITES = pytest.mark.parametrize(
     "site",
+    [flat(CHUNK_PROMPT), _MANIFEST_ALIASES],
+    ids=["chunk", "manifest-aliases"],
+)
+RECORD_SITES = pytest.mark.parametrize(
+    "site",
     [flat(CHUNK_PROMPT), _MANIFEST_ALIASES, _RECORD],
     ids=["chunk", "manifest-aliases", "record"],
 )
 
 
-class TestNicknamesAndAppellations:
+class TestAppellations:
     @NAME_ROUTING_SITES
-    def test_an_absolute_name_is_a_nickname(self, site):
-        assert NICKNAME_RULE in site
+    def test_every_form_that_names_a_person_is_an_alias(self, site):
+        assert ALIAS_RULE in site
 
     @NAME_ROUTING_SITES
-    def test_a_relational_name_is_referred_to_as(self, site):
+    def test_a_form_no_plain_name_is_also_referred_to_as(self, site):
         assert APPELLATION_RULE in site
 
     @NAME_ROUTING_SITES
-    def test_a_name_a_writer_uses_is_their_name(self, site):
-        """The postcard's "Liebes Pünktchen!" uses Klara's nickname: a
-        greeting is no perspective that makes it relational."""
+    def test_a_description_is_no_alias(self, site):
+        assert DESCRIPTION_RULE in site
+
+    @RECORD_SITES
+    def test_a_nickname_is_a_record_nickname_and_a_relation_is_not(self, site):
+        assert NICKNAME_RULE in site
+
+    @RECORD_SITES
+    def test_a_name_a_writer_uses_is_their_name_form(self, site):
+        """The postcard's "Liebes Pünktchen!" uses Klara's pet name: a
+        name form of hers, and an appellation too."""
         assert GREETING_RULE in site
 
     def test_the_chunk_types_a_nickname_by_what_the_person_is_called(self):
@@ -418,21 +447,77 @@ class TestNicknamesAndAppellations:
             'an "aka")'
         ) in flat(CHUNK_PROMPT)
 
-    def test_the_chunk_routes_a_relational_name_to_referred_to_as(self):
+    def test_the_chunk_gives_one_claim_per_appellation(self):
         assert (
-            '"Aunt Pünktchen", "Mem" is NOT a name and never an alias.'
+            "Give each appellation of the person as ONE `referred_to_as` "
+            "claim (the form verbatim, never cut to its name or its kinship "
+            "word; a form the document repeats is still one claim)"
+        ) in flat(CHUNK_PROMPT)
+
+    def test_a_literal_kinship_term_also_gives_the_kinship(self):
+        assert (
+            "If it holds a LITERAL kinship term, record the kinship too, as "
+            'above: "Tante Rahel", where Rahel is the aunt, also gives '
+            '`relative` + `kinship_type` "Tante" + `kinship_class` '
+            "kin_aunt_or_uncle, with the ego as the object."
         ) in flat(CHUNK_PROMPT)
         assert (
             "If it is NOT a literal relation (a courtesy title such as a "
-            '"Tante" who is no aunt, "Nana Maisie", or a name one person '
-            'calls another, "Bubele"), record it as `referred_to_as`'
+            '"Tante" who is no aunt, "Nana Maisie", a pet name, or a name '
+            'one person calls another, "Bubele"), it gives no kinship: '
+            "`referred_to_as` alone, beside a `nickname` claim where the "
+            "source marks a pet name as what the person is called."
         ) in flat(CHUNK_PROMPT)
 
-    def test_an_alias_is_no_relational_appellation(self):
+    def test_an_unsure_term_is_referred_to_as_alone(self):
         assert (
-            "a literal kinship term becomes `relative` + `kinship_type`; a "
-            "spousal term gives a marriage; any other relational appellation "
-            "becomes `referred_to_as`"
+            "When unsure whether a term is literal kinship, give "
+            "`referred_to_as` alone"
+        ) in flat(CHUNK_PROMPT)
+
+    def test_the_chunk_works_the_example_through(self):
+        """ "Tante Rahel", "Omama" named elsewhere and never named, and a
+        pet name, each with its claims."""
+        chunk = flat(CHUNK_PROMPT)
+        assert (
+            'a letter to Klara that writes "Tante Rahel" and elsewhere '
+            '"Rahel Löbig" gives Rahel the claims `referred_to_as` "Tante '
+            'Rahel", with Klara as its `perspective`, and `relative` to '
+            'Klara with the kinship_type "Tante" and the kinship_class '
+            "kin_aunt_or_uncle."
+        ) in chunk
+        assert (
+            '`relative` to Nicholas with the kinship_type "Omama" and the '
+            "kinship_class kin_grandparent"
+        ) in chunk
+        assert (
+            'whether it names her elsewhere ("Hildegard Löbig", her label) '
+            'or never (when "Omama" is her label).'
+        ) in chunk
+        assert (
+            'The postcard\'s "Liebes Pünktchen!" gives Klara `referred_to_as` '
+            '"Pünktchen", with its writer as its `perspective`: a pet name, '
+            "and no relation."
+        ) in chunk
+
+    def test_the_manifest_works_the_example_through(self):
+        assert (
+            'a letter to Klara that writes "Tante Rahel" and elsewhere '
+            '"Rahel Löbig" gives one entity labelled "Rahel Löbig" with the '
+            'alias "Tante Rahel". A letter of Nicholas\'s that calls his '
+            'grandmother Hildegard "Omama" and names her "Hildegard Löbig" '
+            'gives the label "Hildegard Löbig" and the alias "Omama"; one '
+            'that never names her gives the label "Omama" (status '
+            '`kinship`). The postcard\'s "Liebes Pünktchen!" gives Klara the '
+            'alias "Pünktchen", a pet name. Each of these forms is also a '
+            "`referred_to_as` claim at extraction."
+        ) in _MANIFEST_ALIASES
+
+    def test_a_description_is_captured_as_a_claim(self):
+        assert (
+            "They are captured as claims at extraction (a literal kinship "
+            "term becomes `relative` + `kinship_type`; a spousal term gives a "
+            "marriage). Never record any of these as an alias (ADR-0018);"
         ) in _MANIFEST_ALIASES
 
     def test_a_courtesy_label_is_a_relational_appellation(self):
@@ -449,69 +534,100 @@ class TestNicknamesAndAppellations:
             "standard form."
         ) in _RECORD
 
-    @NAME_ROUTING_SITES
+    def test_a_kinship_word_is_no_record_part_and_no_title(self):
+        """Scratch run 2 set aside two records that filed "Tante" or
+        "Onkel" as a title (#514, superseded by #499): the record
+        prompt says a kinship word is part of the appellation only."""
+        assert (
+            'A kinship or relational word before a name ("Tante", "Onkel", '
+            '"Oma", "Aunt"), literal or a courtesy one, is part of the '
+            "appellation (an alias and a `referred_to_as` claim), never part "
+            "of the record: neither a name part nor a `titles` entry. "
+            '"Tante Rahel" gives the given name Rahel and nothing for '
+            '"Tante".'
+        ) in _RECORD
+        assert (
+            "Titles are honorifics and ranks (Mrs, Dr., Frau, Fräulein, "
+            "Mefrou, Rabbi), never a kinship word"
+        ) in _RECORD
+
+    @RECORD_SITES
     def test_the_size_of_the_calling_group_routes_no_name(self, site):
         """The family's "Gustl at home" is a nickname: what makes a name
         relational is that it names the person through someone, never how
         many call them so."""
         assert "or group" not in site
 
-    def test_an_unsure_term_is_referred_to_as(self):
+    def test_the_single_call_asks_for_referred_to_as(self):
         assert (
-            "When unsure whether a term is literal kinship, prefer "
-            "`referred_to_as`"
-        ) in flat(CHUNK_PROMPT)
+            "Every form the document uses to name or address a person that "
+            "is no plain name form (a name, or a spelling, a shortening, a "
+            "diminutive or an initial of one) is an appellation"
+        ) in flat(EXTRACTION_PROMPT)
+        assert (
+            "Give each as ONE `referred_to_as` claim, the form verbatim, with "
+            "a `perspective` qualifier naming the ego only where the source "
+            "gives it as an entity; a literal kinship term also gives the "
+            "kinship"
+        ) in flat(EXTRACTION_PROMPT)
+        assert (
+            '`relative` with the kinship_type "Tante" and the kinship_class '
+            "kin_aunt_or_uncle)."
+        ) in flat(EXTRACTION_PROMPT)
+        assert (
+            'A description that is no form of address ("the deceased", "my '
+            'husband") gives none.'
+        ) in flat(EXTRACTION_PROMPT)
 
-    def test_no_relational_appellation_is_an_alias(self):
+    def test_the_critic_is_told_an_appellation_is_right(self):
         assert (
-            "Never record any of these as an alias (ADR-0018);"
-            in _MANIFEST_ALIASES
-        )
+            "An appellation (a kinship term, alone or with a name, a pet "
+            "name or a courtesy name) among a person's aliases, or recorded "
+            "as a `referred_to_as` claim, and a kinship term as `relative` + "
+            "`kinship_type`, are right — do not flag them."
+        ) in flat(critique.CRITIQUE_PROMPT)
 
     def test_the_vocabulary_draws_the_same_line(self):
-        """The single-call prompt names the two properties only through the
-        manifest's descriptions, which use the same words."""
+        """The single-call prompt names the two properties through the
+        manifest's descriptions too."""
         assert "{property_keys}" in EXTRACTION_PROMPT
         properties, _items = vocabulary_prompt_lines()
         assert (
-            "nickname: monolingualtext — a name the source gives as what the "
-            "person is called, by anyone"
+            "nickname: monolingualtext — a name the source marks as what the "
+            'person is called, by anyone ("Peppi", "Gustl"); never their '
+            "formal name, and never what one person calls another or a name "
+            "through a relation (`referred_to_as` alone)"
         ) in properties
         assert (
-            'or a writer simply uses for them ("Liebes Pünktchen!"); never '
-            "their formal name, never what one person calls another, and "
-            "never a name through a relation (`referred_to_as`)"
+            "the person or family whose term it is (a grandchild who calls a "
+            'grandmother "Omama"; a child who calls a non-relative "Nana '
+            'Maisie").'
         ) in properties
         assert (
-            "the person or family whose relational term it is (a child who "
-            'calls a non-relative "Nana Maisie"); a family\'s own name for a '
-            "member is a nickname."
-        ) in properties
-        assert (
-            "referred_to_as: monolingualtext — a name the source gives as "
-            "what one person calls another, with or without a stated "
-            "perspective, or that names the person through a relation, no "
-            "literal kinship term; verbatim, qualified with `perspective` "
-            "when the ego is known"
+            "referred_to_as: monolingualtext — a form naming or addressing "
+            "the person that is no plain name form: a kinship term with a "
+            'name ("Tante Rahel") or alone ("Omama"), a pet name, a courtesy '
+            'name ("Nana Maisie"); verbatim, with `perspective` when the ego '
+            "is known"
         ) in properties
 
-    def test_the_critic_routes_any_other_appellation_to_referred_to_as(self):
+    def test_the_critic_spares_an_appellation_among_the_aliases(self):
         category = critique.CATEGORIES["kinship_term_alias"]
         assert category.startswith(
-            "a kinship term or other relational appellation recorded as an "
-            "alias"
+            "a kinship term or other appellation recorded as the label of a "
+            "person the document names"
         )
-        assert '"Nana Maisie", "Bubele"' in category
-        assert "a marriage (a spousal term)" in category
         assert (
-            "`referred_to_as` (any other relational appellation)"
-            in (critique.CATEGORIES["kinship_term_alias"])
-        )
+            "A kinship term, a pet name or a courtesy name among the aliases "
+            '("Tante Rahel", "Omama", "Pünktchen", "Nana Maisie") is right '
+            "and no finding."
+        ) in category
+        assert "a marriage" in category
+        assert "`referred_to_as`" in category
 
     @pytest.mark.parametrize(
         "ambiguous",
         [
-            "pet name",
             "pet appellation",
             "family/pet",
             "courtesy/pet",
@@ -520,7 +636,7 @@ class TestNicknamesAndAppellations:
             "familiar name",
         ],
     )
-    def test_no_prompt_gives_a_pet_name_two_homes(self, ambiguous):
+    def test_no_prompt_gives_a_name_an_ambiguous_kind(self, ambiguous):
         properties, _items = vocabulary_prompt_lines()
         texts = {
             **PROMPTS,
@@ -588,6 +704,182 @@ def extract(tmp_path, *entities: dict):
     return batch, side_output(tmp_path, "coverage.json")
 
 
+def appellation(local_id: str, label: str, text: str, language="de"):
+    value = {
+        "type": "monolingual",
+        "value": {"text": text, "language": language},
+    }
+    return {
+        "subject": {
+            "kind": "local",
+            "local_id": local_id,
+            "label": label,
+            "instance_of": "human",
+        },
+        "property": "referred_to_as",
+        "value": value,
+        "source": {
+            "artifact": DOC_REF.model_dump(),
+            "transcription_excerpt": {"text": text, "language": "de"},
+        },
+    }
+
+
+class TestTheAppellationLabel:
+    """Where the batch is assembled, once the chunks' claims exist: a
+    label that is one of the document's appellations of a person whose
+    `name` record stands becomes the name (ADR-0018 as amended by #499),
+    in the entity and in every local ref, and coverage.json counts it."""
+
+    def extract(self, tmp_path):
+        llm = ScriptedLlm(
+            [
+                manifest(
+                    HILDEGARD
+                    | {
+                        "label": "Omama",
+                        "aliases": ["Hildegard Löbig"],
+                        "structure": name_record("Hildegard", "Löbig"),
+                    },
+                    SEBASTIAN
+                    | {
+                        "label": "Opa",
+                        "aliases": ["Sebastian Löbig"],
+                        "structure": name_record("Sebastian", "Löbig"),
+                    },
+                ),
+                ndjson(
+                    [
+                        claim("e1", "Omama", 1876),
+                        appellation("e1", "Omama", "Omama"),
+                    ]
+                ),
+                # a referred_to_as whose language is no tag is a reject,
+                # and marks nothing
+                ndjson(
+                    [
+                        claim("e2", "Opa", 1862),
+                        appellation("e2", "Opa", "Opa", language="Deutsch"),
+                    ]
+                ),
+            ]
+        )
+        batch = ChunkedClaimExtractor(
+            llm, state_dir=tmp_path / "state", budget=LINE_LENGTH
+        ).extract(transcription(), DOC_REF)
+        return batch, side_output(tmp_path, "coverage.json")
+
+    def test_the_label_becomes_the_name_and_the_form_an_alias(self, tmp_path):
+        batch, _coverage = self.extract(tmp_path)
+        by_id = {e.id: e for e in batch.entities}
+        assert by_id["e1"].label == "Hildegard Löbig"
+        assert by_id["e1"].aliases == ["Omama"]
+        subjects = {
+            c.subject.label for c in batch.claims if c.subject.local_id == "e1"
+        }
+        assert subjects == {"Hildegard Löbig"}
+        (said,) = [c for c in batch.claims if c.property == "referred_to_as"]
+        assert said.value.value.text == "Omama"
+
+    def test_a_rejected_claim_marks_no_appellation(self, tmp_path):
+        batch, coverage = self.extract(tmp_path)
+        by_id = {e.id: e for e in batch.entities}
+        assert by_id["e2"].label == "Opa"
+        assert coverage["rejected_claims"] == 1
+
+    def name_claim(self, local_id, label, text):
+        found = appellation(local_id, label, text)
+        found["property"] = "name"
+        return found
+
+    def extract_names(self, tmp_path):
+        """Hildegard labelled "Omama", her record holding it as a
+        nickname, with three `name` claims: one restating the model's
+        label, one the name her label becomes, and one another form.
+        Sebastian's appellation names an ego outside the manifest."""
+        omama = appellation("e2", "Opa", "Opa")
+        omama["qualifiers"] = [
+            {
+                "property": "perspective",
+                "value": {
+                    "type": "item",
+                    "value": {"kind": "local", "local_id": "e9"},
+                },
+            }
+        ]
+        record = name_record("Hildegard", "Löbig") | {"nicknames": ["Omama"]}
+        llm = ScriptedLlm(
+            [
+                manifest(
+                    HILDEGARD
+                    | {
+                        "label": "Omama",
+                        "aliases": ["Hildegard Löbig"],
+                        "structure": record,
+                    },
+                    SEBASTIAN
+                    | {
+                        "label": "Opa",
+                        "aliases": ["Sebastian Löbig"],
+                        "structure": name_record("Sebastian", "Löbig"),
+                    },
+                ),
+                ndjson(
+                    [
+                        claim("e1", "Omama", 1876),
+                        appellation("e1", "Omama", "Omama"),
+                        self.name_claim("e1", "Omama", "Omama"),
+                        # the new label, cased otherwise
+                        self.name_claim("e1", "Omama", "HILDEGARD Löbig"),
+                        self.name_claim("e1", "Omama", "Hilde"),
+                    ]
+                ),
+                ndjson([claim("e2", "Opa", 1862), omama]),
+            ]
+        )
+        extractor = ChunkedClaimExtractor(
+            llm, state_dir=tmp_path / "state", budget=LINE_LENGTH
+        )
+        batch = extractor.extract(transcription(), DOC_REF)
+        return batch, side_output(tmp_path, "coverage.json"), extractor
+
+    def test_a_name_claim_restating_the_models_label_stays_rejected(
+        self, tmp_path
+    ):
+        batch, coverage, extractor = self.extract_names(tmp_path)
+        names = [
+            c.value.value.text for c in batch.claims if c.property == "name"
+        ]
+        assert names == ["Hilde"]
+        rejected = [r["claim"] for r in extractor._rejects]
+        assert [c["property"] for c in rejected] == ["name", "referred_to_as"]
+        assert rejected[0]["value"]["value"]["text"] == "Omama"
+        assert coverage["rejected_claims"] == 2
+
+    def test_a_name_claim_of_the_new_label_is_dropped_and_counted(
+        self, tmp_path
+    ):
+        batch, coverage, _extractor = self.extract_names(tmp_path)
+        by_id = {e.id: e for e in batch.entities}
+        assert by_id["e1"].label == "Hildegard Löbig"
+        assert coverage["records"]["appellation_label_names"] == 1
+
+    def test_an_appellation_naming_an_ego_outside_the_manifest_marks_nothing(
+        self, tmp_path
+    ):
+        batch, _coverage, _extractor = self.extract_names(tmp_path)
+        assert {e.id: e for e in batch.entities}["e2"].label == "Opa"
+
+    def test_a_record_part_that_is_an_appellation_is_counted(self, tmp_path):
+        _batch, coverage, _extractor = self.extract_names(tmp_path)
+        assert coverage["records"]["appellation_parts"] == 1
+
+    def test_coverage_counts_the_labels_it_replaced(self, tmp_path):
+        _batch, coverage = self.extract(tmp_path)
+        assert coverage["records"]["appellation_labels"] == 1
+        assert "Omama" not in json.dumps(coverage)
+
+
 class TestTheManifestsRecords:
     def test_a_record_that_stands_is_kept_and_counted(self, tmp_path):
         batch, coverage = extract(
@@ -612,6 +904,9 @@ class TestTheManifestsRecords:
             "unsplit_forms": 0,
             "set_aside_records": 0,
             "set_aside": {},
+            "appellation_labels": 0,
+            "appellation_label_names": 0,
+            "appellation_parts": 0,
         }
 
     def test_a_record_that_adds_a_word_is_set_aside_not_the_entity(
@@ -640,6 +935,9 @@ class TestTheManifestsRecords:
             "unsplit_forms": 0,
             "set_aside_records": 3,
             "set_aside": {"addition": 1, "kind": 1, "schema": 1},
+            "appellation_labels": 0,
+            "appellation_label_names": 0,
+            "appellation_parts": 0,
         }
         # the claims are extracted as ever
         assert len(batch.claims) == 2
@@ -716,6 +1014,9 @@ class TestTheManifestsRecords:
             "by_status": {"name": 1},
             "unsplit_forms": 2,
             "set_aside_records": 2,
+            "appellation_labels": 0,
+            "appellation_label_names": 0,
+            "appellation_parts": 0,
             "set_aside": {
                 "addition": 3,
                 "initial": 1,
@@ -772,6 +1073,9 @@ class TestTheManifestsRecords:
             "unsplit_forms": 0,
             "set_aside_records": 1,
             "set_aside": {"dropped": 3, "no toponym": 1},
+            "appellation_labels": 0,
+            "appellation_label_names": 0,
+            "appellation_parts": 0,
         }
 
     def test_a_manifest_with_bad_records_is_never_refused(self):

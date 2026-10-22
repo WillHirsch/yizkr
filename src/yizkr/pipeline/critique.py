@@ -68,16 +68,19 @@ CATEGORIES: dict[str, str] = {
         "MOTHER, FATHER, CHILD, INFORMANT, BRIDE, GROOM, WITNESS"
     ),
     "kinship_term_alias": (
-        "a kinship term or other relational appellation recorded as an "
-        'alias, or as the label of a person the document names ("my '
-        'husband", "our great grandmother", "Oma", "Nana Maisie", '
-        '"Bubele"; "Tante Rahel" as the label of Rahel): it is not a name; '
-        "suggest `relative` + `kinship_type` (a literal kinship term), a "
-        "marriage (a spousal term) or `referred_to_as` (any other relational "
-        "appellation), NOT an alias (ADR-0018). A person the document never "
-        "names is rightly labelled with the document's own words for them "
-        '(the postcard\'s writer, who signs only "Dein Vater"; a status '
-        "other than `name`): that label is no finding"
+        "a kinship term or other appellation recorded as the label of a "
+        'person the document names ("Tante Rahel" as the label of Rahel; '
+        '"Omama" as the label of a grandmother the document names), or a '
+        'description recorded as an alias ("my husband", "our great '
+        'grandmother"): the label takes the name, and an appellation is an '
+        "alias and a `referred_to_as` claim (a literal kinship term also "
+        "`relative` + `kinship_type`; a spousal term gives a marriage) "
+        "(ADR-0018). A kinship term, a pet name or a courtesy name among "
+        'the aliases ("Tante Rahel", "Omama", "Pünktchen", "Nana Maisie") '
+        "is right and no finding. A person the document never names is "
+        "rightly labelled with the document's own words for them (the "
+        'postcard\'s writer, who signs only "Dein Vater"; a status other '
+        "than `name`): that label is no finding"
     ),
     "deictic_alias": (
         'a deictic or generic reference recorded as an alias ("the '
@@ -192,9 +195,10 @@ curator sees it. You FLAG concerns only; you never rewrite.
 Flag a genuine concern only, of one of these categories:
 {categories_block}
 
-A relational appellation CORRECTLY recorded as a `referred_to_as` claim,
-or a kinship term as `relative` + `kinship_type`, is right — do not flag
-it.
+An appellation (a kinship term, alone or with a name, a pet name or a
+courtesy name) among a person's aliases, or recorded as a
+`referred_to_as` claim, and a kinship term as `relative` +
+`kinship_type`, are right — do not flag them.
 
 Each finding doubts one part of a statement (its axis):
 - subject: which entity it is, or its kind;

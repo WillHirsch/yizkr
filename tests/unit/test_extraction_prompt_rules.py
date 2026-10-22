@@ -47,34 +47,36 @@ SINGLE = flat(EXTRACTION_PROMPT)
 ESCAPE_HATCH = flat(critique.CATEGORIES["escape_hatch_misused"])
 CONTAINMENT_CATEGORY = critique.CATEGORIES.get("unsupported_containment", "")
 
-# -- kinship words are never labels or aliases (#459, ADR-0018) ---------------
+# -- kinship words are never labels of the named (#459, #499, ADR-0018) -----
 
 
 class TestKinshipWordsAreNoNames:
     def test_the_manifest_takes_the_name_never_the_kinship_word(self):
         assert (
-            "A kinship word is never a label or an alias of a person the "
-            "document names: the label and aliases take the name, never the "
-            "kinship word (ADR-0018)."
+            "A kinship word is never the label of a person the document "
+            "names: the label takes the name, never the kinship word, and "
+            "the form stays an alias (ADR-0018)."
         ) in MANIFEST
 
     def test_the_manifest_gives_a_kinship_term_alone(self):
         assert (
-            'a kinship term alone ("Oma", "Mum", "Grandma", "Mem", "дядя"): '
-            "never an alias; it is a label only for a person the document "
+            'a kinship term alone ("Oma", "Omama", "Mum", "Grandma", "Mem", '
+            '"дядя"): an alias, and the label only of a person the document '
             "never names"
         ) in MANIFEST
 
     def test_the_manifest_gives_a_kinship_term_with_a_name(self):
-        """The name beside the kinship word follows the label and alias
-        rules: "Aunt Pünktchen" gives Klara's nickname as an alias, and the
-        1958 letter's "дядя Себастьян", his only name there, his label."""
+        """The whole phrase is an alias, and the name beside the kinship
+        word follows the label and alias rules: "Aunt Pünktchen" gives
+        Klara's nickname as an alias too, and the 1958 letter's "дядя
+        Себастьян", his only name there, his label."""
         assert (
             'a kinship term with a name ("Aunt Pünktchen", "Tante Rahel", '
-            '"дядя Себастьян"): never the whole phrase and never the kinship '
-            "word; the name follows the label and alias rules below: a "
-            'nickname is an alias ("Pünktchen"), and a given name that is the '
-            'person\'s only name in the document is the label ("Себастьян");'
+            '"дядя Себастьян"): the whole phrase is an alias, never the '
+            "label, and the name follows the label and alias rules below: a "
+            'nickname is an alias too ("Pünktchen"), and a given name that is '
+            "the person's only name in the document is the label "
+            '("Себастьян");'
         ) in MANIFEST
 
     def test_the_manifest_lists_no_sole_given_name_as_an_alias(self):
@@ -89,7 +91,8 @@ class TestKinshipWordsAreNoNames:
         assert (
             'a writer\'s "your father" ("Dein Vater", "Ваш отец", "your '
             'aunt") for a person the document names elsewhere: the label is '
-            "that name, and the phrase is neither label nor alias."
+            "that name, and the phrase, a description, is neither label nor "
+            "alias."
         ) in MANIFEST
 
     def test_the_manifest_still_labels_an_unnamed_writer_by_his_words(self):
@@ -101,18 +104,18 @@ class TestKinshipWordsAreNoNames:
 
     def test_the_chunk_takes_the_name_never_the_kinship_word(self):
         assert (
-            "A kinship word is never the label or an alias of a person the "
-            "document names: take the name, never the kinship word."
+            "A kinship word is never the label of a person the document "
+            "names: take the name, never the kinship word."
         ) in CHUNK
 
     def test_the_chunk_gives_a_kinship_term_alone_and_with_a_name(self):
         assert (
-            'A kinship term alone ("Oma", "Mum", "Grandma", "Mem") is no '
-            'alias; with a name ("Aunt Pünktchen", "Tante Rahel", "дядя '
-            'Себастьян") only the name counts, by the label and alias rules: '
-            'a nickname is an alias ("Pünktchen"), and a given name that is '
-            "the person's only name in the document is the label "
-            '("Себастьян");'
+            'A kinship term alone ("Oma", "Omama", "Mum", "Grandma", "Mem") '
+            'or with a name ("Aunt Pünktchen", "Tante Rahel", "дядя '
+            'Себастьян") is an alias and an appellation, and the name beside '
+            "it follows the label and alias rules: a nickname is an alias too "
+            '("Pünktchen"), and a given name that is the person\'s only name '
+            'in the document is the label ("Себастьян");'
         ) in CHUNK
 
     def test_the_chunk_gives_a_writers_your_father(self):
@@ -151,10 +154,10 @@ class TestKinshipWordsAreNoNames:
             'kinship words ("Mem").'
         ) in SINGLE
 
-    def test_the_critic_flags_a_kinship_label_too(self):
+    def test_the_critic_flags_a_kinship_label_only(self):
         assert flat(critique.CATEGORIES["kinship_term_alias"]).startswith(
-            "a kinship term or other relational appellation recorded as an "
-            "alias, or as the label of a person the document names"
+            "a kinship term or other appellation recorded as the label of a "
+            "person the document names"
         )
 
 

@@ -1758,6 +1758,126 @@ class TestKeys:
 
 
 class TestRecordless:
+    @pytest.mark.parametrize("as_label", [False, True], ids=["alias", "label"])
+    def test_an_appellation_is_never_an_identity_key(self, as_label):
+        """Two people a document each calls "Oma", neither with a record:
+        each keys on its exact names, but never on a form its document
+        gives as an appellation (a `referred_to_as` claim, ADR-0018 as
+        amended by #499), as alias or as label, so they never meet. The
+        same form unmarked still keys, as any recordless name does."""
+
+        def grandmother(name: str, label: str, marked: bool) -> Doc:
+            claims = [("e1", "date_of_birth", day(1876))]
+            if marked:
+                said = {"text": "Oma", "language": "de"}
+                claims.append(
+                    (
+                        "e1",
+                        "referred_to_as",
+                        {"type": "monolingual", "value": said},
+                    )
+                )
+            labelled = "Oma" if as_label else label
+            aliases = () if as_label else ("Oma",)
+            return register(
+                name,
+                [entity("e1", labelled, aliases=aliases)],
+                claims,
+                {"e1": name},
+            )
+
+        marked = [
+            grandmother("hildegard", "Hildegard Löbig", True),
+            grandmother("sipkje", "Sipkje Faxridge", True),
+        ]
+        assert blocked_pairs([doc.manifest for doc in marked]) == set()
+        identity = identity_of(*marked)
+        assert merged(marked, identity) == []
+        unmarked = [
+            grandmother("hildegard", "Hildegard Löbig", False),
+            grandmother("sipkje", "Sipkje Faxridge", False),
+        ]
+        assert blocked_pairs([doc.manifest for doc in unmarked]) == {
+            pair(unmarked[0], "e1", unmarked[1], "e1")
+        }
+
+    def test_a_kindless_or_unclassified_appellation_keys_nothing(self):
+        """A ref with no kind (a line-range batch without `instance_of`)
+        and an unclassified entity may each be a person: neither keys on
+        a form its document gives as an appellation."""
+        said = {
+            "type": "monolingual",
+            "value": {"text": "Oma", "language": "de"},
+        }
+
+        def kindless(name: str) -> Doc:
+            sha1 = hashlib.sha1(name.encode()).hexdigest()
+            ref = {"kind": "local", "local_id": "p1", "label": "Oma"}
+            batch = ClaimBatch.model_validate(
+                {
+                    "extraction_run": RUN,
+                    "claims": [
+                        {
+                            "subject": ref,
+                            "property": "referred_to_as",
+                            "value": said,
+                            "source": {
+                                "artifact": {"kind": "artifact", "sha1": sha1}
+                            },
+                        }
+                    ],
+                }
+            )
+            return Doc("a register", Manifest(sha1, batch), {"p1": name})
+
+        bare = [kindless("first"), kindless("second")]
+        assert blocked_pairs([doc.manifest for doc in bare]) == set()
+
+        def unclassified(name: str) -> Doc:
+            return register(
+                name,
+                [
+                    entity(
+                        "e1",
+                        "Oma",
+                        "unclassified_entity",
+                        type_hint="grandmother",
+                    )
+                ],
+                [("e1", "referred_to_as", said)],
+                {"e1": name},
+            )
+
+        loose = [unclassified("first"), unclassified("second")]
+        assert blocked_pairs([doc.manifest for doc in loose]) == set()
+
+    def test_marks_on_an_organisation_change_nothing(self):
+        """Appellations are a person's: a recordless organisation keys on
+        an alias its document marks as it does on any other."""
+
+        def firm(name: str, label: str) -> Doc:
+            said = {"text": "die Firma", "language": "de"}
+            return register(
+                name,
+                [entity("e1", label, "organization", aliases=("die Firma",))],
+                [
+                    (
+                        "e1",
+                        "referred_to_as",
+                        {"type": "monolingual", "value": said},
+                    )
+                ],
+                {"e1": name},
+            )
+
+        firms = [
+            firm("hatters", "Hutmacherei zum Blauen Hut"),
+            firm("brickworks", "it tichelwurk fan Snylsjum"),
+        ]
+        assert blocked_pairs([doc.manifest for doc in firms]) == {
+            pair(firms[0], "e1", firms[1], "e1")
+        }
+
     def test_a_recordless_mention_keys_on_its_exact_name_alone(self):
         """Two line-range batches that each name 'Hildegard Löbig' pair,
         but never merge, even on a date that agrees; a 'Hilde Löbig'
@@ -5902,13 +6022,14 @@ class TestTheStage:
         self, tmp_path, monkeypatch
     ):
         """The digest is of the bytes of clustering.py, fingerprints.py,
-        reconcile.py and writer.py: a byte changed in any of them changes
-        it."""
+        reconcile.py, writer.py and names.py: a byte changed in any of
+        them changes it."""
         assert clustering.CODE == (
             "clustering.py",
             "fingerprints.py",
             "reconcile.py",
             "writer.py",
+            "names.py",
         )
         before = code_digest()
         for name in clustering.CODE:

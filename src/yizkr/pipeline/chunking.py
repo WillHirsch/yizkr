@@ -240,7 +240,7 @@ Rules — these mirror the archive's non-negotiable conventions:
   is an alias too. A form the source sets apart without saying its
   kind is `name` even where it reads like a nickname; a nickname with
   no `name` is one used in running text or a greeting, and follows the
-  nickname and referred_to_as rules below. A shortening, an initial, a
+  nickname and appellation rules below. A shortening, an initial, a
   spelling variant or a part of the label is an alias alone, never
   `name`, and so is a stand-in for an unknown name ("N.N."). Never
   give the label's own form as `name`, and never a form you type.
@@ -286,38 +286,71 @@ Rules — these mirror the archive's non-negotiable conventions:
   kin_grandparent of degree 1; a bare "cousin" states no degree. A
   spousal term ("my husband") gives a marriage (below), never a kinship
   class.
-- Nicknames and relational appellations (ADR-0018). A name the source
-  gives as what the person is called, by anyone, is a nickname ("Peppi",
-  "Gustl"): an alias, a record nickname, and a `nickname` claim only where
-  the source marks the type. A name the source gives as what one person
-  calls another, with or without a stated perspective, or that names the
-  person through a relation but is no literal kinship term ("Bubele",
-  "Nana Maisie", "Рудольфиха"), is `referred_to_as`: never an alias and
-  never a record nickname. A name a writer simply uses for someone, in a
-  greeting ("Liebes Pünktchen!") or a mention, is their name form (label
-  or alias).
-- Relational / perspectival appellations (ADR-0018): a reference like
-  "our great grandmother", "meine Oma", "Aunt Pünktchen", "Mem" is NOT a
-  name and never an alias. Two cases:
-  * If it is a LITERAL kinship term, record the kinship, as above.
+- Appellations (ADR-0018). Every form a source uses to name or address
+  a person is an alias, with no distinction between them: a name form,
+  a kinship term with a name ("Tante Rahel"), a kinship term alone
+  ("Omama"), a pet name ("Pünktchen", "Bubele") and a courtesy name
+  ("Nana Maisie"). A form that is no plain name form (a name, or a
+  spelling, a shortening, a diminutive or an initial of one, such as
+  "Gustl" for Gustav) is an appellation: it is also one `referred_to_as`
+  claim, the form verbatim with its excerpt, with a `perspective`
+  qualifier where the source gives the ego as an entity. A description
+  that is no form of address is never an alias: "the deceased", "the
+  informant", a role or form-field label, "my husband", "our great
+  grandmother".
+  A name the source gives as what the person is called, by anyone
+  ("Peppi", "Gustl", "Pünktchen"), is also a record nickname, and a
+  `nickname` claim only where the source marks the type. A form one
+  person calls another, or that names the person through a relation
+  ("Bubele", "Nana Maisie", "Рудольфиха", "Tante Rahel", "Omama"), is
+  never a record nickname. A name a writer simply uses for someone, in
+  a greeting ("Liebes Pünktchen!") or a mention, is their name form
+  (label or alias), and an appellation too where it is no plain name
+  form.
+  Give each appellation of the person as ONE `referred_to_as` claim
+  (the form verbatim, never cut to its name or its kinship word; a form
+  the document repeats is still one claim), and add a `perspective`
+  qualifier naming the ego (the person or family whose viewpoint it is)
+  ONLY when that ego is an entity you can point to. Omit `perspective`
+  when the ego is a bare "our"/"we" with no named person or family —
+  never invent an entity to fill it. Then:
+  * If it holds a LITERAL kinship term, record the kinship too, as
+    above: "Tante Rahel", where Rahel is the aunt, also gives `relative`
+    + `kinship_type` "Tante" + `kinship_class` kin_aunt_or_uncle, with
+    the ego as the object.
   * If it is NOT a literal relation (a courtesy title such as a "Tante"
-    who is no aunt, "Nana Maisie", or a name one person calls another,
-    "Bubele"), record it as `referred_to_as` (the term verbatim), and
-    add a `perspective` qualifier naming the ego (the person or family
-    whose viewpoint it is) ONLY when that ego is an entity you can point
-    to. Omit `perspective` when the ego is a bare "our"/"we" with no
-    named person or family — never invent an entity to fill it.
-  When unsure whether a term is literal kinship, prefer `referred_to_as`
-  (it asserts only that the term was used, never a relation).
-  A kinship word is never the label or an alias of a person the document
-  names: take the name, never the kinship word. A kinship term alone
-  ("Oma", "Mum", "Grandma", "Mem") is no alias; with a name ("Aunt
-  Pünktchen", "Tante Rahel", "дядя Себастьян") only the name counts, by
-  the label and alias rules: a nickname is an alias ("Pünktchen"), and a
-  given name that is the person's only name in the document is the label
-  ("Себастьян"); a writer's "your father" ("Dein Vater", "Ваш отец") for
-  a person named elsewhere leaves that name the label. Only a person the
-  document never names is labelled with its kinship words.
+    who is no aunt, "Nana Maisie", a pet name, or a name one person
+    calls another, "Bubele"), it gives no kinship: `referred_to_as`
+    alone, beside a `nickname` claim where the source marks a pet name
+    as what the person is called.
+  When unsure whether a term is literal kinship, give `referred_to_as`
+  alone (it asserts only that the term was used, never a relation). A
+  description ("meine Oma", "our great grandmother") gives no
+  `referred_to_as`: a literal kinship term in it gives the kinship, a
+  spousal term a marriage.
+  A kinship word is never the label of a person the document names:
+  take the name, never the kinship word. A kinship term alone ("Oma",
+  "Omama", "Mum", "Grandma", "Mem") or with a name ("Aunt Pünktchen",
+  "Tante Rahel", "дядя Себастьян") is an alias and an appellation, and
+  the name beside it follows the label and alias rules: a nickname is an
+  alias too ("Pünktchen"), and a given name that is the person's only
+  name in the document is the label ("Себастьян"); a writer's "your
+  father" ("Dein Vater", "Ваш отец") for a person named elsewhere leaves
+  that name the label. Only a person the document never names is
+  labelled with its kinship words.
+  For example: a letter to Klara that writes "Tante Rahel" and
+  elsewhere "Rahel Löbig" gives Rahel the claims `referred_to_as` "Tante
+  Rahel", with Klara as its `perspective`, and `relative` to Klara with
+  the kinship_type "Tante" and the kinship_class kin_aunt_or_uncle. A
+  letter of Nicholas's that calls his grandmother Hildegard "Omama"
+  gives her `referred_to_as` "Omama", with Nicholas as its
+  `perspective`, and `relative` to Nicholas with the kinship_type
+  "Omama" and the kinship_class kin_grandparent, whether it names her
+  elsewhere ("Hildegard Löbig", her label) or never (when "Omama" is her
+  label). The
+  postcard's "Liebes Pünktchen!" gives Klara `referred_to_as`
+  "Pünktchen", with its writer as its `perspective`: a pet name, and no
+  relation.
 - A count of children the source states is the parent's
   `number_of_children`, whether or not it names them.
 - Events and their participants (ADR-0035 §3.2): a `participant` claim
@@ -553,49 +586,66 @@ Also:
   ("Löbig, Ursula, Wwe.") gives neither.
 
 Unify aliases: one entity that appears as "Cäcilie Löbig", "Cäcilie", and
-"C. Löbig" is ONE manifest entry whose label is the fullest form the
-document gives and whose aliases list every other NAME form, verbatim.
-Aliases are actual NAMES the document uses for the entity. They are NOT:
+"C. Löbig" is ONE manifest entry whose label is the fullest name the
+document gives and whose aliases list every other form, verbatim.
+Every form a source uses to name or address a person is an alias, with
+no distinction between them: a name form, a kinship term with a name
+("Tante Rahel"), a kinship term alone ("Omama"), a pet name
+("Pünktchen", "Bubele") and a courtesy name ("Nana Maisie"). A form that
+is no plain name form (a name, or a spelling, a shortening, a diminutive
+or an initial of one, such as "Gustl" for Gustav) is an appellation: it
+is also one `referred_to_as` claim, the form verbatim with its excerpt,
+with a `perspective` qualifier where the source gives the ego as an
+entity. A description that is no form of address is never an alias:
+"the deceased", "the informant", a role or form-field label, "my
+husband", "our great grandmother". So aliases are NOT:
 - role or form-field labels — MOTHER, FATHER, CHILD, INFORMANT, BRIDE,
   WITNESS name a ROLE, not the person;
-- relational or perspectival references — "our great grandmother", "my
-  husband", "Aunt Pünktchen", "Oma", "Mem", "the deceased". These
-  describe a relationship or viewpoint, not a name; they are captured as
-  claims at extraction, not as aliases (a literal kinship term becomes
-  `relative` + `kinship_type`; a spousal term gives a marriage; any other
-  relational appellation becomes `referred_to_as`). Never record any of
+- descriptions of a relationship or viewpoint — "my husband", "our
+  great grandmother", "meine Oma", "the deceased", a writer's "your
+  father" for a person the document names. They are captured as claims
+  at extraction (a literal kinship term becomes `relative` +
+  `kinship_type`; a spousal term gives a marriage). Never record any of
   these as an alias (ADR-0018);
 - for a place, a deictic or locative reference back to it ("dort",
   "hier", "daselbst", "ebenda", "there") or a generic one ("the
   village"): a place's alias is a toponym;
 - for an organization, a generic phrase that names no one ("die Firma",
   "the company", "the bank"): an organization's alias is a name.
-A name the source gives as what the person is called, by anyone, is a
-nickname ("Peppi", "Gustl"): an alias, a record nickname, and a `nickname`
-claim only where the source marks the type. A name the source gives as what
-one person calls another, with or without a stated perspective, or that
-names the person through a relation but is no literal kinship term
-("Bubele", "Nana Maisie", "Рудольфиха"), is `referred_to_as`: never an
-alias and never a record nickname. A name a writer simply uses for someone,
-in a greeting ("Liebes Pünktchen!") or a mention, is their name.
-A kinship word is never a label or an alias of a person the document
-names: the label and aliases take the name, never the kinship word
-(ADR-0018). Three cases:
-- a kinship term alone ("Oma", "Mum", "Grandma", "Mem", "дядя"): never
-  an alias; it is a label only for a person the document never names
-  (below);
+A name the source gives as what the person is called, by anyone
+("Peppi", "Gustl", "Pünktchen"), is also a record nickname, and a
+`nickname` claim only where the source marks the type. A form one
+person calls another, or that names the person through a relation
+("Bubele", "Nana Maisie", "Рудольфиха", "Tante Rahel", "Omama"), is
+never a record nickname. A name a writer simply uses for someone, in a
+greeting ("Liebes Pünktchen!") or a mention, is their name form (label
+or alias), and an appellation too where it is no plain name form.
+A kinship word is never the label of a person the document names: the
+label takes the name, never the kinship word, and the form stays an
+alias (ADR-0018). Three cases:
+- a kinship term alone ("Oma", "Omama", "Mum", "Grandma", "Mem",
+  "дядя"): an alias, and the label only of a person the document never
+  names (below);
 - a kinship term with a name ("Aunt Pünktchen", "Tante Rahel", "дядя
-  Себастьян"): never the whole phrase and never the kinship word; the
+  Себастьян"): the whole phrase is an alias, never the label, and the
   name follows the label and alias rules below: a nickname is an alias
-  ("Pünktchen"), and a given name that is the person's only name in the
-  document is the label ("Себастьян");
+  too ("Pünktchen"), and a given name that is the person's only name in
+  the document is the label ("Себастьян");
 - a writer's "your father" ("Dein Vater", "Ваш отец", "your aunt") for a
   person the document names elsewhere: the label is that name, and the
-  phrase is neither label nor alias.
+  phrase, a description, is neither label nor alias.
 A person the document does not name is labelled with the document's own
 words for them: the postcard's writer signs "Dein Vater", so that is his
 label. Only where the document has no words for a person at all do you
 compose a label, such as "Klara's father".
+For example: a letter to Klara that writes "Tante Rahel" and elsewhere
+"Rahel Löbig" gives one entity labelled "Rahel Löbig" with the alias
+"Tante Rahel". A letter of Nicholas's that calls his grandmother
+Hildegard "Omama" and names her "Hildegard Löbig" gives the label
+"Hildegard Löbig" and the alias "Omama"; one that never names her gives
+the label "Omama" (status `kinship`). The postcard's "Liebes Pünktchen!"
+gives Klara the alias "Pünktchen", a pet name. Each of these forms is
+also a `referred_to_as` claim at extraction.
 
 Name composition and the canonical label (ADR-0022):
 - Do NOT enumerate full-name PERMUTATIONS as aliases. A "/" between family
@@ -628,8 +678,9 @@ as an empty string ("").
   * status says what the label is: `name` where it names the person;
     `role`, a role or form-field label (INFORMANT) or an office the
     source names alone ("the consul"); `kinship`, a literal kinship term
-    ("Dein Vater", "Mem"); `courtesy`, a courtesy title or other
-    relational appellation that is no literal relation ("Nana Maisie");
+    ("Dein Vater", "Mem", "Omama" for a person the document never
+    names); `courtesy`, a courtesy title or other relational
+    appellation that is no literal relation ("Nana Maisie");
     `placeholder`, the source's stand-in for a name it does not know
     ("N.N. Löbig"); `description`, a label you composed.
   * The document's conventions decide which part is which. A register,
@@ -650,20 +701,26 @@ as an empty string ("").
     Gustave Lobig here, Gus to everyone" makes its Gus Gustave. A full
     name is its own standard form; a standard form is never a
     translation; an initial has none.
-  * A name the source gives as what the person is called, by anyone, is a
-    nickname ("Peppi", "Gustl"): an alias, a record nickname, and a
-    `nickname` claim only where the source marks the type. A name the
-    source gives as what one person calls another, with or without a
-    stated perspective, or that names the person through a relation but
-    is no literal kinship term ("Bubele", "Nana Maisie", "Рудольфиха"),
-    is `referred_to_as`: never an alias and never a record nickname. A
-    name a writer simply uses for someone, in a greeting ("Liebes
-    Pünktchen!") or a mention, is their name. A nickname that is a form
-    of a given name ("Gustl", "Gus") is also that given name, with its
-    standard form where the document supports it; one that stands for no
-    given name ("Peppi") has no standard form.
+  * A name the source gives as what the person is called, by anyone
+    ("Peppi", "Gustl", "Pünktchen"), is also a record nickname, and a
+    `nickname` claim only where the source marks the type. A form one
+    person calls another, or that names the person through a relation
+    ("Bubele", "Nana Maisie", "Рудольфиха", "Tante Rahel", "Omama"), is
+    never a record nickname. A name a writer simply uses for someone, in
+    a greeting ("Liebes Pünktchen!") or a mention, is their name form
+    (label or alias), and an appellation too where it is no plain name
+    form. A nickname that is a form of a given name ("Gustl", "Gus") is
+    also that given name, with its standard form where the document
+    supports it; one that stands for no given name ("Peppi") has no
+    standard form.
+  * A kinship or relational word before a name ("Tante", "Onkel", "Oma",
+    "Aunt"), literal or a courtesy one, is part of the appellation (an
+    alias and a `referred_to_as` claim), never part of the record:
+    neither a name part nor a `titles` entry. "Tante Rahel" gives the
+    given name Rahel and nothing for "Tante".
   * A patronymic, a name formed from the father's given name, is a part
-    of its own, never a surname. Titles (Mrs, Dr., Fräulein, Mefrou) and
+    of its own, never a surname. Titles are honorifics and ranks (Mrs,
+    Dr., Frau, Fräulein, Mefrou, Rabbi), never a kinship word; titles and
     suffixes (generational and status words, such as "Wwe.") never name
     anyone. A word that states a fact (an occupation beside a name, a
     widow's marker, "the late") is no name part: it becomes a claim at
@@ -1138,6 +1195,8 @@ class ChunkedClaimExtractor:
         # entities whose mention record was set aside
         self._set_aside: dict[str, int] = {}
         self._set_aside_records = 0
+        # what settling the manifest's names counted (_settle_names)
+        self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
         # how chunk calls saw the document: fork, inline or compressed
         self.context_mode: str | None = None
         self.attention: list[str] = []
@@ -1583,6 +1642,7 @@ class ChunkedClaimExtractor:
         self._unread = {}
         self._set_aside = {}
         self._set_aside_records = 0
+        self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
 
         entities, segmentation, handle = self._phase_one(
             transcription, artifact
@@ -1865,26 +1925,27 @@ class ChunkedClaimExtractor:
         self._unread = unread
 
         deduped = cite_artifact(raw_claims, artifact, printed_pages)
+        run = run_metadata(self.client.model_identifier).model_dump(
+            mode="json"
+        )
 
+        settled_rejects: list[dict] = []
+        self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
         if entities is not None:
-            # ADR-0022 §4: hygiene the alias bag (drop derivable
-            # short-forms, keep compounds whole) — the deterministic safety
-            # net over the LLM manifest; typing/composition stay the LLM's
-            # job.
-            from yizkr.pipeline.names import normalize_entity_dict
-
-            entities_payload = [
-                normalize_entity_dict(record.model_dump())
-                for record in entities
-            ]
+            settled = _settle_names(deduped, entities, run)
+            deduped, entities_payload = settled.claims, settled.entities
+            settled_rejects = settled.rejects
+            self._appellations = {
+                "labels": settled.labels,
+                "label_names": settled.label_names,
+                "parts": settled.parts,
+            }
         else:
             entities_payload = []
         batch, rejects = salvage_valid_claims(
-            deduped,
-            run_metadata(self.client.model_identifier).model_dump(mode="json"),
-            entities=entities_payload,
+            deduped, run, entities=entities_payload
         )
-        rejects = transform_rejects + rejects
+        rejects = transform_rejects + settled_rejects + rejects
         self._rejects = rejects
         extras: dict[str, str] = {}
         if rejects:
@@ -1917,10 +1978,13 @@ class ChunkedClaimExtractor:
         records and judgement notes the extraction gave (ADR-0035 §5):
         the records given, by status, and the unsplit name forms they
         hold; the mentions recordless; the records set aside, and the
-        reasons they and the notes were set aside by, by category; and
-        the notes by category. A mention of a kind that takes a record
-        but has none is recordless: its record was set aside, or never
-        given. Nothing in it quotes a label."""
+        reasons they and the notes were set aside by, by category; the
+        labels the appellation label rule replaced with a name
+        (names.appellation_label), the `name` claims dropped for
+        restating one, and the record name parts that are an
+        appellation; and the notes by category. A mention
+        of a kind that takes a record but has none is recordless: its
+        record was set aside, or never given. Nothing in it quotes a label."""
         subject_ids = {
             claim.subject.local_id
             for claim in batch.claims
@@ -1961,6 +2025,9 @@ class ChunkedClaimExtractor:
                 ),
                 "set_aside_records": self._set_aside_records,
                 "set_aside": dict(sorted(self._set_aside.items())),
+                "appellation_labels": self._appellations["labels"],
+                "appellation_label_names": self._appellations["label_names"],
+                "appellation_parts": self._appellations["parts"],
             },
             "notes": dict(sorted(notes.items())),
         }
@@ -1997,6 +2064,112 @@ class ChunkedClaimExtractor:
             "distinct_subject_labels": sorted(subject_labels),
             "failed_chunks": self.failed_chunks,
         }
+
+
+class _Settled(NamedTuple):
+    """What settling a manifest's names gives (_settle_names): the claims
+    to validate, the entities as the batch carries them, the claims
+    rejected already, and the counts coverage.json gives: the labels that
+    became a name, the `name` claims dropped for restating one, and the
+    record name parts that are an appellation."""
+
+    claims: list[dict]
+    entities: list[dict]
+    rejects: list[dict]
+    labels: int
+    label_names: int
+    parts: int
+
+
+def _name_text(claim: dict) -> str | None:
+    """The text a `name` or `referred_to_as` claim dict gives, if any."""
+    value = claim.get("value")
+    inner = value.get("value") if isinstance(value, dict) else None
+    text = inner.get("text") if isinstance(inner, dict) else None
+    return text if isinstance(text, str) else None
+
+
+def _subject_id(claim: dict) -> str | None:
+    subject = claim.get("subject")
+    if isinstance(subject, dict) and subject.get("kind") == "local":
+        local_id = subject.get("local_id")
+        return local_id if isinstance(local_id, str) else None
+    return None
+
+
+def _settle_names(
+    claims: list[dict], entities: list[EntityRecord], run: dict
+) -> _Settled:
+    """Each entity's label set and its alias bag cleaned (ADR-0022 §4,
+    ADR-0035 §8; names.normalize_entity_dict), once the chunks' claims
+    exist: the deterministic safety net over the model's manifest, by
+    the forms the document gives as its appellations (ADR-0018). Those
+    are the values of the `referred_to_as` claims about it that validate
+    against the manifest as the model gave it (names.appellations_of);
+    only those claims and the `name` claims are checked here, each on its
+    own. A label that changes changes in every local ref to the entity
+    too. A `name` claim on such a person that the first check rejected
+    (one restating the model's own label) keeps that reject, and one that
+    restates the new label is dropped and counted, never a reject of the
+    model's."""
+    from yizkr.claims import name_form_key
+    from yizkr.pipeline.names import (
+        appellation_parts,
+        appellations_of,
+        normalize_entity_dict,
+    )
+
+    given = [record.model_dump() for record in entities]
+    valid: list[dict] = []
+    first_rejects: dict[int, dict] = {}
+    for index, claim in enumerate(claims):
+        if claim.get("property") not in ("referred_to_as", "name"):
+            continue
+        checked, rejected = salvage_valid_claims([claim], run, entities=given)
+        if checked.claims:
+            valid.append(claim)
+        else:
+            first_rejects[index] = rejected[0]
+    forms = appellations_of(
+        claim for claim in valid if claim["property"] == "referred_to_as"
+    )
+    settled = [
+        normalize_entity_dict(entity, forms.get(entity["id"], ()))
+        for entity in given
+    ]
+    parts = sum(
+        appellation_parts(entity, forms.get(entity["id"], ()))
+        for entity in given
+    )
+    labels = {
+        entity["id"]: entity["label"]
+        for entity, before in zip(settled, given, strict=True)
+        if entity["label"] != before["label"]
+    }
+    kept: list[dict] = []
+    rejects: list[dict] = []
+    label_names = 0
+    for index, claim in enumerate(claims):
+        subject = _subject_id(claim)
+        if claim.get("property") == "name" and subject in labels:
+            if index in first_rejects:
+                rejects.append(first_rejects[index])
+                continue
+            text = _name_text(claim)
+            if text is not None and name_form_key(text) == name_form_key(
+                labels[subject]
+            ):
+                label_names += 1
+                continue
+        kept.append(claim)
+    if labels:
+
+        def fix(ref: dict) -> None:
+            if ref["local_id"] in labels:
+                ref["label"] = labels[ref["local_id"]]
+
+        kept = [_rewrite_local_refs(claim, fix) for claim in kept]
+    return _Settled(kept, settled, rejects, len(labels), label_names, parts)
 
 
 class _Manifest(NamedTuple):
