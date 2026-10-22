@@ -161,7 +161,10 @@ since the corpus's languages are never posted (#458). The per-stage
 count deltas, the extraction counts (entities, claims, rejects, chunks,
 fallback tiers) and the mention records and judgement notes
 (`content.records`, `content.notes`, with their `absent.*` figures) are
-among them.
+among them, and so are the write's counts (`content.write`), the claims
+the writer refused for an item value that is their subject's item
+(`content.write.claims_self_referencing`, #491) apart from its other
+refusals and from extraction's rejects.
 
 **Absent is not zero.** `report.json`'s `format` stays 1 as figures are
 added, so a report made by older code lacks the newer figures: one made

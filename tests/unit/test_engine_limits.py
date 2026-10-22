@@ -844,8 +844,9 @@ class TestAskingAgain:
         ],
     )
     def test_a_pause_describes_the_window(self, cli, clock, window, described):
-        """Each window name CLI 2.1.288 reports is described in words; a
-        name it does not know is given as the CLI names it (#452)."""
+        """Each window name CLI 2.1.296 reports, as 2.1.288 did, is described
+        in words; a name it does not know is given as the CLI names it
+        (#452, #526)."""
         cli.script = [usage_window(START + 3 * 24 * HOUR, window)]
         with pytest.raises(UsageLimitReached) as paused:
             ClaudeCodeClient().complete("Read the letter.")
@@ -1038,11 +1039,11 @@ class TestReserve:
         assert clock.slept == []
 
     def test_unified_windows_are_not_paced_from(self, pacer, clock):
-        """CLI 2.1.288 reports every window's use in unifiedWindows, past
-        the warning thresholds or not (#452). The engine paces from
-        rate_limit_info's utilization alone, so a report whose
-        unifiedWindows say a window is nearly used up, and whose
-        utilization is absent, paces nothing."""
+        """CLI 2.1.296, like 2.1.288, reports every window's use in
+        unifiedWindows, past the warning thresholds or not (#452, #526).
+        The engine paces from rate_limit_info's utilization alone, so a
+        report whose unifiedWindows say a window is nearly used up, and
+        whose utilization is absent, paces nothing."""
         resets = START + HOUR
         info = report(resets_at=resets) | {
             "unifiedWindows": {
@@ -1351,6 +1352,38 @@ class TestOverage:
         assert paused.value.reason == OVERAGE
         assert paused.value.resumes_at is None
 
+    def test_overage_enabled_is_not_overage(self, pacer, clock):
+        """CLI 2.1.296's allowed_warning report may say whether usage
+        credits are enabled on the account (overageEnabled, #526). That a
+        call could run on them is not that it did: only isUsingOverage
+        pauses the pass."""
+        info = report(0.5, resets_at=START + 3 * 24 * HOUR, window="seven_day")
+        info["overageEnabled"] = True
+        assert info["isUsingOverage"] is False
+        pacer.done([info])
+        record = admit(pacer, max_wait=0)
+        assert record["held"] is None
+        assert clock.slept == []
+
+    def test_overage_enabled_beside_overage_still_pauses(self, pacer, clock):
+        info = report(resets_at=START + HOUR, overage=True)
+        info["overageEnabled"] = True
+        pacer.done([info])
+        with pytest.raises(UsageLimitReached) as paused:
+            admit(pacer, max_wait=0)
+        assert paused.value.reason == OVERAGE
+
+    def test_overage_enabled_without_is_using_overage(self, pacer, clock):
+        """A report that leaves isUsingOverage out says nothing of credits
+        used, whatever overageEnabled says."""
+        info = report(0.5, resets_at=START + 3 * 24 * HOUR, window="seven_day")
+        del info["isUsingOverage"]
+        info["overageEnabled"] = True
+        pacer.done([info])
+        record = admit(pacer, max_wait=0)
+        assert record["held"] is None
+        assert clock.slept == []
+
 
 class TestOverageDocs:
     """The overage guarantee, wherever it is written down, admits what
@@ -1441,10 +1474,10 @@ class TestUtilizationDocs:
 
 
 class TestUnifiedWindowsDocs:
-    """CLI 2.1.288 reports a window's use below its warning thresholds in
-    unifiedWindows (#452), so nothing here says it reports none, and
-    every description of what it reports says the engine reads neither
-    unifiedWindows nor limitScope."""
+    """CLI 2.1.296, like 2.1.288, reports a window's use below its warning
+    thresholds in unifiedWindows (#452, #526), so nothing here says it
+    reports none, and every description of what it reports says the
+    engine reads neither unifiedWindows nor limitScope."""
 
     # the wordings of the claim that the CLI reports no use below its
     # warning thresholds, or that the reserve paces from whatever it sends
@@ -1460,7 +1493,9 @@ class TestUnifiedWindowsDocs:
 
     @staticmethod
     def normalised(text: str) -> str:
-        return " ".join(text.split())
+        # comment markers at line starts fold away with the whitespace, so
+        # a phrase reads the same however a comment wraps it
+        return " ".join(re.sub(r"(?m)^\s*#", " ", text).split())
 
     def texts(self) -> dict[str, str]:
         return {
@@ -1483,8 +1518,8 @@ class TestUnifiedWindowsDocs:
         section = source.split("# -- subscription limits", 1)[1]
         section = self.normalised(section.split("RATE_LIMIT_EVENT =", 1)[0])
         assert "unifiedWindows" in section and "limitScope" in section
-        assert "# the engine reads neither" in section
-        assert "never from # unifiedWindows" in section
+        assert "the engine reads neither" in section
+        assert "never from unifiedWindows" in section
 
     def test_llm_cache_doc_says_the_engine_reads_neither(self):
         text = self.texts()["LLM_CACHE.md"]
@@ -1500,22 +1535,58 @@ class TestUnifiedWindowsDocs:
         assert "`unifiedWindows`" in amendment
         assert "reads neither" in amendment
 
+    def test_limit_scope_comes_only_when_the_server_reports_one(self):
+        """The CLI sends limitScope only when the server reports an
+        overage scope, on 2.1.288 and 2.1.296 alike (#526)."""
+        texts = self.texts()
+        assert "when the server reports one, limitScope" in texts["llm.py"]
+        assert (
+            "when the server reports one, `limitScope`"
+            in texts["LLM_CACHE.md"]
+        )
+        assert "`limitScope` only when the server reports one" in (
+            adr_0025_amendment("Amended by #526 (2026-10-16):")
+        )
+
+
+def adr_0025_amendment(header: str) -> str:
+    """The paragraph of ADR-0025 that opens with `header`, up to the next
+    blank line, its whitespace folded."""
+    text = (
+        ROOT / "docs" / "adr" / "0025-development-by-scratch-runs.md"
+    ).read_text()
+    assert header in text, header
+    amendment = text.split(header, 1)[1].split("\n\n", 1)[0]
+    return " ".join(amendment.split())
+
 
 class TestPinDocs:
-    """The docs name 2.1.288 as the pin and say how to install it, and the
+    """The docs name 2.1.296 as the pin and say how to install it, and the
     pipeline README names both settings that keep a call as it ran on
-    2.1.237 (#452 review)."""
+    2.1.237 (#452 review, #526)."""
 
+    PIN = "2.1.296"
     RUNBOOK = ROOT / "docs" / "runbooks" / "scratch-run.md"
     README = ROOT / "src" / "yizkr" / "pipeline" / "README.md"
+    # the versions other than the pin each text names on purpose: the
+    # oldest that runs claude-opus-5-5, and the README's account of what
+    # 2.1.237 did
+    OTHER_VERSIONS = {
+        "llm.py": set(),
+        "LLM_CACHE.md": set(),
+        "scratch-run.md": {"2.1.280"},
+        "README.md": {"2.1.237", "2.1.280"},
+    }
 
     def test_the_runbook_installs_exactly_the_pin(self):
         text = self.RUNBOOK.read_text()
-        assert "npm install -g @anthropic-ai/claude-code@2.1.288" in text
+        assert f"npm install -g @anthropic-ai/claude-code@{self.PIN}" in text
         assert "export DISABLE_AUTOUPDATER=1" in text
         flat = " ".join(text.split())
         assert "the binary an editor bundles" in flat
         assert "is no pin" in flat
+        assert f"The pinned version is {self.PIN}" in flat
+        assert f"claude --version # {self.PIN} (Claude Code)" in flat
 
     def test_no_text_names_the_old_pin(self):
         texts = {
@@ -1525,14 +1596,31 @@ class TestPinDocs:
             "README.md": self.README.read_text(),
         }
         for name, text in texts.items():
-            flat = " ".join(text.split())
-            for old in ("pinned 2.1.237", "claude-code@2.1.237"):
+            flat = TestUnifiedWindowsDocs.normalised(text)
+            for old in (
+                "pinned 2.1.237",
+                "claude-code@2.1.237",
+                "pinned 2.1.288",
+                "claude-code@2.1.288",
+            ):
                 assert old not in flat, (name, old)
-            assert "2.1.288" in flat, name
+            # the README compares the pin with 2.1.288 once, on purpose
+            flat = flat.replace(f"{self.PIN}, like 2.1.288,", self.PIN)
+            versions = set(re.findall(r"\b2\.1\.\d+\b", flat))
+            assert self.PIN in versions, name
+            assert versions - {self.PIN} <= self.OTHER_VERSIONS[name], (
+                name,
+                versions,
+            )
+
+    def test_adr_0025_is_amended_for_the_pin(self):
+        amendment = adr_0025_amendment("Amended by #526 (2026-10-16):")
+        assert f"claude CLI {self.PIN}" in amendment
+        assert "`limitScope` only when the server reports one" in amendment
 
     def test_the_readme_names_the_pin_and_both_settings(self):
         text = self.README.read_text()
-        assert "Install 2.1.288, which `claude-opus-5-5`" in " ".join(
+        assert "Install 2.1.296, which `claude-opus-5-5`" in " ".join(
             text.split()
         )
         assert "`--permission-mode default`" in text
@@ -2100,14 +2188,15 @@ class TestEstimate:
             {"sha1": A, "kind": "text", "stages": EXTRACTED},
             {"sha1": B, "kind": "media", "stages": EXTRACTED},
             {"sha1": C, "kind": "presentation", "stages": EXTRACTED},
+            {"sha1": D, "kind": "pdf", "stages": EXTRACTED},
         ]
         estimate = estimate_calls(plan, sizes={A: 5000})
-        # a scan's vision call; the manifest and a chunk per 2000
-        # characters (three for A), else one; a critique each
+        # a scan's and a PDF's vision call (#502); the manifest and a chunk
+        # per 2000 characters (three for A), else one; a critique each
         assert estimate == {
-            "transcription": StageEstimate(documents=3, calls=1),
-            "extraction": StageEstimate(documents=3, calls=4 + 2 + 2),
-            "critique": StageEstimate(documents=3, calls=3),
+            "transcription": StageEstimate(documents=4, calls=2),
+            "extraction": StageEstimate(documents=4, calls=4 + 2 + 2 + 2),
+            "critique": StageEstimate(documents=4, calls=4),
         }
 
     def test_a_run_estimates_its_own_rerun(self, cli, clock, tmp_path):

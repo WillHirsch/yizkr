@@ -68,16 +68,19 @@ CATEGORIES: dict[str, str] = {
         "MOTHER, FATHER, CHILD, INFORMANT, BRIDE, GROOM, WITNESS"
     ),
     "kinship_term_alias": (
-        "a kinship term or other relational appellation recorded as an "
-        'alias, or as the label of a person the document names ("my '
-        'husband", "our great grandmother", "Oma", "Nana Maisie", '
-        '"Bubele"; "Tante Rahel" as the label of Rahel): it is not a name; '
-        "suggest `relative` + `kinship_type` (a literal kinship term), a "
-        "marriage (a spousal term) or `referred_to_as` (any other relational "
-        "appellation), NOT an alias (ADR-0018). A person the document never "
-        "names is rightly labelled with the document's own words for them "
-        '(the postcard\'s writer, who signs only "Dein Vater"; a status '
-        "other than `name`): that label is no finding"
+        "a kinship term or other appellation recorded as the label of a "
+        'person the document names ("Tante Rahel" as the label of Rahel; '
+        '"Omama" as the label of a grandmother the document names), or a '
+        'description recorded as an alias ("my husband", "our great '
+        'grandmother"): the label takes the name, and an appellation is an '
+        "alias and a `referred_to_as` claim (a literal kinship term also "
+        "`relative` + `kinship_type`; a spousal term gives a marriage) "
+        "(ADR-0018). A kinship term, a pet name or a courtesy name among "
+        'the aliases ("Tante Rahel", "Omama", "Pünktchen", "Nana Maisie") '
+        "is right and no finding. A person the document never names is "
+        "rightly labelled with the document's own words for them (the "
+        'postcard\'s writer, who signs only "Dein Vater"; a status other '
+        "than `name`): that label is no finding"
     ),
     "deictic_alias": (
         'a deictic or generic reference recorded as an alias ("the '
@@ -192,9 +195,10 @@ curator sees it. You FLAG concerns only; you never rewrite.
 Flag a genuine concern only, of one of these categories:
 {categories_block}
 
-A relational appellation CORRECTLY recorded as a `referred_to_as` claim,
-or a kinship term as `relative` + `kinship_type`, is right — do not flag
-it.
+An appellation (a kinship term, alone or with a name, a pet name or a
+courtesy name) among a person's aliases, or recorded as a
+`referred_to_as` claim, and a kinship term as `relative` +
+`kinship_type`, are right — do not flag them.
 
 Each finding doubts one part of a statement (its axis):
 - subject: which entity it is, or its kind;
@@ -472,11 +476,12 @@ def run_critique(
     against them all.
 
     Advisory only — an unfinished answer never raises (unlike chunk
-    extraction): the critic must never block the pipeline, only inform
-    the reviewer. An answer the engine stopped at its output limit
-    (llm.at_output_limit), or one without its terminal sentinel (a
-    refusal, an answer cut off, a usage-limit notice), still gives the
-    findings it holds, and is rejected through the client
+    extraction), but for a rejection the cache refuses (a pause, as a
+    call it refuses is; _reject): the critic must never block the
+    pipeline, only inform the reviewer. An answer the engine stopped at
+    its output limit (llm.at_output_limit), or one without its terminal
+    sentinel (a refusal, an answer cut off, a usage-limit notice), still
+    gives the findings it holds, and is rejected through the client
     (llm.reject_response), so that a client that keeps answers asks the
     critic again next time rather than serving it. One the client kept
     from an earlier call is asked for once more, and the engine's answer
@@ -563,7 +568,8 @@ def _reject(client: LlmClient, response: str, reason: str) -> bool:
     """Reject an unfinished critique answer for `reason`; True when it was
     one the client kept from an earlier call (llm.reject_response). A
     rejection that fails is only a warning: the critic never blocks the
-    pipeline."""
+    pipeline. A rejection the cache refuses (llmcache.CacheRefused, a
+    pause) ends the pass, as a call it refuses does."""
     try:
         return reject_response(client, response, reason)
     except Exception as exc:

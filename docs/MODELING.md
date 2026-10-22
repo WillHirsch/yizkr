@@ -7,8 +7,8 @@
 - Mirror Wikidata property *semantics* where a good equivalent exists
   (instance of, date of birth, spouse, residence, depicts, coordinate
   location, start/end time, stated in...), using local P-ids. The
-  vocabulary is declared in `model/manifest.yaml` and minted by
-  `model/bootstrap.py`, which maintains the mapping table
+  vocabulary is declared in `src/yizkr/model/manifest.yaml` and minted
+  by `yizkr bootstrap`, which maintains the mapping table
   (local id – Wikidata id) on the wiki page `Project:Model mapping`.
   Local P/Q ids are per-instance and never recorded in the repo.
 - Every entity gets a label and a short description; name variants go
@@ -175,8 +175,8 @@
   unit test checks (writer's INSTANCE_UNICODE; ADR-0010, #431).
 - Schema-level statements (e.g. the subclass hierarchy) carry
   references too (ADR-0003): a `stated in` reference to the *model
-  manifest* item, which represents `model/manifest.yaml` — the document that
-  asserts them.
+  manifest* item, which represents `src/yizkr/model/manifest.yaml` — the
+  document that asserts them.
 
 ## Core classes (items, via "instance of")
 
@@ -209,12 +209,13 @@
   prompt/pipeline version, software commit)
 
 **Manifest descriptions are extraction-prompt surface**, not only
-documentation. Every property and item in `model/manifest.yaml` carries
-a description, and the extractor is shown it verbatim beside the key: a
-property's description is what tells the model which way a relation
-points (`employer` takes the organization, not the employee) and what
-kind of entity the value must be (`location` takes a place). Write them
-for that reader as well as for a human.
+documentation. Every property and item in
+`src/yizkr/model/manifest.yaml` carries a description, and the
+extractor is shown it verbatim beside the key: a property's
+description is what tells the model which way a relation points
+(`employer` takes the organization, not the employee) and what kind of
+entity the value must be (`location` takes a place). Write them for
+that reader as well as for a human.
 
 Items flagged **`entity_kind: true`** are the kinds the extractor may
 type a document-mentioned entity as (the ADR-0007 manifest pass), and
@@ -273,6 +274,18 @@ are refused and counted among extraction's rejects. The claim is the unit
 of rejection: a qualifier naming the subject rejects its whole claim. The
 GEDCOM adapter leaves out a family's link that makes a parent their own
 child, and counts it (ADR-0036). (Amended by #461 and #462, 2026-10-05.)
+The writer checks the same rule again before its first write, since the
+identity map, an approved equivalence or a curator's correction of the
+equivalence sheet can put a claim's subject and its value, two mentions,
+on one item after validation: a father and a son of one name that
+clustering merges, with a `father` claim between them. A claim whose
+value or qualifier's value is then its subject's item is refused whole,
+nothing of it written, the rest of the batch written; the writer's
+result names it in `refused` and again in `self_references`, as `ingest
+run`'s write step record does, and the scratch write's record, the run
+report (`content.write.claims_self_referencing`) and the run-to-run diff
+count these apart from the writer's other refusals and from
+extraction's rejects. (Amended by #491, 2026-10-16.)
 A `time_period` claim from extraction is, for now, a counted reject:
 `time_period` accepts only a period, an entity of `time_period_class`, no
 entity kind offers one and no QID exists before write.
@@ -327,7 +340,7 @@ Every statement carries at least one reference with:
   from the model: only for a claim whose page number is one physical
   page whose record gives a printed number. A range, a page given in
   words, a page the record gives no printed number and a transcription
-  with no record (a text file's, a deck's slide text) get none; none is
+  with no record (a text file's, a deck's slides) get none; none is
   ever guessed (#424). It describes the physical page: a page that
   shows a spread with one half numbered keeps that one number for
   every claim read from it, as both ways of reading a PDF give it the
@@ -736,7 +749,9 @@ artifact a new QID, changes neither.
   (process provenance; a GeoNames-imported edge adds `stated in` → the
   GeoNames dataset item). The inconsistency report suppresses value
   pairs connected by a `(location|part_of)+` path — differences of
-  resolution, not contradictions.
+  resolution, not contradictions. ADR-0038 (proposed) would make each
+  containment a source's time-scoped claim instead; until the owner
+  accepts it, this bullet stands.
 - Extraction gives a place's `part_of` only where the source states it
   (in the place's mention, "Fläckfeld, Kreis Mockburg"; in the fields a
   form gives that place; or as a link of a chain of containers), never
@@ -807,8 +822,14 @@ and reference the artifact itself or the producing run.
   of`, `media file`, `media SHA-1`) is one statement citing each of them;
   a later container's name for the item is an alias, unless another
   item already has that label (ADR-0008 as amended by #50).
-- Unpacking is deterministic (documented ZIP+XML), never generative;
-  only claim extraction from the slide text uses an LLM.
+- Unpacking is deterministic (documented ZIP+XML), never generative:
+  the slide text is read from the XML. Each image a deck embeds that is
+  read on its own (not decoration, the never-ingest list not naming it,
+  in a format the vision engine reads) is read by the vision engine and
+  extracted as a document of its own, an excerpt, whose claims cite the
+  image, as a PDF's placed image is (below; ADR-0008 as amended by
+  #502). A scanned document on a slide so gives claims that cite the
+  scan, not the deck.
 - **A compilation's original excerpts are artifacts of their own**
   (ADR-0008 as amended by #289, #176 and #397). A compilation sets text
   of its own (a typed translation, commentary) beside images of excerpts
@@ -863,8 +884,9 @@ and reference the artifact itself or the producing run.
 - Reference identifies the proposer (extraction/detection run) and
   confirmation is implied by the statement existing at all – unconfirmed
   proposals live outside the graph (review queue), never in it.
-- W1 implementation: `python -m ingest detect-faces / enroll-face /
-  match-faces` (see `ingest/faces.py`), feeding the shared review flow.
+- W1 implementation: `yizkr ingest detect-faces / enroll-face /
+  match-faces` (see `src/yizkr/pipeline/faces.py`), feeding the shared
+  review flow.
 - **Associated media vs. depiction (see ADR-0021).** `image` (P18
   semantics) links a person to a medium a source *associates* with them (a
   portrait, an obituary scan) — distinct from `depicts`, which is a
@@ -891,10 +913,10 @@ Names are modelled in **two layers**:
   event):
   - `birth name` (P1477) — name/maiden name given at birth;
   - `married name` (P2562) — family name taken on marriage;
-  - `nickname` (P1449) — a name the source gives as what the person is
+  - `nickname` (P1449) — a name the source marks as what the person is
     called, by anyone ("Peppi", "Gustl"), or an "aka"; what one person
-    calls another, or a name that names the person through a relation
-    but is no literal kinship term, is `referred_to_as` instead (below);
+    calls another, or a name that names the person through a relation,
+    is `referred_to_as` alone (below);
   - `official name` (P1448) — a formally adopted or legally changed name.
 - **A name form of no stated type** (ADR-0011, amended by #435): where a
   source gives a person a name form without stating its type, beside the
@@ -914,8 +936,10 @@ Names are modelled in **two layers**:
 - So each kind of name form goes here: the label's own form, to the
   label alone; a form the source types, to an alias and its typed
   statement; a further form of no stated type, to an alias and a `name`
-  statement; and a relational appellation, to `referred_to_as` alone
-  (below).
+  statement; and an appellation, any other form a source uses to name or
+  address the person (a kinship term with a name or alone, a pet name, a
+  courtesy name), to an alias and a `referred_to_as` statement (below;
+  ADR-0018 as amended by #499).
 - Typing adds structure where a source marks it; it never narrows or
   infers (a maiden name is recorded only when the source says so, never
   derived from gender + marriage).
@@ -975,8 +999,27 @@ parts the label already gives ("Löbig, Ida" beside "Ida Löbig"); one that
 adds a part is kept ("Wastl"), as is one that spells a part otherwise
 than the label ("Gustav Lobig" beside "Gustav Löbig"), and so is the
 first that alone holds a title or suffix the record gives ("Frau Löbig" beside "Ida Löbig", her
-record titling her Frau). The GEDCOM adapter cleans by the record it
-fills, as extraction does. A place's or an organisation's alias that
+record titling her Frau). An alias the document gives as an appellation
+(the value of a `referred_to_as` claim of the same document about the
+entity) is kept when it holds a word that is no name part ("Tante
+Rahel" beside "Rahel Löbig", "Omama"); one made only of name parts is
+judged as any other, so a reordering stays dropped. Where a person's
+label is one of those appellations and its record stands with the status
+`name`, the label becomes the name the record gives. Every form, the
+label and each alias, competes: one made only of name parts as itself,
+any other with its longest run of name-part words, never joined across a
+word that is none ("Rahel Löbig" of "Frau Rahel Löbig geb. Tarle"). One
+that is no appellation wins, then the one of most words, a whole form
+before a run, most letters, least punctuation (so "Rahel Löbig" before
+"Löbig, Rahel"); with no form holding a name word, the label stays. The
+appellation stays an alias, every local ref takes the new label, a
+`name` claim restating the model's label stays a reject, and one
+restating the new label is dropped and counted
+(`appellation_label_names`). A `referred_to_as` the manifest turn did not
+list joins the person's aliases. This runs where the
+batch is assembled, once the chunks' claims exist, and fires on marked
+appellations only, never on a word the record merely leaves out. The
+GEDCOM adapter cleans by the record it fills, as extraction does. A place's or an organisation's alias that
 gives no part (a deictic or generic reference) is dropped, and a short form
 kept. An entity without a record keeps its aliases, blanks and duplicates
 aside. It never splits a name, so compound/particle surnames stay whole
@@ -997,8 +1040,10 @@ language:
   particles; patronymics, a name part of their own (the 1941
   certificate's *Лёбиг Рудольф Феликсович* gives the given name Рудольф,
   the surname Лёбиг and the patronymic Феликсович); nicknames, the names
-  the person is called by anyone, each also an alias (never a
-  `referred_to_as` appellation, ADR-0018); titles and
+  the person is called by anyone, each also an alias (a pet name among
+  them also a `referred_to_as` appellation; a form through a relation,
+  such as "Tante Rahel" or "Nana Maisie", is never a record part,
+  ADR-0018); titles, honorifics and ranks and never a kinship word, and
   suffixes, which never key; and `unsplit` forms whose given name and
   surname the source does not tell apart;
 - **a place:** a status (`toponym`, `deictic` or `generic`); its names,
@@ -1046,30 +1091,52 @@ document's own words for them (the postcard's *Dein Vater*, status
 or `other`) and one sentence in English, only where the extractor made a
 call a careful reader could make differently. `coverage.json` counts the
 records given (and by status, and the `unsplit` forms they hold),
-recordless and set aside (the records, and the reasons by category), and
+recordless and set aside (the records, and the reasons by category), the
+labels the appellation rule replaced with a name (`appellation_labels`),
+the `name` claims dropped for restating one (`appellation_label_names`),
+the record name parts that are appellations (`appellation_parts`), and
 the notes by category.
 
-**Relational and perspectival appellations are NOT names** (ADR-0018).
-"our great grandmother", "meine Oma", "Nana Maisie", "my husband" describe
-a relationship or viewpoint, so they never enter the alias bag. A literal
-kinship term is a `relative` + `kinship_type` claim with the ego as
-object (§Kinship); a spousal term ("my husband") gives a marriage
-(ADR-0036); any other relational appellation (a name the
-source gives as what one person calls another, with or without a stated
-perspective, or that names the person through a relation: a courtesy
-title, "Bubele", "Рудольфиха") is a
-`referred_to_as` (P1810) statement on the referent — verbatim, source-
-referenced — qualified by `perspective` (the person/family ego) when the
-ego is a modelled entity, and unqualified otherwise. Both are
-multi-valued and coexist (ADR-0002): many people may call one person many
-things. Because each appellation is a statement whose *subject* is the
-referent and whose ego (the `relative` object or the `perspective`
-qualifier) is the other party, reciprocal naming
-(a grandmother "Oma" to a grandchild who is "Bubele" to her) is just two
-independent statements — no dyad object, and the kinship inverse is
-derived, not stored. With the ego anchored, a later bare reference
-resolves: compositional terms by kinship derivation, idiosyncratic ones
-via the appellation table.
+**Appellations are aliases and sourced statements** (ADR-0018, amended
+by #499). Every form a source uses to name or address a person is an
+alias, with no structural distinction: a name form, a kinship term with
+a name ("Tante Rahel"), a kinship term alone ("Omama"), a pet name
+("Pünktchen") and a courtesy name ("Nana Maisie"); that the person was
+known by it, to at least someone, is what the alias keeps. Each form
+that is no plain name form (a name, or a spelling, a shortening, a
+diminutive or an initial of one) is also one `referred_to_as` (P1810)
+statement on the referent: verbatim, referenced to the artifact with its
+locator, and qualified by `perspective` (the person/family ego) when the
+source gives an ego that is a modelled entity, unqualified otherwise.
+The alias is the lookup; the statement is the evidence. A literal
+kinship term also gives a `relative` + `kinship_type` claim with the ego
+as object (§Kinship); a spousal term ("my husband") gives a marriage
+(ADR-0036). A description that is no form of address ("the deceased",
+"the informant", "my husband", "our great grandmother", a role or
+form-field label) is never an alias. The label stays the display name: a
+name form wherever the document names the person, and the document's own
+words only for a person it never names. Where a person's label is one of
+the document's appellations and their record names them, every form
+competes for the label: one made only of name parts as itself, any other
+with its longest run of name-part words (never joined across a word such
+as "geb."), so "Omama" beside "Oma Hildegard" becomes "Hildegard". For
+identity, a recordless person never keys on a form its document gives as
+an appellation, as label or alias; a person with a record keys on its
+name parts; and a pet name the person is called by anyone stays a record
+nickname and keys as one (ADR-0035 §7). Places, organisations and
+families, never persons, key on marked forms as on any other name;
+persons and the kinds that may be persons (an unclassified entity, a ref
+with no kind) never do. Appellations
+are multi-valued and coexist (ADR-0002): many people may call one person
+many things. Because each appellation is a statement whose *subject* is
+the referent and whose ego (the `relative` object or the `perspective`
+qualifier) is the other party, reciprocal naming (a grandmother "Oma" to
+a grandchild who is "Bubele" to her) is just two independent statements
+— no dyad object, and the kinship inverse is derived, not stored. With
+the ego anchored, a later bare reference resolves: compositional terms
+by kinship derivation, idiosyncratic ones via the appellation table.
+Appellations of possibly-living people ride the possibly-living
+exclusion (ADR-0020).
 
 ## Kinship (see ADR-0014)
 
@@ -1089,9 +1156,9 @@ primitive network and the *same* term set describes any pair:
 - **A derivation calculus (query/frontend layer — NOT vocabulary):**
   second-order relations (grandparent, aunt/uncle, cousin, in-law) are
   property PATHS over the primitives, mapped to a shared gendered term
-  set. See `queries/kinship.rq`; the full pairwise calculus with degrees
-  (great-, once-removed, half-) is a frontend build over the same
-  primitives. Never store a derivable relation.
+  set. See `src/yizkr/queries/kinship.rq`; the full pairwise calculus
+  with degrees (great-, once-removed, half-) is a frontend build over
+  the same primitives. Never store a derivable relation.
 - **A source-asserted compound fallback:** `relative` (P1038) with a
   verbatim `kinship_type` qualifier holds a compound relation a source
   states but that primitives cannot yet capture unambiguously ("maternal
@@ -1254,13 +1321,13 @@ dating below is the convention its readers still interpret:
 
 The disagreement report compares a residence's or a spouse's start and
 end times, each through its own range ("Contradictions" below); the
-person timeline (`queries/person-timeline.rq`) lists each start, end and
-point in time with the range stated for it, which the static site's
-timeline page and feed show beside the date, each bound under its
-qualifier's label ("1946 (earliest date: 1946; latest start date:
-1947)"); and the extraction prompts give the extractor this convention
-for residences and other periods, and date a marriage by its wedding and
-end events instead.
+person timeline (`src/yizkr/queries/person-timeline.rq`) lists each
+start, end and point in time with the range stated for it, which the
+static site's timeline page and feed show beside the date, each bound
+under its qualifier's label ("1946 (earliest date: 1946; latest start
+date: 1947)"); and the extraction prompts give the extractor this
+convention for residences and other periods, and date a marriage by its
+wedding and end events instead.
 
 ## Persecution and displacement as events (see ADR-0014)
 
@@ -1295,8 +1362,9 @@ not a signal to grow the schema on.
   only when they would link as places or one lies in the other; an umlaut
   also written out (DIN 5007-2). A person, place, organisation or family
   without a record (none given, or one extraction set aside under
-  ADR-0035 §5, before the alias cleanup) meets only its exact name, and
-  never merges; so a document's mention whose record was set aside never
+  ADR-0035 §5, before the alias cleanup) meets only its exact name, never
+  one its document gives as an appellation (two people called "Oma" never
+  meet by it), and never merges; so a document's mention whose record was set aside never
   meets the GEDCOM export, whose people and places all have records; the
   kinds that take no record (occupations, vessels and the like) still
   merge on an exact name. A union is keyed by its couple,

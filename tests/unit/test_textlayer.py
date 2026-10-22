@@ -187,7 +187,7 @@ class TestPages:
         result = read(tmp_path, typed(TITLE))
         assert methods(result) == [TEXT_LAYER]
         assert result.pages[0].text == TITLE
-        assert result.by_text_layer
+        assert result.by_own_text
 
     def test_a_scan_with_an_ocr_layer_is_read_by_vision(self, tmp_path):
         """An OCR layer is drawn invisibly: it is a machine's reading, not
@@ -197,7 +197,7 @@ class TestPages:
         assert result.pages[0].text == ""
         # a PDF with no page read from its text layer is read whole, and
         # nothing is written for it
-        assert not result.by_text_layer
+        assert not result.by_own_text
         assert written(tmp_path) == []
 
     def test_text_in_render_mode_7_is_no_part_of_the_text_layer(
@@ -815,8 +815,8 @@ class TestImages:
         assert result.images == {}
         assert result.pages[0].images == []
         assert result.notes == [
-            "page 1, image 1: PDFium could not give its bytes, so it is not "
-            "read"
+            "image not read on its own: page 1, image 1: PDFium could not "
+            "give its bytes, so it is not read"
         ]
 
     def test_no_image_is_read_on_a_page_read_by_vision(self, tmp_path):

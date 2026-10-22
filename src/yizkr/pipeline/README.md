@@ -190,8 +190,8 @@ uv run yizkr ingest --help
 ```
 
 Connection settings come from `deploy/.env` (same variables as the
-smoke test); the vocabulary comes from `model/manifest.yaml` resolved
-against the live instance (run `model/bootstrap.py` first).
+smoke test); the vocabulary comes from `src/yizkr/model/manifest.yaml`
+resolved against the live instance (run `yizkr bootstrap` first).
 
 ## Ingestion host prerequisites
 
@@ -273,16 +273,27 @@ re-running one step in isolation — but for a normal ingest you only ever run
   record, by its transcription stage, each named for its places ("page
   6, image 1") with the pages it is on; the write registers them after
   the PDF, each `part of` it once per page (ADR-0008).
-- **excerpts** — each image a PDF places within a text-layer page, with
-  a reading of its own that passes the check, is a document of its own
-  (kind `excerpt`, `ExcerptRun`), in `excerpts/<sha1>/` of the state
-  directory: its transcription is that reading, taken without a call,
-  and its extraction and critique cite the image. The same image in
-  several PDFs is one excerpt; one whose bytes a document of the corpus
-  has, or that the never-ingest list names, is none. `ingest run` takes
-  excerpts after the folder's documents; the scratch driver as their
-  PDF's transcription ends, the first as the excerpts' canary. An
-  excerpt's write registers each PDF that places it, with its images.
+- **excerpts** — each image a PDF places within a text-layer page, or a
+  deck embeds on a slide, with a reading of its own that passes the
+  check, is a document of its own (kind `excerpt`, `ExcerptRun`), in
+  `excerpts/<sha1>/` of the state directory: its transcription is that
+  reading, taken without a call, and its extraction and critique cite
+  the image. The same image in several PDFs and decks is one excerpt;
+  one whose bytes a document of the corpus has, or that the never-ingest
+  list names, is none. `ingest run` takes excerpts after the folder's
+  documents; the scratch driver as their container's transcription ends,
+  the first as the excerpts' canary. An excerpt's write registers each
+  container that places it, with its images.
+- **paged containers** — a PDF (kind `pdf`) and a deck (kind
+  `presentation`) take the `paged` route (`yizkr.pipeline.containers`,
+  ADR-0008 as amended by #502): a reader per format gives the pages,
+  each with its own text where the file holds it and the images placed
+  on it, and one transcriber (`transcribe.PagedTranscriber`) makes the
+  transcription and reads each image on its own. A deck's slides are
+  read from their XML (method `slide-xml`), behind `[Slide N]` markers,
+  each image read on its own marked below its slide's marker
+  (`[Slide 2, image 1: sha1:…]`); an image in a format the vision engine
+  does not read (a TIFF) is noted, not read.
 - **transcribe** — engines: `llm` (LLM-vision, ADR-0004), `textfile`
   (wrap an existing/manual transcription; keeps the pipeline fully
   local), `htr` (a Transkribus-style platform adapter, dropped as LLM
@@ -331,7 +342,8 @@ re-running one step in isolation — but for a normal ingest you only ever run
 - **transcription check** — runs on the output of the `llm` and
   `textfile` engines (in `ingest run`, the vision and text-file methods)
   before anything uses it, in `ingest run` and `ingest transcribe`
-  alike; slide text and a curator's correction are not checked. It is
+  alike; a deck's slide text, a PDF's text layer and a curator's
+  correction are not checked, a deck's images' readings are. It is
   `yizkr.pipeline.transcription_check`, a step with its own version,
   apart from the transcription's. It runs on every transcription a run
   makes, from the engine or the LLM cache, and on every transcription
@@ -411,15 +423,33 @@ re-running one step in isolation — but for a normal ingest you only ever run
   OpenRefine or any spreadsheet (R4). Rows are matched back by
   `claim_id`, a content hash: sorting or filtering the sheet cannot
   mis-apply decisions, and edited claim content is detected loudly.
-  **Only explicit `approve` decisions pass** — no decision means no
-  write; human confirmation is part of the data flow (R3).
+  **Only explicit approvals pass** — a per-row `approve`, or the
+  `bulk-accept` that accept-all writes — and no decision means no write;
+  human confirmation is part of the data flow (R3). apply-review refuses
+  the whole sheet, writing nothing, when it has `bulk-accept` on any
+  claim whose property in the batch is `depicts`, whatever the sheet's
+  cells say (only a per-row human decision confirms a depicts claim,
+  ADR-0005), or when it carries an equivalences sheet's `entity_id` or
+  `verdict` column (its approvals may be ratified machine verdicts).
 - **accept-all** — writes a `*.reviewed.csv` from a gate CSV with the
   `decision` column pre-filled, so a curator can flip the few outliers
   instead of typing a decision on every row. It writes `<input-stem>`
   `.reviewed.csv` beside the input (so `equivalences.csv` →
   `equivalences.reviewed.csv`, `review.csv` → `review.reviewed.csv`) and
   detects the gate by the CSV's columns:
-  - **claims** (`review.csv`): every row → `approve`.
+  - **claims** (`review.csv`): every row → `bulk-accept`, an approval
+    that also records the whole-sheet disposition (ADR-0023). When
+    `ingest run` writes a sheet with no decision other than
+    `bulk-accept`, each new statement it writes gets the distinct
+    low-scrutiny edit summary `ingest: write bulk-accepted claim`, so it
+    can be found for reappraisal. Any other decision on the sheet, such
+    as a `reject` on one flipped outlier, makes the whole sheet an
+    ordinary review (`ingest: write reviewed claim`), and `ingest write`
+    always writes that summary. Only a per-row human decision confirms a
+    `depicts` claim (ADR-0005): accept-all refuses the whole sheet,
+    writing nothing, if any row's `property` is `depicts`, or if it
+    lacks the exactly named `claim_id` column or exactly one `property`
+    column, so its depicts rows cannot be found.
   - **equivalences** (`equivalences.csv`): each row is set from its
     machine `verdict` — *ratify the verdict*, not a blanket approve:
     `same → approve`, `distinct → reject`, `uncertain → blank` (left for
@@ -476,7 +506,13 @@ re-running one step in isolation — but for a normal ingest you only ever run
   entity that may take neither its label nor its tagged label, as a
   media object whose tagged label a registered item holds too, is
   refused, with its claims, before the first write (ADR-0010 as amended
-  by #444 and #109). It writes each claim
+  by #444 and #109). A claim whose item value, its own or a
+  qualifier's, is its subject's item once the map, an approved
+  equivalence or a curator's correction puts both on one item, as
+  clustering may merge a father and a son of one name, is refused before
+  the first write and counted apart (docs/MODELING.md; #491): the step's
+  record names it in `refused` and again in `self_references`. It writes
+  each claim
   at normal rank with two references: `stated in → artifact/fragment`
   (with page/region/excerpt locator qualifiers) and `inferred from
   extraction run → run item`. Re-runs skip existing statements.
@@ -590,7 +626,11 @@ refuses). The module docstring is the full account; in short:
   mention whose record was set aside never meets the GEDCOM export, whose
   people and places have records): it keys on its exact
   normalised name, meets only mentions without a record, never links
-  confidently, and is counted. Whether a record stands (ADR-0035 §5) is
+  confidently, and is counted. A recordless mention that may be a person
+  (any kind but a place, an organisation or a family, an unclassified
+  entity and a ref with no kind included) never keys on a form its
+  document gives as an appellation (a `referred_to_as` value, ADR-0018).
+  Whether a record stands (ADR-0035 §5) is
   extraction's verdict, taken before the alias cleanup; clustering reads
   any record of its entity's kind. No word list and no token length
   remains.
@@ -719,7 +759,7 @@ wiki, the engine or the corpus, and writes `diff.json` (local) and
 `diff.md` (aggregates, may be posted) into the run's `.diff/<baseline>/`.
 docs/RUN_DIFF.md has the details and the reviewer checklist.
 
-## Face proposals (`ingest/faces.py`, ADR-0005)
+## Face proposals (`src/yizkr/pipeline/faces.py`, ADR-0005)
 
 A face proposal is an ordinary claim — `depicts` on the photograph,
 person as value, `relative position within image` qualifier, the
@@ -771,8 +811,9 @@ structural in the schema:
   19th as 1801), and a century given by any other year is refused.
 
 Properties and vocabulary items are referenced by **manifest key**
-(`spouse`, `circa` — see `model/manifest.yaml`), never by local P/Q id:
-ids are per-instance and only the writer resolves them, at write time.
+(`spouse`, `circa` — see `src/yizkr/model/manifest.yaml`), never by
+local P/Q id: ids are per-instance and only the writer resolves them,
+at write time.
 
 ```sh
 uv run yizkr claims --json-schema           # JSON Schema, used in LLM prompts
@@ -813,12 +854,12 @@ Two Anthropic-backed providers, differing in how usage is billed:
   docs/LLM_CACHE.md, Subscription limits) — best-effort, since the engine
   reads only the utilization the CLI reports once one of its own warning
   thresholds is passed, so the reserve gives no protection below the first of
-  those. (CLI 2.1.288 also reports each window's use in its
+  those. (CLI 2.1.296 also reports each window's use in its
   `rate_limit_event`'s `unifiedWindows`, whatever the thresholds; the
   engine does not read it.)
 
   A pass runs on one **pinned** CLI version (#133): the one installed
-  when its first client starts. Install 2.1.288, which `claude-opus-5-5`
+  when its first client starts. Install 2.1.296, which `claude-opus-5-5`
   needs (2.1.280 or newer; docs/runbooks/scratch-run.md). The engine
   does not compare the version with the model's needs, but a call the
   API refuses with status 400 because the CLI does not support its model
@@ -842,8 +883,9 @@ Two Anthropic-backed providers, differing in how usage is billed:
   hooks, permission rules, plugins or CLAUDE.md), `--strict-mcp-config`
   (no MCP servers, claude.ai connectors included),
   `--disable-slash-commands` (no skills), `--permission-mode default`
-  (the mode 2.1.237 started `-p` in; 2.1.288 starts it in auto mode
-  when telemetry is off, whose availability depends on the account),
+  (the mode 2.1.237 started `-p` in; 2.1.296, like 2.1.288, starts it in
+  auto mode when telemetry is off, whose availability depends on the
+  account),
   `--settings
   '{"autoCompactEnabled":true}'` (see below), and a child environment
   built from an **allowlist**. A call inherits only `PATH`; `HOME`,
@@ -875,7 +917,7 @@ Two Anthropic-backed providers, differing in how usage is billed:
   (see below), `CLAUDE_CODE_DISABLE_AUTO_MEMORY`,
   `DISABLE_ERROR_REPORTING`, `DISABLE_TELEMETRY` and
   `CLAUDE_CODE_HARBOR_KITE=0` (the CLI's internal name for its
-  cross-session messaging socket: on 2.1.288, 0 keeps a telemetry-off
+  cross-session messaging socket: on 2.1.296, 0 keeps a telemetry-off
   `-p` call from listening on a socket your other Claude Code sessions
   can reach; it has no effect on 2.1.237, which has no socket). Calls
   run in

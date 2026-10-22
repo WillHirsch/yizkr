@@ -48,7 +48,7 @@ services:
       YIZKR_CORPUS_DIR: ${YIZKR_CORPUS_DIR:+/corpus}
       YIZKR_EXCLUDE_FILE: ${YIZKR_EXCLUDE_FILE:+/corpus-exclude.txt}
     volumes:
-      # backups and the generated static site land on the host tree
+      # the generated static site lands on the host tree
       - ../var:/app/var
       # A set but wrong path stops `run` with an error instead of leaving
       # an empty root-owned folder where the list or corpus should be.
