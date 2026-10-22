@@ -22,12 +22,16 @@ everything needed to rebuild the instance, plus a non-privileged export:
 Exclusion is CONSERVATIVE by design and computed at RUNTIME — there is
 no stored "living" flag (ADR-0020). A person is excluded unless the graph
 gives positive evidence they are not living: any death evidence (a date,
-place, or cause of death, a place of burial, or a death event), or births
-that all lie more than ``cutoff_years`` ago (``DEFAULT_CUTOFF_YEARS`` by
-default), every birth statement a curator has not deprecated read at the
-latest year it allows. Unknown means excluded. The determination, and the
-queries that select people and read their births for it, live in
-``yizkr.core.privacy``.
+place, or cause of death, a place of burial, or a death event whose
+single principal they are: an informant or a witness at someone else's
+death, or anyone in a death with no role or several principals, is not
+released by it), or births that all lie more than ``cutoff_years`` ago
+(``DEFAULT_CUTOFF_YEARS`` by default), every birth statement a curator has
+not deprecated and every dated birth event they are the single principal
+of (one that is nobody's own adds its date to the births its participants
+have already), read at the latest year it allows. Unknown means excluded.
+The determination, and the queries that select people and read their births
+and events for it, live in ``yizkr.core.privacy``.
 
 The export keeps only the people that check releases, and so fails
 closed:
@@ -107,7 +111,6 @@ from yizkr.core import sparql
 from yizkr.core.config import Config, read_env_file
 from yizkr.core.dates import UnsupportedDate, unsupported_in_graph
 from yizkr.core.privacy import (
-    BIRTHS_QUERY,
     DEFAULT_CUTOFF_YEARS,
     FAMILY_CLASS,
     NON_PERSON_CLASSES,
@@ -117,8 +120,8 @@ from yizkr.core.privacy import (
     PERSON_VALUE_PROPERTIES,
     SAME_AS,
     is_possibly_living,
-    latest_births,
     people_selection,
+    read_evidence,
 )
 from yizkr.model.schema import load_manifest
 from yizkr.queries.publish import prefix_block
@@ -242,30 +245,28 @@ def dump_rdf(deploy_dir: Path, out_path: Path, compose_files=None) -> None:
 
 
 # One row per item with person evidence (``{people}``: the privacy
-# module's selection, at every rank), with a value per death signal,
-# bound when the person has that signal: only whether it is bound counts,
-# so any value sampled does. A death event needs only the person as
-# participant — no date — so an undated death marks a person deceased
-# just like a burial place or a cause of death does. Births are read
-# apart, statement by statement (``yizkr.core.privacy.BIRTHS_QUERY``).
+# module's selection, at every rank), with a value per death signal of
+# the person's own statements, bound when the person has that signal:
+# only whether it is bound counts, so any value sampled does. Death events
+# and births are read apart (``yizkr.core.privacy.read_evidence``): a
+# death event counts only for its principal, and needs no date, so an
+# undated death marks its principal deceased just like a burial place or
+# a cause of death does.
 PERSON_FACTS_QUERY = """\
 SELECT ?person
        (SAMPLE(?deathDate) AS ?death) (SAMPLE(?deathPlace) AS ?deathPlace)
        (SAMPLE(?deathCause) AS ?deathCause) (SAMPLE(?burial) AS ?burial)
-       (SAMPLE(?deathEventItem) AS ?deathEvent)
 WHERE {{
 {people}
   OPTIONAL {{ ?person wdt:{date_of_death} ?deathDate . }}
   OPTIONAL {{ ?person wdt:{place_of_death} ?deathPlace . }}
   OPTIONAL {{ ?person wdt:{cause_of_death} ?deathCause . }}
   OPTIONAL {{ ?person wdt:{burial_place} ?burial . }}
-  OPTIONAL {{ ?deathEventItem wdt:{participant} ?person ;
-                              wdt:{instance_of} wd:{death} . }}
 }}
 GROUP BY ?person
 """
 
-_DEATH_BINDINGS = ("death", "deathPlace", "deathCause", "burial", "deathEvent")
+_DEATH_BINDINGS = ("death", "deathPlace", "deathCause", "burial")
 
 
 @dataclass
@@ -328,21 +329,19 @@ def exclusion_report(
             place_of_death=properties["place_of_death"],
             cause_of_death=properties["cause_of_death"],
             burial_place=properties["burial_place"],
-            participant=properties["participant"],
-            death=items["death"],
         )
     )
-    births = latest_births(run(prefixes + BIRTHS_QUERY.format(**properties)))
+    evidence = read_evidence(run, prefixes, properties, items)
 
     cutoff_year = utc_now(now).year - cutoff_years
     report = ExclusionReport()
     for binding in bindings:
         qid = binding["person"]["value"].rsplit("/", 1)[-1]
-        has_death = any(
+        has_death = qid in evidence.died or any(
             binding.get(name, {}).get("value") for name in _DEATH_BINDINGS
         )
         possibly_living, reason = is_possibly_living(
-            births.get(qid, []), has_death, cutoff_year
+            evidence.births.get(qid, []), has_death, cutoff_year
         )
         report.reasons[qid] = reason
         (report.excluded if possibly_living else report.included).add(qid)

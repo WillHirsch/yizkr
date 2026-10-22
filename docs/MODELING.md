@@ -1509,12 +1509,29 @@ not a signal to grow the schema on.
   badge call it, so they always agree.
 - **Death evidence** is any source-asserted signal that presupposes
   death: a `date of death`, `place of death`, or `cause of death`; a
-  `place of burial` (burial presupposes death); or participation in a
-  `death` event. None of these requires *both* a date and a place, so a
-  person can be recorded as **deceased without a time or place of
-  death** — a burial place, a cause of death, or an undated death event
-  each suffices. Death is an event like any other (ADR-0014), so "died,
-  nothing else known" is a death event with the person as participant.
+  `place of burial` (burial presupposes death); or a `death` event of
+  which they are the principal. None of these requires *both* a date and
+  a place, so a person can be recorded as **deceased without a time or
+  place of death** — a burial place, a cause of death, or an undated
+  death event each suffices. Death is an event like any other
+  (ADR-0014), so "died, nothing else known" is a death event with the
+  person as its principal participant.
+- **A birth or death event is its one principal's own** (ADR-0020, as
+  amended by #345; ADR-0035 §3.2). A death event releases only the
+  single participant its `participant` statements name in the role
+  `principal` (`object_has_role`, read from the statement's qualifier,
+  not the truthy triple), through a statement at the best rank that
+  states no other role; an informant or a witness at someone else's
+  death stays possibly living. A death with no principal, with several,
+  with one of unknown value, or with no role stated at all is nobody's
+  own and releases no one. A dated birth event's `point in time` is a
+  birth of its principal, read as a `date of birth` is: it may release a
+  principal born only by it, and an 1850 date of birth beside a 1990
+  birth event keeps the person possibly living. A birth event that is
+  nobody's own only adds its date to the births of participants who have
+  a birth already, so it can only keep them possibly living. The export
+  and the site read both through `yizkr.core.privacy.read_evidence`, so
+  they decide each person alike.
 - **No curation duty.** There is no `living` column in the review CSV
   and nothing the reviewer must decide. Privacy falls out of what
   sources already assert; a curator who knows a person is dead records

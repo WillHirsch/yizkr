@@ -55,12 +55,12 @@ from yizkr.core import sparql
 from yizkr.core.config import Config
 from yizkr.core.dates import check_time, unsupported_in_graph
 from yizkr.core.privacy import (
-    BIRTHS_QUERY,
     DEFAULT_CUTOFF_YEARS,
+    LifeEvidence,
     family_type,
     is_possibly_living,
-    latest_births,
     people_selection,
+    read_evidence,
 )
 from yizkr.core.wiki import WikiClient
 from yizkr.disagreement import Disagreement, Side
@@ -83,10 +83,11 @@ def qid_of(binding: dict, name: str) -> str:
 # person evidence at any rank, so a person whose `human` type a curator
 # deprecated or outranked, or who has no type but other evidence, is listed and
 # badged too. ?deceased is true when the graph holds any death-implying
-# statement (date/place/cause of death, place of burial) or a death event with
-# the person as participant — none of which needs a date. Births, for the
-# birth-recency cutoff, are read statement by statement with the query the
-# non-privileged export reads them with (core/privacy.py). ?family is true for
+# statement of the person's own (date/place/cause of death, place of burial),
+# none of which needs a date. Death events, whose principal alone they mark
+# deceased, and births, for the birth-recency cutoff, are read apart, with the
+# reading the non-privileged export uses (core/privacy.py's read_evidence).
+# ?family is true for
 # a family (``{family_type}``, the privacy module's test), which never
 # enters the non-privileged export, released or not. No stored "living"
 # flag is read; the badge is derived, like the non-privileged export.
@@ -102,8 +103,6 @@ WHERE {{
      || EXISTS {{ ?person wdt:{place_of_death} [] }}
      || EXISTS {{ ?person wdt:{cause_of_death} [] }}
      || EXISTS {{ ?person wdt:{burial_place} [] }}
-     || EXISTS {{ ?deathEvt wdt:{participant} ?person ;
-                            wdt:{instance_of} wd:{death} }}
        ) AS ?deceased)
   SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en" . }}
 }}
@@ -520,10 +519,15 @@ class SiteBuilder:
     # -- helpers ------------------------------------------------------------
 
     @cached_property
-    def _latest_births(self) -> dict[str, list[int | None]]:
-        """The latest year each birth statement allows, by person, read
-        with the query and the reading the non-privileged export uses."""
-        return latest_births(self.run(self._instance_query(BIRTHS_QUERY)))
+    def _evidence(self) -> LifeEvidence:
+        """The births by person and the principals of death events, read
+        with the queries and the reading the non-privileged export uses."""
+        return read_evidence(
+            self.run,
+            prefix_block(self.config.concept_uri),
+            self.properties,
+            self.items,
+        )
 
     def _possibly_living(self, person: dict) -> bool:
         """Runtime privacy determination (ADR-0020): possibly living
@@ -534,8 +538,11 @@ class SiteBuilder:
         family out: any of its people may be living."""
         if cell(person, "family") == "true":
             return True
-        births = self._latest_births.get(qid_of(person, "person"), [])
-        has_death = cell(person, "deceased") == "true"
+        qid = qid_of(person, "person")
+        births = self._evidence.births.get(qid, [])
+        has_death = (
+            cell(person, "deceased") == "true" or qid in self._evidence.died
+        )
         return is_possibly_living(births, has_death, self._cutoff_year)[0]
 
     def _instance_query(self, template: str) -> str:

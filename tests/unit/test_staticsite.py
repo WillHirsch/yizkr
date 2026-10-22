@@ -38,13 +38,28 @@ from tests.unit.test_disagreement import (
     stated,
     text,
 )
-from tests.unit.test_privacy import BIRTHS, CASES, EXCLUDED, birth_rows
+from tests.unit.test_privacy import (
+    BIRTHS,
+    CASES,
+    EVENT_BIRTHS,
+    EVENT_CASES,
+    EVENT_EXCLUDED,
+    EVENT_PARTICIPANTS,
+    EVENT_PEOPLE_BIRTHS,
+    EXCLUDED,
+    birth_rows,
+)
 from yizkr import disagreement
 from yizkr.backup import exclusion_report
 from yizkr.core import sparql
 from yizkr.core.config import Config
 from yizkr.core.dates import UnsupportedDate
-from yizkr.core.privacy import BIRTHS_QUERY, family_type, people_selection
+from yizkr.core.privacy import (
+    BIRTHS_QUERY,
+    family_type,
+    participants_query,
+    people_selection,
+)
 from yizkr.model.schema import read_manifest_data
 from yizkr.queries.publish import load_templates, prefix_block
 from yizkr.staticsite import SiteBuilder, format_time, ordinal
@@ -750,11 +765,74 @@ class TestTheBadgeReadsEveryBirth:
         )
         assert builder._possibly_living(PRIVACY_PEOPLE[0])
         assert builder._possibly_living(PRIVACY_PEOPLE[1])
-        properties, _ = vocabulary
+        properties, items = vocabulary
         assert calls == [
             prefix_block(config().concept_uri)
-            + BIRTHS_QUERY.format(**properties)
+            + BIRTHS_QUERY.format(**properties),
+            prefix_block(config().concept_uri)
+            + participants_query(properties, items),
         ]
+
+
+class TestTheBadgeReadsEventsAsTheExportDoes:
+    """A birth or death event is its principal's own (#345): the badge
+    stays on an informant at someone else's death and on everyone in a
+    death that states no role and has several participants, comes off
+    the principal, and reads a dated birth event as a further birth of its
+    principal, as the export decides each of them."""
+
+    PEOPLE = [
+        {
+            "person": uri(qid),
+            "personLabel": literal(description),
+            "deceased": literal("false"),
+            "aliases": literal(""),
+        }
+        for qid, (description, _, _) in EVENT_CASES.items()
+    ]
+
+    def responses(self, vocabulary) -> dict:
+        properties, _ = vocabulary
+        # the birth events' dates, asked before the births they read like
+        dates = f"?person p:{properties['point_in_time']} ?statement"
+        return {
+            dates: EVENT_BIRTHS,
+            "?eventKind": EVENT_PARTICIPANTS,
+            **RESPONSES,
+            "GROUP_CONCAT(DISTINCT ?alias": self.PEOPLE,
+            'BIND("value" AS ?bound)': EVENT_PEOPLE_BIRTHS,
+        }
+
+    def badged(self, site) -> set[str]:
+        return {
+            qid
+            for qid in EVENT_CASES
+            if "possibly living — never in the non-privileged export"
+            in (site / f"people/{qid}.html").read_text()
+        }
+
+    def test_the_badge_follows_whose_own_each_event_is(
+        self, tmp_path, vocabulary
+    ):
+        site, _ = build(tmp_path, vocabulary, self.responses(vocabulary))
+        assert self.badged(site) == EVENT_EXCLUDED
+        assert "Q322" in self.badged(site)  # the informant
+        assert "Q329" in self.badged(site)  # born 1850, and in 1990
+
+    def test_the_site_and_the_export_agree(self, tmp_path, vocabulary):
+        site, _ = build(tmp_path, vocabulary, self.responses(vocabulary))
+        answers = self.responses(vocabulary)
+
+        def run(query: str) -> list[dict]:
+            if "SAMPLE(?deathDate)" in query:
+                return [{"person": uri(qid)} for qid in EVENT_CASES]
+            for marker, rows in answers.items():
+                if marker in query:
+                    return rows
+            return []
+
+        export = exclusion_report(config(), run=run, vocabulary=vocabulary)
+        assert self.badged(site) == export.excluded == EVENT_EXCLUDED
 
 
 class TestThePeopleAreTheExports:
@@ -803,6 +881,15 @@ class TestThePeopleAreTheExports:
         (roster,) = [q for q in calls if "GROUP_CONCAT(DISTINCT ?alias" in q]
         assert f"BIND({family_type(properties, items)} AS ?family)" in roster
         assert "?personDescription ?deceased ?family\n" in roster
+
+    def test_the_roster_reads_no_death_event(self):
+        # a death event is read apart, for its principal alone (#345): no
+        # participant of any role is taken for the one who died
+        from yizkr.staticsite import PEOPLE_QUERY
+
+        assert "participant" not in PEOPLE_QUERY
+        assert "{death}" not in PEOPLE_QUERY
+        assert PEOPLE_QUERY.count("EXISTS {{ ?person wdt:") == 4
 
     def test_a_family_is_badged_whatever_the_check_says(
         self, tmp_path, vocabulary

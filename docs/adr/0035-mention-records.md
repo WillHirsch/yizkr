@@ -972,12 +972,13 @@ A `participant` claim gains a role, as Wikidata qualifies one with
   an event, which #361 read either way (`pipeline/clustering.py:918-922`).
 - **The GEDCOM adapter** makes each person's death event with that person
   as principal.
-- **Privacy.** #345 reads the role: a death event is death evidence for
-  its principal alone, and a dated birth event is a birth of its
-  principal. Until #345 lands, the possibly-living readers
-  (`backup.py:205-220`, `staticsite.py:83-102`) count every participant
-  of a death event as dead, informants, witnesses and officiants
-  included. So #345 lands before any export or publication.
+- **Privacy.** The possibly-living readers read the role (ADR-0020, as
+  amended by #345): a death event is death evidence for its single
+  principal alone, and a dated birth event is a birth of its single
+  principal. A death or birth with no principal, several, one of unknown
+  value, or no role at all is nobody's own: a death then releases no
+  one, and a birth only adds its date to the births its participants
+  already have.
 
 #### 3.3 Kinship classes
 

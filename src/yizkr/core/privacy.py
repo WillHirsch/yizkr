@@ -14,14 +14,29 @@ evidence" is any source-asserted signal that presupposes death:
 * a `date of death`, `place of death`, or `cause of death`;
 * a `place of burial` (burial presupposes death — the requirement's
   explicit example);
-* participation in a `death` event (ADR-0014 models death as an event
-  like any other).
+* a `death` event that is the person's own (ADR-0014 models death as an
+  event like any other).
 
 None of these requires *both* a date and a place — a cause of death, a
 burial place, or an undated death event each records "deceased" with no
 particulars. So a person can be identified as deceased without a
 time/place of death, and no curator "living/deceased" decision is ever
 demanded: privacy falls out of what sources already assert.
+
+A birth or a death event is its principal's own, the one it happens to,
+and no one else's who takes part in it (``event_principal``, ADR-0035
+§3.2): the one participant its statements name in the role `principal`.
+An event with no principal, with several, or with one of unknown value
+is nobody's own, and so is one whose participants state no role at all.
+A death event is death evidence for its principal alone, through a
+participant statement at the best rank, as a truthy value would be; an
+informant or a witness at someone else's death is never released by it.
+A dated birth event's `point in time` (``BIRTH_EVENT_DATES_QUERY``) is a
+birth of its principal, read as a `date of birth` is, so it may release a
+principal who has no other birth; a birth that is nobody's own adds its
+date only to the births of its participants who have a birth already, so
+it can only keep them possibly living. ``read_evidence`` reads both, with
+the births, for the non-privileged export and the site alike.
 
 Births fail closed. ``BIRTHS_QUERY`` reads every `date of birth`
 statement a curator has not deprecated, through its statement node, so no
@@ -57,7 +72,8 @@ export leaves it out and the site badges it.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 
 from yizkr.core.dates import check_time
 
@@ -69,8 +85,9 @@ DEFAULT_CUTOFF_YEARS = 123
 # Statement properties (manifest keys) that presuppose the subject's
 # death. `age_at_death` is intentionally absent: it is a qualifier on
 # `date of death`, never a standalone statement, so it adds nothing.
-# Death-event participation is checked separately (it is a relation
-# through an event item, not a property on the person).
+# A death event is checked separately (it is a relation through an
+# event item, not a property on the person, and counts only for its
+# principal: ``event_principal``).
 DEATH_EVIDENCE_PROPERTIES = (
     "date_of_death",
     "place_of_death",
@@ -508,3 +525,238 @@ def is_possibly_living(
     if latest <= cutoff_year:
         return False, f"born by {latest}, beyond the {cutoff_year} cutoff"
     return True, f"born as late as {latest}, with no death evidence"
+
+
+# The role of the one an event happens to (ADR-0035 §3.2), a key of the
+# model manifest: the person born in a birth, the one who died in a death.
+PRINCIPAL_ROLE = "principal"
+
+# Every participant statement of every birth and death event, read through
+# its statement node at every rank: one row for each role it states (one
+# row with no role when it states none), with the statement's rank, its
+# value when it has one (an item, or an unknown value) and whether the
+# role is `principal` (read through redirects). A death event is an item
+# whose truthy type is `death`, as the other death evidence is read
+# truthy; a birth event is an item with a `birth` type at any rank,
+# through redirects. ``participants_query`` fills in the ids.
+PARTICIPANTS_QUERY = """\
+SELECT ?event ?eventKind ?part ?partRank ?value ?role ?principal
+WHERE {{
+  {{
+    ?event wdt:{instance_of} wd:{death} .
+    BIND("death" AS ?eventKind)
+  }} UNION {{
+    ?event p:{instance_of} ?birthTyping .
+    ?birthTyping ps:{instance_of}/{same_as}* wd:{birth} .
+    BIND("birth" AS ?eventKind)
+  }}
+  ?event p:{participant} ?part .
+  ?part wikibase:rank ?partRank .
+  OPTIONAL {{ ?part ps:{participant} ?value . }}
+  OPTIONAL {{
+    ?part pq:{object_has_role} ?role .
+    BIND(EXISTS {{ ?role {same_as}* wd:{principal} . }} AS ?principal)
+  }}
+}}
+"""
+
+
+def participants_query(
+    properties: Mapping[str, str], items: Mapping[str, str]
+) -> str:
+    """``PARTICIPANTS_QUERY`` with an instance's ids."""
+    return PARTICIPANTS_QUERY.format(
+        same_as=SAME_AS,
+        instance_of=properties["instance_of"],
+        participant=properties["participant"],
+        object_has_role=properties["object_has_role"],
+        birth=items["birth"],
+        death=items["death"],
+        principal=items[PRINCIPAL_ROLE],
+    )
+
+
+# Every dated birth event's `point in time` statements, read as
+# ``BIRTHS_QUERY`` reads a `date of birth`: statement by statement, with
+# the earliest and latest dates each carries, deprecated ones aside. Here
+# ?person is the event, whose date ``read_evidence`` gives its principal,
+# or, when it is nobody's own, its participants who have a birth already.
+# ``birth_event_dates_query`` fills in the ids.
+BIRTH_EVENT_DATES_QUERY = BIRTHS_QUERY.replace(
+    "?person p:{date_of_birth} ?statement .",
+    "?person p:{instance_of}/ps:{instance_of}/{same_as}* wd:{birth} .\n"
+    "    ?person p:{point_in_time} ?statement .",
+).replace(
+    "wd:{date_of_birth} wikibase:statementValue",
+    "wd:{point_in_time} wikibase:statementValue",
+)
+
+
+def birth_event_dates_query(
+    properties: Mapping[str, str], items: Mapping[str, str]
+) -> str:
+    """``BIRTH_EVENT_DATES_QUERY`` with an instance's ids."""
+    return BIRTH_EVENT_DATES_QUERY.format(
+        **properties, same_as=SAME_AS, birth=items["birth"]
+    )
+
+
+_ENTITY = re.compile(r"/entity/(Q[1-9][0-9]*)$")
+_DEPRECATED = "DeprecatedRank"
+_PREFERRED = "PreferredRank"
+
+
+@dataclass(frozen=True)
+class Participation:
+    """One participant statement of an event: `value` is the QID it names,
+    ``UNKNOWN`` for an unknown value or one that is no item, and "" for
+    no value; `rank` is the local name of its rank (``NormalRank``);
+    `roles` holds, for each role it states, whether that role is
+    `principal`."""
+
+    value: str
+    rank: str = "NormalRank"
+    roles: frozenset[tuple[str, bool]] = frozenset()
+
+
+UNKNOWN = "?"
+
+
+def event_principal(
+    parts: Iterable[Participation], *, best_rank_only: bool
+) -> str | None:
+    """The QID whose own the event is (ADR-0035 §3.2), from its
+    participant statements, or None when it is nobody's own. It is its
+    principal's: the one value that every statement stating a `principal`
+    role names, at any rank. With no principal, or with several, or with
+    one of unknown value, it is nobody's own, and so is an event whose
+    participants state no role at all. The principal's own statement must
+    state no role but `principal` and must not be deprecated; with
+    `best_rank_only` it must be at the best rank among the event's
+    participant statements, as a truthy value is. A statement a curator
+    deprecated can so name a second principal, and take a release away,
+    but never give one."""
+    parts = list(parts)
+    claimed = {
+        part.value
+        for part in parts
+        if part.value and any(principal for _, principal in part.roles)
+    }
+    if len(claimed) != 1 or UNKNOWN in claimed:
+        return None
+    (principal,) = claimed
+    counted = [part for part in parts if part.rank != _DEPRECATED]
+    if best_rank_only and counted:
+        best = (
+            _PREFERRED
+            if any(part.rank == _PREFERRED for part in counted)
+            else "NormalRank"
+        )
+        counted = [part for part in counted if part.rank == best]
+    if any(
+        part.value == principal
+        and all(is_principal for _, is_principal in part.roles)
+        for part in counted
+    ):
+        return principal
+    return None
+
+
+def principals_by_event(
+    rows: Iterable[Mapping[str, Mapping[str, str]]],
+) -> dict[str, dict[str, set[str]]]:
+    """Whose own each event is, by its kind and its QID, from the rows of
+    ``PARTICIPANTS_QUERY``: "death" and "birth" map each event to its
+    principal, or to no one (``event_principal``: a death's at the best
+    rank, a birth's at any rank a curator has not deprecated); "shared
+    birth" maps each birth that is nobody's own to the QIDs it names in
+    the participant statements a curator has not deprecated. A role row
+    with no `principal` answer reads as another role."""
+    found: dict[tuple[str, str], dict[str, dict]] = {}
+    for row in rows:
+        event = _cell(row, "event").rsplit("/", 1)[-1]
+        part = found.setdefault(
+            (_cell(row, "eventKind"), event), {}
+        ).setdefault(_cell(row, "part"), {"roles": set(), "row": row})
+        if "role" in row:
+            part["roles"].add(
+                (_cell(row, "role"), _cell(row, "principal") == "true")
+            )
+    events: dict[str, dict[str, set[str]]] = {
+        "birth": {},
+        "death": {},
+        "shared birth": {},
+    }
+    for (kind, event), parts in found.items():
+        if kind not in ("birth", "death"):
+            continue
+        participations = []
+        for part in parts.values():
+            row = part["row"]
+            value = _cell(row, "value")
+            item = _ENTITY.search(value) if value else None
+            participations.append(
+                Participation(
+                    value=item.group(1) if item else UNKNOWN if value else "",
+                    rank=_cell(row, "partRank").rsplit("#", 1)[-1],
+                    roles=frozenset(part["roles"]),
+                )
+            )
+        principal = event_principal(
+            participations, best_rank_only=kind == "death"
+        )
+        events[kind][event] = {principal} if principal else set()
+        if kind == "birth" and principal is None:
+            events["shared birth"][event] = {
+                part.value
+                for part in participations
+                if part.value not in ("", UNKNOWN) and part.rank != _DEPRECATED
+            }
+    return events
+
+
+@dataclass
+class LifeEvidence:
+    """What the possibly-living call reads beside a person's own death
+    statements: `births`, the latest year each birth allows by person
+    (``latest_births``), those of birth events included
+    (``read_evidence``); and `died`, everyone who is the principal of a
+    death event (``event_principal``)."""
+
+    births: dict[str, list[int | None]] = field(default_factory=dict)
+    died: set[str] = field(default_factory=set)
+
+
+def read_evidence(
+    run: Callable[[str], list[dict]],
+    prefixes: str,
+    properties: Mapping[str, str],
+    items: Mapping[str, str],
+) -> LifeEvidence:
+    """The births and the death events the possibly-living call weighs,
+    read with `run` (a query runner, given `prefixes`): every `date of
+    birth` statement (``BIRTHS_QUERY``), and each dated birth event's
+    `point in time`, and the principals of the death events. A birth
+    event's date is a birth of its principal, as a `date of birth` is, so
+    it may release them; a birth that is nobody's own only adds its date
+    to the births of its participants who have one already, after the
+    principals' have been added, so it never releases anyone. The
+    non-privileged export and the site both read them here, so both
+    decide each person the same way."""
+    births = latest_births(run(prefixes + BIRTHS_QUERY.format(**properties)))
+    events = principals_by_event(
+        run(prefixes + participants_query(properties, items))
+    )
+    if events["birth"]:
+        dated = latest_births(
+            run(prefixes + birth_event_dates_query(properties, items))
+        )
+        for event, years in dated.items():
+            for person in events["birth"].get(event, ()):
+                births.setdefault(person, []).extend(years)
+        for event, years in dated.items():
+            for person in events["shared birth"].get(event, ()):
+                if person in births:
+                    births[person].extend(years)
+    died = set().union(*events["death"].values())
+    return LifeEvidence(births=births, died=died)
