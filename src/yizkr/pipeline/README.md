@@ -415,15 +415,33 @@ re-running one step in isolation — but for a normal ingest you only ever run
   OpenRefine or any spreadsheet (R4). Rows are matched back by
   `claim_id`, a content hash: sorting or filtering the sheet cannot
   mis-apply decisions, and edited claim content is detected loudly.
-  **Only explicit `approve` decisions pass** — no decision means no
-  write; human confirmation is part of the data flow (R3).
+  **Only explicit approvals pass** — a per-row `approve`, or the
+  `bulk-accept` that accept-all writes — and no decision means no write;
+  human confirmation is part of the data flow (R3). apply-review refuses
+  the whole sheet, writing nothing, when it has `bulk-accept` on any
+  claim whose property in the batch is `depicts`, whatever the sheet's
+  cells say (only a per-row human decision confirms a depicts claim,
+  ADR-0005), or when it carries an equivalences sheet's `entity_id` or
+  `verdict` column (its approvals may be ratified machine verdicts).
 - **accept-all** — writes a `*.reviewed.csv` from a gate CSV with the
   `decision` column pre-filled, so a curator can flip the few outliers
   instead of typing a decision on every row. It writes `<input-stem>`
   `.reviewed.csv` beside the input (so `equivalences.csv` →
   `equivalences.reviewed.csv`, `review.csv` → `review.reviewed.csv`) and
   detects the gate by the CSV's columns:
-  - **claims** (`review.csv`): every row → `approve`.
+  - **claims** (`review.csv`): every row → `bulk-accept`, an approval
+    that also records the whole-sheet disposition (ADR-0023). When
+    `ingest run` writes a sheet with no decision other than
+    `bulk-accept`, each new statement it writes gets the distinct
+    low-scrutiny edit summary `ingest: write bulk-accepted claim`, so it
+    can be found for reappraisal. Any other decision on the sheet, such
+    as a `reject` on one flipped outlier, makes the whole sheet an
+    ordinary review (`ingest: write reviewed claim`), and `ingest write`
+    always writes that summary. Only a per-row human decision confirms a
+    `depicts` claim (ADR-0005): accept-all refuses the whole sheet,
+    writing nothing, if any row's `property` is `depicts`, or if it
+    lacks the exactly named `claim_id` column or exactly one `property`
+    column, so its depicts rows cannot be found.
   - **equivalences** (`equivalences.csv`): each row is set from its
     machine `verdict` — *ratify the verdict*, not a blanket approve:
     `same → approve`, `distinct → reject`, `uncertain → blank` (left for
