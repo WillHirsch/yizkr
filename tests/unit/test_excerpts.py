@@ -194,7 +194,7 @@ class TestAnExcerpt:
         assert letter
         assert not any("Angerring 71" in prompt for prompt in letter)
         # the run plans it once it is found, and its end counts it
-        assert planned(orchestrator) == {doc.sha1: "media", LETTER_SHA1: KIND}
+        assert planned(orchestrator) == {doc.sha1: "pdf", LETTER_SHA1: KIND}
         (end,) = this_run(orchestrator, "run-end")
         assert end["statuses"] == {AWAITING_CLAIMS: 2}
 
@@ -652,7 +652,7 @@ class TestAScratchRun:
         assert fakes.calls.count(("vision", f"{LETTER_SHA1}.png")) == 1
         manifest = RunDir(driver.state_dir).manifest()
         assert {d["sha1"]: d["kind"] for d in manifest["documents"]} == {
-            pdf: "media",
+            pdf: "pdf",
             LETTER_SHA1: KIND,
         }
         assert manifest["scratch"]["canaries"] == [pdf, LETTER_SHA1]
@@ -668,14 +668,15 @@ class TestAScratchRun:
         # the report counts the images each PDF places, as aggregates
         report = build(driver.state_dir)
         documents = report["aggregate"]["documents"]
-        assert documents["by_kind"] == {"media": 1, KIND: 1}
+        assert documents["by_kind"] == {"pdf": 1, KIND: 1}
         assert documents["pdf_images"] == {
             "pdfs": 1,
             "placed": 1,
             "distinct": 1,
             "per_pdf": {"1": 1},
-            "excerpts": 1,
         }
+        assert documents["deck_images"]["decks"] == 0
+        assert documents["excerpts"] == 1
         assert documents["views_not_read"] == 0
         # the excerpt's extraction counts its mention records and notes as
         # the PDF's does (#420)
@@ -692,8 +693,10 @@ class TestAScratchRun:
         text = render_markdown(report["aggregate"])
         assert (
             "Images placed within PDFs read page by page and read on their "
-            "own: 1 in 1 PDFs (1 distinct; images per PDF: 1 in 1); "
-            "documents of their own (excerpts): 1"
+            "own: 1 in 1 PDFs (1 distinct; images per PDF: 1 in 1); images "
+            "embedded in decks and read on their own: 0 in 0 decks (0 "
+            "distinct; images per deck: none); documents of their own "
+            "(excerpts): 1"
         ) in text
         assert LETTER_SHA1 not in text
 
@@ -767,7 +770,7 @@ class TestAScratchRun:
         kinds = {
             d["kind"] for d in RunDir(driver.state_dir).manifest()["documents"]
         }
-        assert kinds == {"media"}
+        assert kinds == {"pdf", "media"}
 
     def test_excerpts_is_no_document_s_directory(self, tmp_path):
         """A file of the folder named for the excerpts' directory gets a
@@ -806,4 +809,4 @@ class TestAScratchRun:
         ]
         report = build(driver.state_dir)["aggregate"]["documents"]
         assert report["pdf_images"]["per_pdf"] == {"1": 2}
-        assert report["pdf_images"]["excerpts"] == 2
+        assert report["excerpts"] == 2

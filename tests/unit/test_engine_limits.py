@@ -2100,14 +2100,15 @@ class TestEstimate:
             {"sha1": A, "kind": "text", "stages": EXTRACTED},
             {"sha1": B, "kind": "media", "stages": EXTRACTED},
             {"sha1": C, "kind": "presentation", "stages": EXTRACTED},
+            {"sha1": D, "kind": "pdf", "stages": EXTRACTED},
         ]
         estimate = estimate_calls(plan, sizes={A: 5000})
-        # a scan's vision call; the manifest and a chunk per 2000
-        # characters (three for A), else one; a critique each
+        # a scan's and a PDF's vision call (#502); the manifest and a chunk
+        # per 2000 characters (three for A), else one; a critique each
         assert estimate == {
-            "transcription": StageEstimate(documents=3, calls=1),
-            "extraction": StageEstimate(documents=3, calls=4 + 2 + 2),
-            "critique": StageEstimate(documents=3, calls=3),
+            "transcription": StageEstimate(documents=4, calls=2),
+            "extraction": StageEstimate(documents=4, calls=4 + 2 + 2 + 2),
+            "critique": StageEstimate(documents=4, calls=4),
         }
 
     def test_a_run_estimates_its_own_rerun(self, cli, clock, tmp_path):

@@ -177,23 +177,24 @@ and `yizkr.reset` for the reset.
     chunks an entity manifest makes follow its entities, which a text's
     length only approaches, so a dense document can take more;
   - **up to more for excerpts**: an image a PDF places within a
-    text-layer page, read on its own, becomes a document of its own, an
-    excerpt (ADR-0008), found only as its PDF is transcribed. The PDF's
-    transcription stage, which the estimate takes through the pipeline's
-    own code, reads the PDF page by page from the file itself
-    (pypdfium2, no model call), so the estimate knows each image it
-    places: once however many PDFs place it, and none that the
+    text-layer page, or a deck embeds on a slide, read on its own,
+    becomes a document of its own, an excerpt (ADR-0008), found only as
+    its container is transcribed. The container's transcription stage,
+    which the estimate takes through the pipeline's own code, reads it
+    page by page from the file itself (a PDF with pypdfium2, a deck from
+    its XML, no model call), so the estimate knows each image it places:
+    once however many PDFs and decks place it, and none that the
     never-ingest list names or whose bytes a document of the corpus has.
     An image whose kept reading (one that passed the check, which the
     cache answers) calls every page blank or not a document page is left
     out, as the run makes no excerpt of it; an image whose earlier
     reading failed the check is read again, and counted. In a run
-    invoked again, a PDF whose transcription stands is not read again:
-    its excerpts are those its directory holds, and each counts the
-    stages whose views do not stand, and every stage after the first of
-    them. An image of a PDF whose transcription is made again counts
-    every excerpt stage, though an excerpt the run holds for it may have
-    views that stand. Each excerpt stage (as `--until` plans them) is
+    invoked again, a container (PDF or deck) whose transcription stands is not
+    read again: its excerpts are those its directory holds, and each counts the
+    stages whose views do not stand, and every stage after the first of them.
+    An image of a container whose transcription is made again counts every
+    excerpt stage, though an excerpt the run holds for it may have views that
+    stand. Each excerpt stage (as `--until` plans them) is
     counted by the mean for excerpts over every run in the runs
     directory that measured the stage for one, pooled, so a run made
     under older prompts or models counts too, else as typical (none, an
@@ -250,7 +251,7 @@ uv run yizkr scratch run
 - **Failed documents.** A run that went to the end with failed documents
   is complete: the bare command then starts a new run, and only `--resume`
   tries the failed documents again in the same run.
-- **The order.** One document of each kind (text file, image or PDF,
+- **The order.** One document of each kind (text file, image, PDF,
   deck, GEDCOM file), the first by name, goes through all its stages
   first: the canaries. A misalignment of any kind shows within the first
   calls, and the monitor has a rate for each kind early. The rest follow
@@ -303,7 +304,7 @@ with `--until clustering` (or an earlier stage) needs none.
   instance: the identity map's hash, each document's SHA-1 with the
   content hash of its batch and what registration reads of it (its kind,
   its title, its file name, its derived media's record, an excerpt's
-  PDFs), the never-ingest list's hash, the writer's version and the
+  PDFs and decks), the never-ingest list's hash, the writer's version and the
   source of the whole package but the modules that only read, and the
   model manifest's hash. A batch's run stamps are in it, so every new run
   resets and writes again; only a later invocation of the run that wrote
@@ -330,9 +331,8 @@ with `--until clustering` (or an earlier stage) needs none.
   the identity map does not hold, an unsupported date, a run item's
   term the instance may keep in another form) is refused first, before
   anything of its document is registered, and counted. Nothing of a
-  refused batch is written; a refused PDF's artifact may still be
-  registered as the container of an excerpt whose batch was not
-  refused.
+  refused batch is written; a refused PDF's or deck's artifact may still be
+  registered as the container of an excerpt whose batch was not refused.
 - **write** writes every claim of each registered document's batch,
   with no review and no approval file, at normal rank, with both
   references (stated in the artifact or fragment with its locator,
@@ -395,8 +395,9 @@ uv run yizkr scratch abort  [<run>] [--stage NAME | --kind NAME] [--reason TEXT]
 
 The monitor's command line (`:` or Enter) asks the same. A request names
 the whole run, a stage (`transcription`, `extraction`, `critique`,
-`gedcom`, or a corpus stage) or a kind (`text`, `media`, `presentation`,
-`gedcom`), and goes into the run's control file, which the driver reads
+`gedcom`, or a corpus stage) or a kind (`text`, `media` for a photograph or
+an image read whole, `pdf`, `presentation`, `gedcom`, `excerpt`), and
+goes into the run's control file, which the driver reads
 before each stage of each document and before each corpus stage. With no
 run named, the command takes the latest, and says which run it wrote to.
 

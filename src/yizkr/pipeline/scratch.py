@@ -13,12 +13,13 @@ follows it as it follows any run.
 **Stages.** Each document takes the per-document stages its kind plans
 (orchestrate.DOCUMENT_STAGES): transcription, which the transcription
 check guards, extraction and the critique; or the GEDCOM adapter for a
-.ged file. An image a PDF places within a text-layer page, read on its
-own, is a document of its own, an excerpt (orchestrate.ExcerptRun), which
-takes the same stages once its PDF's transcription has found it, and
-joins the run plan then. Nothing before the barrier reads or writes the
-wiki: no artifact is registered before the register stage, and a deck's
-derived media are recorded in its directory (ADR-0025 §2). There is no
+.ged file. An image a PDF places within a text-layer page, or a deck
+embeds on a slide, read on its own, is a document of its own, an excerpt
+(orchestrate.ExcerptRun), which takes the same stages once its
+container's transcription has found it, and joins the run plan then.
+Nothing before the barrier reads or writes the wiki: no artifact is
+registered before the register stage, and a deck's derived media are
+recorded in its directory (ADR-0025 §2). There is no
 human stop. When every document's per-document stages have ended, done
 or failed, the run is at the **barrier**, and the driver runs the corpus
 stages registered with it (CORPUS_STAGES), in order, over the documents
@@ -35,10 +36,10 @@ every per-document stage first: the canaries. The rest follow stage by
 stage, every transcription before any extraction and every extraction
 before any critique, a document's own stages always in order. So a
 misalignment of any kind shows within the first calls, and each stage's
-rate is known early. An excerpt joins as its PDF's transcription ends:
-the invocation's first is the excerpts' canary, which goes through its
-stages next, and the others take their stages rank by rank, after the
-documents in each rank. `until` stops the run after a stage.
+rate is known early. An excerpt joins as its container's transcription
+ends: the invocation's first is the excerpts' canary, which goes through
+its stages next, and the others take their stages rank by rank, after
+the documents in each rank. `until` stops the run after a stage.
 
 **Control.** Before each stage of each document, and before each corpus
 stage, the driver reads the run's control file (rundir.fold_control): a
@@ -134,6 +135,7 @@ from yizkr.pipeline.orchestrate import (
     MODEL_ROLES,
     MODEL_VARIABLE,
     PAUSED,
+    PDF,
     DocumentRun,
     ExcerptRun,
     Orchestrator,
@@ -1171,7 +1173,7 @@ class ScratchDriver(Orchestrator):
 
         try:
             preflight_vision_transcription(
-                doc.source for doc in docs if doc.kind == "media"
+                doc.source for doc in docs if doc.kind == PDF
             )
         except MissingPrerequisite as exc:
             raise PreflightFailed([str(exc)]) from None
@@ -1813,7 +1815,8 @@ class ScratchDriver(Orchestrator):
         taken, duplicates = self._canonical(docs)
         canaries = self._canaries(taken)
         # the excerpts the documents' directories hold already join the
-        # plan; the others join it as their PDFs' transcriptions find them
+        # plan; the others join it as their containers' transcriptions find
+        # them
         self._excerpts, self._queued = {}, set()
         self._corpus_sha1s = frozenset(doc.sha1 for doc in docs)
         known = self._known_excerpts(taken)

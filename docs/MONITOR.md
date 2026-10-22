@@ -206,7 +206,12 @@ ordering (#194) gives every kind a rate early.
 its SHA-1 prefix, kind and stage, and for how long.
 
 **Slices.** Each slice the operator can stop: the run, each stage and
-each kind, and any other scope a current request names. A stopped slice
+each kind, and any other scope a current request names. The kinds are
+the run plan's (orchestrate.DOCUMENT_STAGES): `text`, `media` (a
+photograph or other image, read whole), `pdf`, `presentation` (a deck),
+`gedcom` and `excerpt` (an image a PDF or a deck places, read as a
+document of its own), so `kind pdf` stops the PDFs and leaves the
+photographs running (ADR-0008, as amended by #502). A stopped slice
 shows since when it has been stopped (a second pause gives a new reason,
 not a new start), and who stopped it and why. The states are the driver's
 own: `control.jsonl` is read with rundir's reader and folded with its

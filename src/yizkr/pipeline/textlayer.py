@@ -7,7 +7,8 @@ exactly as it was typed. A scanned page carries only a picture of its
 text, and the vision engine reads it. `read_pages` tells the two apart
 page by page, and the transcription reads a PDF page by page whenever one
 of its pages reads from its text layer
-(yizkr.pipeline.transcribe.PdfPageTranscriber). A PDF none of whose pages
+(yizkr.pipeline.transcribe.PdfPageTranscriber, one of the paged
+containers of yizkr.pipeline.containers). A PDF none of whose pages
 does is read whole by the vision engine, in one call that gives the
 engine the PDF itself: the call the LLM cache, and the transcription
 seed, keep its answer under (ADR-0032).
@@ -66,7 +67,8 @@ opacity of 0.
 on their own, each as a witness of its own (ADR-0008): an original that a
 compilation embeds beside its translation is its writer's assertion, not
 the compiler's. An image under `MIN_IMAGE_SIDE` pixels on a side, or
-under `MIN_IMAGE_PIXELS` pixels in all, is taken for decoration: it could
+under `MIN_IMAGE_PIXELS` pixels in all (yizkr.pipeline.containers, the
+rule a deck's images are read by too), is taken for decoration: it could
 hold no more than a word of legible text, and it is not read. Each image
 is known by the SHA-1 of its bytes (ADR-0010), so one placed on several
 pages, or twice on one, is one image, read once. An image the
@@ -126,6 +128,13 @@ import pypdfium2 as pdfium
 import pypdfium2._library_scope as pdfium_library
 import pypdfium2.raw as pdfium_c
 
+from yizkr.pipeline.containers import (
+    ContainerPage,
+    ContainerPages,
+    PlacedImage,
+    is_decoration,
+)
+
 # how a page is read
 TEXT_LAYER = "text-layer"
 VISION = "vision"
@@ -145,9 +154,6 @@ BACKGROUND_COVER = 0.9
 # the largest share of a usable text layer's characters, whitespace aside,
 # that may be unreadable
 MAX_UNREADABLE_SHARE = 0.1
-# below either, an image is decoration and is not read
-MIN_IMAGE_SIDE = 24
-MIN_IMAGE_PIXELS = 10_000
 # the long edge, in pixels, of a page rendered for the vision engine
 RENDER_LONG_EDGE = 1600
 # zlib's level for PNG: fixed, since an image's bytes are its identity
@@ -301,62 +307,12 @@ def bitmap_png(bitmap: Any) -> bytes:
     return png(width, height, channels, bytes(pixels))
 
 
-@dataclass
-class PlacedImage:
-    """An image placed within a page and read on its own: its bytes, kept
-    in a file named for their SHA-1, and each place it has, as (page, its
-    place among that page's images read on their own, from 1)."""
-
-    sha1: str
-    suffix: str
-    path: Path
-    places: list[tuple[int, int]] = field(default_factory=list)
-
-    @property
-    def pages(self) -> list[int]:
-        return sorted({page for page, _place in self.places})
-
-
-@dataclass
-class PdfPage:
-    """How one page is read: its method, its text layer (a text-layer
-    page's), the file the vision engine reads (a vision page's), the
-    images placed within it that are read on their own, as (place, SHA-1)
-    in their order on the page, and how many annotations it shows that its
-    text layer leaves unread (a text-layer page's)."""
-
-    number: int
-    method: str
-    text: str = ""
-    vision: Path | None = None
-    images: list[tuple[int, str]] = field(default_factory=list)
-    annotations: int = 0
-
-
-@dataclass
-class PdfPages:
-    """A PDF read page by page (`read_pages`): its pages in order, the
-    images read on their own by SHA-1 in the order they are first placed,
-    and `notes` on what could not be read: an image whose bytes PDFium
-    could not give."""
-
-    pages: list[PdfPage]
-    images: dict[str, PlacedImage] = field(default_factory=dict)
-    notes: list[str] = field(default_factory=list)
-
-    @property
-    def by_text_layer(self) -> bool:
-        """Does any page read from its text layer? A PDF none of whose
-        pages does is read whole by the vision engine."""
-        return any(page.method == TEXT_LAYER for page in self.pages)
-
-
 def read_pages(
     path: Path,
     directory: Path,
     *,
     excluded: Callable[[str], bool] = lambda sha1: False,
-) -> PdfPages | None:
+) -> ContainerPages | None:
     """Read the PDF at `path` page by page (the module docstring says
     how): each page's method and text layer and, when any page reads from
     its text layer, the files the vision engine is to read, written into
@@ -411,7 +367,7 @@ class _Layout:
 
 def _read(
     document: Any, directory: Path, excluded: Callable[[str], bool]
-) -> PdfPages:
+) -> ContainerPages:
     """`read_pages` of an open document: every page's layout first, and
     only then, when a page reads from its text layer, the files."""
     layouts = []
@@ -421,9 +377,9 @@ def _read(
             layouts.append(_layout(page, index + 1, document.formenv))
         finally:
             page.close()
-    read = PdfPages(
+    read = ContainerPages(
         [
-            PdfPage(
+            ContainerPage(
                 layout.number,
                 layout.method,
                 layout.text,
@@ -432,7 +388,7 @@ def _read(
             for layout in layouts
         ]
     )
-    if not read.by_text_layer:
+    if not read.by_own_text:
         return read
     for layout, page in zip(layouts, read.pages, strict=True):
         if page.method == VISION:
@@ -638,11 +594,7 @@ def _draws(obj: Any, on_page: bool, drawing: set[int]) -> bool:
 def _decoration(obj: Any) -> bool:
     """Is an image too small to hold legible text (MIN_IMAGE_SIDE,
     MIN_IMAGE_PIXELS)?"""
-    width, height = obj.get_px_size()
-    return (
-        min(width, height) < MIN_IMAGE_SIDE
-        or width * height < MIN_IMAGE_PIXELS
-    )
+    return is_decoration(*obj.get_px_size())
 
 
 def _upright(obj: Any) -> bool:
@@ -864,8 +816,8 @@ def _write_vision(document: Any, layout: _Layout, directory: Path) -> Path:
 def _write_images(
     document: Any,
     layout: _Layout,
-    page: PdfPage,
-    read: PdfPages,
+    page: ContainerPage,
+    read: ContainerPages,
     directory: Path,
     excluded: Callable[[str], bool],
 ) -> None:
@@ -879,8 +831,9 @@ def _write_images(
                 data, suffix = image_bytes(objects[at][0])
             except (pdfium.PdfiumError, ValueError):
                 read.notes.append(
-                    f"page {layout.number}, image {place}: PDFium could not "
-                    "give its bytes, so it is not read"
+                    f"image not read on its own: page {layout.number}, image "
+                    f"{place}: PDFium could not give its bytes, so it is not "
+                    "read"
                 )
                 continue
             sha1 = hashlib.sha1(data).hexdigest()

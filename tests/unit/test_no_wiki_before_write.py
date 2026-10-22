@@ -39,7 +39,9 @@ import json
 import os
 import shutil
 import socket
+import struct
 import zipfile
+import zlib
 from pathlib import Path
 
 import pytest
@@ -166,10 +168,35 @@ def refusals(monkeypatch) -> Refusals:
 # -- a fictional corpus -------------------------------------------------------
 
 DECK = "Hutmacherei zum Blauen Hut.pptx"
+
+
 # synthetic image bytes: the shop front, and the studio portrait, which is
 # also a document of its own in the corpus
-SHOP_FRONT = b"\x89PNG synthetic: the shop front at Brunnenring 35"
-PORTRAIT = b"\x89PNG synthetic: " + "Photograph Brüsrich, Peiltal".encode()
+def tiny_png(caption: str) -> bytes:
+    """A 1x1 PNG carrying `caption` in a text chunk, so that each caption
+    gives other bytes: decoration, which a deck's transcription does not
+    read on its own (yizkr.pipeline.containers), though the deck's
+    record keeps it and the write registers it."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return (
+            struct.pack(">I", len(data))
+            + body
+            + struct.pack(">I", zlib.crc32(body))
+        )
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 0, 0, 0, 0))
+        + chunk(b"tEXt", b"Comment\x00" + caption.encode())
+        + chunk(b"IDAT", zlib.compress(b"\x00\x00"))
+        + chunk(b"IEND", b"")
+    )
+
+
+SHOP_FRONT = tiny_png("synthetic: the shop front at Brunnenring 35")
+PORTRAIT = tiny_png("synthetic: Photograph Brüsrich, Peiltal")
 FILM = b"synthetic film"
 
 
@@ -567,6 +594,33 @@ def test_a_pdf_s_excerpt_leaves_the_wiki_alone(
     assert excerpt.state.status == AWAITING_CLAIMS, excerpt.state.error
     states = run_state(orchestrator.rundir)
     assert {states[stage].status for stage in stages(excerpt)} == {DONE}
+
+
+def test_a_deck_s_excerpt_leaves_the_wiki_alone(tmp_path, refusals):
+    """A deck read slide by slide and the scan it embeds, extracted as a
+    document of its own (#502): neither asks anything of the wiki before
+    the write, on a first run or a second that reuses their views."""
+    from tests.unit.test_deck_excerpts import library_talk
+    from tests.unit.test_pdf_pages import LETTER_SHA1
+    from yizkr.pipeline.orchestrate import EXCERPT
+
+    folder = tmp_path / "decks"
+    folder.mkdir()
+    library_talk(folder / "library-talk-2018.pptx")
+
+    class Talk(BeforeTheWrite):
+        def _llm(self, role, doc):
+            return ScriptedEngine(doc.sha1, *PEOPLE["postcard-1938.txt"])
+
+    for _run in range(2):
+        orchestrator = Talk(folder, tmp_path / "state", refusals)
+        assert orchestrator.run() == 2
+        assert refusals.asked == []
+        excerpt = orchestrator._excerpts[LETTER_SHA1]
+        assert excerpt.kind == EXCERPT
+        assert excerpt.state.status == AWAITING_CLAIMS, excerpt.state.error
+        states = run_state(orchestrator.rundir)
+        assert {states[stage].status for stage in stages(excerpt)} == {DONE}
 
 
 def test_adjudication_given_a_roster_asks_nothing_of_the_wiki(refusals):

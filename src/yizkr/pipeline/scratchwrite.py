@@ -11,7 +11,7 @@ with the canonical content hash of its batch, whole, run stamps included,
 since the run item's label holds them, and what registration reads of it
 (its kind, its title, its file name, which its artifact's description
 gives, the record of its derived media and, for an excerpt, the PDFs
-that place it); the never-ingest list's hash; the writer's version
+and decks that place it); the never-ingest list's hash; the writer's version
 (WRITER_VERSION and the package's source, code_digest); and the model
 manifest's hash. Never a QID, an mtime or a timestamp. A batch's run
 stamps differ from run to run, so a new run resets and writes again,
@@ -54,7 +54,7 @@ writer would refuse whole is refused here first, before anything of its
 document is registered (check_batch): a mention the identity map does
 not hold, an unsupported date, a run item's term the instance may keep
 in another form. Nothing of a refused batch is written; a refused PDF's
-artifact may still be registered as the container of an excerpt whose
+or deck's artifact may still be registered as the container of an excerpt whose
 batch was not refused.
 
 **write** writes every claim of each registered document's batch, the

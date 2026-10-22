@@ -17,8 +17,9 @@ the wiki, the engine, the LLM cache or the corpus:
     <document>/      a document's state.json and its views:
                      transcription.json, batch.json, critique.json and
                      the extraction's extraction/coverage.json
-    excerpts/<sha1>/ the same, for an image a PDF places within a page
-                     read as a document of its own (ADR-0008)
+    excerpts/<sha1>/ the same, for an image a PDF or a deck places on a
+                     page or a slide, read as a document of its own
+                     (ADR-0008)
     corpus/<stage>/  a corpus stage's outputs: the clustering stage's
                      identity-map.json
 
@@ -242,8 +243,11 @@ STATUSES = frozenset(
 ROUTES = frozenset(
     {"llm-vision", "pdf-pages", "text-file", "pptx-adapter", "correction"}
 )
-# how a page of a PDF read page by page is read (yizkr.pipeline.textlayer)
-PAGE_METHODS = frozenset({"text-layer", "vision", "none"})
+# the route of a deck's transcription (transcribe.DECK_ENGINE)
+DECK = "pptx-adapter"
+# how a page of a container read page by page is read
+# (yizkr.pipeline.containers)
+PAGE_METHODS = frozenset({"text-layer", "slide-xml", "vision", "none"})
 RESOLUTIONS = frozenset({"record", "detected", "fallback", "override"})
 HIT_REASONS = frozenset({KEY_MATCH, "adopted"})
 MISS_REASONS = frozenset({"absent", "rejected", "refresh"})
@@ -305,6 +309,12 @@ ATTENTION_LABELS = frozenset(
         "conflicting clusters not merged",
         "ambiguous pairs to adjudicate",
         "hub keys not blocked on",
+        # a container's image its reading does not read on its own
+        # (presentation.UNREAD_IMAGE, and a PDF's image PDFium cannot give)
+        "image not read on its own",
+        # an image whose own reading the check failed
+        # (transcribe.READING_FAILED)
+        "image reading failed the check",
     }
 )
 # the leading labels of a document's failure outside its stages; any
@@ -999,13 +1009,13 @@ def _view(document: Document, stage: str, path: Path, kind: type) -> Any:
 
 
 def _pages(pages: Any) -> dict[str, Any]:
-    """A PDF read page by page, as its transcription's `pages` give it:
-    its pages by the method that read them, how many of its text-layer
-    pages show annotations the text layer leaves unread, and the images
-    placed within its pages that were read on their own, by their SHA-1s,
-    each once: its derived images (ADR-0008). Pages whose provenance
-    cannot be read are not counted, and neither is a name of an image that
-    is no SHA-1."""
+    """A container read page by page (a PDF's pages, a deck's slides), as
+    its transcription's `pages` give it: its pages by the method that read
+    them, how many of its text-layer pages show annotations the text layer
+    leaves unread, and the images placed on its pages that were read on
+    their own, by their SHA-1s, each once: its derived images (ADR-0008).
+    Pages whose provenance cannot be read are not counted, and neither is
+    a name of an image that is no SHA-1."""
     methods: Counter = Counter()
     annotated = 0
     images: set[str] = set()
@@ -1994,10 +2004,11 @@ def _aggregate_documents(
     resolved: Counter = Counter()
     page_methods: Counter = Counter()
     annotated_pages = 0
-    # each PDF's derived images: how many PDFs place how many images, and
-    # the images themselves, each once however many PDFs place it
-    images_per_pdf: Counter = Counter()
-    images: set[str] = set()
+    # each container's derived images, by the container's route (a PDF
+    # read page by page, a deck): how many containers place how many
+    # images, and the images themselves, each once however many place it
+    images_per: dict[str, Counter] = {"pdf-pages": Counter(), DECK: Counter()}
+    images: dict[str, set[str]] = {"pdf-pages": set(), DECK: set()}
     untranscribed = 0
     for document in planned:
         if "transcription" not in document.stages:
@@ -2014,12 +2025,16 @@ def _aggregate_documents(
         routes[_known(transcription["route"], ROUTES)] += 1
         if transcription["resolved"]:
             resolved[_known(transcription["resolved"], RESOLUTIONS)] += 1
-        page_methods.update(transcription.get("page_methods") or {})
-        annotated_pages += transcription.get("annotated_pages") or 0
+        container = transcription["route"]
+        if container not in images:
+            continue
+        if container == "pdf-pages":
+            page_methods.update(transcription.get("page_methods") or {})
+            annotated_pages += transcription.get("annotated_pages") or 0
         placed = transcription.get("images") or []
         if placed:
-            images_per_pdf[str(len(placed))] += 1
-            images.update(placed)
+            images_per[container][str(len(placed))] += 1
+            images[container].update(placed)
     return {
         "planned": len(planned),
         "files": entries,
@@ -2044,18 +2059,14 @@ def _aggregate_documents(
         "pdf_pages_annotated": annotated_pages,
         # the images placed within the pages of the PDFs read page by page
         # and read on their own, per PDF (ADR-0008): the PDFs that place
-        # any, the images they place (an image counted once per PDF, and
-        # once however many PDFs place it), how many PDFs place how many,
-        # and how many of the images are documents of their own, excerpts
-        "pdf_images": {
-            "pdfs": sum(images_per_pdf.values()),
-            "placed": sum(int(n) * c for n, c in images_per_pdf.items()),
-            "distinct": len(images),
-            "per_pdf": dict(
-                sorted(images_per_pdf.items(), key=lambda item: int(item[0]))
-            ),
-            "excerpts": sum(d.kind == EXCERPT for d in planned),
-        },
+        # any, the images they place (an image counted once per PDF), the
+        # distinct images (once however many PDFs place one), and how many
+        # PDFs place how many; and the same of the images the decks embed
+        # on their slides and read on their own
+        "pdf_images": _placed(images_per["pdf-pages"], images["pdf-pages"]),
+        "deck_images": _placed(images_per[DECK], images[DECK], "deck"),
+        # the images of either that are documents of their own, excerpts
+        "excerpts": sum(d.kind == EXCERPT for d in planned),
         "failed": len(failed),
         # the planned documents that failed, by the kind the plan gives
         # each; the others (a source that could not be read has no SHA-1
@@ -2078,6 +2089,21 @@ def _aggregate_documents(
             )
         ),
         "views_not_read": sum(bool(d.unread) for d in planned),
+    }
+
+
+def _placed(
+    per: Counter, images: set[str], container: str = "pdf"
+) -> dict[str, Any]:
+    """The images a kind of container places and reads on their own, as
+    the documents' aggregates give them (_aggregate_documents)."""
+    return {
+        f"{container}s": sum(per.values()),
+        "placed": sum(int(n) * c for n, c in per.items()),
+        "distinct": len(images),
+        f"per_{container}": dict(
+            sorted(per.items(), key=lambda item: int(item[0]))
+        ),
     }
 
 
@@ -2824,24 +2850,36 @@ def _documents_section(
             "Pages of PDFs read page by page, by method: "
             f"{_listed(documents['pdf_pages'])}; with annotations the text "
             f"layer leaves unread: {_n(documents['pdf_pages_annotated'])}",
-            _images_line(documents["pdf_images"]),
+            _images_line(documents),
             f"Language resolved: {_listed(documents['language_resolved'])}",
         ]
     )
     return _Section("Documents", blocks)
 
 
-def _images_line(images: Mapping[str, Any]) -> str:
-    """The derived images of the PDFs read page by page, as one line."""
-    per_pdf = ", ".join(
-        f"{count} in {_n(pdfs)}" for count, pdfs in images["per_pdf"].items()
-    )
+def _images_line(documents: Mapping[str, Any]) -> str:
+    """The derived images of the PDFs read page by page and of the decks,
+    and the excerpts among them, as one line."""
+    parts = []
+    for key, where, container, name in (
+        ("pdf_images", "placed within PDFs read page by page", "pdf", "PDF"),
+        ("deck_images", "embedded in decks", "deck", "deck"),
+    ):
+        images = documents[key]
+        per = ", ".join(
+            f"{count} in {_n(n)}"
+            for count, n in images[f"per_{container}"].items()
+        )
+        parts.append(
+            f"{'images' if parts else 'Images'} {where} and read on their "
+            "own: "
+            f"{_n(images['placed'])} in {_n(images[f'{container}s'])} "
+            f"{name}s ({_n(images['distinct'])} distinct; images per "
+            f"{name}: {per or 'none'})"
+        )
     return (
-        "Images placed within PDFs read page by page and read on their own: "
-        f"{_n(images['placed'])} in {_n(images['pdfs'])} PDFs "
-        f"({_n(images['distinct'])} distinct; images per PDF: "
-        f"{per_pdf or 'none'}); documents of their own (excerpts): "
-        f"{_n(images['excerpts'])}"
+        "; ".join(parts)
+        + f"; documents of their own (excerpts): {_n(documents['excerpts'])}"
     )
 
 
