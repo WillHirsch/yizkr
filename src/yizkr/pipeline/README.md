@@ -84,7 +84,15 @@ review` (Gate 1), `awaiting claim review` (Gate 2), `written` (done),
 `paused` (the run's control file held one of its stages), or `failed`
 (errored; re-run to retry, unless the model's answers caused it: see
 below). The exit code summarises the batch: `0` all written, `2`
-something awaits you, `1` something failed. Re-running is always safe:
+something awaits you, `1` something failed. The codes are the ones every
+`yizkr` command exits with (`yizkr --help`, `yizkr.core.exits`): `2`
+also when the run stopped short for a pause of the engine or its cache
+(`PassPaused`: a claude CLI other than the pinned version, a usage
+limit, a cache another process holds, and the like), `3` when a command
+refuses before doing what it was asked (a usage error, an input it will
+not act on, a missing never-ingest list), and `130` on Ctrl-C. A pause
+or a refusal prints its message alone, with no traceback; only an error
+no command anticipates prints one, and exits `1`. Re-running is always safe:
 finished work is skipped, and a corrected upstream file re-does only what
 depends on it (make-style, by content hash; modification times are never
 read).
