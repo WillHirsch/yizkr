@@ -688,18 +688,29 @@ artifact a new QID, changes neither.
   curator who types "19. century" into the wiki stores 1900):
   `format_time` shows a century-precision date stored as 1801 or 1900 as
   the 19th century, and the report gives it the span 1801–1900
-  ("Contradictions").
+  ("Contradictions"). `format_time` names a century or a millennium with
+  its English ordinal (the 1st, 2nd, 3rd, 11th, 21st, 101st century) and
+  shows a date at millennium precision as its millennium, counted from
+  year 1 as above, so one stored as 1001 or 2000 is the 2nd millennium. A
+  precision coarser than a millennium (ten thousand years up to a
+  billion) shows as the stored year with the span its precision allows
+  ("1900, to within 10,000 years"), never as a narrower century.
 - "The 1800s", meaning 1800–1899, is not a century in that count, and
   is stated as a range, earliest date 1800 and latest date 1899, never
   rounded to the 19th century.
 - Ranges and vagueness: earliest date / latest date qualifiers. On a
   statement dated as a period (a marriage, a residence), each end has its
   own pair: see "Marriages, residences and other periods". The static
-  site's timeline and inconsistencies pages show a stated range beside
-  its date, each bound under its qualifier's label and at its own
+  site's timeline, inconsistencies and artifact pages show a stated range
+  beside its date, each bound under its qualifier's label and at its own
   precision, so a range open at one end names its one bound: Rahel's
   death "after 1945" per the family tree shows as "1945 (earliest date:
-  1945)".
+  1945)". The person and artifact pages show every qualifier of a
+  statement so, a period's start time with its bounds and then its end
+  time with its own, and its circa; the artifact page shows each
+  statement that cites the artifact once, with each place its reference
+  blocks cite it at (page, printed page, image region, fragment) and the
+  excerpt there.
 - "circa": sourcing circumstances qualifier. A compilation's statement
   that its text was prepared with machine assistance is another
   sourcing circumstance (planned: "Compound artifacts").

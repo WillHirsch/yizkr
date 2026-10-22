@@ -486,10 +486,16 @@ class TestTheSite:
     """The site never shows one: format_time refuses it, and the build
     stops, before writing anything, when the graph holds one."""
 
-    @pytest.mark.parametrize("precision", ["7", "8", "9", "10", "11"])
-    def test_format_time_refuses_a_date_before_the_common_era(self, precision):
+    @pytest.mark.parametrize("precision", [str(p) for p in range(12)])
+    @pytest.mark.parametrize(
+        "before", ["-1836-01-01T00:00:00Z", "0000-01-01T00:00:00Z"]
+    )
+    def test_format_time_refuses_a_date_before_the_common_era(
+        self, precision, before
+    ):
+        # at every precision, the coarser-than-a-millennium ones included
         with pytest.raises(UnsupportedDate):
-            format_time("-1836-01-01T00:00:00Z", precision)
+            format_time(before, precision)
         assert format_time("1836-01-01T00:00:00Z", precision)
 
     @staticmethod

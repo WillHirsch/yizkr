@@ -3415,11 +3415,12 @@ class TestThePipeline:
     def test_a_scratch_run_whose_cache_git_would_track_stops_before_a_call(
         self, tmp_path, monkeypatch
     ):
-        """The scratch driver opens the cache as the orchestrator does: a
-        folder git would track stops the run at its first stage that needs
-        the engine, as a pause, with the engine never asked (#305)."""
+        """The scratch driver refuses a cache folder git would track at
+        its preflight, as the cache would refuse it, found without making
+        anything: before the engine is asked, and before run.json, a
+        document's directory or an event is written (#305, #327)."""
         from yizkr.core.corpus import ExclusionList
-        from yizkr.pipeline.scratch import ScratchDriver
+        from yizkr.pipeline.scratch import PreflightFailed, ScratchDriver
 
         engine = Engine(pipeline_answers)
 
@@ -3439,12 +3440,11 @@ class TestThePipeline:
             llm="anthropic", cache_dir=repo / "cache",
             exclusions=ExclusionList(), min_free=0, log=quiet,
         )  # fmt: skip
-        with pytest.raises(CacheRefused, match="git work tree"):
+        with pytest.raises(PreflightFailed, match="git work tree"):
             driver.run()
         assert engine.calls == []
         assert not (repo / "cache").exists()
-        last = driver.rundir.manifest()["invocations"][-1]
-        assert (last["outcome"], last["reason"]) == ("paused", "CacheRefused")
+        assert not (tmp_path / "runs" / "run-1").exists()
 
 
 class TestRoleClient:

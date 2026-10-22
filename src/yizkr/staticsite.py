@@ -42,6 +42,7 @@ from __future__ import annotations
 import datetime
 import html
 import json
+import re
 import shutil
 import urllib.parse
 from collections import defaultdict
@@ -110,14 +111,49 @@ GROUP BY ?person ?personLabel ?personDescription ?deceased ?family
 ORDER BY ?personLabel
 """
 
+# each qualifier of the statement ?st as one cell, for GROUP_CONCAT with
+# separator "|": its property's id, its property's English label, its value
+# and, for a time, its precision, separated by spaces. The label and the
+# value are percent-encoded (ENCODE_FOR_URI), so no cell holds a space or a
+# "|" of its own, whatever a label or a string value says; read_qualifiers
+# reads them back. An item's value is its English label (its full IRI when
+# it has none), a time's its
+# xsd:dateTime with its precision beside it (formatted by format_time, so
+# shown at the SOURCE's precision, never padded or narrowed), and any other
+# value its text.
+QUALIFIER_CELL = """\
+    ?st ?pq ?qualifierValue .
+    ?qualifierProp wikibase:qualifier ?pq ;
+                   rdfs:label ?qualifierLabel .
+    FILTER(LANG(?qualifierLabel) = "en")
+    OPTIONAL {{
+      ?qualifierValue rdfs:label ?qualifierValueLabel .
+      FILTER(LANG(?qualifierValueLabel) = "en")
+    }}
+    OPTIONAL {{
+      ?qualifierProp wikibase:qualifierValue ?pqv .
+      ?st ?pqv ?qualifierNode .
+      ?qualifierNode wikibase:timeValue ?qualifierValue ;
+                     wikibase:timePrecision ?qualifierPrecision .
+    }}
+    BIND(
+      CONCAT(STRAFTER(STR(?qualifierProp), "/entity/"), " ",
+             ENCODE_FOR_URI(STR(?qualifierLabel)), " ",
+             ENCODE_FOR_URI(COALESCE(STR(?qualifierValueLabel),
+                                     STR(?qualifierValue))), " ",
+             COALESCE(STR(?qualifierPrecision), ""))
+      AS ?qualifierCell)
+"""
+
 # every statement about every person the roster lists (``{people}``, as
-# above): value, time precision, sources, qualifiers — the raw material
-# of the plural-by-default person page
-STATEMENTS_QUERY = """\
+# above): value, time precision, sources, qualifiers (QUALIFIER_CELL) —
+# the raw material of the plural-by-default person page
+STATEMENTS_QUERY = (
+    """\
 SELECT ?person ?prop ?propLabel ?st ?value ?valueLabel ?precision
        (GROUP_CONCAT(DISTINCT ?sourceLabel; separator="|") AS ?sources)
-       (GROUP_CONCAT(DISTINCT ?qualifierText; separator="|")
-        AS ?qualifierTexts)
+       (GROUP_CONCAT(DISTINCT ?qualifierCell; separator="|")
+        AS ?qualifierCells)
 WHERE {{
 {people}
   ?person ?p ?st .
@@ -143,37 +179,15 @@ WHERE {{
          AS ?sourceLabel)
   }}
   OPTIONAL {{
-    ?st ?pq ?qualifierValue .
-    ?qualifierProp wikibase:qualifier ?pq ;
-                   rdfs:label ?qualifierLabel .
-    FILTER(LANG(?qualifierLabel) = "en")
-    OPTIONAL {{
-      ?qualifierValue rdfs:label ?qualifierValueLabel .
-      FILTER(LANG(?qualifierValueLabel) = "en")
-    }}
-    # time qualifiers display at the SOURCE's precision — never padded
-    OPTIONAL {{
-      ?qualifierProp wikibase:qualifierValue ?pqv .
-      ?st ?pqv ?qualifierNode .
-      ?qualifierNode wikibase:timeValue ?qualifierValue ;
-                     wikibase:timePrecision ?qualifierPrecision .
-    }}
-    BIND(
-      CONCAT(?qualifierLabel, ": ",
-             COALESCE(
-               ?qualifierValueLabel,
-               IF(?qualifierPrecision >= 11,
-                  SUBSTR(STR(?qualifierValue), 1, 10),
-               IF(?qualifierPrecision = 10,
-                  SUBSTR(STR(?qualifierValue), 1, 7),
-                  SUBSTR(STR(?qualifierValue), 1, 4))),
-               STR(?qualifierValue)))
-      AS ?qualifierText)
+"""
+    + QUALIFIER_CELL
+    + """\
   }}
 }}
 GROUP BY ?person ?prop ?propLabel ?st ?value ?valueLabel ?precision
 ORDER BY ?person ?propLabel
 """
+)
 
 ARTIFACTS_QUERY = """\
 SELECT ?artifact ?artifactLabel ?artifactDescription ?kindLabel ?file
@@ -199,18 +213,39 @@ WHERE {{
 ORDER BY ?childLabel
 """
 
-# what each artifact asserts — the artifact page's evidence table
-ASSERTIONS_QUERY = """\
-SELECT ?artifact ?subject ?subjectLabel ?propLabel ?value ?valueLabel
-       ?precision
+# what each artifact asserts, and where in it — the artifact page's evidence
+# table. A row for each statement and reference block that cites the
+# artifact: the statement, so two same-value statements that differ by a
+# qualifier stay two (ADR-0002), and the block's locators and excerpt, each
+# a column of its own, so a statement that cites one artifact in two blocks
+# (two pages, say) gives rows that say where. A block with two values of
+# one locator gives a row for each. A statement citing a fragment of an
+# artifact is listed under its whole, as the disagreement report lists it,
+# with the fragment as ?source and its label. Each statement's qualifiers
+# come as QUALIFIER_CELL's cells, gathered by statement in a subquery.
+ASSERTIONS_QUERY = (
+    """\
+SELECT ?artifact ?source ?fragmentLabel ?st ?reference ?subject ?subjectLabel
+       ?propLabel ?value ?valueLabel ?precision
+       ?page ?printedPage ?region ?excerpt ?qualifierCells
 WHERE {{
-  ?st prov:wasDerivedFrom/pr:{stated_in} ?artifact .
+  ?st prov:wasDerivedFrom ?reference .
+  ?reference pr:{stated_in} ?source .
   ?subject ?p ?st .
   ?prop wikibase:claim ?p ;
         wikibase:statementProperty ?ps ;
         rdfs:label ?propLabel .
   FILTER(LANG(?propLabel) = "en")
   ?st ?ps ?value .
+  OPTIONAL {{
+    ?source wdt:{instance_of} wd:{artifact_fragment} ;
+            wdt:{part_of} ?whole .
+    OPTIONAL {{
+      ?source rdfs:label ?fragmentLabel .
+      FILTER(LANG(?fragmentLabel) = "en")
+    }}
+  }}
+  BIND(COALESCE(?whole, ?source) AS ?artifact)
   OPTIONAL {{
     ?subject rdfs:label ?subjectLabel .
     FILTER(LANG(?subjectLabel) = "en")
@@ -224,9 +259,26 @@ WHERE {{
     ?st ?psv ?valueNode .
     ?valueNode wikibase:timePrecision ?precision .
   }}
-}}
-ORDER BY ?artifact ?subjectLabel ?propLabel
+  OPTIONAL {{ ?reference pr:{page_number} ?page . }}
+  OPTIONAL {{ ?reference pr:{printed_page_number} ?printedPage . }}
+  OPTIONAL {{ ?reference pr:{relative_position_within_image} ?region . }}
+  OPTIONAL {{ ?reference pr:{transcription_excerpt} ?excerpt . }}
+  OPTIONAL {{
+    SELECT ?st (GROUP_CONCAT(DISTINCT ?qualifierCell; separator="|")
+                AS ?qualifierCells)
+    WHERE {{
+      ?st prov:wasDerivedFrom/pr:{stated_in} [] .
 """
+    + QUALIFIER_CELL
+    + """\
+    }}
+    GROUP BY ?st
+  }}
+}}
+ORDER BY ?artifact ?subjectLabel ?propLabel ?st ?page ?printedPage ?region
+         ?excerpt
+"""
+)
 
 # the scratch runs the instance holds, by their run items' marks
 SCRATCH_RUNS_QUERY = """\
@@ -335,13 +387,27 @@ def page(title: str, body: str, root: str = "", notice: str = "") -> str:
     )
 
 
+def ordinal(number: int) -> str:
+    """`number` as an English ordinal: 1st, 2nd, 3rd, 4th, 11th, 12th,
+    13th, 21st, 101st, 111th."""
+    if number % 100 in (11, 12, 13):
+        return f"{number}th"
+    suffix = {1: "st", 2: "nd", 3: "rd"}.get(number % 10, "th")
+    return f"{number}{suffix}"
+
+
 def format_time(
     value: str, precision: str, where: str = "a date the site shows"
 ) -> str:
-    """Wikibase dateTime + precision -> what the source actually said. A
-    century is the one Wikibase counts for the stored year, from year 1:
-    at century precision, 1801 to 1900 are each the 19th century. A date
-    before the common era raises UnsupportedDate naming `where`
+    """Wikibase dateTime + precision -> what the source actually said.
+    Centuries and millennia are the ones Wikibase counts for the stored
+    year, from year 1: at century precision, 1801 to 1900 are each the
+    19th century, and at millennium precision 1001 to 2000 are each the
+    2nd millennium. A precision coarser than a millennium (Wikibase's 0
+    to 5, ten thousand years up to a billion) names no span the site has
+    a word for, so it shows the stored year with the span its precision
+    allows ("1900, to within 10,000 years"), never a narrower date.
+    A date before the common era raises UnsupportedDate naming `where`
     (ADR-0034): it is never shown. This is a backstop: the build has
     already refused a graph holding one, naming its item and statement."""
     check_time(value, None, where)
@@ -350,8 +416,12 @@ def format_time(
     year, _, rest = date.partition("-")
     month = rest.split("-")[0] if rest else ""
     p = int(precision) if precision else 11
-    if p <= 7:
-        return f"{(int(year) + 99) // 100}th century"
+    if p <= 5:
+        return f"{int(year)}, to within {10 ** (9 - p):,} years"
+    if p == 6:
+        return f"{ordinal((int(year) + 999) // 1000)} millennium"
+    if p == 7:
+        return f"{ordinal((int(year) + 99) // 100)} century"
     if p == 8:
         return f"{int(year) // 10 * 10}s"
     if p == 9:
@@ -376,6 +446,49 @@ def range_text(
         f"{label}: {format_time(value, precision, where)}"
         for label, value, precision in bounds
     )
+
+
+# the order a statement's dates read in, by manifest key: a period's start
+# with its bounds, then its end with its bounds (docs/MODELING.md,
+# "Marriages, residences and other periods"); a value's earliest date
+# before its latest. Every other qualifier follows, by label and value.
+DATE_QUALIFIERS = (
+    "point_in_time",
+    "start_time",
+    "earliest_date",
+    "latest_start_date",
+    "end_time",
+    "earliest_end_date",
+    "latest_date",
+)
+
+
+def natural_order(text: str) -> tuple[list[str | int], str]:
+    """A sort key that reads each run of digits in `text` as its number,
+    so page 2 sorts before page 10, and then `text` itself, so texts whose
+    numbers are equal ("02" and "2") still keep one order."""
+    runs = re.split(r"(\d+)", text)
+    return [int(run) if n % 2 else run for n, run in enumerate(runs)], text
+
+
+def read_qualifiers(encoded: str) -> list[tuple[str, str, str, str]]:
+    """The qualifier cells of QUALIFIER_CELL, "|"-separated as
+    GROUP_CONCAT gives them, as (property id, label, value, precision),
+    the precision "" for a value that is not a time."""
+    qualifiers = []
+    for each in encoded.split("|"):
+        if not each:
+            continue
+        pid, label, value, precision = each.split(" ")
+        qualifiers.append(
+            (
+                pid,
+                urllib.parse.unquote(label),
+                urllib.parse.unquote(value),
+                precision,
+            )
+        )
+    return qualifiers
 
 
 def qualifier_span(text: str) -> str:
@@ -503,6 +616,29 @@ class SiteBuilder:
                 (label, cell(row, bound), cell(row, f"{bound}Precision"))
             )
         return range_text(bounds, f"{qid_of(row, 'person')} timeline date")
+
+    def qualifier_text(self, encoded: str, where: str) -> str:
+        """A statement's qualifier cells (QUALIFIER_CELL) as text to show
+        beside its value, each in the `label: value` form, a time at its
+        own precision (``format_time``, which refuses a date before the
+        common era, naming `where`): "start time: 1938; latest date: 1952".
+        GROUP_CONCAT gives the cells in no set order, so they are sorted:
+        the dates in DATE_QUALIFIERS order, then the rest by label and
+        value."""
+        rank = {
+            self.properties[key]: n
+            for n, key in enumerate(DATE_QUALIFIERS)
+            if key in self.properties
+        }
+        qualifiers = sorted(
+            read_qualifiers(encoded),
+            key=lambda q: (rank.get(q[0], len(rank)), q[1], q[2], q[3]),
+        )
+        return "; ".join(
+            f"{label}: "
+            + (format_time(value, precision, where) if precision else value)
+            for _, label, value, precision in qualifiers
+        )
 
     # -- sections -----------------------------------------------------------
 
@@ -642,16 +778,89 @@ class SiteBuilder:
             rendered = esc(format_time(raw, cell(row, "precision"), where))
         else:
             rendered = esc(cell(row, "valueLabel") or raw)
-        qualifiers = [q for q in cell(row, "qualifierTexts").split("|") if q]
-        if qualifiers:
-            rendered += (
-                f' <span class="qualifiers">'
-                f"({esc('; '.join(qualifiers))})</span>"
+        rendered += qualifier_span(
+            self.qualifier_text(
+                cell(row, "qualifierCells"),
+                f"{qid_of(row, 'person')} statement {qid_of(row, 'st')}",
             )
+        )
         sources = self.source_links(cell(row, "sources"))
         if sources:
             rendered += f'<span class="source">{sources}</span>'
         return rendered
+
+    def asserted_statements(
+        self, assertions: list[dict]
+    ) -> list[tuple[dict, list[str]]]:
+        """ASSERTIONS_QUERY's rows for one artifact as its statements, in
+        the order the query gives them: each statement's first row, and
+        each place in the artifact its reference blocks cite it at, as
+        ``place_html`` shows it. Rows are a statement's blocks, and a
+        block's rows its locators' values, so the statements are counted
+        here, never the rows."""
+        blocks: dict[str, dict[str, dict[str, list]]] = {}
+        first: dict[str, dict] = {}
+        for row in assertions:
+            st = cell(row, "st")
+            first.setdefault(st, row)
+            block = blocks.setdefault(st, {}).setdefault(
+                cell(row, "reference"), defaultdict(list)
+            )
+            for name in ("fragmentLabel", "page", "printedPage", "region"):
+                text = cell(row, name)
+                if (
+                    name == "fragmentLabel"
+                    and not text
+                    and cell(row, "source") != cell(row, "artifact")
+                ):
+                    # a fragment folded into its whole that has no English
+                    # label is named by its id
+                    text = qid_of(row, "source")
+                if text and text not in block[name]:
+                    block[name].append(text)
+            excerpt = row.get("excerpt")
+            if excerpt:
+                shown = (excerpt.get("value", ""), excerpt.get("xml:lang", ""))
+                if shown[0] and shown not in block["excerpt"]:
+                    block["excerpt"].append(shown)
+        return [
+            (
+                first[st],
+                sorted(
+                    (self.place_html(block) for block in by_block.values()),
+                    key=natural_order,
+                ),
+            )
+            for st, by_block in blocks.items()
+        ]
+
+    def place_html(self, block: dict[str, list]) -> str:
+        """Where one reference block cites the artifact, as HTML: its
+        fragment (by its English label, or its id when it has none), page
+        number, printed page number and image region, each
+        in the `label: value` form, then its excerpt, quoted, in a
+        ``q`` element whose ``lang`` is the excerpt's language. A block
+        with none of them reads "the artifact as a whole"."""
+        labels = disagreement.property_labels()
+        parts = [
+            f"{esc(label)}: "
+            + esc(", ".join(sorted(block[name], key=natural_order)))
+            for name, label in (
+                ("fragmentLabel", "fragment"),
+                ("page", labels["page_number"]),
+                ("printedPage", labels["printed_page_number"]),
+                ("region", labels["relative_position_within_image"]),
+            )
+            if block.get(name)
+        ]
+        place = "; ".join(parts)
+        quoted = " ".join(
+            (f'<q lang="{esc(lang)}">' if lang else "<q>") + f"{esc(text)}</q>"
+            for text, lang in sorted(block.get("excerpt", []))
+        )
+        if place and quoted:
+            return f"{place}: {quoted}"
+        return place or quoted or "the artifact as a whole"
 
     def artifact_page(self, artifact: dict, assertions: list[dict]) -> str:
         qid = qid_of(artifact, "artifact")
@@ -677,27 +886,29 @@ class SiteBuilder:
                 f'<p><a href="{esc(href)}">⬇ download the original '
                 f"({esc(file_name.removeprefix('File:'))})</a></p>"
             )
-        if assertions:
+        statements = self.asserted_statements(assertions)
+        if statements:
             body.append(
-                f"<h2>What this artifact asserts ({len(assertions)})</h2>"
+                f"<h2>What this artifact asserts ({len(statements)})</h2>"
             )
             body.append(
-                "<table><tr><th>About</th><th>Property</th><th>Value</th></tr>"
+                "<table><tr><th>About</th><th>Property</th><th>Value</th>"
+                "<th>Where</th></tr>"
             )
-            for row in assertions:
+            for row, places in statements:
                 subject_qid = qid_of(row, "subject")
                 subject = esc(cell(row, "subjectLabel") or subject_qid)
                 if subject_qid.startswith("Q"):
                     subject = (
                         f'<a href="../people/{subject_qid}.html">{subject}</a>'
                     )
+                where = (
+                    f"{subject_qid} statement {qid_of(row, 'st')} as "
+                    f"{qid} asserts it"
+                )
                 value = row.get("value", {})
                 raw = value.get("value", "")
                 if value.get("datatype", "").endswith("dateTime"):
-                    where = (
-                        f"{subject_qid} as {qid_of(artifact, 'artifact')} "
-                        "asserts it"
-                    )
                     shown = esc(
                         format_time(raw, cell(row, "precision"), where)
                     )
@@ -710,10 +921,14 @@ class SiteBuilder:
                             else raw
                         )
                     )
+                shown += qualifier_span(
+                    self.qualifier_text(cell(row, "qualifierCells"), where)
+                )
                 body.append(
                     f"<tr><td>{subject}</td>"
                     f"<td>{esc(cell(row, 'propLabel'))}</td>"
-                    f"<td>{shown}</td></tr>"
+                    f"<td>{shown}</td>"
+                    f"<td>{'<br>'.join(places)}</td></tr>"
                 )
             body.append("</table>")
         else:
