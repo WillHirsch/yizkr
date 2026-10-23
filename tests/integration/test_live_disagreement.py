@@ -27,7 +27,11 @@ running stack, then pins the report's rows for the fixture subjects:
   observations at different points in time are not;
 * birth names compare as text: spellings that differ only in letter case
   and language are one value, listed once with the sources of all of them,
-  while nicknames accumulate and are never compared.
+  while nicknames accumulate and are never compared;
+* a document's date of making is single-valued (#584, ADR-0039): a letter
+  dated 28 July 1939 by its own dateline and 1940 by a curator's claim
+  stated in another artifact is listed, each date with its source, while a
+  curator's July 1939 from a third artifact holds the dateline and is not.
 
 The whole graph is queried, and rows are filtered to the fixture subjects,
 so unrelated data on the instance cannot make the assertions flaky. Like
@@ -113,6 +117,7 @@ SUBJECTS = (
     "same year",
     "emigration",
     "second emigration",
+    "letter",
 )
 
 
@@ -211,6 +216,35 @@ def set_rank(client, subject, prop_key, matches, rank: WikibaseRank) -> None:
         entity.write(summary="integration test: curator rank on a fixture")
 
 
+def add_inception(client, subject: str, value: dict, artifact_qid: str):
+    """A curator's claim of when the document `subject` was made, stated
+    in another artifact, `artifact_qid` (a container's caption read as a
+    claim, ADR-0039): the writer takes a document's inception only from the
+    document itself, so it is added here, with its reference (rule 1).
+    Idempotent."""
+    from wikibaseintegrator.datatypes import Item, Time
+    from wikibaseintegrator.models import Reference, References
+    from wikibaseintegrator.wbi_enums import ActionIfExists
+
+    from yizkr.claims import TimeValue
+
+    properties, _ = client.vocabulary()
+    stored = TimeValue.model_validate(value).to_wikibase()
+    entity = client.wbi.item.get(subject)
+    for statement in entity.claims.get(properties["inception"]):
+        if statement.mainsnak.datavalue["value"]["time"] == stored["time"]:
+            return
+    reference = Reference()
+    reference.add(Item(prop_nr=properties["stated_in"], value=artifact_qid))
+    references = References()
+    references.add(reference)
+    entity.claims.add(
+        Time(prop_nr=properties["inception"], references=references, **stored),
+        action_if_exists=ActionIfExists.FORCE_APPEND,
+    )
+    entity.write(summary="integration test: a curator's date of making")
+
+
 def between(start: dict, end: dict) -> tuple:
     """The earliest and latest dates a source gives a value."""
     return (("earliest_date", start), ("latest_date", end))
@@ -225,27 +259,34 @@ def write_fixture(
     """Write the fixture's claim batches in order, under item labels that carry
     a marker: six hex digits of a hash over the fixture's cases and values
     (every claim, each artifact named by its letter in `artifacts`, which maps
-    the SHA-1 a claim cites to the letter). The batches are written with one
-    identity map in which each label is one entity (by_label), and an item is
-    found again by its label and the description that map gives it, so a
-    version of the fixture with other values would otherwise write onto an
-    earlier version's items and see its old values beside the new ones.
+    the SHA-1 a claim cites or names as its subject to the letter). The
+    batches are written with one identity map in which each label is one
+    entity (by_label), and an item is found again by its label and the
+    description that map gives it, so a version of the fixture with other
+    values would otherwise write onto an earlier version's items and see its
+    old values beside the new ones.
     With the marker it writes items of its own, and a re-run of one
     version finds its own items again. The hash also covers the module's marker
     (conftest.fixture_mark: the writer's source and the session's random
     bytes), so each session writes items of its own: what an earlier session
     wrote, a live mutant's run included, never meets it, and a re-run within
-    the session finds its own items again. The curator ranks the test sets
-    afterwards are not in the hash: the session's marker gives them items of
-    their own. `artifact_qids` is handed to each batch's writer: the item of
-    each key no media carries (BatchWriter). Its spouse claims go through
-    legacy_spouse_writes, as the statements an instance holds from before
-    ADR-0036, which the readers read until #520. Returns each batch's
-    result."""
+    the session finds its own items again. The curator ranks and dates of
+    making the test sets afterwards are not in the hash: the session's
+    marker gives them items of their own. `artifact_qids` is handed to each
+    batch's writer: the item of each key no media carries (BatchWriter).
+    Its spouse claims go through legacy_spouse_writes, as the statements an
+    instance holds from before ADR-0036, which the readers read until #520.
+    Returns each batch's result."""
     content = [
         [
             {
                 **claim,
+                # a document's own claim names it as its subject too
+                "subject": (
+                    artifacts[claim["subject"]["sha1"]]
+                    if claim["subject"].get("kind") == "artifact"
+                    else claim["subject"]
+                ),
                 "source": {
                     **claim["source"],
                     "artifact": artifacts[claim["source"]["artifact"]["sha1"]],
@@ -290,17 +331,18 @@ def fixture_graph(client, config):
     """Write the fixture under its marked labels (write_fixture), apply the
     curator ranks, and wait until the query service holds every fixture
     item's latest revision. Returns (QIDs by role, source QIDs by
-    letter)."""
+    letter). Source D is a letter, whose own item is the subject of its
+    dates of making."""
     registered = {
         letter: register_fictional(
             client,
             f"Disagreement fixture source {letter} {MARK}",
-            "certificate",
+            "letter" if letter == "D" else "certificate",
             pages=1 if letter == "A" else 0,
         )
-        for letter in "ABC"
+        for letter in "ABCD"
     }
-    a, b, c = (registered[letter].ref for letter in "ABC")
+    a, b, c, d = (registered[letter].ref for letter in "ABCD")
     # A claim cites an artifact by the SHA-1 of its media, which a page
     # fragment does not have of its own: the writer is handed the page's
     # item for a key of its own, as a caller hands over an artifact it has
@@ -315,6 +357,7 @@ def fixture_graph(client, config):
             a.sha1: "A",
             b.sha1: "B",
             c.sha1: "C",
+            d.sha1: "D",
             page_one_of_a.sha1: "A, page 1",
         },
         (
@@ -481,6 +524,13 @@ def fixture_graph(client, config):
                     a,
                 ),
                 claim(SECOND_EMIGRATION, "start_time", date(1863), b),
+                # the letter's own dateline: made on 28 July 1939
+                claim(
+                    d.model_dump(mode="json"),
+                    "inception",
+                    date(1939, 7, 28),
+                    d,
+                ),
             ],
             [
                 # a curator's correction of artifact A's reading
@@ -507,9 +557,15 @@ def fixture_graph(client, config):
         lambda value: value["time"] == "+1919-01-07T00:00:00Z",
         WikibaseRank.PREFERRED,
     )
+    # the letter dated by two other artifacts' claims: 1940 per source B,
+    # which disagrees with its dateline, and July 1939 per source C, which
+    # holds it
+    qids["letter"] = registered["D"].qid
+    add_inception(client, qids["letter"], date(1940), registered["B"].qid)
+    add_inception(client, qids["letter"], date(1939, 7), registered["C"].qid)
     # every item the report's rows name is the session's own
     wait_for_query_service(config, client, list(qids.values()))
-    return qids, {letter: registered[letter].qid for letter in "ABC"}
+    return qids, {letter: registered[letter].qid for letter in "ABCD"}
 
 
 def report_rows(client, config, qids: dict[str, str]) -> list[dict]:
@@ -696,6 +752,7 @@ EXPECTED = {
         "",
         frozenset({"1938-06-22", "1938-08-19"}),
     ),
+    ("letter", "inception", "", "", frozenset({"1939-07-28", "1940"})),
 }
 
 
@@ -732,6 +789,8 @@ def test_each_value_names_the_artifacts_that_state_it(
         "1945 [1945..]": {source["B"]},
         "1938-06-22": {source["B"]},
         "1938-08-19": {source["A"]},
+        "1939-07-28": {source["D"]},
+        "1940": {source["B"]},
     }
     for row in report_rows(client, config, qids):
         for side in "AB":
@@ -870,6 +929,10 @@ def test_what_the_report_leaves_out(client, config, fixture_graph):
     ]
     shown_values = {shown(row, side) for row in rows for side in "AB"}
     assert not shown_values & {"1919", "1938", "19th century", "1863"}
+    # a curator's July 1939 holds the letter's 28 July 1939, and is not
+    # listed beside it
+    assert len(statements(client, qids["letter"], "inception")) == 3
+    assert "1939-07" not in shown_values
     # residence observations and a one-sided end time are not compared
     assert len(statements(client, person, "residence")) == 4
     residence_rows = [

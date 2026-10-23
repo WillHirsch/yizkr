@@ -352,6 +352,60 @@ class TestComparedValues:
             )
             assert listed(*statements) == [], prop
 
+    def test_two_dates_of_making_from_two_sources_are_listed(self):
+        # the letter's image dates itself 28 July 1939; (here) a curator
+        # reads the booklet's caption as a claim that it was made in 1938
+        # (#584, ADR-0039)
+        (own,) = [
+            said(a.subject, a.property, a.value, a.source)
+            for a in u.about("letter-excerpt-1939", "inception")
+        ]
+        caption = said(
+            "letter-excerpt-1939",
+            "inception",
+            u.Date(1938),
+            "family-booklet-2011",
+        )
+        assert listed(own, caption) == [
+            (
+                label("letter-excerpt-1939"),
+                "inception",
+                "",
+                "",
+                "1938-01-01/9",
+                "1939-07-28/11",
+            )
+        ]
+        (row,) = compare([own, caption], NOTHING)
+        assert {s.qid for s in row.a.sources} == {QIDS["family-booklet-2011"]}
+        assert {s.qid for s in row.b.sources} == {QIDS["letter-excerpt-1939"]}
+
+    def test_a_date_of_making_inside_the_other_is_not_listed(self):
+        # the caption's "July 1939" holds the letter's 28 July 1939, and
+        # the postcard's "before 19 August 1938" holds (here) June 1938
+        letter = said(
+            "letter-excerpt-1939",
+            "inception",
+            u.Date(1939, 7, 28),
+            "letter-excerpt-1939",
+        )
+        caption = said(
+            "letter-excerpt-1939",
+            "inception",
+            u.Date(1939, 7),
+            "family-booklet-2011",
+        )
+        assert listed(letter, caption) == []
+        (postmark,) = [
+            said(a.subject, a.property, a.value, a.source)
+            for a in u.about(POSTCARD, "inception")
+        ]
+        june = said(POSTCARD, "inception", u.Date(1938, 6), INTERVIEW)
+        assert listed(postmark, june) == []
+        # a date after the postmark lies outside its range
+        september = said(POSTCARD, "inception", u.Date(1938, 9), INTERVIEW)
+        assert len(listed(postmark, september)) == 1
+
     def test_two_spouses_or_residences_never_conflict(self):
         # two places of residence, and two spouses (the second a
         # placeholder): values that accumulate over a life

@@ -76,8 +76,8 @@ DEPRECATED = "http://wikiba.se/ontology#DeprecatedRank"
 
 # Properties that hold at most one true value per subject: two values
 # from different sources disagree. The dates are an entity's own (a birth,
-# or an event's point in time, start or end); the last three identify a
-# place.
+# an event's point in time, start or end, or a document's date of making,
+# its inception: ADR-0039); the last three identify a place.
 SINGLE_VALUED = frozenset(
     {
         "date_of_birth",
@@ -90,6 +90,7 @@ SINGLE_VALUED = frozenset(
         "point_in_time",
         "start_time",
         "end_time",
+        "inception",
         "coordinate_location",
         "geonames_id",
         "whg_place_id",
