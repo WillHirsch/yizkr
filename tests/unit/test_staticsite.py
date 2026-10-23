@@ -2108,13 +2108,15 @@ class TestTimeFormatting:
 # the image's own dateline, heading and greeting, and the portrait's own
 # studio and the names on its reverse. The second `inception`, July 1939
 # stated in the booklet, is a curator's promotion of the caption's fact
-# (ADR-0039 §4): two sources, two dates, both shown.
-LETTER, BOOKLET, PORTRAIT = "Q50", "Q51", "Q52"
+# (ADR-0039 §4): two sources, two dates, both shown. Rahel's studio
+# portrait dates itself circa 1895 (#586).
+LETTER, BOOKLET, PORTRAIT, RAHELS_PORTRAIT = "Q50", "Q51", "Q52", "Q53"
 KLARA, ADDRESS, STUDIO = "Q12", "Q60", "Q61"
 TITLES = {
     LETTER: u.by_key()["letter-excerpt-1939"].title,
     BOOKLET: u.by_key()["family-booklet-2011"].title,
     PORTRAIT: u.by_key()["studio-photo-1890s"].title,
+    RAHELS_PORTRAIT: u.by_key()["studio-photo-1895"].title,
 }
 
 
@@ -2472,6 +2474,41 @@ class TestWhatSourcesSay:
             },
         )
         return (site / qid).read_text()
+
+    def test_a_date_its_source_gives_as_circa_shows_with_its_circa(
+        self, tmp_path, vocabulary
+    ):
+        # Rahel's portrait dates its own making "um 1895" on its mount: its
+        # `inception` at year precision with circa as its sourcing
+        # circumstance, both shown, labelled by its source, the portrait
+        # itself (ADR-0039 §2.2, §7; #586)
+        (made,) = u.about("studio-photo-1895", "inception")
+        assert made.source == "studio-photo-1895"
+        assert made.value.qualifier == "circa"
+        _, precision, ranges = stated(made.value)
+        assert ranges == {}  # circa is no range
+        row = said_row(
+            RAHELS_PORTRAIT,
+            "inception",
+            time_literal("+" + stamp(made.value)),
+            RAHELS_PORTRAIT,
+            "c10",
+            precision=str(precision),
+            qualifiers=qualifier_cells(
+                ("sourcing_circumstances", made.value.qualifier, "")
+            ),
+        )
+        page = self.page_of(
+            tmp_path, vocabulary, [row], f"artifacts/{RAHELS_PORTRAIT}.html"
+        )
+        (section,) = re.findall(
+            r'<dl class="statements">(.*?)</dl>', page, flags=re.S
+        )
+        assert section == (
+            "<dt>inception</dt>"
+            '<dd>1895 <span class="qualifiers">(sourcing circumstances: '
+            'circa)</span><span class="source">this artifact</span></dd>'
+        )
 
     def test_a_blocks_pages_are_listed_once_each_in_order(
         self, tmp_path, vocabulary
