@@ -258,7 +258,18 @@ def test_the_nonprivileged_export_leaves_the_caption_out(
     # the full dump holds the caption, so its absence is the export's doing
     assert any(MARK in line and "Wastl to Klara" in line for line in full)
     assert not any("Wastl to Klara" in line for line in kept)
-    assert not any(f"/{caption_pid}>" in line for line in kept)
+
+    # no triple states a caption, as the full dump's do; the property's
+    # own declaration may stay
+    def captions(dump: list[str]) -> list[str]:
+        return [
+            line
+            for line in dump
+            if line.split(" ", 2)[1].endswith(f"/{caption_pid}>")
+        ]
+
+    assert captions(full)
+    assert captions(kept) == []
     # the image itself, and what it states of itself, stay
     assert any(
         line.startswith(f"<{config.concept_uri}/entity/{image_qid}>")
