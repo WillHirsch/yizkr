@@ -708,20 +708,25 @@ class TestAcceptAllRefusesDepicts:
 
         assert not out.exists()
 
-    @pytest.mark.parametrize("body", [True, False], ids=["rows", "header"])
+    @pytest.mark.parametrize("body", ["rows", "header", "empty", "bom-only"])
     def test_apply_review_refuses_a_sheet_without_claim_id(
         self, tmp_path, body
     ):
         # it matches rows to claims by claim_id: without that column it
-        # refuses before reading any row, rather than a KeyError (#532)
+        # refuses before reading any row, rather than a KeyError, and a
+        # file with no header row at all is refused the same way (#532)
         text = portrait_text()
         review_csv = tmp_path / "review.csv"
         export_review_csv(text, review_csv)
         edit_columns(
             review_csv,
             drop_column("claim_id"),
-            lambda header, rows: (header, rows if body else []),
+            lambda header, rows: (header, rows if body == "rows" else []),
         )
+        if body == "empty":
+            review_csv.write_text("")
+        elif body == "bom-only":
+            review_csv.write_bytes(codecs.BOM_UTF8)
 
         with pytest.raises(ValueError, match="no 'claim_id' column"):
             apply_review(text, review_csv)
@@ -751,8 +756,12 @@ class TestAcceptAllRefusesDepicts:
 
     @pytest.mark.parametrize(
         "edit",
-        [drop_column("claim_id"), rename_column("claim_id", "Claim_ID")],
-        ids=["dropped", "renamed"],
+        [
+            drop_column("claim_id"),
+            rename_column("claim_id", "Claim_ID"),
+            None,  # a 0-byte file: no header row at all
+        ],
+        ids=["dropped", "renamed", "empty"],
     )
     def test_apply_review_cli_refuses_a_sheet_without_claim_id(
         self, tmp_path, edit
@@ -763,7 +772,10 @@ class TestAcceptAllRefusesDepicts:
         batch.write_text(text.model_dump_json(indent=2))
         review_csv = tmp_path / "review.csv"
         export_review_csv(text, review_csv)
-        edit_columns(review_csv, edit)
+        if edit is None:
+            review_csv.write_text("")
+        else:
+            edit_columns(review_csv, edit)
         approved = tmp_path / "approved.json"
         args = build_parser().parse_args(
             [

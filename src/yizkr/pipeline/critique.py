@@ -341,9 +341,9 @@ _LINE_BREAKS = str.maketrans(
 def _value(claim: Claim) -> str:
     """A claim's value as the prompt lists it: an item by its id, which
     the entities block labels; a quantity in full; a text with its
-    language; anything else as the review sheet shows it. A line feed is
-    listed as a backslash and an n, and every other line break as its
-    escape (_LINE_BREAKS), so each claim is one line."""
+    language; anything else as `review.describe_value` renders it. A line
+    feed is listed as a backslash and an n, and every other line break as
+    its escape (_LINE_BREAKS), so each claim is one line."""
     value = claim.value
     if isinstance(value, ItemValue):
         rendered = _ref_id(value.value)

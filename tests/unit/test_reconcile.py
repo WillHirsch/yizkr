@@ -1,6 +1,7 @@
 """Offline tests for entity reconciliation (ADR-0007). No instance, no LLM."""
 
 import json
+import re
 import urllib.parse
 
 import pytest
@@ -1632,12 +1633,19 @@ class TestDatesAtTheirPrecision:
                 death="1941-03-01T00:00:00Z|10",
             ),
             self.binding("Q102", birth="1833-01-01T00:00:00Z|9"),
+            # coarser than a claim states, as a curator may set in the wiki
+            self.binding(
+                "Q103",
+                birth="1001-01-01T00:00:00Z|6",
+                death="1900-01-01T00:00:00Z|5",
+            ),
         ]
         roster, _ = self.fetch(monkeypatch, rows)
         assert [(r.birth, r.death) for r in roster] == [
             ("the 19th century", "the 1830s"),
             ("1876-03-19", "1941-03"),
             ("1833", ""),
+            ("the 2nd millennium", "1900, to within 10,000 years"),
         ]
         assert "born: the 19th century; died: the 1830s" in roster[0].facts()
 
@@ -1648,6 +1656,8 @@ class TestDatesAtTheirPrecision:
                 "Q100",
                 birth="1876-03-19T00:00:00Z|11",
                 eventBirth="1801-01-01T00:00:00Z|7",
+                death="1941-03-01T00:00:00Z|10",
+                eventDeath="1890-01-01T00:00:00Z|8",
             ),
             # an event's date stands in where there is no direct one
             self.binding(
@@ -1658,12 +1668,26 @@ class TestDatesAtTheirPrecision:
         ]
         roster, _ = self.fetch(monkeypatch, rows)
         assert [(r.birth, r.death) for r in roster] == [
-            ("1876-03-19", ""),
+            ("1876-03-19", "1941-03"),
             ("the 19th century", "the 1890s"),
         ]
 
     def test_roster_query_reads_each_dates_precision(self, monkeypatch):
         _, query = self.fetch(monkeypatch, [])
+        flat = re.sub(r"\s+", " ", query)
+        # each date's node reached through its own property's statement
+        # value link, and sampled with its own precision
+        for statement, prop, name in [
+            ("birthStatement", "P2", "birth"),
+            ("deathStatement", "P3", "death"),
+            ("birthEventStatement", "P10", "birthEvent"),
+            ("deathEventStatement", "P10", "deathEvent"),
+        ]:
+            assert f"wd:{prop} wikibase:statementValue ?{name}Link ." in flat
+            assert f"?{statement} ?{name}Link ?{name}Node ." in flat
+            assert (
+                f'CONCAT(STR(?{name}Time), "|", STR(?{name}Precision))' in flat
+            )
         # P2/P3 are date of birth/death and P10 point in time, as
         # TestRosterKinds.Vocabulary numbers them
         for statement, prop in [

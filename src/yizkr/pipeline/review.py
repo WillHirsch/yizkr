@@ -271,7 +271,9 @@ def _describe_ref(ref) -> str:
 
 
 def describe_value(value) -> str:
-    """A value as a review row shows it: an item by its reference, a date
+    """A value as the extraction critic lists it, and as a review row shows
+    any value but a date (which the sheet shows through `sheet_value`):
+    an item by its reference, a date
     as `YYYY[-MM[-DD]]` with its precision when it is not the plain one, a
     text by its text and language. Every date is Gregorian and of 1 CE or
     later (ADR-0034)."""
