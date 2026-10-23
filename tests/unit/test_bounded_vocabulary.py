@@ -237,6 +237,9 @@ class TestTheFallback:
         self.assert_read_whole(FakeWiki(page=page_without(label)))
 
     def test_a_page_that_names_a_label_twice(self):
+        """Two rows give the human label two ids, and both items carry it:
+        the page cannot say which is the vocabulary's, and the whole read
+        refuses the label two items hold."""
         label = RAW["items"]["human"]["label"]
         twice = PAGE.replace(
             "|}\n",
@@ -244,8 +247,12 @@ class TestTheFallback:
             1,
         )
         assert list(mapping_rows(twice)).count(("Q901", label)) == 1
+        wiki = FakeWiki(page=twice)
+        wiki.labels["Q901"] = label
 
-        self.assert_read_whole(FakeWiki(page=twice))
+        with pytest.raises(RuntimeError, match=f"{label!r}"):
+            wiki.vocabulary()
+        assert wiki.whole_reads == 1
 
     def test_an_id_that_carries_another_label(self):
         """A vocabulary item relabelled on the wiki and in the manifest
