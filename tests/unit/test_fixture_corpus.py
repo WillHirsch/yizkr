@@ -1996,15 +1996,15 @@ class TestTheRunReport:
         ]
         clustering_row = report.corpus_stage(clustering.STAGE)
         assert clustering_row["state"] == NEEDS_ATTENTION
-        assert clustering_row["attention"] == {
-            "ambiguous clusters not merged": 1,
-            "conflicting clusters not merged": 1,
-        }
+        assert clustering_row["attention"] == [
+            "ambiguous clusters not merged",
+            "conflicting clusters not merged",
+        ]
         assert clustering_row["failure"] is None
         assert report.corpus_stage(PROBE) == {
             "name": PROBE,
             "state": DONE,
-            "attention": {},
+            "attention": [],
             "failure": None,
             "seconds": report.corpus_stage(PROBE)["seconds"],
         }
