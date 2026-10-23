@@ -1024,8 +1024,8 @@ def export_places_csv(
 def approved_answers(rows: list[dict], work: Worklist) -> list[Answer]:
     """The answers a reviewed CSV approves, matched to the questions
     `work` asks by their place, chain and container. A row that is not
-    approved, whose verdict is not SAME, whose question the graph no
-    longer asks, or whose B is no candidate of it, gives none."""
+    approved, whose verdict is not SAME, whose question `work` does not
+    ask, or whose B is no candidate of it, gives none."""
     by_key = {question.key: question for question in work.questions}
     found = []
     for row in rows:
@@ -1119,7 +1119,8 @@ def apply_answers(
     """Write the links a reviewed CSV's approved answers decide, cited as
     write_link cites them, through the cycle guard against the graph's
     containment. The worklist is derived again from the graph and the
-    stated `links`, so a row the graph no longer asks writes nothing."""
+    stated `links`, so a row whose question the graph does not ask writes
+    nothing."""
     from yizkr.pipeline.writer import BatchWriter
 
     with open(csv_path, newline="") as handle:
