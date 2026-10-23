@@ -529,6 +529,13 @@ class TestTheReport:
 
 
 class TestThePrompt:
+    def test_the_evidence_leaves_out_the_line_numbers(self):
+        prompt = " ".join(ENTITY_MANIFEST_PROMPT.split())
+        assert (
+            "Copy the words alone, never the line numbers the document is "
+            "shown with."
+        ) in prompt
+
     def test_the_manifest_asks_for_each_container_s_evidence(self):
         prompt = " ".join(ENTITY_MANIFEST_PROMPT.split())
         assert '"within": [{{"name": "...", "evidence": "..."}}]' in prompt
