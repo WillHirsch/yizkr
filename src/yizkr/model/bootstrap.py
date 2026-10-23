@@ -19,7 +19,9 @@ CLI: `yizkr bootstrap [--dry-run] [--manifest PATH]`.
 
 from __future__ import annotations
 
+import re
 import sys
+from collections.abc import Iterator
 
 from yizkr.core.wiki import ItemLabels, WikiClient
 from yizkr.model.schema import Manifest
@@ -170,6 +172,24 @@ def build_mapping_wikitext(
         ]
     lines += ["|}", ""]
     return "\n".join(lines)
+
+
+# a row of either table of the mapping page: its Local ID cell, the id's
+# namespace matching its kind, then its Label cell
+_MAPPING_ROW = re.compile(
+    r"\| \[\[(?:Property:(?P<pid>P\d+)\|(?P=pid)|Item:(?P<qid>Q\d+)\|(?P=qid))"
+    r"\]\] \|\| (?P<label>.*?) \|\| "
+)
+
+
+def mapping_rows(wikitext: str) -> Iterator[tuple[str, str]]:
+    """(Local ID, Label) of each row of the mapping page's two tables, as
+    `build_mapping_wikitext` writes them, properties and items alike. A
+    line in no row's form gives nothing."""
+    for line in wikitext.splitlines():
+        match = _MAPPING_ROW.match(line)
+        if match:
+            yield match["pid"] or match["qid"], match["label"]
 
 
 def bootstrap_instance(

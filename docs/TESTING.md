@@ -386,7 +386,7 @@ tests = ["tests/unit/test_example.py::test_blank_names_are_dropped"]
   and block checks over the full dump and the export; and
   `WikiClient.label_index`, which the writer reads, and which
   raises on two properties that share an English label; two items under
-  one label break a vocabulary read or the bootstrap only when it is a
+  one label break a whole vocabulary read or the bootstrap only when it is a
   manifest vocabulary item's, and a write only when it is its run item's
   (#94). A live mutant that breaks one of these (one that drops a
   reference, mints a duplicate vocabulary or run-item label, or leaves

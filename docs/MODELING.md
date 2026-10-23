@@ -19,8 +19,15 @@
   two items under one label (homonyms). The wiki client's label index
   gives such a label the numerically earliest of its items, and keeps
   every holder, and fails only where a label must name one item alone: a
-  vocabulary item's (the vocabulary read, the bootstrap) and a process
-  item's, such as a run item's (#94). No extracted entity is found by its
+  vocabulary item's (the vocabulary's whole read, the bootstrap) and a
+  process item's, such as a run item's (#94). The vocabulary is read
+  bounded where it can be (#507): the ids `Project:Model mapping` gives
+  the manifest's labels, each checked to carry its label, 50 a
+  request. That read sees only those ids, so another item under a
+  vocabulary item's label goes unseen there, and the bootstrap, which
+  reads every label, refuses it. When the page is missing, lacks or
+  repeats a manifest label, or an id is missing, a redirect or carries
+  another label, the vocabulary reads every label whole. No extracted entity is found by its
   label (#109): the writer finds or mints its item through the identity
   map alone (below).
 - **One item per cluster of the identity map** (#109; ADR-0035 as

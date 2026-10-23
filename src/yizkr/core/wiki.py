@@ -12,8 +12,12 @@ people of one name are two items under one label (homonyms). The index
 gives such a label its numerically earliest item and keeps every holder
 (`ItemLabels`), and only a lookup whose label must name one item alone
 fails on it (`ItemLabels.sole`): a manifest vocabulary item, found by its
-label in `vocabulary` and the bootstrap, and a process item, such as a
-run item, whose label is its key (`find_item_by_label`).
+label in the bootstrap and in `vocabulary`'s full read, and a process
+item, such as a run item, whose label is its key (`find_item_by_label`).
+
+`vocabulary` reads bounded where it can: the ids the bootstrap's mapping
+page gives the manifest's labels, each checked to carry its label. It
+falls back to the full read when the page is missing or disagrees.
 """
 
 from __future__ import annotations
@@ -263,13 +267,19 @@ class WikiClient:
     def vocabulary(self) -> tuple[dict[str, str], dict[str, str]]:
         """(property key -> P id, item key -> Q id) via manifest labels.
 
-        Each manifest item's label must name one item alone
-        (`ItemLabels.sole`): a label it shares with another item fails
-        here, whatever other labels items share.
         The labels this client last read whole (`label_index`) answer it
         when they hold the whole vocabulary, so a caller that has just
-        read them, as resolve does, costs no second read; otherwise the
-        labels are read afresh."""
+        read them, as resolve does, costs no second read. Otherwise the
+        bootstrap's mapping page answers it, read bounded
+        (`_bounded_vocabulary`), and when that fails the labels are read
+        afresh, whole.
+
+        On a whole read each manifest item's label must name one item
+        alone (`ItemLabels.sole`): a label it shares with another item
+        fails here, whatever other labels items share. The bounded read
+        sees only the ids the mapping page names, so another item under
+        a manifest item's label goes unseen there; the bootstrap, which
+        reads whole, refuses it."""
         if self._vocabulary is not None:
             return self._vocabulary
         raw = yaml.safe_load(read_manifest_data(self.manifest_source))
@@ -278,6 +288,10 @@ class WikiClient:
             if not found[2]:
                 self._vocabulary = found[0], found[1]
                 return self._vocabulary
+        bounded = self._bounded_vocabulary(raw)
+        if bounded is not None:
+            self._vocabulary = bounded
+            return self._vocabulary
         properties, items, missing = _vocabulary_of(raw, *self.label_index())
         if missing:
             raise RuntimeError(
@@ -286,6 +300,72 @@ class WikiClient:
             )
         self._vocabulary = (properties, items)
         return self._vocabulary
+
+    def _bounded_vocabulary(
+        self, raw: dict
+    ) -> tuple[dict[str, str], dict[str, str]] | None:
+        """The vocabulary of the manifest `raw` from the bootstrap's
+        mapping page, at a cost that grows with the vocabulary, not the
+        instance: the page's Local ID of each manifest label, each id's
+        English label checked against the manifest's, one `wbgetentities`
+        request per 50 ids. Both reads are lag-free (the page's latest
+        revision, the entities' current data).
+
+        None, and the caller reads whole, when the page is missing, names
+        a label twice or lacks one the manifest gives, when an id is
+        missing, a redirect or carries another label, and when the read
+        fails in any way: a whole read answers then, and fails loudly
+        itself on an instance that cannot answer."""
+        try:
+            return self._read_bounded_vocabulary(raw)
+        except Exception:
+            return None
+
+    def _read_bounded_vocabulary(
+        self, raw: dict
+    ) -> tuple[dict[str, str], dict[str, str]] | None:
+        from yizkr.model.bootstrap import mapping_rows
+
+        text = self.page_text(raw["mapping_page"])
+        if text is None:
+            return None
+        # page label -> id, of properties (P) and of items (Q)
+        named: dict[str, dict[str, str]] = {"P": {}, "Q": {}}
+        for entity_id, label in mapping_rows(text):
+            ids = named[entity_id[0]]
+            if ids.setdefault(label, entity_id) != entity_id:
+                return None
+        found: dict[str, dict[str, str]] = {"P": {}, "Q": {}}
+        # id -> the manifest label it must carry
+        wanted: dict[str, str] = {}
+        for kind, section in (("P", "properties"), ("Q", "items")):
+            for key, spec in raw[section].items():
+                entity_id = named[kind].get(spec["label"])
+                if entity_id is None:
+                    return None
+                found[kind][key] = entity_id
+                wanted[entity_id] = spec["label"]
+        ids = sorted(
+            wanted, key=lambda entity_id: (entity_id[0], _qid_order(entity_id))
+        )
+        for start in range(0, len(ids), 50):
+            batch = ids[start : start + 50]
+            data = self.api_get(
+                {
+                    "action": "wbgetentities",
+                    "ids": "|".join(batch),
+                    "props": "labels",
+                    "languages": "en",
+                }
+            )
+            for entity_id in batch:
+                entity = data["entities"].get(entity_id) or {}
+                if entity.get("id") != entity_id or "redirects" in entity:
+                    return None
+                label = entity.get("labels", {}).get("en", {}).get("value")
+                if label != wanted[entity_id]:
+                    return None
+        return found["P"], found["Q"]
 
     def forget_vocabulary(self) -> None:
         """Forget the vocabulary and the labels this client has read, so
@@ -347,6 +427,26 @@ class WikiClient:
         }
 
     # -- wiki pages ---------------------------------------------------------
+
+    def page_text(self, title: str) -> str | None:
+        """The text of the page `title`'s latest revision, or None when
+        the page does not exist. Lag-free: read from the page store, never
+        the search index."""
+        data = self.api_get(
+            {
+                "action": "query",
+                "prop": "revisions",
+                "titles": title,
+                "rvprop": "content",
+                "rvslots": "main",
+                "formatversion": "2",
+            }
+        )
+        (page,) = data["query"]["pages"]
+        if page.get("missing") or page.get("invalid"):
+            return None
+        (revision,) = page["revisions"]
+        return revision["slots"]["main"]["content"]
 
     def edit_page(self, title: str, text: str, summary: str) -> None:
         """Create or fully replace a wiki page."""
