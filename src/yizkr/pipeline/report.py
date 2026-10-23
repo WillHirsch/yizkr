@@ -1833,6 +1833,9 @@ def _clusters(path: Path, fold: _Fold) -> dict[str, Any]:
         "ambiguous pairs": number("ambiguous_pairs"),
         "adjudication calls": number("adjudication", "calls_ambiguous_pairs"),
         "pairs adjudicated": number("adjudication", "asked_pairs"),
+        "pairs not asked, a same cannot merge": number(
+            "adjudication", "unmergeable_pairs_not_asked"
+        ),
         "adjudication calls made": number("adjudication", "calls"),
         "verdicts same": number("adjudication", "verdicts", "same"),
         "verdicts different": number("adjudication", "verdicts", "different"),

@@ -741,8 +741,11 @@ refuses). The module docstrings are the full account; in short:
   it holds a pair contradicted: a `different` pair joined another way (a
   cannot-link), a `same` pair that differs by more than its own dates (a
   verdict excuses a date conflict on its own pair, never stated sexes,
-  civil statuses or kin that conflict), or any two members whose
-  evidence says they differ. A merged part's method is `adjudicated` when
+  civil statuses or kin that conflict, a place's containers or an
+  organisation's places that differ, or event kinds that cannot be
+  one), or any two members whose evidence says they differ. A cluster
+  of two whose one pair no `same` could merge is not asked in a
+  development-stage run (no verdict changes a cluster), and is counted. A merged part's method is `adjudicated` when
   a `same` pair is among its links, `confident` when its confident links
   alone join it. A cluster with an `uncertain` pair or one without a
   verdict stays apart whole. People are asked first, then unions, then

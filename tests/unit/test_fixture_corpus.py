@@ -1802,6 +1802,9 @@ class TestTheRunReport:
                 "calls_ambiguous_pairs"
             ],
             "pairs adjudicated": summary["adjudication"]["asked_pairs"],
+            "pairs not asked, a same cannot merge": summary["adjudication"][
+                "unmergeable_pairs_not_asked"
+            ],
             "adjudication calls made": summary["adjudication"]["calls"],
             **{
                 f"verdicts {verdict}": count

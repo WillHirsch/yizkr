@@ -329,8 +329,15 @@ Each part is checked again before it merges: a `different` pair is a
 cannot-link, so a part the closure joins across one stays apart, and so
 does a part with any two members whose evidence says they differ. A
 `same` verdict excuses only a date conflict on its own pair (sources
-disagree on dates); stated sexes or civil statuses that cannot both
-hold, and kin that conflict, keep the pair apart whatever the verdict.
+disagree on dates); whatever else the pair's evidence says differs keeps
+it apart whatever the verdict: for people, stated sexes or civil
+statuses that cannot both hold, and kin that conflict; for places,
+containers that differ (neither equal nor nested); for organisations,
+places that differ; for events and unions, kinds that cannot be one. In
+a development-stage run a candidate cluster of two whose one pair no
+`same` could merge is not asked, since no verdict on it changes a
+cluster, and is counted; in keeper mode it is asked, for the review
+sheet.
 A part merges with the method `adjudicated` when a `same` pair is among
 its links, and `confident` when its confident links alone join it, so
 the identity map says what made each merge; a cluster with an

@@ -216,12 +216,17 @@ A part that holds a pair contradicted stays apart, each member
 `ambiguous`, and the cluster counts among the ambiguous ones with them:
 a `different` pair the closure joined another way (a `different` is a
 cannot-link), a `same` pair whose evidence says they differ by more
-than their own dates (a verdict excuses a date conflict on its own
-pair, never stated sexes or civil statuses that cannot both hold, nor
-kin that conflict), or two other members whose evidence says they
-differ. Any other part merges, with the method `adjudicated` when a
-`same` pair is among its links, and `confident` when its confident links
-alone join it; a member a `different` pair left alone is a cluster of
+than their own dates, or two other members whose evidence says they
+differ (_Judge.contradicts). A verdict excuses a date conflict on its
+own pair and nothing else: never stated sexes or civil statuses that
+cannot both hold, kin that conflict, a place's containers that differ,
+an organisation's places that differ, or event kinds that cannot be
+one. Each ambiguous review pair records whether a `same` could merge it
+(`same_merges`); a candidate cluster of two whose one pair could not
+(cannot_merge) is not pending in a run whose verdicts merge. Any other
+part merges, with the method `adjudicated` when a `same` pair is among
+its links, and `confident` when its confident links alone join it; a
+member a `different` pair left alone is a cluster of
 its own, `adjudicated`, counted as `adjudicated_apart`. An ambiguous
 cluster with an `uncertain` pair, or a pair without a verdict, stays
 apart whole, and a conflicting cluster never merges, whatever its
@@ -2245,16 +2250,34 @@ def stage_group(kind: str | None) -> int:
     return 2 if kind in EVENT_KINDS else 0
 
 
+def cannot_merge(entry: Mapping[str, Any]) -> bool:
+    """Whether a review entry is a candidate cluster of two members whose
+    one pair no `same` verdict could merge (`same_merges` false): every
+    verdict on it leaves the two apart, so in a run whose verdicts merge
+    asking it changes no cluster. A pair in a larger cluster is asked
+    still, since its `different` can settle the cluster."""
+    pairs = entry.get("pairs") or ()
+    return (
+        len(entry.get("members") or ()) == 2
+        and len(pairs) == 1
+        and pairs[0].get("same_merges") is False
+    )
+
+
 def pending_pairs(
-    review: Iterable[Mapping[str, Any]],
+    review: Iterable[Mapping[str, Any]], *, merging: bool = False
 ) -> list[tuple[int, list[Pair]]]:
     """The ambiguous pairs of each ambiguous candidate cluster of a map's
     review that no verdict settles yet (none given, or an answer that gave
     none), with the cluster's stage_group, in the review's order. A
-    conflicting cluster never merges, so none of its pairs is pending."""
+    conflicting cluster never merges, so none of its pairs is pending;
+    nor, when the verdicts merge (`merging`), is a cluster no verdict
+    could merge (cannot_merge)."""
     found = []
     for entry in review:
         if entry.get("status") != AMBIGUOUS:
+            continue
+        if merging and cannot_merge(entry):
             continue
         pairs = [
             _pair(*pair["mentions"])
@@ -2268,9 +2291,9 @@ def pending_pairs(
 
 def pending_sizes(review: Iterable[Mapping[str, Any]]) -> dict[int, list[int]]:
     """How many pairs are pending (pending_pairs) in each cluster, by its
-    stage group."""
+    stage group, in a run whose verdicts merge."""
     sizes: dict[int, list[int]] = defaultdict(list)
-    for group, pairs in pending_pairs(review):
+    for group, pairs in pending_pairs(review, merging=True):
         sizes[group].append(len(pairs))
     return dict(sizes)
 
@@ -2528,6 +2551,19 @@ def cluster_corpus(
                         "mentions": list(pair),
                         "link": links[pair][0],
                         "evidence": links[pair][1],
+                        **(
+                            {
+                                # whether a `same` verdict could merge it
+                                "same_merges": judge.contradicts(
+                                    index[pair[0]],
+                                    index[pair[1]],
+                                    dates_count=False,
+                                )
+                                is None
+                            }
+                            if links[pair][0] == AMBIGUOUS
+                            else {}
+                        ),
                         **(
                             {"verdict": settling.get(pair)}
                             if verdicts is not None

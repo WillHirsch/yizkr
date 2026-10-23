@@ -342,26 +342,22 @@ class TestVerdicts:
 
     def test_same_never_excuses_stated_sexes_that_differ(self):
         """Klara Löbig, born 1917, in two registers, one misreading her
-        sex: their sexes block the pair, and a `same` verdict does not
-        merge it. Only a date conflict on its own pair is a verdict's to
-        excuse."""
-
-        def klara(name: str, sex: str) -> Doc:
-            return register(
-                name,
-                [human("e1", "Klara Löbig")],
-                [
-                    ("e1", "date_of_birth", day(1917)),
-                    ("e1", "sex_or_gender", vocab(sex)),
-                ],
-                {"e1": "klara-loebig"},
-            )
-
-        docs = [klara("read", "female"), klara("misread", "male")]
+        sex, and a third that states none and links confidently to each:
+        the first two's sexes block their pair, which is asked, since it
+        sits in a larger cluster, and `same` on it merges none of the
+        three.
+        Only a date conflict on its own pair is a verdict's to excuse."""
+        docs = [
+            klara("read", "female"),
+            klara("misread", "male"),
+            klara("silent", None),
+        ]
         before = cluster_corpus([d.manifest for d in docs])
         (entry,) = before["review"]
-        assert entry["pairs"][0]["evidence"].endswith("/sex")
+        blocked = [p for p in entry["pairs"] if p["evidence"].endswith("/sex")]
+        assert [p["same_merges"] for p in blocked] == [False]
         made, _ = run(docs, Engine(truths(docs), verdict=SAME))
+        assert made.counts["asked_pairs"] == 1
         assert {e["method"] for e in made.identity["mentions"].values()} == {
             AMBIGUOUS
         }
@@ -370,6 +366,84 @@ class TestVerdicts:
         assert entry["contradiction"]["evidence"].endswith("/sex")
         assert made.identity["summary"]["clusters"][AMBIGUOUS] == 1
         assert made.identity["summary"]["clusters"][ADJUDICATED] == 0
+
+    def test_a_pair_no_verdict_could_merge_is_not_asked_while_merging(self):
+        """The two registers alone: a cluster of one pair whose sexes block
+        it, so no verdict could merge it. A run whose verdicts merge does
+        not ask it, and counts it; keeper mode asks it, for the review
+        sheet; and a `same` given anyway merges nothing."""
+        docs = [klara("read", "female"), klara("misread", "male")]
+        engine = Engine(truths(docs), verdict=SAME)
+        made, clients = run(docs, engine)
+        assert engine.prompts == [] and clients == []
+        assert made.counts["unmergeable_pairs_not_asked"] == 1
+        assert made.counts["planned_calls"] == 0
+        assert {e["method"] for e in made.identity["mentions"].values()} == {
+            AMBIGUOUS
+        }
+        kept, _ = run(docs, engine, merge=False)
+        assert kept.counts["asked_pairs"] == 1
+        assert kept.counts["unmergeable_pairs_not_asked"] == 0
+        manifests = [d.manifest for d in docs]
+        (entry,) = cluster_corpus(manifests)["review"]
+        forced = cluster_corpus(
+            manifests,
+            None,
+            {clustering._pair(*entry["pairs"][0]["mentions"]): SAME},
+        )
+        assert {e["method"] for e in forced["mentions"].values()} == {
+            AMBIGUOUS
+        }
+
+    def test_a_chain_of_same_never_joins_dates_that_conflict(self):
+        """Gustav born 1919, a register giving his given names Gustav
+        Adolf Emil with no date, and a Gustav Emil born 1819: with a key
+        limit that leaves the two dated ones unblocked, `same` joins each
+        to the undated one, but the two never paired and their dates
+        conflict, so none of the three merges."""
+
+        def gustav_of(name: str, givens: list[str], year: int | None) -> Doc:
+            claims = [("e1", "date_of_birth", day(year, 1, 7))] if year else []
+            return register(
+                name,
+                [
+                    human(
+                        "e1",
+                        "Gustav Löbig",
+                        givens=givens,
+                        surnames=["Löbig"],
+                    )
+                ],
+                claims,
+                {"e1": "gustav-loebig"},
+            )
+
+        docs = [
+            gustav_of("adolf", ["Gustav", "Adolf"], 1919),
+            gustav_of("both", ["Gustav", "Adolf", "Emil"], None),
+            gustav_of("emil", ["Gustav", "Emil"], 1819),
+        ]
+        config = clustering.load_config(
+            overrides={"blocking": {"max-key-mentions": 2}}
+        )
+        manifests = [d.manifest for d in docs]
+        identity = cluster_corpus(manifests, config)
+        (entry,) = [e for e in identity["review"] if e["status"] == AMBIGUOUS]
+        assert len(entry["pairs"]) == 2
+        verdicts = {
+            clustering._pair(*p["mentions"]): SAME
+            for p in entry["pairs"]
+            if p["link"] == AMBIGUOUS
+        }
+        assert len(verdicts) == 2
+        settled = cluster_corpus(manifests, config, verdicts)
+        first = docs[0].fingerprint("e1", settled)
+        last = docs[2].fingerprint("e1", settled)
+        mentions = settled["mentions"]
+        assert mentions[first]["cluster"] != mentions[last]["cluster"]
+        assert {e["method"] for e in mentions.values()} == {AMBIGUOUS}
+        (entry,) = [e for e in settled["review"] if e["status"] == ADJUDICATED]
+        assert entry["contradiction"]["evidence"] == "key/conflict/unknown"
 
     def test_one_uncertain_pair_keeps_the_whole_cluster_apart(self):
         docs = [gustav(n, dated=True) for n in ("one", "two", "three")]
@@ -577,6 +651,27 @@ class TestSchema:
         assert "cut off" in made.calls[0]["refused"]
         assert method_of(made, docs, docs[0].sha1, "e1") == AMBIGUOUS
 
+    def test_a_give_up_on_the_second_attempt_is_refused(self, tmp_path):
+        """A kept answer refused, and the engine giving up at its output
+        limit when asked once more: the call is refused and counted, its
+        record keeps no rejected answer, and the pair stays apart."""
+        docs = [gustav("one", dated=True), gustav("two", dated=False)]
+        probe = Engine(truths(docs))
+        run(docs, probe)
+        broken = Engine(truths(docs), sentinel=False)
+        cached_client(
+            broken, open_cache(tmp_path / "cache"), role=ROLE
+        ).complete(probe.prompts[0])
+        gives_up = Engine(truths(docs), give_up=True)
+        made, _ = run(
+            docs,
+            cached_client(gives_up, open_cache(tmp_path / "cache"), role=ROLE),
+        )
+        assert made.counts["refused_calls"] == 1
+        assert made.counts["second_attempts"] == 1
+        assert made.calls[0]["response"] == ""
+        assert method_of(made, docs, docs[0].sha1, "e1") == AMBIGUOUS
+
     def test_a_second_bad_answer_is_rejected_too(self, tmp_path):
         """A kept answer refused, asked once more and answered badly again:
         that answer is rejected too, so the next invocation asks the
@@ -751,6 +846,27 @@ class TestPrompt:
             "\n".join(lines)
         )
 
+    def test_an_event_is_given_up_to_its_claims_limit(self):
+        """An event that names a mention is given with at most MAX_CLAIMS
+        of its own claims, and says how many more it has."""
+        count = adjudication.MAX_CLAIMS + 2
+        claims = [("b1", "participant", item("e1"), role("principal"))] + [
+            ("b1", "point_in_time", day(1880 + n)) for n in range(count)
+        ]
+        doc = register(
+            "a register",
+            [human("e1", "Gustav Löbig"), entity("b1", "Birth", "birth")],
+            claims,
+            {"e1": "gustav-loebig", "b1": "gustav-loebig-birth"},
+        )
+        (line,) = [
+            line
+            for line in adjudication._Document(doc.manifest).lines("e1")
+            if line.startswith("named as the participant")
+        ]
+        assert line.count("point_in_time") == adjudication.MAX_CLAIMS
+        assert line.endswith("; and 2 claims more")
+
     def test_says_how_many_claims_it_leaves_out(self):
         doc = document(
             "a register",
@@ -897,6 +1013,7 @@ class TestStage:
         assert [v["verdict"] for v in record["verdicts"]] == [SAME]
         assert record["verdicts"][0]["reason"] == "fictional"
         assert record["calls"][0]["response"].endswith('{"done": true}')
+        assert record["calls"][0]["round"] == 1
         identity = json.loads((context.directory / IDENTITY_MAP).read_text())
         assert identity["summary"]["clusters"][ADJUDICATED] == 1
         # its calls are named apart in the run's events
@@ -990,6 +1107,14 @@ class TestStage:
             return value
 
         monkeypatch.setattr(staticsite, "format_time", format_time)
+        assert adjudication.code_digest() != digest
+        monkeypatch.undo()
+        # the module's own source: a copy with one line more
+        copy = tmp_path / "adjudication.py"
+        copy.write_text(
+            Path(adjudication.__file__).read_text() + "# one line more\n"
+        )
+        monkeypatch.setattr(adjudication, "__file__", str(copy))
         assert adjudication.code_digest() != digest
         monkeypatch.undo()
         monkeypatch.setattr(adjudication, "code_digest", lambda: "other")
@@ -1196,6 +1321,16 @@ def test_the_monitor_counts_the_calls_under_adjudication(tmp_path):
 
 
 # -- what verdicts settle -----------------------------------------------------
+
+
+def klara(name: str, sex: str | None) -> Doc:
+    """A register of Klara Löbig, born 1917, with the sex it states."""
+    claims = [("e1", "date_of_birth", day(1917))]
+    if sex:
+        claims.append(("e1", "sex_or_gender", vocab(sex)))
+    return register(
+        name, [human("e1", "Klara Löbig")], claims, {"e1": "klara-loebig"}
+    )
 
 
 def three_nicholases() -> list[Doc]:
