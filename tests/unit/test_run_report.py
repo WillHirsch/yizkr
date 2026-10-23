@@ -1821,10 +1821,15 @@ class TestCorpusStages:
 
     def test_a_corpus_stage_s_unknown_reason_shows_as_other(self, tmp_path):
         """A reason whose label the vocabulary does not hold shows as
-        OTHER: never its own words, which may quote a document."""
-        unknown = "Gustav Löbig turned up twice: in Flörburg and Klurnau"
+        OTHER: never its own words, which may quote a document. The first
+        is a leading label of the shape the pipeline's labels take, so
+        only the check against ATTENTION_LABELS keeps it out."""
+        unknown = [
+            "klurnau and rekau look alike: 2 clusters",
+            "Gustav Löbig turned up twice: in Flörburg and Klurnau",
+        ]
         entries = [
-            (name, entry | {"attention": [*CLUSTERED, unknown]})
+            (name, entry | {"attention": [*CLUSTERED, *unknown]})
             if entry.get("stage") == "clustering"
             and entry.get("event") == "done"
             else (name, entry)
@@ -1850,6 +1855,7 @@ class TestCorpusStages:
             f"merged, {OTHER} |"
         ) in row
         assert "Löbig" not in text and "turned up" not in text
+        assert "klurnau" not in text and "look alike" not in text
 
     def test_no_pointer_without_a_corpus_stage_s_reason(self, tmp_path):
         entries = [
