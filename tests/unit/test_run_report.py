@@ -677,6 +677,7 @@ def records(
     appellation_parts=None,
     containers_checked=None,
     containers_dropped=None,
+    containers_name_only=None,
 ) -> dict:
     """coverage.json's records; with no `set_aside_records`,
     `unsplit_forms`, `appellation_labels` or the place containers checked
@@ -691,6 +692,7 @@ def records(
             ("appellation_parts", appellation_parts),
             ("containers_checked", containers_checked),
             ("containers_dropped", containers_dropped),
+            ("containers_name_only", containers_name_only),
         )
         if count is not None
     }
@@ -784,6 +786,7 @@ def views() -> dict[str, dict[str, object]]:
                         "no-evidence": 1,
                         "evidence-not-in-source": 2,
                     },
+                    containers_name_only=1,
                 ),
                 notes={"identity": 2, "date_reading": 3},
             ),
@@ -2030,6 +2033,7 @@ class TestContent:
                 "evidence-not-in-source": 2,
                 "no-evidence": 1,
             },
+            "containers_name_only": 1,
             # the deck's coverage predates the three newer counts, the
             # postcard's those of unsplit forms and the appellation counts,
             # and both predate the containers'
@@ -2064,7 +2068,8 @@ class TestContent:
             "- Records set aside: 2; reasons records were set aside: 4 (a "
             "record can give several)\n"
             "- Place containers checked: 4; dropped alone, their records "
-            "standing, so counted apart from records set aside: 3\n"
+            "standing, so counted apart from records set aside: 3; kept "
+            "whose evidence is the container's name alone: 1\n"
             "- Judgement notes: 7; notes set aside: 5\n"
             "- Extractions not counted: 1 whose coverage predates these "
             "counts; 1 that fell back to line ranges (all their mentions "
@@ -2110,6 +2115,7 @@ class TestContent:
                 "evidence-not-in-source": 2,
                 "no-evidence": 1,
             },
+            "containers_name_only": 1,
         }
         assert cert["notes"] == {
             "by_category": {"identity": 2, "date_reading": 3},
@@ -2127,6 +2133,7 @@ class TestContent:
             "set_aside_by_reason": {},
             "containers_checked": None,
             "containers_dropped_by_reason": None,
+            "containers_name_only": None,
         }
         assert deck["notes"] == {"by_category": {}, "set_aside": 0}
         for absent in (CARD, DIRECTORY):
@@ -2138,7 +2145,8 @@ class TestContent:
             "unsplit name forms: 3; appellation labels: 2; appellation "
             "parts: 1; recordless: 1; "
             "records set aside: 1; reasons set aside: initial 2, addition 1; "
-            "place containers checked: 4; dropped: evidence-not-in-source "
+            "place containers checked: 4; kept whose evidence is the name "
+            "alone: 1; dropped: evidence-not-in-source "
             "2, no-evidence 1; judgement notes: "
             "date_reading 3, identity 2; notes set aside: 3"
         ) in drilled(made, CERT)
@@ -2149,7 +2157,8 @@ class TestContent:
             f"appellation parts: {predates}; "
             "recordless: 0; records set aside: "
             f"{predates}; reasons set aside: none; place containers "
-            f"checked: {predates}; dropped: not counted; judgement notes: "
+            f"checked: {predates}; kept whose evidence is the name alone: "
+            f"{predates}; dropped: not counted; judgement notes: "
             "none; notes set aside: 0"
         ) in drilled(made, DECK)
         assert (
@@ -2158,6 +2167,7 @@ class TestContent:
             f"{predates}; recordless: 1; "
             "records set aside: 1; reasons set "
             "aside: no toponym 1; place containers checked: "
+            f"{predates}; kept whose evidence is the name alone: "
             f"{predates}; dropped: not counted; judgement notes: kind 1, "
             "relation 1; notes set aside: 2"
         ) in drilled(made, POSTCARD)
@@ -2235,6 +2245,7 @@ class TestContent:
             "containers_checked": 0,
             "containers_dropped": 0,
             "containers_dropped_by_reason": {},
+            "containers_name_only": 0,
             "absent": {
                 "predating": 0,
                 "line_range": 0,
@@ -2260,7 +2271,8 @@ class TestContent:
             "- Records set aside: 1; reasons records were set aside: 2 (a "
             "record can give several)\n"
             "- Place containers checked: 0; dropped alone, their records "
-            "standing, so counted apart from records set aside: 0\n"
+            "standing, so counted apart from records set aside: 0; kept "
+            "whose evidence is the container's name alone: 0\n"
             "- Judgement notes: 1; notes set aside: 1\n"
             "- Extractions not counted: 0 whose coverage predates these "
             "counts; 0 that fell back to line ranges (all their mentions "
@@ -2288,7 +2300,8 @@ class TestContent:
             "forms: 2; appellation labels: 0; appellation parts: 0; "
             "recordless: 1; records set "
             "aside: 1; reasons set aside: addition 2; place containers "
-            "checked: 0; dropped: none; judgement notes: "
+            "checked: 0; kept whose evidence is the name alone: 0; "
+            "dropped: none; judgement notes: "
             "identity 1; notes set aside: 1"
         ) in drilled(made, CERT)
         said = ("hatter", "Klara", "Ida", "read as Hildegard")
@@ -2422,6 +2435,7 @@ class TestContent:
             "containers_checked": 0,
             "containers_dropped": 0,
             "containers_dropped_by_reason": {},
+            "containers_name_only": 0,
             "absent": {
                 "predating": 2,
                 "line_range": 1,
@@ -2448,7 +2462,8 @@ class TestContent:
             "- Records set aside: 0; reasons records were set aside: 0 (a "
             "record can give several)\n"
             "- Place containers checked: 0; dropped alone, their records "
-            "standing, so counted apart from records set aside: 0\n"
+            "standing, so counted apart from records set aside: 0; kept "
+            "whose evidence is the container's name alone: 0\n"
             "- Judgement notes: 0; notes set aside: 0\n"
             "- Extractions not counted: 2 whose coverage predates these "
             "counts; 1 that fell back to line ranges (all their mentions "
@@ -2474,6 +2489,7 @@ class TestContent:
             "set_aside_by_reason": {},
             "containers_checked": 0,
             "containers_dropped_by_reason": {},
+            "containers_name_only": None,
         }
         assert (
             "Mention records given: 0, by status: none; unsplit name forms: "
@@ -2543,6 +2559,7 @@ class TestContent:
             "set_aside_by_reason": {"kind": 1, "addition": 0},
             "containers_checked": None,
             "containers_dropped_by_reason": None,
+            "containers_name_only": None,
         }
         assert cert["notes"] == {"by_category": {"kind": 2}, "set_aside": 0}
         for half in (DECK, POSTCARD):
@@ -2563,6 +2580,7 @@ class TestContent:
             "containers_checked": 0,
             "containers_dropped": 0,
             "containers_dropped_by_reason": {},
+            "containers_name_only": 0,
             "absent": {
                 "predating": 3,
                 "line_range": 1,
@@ -2634,6 +2652,7 @@ class TestContent:
             "containers_checked": 0,
             "containers_dropped": 0,
             "containers_dropped_by_reason": {},
+            "containers_name_only": 0,
             "absent": {
                 "predating": 0,
                 "line_range": 0,
@@ -3545,6 +3564,7 @@ class TestAScratchRun:
             "containers_checked": 0,
             "containers_dropped": 0,
             "containers_dropped_by_reason": {},
+            "containers_name_only": 0,
             "absent": {
                 "predating": 0,
                 "line_range": 0,

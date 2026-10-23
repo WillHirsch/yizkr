@@ -1274,12 +1274,9 @@ def name_form_key(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _fold(text: str) -> str:
-    """Case and accents folded after Unicode normalisation."""
-    decomposed = unicodedata.normalize(
-        "NFD", unicodedata.normalize("NFC", text).casefold()
-    )
-    return "".join(c for c in decomposed if not unicodedata.combining(c))
+# case, accents and typographic punctuation folded, as every comparison
+# of an excerpt or a name reads them (core/verbatim.py)
+_fold = verbatim.fold
 
 
 def _words(text: str) -> list[str]:
@@ -1512,43 +1509,43 @@ CONTAINER_REASONS = (
 
 
 def container_problem(
-    container: Container | str,
-    forms: Iterable[str],
-    transcript: verbatim.Transcript | None,
-) -> tuple[str | None, int | None]:
+    container: Container, transcript: verbatim.Transcript | None
+) -> tuple[str | None, tuple[int, int] | None]:
     """(why a place's container cannot stand, or None when it can; the
-    number of the transcription line its evidence was compared with, or
-    None) (ADR-0035 §5). `forms` are the place's label and aliases.
+    first and last numbers of the transcription lines its evidence was
+    compared with, or None) (ADR-0035 §5).
 
-    * `no-evidence`: the entry gives none;
+    * `no-evidence`: the entry gives none, a name alone among them;
     * `evidence-not-in-source`: the evidence does not occur in the
-      transcription, compared as `core.verbatim` reads both (the line is
-      the one sharing the most of its words);
+      transcription, compared as `core.verbatim` reads both, whole words
+      only (the lines are the one sharing the most of its words);
     * `evidence-does-not-name`: the evidence does not hold the
-      container's name, folded, as whole words (the line is the one the
-      evidence occurs on).
+      container's name, folded, as whole words (the lines are those the
+      evidence spans).
 
-    A bare string, a name alone as a stored answer may give it, is read
-    with the no-addition check: it stands where its name occurs in the
-    label or an alias, folded, as whole words, and gives `no-evidence`
-    otherwise. With no
-    transcript (an adapter's record, whose source is no transcription),
-    the evidence is not looked for in one."""
-    if isinstance(container, str):
-        named = _occurs(container, [_words(form) for form in forms])
-        return (None if named else NO_EVIDENCE), None
+    With no transcript (an adapter's record, whose source is no
+    transcription), the evidence is not looked for in one."""
     if container.evidence is None or not verbatim.words(container.evidence):
         return NO_EVIDENCE, None
-    line = None
+    lines = None
     if transcript is not None:
-        line = transcript.locate(container.evidence)
-        if line is None:
-            return EVIDENCE_NOT_IN_SOURCE, transcript.nearest(
-                container.evidence
+        lines = transcript.span(container.evidence)
+        if lines is None:
+            nearest = transcript.nearest(container.evidence)
+            return EVIDENCE_NOT_IN_SOURCE, (
+                None if nearest is None else (nearest, nearest)
             )
     if not _occurs(container.name, [verbatim.words(container.evidence)]):
-        return EVIDENCE_DOES_NOT_NAME, line
-    return None, line
+        return EVIDENCE_DOES_NOT_NAME, lines
+    return None, lines
+
+
+def name_only(container: Container) -> bool:
+    """Whether a container's evidence gives its name and nothing else,
+    folded, as words: evidence that names no place it is said to hold."""
+    return container.evidence is not None and verbatim.words(
+        container.evidence
+    ) == verbatim.words(container.name)
 
 
 def container_problems(entity: EntityRecord) -> list[str]:
@@ -1558,15 +1555,26 @@ def container_problems(entity: EntityRecord) -> list[str]:
     structure = entity.structure
     if not isinstance(structure, PlaceStructure):
         return []
-    forms = [entity.label, *entity.aliases]
     found = []
     for index, container in enumerate(structure.within):
-        reason, _ = container_problem(container, forms, None)
+        reason, _ = container_problem(container, None)
         if reason is not None:
             found.append(
                 f"{reason}: structure.place.within.{index}: {container.name!r}"
             )
     return found
+
+
+def _place_forms(entity: dict, structure: dict) -> list[list[str]]:
+    """The folded words of each form a place goes by: its label, its
+    aliases, and its record's names and address as written."""
+    forms = [entity.get("label") or "", *(entity.get("aliases") or [])]
+    for name in structure.get("names") or []:
+        forms.append(name.get("written") or "")
+    address = structure.get("address")
+    if isinstance(address, dict):
+        forms.append(address.get("written") or "")
+    return [_words(form) for form in forms if form]
 
 
 def drop_containers(
@@ -1575,39 +1583,58 @@ def drop_containers(
     """An entity of an entity manifest whose record stands
     (`set_aside_structure`), with each container of its place record that
     cannot stand dropped alone (`container_problem`), the record standing
-    with its names, keys and other entries (ADR-0035 §5); and an audit
-    entry for each container checked, kept or dropped: the entity's id,
-    the entry's field path, its name and evidence, the reason it was
-    dropped (None when kept), and the number and text of the
-    transcription line its evidence was compared with. The audit stays
-    with the document's local extraction records, never in a report."""
+    with its names, keys and other entries (ADR-0035 §5). An entry written
+    as a bare string gives a name alone, no evidence, and is dropped as
+    `no-evidence` like any other.
+
+    Also an audit entry for each container checked, kept or dropped: the
+    entity's id; the entry's field path (its index counts the entries
+    left once those written as empty strings were dropped,
+    `set_aside_structure`); its name and evidence; the reason it was
+    dropped (None when kept); the first and last numbers of the
+    transcription lines its evidence was compared with, and the first
+    line's text; whether the evidence names the place itself (its label,
+    an alias or a name its record gives, folded, as whole words); and
+    whether the evidence is the container's name alone (`name_only`).
+    The audit stays with the document's local extraction records, never
+    in a report."""
     structure = entity.get("structure")
     if not isinstance(structure, dict) or structure.get("kind") != "place":
         return entity, []
     within = structure.get("within")
     if not isinstance(within, list) or not within:
         return entity, []
-    forms = [entity.get("label") or "", *(entity.get("aliases") or [])]
+    forms = _place_forms(entity, structure)
     kept: list[object] = []
     audit: list[dict] = []
     for index, raw in enumerate(within):
-        container = raw if isinstance(raw, str) else Container(**raw)
-        reason, line = container_problem(container, forms, transcript)
-        name = raw if isinstance(raw, str) else container.name
-        evidence = None if isinstance(raw, str) else container.evidence
+        container = (
+            Container(name=raw) if isinstance(raw, str) else Container(**raw)
+        )
+        reason, lines = container_problem(container, transcript)
+        first, last = lines if lines is not None else (None, None)
+        evidence = container.evidence
         audit.append(
             {
                 "entity": entity.get("id"),
                 "field": f"structure.place.within.{index}",
-                "name": name,
+                "name": container.name,
                 "evidence": evidence,
                 "reason": reason,
-                "line": line,
+                "line": first,
+                "last_line": last,
                 "line_text": (
-                    transcript.line(line)
-                    if transcript is not None and line is not None
+                    transcript.line(first)
+                    if transcript is not None and first is not None
                     else None
                 ),
+                "names_place": evidence is not None
+                and any(
+                    _occurs(" ".join(form), [verbatim.words(evidence)])
+                    for form in forms
+                    if form
+                ),
+                "name_only": name_only(container),
             }
         )
         if reason is None:

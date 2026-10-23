@@ -313,7 +313,9 @@ Applied with the implementation (accepted by the owner, 2026-10-23):
    containers that stand, each a name with its evidence, by name and
    nearest first as before: a container whose evidence fails its checks
    is dropped from the record at extraction, its record standing
-   (ADR-0035 §5), so it states no link here. No model gives geography:
+   (ADR-0035 §5), so it states no link here; a container written as a
+   bare string gives no evidence and is dropped too. No model gives
+   geography:
    the evidence is the source's words, checked against its transcription.
    *Applied (#571):* the GEDCOM export states the containment its PLACs
    give as the extracted documents do. Each jurisdiction of a PLAC is a

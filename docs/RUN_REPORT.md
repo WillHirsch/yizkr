@@ -279,7 +279,9 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   dropped alone from records that stand, by reason (`no-evidence`,
   `evidence-not-in-source`, `evidence-does-not-name`;
   `claims.CONTAINER_REASONS`, ADR-0035 §5 as amended by #569), a drop
-  being no record set aside and no reason among theirs, and never quoted
+  being no record set aside and no reason among theirs, and those kept
+  whose evidence is the container's name alone (`containers_name_only`),
+  never quoted
   (each container checked, with its evidence and the transcription line
   it was compared with, stays in the extraction's local
   `containers.json`); the reasons records were set aside by, by
@@ -350,7 +352,8 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   `recordless`, `by_status`, `unsplit_forms`, `set_aside_records`,
   `appellation_labels`, `appellation_parts`, `set_aside_reasons`,
   `set_aside_by_reason`, `containers_checked`, `containers_dropped`,
-  `containers_dropped_by_reason`, `absent.predating`,
+  `containers_dropped_by_reason`, `containers_name_only`,
+  `absent.predating`,
   `absent.line_range`, `absent.set_aside_records`,
   `absent.unsplit_forms`, `absent.appellation_labels`,
   `absent.appellation_parts`, `absent.containers`) and

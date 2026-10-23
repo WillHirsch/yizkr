@@ -5,9 +5,10 @@ A `within` entry is a name and a verbatim excerpt of the transcription
 that states the containment. Each fails for one reason, counted apart:
 `no-evidence`, `evidence-not-in-source` and `evidence-does-not-name`. By
 the owner's option B a failing entry is dropped alone and the record
-stands. An older answer's bare-string entry is read with the check that
-answer was made for. The GEDCOM adapter gives each entry its PLAC's value.
-The critic may flag `evidence_does_not_state`, advisory.
+stands. A bare-string entry gives no evidence and is dropped as
+`no-evidence`; a stored batch's bare strings still parse. The GEDCOM
+adapter gives each entry its PLAC's value. The critic may flag
+`evidence_does_not_state`, advisory, name-only evidence among it.
 
 Every text is the fictional universe's (docs/EXAMPLES.md): the 1952
 letter's sender, "Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân", and
@@ -136,20 +137,83 @@ class TestTheComparison:
         assert found.line(9) == ""
 
 
-class TestEachReason:
-    forms = ["Snylsjum"]
+class TestWholeWords:
+    """An excerpt may neither start nor end inside a word of the
+    transcription, so a container the model added by quoting part of a
+    word does not stand."""
 
+    def test_an_excerpt_ending_inside_a_word_is_no_match(self):
+        found = Transcript("Snylsjum, gemeente Drakeradiel")
+        assert found.locate("gemeente Drake") is None
+        assert found.locate("Snylsjum, gemeente Drakeradiel") == 1
+
+    def test_an_excerpt_starting_inside_a_word_is_no_match(self):
+        assert Transcript("Fläckfeld, Kreis Mockburg").locate("burg") is None
+        assert Transcript(SENDER).locate("ryslân, Nederlân") is None
+
+    def test_a_later_whole_word_match_is_found(self):
+        found = Transcript("Mockburger Weg\nKreis Mockburg")
+        assert found.locate("Mockburg") == 2
+
+    def test_punctuation_at_an_excerpt_s_edge_needs_no_boundary(self):
+        assert Transcript(SENDER).locate(", gemeente") == 1
+
+    def test_a_partial_word_container_is_not_in_the_source(self):
+        reason, _ = container_problem(
+            Container(name="Drake", evidence="Snylsjum, gemeente Drake"),
+            Transcript("Snylsjum, gemeente Drakeradiel"),
+        )
+        assert reason == EVIDENCE_NOT_IN_SOURCE
+        reason, _ = container_problem(
+            Container(name="Burg", evidence="burg"),
+            Transcript("Fläckfeld, Kreis Mockburg"),
+        )
+        assert reason == EVIDENCE_NOT_IN_SOURCE
+
+
+class TestReadings:
+    """The edge cases of the reading both sides share."""
+
+    def test_a_hyphenated_name_broken_at_its_hyphen(self):
+        # Mockburg-Süd, the universe's worked example (docs/EXAMPLES.md)
+        found = Transcript("Mockburg-\nSüd, Kreis Mockburg")
+        assert found.locate("Mockburg-Süd, Kreis Mockburg") == 1
+        # the joined reading is tried first, and still found
+        assert found.locate("MockburgSüd") == 1
+        assert found.span("Mockburg-Süd, Kreis Mockburg") == (1, 2)
+
+    def test_a_spaced_dash_at_a_line_s_end_is_no_hyphen(self):
+        assert (
+            Transcript("Snylsjum -\nFryslân").locate("Snylsjum - Fryslân") == 1
+        )
+
+    def test_a_blank_line_is_one_space(self):
+        assert Transcript("a,\n\nb").locate("a, b") == 1
+
+    def test_whitespace_at_a_line_s_edges(self):
+        found = Transcript("Snylsjum, gemeente Drake-  \n  radiel")
+        assert found.locate("Drakeradiel") == 1
+        assert found.locate("Snylsjum, gemeente") == 1
+
+    def test_typographic_punctuation_reads_plain(self):
+        found = Transcript("Sybren van \u2019t Nijks \u2013 Snylsjum")
+        assert found.locate("Sybren van 't Nijks - Snylsjum") == 1
+
+    def test_a_span_gives_its_first_and_last_line(self):
+        assert Transcript(LETTER).span("Nijks Snylsjum, gemeente") == (2, 3)
+        assert Transcript(LETTER).span("Peiltal") is None
+
+
+class TestEachReason:
     def check(self, container, text=LETTER):
         return container_problem(
-            container,
-            self.forms,
-            None if text is None else Transcript(text),
+            container, None if text is None else Transcript(text)
         )
 
     def test_evidence_the_source_holds_naming_the_container_stands(self):
         assert self.check(Container(name="Fryslân", evidence=SENDER)) == (
             None,
-            3,
+            (3, 4),
         )
 
     def test_no_evidence(self):
@@ -162,16 +226,24 @@ class TestEachReason:
 
     def test_evidence_not_in_source(self):
         # the model's own words, which the letter does not hold
-        reason, line = self.check(
+        reason, lines = self.check(
             Container(name="Fryslân", evidence="Snylsjum in Fryslân")
         )
         assert reason == EVIDENCE_NOT_IN_SOURCE
         # the line it was most likely meant to quote
-        assert line == 3
+        assert lines == (3, 3)
 
     def test_evidence_that_does_not_name_the_container(self):
-        reason, line = self.check(Container(name="Friesland", evidence=SENDER))
-        assert (reason, line) == (EVIDENCE_DOES_NOT_NAME, 3)
+        reason, lines = self.check(
+            Container(name="Friesland", evidence=SENDER)
+        )
+        assert (reason, lines) == (EVIDENCE_DOES_NOT_NAME, (3, 4))
+
+    def test_a_name_the_label_holds_but_the_evidence_lacks(self):
+        given = snylsjum(entry("Fryslân", "Sybren van 't Nijks"))
+        given["label"] = "Snylsjum, Fryslân"
+        _, audit = drop_containers(given, Transcript(LETTER))
+        assert [found["reason"] for found in audit] == [EVIDENCE_DOES_NOT_NAME]
 
     def test_a_name_is_compared_as_whole_words(self):
         reason, _ = self.check(
@@ -185,9 +257,8 @@ class TestEachReason:
                 name="Kaldovsky District",
                 evidence="District: Kaldovsky District",
             ),
-            ["Koshnovka"],
             Transcript(FORM),
-        ) == (None, 2)
+        ) == (None, (2, 2))
 
     def test_with_no_transcript_the_source_is_not_looked_in(self):
         assert self.check(
@@ -230,8 +301,22 @@ class TestOptionB:
             "evidence": SENDER,
             "reason": EVIDENCE_DOES_NOT_NAME,
             "line": 3,
+            "last_line": 4,
             "line_text": "Snylsjum, gemeente Drake-",
+            "names_place": True,
+            "name_only": False,
         }
+
+    def test_the_audit_tells_name_only_evidence_apart(self):
+        given = snylsjum(
+            entry("Fryslân", "Fryslân"),
+            entry("Nederlân", "Fryslân, Nederlân"),
+        )
+        _, audit = drop_containers(given, Transcript(LETTER))
+        assert [found["reason"] for found in audit] == [None, None]
+        assert [found["name_only"] for found in audit] == [True, False]
+        # neither names Snylsjum itself
+        assert [found["names_place"] for found in audit] == [False, False]
 
     def test_a_record_whose_containers_all_stand_is_unchanged(self):
         given = snylsjum(
@@ -277,22 +362,27 @@ class TestOptionB:
         assert EntityRecord.model_validate(kept).structure.within == []
 
 
-class TestAnOlderAnswer:
-    """An answer made before entries carried evidence wrote bare strings.
-    Such an entry is read with the check that answer was made for: it
-    stands where its name occurs in the label or an alias, and is dropped
-    as `no-evidence` otherwise. A stored batch's bare strings read as
-    containers with no evidence."""
+class TestABareString:
+    """An entry written as a bare string gives a name alone, no evidence:
+    at extraction it is dropped as `no-evidence` like any other, whatever
+    the label or an alias holds. A stored batch's bare strings still read
+    as containers with no evidence."""
 
-    def test_a_bare_string_the_label_holds_stands(self):
+    def test_a_bare_string_the_label_holds_is_dropped(self):
         given = snylsjum("Fryslân", "Nederlân")
         given["label"] = SENDER
         kept, audit = drop_containers(given, Transcript(LETTER))
-        assert kept == given
-        assert [found["reason"] for found in audit] == [None, None]
+        assert kept["structure"]["within"] == []
+        assert [found["reason"] for found in audit] == [NO_EVIDENCE] * 2
         assert [found["evidence"] for found in audit] == [None, None]
 
-    def test_a_bare_string_no_form_holds_is_dropped_as_no_evidence(self):
+    def test_a_bare_string_an_alias_holds_is_dropped(self):
+        given = snylsjum("Fryslân")
+        given["aliases"] = ["Snylsjum, Fryslân"]
+        _, audit = drop_containers(given, Transcript(LETTER))
+        assert [found["reason"] for found in audit] == [NO_EVIDENCE]
+
+    def test_a_bare_string_no_form_holds_is_dropped(self):
         kept, audit = drop_containers(snylsjum("Fryslân"), Transcript(LETTER))
         assert [found["reason"] for found in audit] == [NO_EVIDENCE]
         assert kept["structure"]["within"] == []
@@ -323,7 +413,23 @@ class TestTheExtraction:
                     entry("Friesland", SENDER),
                     entry("Nederlân"),
                 )
-                | {"extract": False}
+                | {"extract": False},
+                # a second place, its first container's evidence the
+                # name alone
+                {
+                    "id": "e3",
+                    "label": "gemeente Drakeradiel",
+                    "kind": "place",
+                    "extract": False,
+                    "structure": {
+                        "kind": "place",
+                        "names": [{"written": "gemeente Drakeradiel"}],
+                        "within": [
+                            entry("Fryslân", "Fryslân"),
+                            entry("Nederlân", SENDER),
+                        ],
+                    },
+                },
             ]
         }
         llm = ScriptedLlm([json.dumps(manifest)])
@@ -338,16 +444,18 @@ class TestTheExtraction:
 
     def test_the_record_stands_with_the_container_that_stands(self, extracted):
         batch, _, _ = extracted
-        (place,) = batch.entities
+        place, other = batch.entities
         assert place.structure.containers() == ["gemeente Drakeradiel"]
         assert place.structure.within[0].evidence == SENDER
+        assert other.structure.containers() == ["Fryslân", "Nederlân"]
 
     def test_each_reason_is_counted_apart_from_records_set_aside(
         self, extracted
     ):
         _, coverage, _ = extracted
         records = coverage["records"]
-        assert records["containers_checked"] == 4
+        assert records["containers_checked"] == 6
+        assert records["containers_name_only"] == 1
         assert records["containers_dropped"] == {
             EVIDENCE_DOES_NOT_NAME: 1,
             EVIDENCE_NOT_IN_SOURCE: 1,
@@ -366,8 +474,58 @@ class TestTheExtraction:
             ("structure.place.within.1", EVIDENCE_NOT_IN_SOURCE),
             ("structure.place.within.2", EVIDENCE_DOES_NOT_NAME),
             ("structure.place.within.3", NO_EVIDENCE),
+            ("structure.place.within.0", None),
+            ("structure.place.within.1", None),
         ]
+        assert [found["entity"] for found in audit] == ["e1"] * 4 + ["e3"] * 2
         assert audit[2]["line_text"] == "Snylsjum, gemeente Drake-"
+
+
+class TestTheParser:
+    def test_an_empty_evidence_written_by_the_model_is_no_evidence(self):
+        answer = json.dumps(
+            {"entities": [snylsjum(entry("Fryslân", ""), entry("Nederlân"))]}
+        )
+        parsed, problems = ChunkedClaimExtractor._parse_entity_manifest(
+            answer, 4, LETTER
+        )
+        assert problems == []
+        (place,) = parsed.entities
+        assert place.structure.within == []
+        assert [found["reason"] for found in parsed.containers] == [
+            NO_EVIDENCE,
+            NO_EVIDENCE,
+        ]
+        # an empty evidence is no record's reason
+        assert parsed.set_aside == {} and parsed.set_aside_records == 0
+
+
+class TestTheReport:
+    def test_a_reason_the_report_does_not_know_is_other(self):
+        from yizkr.pipeline.report import OTHER, _records
+
+        counted = _records(
+            {
+                "records": {
+                    "given": 1,
+                    "recordless": 0,
+                    "by_status": {},
+                    "set_aside": {},
+                    "containers_checked": 3,
+                    "containers_dropped": {
+                        NO_EVIDENCE: 1,
+                        "evidence-too-long": 2,
+                    },
+                    "containers_name_only": 1,
+                },
+                "notes": {},
+            }
+        )["records"]
+        assert counted["containers_dropped_by_reason"] == {
+            OTHER: 2,
+            NO_EVIDENCE: 1,
+        }
+        assert counted["containers_name_only"] == 1
 
 
 class TestThePrompt:
@@ -480,6 +638,32 @@ class TestTheCritic:
         assert isinstance(found, Invalid)
         assert found.why == [
             "container 'Friesland' is not one the entity's record lists"
+        ]
+
+    def test_the_prompt_asks_about_name_only_evidence(self):
+        from yizkr.pipeline.critique import CRITIQUE_PROMPT
+
+        prompt = " ".join(CRITIQUE_PROMPT.split())
+        assert (
+            "or gives only the container's name, outside a field of a form "
+            "about the place"
+        ) in prompt
+
+    def test_a_container_on_an_entity_with_no_place_record_is_invalid(self):
+        from yizkr.claims import load_vocabulary
+        from yizkr.pipeline.critique import Invalid, check
+
+        batch = self.batch().model_copy(deep=True)
+        batch.entities.append(
+            EntityRecord.model_validate(
+                {"id": "e9", "label": "Sybren van 't Nijks", "kind": "human"}
+            )
+        )
+        found = check(self.finding(entity="e9"), batch, load_vocabulary())
+        assert isinstance(found, Invalid)
+        assert found.why == [
+            "container 'gemeente Drakeradiel' is not one the entity's "
+            "record lists"
         ]
 
     def test_the_category_names_a_container(self):

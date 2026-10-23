@@ -139,12 +139,13 @@ CATEGORIES: dict[str, str] = {
         "suggest drop the qualifier"
     ),
     "evidence_does_not_state": (
-        "a place's `within` entry whose evidence names the place and its "
-        "container but does not state that one is within the other, such "
-        "as a list of towns, or a form's line that names the container "
-        "and no field of the place: name the entry by its container as "
-        "listed (`container`), suggest drop; a form's field line that "
-        "gives the container of the place the form is about states it"
+        "a place's `within` entry whose evidence does not state that the "
+        "place is within the container: one that names both places without "
+        "saying one is in the other (a list of towns), or one that gives "
+        "only the container's name, outside a field of a form about the "
+        "place: name the entry by its container as listed (`container`), "
+        "suggest drop; a form's field line that gives the container of the "
+        "place the form is about states it"
     ),
 }
 
@@ -253,9 +254,12 @@ so is a time the excerpt does not state for the containment.
 Each container a place's mention record puts it in, nearest first, with
 the excerpt of the source it gives as evidence:
 {within_block}
-Check each against its evidence: evidence that names both places but does
-not state that one is within the other is a concern
-(evidence_does_not_state).
+Check every one against its evidence, one whose evidence is the
+container's name alone included: evidence that does not state that the
+place is within the container is a concern (evidence_does_not_state),
+whether it names both places without saying one is in the other (a list
+of towns) or gives only the container's name, outside a field of a form
+about the place.
 
 Output NDJSON, one finding per line, no prose, no code fences:
 {{"entity": "<the entity id the finding concerns>",

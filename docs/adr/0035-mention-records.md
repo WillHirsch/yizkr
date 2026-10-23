@@ -11,25 +11,31 @@ the mention itself in running text, a field's line on a form. The
 no-addition check (§5) no longer reads containers, which a form gives in
 fields of their own and so never in the place's label; each container is
 checked on its own, with three reasons each counted apart: `no-evidence`,
-`evidence-not-in-source` (compared folded, every run of whitespace and
-line breaks made one space, a hyphen at a line's end joined;
-`core/verbatim.py`, the comparison claims' excerpts can share) and
+`evidence-not-in-source` (compared folded, typographic punctuation read
+plain, every run of whitespace and line breaks made one space, a hyphen
+at a line's end joined, or kept where the name is hyphenated, and whole
+words only; `core/verbatim.py`, the comparison claims' excerpts can
+share) and
 `evidence-does-not-name` (the evidence does not hold the container's
 name, folded, as whole words). By the owner's option B, a container that
 fails is dropped alone: the record stands with its names, keys and other
 containers, and the drop is counted by reason in the extraction's
 coverage (`records.containers_dropped`) and the run report, apart from
-the records set aside. The critic sees each container with its evidence
+the records set aside. The critic sees every container with its evidence
 and may flag `evidence_does_not_state` (the evidence names both places
-but does not state that one is within the other), an advisory finding
-counted with the critic's categories, never gating a write. Each
-container checked, kept or dropped, is kept in the extraction's local
-`containers.json` with its field path, evidence, reason and the
-transcription line it was compared with; reports carry counts alone. An
-older answer's container written as a bare string is read with the check
-that answer was made for: it stands where its name occurs in the label or
-an alias, and is dropped as `no-evidence` otherwise. The GEDCOM adapter
-gives each container its PLAC's value as its evidence (§6).
+but does not state that one is within the other, or gives only the
+container's name outside a field of a form about the place), an advisory
+finding counted with the critic's categories, never gating a write. The
+containers kept whose evidence is their name alone are counted apart
+(`records.containers_name_only`). Each container checked, kept or
+dropped, is kept in the extraction's local `containers.json` with its
+field path, evidence, reason, the transcription lines it was compared
+with, and whether the evidence names the place itself or is the
+container's name alone; reports carry counts alone. A container written
+as a bare string gives a name alone, no evidence, and is dropped as
+`no-evidence` like any other; a stored batch's bare strings still read as
+containers with no evidence. The GEDCOM adapter gives each container its
+PLAC's value as its evidence (§6).
 
 Amended by #571 (2026-10-23): §6's PLAC row. Each jurisdiction of a PLAC
 is a place entity of its own, one per distinct tail of components in the
@@ -1417,22 +1423,27 @@ surname types, roles, classes and note categories. Beyond the schema:
   and one that fails is dropped alone, the record standing with its
   names, keys and other containers. Each reason is counted apart, in the
   coverage's `records.containers_dropped` and the run report, never among
-  the records set aside: `no-evidence`, the entry gives none;
-  `evidence-not-in-source`, the evidence does not occur in the
-  transcription, the two compared folded, with every run of whitespace
-  and line breaks made one space and a hyphen at a line's end joined
+  the records set aside: `no-evidence`, the entry gives none (a bare
+  string, a name alone, among them); `evidence-not-in-source`, the
+  evidence does not occur in the transcription as whole words, the two
+  compared folded, typographic quotes, apostrophes and dashes read
+  plain, with every run of whitespace and line breaks made one space and
+  a hyphen at a line's end joined, or, where the joined reading finds
+  nothing, kept, for a hyphenated name a line breaks at its own hyphen
   (`core/verbatim.py`); `evidence-does-not-name`, the evidence does not
   hold the container's name, folded, as whole words. Whether the evidence
   states the containment, and not only names both places (a list of
-  towns), stays a judgement: the critic may flag it
-  (`evidence_does_not_state`), advisory and counted with its findings.
-  Each container checked is kept, with its field path, evidence, reason
-  and the transcription line it was compared with, in the extraction's
-  local `containers.json`, so each reason's cases can be sampled; report
-  and diff carry counts alone. An older answer's container given as a
-  bare string, with no evidence, is read with the check that answer was
-  made for: it stands where its name occurs in the label or an alias,
-  and is dropped as `no-evidence` otherwise;
+  towns) or gives the container's name alone, stays a judgement: the
+  critic may flag it (`evidence_does_not_state`), advisory and counted
+  with its findings, and the containers kept whose evidence is their name
+  alone are counted apart (`records.containers_name_only`). Each
+  container checked is kept, with its field path, evidence, reason, the
+  first and last transcription lines it was compared with, and whether
+  its evidence names the place itself or is the container's name alone,
+  in the extraction's local `containers.json`, so each reason's cases can
+  be sampled; report and diff carry counts alone. A stored batch's
+  container written as a bare string still reads as a container with no
+  evidence;
 - a `name` status needs a name part, and a `toponym` status a name or an
   address;
 - a claim's value is of a kind its property accepts (§3.5), and a death's

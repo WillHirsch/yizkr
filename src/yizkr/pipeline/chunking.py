@@ -781,9 +781,10 @@ as an empty string ("").
     Drakeradiel, Fryslân, Nederlân". On a form it is the line of the
     container's field: Koshnovka's "Kaldovsky District" takes its
     district line, "District: Kaldovsky District", and "Chadsk Oblast"
-    its oblast line. Give a container only where the document states
-    it; one with no evidence, or evidence the document does not hold or
-    that does not name it, is dropped.
+    its oblast line. Copy the words alone, never the line numbers the
+    document is shown with. Give a container only where the document
+    states it; one with no evidence, or evidence the document does not
+    hold or that does not name it, is dropped.
   * each container in within is also a place entity of the manifest,
     with its own record, and so in turn is each of its own containers:
     "Fläckfeld, Kreis Mockburg, Hesse" is Fläckfeld within "Kreis
@@ -2067,8 +2068,9 @@ class ChunkedClaimExtractor:
         the records given, by status, and the unsplit name forms they
         hold; the mentions recordless; the records set aside, and the
         reasons they and the notes were set aside by, by category; the
-        place containers checked, and those dropped alone from records
-        that stand, by reason (claims.drop_containers); the
+        place containers checked, those dropped alone from records that
+        stand, by reason, and those kept whose evidence is their name
+        alone (claims.drop_containers); the
         labels the appellation label rule replaced with a name
         (names.appellation_label), the `name` claims dropped for
         restating one, and the record name parts that are an
@@ -2124,6 +2126,12 @@ class ChunkedClaimExtractor:
                             if found["reason"] is not None
                         ).items()
                     )
+                ),
+                # the containers kept whose evidence is their name alone,
+                # which names no place they are said to hold
+                "containers_name_only": sum(
+                    found["reason"] is None and found["name_only"]
+                    for found in self._containers
                 ),
                 "appellation_labels": self._appellations["labels"],
                 "appellation_label_names": self._appellations["label_names"],
