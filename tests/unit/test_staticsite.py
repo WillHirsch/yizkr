@@ -473,9 +473,10 @@ RESPONSES = {
     "?kind wdt:": ARTIFACTS,  # artifacts query walks the subclass path
     # the assertions query, the one query that reads a printed page number
     "?printedPage": ASSERTIONS,
-    # the disagreement report's statements and the recorded containment
-    "wikibase:rank ?rank": FETCHED,
+    # the recorded containment, and the disagreement report's statements:
+    # both read a statement's rank, so the containment's marker comes first
     "?item ?link ?target": CONTAINED,
+    "wikibase:rank ?rank": FETCHED,
 }
 
 

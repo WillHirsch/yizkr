@@ -10,6 +10,11 @@ a marriage date is settled (MODELING.md, "Marriages, residences and other
 periods"), so a residence's or a spouse's start and end each have a range
 of their own, the fetch lists the two bounds that are new, and
 `compared_as_stated` is gone (§1, §2, §5).
+Amended by [ADR-0038](0038-place-containment-as-source-claims.md)
+(accepted 2026-10-23, #515; §5, §8.1): `place-containment.rq` lists every
+location and part-of statement as an edge, with its rank and whether it
+has a stated-in source, and the comparison follows only an edge a source
+states and a curator has not deprecated, at any time it carries (§1).
 Amended by #241 (2026-09-28): the open question of which century a
 century-precision date names is settled (MODELING.md, "Uncertainty and
 time"): centuries are counted as Wikibase counts them, so `century` gives
@@ -65,8 +70,11 @@ anything, so each costs time in proportion to what it lists.
   belongs to (a page fragment resolves to its artifact).
   It filters nothing, not even by rank: rank is an overlay the comparison
   reads, and a statement with no stated-in source is listed with none.
-- **`place-containment.rq`** lists every location and part-of edge (the
-  truthy ones, best rank only) and every merge redirect.
+- **`place-containment.rq`** lists every location and part-of statement
+  as an edge, with its rank and whether it has a stated-in source, and
+  every merge redirect (amended by ADR-0038: it listed the truthy edges,
+  best rank only). The comparison follows an edge a source states at
+  normal or preferred rank.
 
 Both stay templates in `src/yizkr/queries/`, rendered and published by
 `yizkr publish-queries`.

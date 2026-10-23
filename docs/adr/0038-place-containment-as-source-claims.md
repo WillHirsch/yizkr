@@ -201,6 +201,10 @@ Applied with the implementation (accepted by the owner, 2026-10-23):
    says. `place-containment.rq` fetches, for each edge, its rank and
    whether it has a stated-in source; `yizkr.disagreement` keeps only
    the edges §5 reads. The report's other rules are unchanged.
+   *Applied (#515):* the query lists each `part_of` and `location`
+   statement, not its truthy triple, with `?rank` and `?stated`;
+   `yizkr.disagreement.followed` keeps an edge whose rank is not
+   deprecated and that has a stated-in source.
 2. **ADR-0017.**
    - **Rule 2 stands.** A source's claim that A lies within B is still
      a referenced fact that A and B are two places, at any time, since
@@ -212,17 +216,33 @@ Applied with the implementation (accepted by the owner, 2026-10-23):
      The `distinct` verdict stands; no `-containment.csv` row comes from
      it.
    - ADR-0017 gains an amendment line saying so.
+   *Applied (#515):* the graph-dedup prompt asks for no container, a
+   proposal carries none, and `reconcile-graph` writes no
+   `-containment.csv`. Rule 2's closure (`fetch_place_containment`)
+   runs `place-containment.rq` and keeps the edges `followed` keeps.
 3. **Extraction's containment rule** keeps "only where the source
    states it", and asks for the time the source gives (§2), never the
    document's date. The extraction critic's `unsupported_containment`
    also flags a time qualifier its excerpt does not state. This changes
    a prompt, so its PR carries `needs:scratch-diff` and `stage:extraction`
    (ADR-0025 §4).
+   *Applied (#515):* the single-call and chunk prompts ask for
+   `start_time` or `end_time` where the source dates the containment's
+   start or end, `point_in_time` where it presents it as holding at a
+   date, with ranges and circa, and none otherwise, never the
+   document's date. The critic's containment block shows each `part_of`
+   claim's dating qualifiers beside its excerpt.
 4. **The writer** writes a `part_of` claim's time qualifiers like any
    claim's. The claim schema and the manifest accept, where they don't yet, `point_in_time`,
    `start_time`, `end_time`, the four range qualifiers and
    `sourcing_circumstances` on `part_of` and `location`. The write test
    covers a dated and an undated containment.
+   *Applied (#515):* the claim schema already takes any manifest
+   property as a qualifier, and the writer writes a qualifier as it
+   writes any claim's; the manifest's `part_of` description now names
+   the time a source gives. tests/unit/test_containment_claims.py and
+   tests/integration/test_live_containment.py cover a dated and an
+   undated containment, side by side.
 5. **The place stage and `reconcile-places`** become the identity
    question of §3, on the worklist ADR-0009 builds:
    - **Questions** come only from stated links: each chain of

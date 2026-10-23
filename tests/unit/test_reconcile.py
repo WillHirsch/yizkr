@@ -13,6 +13,8 @@ from yizkr.claims import (
     QidRef,
 )
 from yizkr.pipeline.reconcile import (
+    GRAPH_ADJUDICATION_PROMPT,
+    PairFacts,
     PlaceContainment,
     Proposal,
     RosterEntity,
@@ -23,10 +25,12 @@ from yizkr.pipeline.reconcile import (
     block_candidates,
     entity_facts,
     export_equivalences_csv,
+    fetch_place_containment,
     impossible_pair,
-    place_containment_proposals,
+    propose_graph_pairs,
     ratify_equivalence_verdicts,
     read_approved_equivalences,
+    read_place_containment,
 )
 
 RUN = {
@@ -1193,88 +1197,136 @@ class TestBlockingWithImpossibility:
         assert len(llm.prompts) == 1
 
 
-class TestContainmentHandoff:
-    def _proposal(self, **kw) -> Proposal:
-        base = dict(
-            entity_id="Q66",
-            qid="Q10",
-            verdict="distinct",
-            evidence="prison in Germany",
-        )
-        base.update(kw)
-        return Proposal(**base)
+class TestGraphDedupAssertsNoGeography:
+    """ADR-0038 §3 and §8.2 (#515): graph dedup's adjudicator answers
+    identity only. On a `distinct` verdict it names no container, so no
+    containment proposal comes from it; the verdict itself stands."""
 
-    def _roster(self):
-        return [
-            RosterEntity(
-                qid="Q66", label="Peiltal court prison", kind="place"
-            ),
-            RosterEntity(qid="Q10", label="Germany", kind="place"),
+    def test_the_prompt_asks_for_no_container(self):
+        prompt = GRAPH_ADJUDICATION_PROMPT.lower()
+        assert "contained_in" not in prompt
+        assert "containment" not in prompt
+        assert "inside" not in prompt
+
+    def test_a_proposal_carries_no_container(self):
+        assert set(Proposal.model_fields) == {
+            "entity_id",
+            "qid",
+            "verdict",
+            "confidence",
+            "evidence",
+        }
+
+    def test_a_distinct_verdict_on_two_places_stands(self):
+        # the town Rekau and the urban district Rekau share a name
+        roster = [
+            RosterEntity(qid="Q66", label="Rekau", kind="place"),
+            RosterEntity(qid="Q10", label="Rekau", kind="place"),
         ]
+        line = {
+            "entity_id": "Q66",
+            "qid": "Q10",
+            "verdict": "distinct",
+            "evidence": "a town and its urban district",
+        }
+        llm = ScriptedLlm(json.dumps(line) + "\n" + json.dumps({"done": True}))
+        (proposal,) = propose_graph_pairs(llm, roster)
+        assert proposal.verdict == "distinct"
+        assert proposal.model_dump().keys() == set(Proposal.model_fields)
 
-    def test_distinct_containment_becomes_a_within_b_row(self):
-        rows = place_containment_proposals(
-            [self._proposal(contained_in="Q10")], self._roster()
+
+def _edge(item, target, *, rank="NormalRank", stated=True, link=None):
+    concept = "http://wikibase.example"
+    return {
+        "item": {"type": "uri", "value": f"{concept}/entity/{item}"},
+        "link": {"type": "uri", "value": link or f"{concept}/entity/P2"},
+        "target": {"type": "uri", "value": f"{concept}/entity/{target}"},
+        "rank": {"type": "uri", "value": f"http://wikiba.se/ontology#{rank}"},
+        "stated": {
+            "type": "literal",
+            "datatype": "http://www.w3.org/2001/XMLSchema#boolean",
+            "value": "true" if stated else "false",
+        },
+    }
+
+
+class TestRuleTwoReadsTheReportsEdges:
+    """ADR-0017 rule 2, as ADR-0038 §8.2 keeps it: the closure follows the
+    edges the inconsistency report follows (§5), a part-of or location a
+    source states, not deprecated, at any time it carries."""
+
+    # Brunnenring 35 in Brunnenring, in Flörburg, in Kreis Peiltal
+    CHAIN = [("Q35", "Q30"), ("Q30", "Q20"), ("Q20", "Q12")]
+
+    def test_the_closure_is_transitive_over_stated_claims(self):
+        containment = read_place_containment(
+            [_edge(*edge) for edge in self.CHAIN]
         )
-        assert len(rows) == 1
-        assert rows[0]["qid_a"] == "Q66"  # child
-        assert rows[0]["qid_b"] == "Q10"  # container/parent
-        assert rows[0]["verdict"] == "a_within_b"
-        assert rows[0]["decision"] == ""
+        assert containment.containers("Q35") == {"Q30", "Q20", "Q12"}
+        assert containment.contains("Q12", "Q35")
+        assert not containment.contains("Q35", "Q12")
 
-    def test_container_can_be_the_first_member(self):
-        # A contains B: entity_id=Q10 is the container
-        rows = place_containment_proposals(
-            [self._proposal(entity_id="Q10", qid="Q66", contained_in="Q10")],
-            self._roster(),
+    def test_a_preferred_claim_is_followed(self):
+        containment = read_place_containment(
+            [_edge("Q35", "Q30", rank="PreferredRank")]
         )
-        assert rows[0]["qid_a"] == "Q66" and rows[0]["qid_b"] == "Q10"
+        assert containment.contains("Q30", "Q35")
 
-    def test_no_containment_field_no_row(self):
-        assert (
-            place_containment_proposals([self._proposal()], self._roster())
-            == []
-        )
-
-    def test_same_verdict_never_a_containment_row(self):
-        assert (
-            place_containment_proposals(
-                [self._proposal(verdict="same", contained_in="Q10")],
-                self._roster(),
-            )
-            == []
-        )
-
-    def test_container_must_be_one_of_the_pair(self):
-        assert (
-            place_containment_proposals(
-                [self._proposal(contained_in="Q999")], self._roster()
-            )
-            == []
-        )
-
-    def test_non_place_pair_never_produces_a_row(self):
-        # a stray contained_in on a person/org pair must not reach
-        # reconcile-places (which would write a bogus part_of edge)
-        people = [
-            RosterEntity(qid="Q66", label="Gustav Löbig", kind="human"),
-            RosterEntity(qid="Q10", label="Gustave Lobig", kind="human"),
+    def test_a_deprecated_claim_is_not_followed(self):
+        rows = [
+            _edge(*self.CHAIN[0]),
+            _edge(*self.CHAIN[1], rank="DeprecatedRank"),
         ]
-        assert (
-            place_containment_proposals(
-                [self._proposal(contained_in="Q10")], people
-            )
-            == []
-        )
+        containment = read_place_containment(rows)
+        assert containment.containers("Q35") == {"Q30"}
 
-    def test_unknown_qid_pair_never_produces_a_row(self):
-        # both members must be known roster places
-        assert (
-            place_containment_proposals(
-                [self._proposal(contained_in="Q10")], []
-            )
-            == []
-        )
+    def test_a_claim_no_source_states_is_not_followed(self):
+        rows = [_edge(*self.CHAIN[0]), _edge(*self.CHAIN[1], stated=False)]
+        containment = read_place_containment(rows)
+        assert containment.containers("Q35") == {"Q30"}
+        # so a pair the unstated edge alone would nest stays a candidate
+        town = PairFacts(kind="place", qid="Q20")
+        street = PairFacts(kind="place", qid="Q30")
+        assert impossible_pair(town, street, containment=containment) is None
+
+    def test_a_merge_redirect_is_no_containment(self):
+        same_as = "http://www.w3.org/2002/07/owl#sameAs"
+        row = _edge("Q9001", "Q20", link=same_as)
+        del row["rank"], row["stated"]
+        assert read_place_containment([row]).containers("Q9001") == set()
+
+    def test_it_runs_the_reports_containment_query(self, monkeypatch):
+        from yizkr.core import sparql
+        from yizkr.queries.publish import load_templates
+
+        sent = []
+
+        def runner(config):
+            def run(query):
+                sent.append(query)
+                return [_edge(*edge) for edge in self.CHAIN]
+
+            return run
+
+        class Client:
+            def vocabulary(self):
+                return {
+                    "location": "P1",
+                    "part_of": "P2",
+                    "stated_in": "P3",
+                }, {}
+
+        class Config:
+            concept_uri = "http://wikibase.example"
+
+        monkeypatch.setattr(sparql, "runner", runner)
+        containment = fetch_place_containment(Client(), Config())
+        assert containment.contains("Q12", "Q35")
+        (query,) = sent
+        template = load_templates()["place-containment"]
+        body = template.split("SELECT", 1)[1].split("WHERE", 1)[0]
+        assert body in query
+        assert "wikibase.example/prop/reference/>" in query
 
 
 class TestRatifyEquivalenceVerdicts:
