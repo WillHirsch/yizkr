@@ -173,6 +173,7 @@ class TestTheComponentMerges:
         }
         assert len({mention(identity, doc)["cluster"] for doc in docs}) == 1
         entry = entry_of(identity, docs[0])
+        assert entry["status"] == AMBIGUOUS
         (pair,) = [p for p in entry["pairs"] if p["link"] == AMBIGUOUS]
         assert pair["inside_component"] is True
         assert pending_pairs([entry]) == []
@@ -253,6 +254,32 @@ class TestTheRecheck:
         assert set(settled_entry["contradiction"]["mentions"]) == set(pair)
         assert settled["summary"]["clusters"][CONFIDENT_COMPONENT] == 0
         assert settled["summary"]["cluster_mentions"][AMBIGUOUS] == 3
+
+    def test_a_verdict_inside_a_merged_component_says_nothing_of_it(self):
+        """The triangle and an undated register of Gustav, which links
+        ambiguously with each of the three. A `same` given on the pair
+        inside the merged component, and `different` on every pair
+        between it and the undated one: the component's merge is its
+        confident links', so it stays `confident_component`, and the
+        undated one is left alone, `adjudicated`."""
+        docs = [*triangle(), gustav_with("undated", born=None, father=False)]
+        identity = identity_of(docs)
+        entry = entry_of(identity, docs[0])
+        inside = [
+            clustering._pair(*p["mentions"])
+            for p in entry["pairs"]
+            if p["link"] == AMBIGUOUS and p["inside_component"]
+        ]
+        between = [p for p in ambiguous_pairs(entry) if p not in inside]
+        assert (len(inside), len(between)) == (1, 3)
+        settled = identity_of(
+            docs,
+            {inside[0]: SAME, **{pair: DIFFERENT for pair in between}},
+        )
+        assert [mention(settled, doc)["method"] for doc in docs] == [
+            CONFIDENT_COMPONENT
+        ] * 3 + [ADJUDICATED]
+        assert settled["summary"]["adjudicated_apart"] == 1
 
     def test_an_uncertain_pair_inside_a_component_leaves_it_merged(self):
         """`uncertain` is no cannot-link: the component still merges, as
