@@ -1784,7 +1784,21 @@ not a signal to grow the schema on.
   `human`. An item typed as a vessel, a military unit or an
   organization at normal or preferred rank is taken
   at its type on its part in a person event: any other evidence makes it
-  a person, a `human` type at any rank included. A family is not taken
+  a person, a `human` type at any rank included. An event is taken at its
+  type on the death it states (#577): an item typed as an event (`event`
+  or a class the manifest makes a subclass of it, a `death` among them) at
+  normal or preferred rank is not a person on its `date of death`, `place
+  of death`, `cause of death` or `place of burial` statements, of each of
+  these it has a truthy value of, so a death event that states its cause
+  or its age gets no person page and is no person to the export. That
+  truthy value is death evidence as the check reads it, so the item would
+  be released were it a person: setting it aside releases no one the
+  check would keep. Any other evidence still makes it a person, a death
+  statement with no truthy value beside it (deprecated, or of no value), a
+  `date of birth` or a `human` type at any rank included, and an item
+  typed as a family too stays listed and badged as every family is. The event's
+  statements stay on the event, and its principal's timeline shows it as
+  before. A family is not taken
   at its type: its label is a surname, and a person known by a surname
   alone can be typed as one. The export reads this evidence from its own
   dump and **keeps a person only once the check has released them**: an
