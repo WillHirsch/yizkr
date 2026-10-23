@@ -48,7 +48,7 @@ import json
 import re
 import shutil
 import urllib.parse
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import cached_property
@@ -919,6 +919,12 @@ class SiteBuilder:
             "timeline_rows": len(timeline),
             "gallery_items": len(gallery),
             "inconsistencies": len(inconsistencies),
+            # the disagreements by property (its manifest key)
+            "inconsistencies_by_property": dict(
+                sorted(
+                    Counter(row.property for row in inconsistencies).items()
+                )
+            ),
             "scratch_runs": self.scratch_runs,
         }
 

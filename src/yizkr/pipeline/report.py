@@ -23,7 +23,8 @@ the wiki, the engine, the LLM cache or the corpus:
                      page or a slide, read as a document of its own
                      (ADR-0008)
     corpus/<stage>/  a corpus stage's outputs: the clustering stage's
-                     identity-map.json
+                     identity-map.json, and the record.json of the
+                     write, place and site stages
 
 The logs are read a line at a time and folded as they are read, so a long
 run's log is never held in memory. They are read as rundir.run_state
@@ -92,9 +93,15 @@ Some counts need what the run directory does not hold, and the report
 says so (NOT_AVAILABLE) rather than count none: depicts proposals, since
 face detection is never a stage of a scratch run; the place stage's
 questions and links, until the run's place stage has run (its record in
-CORPUS_DIR/places/ gives them); different-source contradictions, which
-only a written graph holds; and flags by tier and class, until a stage
-makes them (`_flags` is where the report reads them). The links the
+CORPUS_DIR/places/ gives them); different-source contradictions, until
+the run's site stage has counted them on the written graph (its record
+in CORPUS_DIR/site/ gives their total and their count by property, and
+a record of a site stage that did not count them gives none); and flags
+by tier and class, until a stage makes them (`_flags` is where the
+report reads them). A corpus stage's attention reasons are shown by
+label alone, never counted: each is one reason of the stage's one
+attempt, and its figures are in the section of what the stage made
+(the clustering stage's in Clusters). The links the
 place stage refused as each would close a cycle are counted in the
 aggregates and named, by their places' labels and their documents, in
 report.json and report.html alone (`place_cycles`).
@@ -222,6 +229,9 @@ WRITE_RECORD = "record.json"
 # the place stage, which keeps its counts and the links it refused in a
 # record of the same name
 PLACE_STAGE = "places"
+# the site stage, whose record of the same name keeps the different-source
+# disagreements it counted on the written graph
+SITE_STAGE = "site"
 # the counts of the place stage's record, as the report names them
 PLACE_COUNTS = {
     "questions": "questions",
@@ -1385,6 +1395,7 @@ def build(path: Path | str, *, now: datetime | None = None) -> dict[str, Any]:
     clusters = _clusters(path, fold)
     written = _written(path)
     placed = _place_stage(path)
+    sited = _site_stage(path)
     return {
         "format": FORMAT,
         "generated_at": now.isoformat(timespec="seconds"),
@@ -1403,6 +1414,7 @@ def build(path: Path | str, *, now: datetime | None = None) -> dict[str, Any]:
             now=now,
             written=written,
             placed=placed,
+            sited=sited,
         ),
         "documents": [_document_record(d) for d in documents.values()],
         "failed_unread": [
@@ -1747,6 +1759,44 @@ def _place_stage(path: Path) -> dict[str, Any] | None:
     return None
 
 
+def _site_stage(path: Path) -> dict[str, Any] | None:
+    """The site stage's record (yizkr.pipeline.scratchwrite), when the run
+    directory holds one."""
+    found = _json(path / CORPUS_DIR / SITE_STAGE / WRITE_RECORD)
+    return found if isinstance(found, dict) else None
+
+
+def _aggregate_contradictions(
+    sited: Mapping[str, Any] | None, vocabulary: _Vocabulary
+) -> dict[str, Any]:
+    """The different-source contradictions the site stage counted on the
+    written graph: their total and their count by property (its manifest
+    key, OTHER for one the manifest does not hold). NOT_AVAILABLE, with
+    why, when no site stage has run or its record does not count them."""
+    if sited is None:
+        return {
+            "status": NOT_AVAILABLE,
+            "why": "no site stage of this run has run to its end, and the "
+            "site stage counts them on the written graph",
+        }
+    counted = sited.get("disagreements")
+    if not isinstance(counted, dict):
+        counted = {}
+    total, by_property = counted.get("total"), counted.get("by_property")
+    if _counted(total) is None or not isinstance(by_property, dict):
+        return {
+            "status": NOT_AVAILABLE,
+            "why": "the run's site stage did not record them",
+        }
+    return {
+        "different_source": _count(total),
+        "by_property": _folded(
+            {name: _count(count) for name, count in by_property.items()},
+            lambda name: _known(name, vocabulary.properties),
+        ),
+    }
+
+
 def _place_cycles(
     placed: Mapping[str, Any] | None, documents: Mapping[str, Document]
 ) -> list[dict[str, str]]:
@@ -2035,6 +2085,7 @@ def _aggregate(
     now: datetime,
     written: Mapping[str, Any] | None = None,
     placed: Mapping[str, Any] | None = None,
+    sited: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The report's aggregates, which report.md shows all of but the
     documents per language: counts, rates and times, keyed by names of
@@ -2049,7 +2100,7 @@ def _aggregate(
         "corpus_stages": _aggregate_corpus(fold, run, vocabulary),
         "anomalies": _aggregate_alerts(alerts, fold, vocabulary),
         "content": _aggregate_content(
-            documents, clusters, flags, vocabulary, written, placed
+            documents, clusters, flags, vocabulary, written, placed, sited
         ),
         "calls": _aggregate_calls(fold, vocabulary),
         "control": _aggregate_control(control, vocabulary),
@@ -2375,8 +2426,8 @@ def _aggregate_corpus(
     fold: _Fold, run: Mapping[str, Any], vocabulary: _Vocabulary
 ) -> list[dict[str, Any]]:
     """Each corpus stage the run records or the events name: its state
-    (NOT_RUN for one no event names), its attention labels and its
-    failure."""
+    (NOT_RUN for one no event names), its attention labels, each once and
+    never counted, and its failure."""
     names = dict.fromkeys(run.get("corpus_stages") or [])
     names.update(dict.fromkeys(fold.corpus))
     shown = []
@@ -2386,10 +2437,10 @@ def _aggregate_corpus(
             {
                 "name": vocabulary.stage(stage),
                 "state": attempt.shown_status if attempt else NOT_RUN,
-                "attention": _by_count(
-                    Counter(map(_attention_label, attempt.attention))
+                "attention": sorted(
+                    set(map(_attention_label, attempt.attention))
                     if attempt
-                    else Counter()
+                    else ()
                 ),
                 "failure": _failure_label(attempt.reason)
                 if attempt is not None and attempt.status == FAILED
@@ -2443,6 +2494,7 @@ def _aggregate_content(
     vocabulary: _Vocabulary,
     written: Mapping[str, Any] | None = None,
     placed: Mapping[str, Any] | None = None,
+    sited: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     entities: Counter = Counter()
     claims: Counter = Counter()
@@ -2632,11 +2684,7 @@ def _aggregate_content(
         "depicts": _depicts(written),
         "write": _aggregate_write(written),
         "place_hierarchy": _aggregate_places(placed),
-        "contradictions": {
-            "status": NOT_AVAILABLE,
-            "why": "different-source contradictions are read from a written "
-            "graph, and the report reads the run directory alone",
-        },
+        "contradictions": _aggregate_contradictions(sited, vocabulary),
         "flags": {
             key: flags[key] for key in ("status", "why") if key in flags
         },
@@ -3192,29 +3240,30 @@ def _stage_sections(
             _Section("How each stage came about", [how, explained], 3)
         )
         sections.append(_Section("Calls and time per stage", [calls], 3))
-    sections.append(
-        _Section(
-            "Corpus stages",
+    blocks: list[Any] = [
+        _table(
+            ("Stage", "State", "Needs attention", "Failed", "Time"),
             [
-                _table(
-                    ("Stage", "State", "Needs attention", "Failed", "Time"),
-                    [
-                        (
-                            stage["name"],
-                            stage["state"],
-                            _listed(stage["attention"]),
-                            stage["failure"] or "no",
-                            _time_of(stage["seconds"]),
-                        )
-                        for stage in corpus
-                    ],
+                (
+                    stage["name"],
+                    stage["state"],
+                    ", ".join(stage["attention"]) or "none",
+                    stage["failure"] or "no",
+                    _time_of(stage["seconds"]),
                 )
-                if corpus
-                else "No corpus stage in this run."
+                for stage in corpus
             ],
-            3,
         )
-    )
+        if corpus
+        else "No corpus stage in this run."
+    ]
+    if any(stage["attention"] for stage in corpus):
+        blocks.append(
+            "A corpus stage's attention reasons are listed by label alone, "
+            "with no count: the clustering stage's clusters and pairs are "
+            "counted in the Clusters section."
+        )
+    sections.append(_Section("Corpus stages", blocks, 3))
     return sections
 
 
@@ -3372,6 +3421,7 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
         ),
         _Section("Clusters", _cluster_blocks(clusters), 3),
         *_write_sections(content),
+        *_contradiction_sections(content),
         _Section(
             "Not available",
             [
@@ -3494,6 +3544,26 @@ def _write_sections(content: Mapping[str, Any]) -> list[_Section]:
         ]
     sections.append(_Section("Place hierarchy", [shown], 3))
     return sections
+
+
+def _contradiction_sections(content: Mapping[str, Any]) -> list[_Section]:
+    """The different-source contradictions, when the site stage counted
+    them."""
+    counted = content["contradictions"]
+    if counted.get("status") == NOT_AVAILABLE:
+        return []
+    return [
+        _Section(
+            "Different-source contradictions",
+            [
+                f"{_n(counted['different_source'])} different-source "
+                "contradictions, as the site stage counted them on the "
+                "written graph; by property: "
+                f"{_listed(counted['by_property'])}."
+            ],
+            3,
+        )
+    ]
 
 
 def _records_blocks(

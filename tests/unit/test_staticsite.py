@@ -1331,6 +1331,14 @@ class TestInconsistencies:
         # Gustav's birth, the residence, the birth name, the emigration and
         # Rahel's death; the two birthplaces differ only in resolution
         assert summary["inconsistencies"] == 5
+        # by property, as the site stage's record keeps them (#575)
+        assert summary["inconsistencies_by_property"] == {
+            "birth_name": 1,
+            "date_of_birth": 1,
+            "date_of_death": 1,
+            "point_in_time": 1,
+            "residence": 1,
+        }
         return (site / "inconsistencies.html").read_text()
 
     def test_both_values_render_with_their_sources(self, tmp_path, vocabulary):

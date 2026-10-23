@@ -1699,10 +1699,10 @@ class TestCorpusStages:
         (clustering,) = aggregate["corpus_stages"]
         assert clustering["name"] == "clustering"
         assert clustering["state"] == NEEDS_ATTENTION
-        assert clustering["attention"] == {
-            "ambiguous clusters not merged": 1,
-            "conflicting clusters not merged": 1,
-        }
+        assert clustering["attention"] == [
+            "ambiguous clusters not merged",
+            "conflicting clusters not merged",
+        ]
 
     def test_the_clusters_come_from_the_identity_map_s_summary(self, made):
         clusters = made["aggregate"]["content"]["clusters"]
@@ -1749,11 +1749,192 @@ class TestCorpusStages:
         ]
         made = build(record(tmp_path / "run", entries), now=NOW)
         (clustering,) = made["aggregate"]["corpus_stages"]
-        assert clustering["attention"] == {
-            "ambiguous clusters not merged": 1,
-            "conflicting clusters not merged": 1,
-            "hub keys not blocked on": 1,
+        assert clustering["attention"] == [
+            "ambiguous clusters not merged",
+            "conflicting clusters not merged",
+            "hub keys not blocked on",
+        ]
+
+    def test_a_corpus_stage_s_reasons_are_labels_never_counts(self, tmp_path):
+        """#576: a corpus stage has one attempt, so counting its reasons
+        by label gives 1 for each, which reads as one cluster or one
+        pair. The row lists the labels alone and points to Clusters,
+        whose figures come from the identity map's summary."""
+        from yizkr.pipeline import clustering
+
+        found = identity_map()
+        summary = found["summary"]
+        summary["clusters"] = {
+            "confident": 2,
+            "ambiguous": 3,
+            "conflicting": 4,
         }
+        summary["cluster_mentions"] = {
+            "confident": 5,
+            "ambiguous": 7,
+            "conflicting": 11,
+        }
+        summary["ambiguous_pairs"] = 13
+        summary["adjudication"]["calls_ambiguous_pairs"] = 2
+        summary["hub_keys"] = 0
+        reasons = clustering.attention(summary)
+        assert len(reasons) == 3
+        entries = [
+            (name, entry | {"attention": reasons})
+            if entry.get("stage") == "clustering"
+            and entry.get("event") == "done"
+            else (name, entry)
+            for name, entry in STREAM
+        ]
+        path = record(tmp_path / "run", entries)
+        (path / "corpus" / "clustering" / "identity-map.json").write_text(
+            json.dumps(found)
+        )
+        made = build(path, now=NOW)
+        aggregate = made["aggregate"]
+        text = render_markdown(aggregate)
+        (row,) = [
+            line for line in text.splitlines() if "| clustering |" in line
+        ]
+        cells = [cell.strip() for cell in row.strip("|").split("|")]
+        assert cells[:4] == [
+            "clustering",
+            NEEDS_ATTENTION,
+            "ambiguous clusters not merged, ambiguous pairs to adjudicate, "
+            "conflicting clusters not merged",
+            "no",
+        ]
+        assert not re.search(r"\d", cells[2])
+        assert "counted in the Clusters section" in text
+        # the Clusters section gives the stage's own figures
+        counts = aggregate["content"]["clusters"]["counts"]
+        assert counts["ambiguous, left split"] == 3
+        assert counts["conflicting"] == 4
+        assert counts["ambiguous pairs"] == 13
+        # a per-document stage still counts documents per label
+        assert stage_row(made, "extraction")["attention_labels"] == {
+            "entity manifest fell back to line-range segmentation": 1,
+            "no claims extracted": 1,
+        }
+        assert "no claims extracted 1" in text
+        assert leaks(text) == []
+
+    def test_no_pointer_without_a_corpus_stage_s_reason(self, tmp_path):
+        entries = [
+            (name, {k: v for k, v in entry.items() if k != "attention"})
+            if entry.get("stage") == "clustering"
+            and entry.get("event") == "done"
+            else (name, entry)
+            for name, entry in STREAM
+        ]
+        text = render_markdown(
+            build(record(tmp_path / "run", entries), now=NOW)["aggregate"]
+        )
+        (row,) = [
+            line for line in text.splitlines() if "| clustering |" in line
+        ]
+        assert "| none |" in row
+        assert "counted in the Clusters section" not in text
+
+
+# -- different-source contradictions ------------------------------------------
+
+
+def site_record(path: Path, **fields) -> None:
+    """The site stage's record in the run directory at `path`."""
+    folder = path / "corpus" / "site"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "record.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "out": str(folder / "site"),
+                "built_at": "2026-09-29T11:00:00+00:00",
+                **fields,
+            }
+        )
+    )
+
+
+class TestContradictions:
+    """#575: the site stage's record keeps the disagreements it counted on
+    the written graph; the report reads them from it."""
+
+    def test_a_site_record_with_counts(self, run):
+        site_record(
+            run,
+            disagreements={
+                "total": 6,
+                "by_property": {
+                    "date_of_birth": 1,
+                    "residence": 2,
+                    "mother": 2,
+                    "Gustav Löbig": 1,
+                },
+            },
+        )
+        aggregate = build(run, now=NOW)["aggregate"]
+        assert aggregate["content"]["contradictions"] == {
+            "different_source": 6,
+            "by_property": {
+                "mother": 2,
+                "residence": 2,
+                "date_of_birth": 1,
+                OTHER: 1,
+            },
+        }
+        text = render_markdown(aggregate)
+        assert (
+            "6 different-source contradictions, as the site stage counted "
+            "them on the written graph; by property: mother 2, residence 2, "
+            f"date_of_birth 1, {OTHER} 1."
+        ) in text
+        assert "Different-source contradictions: not available" not in text
+        assert "Löbig" not in text
+        assert leaks(text) == []
+
+    def test_an_older_site_record_counts_none(self, run):
+        """A record made before the stage counted them: not available,
+        never 0."""
+        site_record(run)
+        aggregate = build(run, now=NOW)["aggregate"]
+        assert aggregate["content"]["contradictions"] == {
+            "status": NOT_AVAILABLE,
+            "why": "the run's site stage did not record them",
+        }
+        text = render_markdown(aggregate)
+        assert (
+            "Different-source contradictions: not available: the run's "
+            "site stage did not record them"
+        ) in text
+        assert "different-source contradictions, as" not in text
+
+    @pytest.mark.parametrize(
+        "counted",
+        [
+            {"total": "6", "by_property": {}},
+            {"total": 6},
+            {"total": True, "by_property": {}},
+            "6",
+        ],
+    )
+    def test_a_record_of_another_shape_counts_none(self, run, counted):
+        site_record(run, disagreements=counted)
+        contradictions = build(run, now=NOW)["aggregate"]["content"][
+            "contradictions"
+        ]
+        assert contradictions["status"] == NOT_AVAILABLE
+
+    def test_a_run_with_no_site_stage(self, made):
+        assert made["aggregate"]["content"]["contradictions"] == {
+            "status": NOT_AVAILABLE,
+            "why": "no site stage of this run has run to its end, and the "
+            "site stage counts them on the written graph",
+        }
+        text = render_markdown(made["aggregate"])
+        assert "Different-source contradictions: not available: no site" in (
+            text
+        )
 
 
 # -- the anomalies ------------------------------------------------------------
@@ -3185,7 +3366,7 @@ class TestRunStates:
             {
                 "name": "clustering",
                 "state": NOT_RUN,
-                "attention": {},
+                "attention": [],
                 "failure": None,
                 "seconds": None,
             }
