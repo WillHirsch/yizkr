@@ -1344,18 +1344,20 @@ class TestTheTrapsInTheIdentityMap:
             assert values(
                 batches.said(name), "gustav-loebig", "date_of_death"
             ) == {u.Date(1996)}, name
-        # merging over the confident links alone would join 14 clusters,
+        # merging over the confident links alone would join 16 clusters,
         # none conflicting (an event links confidently once the components
-        # holding its people merge); the rule merges 37 mentions, the confident
-        # components of ambiguous clusters counted apart, and leaves the
+        # holding its people merge); the rule merges 41 mentions, among
+        # them the export's Hesse and Australia, jurisdictions of its
+        # PLACs, with the sources' own (#571), and the confident
+        # components of ambiguous clusters, counted apart; it leaves the
         # conflicting clusters' confident links unmerged
         summary = identity.map["summary"]
         assert summary["confident_links_only"] == {
-            "clusters": 14,
-            "mentions": 41,
+            "clusters": 16,
+            "mentions": 45,
             "conflicting": 0,
         }
-        assert summary["merged_mentions"] == 37
+        assert summary["merged_mentions"] == 41
         assert summary["clusters"][clustering.CONFIDENT_COMPONENT] == 3
         assert summary["cluster_mentions"][clustering.CONFIDENT_COMPONENT] == 9
 

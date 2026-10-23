@@ -333,7 +333,14 @@ since `yizkr write` takes a batch without validating it against the
 manifest, against the derived media registered for the source in the
 same write: it refuses such a claim before the first write, names it in
 its `refused` list and warns why, as it refuses a claim whose text the
-instance cannot hold.
+instance cannot hold. From the command line, `yizkr ingest write`,
+`yizkr claims --validate` and `claims.py --validate` take a source's
+placed media with `--placed`: the container's record of derived media
+the pipeline keeps in its document directory (`derived-media.json`, or
+that directory), or the source's SHA-1 and theirs
+(`<source>=<sha1>[,<sha1>...]`); the write then needs an item to carry
+each, as a registration makes it. Without it each caption is refused,
+and the command says how to give them (#551).
 
 **A retired property** stays in the instance and takes no new claim: it
 accepts nothing, validation refuses every claim of it, and no prompt that
@@ -872,6 +879,12 @@ artifact a new QID, changes neither.
   `location` and `part_of` claims, differences of resolution rather than
   contradictions, and follows only a claim that a source states and a
   curator has not deprecated, at any time it carries ("Contradictions").
+- The GEDCOM adapter gives each link of a PLAC's chain of components as
+  a `part_of` claim of the export, from the place to its nearest
+  jurisdiction and from each jurisdiction to the next, each jurisdiction
+  a place of its own, with no time, since a PLAC states none:
+  "Brunnenring 35, Flörburg, Hesse, Germany" gives Brunnenring 35 in
+  Flörburg, Flörburg in Hesse and Hesse in Germany (ADR-0035 §6).
 - Extraction gives a place's `part_of` only where the source states it
   (in the place's mention, "Fläckfeld, Kreis Mockburg"; in the fields a
   form gives that place; or as a link of a chain of containers), never
@@ -1232,6 +1245,16 @@ counted; in a NAME with no value, a prefix or suffix with no given name
 or surname beside it is counted instead, so none is dropped silently. A
 NICK and a `_MARNM` are aliases too. A place's record takes its PLAC's
 first component as its name and the rest as the places it is within.
+Each of those jurisdictions is a place of its own too, one per distinct
+tail of components in the export, and each place carries its own name
+as its label or an alias; each link of the chain is an undated
+`part_of` claim cited by the PLAC's line. A component without a word
+('?') is left out and counted. A placeholder word ('unbekannt',
+'unknown', 'onbekend'; the list in `pipeline/gedcom_placeholders.yaml`,
+which is data and may be extended) is record-only, by the owner's
+decision: it stays in the place's `within` as written, with no place,
+no `part_of` to or from it and none across it, so that two unknowns are
+never one place; it is counted (ADR-0035 §6).
 What a marker in a name asserts (a widow's
 marker, "the late", a patronymic's father, a married-name marker) is a
 claim: a `civil_status`, a death, a `father`, a `married_name`.

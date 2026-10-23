@@ -29,10 +29,11 @@ as its artifact, label, kind and lines stay the same.
 **Stand-ins**, where a mention lacks a component:
 
 - *No lines*: the span is empty. That is so for the places and
-  occupations the GEDCOM adapter makes, one per distinct place or
-  occupation string, for its media objects, for a manifest record the
-  model gave no line (or only lines outside the transcription), and for
-  the refs of a batch without an entity manifest.
+  occupations the GEDCOM adapter makes, one per distinct place (its
+  PLAC's components) or occupation string, for its media objects, for a
+  manifest record the model gave no line (or only lines outside the
+  transcription), and for the refs of a batch without an entity
+  manifest.
 - *No entity manifest*: a batch whose extraction fell back to line
   ranges has no manifest, and its claims name entities by refs alone.
   Each local id its claims name is a mention: its label is the first

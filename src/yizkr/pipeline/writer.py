@@ -29,14 +29,17 @@ Per batch, the writer:
    is an artifact its source places, on the one property the manifest
    marks `placed_subject` (a `caption`, ADR-0039 §2.1), is written on
    that artifact's item, resolved by its media SHA-1 as a source is: the
-   artifact must be among the derived media the caller registered for
-   that source in the same write (`placed`), and must have an item. A
-   document subject that names any other document, an artifact subject on
-   a property the manifest marks neither way, a placed subject that names
-   no artifact registered as its source's in this write, or one no item
-   carries, and a claim of either kind of property with any other
-   subject, are refused before the first write, as a claim whose text the
-   instance cannot hold is (below). So is a claim of a property the
+   artifact must be among the media the caller gives as that source's
+   placed media (`placed`), and must have an item. The pipeline gives the
+   derived media it registers for the source in the same write; `yizkr
+   ingest write` those its `--placed` names, from a container's
+   derived-media record or by their SHA-1s. A document subject that names
+   any other document, an artifact subject on a property the manifest
+   marks neither way, a placed subject that names no artifact given as
+   its source's in this write, or one no item carries, and a claim of
+   either kind of property with any other subject, are refused before the
+   first write, as a claim whose text the instance cannot hold is
+   (below). So is a claim of a property the
    manifest marks retired (`spouse`, which takes no new claim: a marriage
    is an entity, ADR-0036), or of a reference property (`stated_in`, a
    judgement note's), as its own property or a qualifier's: validation
@@ -1425,7 +1428,7 @@ def subject_refusal(
             reason = "its property takes only an artifact its source places"
         elif subject.sha1 not in placed.get(source, ()):
             reason = (
-                "its subject is no artifact registered in this write as "
+                "its subject is no artifact given to this write as "
                 "placed by its source"
             )
         elif subject.sha1 not in resolved:
@@ -1467,14 +1470,14 @@ def pre_plan_refusals(
       qualifier's: validation refuses both, and `yizkr write` takes a
       batch without validating it (`retired_or_reference_property`);
     * a subject the subject rules refuse (subject_refusal, with `placed`,
-      the derived media registered for each source in this write, and
+      the artifacts given as each source's placed media, and
       `resolved`, the artifact SHA-1s an item carries): a document
       subject that is not the claim's own source, an artifact subject on
       a property that takes none, a caption whose subject is no artifact
-      its source places in this write, and a claim of a document-subject
-      or placed-subject property with any other subject (ADR-0035 §3.4,
-      ADR-0039 §2): the statement would go on the wrong item
-      (`subject_rule`);
+      this write is given as placed by its source, and a claim of a
+      document-subject or placed-subject property with any other subject
+      (ADR-0035 §3.4, ADR-0039 §2): the statement would go on the wrong
+      item (`subject_rule`);
     * a claim whose own text the instance cannot hold as it is: for
       each of its texts, its value or a qualifier's, what keeps the
       instance from holding it in the form the writer sends it in
@@ -3521,10 +3524,12 @@ class BatchWriter:
         `claim_summary` is the edit summary of each
         claim's write, by default one that says whether its batch was
         reviewed row by row or accepted whole. `placed` names, by the SHA-1
-        of a source's media, the SHA-1s of the derived media registered for
-        that source in this write: the artifacts a `caption` claim of that
-        source may take as its subject (step 0 of the module docstring).
-        Without it a caption is refused."""
+        of a source's media, the SHA-1s of the artifacts it places: the
+        derived media registered for that source in this write, or those
+        a container's derived-media record names (`yizkr ingest write
+        --placed`), which a `caption` claim of that source may take as its
+        subject (step 0 of the module docstring). Without it a caption is
+        refused."""
         self._clusters, self._document, self._terms, self._identity_hash = (
             check_batch(batch, identity, mapped_from)
         )

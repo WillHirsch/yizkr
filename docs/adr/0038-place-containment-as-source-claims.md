@@ -309,6 +309,18 @@ Applied with the implementation (accepted by the owner, 2026-10-23):
    columns of ADR-0009's contract (A the place, B the candidate named)
    and the chain and the container's number in it (from 1, as the
    question gives it) beside them.
+   *Applied (#571):* the GEDCOM export states the containment its PLACs
+   give as the extracted documents do. Each jurisdiction of a PLAC is a
+   place entity, one per distinct tail of components in the export, and
+   each place, a PLAC's own and a jurisdiction, carries its own name as
+   its label or an alias, so `stated_links` matches a claim to its
+   container and `build_worklist` names the container by it. Each link
+   of a PLAC's chain is a `part_of` claim of the export, cited by the
+   PLAC's line, with no time qualifier, since a PLAC states none (§2).
+   Its links are therefore claimed, not record-only, and a container the
+   export's own place alone bears is settled without a question; one a
+   place of another document also bears is asked of, as any is
+   (ADR-0035 §6).
 6. **The rebuild of #201's stage** reuses PR #513's plumbing as listed
    in point 5, and drops its competing-pair questions and its run-only
    provenance. Graphs written before it are scratch graphs, removed by

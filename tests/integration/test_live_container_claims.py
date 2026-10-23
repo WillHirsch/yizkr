@@ -9,8 +9,11 @@ one `caption` statement on the image's item, its subject the image's
 SHA-1, stated in the booklet with its page; the image's own dateline
 gives its `inception`, stated in the image itself. A re-run adds
 nothing. A caption written without the derived media its container
-registered is refused before the first write. The non-privileged export
-leaves the caption out, whole, and keeps the image's own statement.
+registered is refused before the first write. `yizkr ingest write` takes
+them from the booklet's record of derived media with `--placed` (#551),
+and without it refuses the caption and says how to give them. The
+non-privileged export leaves the caption out, whole, and keeps the
+image's own statement.
 
 Every title, label, caption and media byte carries the session's marker
 (conftest.fixture_mark), so each session meets the fixture as a first
@@ -23,6 +26,7 @@ ends by clearing the recorded instance-contents key
 from __future__ import annotations
 
 import gzip
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -35,11 +39,18 @@ from tests.integration.conftest import (
     register_fictional,
     wait_for_query_service,
 )
-from yizkr import backup
+from yizkr import backup, cli
 from yizkr.backup import dump_rdf, export_nonprivileged
-from yizkr.claims import ArtifactRef, ClaimBatch, validate_against_manifest
+from yizkr.claims import (
+    ArtifactRef,
+    ClaimBatch,
+    unplaced_hint,
+    validate_against_manifest,
+)
+from yizkr.core.exits import EXIT_OK
 from yizkr.pipeline import registrar, writer
 from yizkr.pipeline.presentation import (
+    DERIVED_MEDIA,
     DERIVED_MEDIA_DIR,
     DerivedMediaRecord,
     DerivedMedium,
@@ -213,6 +224,69 @@ def test_a_caption_without_its_registered_media_is_refused(client, placed):
     assert result.refused == [claim_id(claim)]
     assert (result.written, result.skipped, result.referenced) == (0, 0, 0)
     assert statements(client, derived[image.sha1], "caption") == before
+    assert statements(client, booklet.qid, "caption") == []
+
+
+def test_ingest_write_takes_the_placed_media_from_their_record(
+    client, placed, tmp_path, capsys
+):
+    """`yizkr ingest write` refuses the caption without the booklet's
+    placed media, and says how to give them; with `--placed` naming the
+    directory that keeps the booklet's record of derived media, the
+    caption is on the image's item, once."""
+    booklet, image, derived = placed
+    image_qid = derived[image.sha1]
+    before = statements(client, image_qid, "caption")
+    batch = caption_batch(booklet.ref, image)
+    (claim,) = batch.claims
+    batch_json = tmp_path / "batch.json"
+    batch_json.write_text(batch.model_dump_json())
+
+    status = cli.main(["ingest", "write", "--batch", str(batch_json)])
+    out, err = capsys.readouterr()
+    assert status == EXIT_OK
+    refused = json.loads(out)
+    assert refused["refused"] == [claim_id(claim)]
+    assert (refused["written"], refused["skipped"]) == (0, 0)
+    assert unplaced_hint(1) in err
+    assert statements(client, image_qid, "caption") == before
+
+    directory = tmp_path / "booklet"
+    directory.mkdir()
+    (directory / DERIVED_MEDIA).write_text(
+        DerivedMediaRecord(
+            source_sha1=booklet.ref.sha1,
+            container="pdf",
+            title=TITLE,
+            media={
+                image.sha1: DerivedMedium(
+                    names=["page 6, image 1"],
+                    slides=[6],
+                    file=f"{DERIVED_MEDIA_DIR}/{image.sha1}.png",
+                )
+            },
+        ).model_dump_json(indent=2)
+    )
+    status = cli.main(
+        [
+            *("ingest", "write", "--batch", str(batch_json)),
+            *("--placed", str(directory)),
+        ]
+    )
+    out, err = capsys.readouterr()
+    assert status == EXIT_OK
+    result = json.loads(out)
+    assert result["refused"] == []
+    assert result["written"] + result["skipped"] == 1
+    assert "--placed" not in err
+    (statement,) = statements(client, image_qid, "caption")
+    assert statement["mainsnak"]["datavalue"]["value"] == {
+        "text": CAPTION,
+        "language": "en",
+    }
+    assert [v["id"] for v in cited(client, statement, "stated_in")] == [
+        booklet.qid
+    ]
     assert statements(client, booklet.qid, "caption") == []
 
 
