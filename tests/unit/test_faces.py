@@ -10,7 +10,7 @@ import pytest
 
 from tests.fixtures import example_universe as u
 from tests.fixtures.identity import write_mapped
-from tests.unit.test_pipeline import PROPERTIES, FakeWiki, _cited
+from tests.unit.test_pipeline import ITEMS, PROPERTIES, FakeWiki, _cited
 from yizkr import cli
 from yizkr.claims import (
     ArtifactRef,
@@ -309,18 +309,31 @@ def portrait_faces() -> ClaimBatch:
 
 def portrait_text() -> ClaimBatch:
     """What extraction reads off the portrait: the 1890s its studio mount
-    gives, then two of the sitters named on its reverse (Eugen, as
-    "Muckel", and Rahel)."""
+    gives, as the scan's own `inception` (ADR-0039 §2.2, the universe's
+    "studio-photo-1890s"), then two of the sitters named on its reverse
+    (Eugen, as "Muckel", and Rahel)."""
     return ClaimBatch(
         extraction_run=run_metadata("fake-model"),
         claims=[
-            on_portrait(
-                "point_in_time", TimeValue(year=1890, precision="decade")
+            Claim(
+                subject=PORTRAIT_SCAN,
+                property="inception",
+                value=TimeValue(year=1890, precision="decade"),
+                source=SourceReference(artifact=PORTRAIT_SCAN),
             ),
             on_portrait("depicts", ItemValue(value=QidRef(qid="Q26"))),
             on_portrait("depicts", ItemValue(value=QidRef(qid="Q28"))),
         ],
     )
+
+
+def test_portrait_text_passes_manifest_validation():
+    # the date is the document's own, its subject the source itself, as
+    # validation takes it (ADR-0035 §3.4, ADR-0039 §2.2; #585)
+    text = portrait_text()
+    date, *_ = text.claims
+    assert (date.property, date.subject) == ("inception", PORTRAIT_SCAN)
+    assert validate_against_manifest(text) == []
 
 
 # Two of the portrait's sitters by label, as a gallery holds people not
@@ -725,7 +738,7 @@ class TestAcceptAllRefusesDepicts:
         sheet = tmp_path / "review.csv"
         sheet.write_text(
             "claim_id,property,decision\n"  # row 1, as a spreadsheet counts
-            "0a1b2c3d4e5f,point_in_time,\n"  # row 2
+            "0a1b2c3d4e5f,inception,\n"  # row 2
             ",depicts,\n"  # row 3, its claim_id lost
         )
         with pytest.raises(ValueError, match="row 3"):
@@ -761,7 +774,7 @@ class TestApplyReviewRefusesBulkAcceptedDepicts:
 
     @pytest.mark.parametrize(
         "cell",
-        ["point_in_time", "", "P180", ZWSP + "depicts"],
+        ["inception", "", "P180", ZWSP + "depicts"],
         ids=["another-property", "blank", "wikidata-id", "zero-width-space"],
     )
     def test_bulk_accept_on_a_hidden_depicts_claim_is_refused(
@@ -795,7 +808,7 @@ class TestApplyReviewRefusesBulkAcceptedDepicts:
         batch.write_text(text.model_dump_json(indent=2))
         review_csv = tmp_path / "review.csv"
         export_review_csv(text, review_csv)
-        edit_rows(review_csv, set_depicts_cells("point_in_time"))
+        edit_rows(review_csv, set_depicts_cells("inception"))
         reviewed = tmp_path / "review.reviewed.csv"
         accept_all(review_csv, reviewed)
         approved = tmp_path / "approved.json"
@@ -944,11 +957,19 @@ def reviewed(batch: ClaimBatch, tmp_path, decide=lambda row: "approve"):
     return approved
 
 
+class PortraitWiki(FakeWiki):
+    """The unit fake, with a document's own date (`inception`, the
+    portrait's text's date) in its vocabulary."""
+
+    def vocabulary(self):
+        return dict(PROPERTIES) | {"inception": "P92"}, dict(ITEMS)
+
+
 def wiki_with_portrait() -> FakeWiki:
     """A fake instance holding the portrait's photograph item, and Rahel's
     item under Q28, the QID the portrait's text names her by: so a batch
     retargeted to her would write, were the writer to let it."""
-    wiki = FakeWiki({PORTRAIT_SCAN.sha1: PORTRAIT.qid})
+    wiki = PortraitWiki({PORTRAIT_SCAN.sha1: PORTRAIT.qid})
     photograph = wiki.wbi.item.new()
     photograph.id = PORTRAIT.qid
     photograph.write()
