@@ -130,6 +130,13 @@ from pathlib import Path
 from typing import Any
 
 from yizkr.core.corpus import MISSING_LIST, ExclusionConfigError
+
+# the CLI's exit statuses (yizkr.core.exits), which the scratch commands
+# return
+from yizkr.core.exits import EXIT_FAILED as EXIT_FAILED
+from yizkr.core.exits import EXIT_INTERRUPTED as EXIT_INTERRUPTED
+from yizkr.core.exits import EXIT_OK as EXIT_OK
+from yizkr.core.exits import EXIT_STOPPED as EXIT_STOPPED
 from yizkr.pipeline.orchestrate import (
     BATCHED,
     DOCUMENT_STAGES,
@@ -217,13 +224,6 @@ RESUME_MARGIN = 60.0
 # `--resume` with no run named: the latest run
 LATEST = "latest"
 
-# exit statuses: the invocation finished and no document failed; it
-# finished with a failure, or the driver refused to start; it stopped
-# short, and invoking the run again goes on; Ctrl-C
-EXIT_OK = 0
-EXIT_FAILED = 1
-EXIT_STOPPED = 2
-EXIT_INTERRUPTED = 130
 
 # what a stage of a document came to in the dispatch loop: it ended (done
 # or reused), the control file held it as it started, or it failed
