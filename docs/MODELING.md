@@ -997,9 +997,10 @@ and reference the artifact itself or the producing run.
   Germany*, page 6 (printed 4)"), then its own document-subject
   statements, each property's values listed together, each with its
   source ("per this artifact" where the artifact states it of itself),
-  none preferred; a date at its stated precision with its qualifiers
-  (its range, circa), a person by a link to their page with the
-  possibly-living badge. A person's page has a section "Named in
+  none preferred, in the order of their text; a date at its stated
+  precision with its qualifiers (its range, circa), an item by its label,
+  a person the roster lists linked to their page and, when possibly
+  living, badged as on the index. A person's page has a section "Named in
   artifacts": each document-subject statement whose value is the person
   ("shown in" the portrait, "addressee of" the letter), with its
   sources. A caption names no one, so it is never listed there.

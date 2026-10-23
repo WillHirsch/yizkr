@@ -289,9 +289,10 @@ ORDER BY ?artifact ?subjectLabel ?propLabel ?st ?page ?printedPage ?region
 # `placed_subject` (a container's `caption`, stated in the container with
 # its page) or `document_subject` (what the artifact states of itself:
 # `author`, `addressee`, `inception` and the rest), ``{source_properties}``.
-# A row for each statement and reference block that cites a source: the
-# statement keeps two same-value statements apart (ADR-0002), and the
-# block names its source and the page and printed page it cites. A time
+# A row for each statement and reference block that cites a source, and
+# one row for a statement that cites none: the statement keeps two
+# same-value statements apart (ADR-0002), and the block names its source
+# and the page and printed page it cites. A time
 # value carries its stated precision, and each statement's qualifiers (its
 # sourcing circumstances, circa among them) come as QUALIFIER_CELL's cells.
 # The person page reads the same rows by their value: the document-subject
@@ -553,6 +554,31 @@ def natural_order(text: str) -> tuple[list[str | int], str]:
     return [int(run) if n % 2 else run for n, run in enumerate(runs)], text
 
 
+def visible(markup: str) -> str:
+    """The text a reader sees of `markup`: its tags left out and its
+    character references read."""
+    return html.unescape(re.sub(r"<[^>]*>", "", markup))
+
+
+def reading_order(entries: Iterable[tuple[str, str]]) -> list[str]:
+    """Entries of (what an entry says, where it is from), each as HTML,
+    joined and sorted by the text a reader sees: what it says, then where
+    it is from, each in ``natural_order``, so a person sorts by their name
+    and not by the link to their page, and July 1939 before 28 July 1939.
+    The order lets no value stand first for any reason but its text."""
+    return [
+        said + source
+        for said, source in sorted(
+            entries,
+            key=lambda entry: (
+                natural_order(visible(entry[0])),
+                natural_order(visible(entry[1])),
+                entry,
+            ),
+        )
+    ]
+
+
 def read_qualifiers(encoded: str) -> list[tuple[str, str, str, str]]:
     """The qualifier cells of QUALIFIER_CELL, "|"-separated as
     GROUP_CONCAT gives them, as (property id, label, value, precision),
@@ -637,6 +663,8 @@ class SiteBuilder:
         # the roster's rows by QID, so a page can link a value to the
         # person's page and badge it as the person's own page does
         self.people: dict[str, dict] = {}
+        # the artifacts that have a page of their own
+        self.artifact_qids: set[str] = set()
 
     # -- helpers ------------------------------------------------------------
 
@@ -843,6 +871,7 @@ class SiteBuilder:
             self.run(self._instance_query(SOURCES_SAY_QUERY))
         )
         self.people = {qid_of(row, "person"): row for row in people}
+        self.artifact_qids = {qid_of(row, "artifact") for row in artifacts}
 
         by_person: dict[str, list[dict]] = defaultdict(list)
         for row in statements:
@@ -1033,8 +1062,8 @@ class SiteBuilder:
                 text += f", {noun} {esc(', '.join(citation.pages))}"
             if citation.printed:
                 text += f" (printed {esc(', '.join(citation.printed))})"
-            parts.append(text)
-        return "; ".join(sorted(parts, key=natural_order))
+            parts.append((text, ""))
+        return "; ".join(reading_order(parts))
 
     def sources_say_html(self, said: list[Said]) -> str:
         """An artifact page's "What sources say about this artifact": its
@@ -1060,13 +1089,12 @@ class SiteBuilder:
         ]
         for group in sorted(grouped):
             body.append(f"<dt>{esc(group[1])}</dt>")
-            entries = sorted(
+            entries = reading_order(
                 (
-                    self.said_value(each)
-                    + self.source_span(self.citations(each, "this artifact"))
-                    for each in grouped[group]
-                ),
-                key=natural_order,
+                    self.said_value(each),
+                    self.source_span(self.citations(each, "this artifact")),
+                )
+                for each in grouped[group]
             )
             body += [f"<dd>{entry}</dd>" for entry in entries]
         body.append("</dl>")
@@ -1074,11 +1102,11 @@ class SiteBuilder:
 
     @staticmethod
     def source_span(citations: str) -> str:
-        """Citations in the muted "— per" style; "no recorded source" for
-        a statement that cites none."""
-        return (
-            f'<span class="source">{citations or "no recorded source"}</span>'
-        )
+        """Citations in the muted "— per" style; for a statement that
+        cites none, "no recorded source" in the qualifiers' muted style."""
+        if not citations:
+            return '<span class="qualifiers"> — no recorded source</span>'
+        return f'<span class="source">{citations}</span>'
 
     def named_in_html(self, naming: list[Said]) -> str:
         """A person page's "Named in artifacts": each document-subject
@@ -1087,7 +1115,7 @@ class SiteBuilder:
         qualifiers and its sources; "" for none."""
         if not naming:
             return ""
-        entries = sorted(
+        entries = reading_order(
             (
                 f"{esc(NAMED_AS.get(each.key, each.property_label))} "
                 + self.artifact_links(
@@ -1098,11 +1126,10 @@ class SiteBuilder:
                         cell(each.row, "qualifierCells"),
                         f"{each.artifact} statement {qid_of(each.row, 'st')}",
                     )
-                )
-                + self.source_span(self.citations(each, "the artifact itself"))
-                for each in naming
-            ),
-            key=natural_order,
+                ),
+                self.source_span(self.citations(each, "the artifact itself")),
+            )
+            for each in naming
         )
         return (
             "<h2>Named in artifacts</h2>"
@@ -1301,10 +1328,18 @@ class SiteBuilder:
             for row, places in statements:
                 subject_qid = qid_of(row, "subject")
                 subject = esc(cell(row, "subjectLabel") or subject_qid)
-                if subject_qid.startswith("Q"):
-                    subject = (
-                        f'<a href="../people/{subject_qid}.html">{subject}</a>'
-                    )
+                # a person links to their page, an artifact (an image a
+                # caption is about) to its own; any other item has none
+                for folder, listed in (
+                    ("people", self.people),
+                    ("artifacts", self.artifact_qids),
+                ):
+                    if subject_qid in listed:
+                        subject = (
+                            f'<a href="../{folder}/{subject_qid}.html">'
+                            f"{subject}</a>"
+                        )
+                        break
                 where = (
                     f"{subject_qid} statement {qid_of(row, 'st')} as "
                     f"{qid} asserts it"

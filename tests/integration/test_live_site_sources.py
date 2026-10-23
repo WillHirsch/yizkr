@@ -12,8 +12,8 @@ amended by #397). One batch writes the booklet's caption over the image,
 heading's address and its greeting's addressee, Klara; and the studio
 portrait's own studio and two of the names on its reverse, Rahel and
 Felix, as `shows`. The site is built from the whole instance, and the
-image's, the booklet's and the portrait's pages and Klara's and Rahel's
-are read.
+image's, the booklet's and the portrait's pages and Klara's, Rahel's
+and Felix's are read.
 
 Every title, label, caption and media byte carries the session's marker
 (conftest.fixture_mark), so each session meets the fixture as a first

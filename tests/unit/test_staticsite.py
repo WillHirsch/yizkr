@@ -2159,6 +2159,8 @@ def said_row(
 
 
 CAPTION = "Wastl to Klara, July 1939."
+# the rows come in no order the pages show: the pages sort what they list
+# by its text (staticsite.reading_order)
 SOURCES_SAY = [
     said_row(
         LETTER,
@@ -2172,14 +2174,6 @@ SOURCES_SAY = [
     said_row(
         LETTER,
         "inception",
-        time_literal("+1939-07-28T00:00:00Z"),
-        LETTER,
-        "c2",
-        precision="11",
-    ),
-    said_row(
-        LETTER,
-        "inception",
         time_literal("+1939-07-01T00:00:00Z"),
         BOOKLET,
         "c3",
@@ -2189,11 +2183,32 @@ SOURCES_SAY = [
     ),
     said_row(
         LETTER,
+        "inception",
+        time_literal("+1939-07-28T00:00:00Z"),
+        LETTER,
+        "c2",
+        precision="11",
+    ),
+    # the letter's heading, and the booklet's translation of it, give the
+    # place it was written: one statement, cited in two blocks
+    said_row(
+        LETTER,
         "location_of_creation",
         uri(ADDRESS),
         LETTER,
         "c4",
         value_label="Brunnenring 35",
+    ),
+    said_row(
+        LETTER,
+        "location_of_creation",
+        uri(ADDRESS),
+        BOOKLET,
+        "c4",
+        reference="r-c4-booklet",
+        value_label="Brunnenring 35",
+        page="6",
+        printed="4",
     ),
     said_row(
         LETTER,
@@ -2214,21 +2229,27 @@ SOURCES_SAY = [
     said_row(
         PORTRAIT,
         "shows",
+        uri("Q8"),
+        PORTRAIT,
+        "c8",
+        value_label="Living Person",
+    ),
+    said_row(
+        PORTRAIT,
+        "shows",
         uri("Q7"),
         PORTRAIT,
         "c7",
         value_label='Eugen "Muckel" & Co <Löbig>',
         qualifiers=qualifier_cells(("referred_to_as", "Muckel", "")),
     ),
-    said_row(
-        PORTRAIT,
-        "shows",
-        uri("Q8"),
-        PORTRAIT,
-        "c8",
-        value_label="Living Person",
-    ),
 ]
+
+
+def said_of(st: str) -> dict:
+    """SOURCES_SAY's first row of the statement `st`."""
+    return next(row for row in SOURCES_SAY if row["st"] == uri(st))
+
 
 KLARAS_ROW = {
     "person": uri(KLARA),
@@ -2314,16 +2335,20 @@ class TestWhatSourcesSay:
         # the letter's own day and the caption's month promoted by a
         # curator: neither is picked, each with its own source
         assert self.entries(site, LETTER)["inception"] == [
-            '1939-07-28<span class="source">this artifact</span>',
             '1939-07<span class="source">'
             f'<a href="../artifacts/{BOOKLET}.html">{TITLES[BOOKLET]}</a>'
             ", page 6 (printed 4)</span>",
+            '1939-07-28<span class="source">this artifact</span>',
         ]
 
     def test_an_items_value_is_its_label_linked_only_for_a_person(self, site):
         entries = self.entries(site, LETTER)
+        # each block's source by its own label, sorted by what a reader
+        # sees, whatever order the blocks come in
         assert entries["location of creation"] == [
-            'Brunnenring 35<span class="source">this artifact</span>'
+            'Brunnenring 35<span class="source">'
+            f'<a href="../artifacts/{BOOKLET}.html">{TITLES[BOOKLET]}</a>'
+            ", page 6 (printed 4); this artifact</span>"
         ]
         assert entries["addressee"] == [
             f'<a href="../people/{KLARA}.html">Klara Löbig</a>'
@@ -2379,14 +2404,15 @@ class TestWhatSourcesSay:
 
     def test_statements_are_counted_not_rows(self, tmp_path, vocabulary):
         # a statement cited in two blocks, at two pages, is one statement
+        # the second block's rows come first; the citations read in order
         two_blocks = [
-            SOURCES_SAY[0],
             {
                 **SOURCES_SAY[0],
                 "reference": uri("r-other"),
                 "page": literal("8"),
                 "printedNumber": literal("6"),
             },
+            SOURCES_SAY[0],
         ]
         site, summary = build(
             tmp_path,
@@ -2433,3 +2459,136 @@ class TestWhatSourcesSay:
         # the statements, and the qualifiers gathered for them
         assert query.count(f"VALUES ?prop {{ {wanted} }}") == 2
         assert f"wd:{property_id('depicts')} " not in query
+
+    def page_of(self, tmp_path, vocabulary, rows: list[dict], qid: str):
+        site, _ = build(
+            tmp_path,
+            vocabulary,
+            {
+                "?printedNumber": rows,
+                **RESPONSES,
+                "GROUP_CONCAT(DISTINCT ?alias": [*PEOPLE, KLARAS_ROW],
+                "?kind wdt:": SAID_ARTIFACTS,
+            },
+        )
+        return (site / qid).read_text()
+
+    def test_a_blocks_pages_are_listed_once_each_in_order(
+        self, tmp_path, vocabulary
+    ):
+        # one block whose rows give two pages, 7 before 6, and the one
+        # printed page twice
+        rows = [
+            {**SOURCES_SAY[0], "page": literal(page), "reference": uri("rA")}
+            for page in ("7", "6")
+        ]
+        page = self.page_of(
+            tmp_path, vocabulary, rows, f"artifacts/{LETTER}.html"
+        )
+        assert ", pages 6, 7 (printed 4)</span>" in page
+        assert "printed 4, 4" not in page
+
+    def test_a_caption_its_property_and_its_page_are_escaped(
+        self, tmp_path, vocabulary
+    ):
+        hostile = {
+            **SOURCES_SAY[0],
+            "value": excerpt('Wastl & Klara <"July"> 1939.', "en"),
+            "propLabel": literal("caption <&>"),
+            "page": literal("6 & <7>"),
+        }
+        page = self.page_of(
+            tmp_path, vocabulary, [hostile], f"artifacts/{LETTER}.html"
+        )
+        assert "<dt>caption &lt;&amp;&gt;</dt>" in page
+        assert (
+            '<q lang="en">Wastl &amp; Klara &lt;&quot;July&quot;&gt; 1939.</q>'
+        ) in page
+        assert ", page 6 &amp; &lt;7&gt; (printed 4)" in page
+
+    def test_an_unlabelled_uncited_value_shows_its_id_and_says_so(
+        self, tmp_path, vocabulary
+    ):
+        bare = {
+            name: value
+            for name, value in said_of("c6").items()  # the studio, author
+            if name not in ("valueLabel", "reference", "source", "sourceLabel")
+        }
+        assert qid(bare, "prop") == property_id("author")
+        page = self.page_of(
+            tmp_path, vocabulary, [bare], f"artifacts/{PORTRAIT}.html"
+        )
+        assert (
+            f'<dd>{STUDIO}<span class="qualifiers"> — no recorded '
+            "source</span></dd>"
+        ) in page
+        assert "— per no recorded source" not in page
+        assert '<span class="source">no recorded' not in page
+
+    def test_named_in_entries_read_in_order(self, tmp_path, vocabulary):
+        # the placeholder person is shown in the portrait and, here, the
+        # letter's addressee: the portrait's row comes first
+        rows = [
+            said_of("c8"),
+            said_row(
+                LETTER,
+                "addressee",
+                uri("Q8"),
+                LETTER,
+                "c9",
+                value_label="Living Person",
+            ),
+        ]
+        page = self.page_of(tmp_path, vocabulary, rows, "people/Q8.html")
+        section = self.section(page, "Named in artifacts")
+        assert [
+            entry.split(" <a", 1)[0]
+            for entry in re.findall(r"<li>(.*?)</li>", section)
+        ] == ["addressee of", "shown in"]
+
+    def test_the_evidence_table_links_a_caption_to_its_artifact(
+        self, tmp_path, vocabulary
+    ):
+        # the booklet's page lists its caption, about the letter's image:
+        # the image links to its artifact page, never to a person page,
+        # and an item that has no page is not linked
+        about = {
+            "artifact": uri(BOOKLET),
+            "source": uri(BOOKLET),
+            "reference": uri("r1"),
+            "propLabel": literal("caption"),
+            "page": literal("6"),
+        }
+        assertions = [
+            {
+                **about,
+                "st": uri("e1"),
+                "subject": uri(LETTER),
+                "subjectLabel": literal(TITLES[LETTER]),
+                "value": excerpt(CAPTION, "en"),
+            },
+            {
+                **about,
+                "st": uri("e2"),
+                "subject": uri(ADDRESS),
+                "subjectLabel": literal("Brunnenring 35"),
+                "propLabel": literal("part of"),
+                "value": uri("Q62"),
+            },
+        ]
+        site, _ = build(
+            tmp_path,
+            vocabulary,
+            {
+                **RESPONSES,
+                "?printedPage": assertions,
+                "?kind wdt:": SAID_ARTIFACTS,
+            },
+        )
+        page = (site / f"artifacts/{BOOKLET}.html").read_text()
+        assert (
+            f'<td><a href="../artifacts/{LETTER}.html">{TITLES[LETTER]}</a>'
+            "</td>"
+        ) in page
+        assert "<td>Brunnenring 35</td>" in page
+        assert f"people/{LETTER}.html" not in page
