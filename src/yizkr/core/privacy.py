@@ -64,8 +64,8 @@ such an event: any other evidence makes it a person. An item typed, at
 normal or preferred rank, as an event (``event_kinds``) is taken at its
 type on the death evidence it states, which describes the death it is
 (``EVENT_DEATH_PROPERTIES``): its statements of a property it has a
-truthy value of are no person evidence, and any other evidence still
-makes it a person. The non-privileged export
+truthy value of are no person evidence, unless it is typed as a family
+too, and any other evidence still makes it a person. The non-privileged export
 reads the same evidence from its own dump, and keeps an item that has any
 of it only once this check has released it; it leaves out an item that
 states no type, so no type at all hides no one either. A family
@@ -173,13 +173,14 @@ EVENT_CLASS = "event"
 # The person-only properties that an event states of the death it is: an
 # item typed, at normal or preferred rank, as an event (``event_kinds``) is
 # not taken for a person on its statements of one of these when it has a
-# truthy value of it. Each is death evidence (``DEATH_EVIDENCE_PROPERTIES``),
-# which the check reads through the truthy values, so such an item would be
-# marked deceased were it a person: setting it aside releases no one the
-# check would keep. A statement of one with no truthy value beside it (one
-# a curator deprecated, or of no value) is still evidence, and so is every
-# other person-only property, a `date of birth` included, and a `human`
-# type at any rank.
+# truthy value of it, unless it is typed as a family too. Each is death
+# evidence (``DEATH_EVIDENCE_PROPERTIES``), which the check reads through
+# the truthy values, so such an item would be marked deceased were it a
+# person: setting it aside releases no one the check would keep, and a
+# family, badged whatever its evidence, stays listed. A statement of one
+# with no truthy value beside it (one a curator deprecated, or of no value)
+# is still evidence, and so is every other person-only property, a `date
+# of birth` included, and a `human` type at any rank.
 EVENT_DEATH_PROPERTIES = DEATH_EVIDENCE_PROPERTIES
 # The types of what takes part in an event without being a person: a
 # vessel, a military unit and an organization, as a ship or a firm takes
@@ -218,11 +219,12 @@ EXISTS {{
 
 # Every item with person evidence, once each, read through statement
 # nodes at every rank, never through the truthy wdt: values; only the
-# type that sets a participant aside must be one a curator has not
-# deprecated. The death evidence an event states of itself
-# (``EVENT_DEATH_PROPERTIES``) is set aside beside an event type a curator
-# has not deprecated, and only where the event has a truthy value of the
-# property (wdt:), as the check reads death evidence. A person-valued
+# types that set a participant, or an event's own death evidence, aside
+# must be ones a curator has not deprecated. The death evidence an event
+# states of itself (``EVENT_DEATH_PROPERTIES``) is set aside only where the
+# event has a truthy value of the property (wdt:), as the check reads
+# death evidence, and never on an item typed as a family too
+# (``FAMILY_TYPE``), which stays listed and badged. A person-valued
 # property's value counts in a statement (ps:) and in a qualifier (pq:)
 # alike. A type is read through the
 # redirects it may name ({same_as}*), so a class a curator merged into
@@ -253,6 +255,7 @@ PEOPLE_SELECTION = """\
               ?eventTyping ps:{instance_of}/{same_as}* ?eventClass ;
                            wikibase:rank ?eventRank .
               FILTER(?eventRank != wikibase:DeprecatedRank)
+              FILTER(!{family_type})
             }}
           }} UNION {{
             VALUES ?link {{ {value_links} }}
@@ -287,6 +290,7 @@ def people_selection(
     ?person to each item with person evidence, for a query to join on."""
     return PEOPLE_SELECTION.format(
         same_as=SAME_AS,
+        family_type=family_type(properties, items),
         instance_of=properties["instance_of"],
         participant=properties["participant"],
         human=items[PERSON_CLASS],

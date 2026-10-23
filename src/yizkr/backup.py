@@ -381,14 +381,6 @@ _ENTITY_DATA = re.compile(r"<[^<>]*/Special:EntityData/[QP][1-9]\d*>")
 # vocabulary does not hold reads nothing.
 UNION_BOUNDS = ("started_by", "ended_by")
 
-# An item typed with the event class (``privacy.EVENT_CLASS``), or with a
-# subclass of it (``privacy.event_kinds``), is linked to every item its
-# statements name (``read_dump``). The person kinds of event
-# (``PERSON_EVENTS``) are events too, and so is every item that has a
-# `participant` statement; but never a union (``UNION_CLASS``) or an item
-# typed human.
-
-
 # The class of every union, a partnership or a marriage (ADR-0036): an
 # entity, not an event. Its `started_by` and `ended_by` statements point to
 # its events, which go with it (``BOUND_LEFT_OUT``), never the other way.
@@ -469,7 +461,8 @@ def read_dump(
     participant in a person event, each through its statement node at
     every rank. A participant typed as one of the non-person classes, at
     normal or preferred rank, is a person only on other evidence, and so is
-    an item typed so as an event on the death evidence it states, of each
+    an item typed so as an event, and not as a family, on the death
+    evidence it states, of each
     property it has a truthy value of (``privacy.EVENT_DEATH_PROPERTIES``),
     read from the dump's truthy triples. A value
     that is not an item (an unknown value is a blank node) is no evidence.
@@ -682,9 +675,10 @@ def read_dump(
     # an item typed as an event, at normal or preferred rank, is taken at
     # its type on the death evidence it states, of each property it has a
     # truthy value of (``privacy.EVENT_DEATH_PROPERTIES``)
+    # but never a family, which stays a person (``privacy.FAMILY_CLASS``)
     events_typed = typed_as(
         {items[key] for key in event_kinds() if key in items}, ranked=True
-    )
+    ) - typed_as({items[FAMILY_CLASS]}, ranked=True)
     reading.people.update(
         item
         for item, pid in death_stated.values()

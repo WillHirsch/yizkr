@@ -2422,6 +2422,8 @@ class TestReadDump:
             "human type at deprecated rank",
             "a birth beside",
             "no event type",
+            "a deprecated death of another property",
+            "a family too",
         ],
     )
     def test_an_events_other_evidence_still_makes_it_a_person(
@@ -2430,7 +2432,10 @@ class TestReadDump:
         # mixed signals fail closed: an event's death statements are set
         # aside only beside a truthy value of their property, as the check
         # reads death evidence, and an event type a curator has not
-        # deprecated; a deprecated statement, or one of no value, gives none
+        # deprecated; a deprecated statement, or one of no value, gives none.
+        # The rule is per property: a truthy cause of death sets aside no
+        # deprecated date of death. A family stays a person whatever else
+        # it is typed
         _, items = vocabulary
 
         def build(dump):
@@ -2459,6 +2464,12 @@ class TestReadDump:
                 )
             if case == "a birth beside":
                 dump.says("Q451", "date_of_birth", dated(1847))
+            if case == "a deprecated death of another property":
+                dump.says(
+                    "Q451", "date_of_death", dated(1909), rank="Deprecated"
+                )
+            if case == "a family too":
+                dump.says("Q451", "instance_of", entity(items["family"]))
 
         for reverse in (False, True):
             found = self.one(tmp_path, vocabulary, build, reverse)
@@ -2492,7 +2503,8 @@ class TestReadDump:
             dump.says(
                 "Q451",
                 "cause_of_death",
-                UNKNOWN if case == "unknown value" else '"Wassersucht"@de',
+                # an unknown value is a blank node, as dumpRdf.php writes it
+                "_:genid1" if case == "unknown value" else '"Wassersucht"@de',
             )
             if case == "deprecated beside":
                 dump.says(

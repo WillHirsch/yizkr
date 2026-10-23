@@ -39,6 +39,7 @@ from yizkr.core.privacy import (
     birth_event_dates_query,
     event_kinds,
     event_principal,
+    family_type,
     is_possibly_living,
     latest_birth_year,
     latest_births,
@@ -684,7 +685,8 @@ class TestThePeopleSelection:
         f"?person p:{typing} ?eventTyping . "
         f"?eventTyping {typed} ?eventClass ; "
         "wikibase:rank ?eventRank . "
-        "FILTER(?eventRank != wikibase:DeprecatedRank) }"
+        "FILTER(?eventRank != wikibase:DeprecatedRank) "
+        f"FILTER(!{' '.join(family_type(PROPERTIES, ITEMS).split())}) }}"
     )
 
     def test_people_are_read_through_statement_nodes_at_every_rank(self):
@@ -745,7 +747,8 @@ class TestThePeopleSelection:
     def test_every_type_is_read_through_its_redirects(self):
         # a class a curator merged into `human`, an event kind or a
         # non-person class types as the one it redirects to
-        assert self.selection.count(self.typed) == 4
+        # the family type that keeps an event listed is the fifth
+        assert self.selection.count(self.typed) == 5
 
     def test_a_non_person_type_sets_only_a_participant_aside(self):
         # once, in the participant's part of the union, and after it the

@@ -41,7 +41,8 @@ reads it, so such an item would be released were it a person: setting it
 aside keeps no badge off a page and lets nothing into the export that the
 check would hold back. Every other evidence still selects it, a death
 statement with no truthy value beside it (deprecated, or of no value), a
-`date of birth` and a `human` type at any rank included (§4).
+`date of birth` and a `human` type at any rank included; nor is an item
+typed as a family too set aside, so it stays listed and badged (§4).
 Amended by [ADR-0035](0035-mention-records.md) (owner decision
 2026-09-29, #385): a stated
 civil status (`civil_status`) is person evidence for the check (ADR-0035
@@ -417,8 +418,9 @@ from the database while the check reads the query service. Now:
   death evidence through those same truthy values, so the items this
   sets aside are only ones it would have released: no page loses its
   badge and the export keeps nothing it held back.
-  `read_dump` reads the same rule, so the export keeps such an event as
-  the event it is.
+  An item typed as a family too is never set aside, so every family
+  keeps its row and its badge. `read_dump` reads the same rule, so the
+  export keeps such an event as the event it is.
 - **A non-person type outweighs a part in an event** (owner,
   2026-09-29). A ship or a firm takes part in a migration, so an item
   typed as a vessel, a military unit or an organization

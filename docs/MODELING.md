@@ -1775,7 +1775,8 @@ not a signal to grow the schema on.
   be released were it a person: setting it aside releases no one the
   check would keep. Any other evidence still makes it a person, a death
   statement with no truthy value beside it (deprecated, or of no value), a
-  `date of birth` or a `human` type at any rank included. The event's
+  `date of birth` or a `human` type at any rank included, and an item
+  typed as a family too stays listed and badged as every family is. The event's
   statements stay on the event, and its principal's timeline shows it as
   before. A family is not taken
   at its type: its label is a surname, and a person known by a surname
