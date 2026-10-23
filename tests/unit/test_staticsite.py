@@ -2252,7 +2252,7 @@ class TestWhatSourcesSay:
 
     @pytest.fixture
     def site(self, tmp_path, vocabulary):
-        site, summary = build(
+        site, _ = build(
             tmp_path,
             vocabulary,
             {
@@ -2263,7 +2263,6 @@ class TestWhatSourcesSay:
                 "?kind wdt:": SAID_ARTIFACTS,
             },
         )
-        self.summary = summary
         return site
 
     @staticmethod
