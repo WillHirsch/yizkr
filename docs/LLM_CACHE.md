@@ -343,11 +343,14 @@ at the review effort (ADR-0016), and its events name the role
 `adjudication` and the stage `clustering`; the place stage calls in the
 `extract` role, its events naming both `places`. Each adjudication call
 is keyed by its prompt, which holds each pair's two mention
-fingerprints, clustering's comparison and each mention's evidence: a
-change to a batch that changes a mention's evidence (its label, record
-or claims) changes the key of the call that asks of it, and of no
-other, while a batch made again the same leaves every key. The prompt
-names no QID, so a reset of the instance changes no key. Since the role
+fingerprints, clustering's comparison and each mention's evidence. A
+change that alters a mention's evidence (its label, record or claims)
+changes the call that asks of it; one that adds, removes or resizes an
+ambiguous cluster re-packs the calls after it, since calls are filled
+in the review's order; and a changed verdict on people changes the
+later rounds' calls, of unions and events. A batch made again the same
+leaves every key. The prompt names no QID, so a reset of the instance
+changes no key. Since the role
 is the critique's, `--refresh critique` and `--epoch critique=N` act on
 the adjudication's calls too.
 

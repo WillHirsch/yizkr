@@ -1805,6 +1805,7 @@ def _clusters(path: Path, fold: _Fold) -> dict[str, Any]:
         "mentions merged by adjudication": number(
             "cluster_mentions", "adjudicated"
         ),
+        "members adjudicated apart": number("adjudicated_apart"),
         "ambiguous, left split": number("clusters", "ambiguous"),
         "ambiguous mentions": number("cluster_mentions", "ambiguous"),
         "conflicting": number("clusters", "conflicting"),

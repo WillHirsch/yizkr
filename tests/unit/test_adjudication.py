@@ -27,12 +27,15 @@ from tests.unit.test_clustering import (
     directory,
     document,
     entity,
+    export,
     family_tree,
     gedcom,
     human,
     item,
     register,
     role,
+    union_of,
+    vocab,
 )
 from yizkr.pipeline import adjudication, clustering
 from yizkr.pipeline.adjudication import (
@@ -57,6 +60,7 @@ from yizkr.pipeline.clustering import (
     cluster_corpus,
 )
 from yizkr.pipeline.llm import (
+    OutputLimitReached,
     cached_client,
     observed_client,
     open_cache,
@@ -94,13 +98,17 @@ class Engine:
     """A fake engine: answers each pair of an adjudication prompt `same`
     when the universe says its mentions are one person and `different`
     otherwise, unless `verdict` overrides it; `lines` replaces the
-    answer's lines, and `sentinel` False leaves its sentinel out. It
+    answer's lines, and `sentinel` False leaves its sentinel out; `cut`
+    reports its answers stopped at the output limit, and `give_up` gives
+    up on them there, as the claude CLI does (OutputLimitReached). It
     records every prompt."""
 
     who: dict[str, str]
     verdict: str | None = None
     lines: list[str] | None = None
     sentinel: bool = True
+    cut: bool = False
+    give_up: bool = False
     prompts: list[str] = field(default_factory=list)
     model = MODEL
     model_identifier = MODEL
@@ -108,8 +116,13 @@ class Engine:
     config_hash = "0" * 64
     cli_version = None
 
+    def last_report(self) -> dict:
+        return {"stop_reason": "max_tokens"} if self.cut else {}
+
     def complete(self, prompt: str, image_paths=()) -> str:
         self.prompts.append(prompt)
+        if self.give_up:
+            raise OutputLimitReached
         lines = self.lines
         if lines is None:
             lines = []
@@ -246,15 +259,117 @@ class TestVerdicts:
         """Three registers give Gustav's birth date and link confidently;
         a fourth gives none and links ambiguously with each. When every
         ambiguous pair is `different`, the cluster is settled: the three
-        merge, by adjudication, and the fourth stays apart."""
+        merge, on their confident links alone, so with the method
+        `confident`, and the fourth stays apart, `adjudicated`."""
         docs = [gustav(n, dated=True) for n in ("one", "two", "three")]
         docs.append(gustav("four", dated=False))
         made, _ = run(docs, Engine(truths(docs), verdict=DIFFERENT))
         dated = {cluster_of(made, doc, "e1") for doc in docs[:3]}
         assert len(dated) == 1
         assert cluster_of(made, docs[3], "e1") not in dated
+        assert {method_of(made, docs, d.sha1, "e1") for d in docs[:3]} == {
+            "confident"
+        }
+        assert method_of(made, docs, docs[3].sha1, "e1") == ADJUDICATED
+        summary = made.identity["summary"]
+        assert summary["clusters"][ADJUDICATED] == 0
+        assert summary["clusters"]["confident"] == 1
+        assert summary["cluster_mentions"]["confident"] == 3
+        assert summary["adjudicated_candidate_clusters"] == 1
+        assert summary["adjudicated_apart"] == 1
+        assert summary["clusters"][AMBIGUOUS] == 0
+
+    def test_a_part_joined_by_same_and_confident_links_is_adjudicated(self):
+        """Two dated registers link confidently, and `same` joins the
+        undated one to one of them: the part merges, `adjudicated`."""
+        docs = [gustav("one", dated=True), gustav("two", dated=True)]
+        docs.append(gustav("three", dated=False))
+        made, _ = run(docs, Engine(truths(docs)))
+        assert {method_of(made, docs, d.sha1, "e1") for d in docs} == {
+            ADJUDICATED
+        }
         assert made.identity["summary"]["clusters"][ADJUDICATED] == 1
-        assert made.identity["summary"]["cluster_mentions"][ADJUDICATED] == 3
+
+    def test_a_different_pair_the_closure_joins_keeps_its_part_apart(self):
+        """Three undated registers of Gustav: `same` joins the first to
+        the second and the second to the third, but the first and the
+        third are `different`. The inconsistent verdicts merge nothing:
+        each stays apart, counted among the ambiguous."""
+        docs = [gustav(n, dated=False) for n in ("one", "two", "three")]
+        identity = cluster_corpus([d.manifest for d in docs])
+        names = {
+            doc.fingerprint("e1", identity): n
+            for doc, n in zip(docs, ("one", "two", "three"), strict=True)
+        }
+        settled = settle_by(
+            docs,
+            names,
+            lambda pair: DIFFERENT if pair == {"one", "three"} else SAME,
+        )
+        assert {e["method"] for e in settled["mentions"].values()} == {
+            AMBIGUOUS
+        }
+        assert len({e["cluster"] for e in settled["mentions"].values()}) == 3
+        (entry,) = settled["review"]
+        assert entry["contradiction"]["evidence"] == DIFFERENT
+        assert settled["summary"]["clusters"][AMBIGUOUS] == 1
+        assert settled["summary"]["cluster_mentions"][AMBIGUOUS] == 3
+
+    def test_a_different_pair_beside_a_confident_link_is_kept_apart(self):
+        """Two dated registers link confidently; `same` joins the second to
+        an undated one, `different` the first to it: the confident link
+        would join the two the adjudicator kept apart, so the part merges
+        nothing."""
+        docs = [gustav("one", dated=True), gustav("two", dated=True)]
+        docs.append(gustav("four", dated=False))
+        identity = cluster_corpus([d.manifest for d in docs])
+        names = {
+            doc.fingerprint("e1", identity): n
+            for doc, n in zip(docs, ("one", "two", "four"), strict=True)
+        }
+        settled = settle_by(
+            docs,
+            names,
+            lambda pair: DIFFERENT if pair == {"one", "four"} else SAME,
+        )
+        clusters = {
+            names[m]: e["cluster"] for m, e in settled["mentions"].items()
+        }
+        assert clusters["one"] != clusters["four"]
+        assert {e["method"] for e in settled["mentions"].values()} == {
+            AMBIGUOUS
+        }
+
+    def test_same_never_excuses_stated_sexes_that_differ(self):
+        """Klara Löbig, born 1917, in two registers, one misreading her
+        sex: their sexes block the pair, and a `same` verdict does not
+        merge it. Only a date conflict on its own pair is a verdict's to
+        excuse."""
+
+        def klara(name: str, sex: str) -> Doc:
+            return register(
+                name,
+                [human("e1", "Klara Löbig")],
+                [
+                    ("e1", "date_of_birth", day(1917)),
+                    ("e1", "sex_or_gender", vocab(sex)),
+                ],
+                {"e1": "klara-loebig"},
+            )
+
+        docs = [klara("read", "female"), klara("misread", "male")]
+        before = cluster_corpus([d.manifest for d in docs])
+        (entry,) = before["review"]
+        assert entry["pairs"][0]["evidence"].endswith("/sex")
+        made, _ = run(docs, Engine(truths(docs), verdict=SAME))
+        assert {e["method"] for e in made.identity["mentions"].values()} == {
+            AMBIGUOUS
+        }
+        (entry,) = made.identity["review"]
+        assert entry["status"] == ADJUDICATED
+        assert entry["contradiction"]["evidence"].endswith("/sex")
+        assert made.identity["summary"]["clusters"][AMBIGUOUS] == 1
+        assert made.identity["summary"]["clusters"][ADJUDICATED] == 0
 
     def test_one_uncertain_pair_keeps_the_whole_cluster_apart(self):
         docs = [gustav(n, dated=True) for n in ("one", "two", "three")]
@@ -313,7 +428,95 @@ def born(name: str, *, dated: bool) -> Doc:
     )
 
 
+def married(name: str, born: int, wedding: int | None = None) -> Doc:
+    """A register of Leopold Löbig and Agnes Nertler's marriage, giving
+    Leopold's birth year as it reads it, and the wedding's year when
+    given."""
+    entities = [
+        human("e1", "Leopold Löbig"),
+        human("e2", "Agnes Nertler", givens=["Agnes"], birth=["Nertler"]),
+        entity("m1", "Leopold and Agnes", "marriage"),
+    ]
+    claims = [
+        ("e1", "date_of_birth", day(born)),
+        *union_of("m1", "e1", "e2"),
+    ]
+    truth = {
+        "e1": "leopold-loebig",
+        "e2": "agnes-loebig",
+        "m1": "leopold-and-agnes",
+    }
+    if wedding:
+        entities.append(entity("w1", "Wedding", "wedding"))
+        claims += [
+            ("m1", "started_by", item("w1")),
+            ("w1", "point_in_time", day(wedding)),
+        ]
+        truth["w1"] = "leopold-and-agnes-wedding"
+    return register(name, entities, claims, truth)
+
+
+def exported_couple(wedding: int | None = None) -> Doc:
+    """A GEDCOM export of Leopold and Agnes as a family, their names
+    written without surname slashes, so they key only weakly and never
+    link confidently; with the wedding's year when given."""
+    family = "0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n"
+    if wedding:
+        family += f"1 MARR\n2 DATE {wedding}\n"
+    return export(
+        "0 @I1@ INDI\n1 NAME Leopold Löbig\n"
+        "0 @I2@ INDI\n1 NAME Agnes Nertler\n" + family,
+        {
+            "i1": "leopold-loebig",
+            "i2": "agnes-loebig",
+            "f1": "leopold-and-agnes",
+        },
+    )
+
+
+UNION_KINDS = ("a marriage in", "a partnership in")
+
+
 class TestRounds:
+    def test_unions_are_settled_after_their_couples(self):
+        """The export's couple and a register's are ambiguous pairs, and so
+        is their union. Once `same` merges the couples, the unions link
+        confidently, and they are never asked."""
+        docs = [exported_couple(), married("register", 1912)]
+        before = cluster_corpus([doc.manifest for doc in docs])
+        assert {e["kind"] for e in before["review"]} == {
+            "human",
+            "partnership",
+        }
+        engine = Engine(truths(docs))
+        made, _ = run(docs, engine)
+        (prompt,) = engine.prompts
+        assert not any(kind in prompt for kind in UNION_KINDS)
+        assert made.counts["rounds"] == 1
+        unions = [
+            entry
+            for entry in made.identity["mentions"].values()
+            if entry["kind"] in ("marriage", "partnership")
+        ]
+        assert [entry["method"] for entry in unions] == ["confident"] * 2
+        assert len({entry["cluster"] for entry in unions}) == 1
+
+    def test_a_union_still_ambiguous_is_asked_in_a_later_round(self):
+        """The same couples, but their weddings' years conflict: the union
+        stays ambiguous once its couple merge, so a later round asks it,
+        through the one client the stage made."""
+        docs = [exported_couple(1947), married("register", 1912, 1974)]
+        engine = Engine(truths(docs))
+        made, clients = run(docs, engine)
+        assert clients == [1]
+        assert made.counts["rounds"] >= 2
+        assert not any(kind in engine.prompts[0] for kind in UNION_KINDS)
+        assert any(
+            kind in prompt
+            for prompt in engine.prompts[1:]
+            for kind in UNION_KINDS
+        )
+
     def test_people_are_settled_before_their_events(self):
         """Two registers of Gustav's birth, one dated: his two mentions
         are an ambiguous pair, and so are the births, whose principals
@@ -323,6 +526,10 @@ class TestRounds:
         docs = [born("one", dated=True), born("two", dated=False)]
         before = cluster_corpus([doc.manifest for doc in docs])
         assert before["summary"]["ambiguous_pairs"] == 2
+        # one call for the people, one for the births, each group apart
+        assert (
+            before["summary"]["adjudication"]["calls_ambiguous_clusters"] == 2
+        )
         engine = Engine(truths(docs))
         made, _ = run(docs, engine)
         (prompt,) = engine.prompts
@@ -340,18 +547,61 @@ class TestRounds:
         }
 
     def test_keeper_mode_asks_every_pending_pair_at_once(self):
+        """In keeper mode one round asks every group's pairs, each group
+        packed apart, as the planned count packs them."""
         docs = [born("one", dated=True), born("two", dated=False)]
         engine = Engine(truths(docs))
         made, _ = run(docs, engine, merge=False)
-        (prompt,) = engine.prompts
-        assert "a human in" in prompt and "a birth in" in prompt
+        people, births = engine.prompts
+        assert "a human in" in people and "a birth in" not in people
+        assert "a birth in" in births and "a human in" not in births
         assert made.counts["asked_pairs"] == 2
+        assert made.counts["rounds"] == 1
+        assert made.counts["calls"] == made.counts["planned_calls"] == 2
 
 
 # -- the answer's schema ------------------------------------------------------
 
 
 class TestSchema:
+    @pytest.mark.parametrize("how", ["cut", "give_up"])
+    def test_an_answer_cut_off_at_the_output_limit_is_refused(self, how):
+        """An answer the engine stopped at its output limit, or one the
+        claude CLI gave up on there, is refused and counted, and the pair
+        stays apart: nothing escapes the stage."""
+        docs = [gustav("one", dated=True), gustav("two", dated=False)]
+        made, _ = run(docs, Engine(truths(docs), **{how: True}))
+        assert made.verdicts == {}
+        assert made.counts["refused_calls"] == 1
+        assert "cut off" in made.calls[0]["refused"]
+        assert method_of(made, docs, docs[0].sha1, "e1") == AMBIGUOUS
+
+    def test_a_second_bad_answer_is_rejected_too(self, tmp_path):
+        """A kept answer refused, asked once more and answered badly again:
+        that answer is rejected too, so the next invocation asks the
+        engine again."""
+        docs = [gustav("one", dated=True), gustav("two", dated=False)]
+        probe = Engine(truths(docs))
+        run(docs, probe)
+        broken = Engine(truths(docs), sentinel=False)
+        cached_client(
+            broken, open_cache(tmp_path / "cache"), role=ROLE
+        ).complete(probe.prompts[0])
+        again = Engine(truths(docs), sentinel=False)
+        made, _ = run(
+            docs,
+            cached_client(again, open_cache(tmp_path / "cache"), role=ROLE),
+        )
+        assert made.counts["second_attempts"] == 1
+        assert made.counts["refused_calls"] == 1
+        good = Engine(truths(docs))
+        made, _ = run(
+            docs,
+            cached_client(good, open_cache(tmp_path / "cache"), role=ROLE),
+        )
+        assert len(good.prompts) == 1
+        assert [v for v, _ in made.verdicts.values()] == [SAME]
+
     def test_an_answer_outside_the_schema_is_refused_and_counted(self):
         docs = [gustav("one", dated=True), gustav("two", dated=False)]
         engine = Engine(
@@ -361,11 +611,12 @@ class TestSchema:
                 json.dumps({"pair": 2, "verdict": SAME, "reason": "x"}),
                 json.dumps({"pair": 1, "verdict": SAME, "reason": 7}),
                 json.dumps({"pair": True, "verdict": SAME, "reason": "x"}),
+                json.dumps({"pair": 0, "verdict": SAME, "reason": "x"}),
             ],
         )
         made, _ = run(docs, engine)
         assert made.verdicts == {}
-        assert made.counts["rejected_lines"] == 4
+        assert made.counts["rejected_lines"] == 5
         assert made.counts["unanswered_pairs"] == 1
         assert method_of(made, docs, docs[0].sha1, "e1") == AMBIGUOUS
         assert any(
@@ -449,7 +700,7 @@ class TestPrompt:
         dated = gustav("one", dated=True)
         undated = document(
             "a register",
-            [human("e1", "Gustav Löbig")],
+            [human("e1", "Gustav Löbig", aliases=["Gustl"])],
             [
                 (
                     "e1",
@@ -470,6 +721,47 @@ class TestPrompt:
             sha1="a" * 40,
         )
         return [dated, undated]
+
+    def test_gives_aliases_events_and_kin_dates(self):
+        """Each mention's aliases; an event that names it, with the
+        event's own date; a union with the other spouse; and kin with
+        their dates."""
+        docs = self.docs()
+        engine = Engine(truths(docs))
+        run(docs, engine)
+        (prompt,) = engine.prompts
+        assert "aliases: 'Gustl'" in prompt
+        births = [born("one", dated=True), born("two", dated=False)]
+        engine = Engine(truths(births), verdict=UNCERTAIN)
+        run(births, engine)
+        assert (
+            "named as the participant of 'Birth' (birth) [role: principal]"
+            " — point_in_time: 1919-01-07" in engine.prompts[0]
+        )
+        lines = adjudication._Document(family_tree().manifest).lines("e2")
+        assert (
+            "named as the participant of 'Marriage of Sebastian and "
+            "Hildegard' (marriage) [role: spouse] — participant: "
+            "'Hildegard Laudler' (human) [role: spouse]"
+        ) in lines
+        assert "child: 'Ursula Löbig' (human) — date_of_birth: 1911; " in (
+            "\n".join(lines)
+        )
+
+    def test_says_how_many_claims_it_leaves_out(self):
+        doc = document(
+            "a register",
+            [human("e1", "Gustav Löbig")],
+            [
+                ("e1", "residence", {"type": "string", "value": "Flörburg"})
+                for _ in range(adjudication.MAX_CLAIMS + 1)
+            ],
+            {"e1": "gustav-loebig"},
+            sha1="d" * 40,
+        )
+        lines = adjudication._Document(doc.manifest).lines("e1")
+        assert lines[-1] == "and 1 claims more"
+        assert lines.count("residence: 'Flörburg'") == adjudication.MAX_CLAIMS
 
     def test_names_no_qid(self):
         docs = self.docs()
@@ -636,6 +928,101 @@ class TestStage:
         assert events.count("cache-hit") == 1
         assert read_cache(tmp_path / "cache") is not None
 
+    def test_a_refused_call_is_asked_again_next_invocation(self, tmp_path):
+        """A call refused (an answer without its sentinel) leaves outputs
+        the next invocation does not reuse: it asks that call again, and
+        the cache answers the rest."""
+        docs = [gustav("one", dated=True), gustav("two", dated=False)]
+        engine = Engine(truths(docs), sentinel=False)
+        context = context_of(docs, tmp_path, engine)
+        adjudication.run_stage(context)
+        record = json.loads((context.directory / RECORD).read_text())
+        assert record["counts"]["refused_calls"] == 1
+        engine.sentinel = True
+        output = ensure_adjudicated(context)
+        assert not output.reused
+        assert len(engine.prompts) == 2
+        assert engine.prompts[0] == engine.prompts[1]
+        assert output.identity_map["summary"]["clusters"][ADJUDICATED] == 1
+        assert ensure_adjudicated(context).reused
+
+    def test_another_mode_is_made_again(self, tmp_path):
+        """Outputs made in keeper mode are not reused by a run of the
+        development stage, which merges on the verdicts."""
+        docs = [gustav("one", dated=True), gustav("two", dated=False)]
+        engine = Engine(truths(docs))
+        context = context_of(docs, tmp_path, engine, stage="kept")
+        adjudication.run_stage(context)
+        context.run.stage = "development"
+        output = ensure_adjudicated(context)
+        assert not output.reused
+        assert output.identity_map["summary"]["clusters"][ADJUDICATED] == 1
+
+    def test_another_prompt_or_batch_size_is_made_again(
+        self, tmp_path, monkeypatch
+    ):
+        docs = [gustav("one", dated=True), gustav("two", dated=False)]
+        context = context_of(docs, tmp_path, Engine(truths(docs)))
+        adjudication.run_stage(context)
+        assert ensure_adjudicated(context).reused
+        config = clustering.load_config(
+            overrides={"adjudication": {"pairs-per-call": 7}}
+        )
+        assert not ensure_adjudicated(context, config).reused
+        assert ensure_adjudicated(context, config).reused
+        monkeypatch.setattr(adjudication, "PROMPT", adjudication.PROMPT + "\n")
+        assert not ensure_adjudicated(context, config).reused
+
+    def test_a_map_another_stage_wrote_over_is_made_again(self, tmp_path):
+        """When the map in the directory is not the one the record made
+        (clustering alone wrote over it), the stage makes its own again."""
+        docs = [gustav("one", dated=True), gustav("two", dated=False)]
+        context = context_of(docs, tmp_path, Engine(truths(docs)))
+        adjudication.run_stage(context)
+        clustering.ensure_identity_map(context.directory, context.documents)
+        output = ensure_adjudicated(context)
+        assert not output.reused
+        assert output.identity_map["summary"]["clusters"][ADJUDICATED] == 1
+
+    def test_a_pause_resumes_with_the_calls_answered(self, tmp_path):
+        """A subscription limit met on the second call stops the stage,
+        leaving nothing written; the next invocation is answered from the
+        cache up to there, and asks only the call the pause stopped."""
+        from yizkr.pipeline.llm import PassPaused
+
+        docs = [
+            gustav("one", dated=True),
+            gustav("two", dated=False),
+            *three_nicholases(),
+        ]
+        engine = Engine(truths(docs))
+        context = context_of(docs, tmp_path, engine)
+        config = clustering.load_config(
+            overrides={"adjudication": {"pairs-per-call": 1}}
+        )
+        answer = engine.complete
+        asked: list[str] = []
+
+        def pausing(prompt, image_paths=()):
+            asked.append(prompt)
+            if len(asked) == 2:
+                raise PassPaused("the five-hour window is used up")
+            return answer(prompt, image_paths)
+
+        engine.complete = pausing
+        with pytest.raises(PassPaused):
+            ensure_adjudicated(context, config)
+        assert not (context.directory / RECORD).exists()
+        made = len(engine.prompts)
+        output = ensure_adjudicated(context, config)
+        assert not output.reused
+        # the first call came from the cache; the stopped one and the
+        # rest reached the engine
+        assert asked[2] == asked[1]
+        assert asked[0] not in engine.prompts[made:]
+        # every call of the second invocation but the cached first
+        assert output.record["counts"]["calls"] == len(asked[2:]) + 1
+
     def test_a_refresh_of_the_role_asks_again_once(self, tmp_path):
         """`--refresh critique` makes the stage's outputs again, asking
         the engine afresh; an invocation that refreshes it again reuses
@@ -695,6 +1082,25 @@ def test_the_report_counts_the_calls_under_adjudication(tmp_path):
     assert calls["engine_calls"]["by_role"] == {NAME: 1}
 
 
+def test_the_review_records_each_verdict_and_the_key_its_values():
+    """Each ambiguous pair of a map made under verdicts records its
+    verdict, and the verdicts' values, not only their pairs, are part of
+    the map's key."""
+    docs = [gustav("one", dated=True), gustav("two", dated=False)]
+    manifests = [doc.manifest for doc in docs]
+    (entry,) = cluster_corpus(manifests)["review"]
+    pair = clustering._pair(*entry["pairs"][0]["mentions"])
+    same = cluster_corpus(manifests, None, {pair: SAME})
+    (settled,) = same["review"]
+    assert settled["pairs"][0]["verdict"] == SAME
+    uncertain = cluster_corpus(manifests, None, {pair: UNCERTAIN})
+    assert uncertain["review"][0]["pairs"][0]["verdict"] == UNCERTAIN
+    config = clustering.load_config()
+    assert clustering.inputs_key(
+        manifests, config, {pair: SAME}
+    ) != clustering.inputs_key(manifests, config, {pair: DIFFERENT})
+
+
 def test_the_diff_lists_each_adjudicated_merge_apart():
     """A merge the verdicts make is counted by its method in the diff's
     aggregates, and listed, with its members, in its detail."""
@@ -712,6 +1118,10 @@ def test_the_diff_lists_each_adjudicated_merge_apart():
     assert aggregate["methods_changed"] == {"ambiguous → adjudicated": 2}
     (merge,) = detail["merges"]
     assert merge["method"] == ADJUDICATED
+    from tests.unit.test_run_diff import an_aggregate
+
+    summary = rundiff.render_markdown(an_aggregate(clusters=aggregate))
+    assert "by method: adjudicated 1" in summary
     assert {m["label"] for m in merge["members"]} == {"Gustav Löbig"}
     assert len(merge["members"]) == 2
 
@@ -790,14 +1200,21 @@ def three_nicholases() -> list[Doc]:
 
 
 def settle(docs: list[Doc], verdict_of) -> dict:
-    """The map under verdicts `verdict_of` gives each ambiguous pair, by
-    the two documents' keys."""
-    manifests = [doc.manifest for doc in docs]
-    identity = cluster_corpus(manifests)
+    """The map under verdicts `verdict_of` gives each ambiguous pair of
+    three_nicholases, by the two documents' names."""
+    identity = cluster_corpus([doc.manifest for doc in docs])
     names = {
         doc.fingerprint("e1", identity): name
         for doc, name in zip(docs, ("read", "undated", "misread"), strict=True)
     }
+    return settle_by(docs, names, verdict_of)
+
+
+def settle_by(docs: list[Doc], names: dict[str, str], verdict_of) -> dict:
+    """The map under verdicts `verdict_of` gives each ambiguous pair, by
+    its two mentions' `names`."""
+    manifests = [doc.manifest for doc in docs]
+    identity = cluster_corpus(manifests)
     verdicts = {
         clustering._pair(*p["mentions"]): verdict_of(
             frozenset(names[m] for m in p["mentions"])
@@ -806,15 +1223,14 @@ def settle(docs: list[Doc], verdict_of) -> dict:
         for p in entry["pairs"]
         if p["link"] == AMBIGUOUS
     }
-    assert len(verdicts) == 3
     return cluster_corpus(manifests, None, verdicts)
 
 
 def test_members_no_same_joined_that_contradict_stay_apart():
     """`same` joins each dated register to the undated one, but the two
-    dated ones are `different`: the part the closure makes holds two
-    members whose dates conflict and that no `same` joined, so all three
-    stay apart."""
+    dated ones are `different`: the part the closure makes holds the two
+    the adjudicator kept apart, so all three stay apart, and count among
+    the ambiguous."""
     settled = settle(
         three_nicholases(),
         lambda pair: DIFFERENT if pair == {"read", "misread"} else SAME,
@@ -822,7 +1238,11 @@ def test_members_no_same_joined_that_contradict_stay_apart():
     assert {e["method"] for e in settled["mentions"].values()} == {AMBIGUOUS}
     (entry,) = settled["review"]
     assert entry["status"] == ADJUDICATED
-    assert entry["contradiction"]["evidence"].split("/")[1] == "conflict"
+    assert entry["contradiction"]["evidence"] == DIFFERENT
+    assert settled["summary"]["clusters"][AMBIGUOUS] == 1
+    assert settled["summary"]["cluster_mentions"][AMBIGUOUS] == 3
+    reasons = clustering.attention(settled["summary"], adjudicated=True)
+    assert reasons[0].startswith("ambiguous clusters not merged: 1 cluster")
 
 
 def test_a_same_verdict_overrides_a_date_contradiction():

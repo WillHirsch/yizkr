@@ -735,19 +735,27 @@ refuses). The module docstrings are the full account; in short:
   one-sentence reason; a line outside that schema, a pair answered two
   ways and an answer cut off are refused and counted. In a
   development-stage run the verdicts merge unattended: clustering is
-  made again under them, a cluster whose every ambiguous pair is `same`
-  or `different` is cut at its `different` pairs and each part merges
-  with the method `adjudicated` (unless two of its members no `same`
-  joined contradict each other), and a cluster with an `uncertain` pair
-  or one without a verdict stays apart whole. People are asked first,
-  then unions, then events, each group after clustering again, so a
-  union whose couple merged may need no call. In keeper mode every pending
-  pair is asked once, the verdicts are recorded for the cluster review
-  sheet (#108), and nothing merges. Verdicts, reasons, each call's pairs
-  and raw answer, and the counts are kept in
+  made again under them, and a cluster whose every ambiguous pair is
+  `same` or `different` is cut at its `different` pairs. Each part the
+  closure over its confident links and `same` pairs makes merges unless
+  it holds a pair contradicted: a `different` pair joined another way (a
+  cannot-link), a `same` pair that differs by more than its own dates (a
+  verdict excuses a date conflict on its own pair, never stated sexes,
+  civil statuses or kin that conflict), or any two members whose
+  evidence says they differ. A merged part's method is `adjudicated` when
+  a `same` pair is among its links, `confident` when its confident links
+  alone join it. A cluster with an `uncertain` pair or one without a
+  verdict stays apart whole. People are asked first, then unions, then
+  events, each group after clustering again, so a union whose couple
+  merged may need no call. In keeper mode every pending pair is asked
+  once, the verdicts are recorded for the cluster review sheet (#108),
+  and nothing merges. Verdicts, reasons, each call's pairs and raw
+  answer, and the counts are kept in
   `<run>/corpus/clustering/adjudication.json`, local-only like the map;
-  both are reused while the clustering's inputs, the prompt, the role's
-  engine, model and effort, the batch size and the mode stand.
+  both are reused while the clustering's inputs, the prompt, the stage's
+  code, the role's engine, model, effort and epoch, a refresh of the
+  role, the batch size and the mode stand, and while no call was
+  refused.
 - **The map.** Each mention's fingerprint maps to its cluster and the
   method that put it there (`confident`, `adjudicated`, `ambiguous`,
   `conflicting`, `singleton`, or `unclustered` for a mention its manifest

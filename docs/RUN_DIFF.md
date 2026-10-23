@@ -339,7 +339,10 @@ expects it and why:
   change does not explain, or verdicts that swing from one kind to
   another with no change to the prompt, the model or the batches
   (read the merges in `diff.json`: each adjudicated merge should be one
-  person, place or family by its members' labels and documents);
+  person, place or family by its members' labels and documents). A
+  union or an event whose people adjudication merged links confidently,
+  so its merge shows as `confident`: read a rise in confident merges of
+  unions and events beside the adjudicated merges of people;
 - calls to the engine far above what the change explains (a cache miss
   for every call of a stage the change does not touch).
 

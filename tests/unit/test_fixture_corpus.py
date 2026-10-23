@@ -1788,6 +1788,7 @@ class TestTheRunReport:
             "mentions merged by adjudication": summary["cluster_mentions"][
                 "adjudicated"
             ],
+            "members adjudicated apart": summary["adjudicated_apart"],
             "ambiguous, left split": summary["clusters"]["ambiguous"],
             "ambiguous mentions": summary["cluster_mentions"]["ambiguous"],
             "conflicting": summary["clusters"]["conflicting"],

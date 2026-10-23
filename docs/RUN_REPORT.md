@@ -336,8 +336,10 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   findings that failed their checks, counted apart as invalid;
 - clusters, from the clustering stage's identity map: confident merges,
   adjudicated merges (those the adjudicator's `same` verdicts made in a
-  development-stage run, #106) and their mentions, ambiguous clusters
-  left split, conflicting clusters (and how many of
+  development-stage run, #106) and their mentions, the members a
+  `different` verdict left alone, ambiguous clusters left split (an
+  adjudicated cluster that left members apart for a contradiction among
+  them), conflicting clusters (and how many of
   them hard), singletons, the recordless mentions (those of a kind that
   takes a mention record and have none, which never link confidently,
   ADR-0035 §7), the mentions clustered by kind, the candidate

@@ -210,16 +210,24 @@ unions end in.
 **Adjudication.** Given an adjudicator's verdicts on ambiguous pairs
 (`cluster_corpus` with `verdicts`, which yizkr.pipeline.adjudication
 asks for), an ambiguous candidate cluster whose every ambiguous pair is
-`same` or `different` is settled: its `different` pairs are cut, the
-closure over its confident links and its `same` pairs gives its parts,
-and each part merges, with the method `adjudicated`, unless two of its
-members that no `same` verdict joined contradict each other, when they
-stay apart, each `ambiguous`. A member a `different` pair cut off alone
-is a cluster of its own, `adjudicated` too. An ambiguous cluster with an
-`uncertain` pair, or a pair without a verdict, stays apart whole, and a
-conflicting cluster never merges, whatever its verdicts. Each review
-pair of an ambiguous link records its verdict, or null, under such a
-map; pending_pairs gives the pairs no verdict settles yet.
+`same` or `different` is settled: its `different` pairs are cut, and the
+closure over its confident links and its `same` pairs gives its parts.
+A part that holds a pair contradicted stays apart, each member
+`ambiguous`, and the cluster counts among the ambiguous ones with them:
+a `different` pair the closure joined another way (a `different` is a
+cannot-link), a `same` pair whose evidence says they differ by more
+than their own dates (a verdict excuses a date conflict on its own
+pair, never stated sexes or civil statuses that cannot both hold, nor
+kin that conflict), or two other members whose evidence says they
+differ. Any other part merges, with the method `adjudicated` when a
+`same` pair is among its links, and `confident` when its confident links
+alone join it; a member a `different` pair left alone is a cluster of
+its own, `adjudicated`, counted as `adjudicated_apart`. An ambiguous
+cluster with an `uncertain` pair, or a pair without a verdict, stays
+apart whole, and a conflicting cluster never merges, whatever its
+verdicts. Each review pair of an ambiguous link records its verdict, or
+null, under such a map; pending_pairs gives the pairs no verdict
+settles yet.
 
 **The identity map** (`identity-map.json`, format FORMAT):
 
@@ -1893,17 +1901,21 @@ class _Judge:
             )
         return (CONFIDENT if confident else AMBIGUOUS), described
 
-    def contradicts(self, a: _Node, b: _Node) -> str | None:
+    def contradicts(
+        self, a: _Node, b: _Node, *, dates_count: bool = True
+    ) -> str | None:
         """The evidence of two members of one cluster, when it says they
         differ (dates that conflict; for events, kinds that cannot be one;
         for people, what blocks a pair, kin that conflict or no name
         match; for places, names neither exact nor nested; for
         organisations, places that differ or no name match; for other
         kinds but events and unions, no name match); None when it does
-        not."""
+        not. Without `dates_count`, the two's own dates that conflict are
+        no contradiction: what an adjudicator's `same` on the pair
+        excuses."""
         name, dates, kin = self.evidence(a, b)
         described = f"{name}/{dates}/{kin}"
-        if dates == "conflict":
+        if dates == "conflict" and dates_count:
             return described
         if _timed(a):
             return None if _one_event(a.kind, b.kind) else described
@@ -2100,9 +2112,15 @@ def _adjudicated(
     """An ambiguous candidate cluster as adjudication settles it, or None
     while any of its ambiguous pairs has no verdict, or `uncertain`. A
     `different` pair is cut; the closure over the confident links and the
-    `same` pairs gives its parts, and a part merges unless two of its
-    members that no `same` verdict joined contradict each other, when
-    each of them stays apart."""
+    `same` pairs gives its parts. A part merges unless it holds a pair
+    contradicted: a `different` pair the closure joined another way, a
+    `same` pair whose evidence says they differ by more than their own
+    dates (stated sexes, civil statuses, kin), or any other two members
+    whose evidence says they differ; then each of its members stays
+    apart, `ambiguous`. A merged part's method is `adjudicated` when a
+    `same` pair is among its links, `confident` when its confident links
+    alone join it; a member a `different` pair left alone is
+    `adjudicated`."""
     ambiguous = [pair for pair in own if links[pair][0] == AMBIGUOUS]
     if not all(verdicts.get(pair) in (SAME, DIFFERENT) for pair in ambiguous):
         return None
@@ -2112,30 +2130,46 @@ def _adjudicated(
         if links[pair][0] == CONFIDENT or verdicts.get(pair) == SAME
     ]
     said_same = {pair for pair in joined if verdicts.get(pair) == SAME}
+    said_different = {
+        pair for pair in ambiguous if verdicts.get(pair) == DIFFERENT
+    }
+
+    def differ(first: str, second: str) -> dict[str, Any] | None:
+        pair = (first, second)
+        if pair in said_different:
+            return {"mentions": list(pair), "evidence": DIFFERENT}
+        evidence = judge.contradicts(
+            judge.node(first),
+            judge.node(second),
+            dates_count=pair not in said_same,
+        )
+        return (
+            {"mentions": list(pair), "evidence": evidence}
+            if evidence
+            else None
+        )
+
+    def first_difference(part: Sequence[str]) -> dict[str, Any] | None:
+        for position, first in enumerate(part):
+            for second in part[position + 1 :]:
+                found = differ(first, second)
+                if found is not None:
+                    return found
+        return None
+
     parts: list[tuple[list[str], str]] = []
     contradiction = None
     for part in _components(members, joined).groups():
-        found = None
-        if len(part) > 1:
-            found = next(
-                (
-                    {"mentions": [first, second], "evidence": evidence}
-                    for position, first in enumerate(part)
-                    for second in part[position + 1 :]
-                    if (first, second) not in said_same
-                    and (
-                        evidence := judge.contradicts(
-                            judge.node(first), judge.node(second)
-                        )
-                    )
-                ),
-                None,
-            )
-        if found is None:
-            parts.append((part, ADJUDICATED))
-        else:
+        found = first_difference(part)
+        if found is not None:
             contradiction = contradiction or found
             parts.extend(([member], AMBIGUOUS) for member in part)
+        elif len(part) > 1 and not any(
+            pair[0] in part and pair[1] in part for pair in said_same
+        ):
+            parts.append((part, CONFIDENT))
+        else:
+            parts.append((part, ADJUDICATED))
     return _Settled(
         list(members),
         ADJUDICATED,
@@ -2566,15 +2600,27 @@ def cluster_corpus(
     mentions_by_status = Counter(
         entry.status for entry in settled for _ in entry.members
     )
-    # the clusters adjudication merged, and their mentions
-    adjudicated_merges = [
-        part
-        for entry in settled
-        for part, method in entry.clusters()
-        if method == ADJUDICATED and len(part) > 1
-    ]
-    by_status[ADJUDICATED] = len(adjudicated_merges)
-    mentions_by_status[ADJUDICATED] = sum(map(len, adjudicated_merges))
+    # what adjudication made of the candidate clusters it settled: the
+    # parts it merged, by their method; a cluster that left any member
+    # apart as ambiguous counts among the ambiguous ones, with those
+    # members; and the members a `different` left alone
+    by_status[ADJUDICATED] = mentions_by_status[ADJUDICATED] = 0
+    adjudicated_apart = 0
+    for entry in settled:
+        if entry.status != ADJUDICATED:
+            continue
+        left = 0
+        for part, method in entry.clusters():
+            if len(part) > 1:
+                by_status[method] += 1
+                mentions_by_status[method] += len(part)
+            elif method == AMBIGUOUS:
+                left += 1
+            else:
+                adjudicated_apart += 1
+        if left:
+            by_status[AMBIGUOUS] += 1
+            mentions_by_status[AMBIGUOUS] += left
     per_call = config.adjudication.pairs_per_call
     summary = {
         "documents": len(ordered),
@@ -2627,6 +2673,8 @@ def cluster_corpus(
         "adjudicated_candidate_clusters": sum(
             entry.status == ADJUDICATED for entry in candidate_groups
         ),
+        # the members a `different` verdict left alone
+        "adjudicated_apart": adjudicated_apart,
         "conflicting_hard": sum(
             entry["conflict"]["how"] == HARD
             for entry in review

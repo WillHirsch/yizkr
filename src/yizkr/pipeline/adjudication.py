@@ -39,48 +39,59 @@ gives (rule 5).
 **Verdicts.** The answer gives each pair `same`, `different` or
 `uncertain`, with a one-sentence reason. An answer line outside that
 schema (no pair asked, another verdict, a reason that is no text) is
-refused and counted; a pair answered twice differently is refused whole
-and counted, and so is a pair the answer leaves out: none of them has a
+refused and counted; a line that is no JSON object is skipped
+uncounted. A pair answered twice differently is refused whole and
+counted, and so is a pair the answer leaves out: none of them has a
 verdict. An answer cut off, at the output limit or before its terminal
-sentinel, is refused whole: one the LLM cache kept from an earlier
-invocation is rejected and asked once more, and one the engine gave in
-this run is rejected, so the next invocation asks again, and counted,
-its pairs left without a verdict.
+sentinel, is refused whole and counted, its pairs left without a
+verdict: one the LLM cache kept from an earlier invocation is rejected
+and asked once more; one the engine gave in this run is rejected, and
+one the engine gave up on at its output limit is never kept, so the
+next invocation asks again.
 
 **Merging.** In a run of the development stage (ADR-0025), the verdicts
 settle what they can, unattended: clustering is made again under them
-(clustering.cluster_corpus with `verdicts`), and an ambiguous candidate
-cluster whose every ambiguous pair is `same` or `different` is split at
-its `different` pairs, its parts merged by its confident links and its
-`same` pairs, each with the method ADJUDICATED; a part two of whose
-members no `same` verdict joined contradict each other stays apart. A
-cluster with an `uncertain` pair, or one without a verdict, stays apart
-whole, as it would without adjudication. Unions are settled after
-people, and events after unions, since their links read the clusters
-their people end in: the stage asks the pending pairs of the first group
-of kinds (clustering.stage_group), clusters again, and asks the next
-group's, so a union whose couple adjudication merged may link
-confidently and need no call. A pair asked once in an invocation is not
-asked again in it. In keeper mode (a run whose manifest records another
-project stage) every pending pair is asked once, the verdicts are
-recorded for the cluster review sheet, and nothing merges: the identity
-map is clustering's own.
+(clustering.cluster_corpus with `verdicts`, whose docstring has the
+rule). An ambiguous candidate cluster whose every ambiguous pair is
+`same` or `different` is cut at its `different` pairs, and the closure
+over its confident links and its `same` pairs gives its parts. A part
+merges, `adjudicated` when a `same` pair is among its links and
+`confident` otherwise, unless it holds a pair contradicted: a
+`different` pair the closure joined another way, a `same` pair whose
+evidence says they differ by more than their own dates (a verdict
+excuses a date conflict on its own pair, never stated sexes, civil
+statuses or kin that conflict), or two other members whose evidence
+says they differ; then each of its members stays apart. A cluster with
+an `uncertain` pair, or one without a verdict, stays apart whole, as it
+would without adjudication. Unions are settled after people, and events
+after unions, since their links read the clusters their people end in:
+the stage asks the pending pairs of the first group of kinds
+(clustering.stage_group), clusters again, and asks the next group's,
+so a union whose couple adjudication merged may link confidently and
+need no call. A pair asked once in an invocation is not asked again in
+it. In keeper mode (a run whose manifest records another project stage)
+every pending pair is asked once, each group of kinds packed apart, the
+verdicts are recorded for the cluster review sheet, and nothing merges:
+the identity map is clustering's own.
 
 **Outputs.** `identity-map.json` is the map the write reads; RECORD
 beside it keeps every verdict with its reason, each call's pairs and raw
 answer, and the counts. Both hold corpus words, so they stay in the run
 directory, which is local-only data. The stage reuses both while the
-clustering's inputs (clustering.inputs_key), VERSION, the prompt, the
-role's engine, model and effort, the pairs per call and whether verdicts
-merge all stand, and so do the role's epoch and whether the run
-refreshes the role, and makes them again otherwise; the calls it makes
-again are answered from the LLM cache while what they send stands. The stage
-reads no wiki and no query service. What reaches the run's events is
-counts within labels of its own.
+clustering's inputs (clustering.inputs_key), VERSION, the prompt, this
+module's source and the date formatter it renders with (code_digest),
+the role's engine, model, effort and epoch, whether the run refreshes
+the role, the pairs per call and whether verdicts merge all stand, and
+while no call was refused; it makes them again otherwise, and the calls
+it makes again are answered from the LLM cache while what they send
+stands. The stage reads no wiki and no query service. What reaches the
+run's events is counts within labels of its own.
 """
 
 from __future__ import annotations
 
+import hashlib
+import inspect
 import json
 import re
 import sys
@@ -106,10 +117,12 @@ from yizkr.pipeline import clustering
 from yizkr.pipeline.clustering import (
     AMBIGUOUS,
     DIFFERENT,
+    EVENT_KINDS,
     GEDCOM,
     IDENTITY_MAP,
     SAME,
     UNCERTAIN,
+    UNION_KINDS,
     VERDICTS,
     ClusteringConfig,
     Manifest,
@@ -122,9 +135,11 @@ from yizkr.pipeline.clustering import (
 from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.llm import (
     CUT_OFF_AT_LIMIT,
+    OutputLimitReached,
     at_output_limit,
     reject_response,
 )
+from yizkr.pipeline.rundir import DEVELOPMENT_STAGE
 from yizkr.pipeline.stages import (
     atomic_write_text,
     canonical_json,
@@ -144,8 +159,6 @@ NAME = "adjudication"
 ROLE = "critique"
 # its record of verdicts, calls and counts, beside the identity map
 RECORD = "adjudication.json"
-# the project stage whose runs merge on verdicts unattended (ADR-0025)
-DEVELOPMENT = "development"
 # how many claims of a mention the prompt gives, each way, at most
 MAX_CLAIMS = 30
 _QID = re.compile(r"\bQ[1-9]\d*\b")
@@ -205,7 +218,10 @@ def date_text(value: TimeValue) -> str:
 
 class _Document:
     """What the prompt reads of one document's batch: each local id's
-    label and kind, and the claims about each, as subject and as value."""
+    label and kind, and the claims about each, as subject and as value.
+    An entity a mention's claims name is given one level deep: an event
+    or a union with its own claims (its date, its place, its other
+    participants with their roles), anything else with its own dates."""
 
     def __init__(self, manifest: Manifest) -> None:
         batch: ClaimBatch = manifest.batch
@@ -306,6 +322,11 @@ class _Document:
         found += [
             f"{claim.property}: {self.value(claim.value)}"
             + self.qualifiers(claim)
+            + (
+                self.brief(self._local(claim.value.value), local_id)
+                if isinstance(claim.value, ItemValue)
+                else ""
+            )
             for claim in about[:MAX_CLAIMS]
         ]
         if len(about) > MAX_CLAIMS:
@@ -314,6 +335,7 @@ class _Document:
         found += [
             f"named as the {claim.property} of {self.named(claim.subject)}"
             + self.qualifiers(claim)
+            + self.brief(self._local(claim.subject), local_id)
             for claim in naming[:MAX_CLAIMS]
         ]
         if len(naming) > MAX_CLAIMS:
@@ -321,6 +343,41 @@ class _Document:
                 f"and named in {len(naming) - MAX_CLAIMS} claims more"
             )
         return found
+
+    def _local(self, ref: Any) -> str | None:
+        return ref.local_id if isinstance(ref, LocalRef) else None
+
+    def brief(self, local_id: str | None, of: str) -> str:
+        """What the document says of an entity a claim of `of` names, one
+        level deep, after a dash; empty when it says nothing more. An
+        event or a union gives its claims but those that name `of`; any
+        other entity its own dates."""
+        if local_id is None or local_id == of:
+            return ""
+        kind = self.names.get(local_id, ("", ""))[1]
+        timed = kind in EVENT_KINDS or kind in UNION_KINDS
+        claims = [
+            claim
+            for claim in self.about.get(local_id, [])
+            if (
+                timed
+                and not (
+                    isinstance(claim.value, ItemValue)
+                    and self._local(claim.value.value) == of
+                )
+            )
+            or (not timed and isinstance(claim.value, TimeValue))
+        ]
+        if not claims:
+            return ""
+        shown = [
+            f"{claim.property}: {self.value(claim.value)}"
+            + self.qualifiers(claim)
+            for claim in claims[:MAX_CLAIMS]
+        ]
+        if len(claims) > MAX_CLAIMS:
+            shown.append(f"and {len(claims) - MAX_CLAIMS} claims more")
+        return " — " + "; ".join(shown)
 
 
 class Evidence:
@@ -507,7 +564,15 @@ def adjudicate(
             pending = [(g, pairs) for g, pairs in pending if g == first]
         rounds += 1
         links = _links(identity)
-        batches = pack((pairs for _group, pairs in pending), per_call)
+        # each group of kinds packed apart, as calls_ambiguous_clusters
+        # plans them
+        batches = [
+            batch
+            for group in sorted({group for group, _pairs in pending})
+            for batch in pack(
+                (pairs for g, pairs in pending if g == group), per_call
+            )
+        ]
         if engine is None:
             engine = client()
         log(
@@ -556,31 +621,38 @@ def _ask(
 ) -> dict[str, Any]:
     """Ask one batch, keep its verdicts, and return the call's record."""
     prompt = prompt_for(batch, links, evidence)
-    response = engine.complete(prompt)
+    response = ""
     refused = None
-    try:
-        answers = parse_answers(
+    answers = None
+
+    def parsed(response: str) -> Answers:
+        return parse_answers(
             response, len(batch), cut_off=at_output_limit(engine, response)
         )
-    except ValueError as exc:
-        # an answer the LLM cache kept from an earlier invocation is
-        # rejected and asked once more; one the engine gave in this run is
-        # rejected, so the next invocation asks again, and refused
-        answers = None
-        if reject_response(engine, response, f"{NAME}: {exc}"):
-            tally["again"] += 1
-            response = engine.complete(prompt)
-            try:
-                answers = parse_answers(
-                    response,
-                    len(batch),
-                    cut_off=at_output_limit(engine, response),
-                )
-            except ValueError as again:
-                reject_response(engine, response, f"{NAME}: {again}")
-                refused = str(again)
-        else:
-            refused = str(exc)
+
+    try:
+        response = engine.complete(prompt)
+        try:
+            answers = parsed(response)
+        except ValueError as exc:
+            # an answer the LLM cache kept from an earlier invocation is
+            # rejected and asked once more; one the engine gave in this
+            # run is rejected, so the next invocation asks again, and
+            # refused
+            if reject_response(engine, response, f"{NAME}: {exc}"):
+                tally["again"] += 1
+                response = engine.complete(prompt)
+                try:
+                    answers = parsed(response)
+                except ValueError as again:
+                    reject_response(engine, response, f"{NAME}: {again}")
+                    refused = str(again)
+            else:
+                refused = str(exc)
+    except OutputLimitReached:
+        # the engine gave up at its output limit: nothing is kept, so the
+        # next invocation asks again
+        refused = f"adjudication answer {CUT_OFF_AT_LIMIT}"
     if answers is None:
         tally["refused"] += 1
         answers = Answers()
@@ -635,9 +707,30 @@ def stage_key(
                 "version": VERSION,
                 "clustering": clustering.inputs_key(manifests, config),
                 "prompt": sha256_text(PROMPT),
+                "code": code_digest(),
                 "model": dict(model),
                 "pairs_per_call": config.adjudication.pairs_per_call,
                 "merge": merge,
+            }
+        )
+    )
+
+
+def code_digest() -> str:
+    """The SHA-256 of what renders and reads the calls: this module's
+    source, and the site's date formatter it renders dates with."""
+    from yizkr import staticsite
+
+    return sha256_text(
+        canonical_json(
+            {
+                "module": hashlib.sha256(
+                    Path(__file__).read_bytes()
+                ).hexdigest(),
+                "dates": sha256_text(
+                    inspect.getsource(staticsite.format_time)
+                    + inspect.getsource(staticsite.ordinal)
+                ),
             }
         )
     )
@@ -656,7 +749,7 @@ def read_record(directory: Path) -> dict[str, Any] | None:
 def merges_on_verdicts(run: Any) -> bool:
     """Whether a run's verdicts merge unattended: a run of the development
     stage (ADR-0025), as its manifest records it."""
-    return run.manifest().get("project_stage") == DEVELOPMENT
+    return run.manifest().get("project_stage") == DEVELOPMENT_STAGE
 
 
 def client_of(context: Any) -> Any:
@@ -705,6 +798,7 @@ def ensure_adjudicated(
         and stored is not None
         and record.get("key") == key
         and record.get("map") == stored.get("inputs")
+        and not (record.get("counts") or {}).get("refused_calls")
     ):
         return StageOutput(stored, record, True)
     made = adjudicate(
