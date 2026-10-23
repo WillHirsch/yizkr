@@ -831,6 +831,43 @@ class TestToGoPastTheBarrier:
             "places, site"
         )
 
+    def test_an_earlier_invocation_s_barrier_is_not_the_latest_s(
+        self, tmp_path
+    ):
+        """The first invocation went past the barrier with a failed
+        document; the second retries it, before its own barrier: the
+        documents' stages come first again."""
+        first = [
+            (name, {**entry, "invocation": FIRST})
+            for name, entry in with_a_failed_extraction()
+        ]
+        entries = [
+            *first,
+            event(BARRIER + 1, "run-end", FIRST, outcome="finished"),
+            event(BARRIER + 10, "run-start", run_id=RUN_ID),
+            event(
+                BARRIER + 11,
+                "started",
+                subject=CERT,
+                kind=DOCUMENTS[CERT],
+                stage="extraction",
+            ),
+        ]
+        run = make(
+            tmp_path,
+            entries,
+            invocations=(
+                (FIRST, 0, BARRIER + 1),
+                (SECOND, BARRIER + 10, None),
+            ),
+        )
+        summary = summarise_run(run, at_(20))
+        assert to_go(summary).startswith("2 stages")
+        assert to_go(summary).endswith(
+            "; then corpus stages: clustering, reset, register, write, "
+            "places, site"
+        )
+
     def test_the_monitor_names_the_driver_s_barrier_event(self):
         from yizkr.pipeline import monitor, scratch
 
