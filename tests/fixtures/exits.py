@@ -10,6 +10,12 @@ and closes a pipe's write end once the child has exited.
 `os.pidfd_open` where this Python has it, else the pidfd_open(2) system
 call itself, which Linux has had since 5.3 whether or not the Python
 build wraps it. A test skips only where the kernel has no pidfd.
+
+`running` says whether a process, by pid, has yet to end, from its state
+in /proc: one that has ended but awaits reaping (Z), or is being reaped
+(X), has ended, though kill(pid, 0) would still find it (#542). Where a
+pidfd has turned readable, the process has ended, and a test trusts that
+rather than asking `running` again.
 """
 
 from __future__ import annotations
@@ -18,12 +24,18 @@ import ctypes
 import errno
 import os
 import threading
+from pathlib import Path
 
 import pytest
 
 # pidfd_open's number in Linux's system call table, the same on every
 # architecture
 SYS_PIDFD_OPEN = 434
+
+# the states in /proc/<pid>/stat of a process that has ended: a zombie
+# awaiting reaping, and one being reaped (dead, upper or lower case by
+# kernel version)
+ENDED_STATES = frozenset("ZXx")
 
 
 def child_exit_fd(pid: int) -> int:
@@ -66,3 +78,25 @@ def pid_exit_fd(pid: int) -> int | None:
         return pidfd_open(pid)
     except ProcessLookupError:
         return None
+
+
+def process_state(pid: int) -> str | None:
+    """The one-letter state of `pid` in /proc/<pid>/stat, None once it is
+    gone. Linux only: a test skips where there is no /proc."""
+    if not Path("/proc/self/stat").exists():
+        pytest.skip("no /proc/<pid>/stat on this system")
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_bytes()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    # the command name, in parentheses, may itself hold ") ", spaces and
+    # bytes that are not UTF-8
+    return stat.rsplit(b")", 1)[1].split()[0].decode()
+
+
+def running(pid: int) -> bool:
+    """Whether `pid` is a process that has yet to end, stopped or not; one
+    that has ended, reaped or not, is not. It goes by the state of the
+    process's main thread, which /proc/<pid>/stat gives."""
+    state = process_state(pid)
+    return state is not None and state not in ENDED_STATES
