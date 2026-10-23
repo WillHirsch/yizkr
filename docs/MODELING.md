@@ -293,18 +293,17 @@ entity kind offers one and no QID exists before write.
 country class; its description, which the chunk and single-pass prompts
 carry, says the value is a country, never a town, city or region within
 one, and validation does not tell them apart. The entity-manifest and
-chunk prompts name it among the relations of place, and the manifest
-gives the country a source states as a person's citizenship as a place
-entity, whether the source names it or gives only an adjective of
-nationality. A country
-given only by an adjective is labelled with the adjective as written
-(*an Australian citizen* gives the place "Australian"), with the record
-status `adjective`, which keys nothing: the adjective is never turned
-into a name of the country, which would add a word the source does not
-write and pick one state where the source gives a nationality
+chunk prompts name it among the relations of place, and the manifest gives
+the country a source states as a person's citizenship as a place entity,
+whether the source names it or gives only an adjective of nationality. A
+country given only by an adjective is labelled with the adjective as
+written (*an Australian citizen* gives the place "Australian"), with the
+record status `adjective`, which keys nothing: the adjective is never
+turned into a name of the country, which would add a word the source does
+not write and pick one state where the source gives a nationality
 (ADR-0035, amended by #573). `part_of`'s list is flat for now: it takes a
-place or an artifact whatever its subject, so a place `part_of` an artifact
-passes the check, which reads the value alone.
+place or an artifact whatever its subject, so a place `part_of` an
+artifact passes the check, which reads the value alone.
 
 **Reference properties** (`stated_in`, `inferred_from_extraction_run`,
 and the judgement note's `judgement` and `judgement_note`) are marked
@@ -683,13 +682,13 @@ artifact a new QID, changes neither.
 
 - An `organization` is an agent — a company, bank, committee, government
   body, school, or congregation. It is **distinct from `place`**: an
-  organization has a `location`, it is not one. **The relation decides
-  the kind** (ADR-0031): a relation of place (born, died or buried at,
-  lives at, located at, deported to, held at, a citizen of) takes a
-  place, and a relation of agency (`issued_by`, `carried_out_by`,
-  `employer`, `educated_at`, `member_of`) an organization. So a camp, a prison, a
-  hospital or a school named only as where something happened is a
-  place, and one the source shows acting is an organization: the
+  organization has a `location`, it is not one. **The relation decides the
+  kind** (ADR-0031): a relation of place (born, died or buried at, lives
+  at, located at, deported to, held at, a citizen of) takes a place, and a
+  relation of agency (`issued_by`, `carried_out_by`, `employer`,
+  `educated_at`, `member_of`) an organization. So a camp, a prison, a
+  hospital or a school named only as where something happened is a place,
+  and one the source shows acting is an organization: the
   registration card's Peiltal court prison, where Leopold was held, is a
   place; the Landgericht Rekau, which divorces Leopold and Agnes, is an
   organization. Where one source uses one institution both ways, it

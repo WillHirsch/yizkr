@@ -589,7 +589,9 @@ in turn is each of its own containers: "Fläckfeld, Kreis Mockburg, Hesse"
 gives three place entities. The writer mints an item only for an entity a
 claim names, and the place stage asks only about containers that name a
 graph place (ADR-0009), so a container that is no entity leaves its link
-with no place to name.
+with no place to name. A container's own record is held to §5's
+no-addition check like any other, so until #569 it is set aside wherever
+its own containers are in neither its label nor an alias.
 
 Amended by #573 (2026-10-23; decided by the implementing session, the
 owner may revisit): a country a source states as a person's citizenship
@@ -605,7 +607,10 @@ never mapped to a name of the country at extraction, which would add a
 word the source does not write and pick one state where the source
 gives only a nationality; where the document also names the country,
 the one entity takes that name, status `toponym`, and the adjective is
-no alias of it (a place's alias is a toponym).
+no alias of it (a place's alias is a toponym). The critic's entity rows
+show a place's record status as they show a person's, so an `adjective`
+label reads as a country, and its `relation_kind_mismatch` names
+citizenship among the relations of place.
 
 Amended by #456 (2026-10-23, ADR-0039 accepted by the owner): §3.4's
 document-subject rule widens from `issued_by` to seven properties, each

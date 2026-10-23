@@ -844,7 +844,8 @@ class TestCitizenshipIsARelationOfPlace:
         # the source does not write and pick one state (ADR-0035 §2.2)
         assert (
             "Where the document names the country, the one entity takes "
-            "that name; where it gives only the adjective, the entity is "
+            "that name, and the adjective is no alias of it; where it gives "
+            "only the adjective, the entity is "
             'labelled with the adjective as written ("deutscher", '
             '"Australian"), status `adjective`;'
         ) in MANIFEST

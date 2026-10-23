@@ -220,16 +220,16 @@ Rules — these mirror the archive's non-negotiable conventions:
 - The relation decides the kind (ADR-0031). A relation of place
   (place_of_birth, place_of_death, burial_place, residence, location,
   country_of_citizenship) takes a place; a relation of agency
-  (issued_by, carried_out_by,
-  employer, educated_at, member_of) takes an organization (member_of
-  also a family). Pick the relation the source best fits, and point it
-  at the manifest entity of that kind: a claim whose value is of a kind
-  its property does not accept is refused. Where the manifest holds a
-  site and an institution of one name, a relation of place takes the
-  site and a relation of agency the institution. A claim's value, and a
-  qualifier's, is never its own subject. An item value is an entity or
-  a vocabulary item its property names: a kind key ("place",
-  "time_period_class") is a value of instance_of or subclass_of alone.
+  (issued_by, carried_out_by, employer, educated_at, member_of) takes an
+  organization (member_of also a family). Pick the relation the source
+  best fits, and point it at the manifest entity of that kind: a claim
+  whose value is of a kind its property does not accept is refused.
+  Where the manifest holds a site and an institution of one name, a
+  relation of place takes the site and a relation of agency the
+  institution. A claim's value, and a qualifier's, is never its own
+  subject. An item value is an entity or a vocabulary item its property
+  names: a kind key ("place", "time_period_class") is a value of
+  instance_of or subclass_of alone.
 - A person's ordinary name lives in their entity-manifest label and
   aliases, and which part of it is which lives in the manifest's record;
   do NOT restate either as a claim, beyond `name` (below). Use the typed
@@ -561,9 +561,10 @@ the relations this source states of it call for:
   entity, the country, whether the source gives it by its name
   ("Staatsangehörigkeit: Deutsches Reich") or only by an adjective of
   nationality ("deutscher Staatsangehöriger", "an Australian citizen").
-  Where the document names the country, the one entity takes that name;
-  where it gives only the adjective, the entity is labelled with the
-  adjective as written ("deutscher", "Australian"), status `adjective`;
+  Where the document names the country, the one entity takes that name,
+  and the adjective is no alias of it; where it gives only the
+  adjective, the entity is labelled with the adjective as written
+  ("deutscher", "Australian"), status `adjective`;
 - a relation of agency (issued a document, carried out an event,
   employed, educated, had as a member) takes an `organization`, an
   institution the source shows ACTING: the Landgericht Rekau, which

@@ -289,6 +289,35 @@ class TestCritique:
         assert "that label is no finding" in line
         assert "else what its label is instead (role, kinship" in prompt
 
+    def test_a_place_row_shows_its_record_status(self):
+        """#573: a country a source gives only by an adjective of
+        nationality ("an Australian citizen") is a place labelled with the
+        adjective; its row says so, and citizenship is a relation of
+        place."""
+        naturalisation = ClaimBatch.model_validate(
+            {
+                "extraction_run": RUN,
+                "entities": [
+                    {
+                        "id": "e01",
+                        "label": "Australian",
+                        "kind": "place",
+                        "structure": {"kind": "place", "status": "adjective"},
+                    },
+                    {"id": "e02", "label": "Stupfield", "kind": "place"},
+                ],
+            }
+        )
+        llm = ScriptedLlm(response([]))
+        run_critique(llm, naturalisation)
+        prompt = llm.prompts[0]
+        assert "e01 | place (status: adjective) | Australian | -" in prompt
+        assert "e02 | place | Stupfield | -" in prompt
+        assert (
+            "residence, location, citizenship) takes a place"
+            in CATEGORIES["relation_kind_mismatch"]
+        )
+
     def test_a_finding_that_fails_its_checks_is_kept_verbatim(self):
         """A finding that fails validation is kept as given, with why,
         beside the valid ones and in the critic's order: never repaired,
