@@ -42,8 +42,10 @@ model, the configuration, the attempt, the epoch.
 - *Anomalies*: each finding (a document or the run, a stage and a
   check) new in the run, resolved since the baseline, or in both.
 - *Failures*: the documents that fail in one run and not the other.
-- *Flags* and *contradictions*: compared when both reports count them;
-  otherwise not available, with why.
+- *Flags* and *contradictions* (the different-source contradictions the
+  site stage counted, in total and by property): compared when either
+  report counts them, a side whose report does not count them *absent*,
+  never 0, as in the figures; not available, with why, when neither does.
 - *Place hierarchy*: the place stage's counts (questions, calls,
   answered, uncertain and unanswered, stated links left out, links
   written, referenced and already there, links a record alone states
@@ -1132,8 +1134,9 @@ def _counted_section(
     baseline: Mapping[str, Any], run: Mapping[str, Any], name: str
 ) -> dict:
     """A content section only some reports count (flags, contradictions):
-    its figures side by side when both reports count it, else not
-    available, with why."""
+    its figures side by side when either report counts it, each figure
+    ABSENT on a side whose report does not; else not available, with
+    why."""
     sections = []
     for aggregate in (baseline, run):
         content = aggregate.get("content")
@@ -1145,7 +1148,7 @@ def _counted_section(
             whys.append(f"the {side}'s report does not hold them")
         elif section.get("status") == NOT_AVAILABLE:
             whys.append(f"the {side}'s report does not count them")
-    if whys:
+    if len(whys) == len(sections):
         return {"status": NOT_AVAILABLE, "why": "; ".join(whys)}
     found = (_Figures(), _Figures())
     for figures_of, section in zip(found, sections, strict=True):
