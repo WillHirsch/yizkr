@@ -427,6 +427,9 @@ class TestTheExtraction:
                         "within": [
                             entry("Fryslân", "Fryslân"),
                             entry("Nederlân", SENDER),
+                            # name-only and not in the letter: dropped,
+                            # so never counted as name-only kept
+                            entry("Friesland", "Friesland"),
                         ],
                     },
                 },
@@ -454,11 +457,11 @@ class TestTheExtraction:
     ):
         _, coverage, _ = extracted
         records = coverage["records"]
-        assert records["containers_checked"] == 6
+        assert records["containers_checked"] == 7
         assert records["containers_name_only"] == 1
         assert records["containers_dropped"] == {
             EVIDENCE_DOES_NOT_NAME: 1,
-            EVIDENCE_NOT_IN_SOURCE: 1,
+            EVIDENCE_NOT_IN_SOURCE: 2,
             NO_EVIDENCE: 1,
         }
         assert records["set_aside_records"] == 0
@@ -476,8 +479,9 @@ class TestTheExtraction:
             ("structure.place.within.3", NO_EVIDENCE),
             ("structure.place.within.0", None),
             ("structure.place.within.1", None),
+            ("structure.place.within.2", EVIDENCE_NOT_IN_SOURCE),
         ]
-        assert [found["entity"] for found in audit] == ["e1"] * 4 + ["e3"] * 2
+        assert [found["entity"] for found in audit] == ["e1"] * 4 + ["e3"] * 3
         assert audit[2]["line_text"] == "Snylsjum, gemeente Drake-"
 
 
