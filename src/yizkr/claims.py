@@ -1425,22 +1425,21 @@ def _clear_empty_part(part, model: type) -> tuple[object, str | None]:
     return cleared, None
 
 
-def _read_written(part, kind: str, field: str) -> tuple[object, str | None]:
+def _read_written(part, kind: str) -> tuple[object, str | None]:
     """An entry of a list of strings with the shape of a name part
     object read as its text (ADR-0035 §5): an object holding only a
     string `written`, as a given name, a person's surname or a place's
-    name is written, or, in a family's `surnames`, that and a person's
-    surname `type`. Returns the entry, as text where it was read so, and
-    what it was read from, None when it was left as it is. Only the
-    shape is read, never the wording; any other object is left for
-    validation."""
+    name is written, or, in a family's `surnames`, its only list, that
+    and a person's surname `type`. Returns the entry, as text where it
+    was read so, and what it was read from, None when it was left as it
+    is. Only the shape is read, never the wording; any other object is
+    left for validation."""
     if not isinstance(part, dict) or not isinstance(part.get("written"), str):
         return part, None
     if set(part) == {"written"}:
         return part["written"], "an object holding only its written text"
     if (
         kind == "family"
-        and field == "surnames"
         and set(part) == {"written", "type"}
         and part["type"] in _SURNAME_TYPES
     ):
@@ -1473,7 +1472,7 @@ def _clear_empty(structure: dict) -> tuple[dict, list[str]]:
         for index, part in enumerate(value if listed else [value]):
             where = f"{field}.{index}" if listed else field
             if part_model is str and listed:
-                part, shape = _read_written(part, kind, field)
+                part, shape = _read_written(part, kind)
                 if shape is not None:
                     dropped.append(
                         f"read as text: structure.{kind}.{where}: {shape}"
