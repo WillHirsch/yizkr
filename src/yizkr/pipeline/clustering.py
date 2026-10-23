@@ -109,8 +109,9 @@ proposes, never with every pair of mentions.
 **Cannot-link.** Two ids of one manifest are kept apart (soft): the
 manifest already unified what it could. The places and occupations of a
 GEDCOM export are exempt, since the adapter makes one per distinct
-string, and so are the refs of a batch without a manifest, whose ids are
-chunk-scoped and never unified. A blocked pair the impossibility filter
+place (its PLAC's components) or occupation string, and so are the refs
+of a batch without a manifest, whose ids are chunk-scoped and never
+unified. A blocked pair the impossibility filter
 rules out (`reconcile.impossible_pair`, ADR-0017), given the lifted
 facts, is pruned (hard): a kin edge between the two, or one place inside
 the other. The filter is reused only after the lift: a manifest's kin
@@ -370,7 +371,8 @@ EVENT_KINDS = (
 )
 # the events a person takes part in once: their principals decide them
 ONE_PER_PERSON = frozenset({"birth", "death"})
-# the kinds the GEDCOM adapter makes one entity of per distinct string:
+# the kinds the GEDCOM adapter makes one entity of per distinct place (its
+# PLAC's components) or occupation string:
 # two of them in one export never say that they differ
 GEDCOM_STRING_KINDS = frozenset({PLACE_KIND, "occupation_class"})
 # (the relation of the value to the subject, of the subject to the value)

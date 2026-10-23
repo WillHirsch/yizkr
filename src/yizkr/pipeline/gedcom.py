@@ -2107,7 +2107,8 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         return {"kind": "local", "local_id": entity_id}
 
     # the PLACs a claim names a place by, each once, in order: each gives
-    # the containment its components state (contain)
+    # the containment its components state, made once the claims are (the
+    # containment pass below)
     placing: dict[int, Record] = {}
 
     def place_item(plac: Record) -> dict:
@@ -2802,8 +2803,8 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             burial_places = places(burial)
             if not burial_places:
                 warnings.append(
-                    f"line {burial.line_number}: BURI without PLAC — "
-                    "no burial claim emitted"
+                    f"line {burial.line_number}: BURI without a PLAC that "
+                    "names a place — no burial claim emitted"
                 )
                 continue
             dates = each_date(burial, dated_qualifiers, "burial")
@@ -2856,8 +2857,8 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             residence_places = places(residence)
             if not residence_places:
                 warnings.append(
-                    f"line {residence.line_number}: RESI without PLAC — "
-                    "no residence claim emitted"
+                    f"line {residence.line_number}: RESI without a PLAC "
+                    "that names a place — no residence claim emitted"
                 )
                 continue
             dates = each_date(residence, period_qualifiers, "residence")

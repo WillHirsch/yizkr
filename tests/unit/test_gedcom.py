@@ -379,7 +379,10 @@ class TestVocabulary:
             "0 @I1@ INDI\n1 NAME A /B/\n1 BURI\n2 DATE 1900\n0 TRLR\n",
             artifact=EXPORT,
         )
-        assert any("BURI without PLAC" in w for w in result.warnings)
+        assert any(
+            "BURI without a PLAC that names a place" in w
+            for w in result.warnings
+        )
         assert not claims_for(result.batch, "i1", "burial_place")
 
     def test_dated_and_placed_occupation_carries_qualifiers(self):
@@ -557,7 +560,10 @@ class TestResidence:
 
     def test_residence_without_place_warns_and_skips(self):
         result = adapt_gedcom(RESI_GEDCOM, artifact=EXPORT)
-        assert any("RESI without PLAC" in w for w in result.warnings)
+        assert any(
+            "RESI without a PLAC that names a place" in w
+            for w in result.warnings
+        )
         assert len(claims_for(result.batch, "i1", "residence")) == 3
 
 
@@ -1999,7 +2005,10 @@ class TestRepeatedDetails:
                 "residence",
                 [],
                 [],
-                ["line 3: RESI without PLAC — no residence claim emitted"],
+                [
+                    "line 3: RESI without a PLAC that names a place — "
+                    "no residence claim emitted"
+                ],
             ),
             (
                 family("1 MARR", "2 DATE 8 FEB 1947", "2 PLAC , , ,"),

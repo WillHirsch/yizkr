@@ -116,6 +116,25 @@ class TestJurisdictions:
             "Germany",
             "Hesse, Germany",
         ]
+        # each spelling's line states each link: a claim of its own, citing
+        # it as written
+        labels = {e.id: e.label for e in batch.entities}
+        cited = {
+            (
+                labels[c.subject.local_id],
+                c.source.transcription_excerpt.text,
+            )
+            for c in batch.claims
+            if c.property == "part_of"
+        }
+        assert cited == {
+            (place, f"2 PLAC {line}")
+            for place in ("Flörburg, Hesse, Germany", "Hesse, Germany")
+            for line in (
+                "Flörburg, Hesse, Germany",
+                "Flörburg,Hesse ,  Germany",
+            )
+        }
 
 
 class TestContainmentClaims:
@@ -159,6 +178,30 @@ class TestContainmentClaims:
             if claim.property == "part_of":
                 assert claim.source.page_number is None
                 assert "cited:" not in claim.source.transcription_excerpt.text
+
+    def test_every_event_s_plac_states_its_chain(self):
+        # (here) Eugen's occupation in Fläckfeld, his wedding in Kredfeld
+        # and his divorce in Moshausen, each a chain of its own
+        batch = adapted(
+            "0 @I1@ INDI\n1 NAME Eugen /Löbig/\n"
+            "1 OCCU Master hatter\n"
+            "2 PLAC Fläckfeld, Kreis Mockburg, Hesse, Germany\n"
+            "1 FAMS @F1@\n"
+            "0 @I2@ INDI\n1 NAME Cäcilie /Tarle/\n1 FAMS @F1@\n"
+            "0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n"
+            "1 MARR\n2 PLAC Kredfeld, Hesse, Germany\n"
+            "1 DIV\n2 PLAC Moshausen, Germany\n"
+        ).batch
+        assert containment(batch) == {
+            (
+                "Fläckfeld, Kreis Mockburg, Hesse, Germany",
+                "Kreis Mockburg, Hesse, Germany",
+            ),
+            ("Kreis Mockburg, Hesse, Germany", "Hesse, Germany"),
+            ("Hesse, Germany", "Germany"),
+            ("Kredfeld, Hesse, Germany", "Hesse, Germany"),
+            ("Moshausen, Germany", "Germany"),
+        }
 
     def test_a_plac_of_one_component_states_no_containment(self):
         batch = adapted(born("Flörburg")).batch
@@ -246,6 +289,41 @@ class TestPlaceholderComponents:
 
     def test_named_components_count_nothing(self):
         assert COUNTED not in adapted().outcomes
+
+    def test_a_placeholder_with_a_word_is_kept_as_written(self):
+        """A component with a word is kept as written, as the adapter
+        cannot tell a name from a word that is none (ADR-0035 §6): the
+        export's 'unbekannt' district is a jurisdiction of its own, which
+        each PLAC through it lies within, and nothing is counted."""
+        result = adapted(
+            born("Fläckfeld, unbekannt, Hesse, Germany")
+            + "1 RESI\n2 PLAC Kredfeld, unbekannt, Hesse, Germany\n"
+        )
+        batch = result.batch
+        fläckfeld = places(batch)["Fläckfeld, unbekannt, Hesse, Germany"]
+        assert fläckfeld.structure.within == ["unbekannt", "Hesse", "Germany"]
+        district = places(batch)["unbekannt, Hesse, Germany"]
+        assert district.aliases == ["unbekannt"]
+        assert containment(batch) == {
+            (
+                "Fläckfeld, unbekannt, Hesse, Germany",
+                "unbekannt, Hesse, Germany",
+            ),
+            (
+                "Kredfeld, unbekannt, Hesse, Germany",
+                "unbekannt, Hesse, Germany",
+            ),
+            ("unbekannt, Hesse, Germany", "Hesse, Germany"),
+            ("Hesse, Germany", "Germany"),
+        }
+        assert COUNTED not in result.outcomes
+
+    def test_empty_components_are_no_placeholders(self):
+        # (here) a tool left Flörburg's district and its country empty
+        result = adapted(born(", Flörburg, , Hesse"))
+        assert sorted(places(result.batch)) == ["Flörburg, Hesse", "Hesse"]
+        assert COUNTED not in result.outcomes
+        assert COUNTED not in adapted(born(", , ,")).outcomes
 
 
 def graph_of(batch: ClaimBatch) -> tuple[dict[str, str], list[PlaceRecord]]:

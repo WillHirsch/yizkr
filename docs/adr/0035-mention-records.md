@@ -9,7 +9,9 @@ is a place entity of its own, one per distinct tail of components in the
 export, named by its own name as its label or an alias, and each link of
 the PLAC's chain is an undated `part_of` claim cited by the PLAC's line
 (ADR-0038 §8.5). A component without a word is left out and counted,
-wherever it stands; one with a word is kept as written. PLACs that name
+wherever it stands; one with a word is kept as written, so that a
+worded placeholder ('unbekannt') is a jurisdiction place of its own,
+which each PLAC through it lies within. PLACs that name
 the same components (spaced otherwise, or with a wordless component
 between them) are one place, labelled by its components comma-joined.
 
