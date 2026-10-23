@@ -169,7 +169,10 @@ class TestCritique:
             for line in llm.prompts[0].splitlines()
             if line.startswith("- relation_kind_mismatch: ")
         ]
-        assert "location) takes a place; a relation of agency (" in line
+        assert (
+            "location, citizenship) takes a place; a relation of agency ("
+            in line
+        )
         assert (
             "member of) takes an organization; a relation of authorship "
             "or address (author, addressee: "
