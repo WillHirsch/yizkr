@@ -797,6 +797,22 @@ class TestAReset:
             "900",
         ]
 
+    def test_progress_is_told_of_each_step_as_it_starts(self, stack_):
+        """The scratch run's reset stage tells the run's events of each
+        step through `progress` (#561): before the step runs, so a step
+        that waits shows as the one in hand."""
+        told = []
+
+        def progress(number, steps, name):
+            told.append((number, steps, name, list(stack_.repopulated)))
+
+        stack_.reset(progress=progress).run()
+        assert [entry[:3] for entry in told] == [
+            (number, 9, name) for number, name in enumerate(STEPS, 1)
+        ]
+        # the bootstrap is told before it runs, not after
+        assert told[6][3] == []
+
     def test_it_removes_the_graph_volumes_and_nothing_else(self, stack_):
         stack_.reset().run()
         removed = [

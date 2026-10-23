@@ -55,6 +55,7 @@ from tests.unit.test_scratch_write import (
     Wiki,
     _vocabulary,
     by_label,
+    progress_events,
     sha1,
 )
 from yizkr.claims import ClaimBatch
@@ -1516,3 +1517,67 @@ class TestReports:
             "Not available: neither run's place stage has counted its "
             "questions." in section
         )
+
+
+class TestProgress:
+    """The place stage tells the run's events how far it has got: the
+    question batches answered, then the links written (#561)."""
+
+    def test_it_tells_of_each_batch_and_each_link(self, run, monkeypatch):
+        monkeypatch.setattr(
+            places,
+            "adjudicate",
+            functools.partial(places.adjudicate, batch_questions=1),
+        )
+        run.past_the_barrier(until="places")
+        events = progress_events(run, "places")
+        asked = [e for e in events if e["phase"] == "asking"]
+        record = run.record("places")
+        batches = record["calls"]
+        assert batches > 1
+        assert asked == [
+            {
+                "stage": "places",
+                "phase": "asking",
+                "unit": "batches",
+                "done": done,
+                "of": batches,
+            }
+            for done in range(batches + 1)
+        ]
+        links = [e for e in events if e["phase"] == "writing"]
+        planned = len(record["planned"])
+        assert planned
+        assert links == [
+            {
+                "stage": "places",
+                "phase": "writing",
+                "unit": "links",
+                "done": done,
+                "of": planned,
+            }
+            for done in range(planned + 1)
+        ]
+        # it asks before it writes
+        assert events.index(asked[-1]) < events.index(links[0])
+
+    def test_it_tells_that_it_waits_for_the_query_service(
+        self, run, monkeypatch
+    ):
+        run.past_the_barrier(until="write")
+        run.shown = []
+        polls = []
+
+        def sleep(seconds):
+            polls.append(seconds)
+            if len(polls) == 3:
+                run.shown = ["run-1"]
+
+        monkeypatch.setattr(scratchwrite, "sleep", sleep)
+        run.stage("places")
+        events = progress_events(run, "places")
+        assert events[0] == {"stage": "places", "phase": "waiting"}
+        assert [e["phase"] for e in events].count("waiting") == 1
+        # once the wait ends, it says it reads, then asks
+        assert events[1] == {"stage": "places", "phase": "reading"}
+        assert events[2]["phase"] == "asking"
