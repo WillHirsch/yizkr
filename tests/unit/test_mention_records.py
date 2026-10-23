@@ -940,6 +940,12 @@ class TestMentionRecords:
             "Lager", "place", {"kind": "place", "status": "generic"}
         )
         assert structure_problems(generic) == []
+        # #573: a country given only by an adjective of nationality, with
+        # no name of its own
+        adjective = record(
+            "Australian", "place", {"kind": "place", "status": "adjective"}
+        )
+        assert structure_problems(adjective) == []
 
     def test_an_organisation_by_kind_and_place(self):
         # the 1941 certificate's register office, known by kind and place;

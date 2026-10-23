@@ -97,7 +97,8 @@ class TestTheManifestPrompt:
             'other>"}]',
             '"patronymics": [...], "nicknames": [...], "titles": [...], '
             '"suffixes": [...], "unsplit": [...]',
-            '{"kind": "place", "status": "<toponym, deictic or generic>",',
+            '{"kind": "place", "status": "<toponym, deictic, generic or '
+            'adjective>",',
             '"names": [{"written": "...", "toponym": "...", "head": "..."}]',
             '"address": {"written": "...", "street": "...", "number": "..."}',
             '{"kind": "organization", "names": [...], "kinds": [...], '

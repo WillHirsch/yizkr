@@ -329,8 +329,9 @@ def entity_name_keys(entity: EntityRecord) -> set[str]:
 
     A person's record keys only when its status is `name`, a place's only
     when it is `toponym`: a role, a kinship term, a courtesy appellation,
-    a placeholder, a composed description, a deictic or a generic head
-    names no one, so it keys nothing. A person keys by its label, its
+    a placeholder, a composed description, a deictic, a generic head or
+    a country's adjective of nationality names no one, so it keys
+    nothing. A person keys by its label, its
     aliases, its record's unsplit forms and nicknames, and the whole
     forms its typed parts make (``_composed``: "Gustl", read as Gustav,
     with the surname Löbig makes "Gustl Löbig" and "Gustav Löbig"); a

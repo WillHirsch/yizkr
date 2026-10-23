@@ -218,8 +218,9 @@ Rules — these mirror the archive's non-negotiable conventions:
 - Vocabulary item keys available for "vocab" references:
 {item_keys}
 - The relation decides the kind (ADR-0031). A relation of place
-  (place_of_birth, place_of_death, burial_place, residence, location)
-  takes a place; a relation of agency (issued_by, carried_out_by,
+  (place_of_birth, place_of_death, burial_place, residence, location,
+  country_of_citizenship) takes a place; a relation of agency
+  (issued_by, carried_out_by,
   employer, educated_at, member_of) takes an organization (member_of
   also a family). Pick the relation the source best fits, and point it
   at the manifest entity of that kind: a claim whose value is of a kind
@@ -552,10 +553,17 @@ about a language.
 The relation decides the kind (ADR-0031). An entity's kind is the one
 the relations this source states of it call for:
 - a relation of place (born, died or buried at, lived at, located at,
-  deported to, held at) takes a `place`. A camp, a prison, a hospital, a
-  school or a congregation named only as WHERE something happened is a
-  place: the registration card's "held in Peiltal court prison" names a
-  place;
+  deported to, held at, a citizen of: `country_of_citizenship`) takes a
+  `place`. A camp, a prison, a hospital, a school or a congregation named
+  only as WHERE something happened is a place: the registration card's
+  "held in Peiltal court prison" names a place;
+- a country the source states as a person's citizenship is a `place`
+  entity, the country, whether the source gives it by its name
+  ("Staatsangehörigkeit: Deutsches Reich") or only by an adjective of
+  nationality ("deutscher Staatsangehöriger", "an Australian citizen").
+  Where the document names the country, the one entity takes that name;
+  where it gives only the adjective, the entity is labelled with the
+  adjective as written ("deutscher", "Australian"), status `adjective`;
 - a relation of agency (issued a document, carried out an event,
   employed, educated, had as a member) takes an `organization`, an
   institution the source shows ACTING: the Landgericht Rekau, which
@@ -742,12 +750,15 @@ as an empty string ("").
     anyone. A word that states a fact (an occupation beside a name, a
     widow's marker, "the late") is no name part: it becomes a claim at
     extraction.
-- A place: {{"kind": "place", "status": "<toponym, deictic or generic>",
+- A place: {{"kind": "place",
+  "status": "<toponym, deictic, generic or adjective>",
   "names": [{{"written": "...", "toponym": "...", "head": "..."}}],
   "address": {{"written": "...", "street": "...", "number": "..."}},
   "within": [...]}}.
   * status: `toponym` for a place's own name; `deictic` for a reference
-    back ("dort"); `generic` for a head with no toponym ("Lager").
+    back ("dort"); `generic` for a head with no toponym ("Lager");
+    `adjective` for a country given only by an adjective of nationality
+    ("Australian"), which is no name of it.
   * a name's toponym and generic head, where they can be told apart:
     "Lager Klurnau" has the head Lager and the toponym Klurnau.
   * the address, a street and a house number as written: "8 Hawthorn
@@ -760,6 +771,11 @@ as an empty string ("").
     oblast, district, village, giving Chadsk Oblast, Kaldovsky District
     and Koshnovka, is Koshnovka within "Kaldovsky District" and "Chadsk
     Oblast".
+  * each container in within is also a place entity of the manifest,
+    with its own record, and so in turn is each of its own containers:
+    "Fläckfeld, Kreis Mockburg, Hesse" is Fläckfeld within "Kreis
+    Mockburg" and "Hesse", Kreis Mockburg within "Hesse", and Hesse, three
+    place entities, each with its own record.
 - An organization: {{"kind": "organization", "names": [...],
   "kinds": [...], "places": [...]}}: its proper names, the words naming
   its kind of institution, and the places its names carry. "Hutmacherei

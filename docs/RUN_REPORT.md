@@ -253,7 +253,8 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
 - mention records and judgement notes, summed from each extraction's
   `coverage.json` (ADR-0035 §4, §5, #420): the mention records given,
   and those by label status (`name`, `role`, `kinship`, `courtesy`,
-  `placeholder`, `description`, `toponym`, `deictic`, `generic`, the
+  `placeholder`, `description`, `toponym`, `deictic`, `generic`,
+  `adjective`, the
   statuses of `claims.PersonStructure` and `claims.PlaceStructure`;
   `report.RECORD_STATUSES`); the unsplit name forms the records given
   hold (a person's `unsplit`: forms whose given name and surname the

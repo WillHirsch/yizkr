@@ -387,6 +387,20 @@ class TestContainmentInThePrompts:
             'within "Kaldovsky District" and "Chadsk Oblast".'
         ) in MANIFEST
 
+    def test_each_container_is_a_place_entity_of_its_own(self):
+        # #572: the writer mints an item only for an entity, so a
+        # container that is none leaves the place stage nothing to ask
+        assert (
+            "each container in within is also a place entity of the "
+            "manifest, with its own record, and so in turn is each of its "
+            "own containers"
+        ) in MANIFEST
+        assert (
+            '"Fläckfeld, Kreis Mockburg, Hesse" is Fläckfeld within "Kreis '
+            'Mockburg" and "Hesse", Kreis Mockburg within "Hesse", and '
+            "Hesse, three place entities, each with its own record."
+        ) in MANIFEST
+
     def test_the_chunk_gives_containment_only_where_stated(self):
         assert (
             "Give a place's containment (`part_of`, its country among them) "
@@ -796,3 +810,45 @@ def test_no_line_break_splits_a_listed_claim(brk):
         and line.endswith("Meister")
         for line in critic_prompt(batch_).splitlines()
     )
+
+
+# -- a stated citizenship's country is a place (#573, ADR-0031, ADR-0035) ----
+
+
+class TestCitizenshipIsARelationOfPlace:
+    def test_the_manifest_lists_citizenship_among_relations_of_place(self):
+        assert (
+            "a relation of place (born, died or buried at, lived at, "
+            "located at, deported to, held at, a citizen of: "
+            "`country_of_citizenship`) takes a `place`."
+        ) in MANIFEST
+
+    def test_the_chunk_lists_citizenship_among_relations_of_place(self):
+        assert (
+            "A relation of place (place_of_birth, place_of_death, "
+            "burial_place, residence, location, country_of_citizenship) "
+            "takes a place"
+        ) in CHUNK
+
+    def test_the_manifest_gives_the_country_as_a_place(self):
+        assert (
+            "a country the source states as a person's citizenship is a "
+            "`place` entity, the country, whether the source gives it by its "
+            'name ("Staatsangehörigkeit: Deutsches Reich") or only by an '
+            'adjective of nationality ("deutscher Staatsangehöriger", "an '
+            'Australian citizen").'
+        ) in MANIFEST
+
+    def test_an_adjective_labels_the_country_as_written(self):
+        # never mapped to a name of the country, which would add a word
+        # the source does not write and pick one state (ADR-0035 §2.2)
+        assert (
+            "Where the document names the country, the one entity takes "
+            "that name; where it gives only the adjective, the entity is "
+            'labelled with the adjective as written ("deutscher", '
+            '"Australian"), status `adjective`;'
+        ) in MANIFEST
+        assert (
+            "`adjective` for a country given only by an adjective of "
+            'nationality ("Australian"), which is no name of it.'
+        ) in MANIFEST
