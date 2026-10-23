@@ -167,7 +167,8 @@ def test_a_process_already_reaped_has_ended(child):
 )
 def test_each_state_reads_as_running_or_ended(monkeypatch, state, is_running):
     """The states of a process being reaped (X, or x on older kernels)
-    pass too briefly to catch in a real process, so each state is given."""
+    pass too briefly to catch on demand in a real process, so each state
+    is given."""
     monkeypatch.setattr(exits, "process_state", lambda pid: state)
     assert exits.running(1) is is_running
 
@@ -176,7 +177,7 @@ def test_the_state_follows_a_command_name_holding_parentheses(
     tmp_path, monkeypatch
 ):
     stat = tmp_path / "stat"
-    stat.write_text("4242 (an (odd) S name) Z 1 4242 4242 0 -1\n")
+    stat.write_bytes(b"4242 (an (odd) S name) Z 1 4242 4242 0 -1\n")
     real = exits.Path
 
     def at(path):
@@ -184,3 +185,30 @@ def test_the_state_follows_a_command_name_holding_parentheses(
 
     monkeypatch.setattr(exits, "Path", at)
     assert process_state(4242) == "Z"
+
+
+def test_a_command_name_that_is_not_utf8_reads_its_state():
+    """The kernel cuts a command name at 15 bytes, which can split a
+    character, and a process may name itself any bytes: the state still
+    reads, here past a name that also looks like a state."""
+    name = repr(b"bad\xff) Z")
+    code = (
+        "import ctypes, sys; "
+        f"ctypes.CDLL(None).prctl(15, ctypes.c_char_p({name}), 0, 0, 0); "
+        "print(flush=True); sys.stdin.read()"
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", code],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+    )
+    try:
+        assert process.stdout.readline() == b"\n"
+        raw = exits.Path(f"/proc/{process.pid}/stat").read_bytes()
+        assert b"(bad\xff) Z)" in raw
+        assert process_state(process.pid) in {"S", "R"}
+        assert running(process.pid)
+    finally:
+        process.stdin.close()
+        process.wait()
+        process.stdout.close()

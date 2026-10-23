@@ -86,15 +86,17 @@ def process_state(pid: int) -> str | None:
     if not Path("/proc/self/stat").exists():
         pytest.skip("no /proc/<pid>/stat on this system")
     try:
-        stat = Path(f"/proc/{pid}/stat").read_text()
+        stat = Path(f"/proc/{pid}/stat").read_bytes()
     except (FileNotFoundError, ProcessLookupError):
         return None
-    # the command name, in parentheses, may itself hold ") " and spaces
-    return stat.rsplit(")", 1)[1].split()[0]
+    # the command name, in parentheses, may itself hold ") ", spaces and
+    # bytes that are not UTF-8
+    return stat.rsplit(b")", 1)[1].split()[0].decode()
 
 
 def running(pid: int) -> bool:
     """Whether `pid` is a process that has yet to end, stopped or not; one
-    that has ended, reaped or not, is not."""
+    that has ended, reaped or not, is not. It goes by the state of the
+    process's main thread, which /proc/<pid>/stat gives."""
     state = process_state(pid)
     return state is not None and state not in ENDED_STATES

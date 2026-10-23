@@ -2063,6 +2063,20 @@ def test_a_signal_ends_the_wait_for_the_lock_at_once(repo, tmp_path, holder):
             process.communicate()
 
 
+def test_a_readable_pidfd_ends_the_wait_whatever_the_pid_reads_as(
+    monkeypatch,
+):
+    """A process mid-reap reads X, and a pid another process has taken
+    over reads as live: until_ended trusts the pidfd (#542)."""
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
+        monkeypatch.setitem(globals(), "running", lambda pid: True)
+        until_ended([child.pid])
+    finally:
+        child.wait()
+
+
 def test_a_killed_harness_leaves_the_lock_to_its_run_until_the_run_ends(
     repo, tmp_path, monkeypatch
 ):
