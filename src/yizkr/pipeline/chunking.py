@@ -742,9 +742,13 @@ as an empty string ("").
   * the address, a street and a house number as written: "8 Hawthorn
     Road, Stupfield, Victoria" has the address 8 Hawthorn Road (street
     Hawthorn Road, number 8), within Stupfield and Victoria.
-  * within: the places the source puts it in, as written, in the
-    source's order: "Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân"
-    is Snylsjum within "gemeente Drakeradiel", "Fryslân" and "Nederlân".
+  * within: the places the source puts it in, as written, nearest
+    first, whatever order the source writes them in: "Snylsjum, gemeente
+    Drakeradiel, Fryslân, Nederlân" is Snylsjum within "gemeente
+    Drakeradiel", "Fryslân" and "Nederlân"; a form whose fields run
+    oblast, district, village, giving Chadsk Oblast, Kaldovsky District
+    and Koshnovka, is Koshnovka within "Kaldovsky District" and "Chadsk
+    Oblast".
 - An organization: {{"kind": "organization", "names": [...],
   "kinds": [...], "places": [...]}}: its proper names, the words naming
   its kind of institution, and the places its names carry. "Hutmacherei

@@ -656,7 +656,8 @@ class PlaceStructure(StrictModel):
     status: Literal["toponym", "deictic", "generic"] = "toponym"
     names: list[PlaceName] = []
     address: Address | None = None
-    # the places the source puts it in, in the source's order
+    # the places the source puts it in, nearest first, whatever order
+    # the source writes them in (the place stage links each to the next)
     within: list[str] = []
 
 
