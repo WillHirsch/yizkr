@@ -228,12 +228,16 @@ class Question:
 @dataclass
 class Worklist:
     """The questions to ask, in order; the links resolved without one
-    (`settled`, key -> the one place a claimed container names); and how
-    many stated links were left out with no name to be asked by."""
+    (`settled`, key -> the one place a claimed container names); how
+    many stated links were left out with no name to be asked by
+    (`unnamed`); and how many were not asked of as the link before them
+    was left out so, which leaves their inner end unresolved
+    (`unresolved`)."""
 
     questions: list[Question] = field(default_factory=list)
     settled: dict[tuple, str] = field(default_factory=dict)
     unnamed: int = 0
+    unresolved: int = 0
 
 
 PLACES_QUERY = """\
@@ -589,6 +593,16 @@ def build_worklist(
                 links=group,
             )
         )
+    # a question whose inner end is a container left out is never asked:
+    # no answer to it could be written
+    keys = {question.key for question in found.questions}
+    for question in sorted(found.questions, key=lambda q: q.index):
+        place, chain, index = question.key
+        before = (place, chain, index - 1)
+        if index and before not in found.settled and before not in keys:
+            keys.discard(question.key)
+            found.unresolved += len(question.links)
+    found.questions = [q for q in found.questions if q.key in keys]
     ancestors = _ancestors(places)
     inside: dict[str, int] = dict.fromkeys(ancestors, 0)
     for above in ancestors.values():
@@ -855,8 +869,10 @@ def parse_answers(
 @dataclass
 class Planned:
     """The links to write, as (child, parent, link), and how many stated
-    links an answer decided but could not place: their inner end was
-    left unresolved by the link before it (`unresolved`)."""
+    links could not be placed as their inner end was left unresolved by
+    the link before it (`unresolved`): an answer that named no place,
+    or none at all, or a container left out, whose links were not asked
+    of (Worklist.unresolved)."""
 
     edges: list[tuple[str, str, StatedLink]] = field(default_factory=list)
     unresolved: int = 0
@@ -871,7 +887,7 @@ def links_to_write(work: Worklist, answers: list[Answer]) -> Planned:
     resolved: dict[tuple, str | None] = dict(work.settled)
     for answer in answers:
         resolved[answer.question.key] = answer.place
-    planned = Planned()
+    planned = Planned(unresolved=work.unresolved)
     for answer in answers:
         if answer.place is None:
             continue
@@ -1132,7 +1148,7 @@ def apply_answers(
     write_link cites them, through the cycle guard against the graph's
     containment. The worklist is derived again from the graph and the
     stated `links`, so a row whose question the graph does not ask writes
-    nothing."""
+    nothing, and is counted among the approved rows passed over."""
     from yizkr.pipeline.writer import BatchWriter
 
     with open(csv_path, newline="") as handle:
@@ -1140,7 +1156,11 @@ def apply_answers(
     places = fetch_places(client, config)
     attach_chains(places, links)
     work = build_worklist(places, links)
-    planned = links_to_write(work, approved_answers(rows, work))
+    answers = approved_answers(rows, work)
+    approved = sum(
+        row.get("decision", "").strip().lower() == "approve" for row in rows
+    )
+    planned = links_to_write(work, answers)
     graph = {place.qid: place.parents for place in places}
     kept, refused = plan(planned.edges, lambda node: graph.get(node, ()))
     labels = {place.qid: place.label for place in places}
@@ -1180,6 +1200,10 @@ def apply_answers(
         "skipped": counts[PRESENT],
         "cycles": len(refused),
         "unresolved": planned.unresolved,
+        # approved rows that decide no question asked: a `same` row of a
+        # question the graph and the run directories do not ask, an
+        # `uncertain` one, or one whose B is no candidate
+        "passed_over": approved - len(answers),
         "notes": notes,
         "run_qid": run_qid,
     }

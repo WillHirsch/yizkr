@@ -1068,6 +1068,11 @@ def _propose(
         unresolved=planned.unresolved,
         schema_rejected=found.rejected,
         conflicts=len(found.conflicts),
+        # the questions the answer left unanswered, neither answered nor
+        # in conflict
+        unanswered=len(work.questions)
+        - len(found.answers)
+        - len(found.conflicts),
         planned=[
             {"child": child, "parent": parent, "link": link.as_json()}
             for child, parent, link in kept
@@ -1113,6 +1118,7 @@ def _counts(record: dict) -> dict:
         "schema_rejected": record.get("schema_rejected", 0),
         "cycles": len(record.get("refused") or []),
         "conflicts": record.get("conflicts", 0),
+        "unanswered": record.get("unanswered", 0),
     }
 
 
@@ -1187,17 +1193,19 @@ def run_places(context: Any) -> list[str]:
                 save_record(context.directory, record)
             return record["run_qid"]
 
+        # every link's document has its artifact before anything is written
+        for entry in record["planned"]:
+            sha1 = entry["link"]["sha1"]
+            if not isinstance(artifacts.get(sha1), str):
+                raise ScratchWriteRefused(
+                    f"no artifact is registered for the document {sha1}, "
+                    "whose record states a link: no place was reconciled"
+                )
         for index, entry in enumerate(record["planned"]):
             if str(index) in record["outcomes"]:
                 continue
             link = hierarchy.StatedLink.from_json(entry["link"])
-            artifact = artifacts.get(link.sha1)
-            if not isinstance(artifact, str):
-                raise ScratchWriteRefused(
-                    f"no artifact is registered for the document "
-                    f"{link.sha1}, whose record states a link: no place "
-                    "was reconciled"
-                )
+            artifact = artifacts[link.sha1]
             outcome = hierarchy.write_link(
                 writer,
                 entry["child"],

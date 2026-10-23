@@ -232,6 +232,7 @@ PLACE_COUNTS = {
     "schema_rejected": "rejected_by_schema",
     "cycles": "refused_cycles",
     "conflicts": "refused_conflicts",
+    "unanswered": "unanswered",
 }
 
 # how many times the report reads run.json and the events while an
@@ -3232,7 +3233,7 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
                         ("Depicts claims left out", "depicts"),
                         ("The write", "write"),
                         (
-                            "Place-hierarchy proposals",
+                            "Place questions and links",
                             "place_hierarchy",
                         ),
                         ("Different-source contradictions", "contradictions"),
@@ -3293,7 +3294,8 @@ def _write_sections(content: Mapping[str, Any]) -> list[_Section]:
             f"{_n(places['questions'])} place questions asked in "
             f"{_n(places['calls'])} calls, of which container a record "
             f"states each place means: {_n(places['answered'])} answered "
-            f"with a place, {_n(places['uncertain'])} uncertain; "
+            f"with a place, {_n(places['uncertain'])} uncertain, "
+            f"{_n(places['unanswered'])} unanswered; "
             f"{_n(places['links_left_out_unnamed'])} stated links left "
             "out, with no place to name.",
             f"Links written: {_n(places['links_written'])} new, "

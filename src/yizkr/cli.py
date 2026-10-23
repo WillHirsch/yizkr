@@ -236,6 +236,12 @@ def cmd_reconcile_places(args) -> int:
         link for run_dir in args.run or () for link in record_links(run_dir)
     ]
     if args.apply:
+        if not links:
+            print(
+                "note: no --run directory states a link, so no row decides "
+                "a question: give the --run the CSV was made with",
+                file=sys.stderr,
+            )
         summary = apply_answers(
             client, config, args.apply, links, "curator-reviewed"
         )
@@ -245,7 +251,8 @@ def cmd_reconcile_places(args) -> int:
             f"links written: {summary['written']}, referenced on an equal "
             f"statement: {summary['referenced']}, already present: "
             f"{summary['skipped']}; refused as cycles: {summary['cycles']}, "
-            f"unresolved: {summary['unresolved']}"
+            f"unresolved: {summary['unresolved']}; approved rows passed "
+            f"over, deciding no question asked: {summary['passed_over']}"
             + (
                 f"; run item {summary['run_qid']}"
                 if summary["run_qid"]

@@ -819,6 +819,7 @@ class TestRefusedAndCounted:
             "schema_rejected": 0,
             "cycles": 0,
             "conflicts": 0,
+            "unanswered": 0,
         }
 
     def test_the_report_and_the_diff_count_them(self, tmp_path, monkeypatch):
@@ -1001,6 +1002,25 @@ class TestKeys:
         monkeypatch.undo()
         monkeypatch.setenv("YIZKR_LLM_MODEL", "claude-opus-5")
         assert scratchwrite.place_key(context, write) != key
+        monkeypatch.undo()
+        monkeypatch.setenv("YIZKR_LLM_MODEL", MODEL)
+        assert scratchwrite.place_key(context, write) == key
+        driver = run.driver
+        for owner, name, other in (
+            (scratchwrite, "PLACE_VERSION", scratchwrite.PLACE_VERSION + 1),
+            (places, "BATCH_QUESTIONS", places.BATCH_QUESTIONS + 1),
+            (driver, "extract_effort", "max"),
+            (driver, "llm", "anthropic"),
+        ):
+            with monkeypatch.context() as changed:
+                assert getattr(owner, name) != other
+                changed.setattr(owner, name, other)
+                assert scratchwrite.place_key(context, write) != key, name
+        # the critique's effort is no part of it
+        with monkeypatch.context() as changed:
+            assert driver.review_effort != "max"
+            changed.setattr(driver, "review_effort", "max")
+            assert scratchwrite.place_key(context, write) == key
 
     def test_the_instance_contents_take_the_place_key(self, run):
         run.past_the_barrier()
@@ -1179,6 +1199,47 @@ class TestGuard:
         # one hold for the whole stage; the engine checks it is held
         assert run.locks == locks + 1
         assert run.engine.prompts
+
+    def test_it_waits_for_the_query_service_to_show_the_write(
+        self, run, monkeypatch
+    ):
+        run.past_the_barrier(until="write")
+        writes = run.wiki.writes
+        run.newest = run.record("write")["revision"] - 1
+        monkeypatch.setattr(scratchwrite, "sleep", run.advance)
+        with pytest.raises(
+            ScratchWriteRefused, match="no place was reconciled"
+        ):
+            run.stage("places")
+        assert run.engine.prompts == []
+        assert "planned" not in run.record("places")
+        assert run.wiki.writes == writes
+
+    def test_a_link_whose_document_has_no_artifact_writes_nothing(self, run):
+        run.past_the_barrier(until="write")
+        registered = run.run_dir / CORPUS_DIR / "register" / "record.json"
+        record = json.loads(registered.read_text())
+        record["documents"].pop(sha1(LETTER))
+        registered.write_text(json.dumps(record))
+        writes = run.wiki.writes
+        with pytest.raises(
+            ScratchWriteRefused, match="no artifact is registered"
+        ):
+            run.stage("places")
+        assert run.wiki.writes == writes
+        assert place_run_items(run.wiki) == []
+
+    def test_a_stage_with_nothing_planned_records_the_place_key(
+        self, tmp_path, monkeypatch
+    ):
+        """The certificate's links are all its claims', each to a
+        container that names one place: nothing is asked or written, and
+        the instance holds what the place key makes."""
+        run = PlaceRun(tmp_path, monkeypatch, documents=DEATH_DOCUMENTS)
+        run.past_the_barrier()
+        record = run.record("places")
+        assert record["planned"] == [] and run.engine.prompts == []
+        assert recorded_contents(run.wiki).key == record["key"]
 
     def test_the_contents_record_is_cleared_before_the_first_write(
         self, run, monkeypatch
@@ -1374,3 +1435,77 @@ class TestTheLiveScenario:
             counts["cycles"],
         ) == (2, 2, 1, 1, 1)
         assert run_item == record["run_qid"]
+
+
+# -- the run report and the run diff ------------------------------------------
+
+
+def report_of(run) -> dict:
+    """The run report of a unit run, its plan written as run.json."""
+    (run.run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "documents": [
+                    {
+                        "sha1": doc.sha1,
+                        "file": doc.source.name,
+                        "kind": "media",
+                        "stages": [],
+                    }
+                    for doc in run.documents
+                ]
+            }
+        )
+    )
+    return report.build(run.run_dir)
+
+
+class TestReports:
+    def test_a_refused_cycle_is_named_in_the_local_report_alone(
+        self, tmp_path, monkeypatch
+    ):
+        run = PlaceRun(tmp_path, monkeypatch)
+        with_parents(monkeypatch, run, Hesse=["Kreis Peiltal"])
+        run.past_the_barrier()
+        built = report_of(run)
+        assert built["place_cycles"] == [
+            {
+                "place": "Kreis Peiltal",
+                "container": "Hesse",
+                "document": f"{sha1(EXTRACT)[:12]} leopold-birth-extract.png",
+            }
+        ]
+        html = report.render_html(built)
+        assert "Place links refused as cycles" in html
+        assert "Kreis Peiltal within Hesse" in html
+        markdown = report.render_markdown(built["aggregate"])
+        assert "1 links that would close a cycle" in markdown
+        for label in ("Kreis Peiltal", "Hesse", "Flörburg"):
+            assert label not in markdown
+
+    def test_the_contents_key_not_recorded_is_said(self):
+        shown = report._aggregate_places({"counts": {}})
+        assert shown["contents_recorded"] is False
+
+    def test_diff_md_sets_the_counts_side_by_side(self, run):
+        run.past_the_barrier()
+        report_of(run)
+        summary = rundiff.render_markdown(
+            rundiff.build(run.run_dir, run.run_dir)["aggregate"]
+        )
+        section = summary.split("## Place hierarchy")[1].split("\n## ")[0]
+        assert "| links_written | 3 | 3 | 0 |" in section
+        assert "| record_only_links | 3 | 3 | 0 |" in section
+        assert "| refused_cycles | 0 | 0 | 0 |" in section
+
+    def test_diff_md_says_when_neither_run_counted(self, run):
+        run.past_the_barrier(until="write")
+        report_of(run)
+        summary = rundiff.render_markdown(
+            rundiff.build(run.run_dir, run.run_dir)["aggregate"]
+        )
+        section = summary.split("## Place hierarchy")[1].split("\n## ")[0]
+        assert (
+            "Not available: neither run's place stage has counted its "
+            "questions." in section
+        )

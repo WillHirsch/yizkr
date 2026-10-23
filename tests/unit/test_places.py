@@ -392,9 +392,28 @@ class TestWorklist:
         assert [q.place for q in work.questions] == ["Q40"]
 
     def test_a_link_a_record_alone_states_is_asked(self):
-        work = build_worklist(peiltal(), [link("Q40", PRISON, 1)])
-        (question,) = work.questions
+        work = build_worklist(
+            peiltal(), [link("Q40", PRISON, 0), link("Q40", PRISON, 1)]
+        )
+        (question,) = [q for q in work.questions if q.index == 1]
         assert question.candidates == ["Q43"]
+
+    def test_a_link_after_one_left_out_is_not_asked(self):
+        """The prison's record places it in 'Kreis Rekau', which names no
+        place, then in Hesse: nothing could be written of the second
+        link, as its inner end has no place, so it is not asked of and is
+        counted unresolved."""
+        work = build_worklist(
+            peiltal(),
+            [
+                link("Q40", ("Kreis Rekau", "Hesse"), 0),
+                link("Q40", ("Kreis Rekau", "Hesse"), 1),
+                link("Q40", ("Kreis Rekau", "Hesse"), 1, sha1=TREE),
+            ],
+        )
+        assert work.questions == []
+        assert (work.unnamed, work.unresolved) == (1, 2)
+        assert links_to_write(work, []).unresolved == 2
 
     def test_a_claimed_link_naming_one_place_is_settled(self):
         work = build_worklist(
@@ -407,11 +426,12 @@ class TestWorklist:
         work = build_worklist(
             peiltal(),
             [
+                link("Q40", PRISON, 0, claimed=True),
                 link("Q40", PRISON, 1, claimed=True),
                 link("Q40", PRISON, 1, sha1=TREE),
             ],
         )
-        (question,) = work.questions
+        (question,) = [q for q in work.questions if q.index == 1]
         assert len(question.links) == 2
 
     def test_a_link_with_no_place_to_name_is_left_out(self):
@@ -457,6 +477,23 @@ class TestWorklist:
             [link("Q6", ("Hesse",), 0), link("Q7", ("Klurnau",), 0)],
         )
         assert [q.candidates for q in work.questions] == [["Q2"], ["Q5"]]
+
+    def test_among_equals_a_shallower_candidate_comes_first(self):
+        """Flörburg and Kreis Mockburg hold no place each; Flörburg lies
+        in Kreis Peiltal, Kreis Mockburg in nothing. Kreis Mockburg's
+        question comes first, though its text would put it second."""
+        places = [
+            PlaceRecord(qid="Q1", label="Kreis Peiltal"),
+            PlaceRecord(qid="Q2", label="Flörburg", parents=["Q1"]),
+            PlaceRecord(qid="Q3", label="Kreis Mockburg"),
+            PlaceRecord(qid="Q4", label="Angerring 11"),
+            PlaceRecord(qid="Q5", label="Fläckfeld"),
+        ]
+        work = build_worklist(
+            places,
+            [link("Q4", ("Flörburg",), 0), link("Q5", ("Kreis Mockburg",), 0)],
+        )
+        assert [q.candidates for q in work.questions] == [["Q3"], ["Q2"]]
 
     def test_spine_first(self):
         """A question whose candidates the graph puts more places inside
@@ -901,15 +938,16 @@ def _item(wiki, label: str) -> str:
 class Runs:
     """The run item, made on first need, and how often it was asked for."""
 
-    def __init__(self, wiki) -> None:
+    def __init__(self, wiki, label="place-hierarchy run fake-model x") -> None:
         self.wiki = wiki
+        self.label = label
         self.calls = 0
         self.qid = None
 
     def __call__(self) -> str:
         self.calls += 1
         if self.qid is None:
-            self.qid = _item(self.wiki, "place-hierarchy run fake-model x")
+            self.qid = _item(self.wiki, self.label)
         return self.qid
 
 
@@ -1003,8 +1041,9 @@ class TestWriteLink:
     ):
         wiki, writer, child, parent, artifact = written
         other = _item(wiki, "1984 family tree")
+        earlier = Runs(wiki, "place-hierarchy run fake-model earlier")
         runs = Runs(wiki)
-        write_link(writer, child, parent, _dated(), other, runs)
+        write_link(writer, child, parent, _dated(), other, earlier)
         assert write_link(writer, child, parent, _dated(), artifact, runs) == (
             REFERENCED
         )
@@ -1013,6 +1052,12 @@ class TestWriteLink:
             [other],
             [artifact],
         ]
+        # the statement gains this run's block too, beside the earlier's
+        assert [
+            found
+            for found in cited(statement, "inferred_from_extraction_run")
+            if found
+        ] == [[earlier.qid], [runs.qid]]
 
     def test_a_dated_and_an_undated_link_coexist(self, written):
         wiki, writer, child, parent, artifact = written
@@ -1174,6 +1219,71 @@ class TestCommand:
         self._graph(monkeypatch, peiltal())
         assert cli.cmd_reconcile_places(self._args(tmp_path)) == 0
         assert "questions: 0" in capsys.readouterr().out
+
+    def test_apply_writes_from_the_run_directories_links(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        from yizkr import cli
+
+        _written(
+            tmp_path / "run" / "prison",
+            [_entity("e1", "Gerichtsgefängnis Peiltal", list(PRISON))],
+            {"e1": "Q40"},
+            MARRIAGE,
+        )
+        self._graph(monkeypatch, peiltal())
+        given = []
+
+        def apply_answers(client, config, path, links, model):
+            given.append((path, links, model))
+            return {
+                "written": 2,
+                "referenced": 1,
+                "skipped": 3,
+                "cycles": 1,
+                "unresolved": 0,
+                "passed_over": 4,
+                "notes": [],
+                "run_qid": "Q7",
+            }
+
+        monkeypatch.setattr(hierarchy, "apply_answers", apply_answers)
+        reviewed = tmp_path / "reviewed.csv"
+        args = self._args(tmp_path, apply=reviewed, run=[tmp_path / "run"])
+        assert cli.cmd_reconcile_places(args) == 0
+        ((path, links, model),) = given
+        assert (path, model) == (reviewed, "curator-reviewed")
+        assert [found.container for found in links] == list(PRISON)
+        out = capsys.readouterr().out
+        assert (
+            "links written: 2, referenced on an equal statement: 1, already "
+            "present: 3; refused as cycles: 1, unresolved: 0; approved rows "
+            "passed over, deciding no question asked: 4; run item Q7" in out
+        )
+
+    def test_apply_without_a_run_says_no_row_decides(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        from yizkr import cli
+
+        self._graph(monkeypatch, peiltal())
+        monkeypatch.setattr(
+            hierarchy,
+            "apply_answers",
+            lambda *a: {
+                "written": 0,
+                "referenced": 0,
+                "skipped": 0,
+                "cycles": 0,
+                "unresolved": 0,
+                "passed_over": 2,
+                "notes": [],
+                "run_qid": None,
+            },
+        )
+        args = self._args(tmp_path, apply=tmp_path / "reviewed.csv")
+        assert cli.cmd_reconcile_places(args) == 0
+        assert "no --run directory states a link" in capsys.readouterr().err
 
     def test_run_takes_several_directories(self):
         from yizkr import cli

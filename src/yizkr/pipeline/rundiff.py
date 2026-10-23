@@ -45,10 +45,10 @@ model, the configuration, the attempt, the epoch.
 - *Flags* and *contradictions*: compared when both reports count them;
   otherwise not available, with why.
 - *Place hierarchy*: the place stage's counts (questions, calls,
-  answered and uncertain, stated links left out, links written,
-  referenced and already there, links a record alone states and of them
-  those written, links unresolved, answers rejected by the schema, and
-  cycles and conflicts refused), side by side, as figures.
+  answered, uncertain and unanswered, stated links left out, links
+  written, referenced and already there, links a record alone states
+  and of them those written, links unresolved, answers rejected by the
+  schema, and cycles and conflicts refused), side by side, as figures.
 - *Claims*, per document and property, matched by their claim
   fingerprints (yizkr.pipeline.fingerprints) as multisets: those only
   the baseline holds are removed and those only the run holds added,
