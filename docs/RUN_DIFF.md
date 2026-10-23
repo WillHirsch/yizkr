@@ -200,10 +200,16 @@ the schema, and cycles and conflicts refused. A run whose report has no
 such counts (its place stage has not run) is `absent` on its side, and a
 diff where neither has them says the section is not available.
 
-**Flags and contradictions.** Compared figure by figure when both reports
-count them; otherwise `not available`, with why. Today no stage makes
-flags (#112), and different-source contradictions are read from a
-written graph, so both are not available until a report counts them.
+**Flags and contradictions.** Compared figure by figure when either
+report counts them (#575): a figure of a report that does not count
+them is `absent` on its side, never 0, and has no delta, as in the
+place-hierarchy section. Where neither report counts them, the section
+is `not available`, with why. Today no stage makes flags (#112). The
+different-source contradictions are those the site stage counted on the
+written graph: `different_source`, their total, and `by_property`, by
+manifest key (a property one report counted none of is 0 on its side).
+So a diff of a run with a site stage against one with no write side
+shows the run's counts, the baseline's absent.
 
 **Claims**, per document and per property, matched by their claim
 fingerprints as multisets (ADR-0025 §4, as amended by #197): a claim only
