@@ -45,6 +45,7 @@ from yizkr.pipeline import report, scratch, scratchwrite
 from yizkr.pipeline.orchestrate import DocumentRun
 from yizkr.pipeline.scratch import CORPUS_DIR, CorpusContext, ScratchDriver
 from yizkr.pipeline.scratchwrite import ScratchWriteRefused
+from yizkr.pipeline.writer import REFUSAL_REASONS
 from yizkr.staticsite import SiteBuilder, scratch_notice
 
 HOST = "wikibase.example"
@@ -1317,6 +1318,15 @@ def test_the_record_counts_the_claims_naming_their_own_subjects_item(
     # counted apart from the letter's other refusal
     assert documents[letter.sha1]["refused"] == 2
     assert documents[letter.sha1]["self_references"] == 1
+    # and by reason, every reason in its order (#552)
+    assert documents[letter.sha1]["refused_by_reason"] == {
+        "retired_or_reference_property": 0,
+        "subject_rule": 1,
+        "text": 0,
+        "side_rule": 0,
+        "self_reference": 1,
+    }
+    assert sum(documents[extract.sha1]["refused_by_reason"].values()) == 0
     assert any(
         "2 claims refused, 1 of them for an item value that is their "
         "subject's item;" in line
@@ -1332,10 +1342,19 @@ def test_the_record_counts_the_claims_naming_their_own_subjects_item(
     content = report._aggregate_content({}, {}, {}, _vocabulary(), record)
     assert content["write"]["claims_refused"] == 2
     assert content["write"]["claims_self_referencing"] == 1
+    assert content["write"]["claims_refused_by_reason"] == {
+        "retired_or_reference_property": 0,
+        "subject_rule": 1,
+        "text": 0,
+        "side_rule": 0,
+        "self_reference": 1,
+    }
     (section,) = report._write_sections(content)
     assert (
-        "2 refused, 1 of them for an item value that is their subject's item"
-        in section.blocks[0][0]
+        "2 refused: 0 for a retired or reference property, 1 for the "
+        "subject rules, 0 for a text the instance cannot hold, 0 for an "
+        "entity the side rule blocks, 1 for an item value that is the "
+        "subject's item; " in section.blocks[0][0]
     )
 
 
@@ -1345,6 +1364,73 @@ def test_a_write_of_no_documents_counts_no_self_references():
     content = report._aggregate_content({}, {}, {}, _vocabulary(), record)
     assert content["write"]["claims_self_referencing"] == 0
     assert content["write"]["claims_refused"] == 0
+    assert content["write"]["claims_refused_by_reason"] == dict.fromkeys(
+        REFUSAL_REASONS, 0
+    )
+
+
+def test_the_refusals_by_reason_sum_over_the_documents():
+    # each document's counts, reason by reason, in the fixed order (#552)
+    def counted(**given):
+        return {reason: given.get(reason, 0) for reason in REFUSAL_REASONS}
+
+    record = {
+        "depicts_left_out": 0,
+        "documents": {
+            "a" * 40: {
+                "refused": 3,
+                "refused_by_reason": counted(text=2, subject_rule=1),
+            },
+            "b" * 40: {
+                "refused": 2,
+                "refused_by_reason": counted(
+                    retired_or_reference_property=1, side_rule=1
+                ),
+            },
+        },
+    }
+    content = report._aggregate_content({}, {}, {}, _vocabulary(), record)
+    by_reason = content["write"]["claims_refused_by_reason"]
+    assert list(by_reason) == list(REFUSAL_REASONS)
+    assert by_reason == counted(
+        retired_or_reference_property=1, subject_rule=1, text=2, side_rule=1
+    )
+    assert sum(by_reason.values()) == content["write"]["claims_refused"]
+
+
+def test_an_older_record_gives_its_self_references_alone():
+    # a write that counted self-references but no reasons: the line says
+    # how many of the refused are self-references, as it did
+    record = {
+        "depicts_left_out": 0,
+        "documents": {
+            "a" * 40: {"refused": 2, "self_references": 1, "items_minted": 0}
+        },
+    }
+    content = report._aggregate_content({}, {}, {}, _vocabulary(), record)
+    assert "claims_refused_by_reason" not in content["write"]
+    (section,) = report._write_sections(content)
+    assert (
+        "2 refused, 1 of them for an item value that is their subject's "
+        "item; 0 items minted," in section.blocks[0][0]
+    )
+
+
+def test_a_record_some_of_whose_documents_lack_reasons_holds_none():
+    # the counts would not sum to the claims refused: absent, never 0
+    record = {
+        "depicts_left_out": 0,
+        "documents": {
+            "a" * 40: {
+                "refused": 1,
+                "refused_by_reason": dict.fromkeys(REFUSAL_REASONS, 0)
+                | {"text": 1},
+            },
+            "b" * 40: {"refused": 2},
+        },
+    }
+    content = report._aggregate_content({}, {}, {}, _vocabulary(), record)
+    assert "claims_refused_by_reason" not in content["write"]
 
 
 def test_a_record_that_does_not_count_self_references_holds_no_figure():
@@ -1358,6 +1444,7 @@ def test_a_record_that_does_not_count_self_references_holds_no_figure():
     }
     content = report._aggregate_content({}, {}, {}, _vocabulary(), record)
     assert "claims_self_referencing" not in content["write"]
+    assert "claims_refused_by_reason" not in content["write"]
     assert content["write"]["claims_refused"] == 1
     (section,) = report._write_sections(content)
     assert "1 refused; 2 items minted," in section.blocks[0][0]
