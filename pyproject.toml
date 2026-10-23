@@ -56,7 +56,7 @@ testpaths = ["tests"]
 markers = [
     "live: requires a running Wikibase Suite stack and deploy/.env",
     "real_fsync: keep the real os.fsync, os.fdatasync and os.sync, which the unit tests otherwise skip (tests/unit/conftest.py)",
-    "write_side: keep the scratch driver's write side (reset, register, write, site) among its corpus stages, which the unit tests otherwise leave out (tests/unit/conftest.py)",
+    "write_side: keep the scratch driver's write side (reset, register, write, places, site) among its corpus stages, which the unit tests otherwise leave out (tests/unit/conftest.py)",
 ]
 addopts = "-m 'not live'"
 
