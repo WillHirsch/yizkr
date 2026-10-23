@@ -844,9 +844,9 @@ class TestAskingAgain:
         ],
     )
     def test_a_pause_describes_the_window(self, cli, clock, window, described):
-        """Each window name CLI 2.1.296 reports, as 2.1.288 did, is described
-        in words; a name it does not know is given as the CLI names it
-        (#452, #526)."""
+        """Each window name CLI 2.1.309 reports, as 2.1.296 and 2.1.288 did,
+        is described in words; a name it does not know is given as the CLI
+        names it (#452, #526, #559)."""
         cli.script = [usage_window(START + 3 * 24 * HOUR, window)]
         with pytest.raises(UsageLimitReached) as paused:
             ClaudeCodeClient().complete("Read the letter.")
@@ -1039,8 +1039,9 @@ class TestReserve:
         assert clock.slept == []
 
     def test_unified_windows_are_not_paced_from(self, pacer, clock):
-        """CLI 2.1.296, like 2.1.288, reports every window's use in
-        unifiedWindows, past the warning thresholds or not (#452, #526).
+        """CLI 2.1.309 reports, as 2.1.296 and 2.1.288 did, every window's
+        use in unifiedWindows, past the warning thresholds or not (#452,
+        #526, #559).
         The engine paces from rate_limit_info's utilization alone, so a
         report whose unifiedWindows say a window is nearly used up, and
         whose utilization is absent, paces nothing."""
@@ -1353,12 +1354,27 @@ class TestOverage:
         assert paused.value.resumes_at is None
 
     def test_overage_enabled_is_not_overage(self, pacer, clock):
-        """CLI 2.1.296's allowed_warning report may say whether usage
-        credits are enabled on the account (overageEnabled, #526). That a
+        """CLI 2.1.296's allowed_warning report, and 2.1.309's, may say
+        whether usage credits are enabled on the account (overageEnabled,
+        #526, #559). That a
         call could run on them is not that it did: only isUsingOverage
         pauses the pass."""
         info = report(0.5, resets_at=START + 3 * 24 * HOUR, window="seven_day")
         info["overageEnabled"] = True
+        assert info["isUsingOverage"] is False
+        pacer.done([info])
+        record = admit(pacer, max_wait=0)
+        assert record["held"] is None
+        assert clock.slept == []
+
+    def test_a_usage_credit_offer_is_not_overage(self, pacer, clock):
+        """CLI 2.1.309's rate_limit_info may carry offers for its own limit
+        banner (usageCreditOffer, adminRequestOffer, #559). An offer of
+        usage credits is not their use: only isUsingOverage pauses the
+        pass."""
+        info = report(0.5, resets_at=START + 3 * 24 * HOUR, window="seven_day")
+        info["usageCreditOffer"] = {"available": True}
+        info["adminRequestOffer"] = {"available": True}
         assert info["isUsingOverage"] is False
         pacer.done([info])
         record = admit(pacer, max_wait=0)
@@ -1474,8 +1490,9 @@ class TestUtilizationDocs:
 
 
 class TestUnifiedWindowsDocs:
-    """CLI 2.1.296, like 2.1.288, reports a window's use below its warning
-    thresholds in unifiedWindows (#452, #526), so nothing here says it
+    """CLI 2.1.309 reports, as 2.1.296 and 2.1.288 did, a window's use below
+    its warning thresholds in unifiedWindows (#452, #526, #559), so nothing
+    here says it
     reports none, and every description of what it reports says the
     engine reads neither unifiedWindows nor limitScope."""
 
@@ -1537,7 +1554,8 @@ class TestUnifiedWindowsDocs:
 
     def test_limit_scope_comes_only_when_the_server_reports_one(self):
         """The CLI sends limitScope only when the server reports an
-        overage scope, on 2.1.288 and 2.1.296 alike (#526)."""
+        overage scope, on 2.1.288 and 2.1.296 alike (#526), and 2.1.309
+        (#559)."""
         texts = self.texts()
         assert "when the server reports one, limitScope" in texts["llm.py"]
         assert (
@@ -1561,11 +1579,11 @@ def adr_0025_amendment(header: str) -> str:
 
 
 class TestPinDocs:
-    """The docs name 2.1.296 as the pin and say how to install it, and the
+    """The docs name 2.1.309 as the pin and say how to install it, and the
     pipeline README names both settings that keep a call as it ran on
-    2.1.237 (#452 review, #526)."""
+    2.1.237 (#452 review, #526, #559)."""
 
-    PIN = "2.1.296"
+    PIN = "2.1.309"
     RUNBOOK = ROOT / "docs" / "runbooks" / "scratch-run.md"
     README = ROOT / "src" / "yizkr" / "pipeline" / "README.md"
     # the versions other than the pin each text names on purpose: the
@@ -1602,10 +1620,10 @@ class TestPinDocs:
                 "claude-code@2.1.237",
                 "pinned 2.1.288",
                 "claude-code@2.1.288",
+                "pinned 2.1.296",
+                "claude-code@2.1.296",
             ):
                 assert old not in flat, (name, old)
-            # the README compares the pin with 2.1.288 once, on purpose
-            flat = flat.replace(f"{self.PIN}, like 2.1.288,", self.PIN)
             versions = set(re.findall(r"\b2\.1\.\d+\b", flat))
             assert self.PIN in versions, name
             assert versions - {self.PIN} <= self.OTHER_VERSIONS[name], (
@@ -1614,13 +1632,18 @@ class TestPinDocs:
             )
 
     def test_adr_0025_is_amended_for_the_pin(self):
-        amendment = adr_0025_amendment("Amended by #526 (2026-10-16):")
+        amendment = adr_0025_amendment("Amended by #559 (2026-10-23):")
         assert f"claude CLI {self.PIN}" in amendment
-        assert "`limitScope` only when the server reports one" in amendment
+        assert "`_READ_ERRORS`" in amendment
+        assert "`usageCreditOffer`" in amendment
+        # #526's amendment stays, and its correction of #452's line holds
+        earlier = adr_0025_amendment("Amended by #526 (2026-10-16):")
+        assert "claude CLI 2.1.296" in earlier
+        assert "`limitScope` only when the server reports one" in earlier
 
     def test_the_readme_names_the_pin_and_both_settings(self):
         text = self.README.read_text()
-        assert "Install 2.1.296, which `claude-opus-5-5`" in " ".join(
+        assert f"Install {self.PIN}, which `claude-opus-5-5`" in " ".join(
             text.split()
         )
         assert "`--permission-mode default`" in text
