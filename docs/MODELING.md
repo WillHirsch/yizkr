@@ -496,9 +496,8 @@ artifact a new QID, changes neither.
   runs and for the place-hierarchy pass's runs alike. An untyped item is
   missing from the non-privileged export until it is typed ("Living
   persons and privacy"), and every statement it backs loses its run
-  reference there: an extraction's claims would read as curated, and the
-  place-hierarchy pass's containment, which cites the run alone, as
-  unreferenced.
+  reference there: an extraction's claims, and the place-hierarchy
+  pass's links, would read as curated, stated in their sources alone.
 - **A scratch run marks its run items** (#200; ADR-0025 §1). The run
   item of each batch a scratch run writes states, in the same second
   write as its kind and stated in itself, `unratified scratch run → <run
@@ -787,10 +786,21 @@ artifact a new QID, changes neither.
   time (rule 5). Views read an undated claim as of its source, labelled
   by that source ("Fläckfeld: in Kreis Mockburg per the 1905 marriage
   certificate; in Kreis Peiltal per the 1984 family tree").
-- The place-hierarchy pass, `yizkr reconcile-places` (ADR-0009), still
-  proposes containment from a model's verdicts until its rebuild as the
-  place stage (ADR-0038 §8.5, #201); a GeoNames-imported edge adds
-  `stated in` → the GeoNames dataset item.
+- **The place hierarchy asks identity alone** (ADR-0009, ADR-0038 §3 and
+  §8.5, #201). A place's mention record states the chain of containers
+  its source puts it in, and each link of the chain is a link the source
+  states. Where a link's container names more than one existing place,
+  or no claim of the document gives the link, a model is asked which
+  existing place the container means, among the places that bear its
+  name; it answers with one of them, or none. The link is then written
+  `part of` the place named, at normal rank, `stated in` the document's
+  artifact (with no page: a record has no locator) and `inferred from`
+  the pass's run item, with the time the document's claim gives and none
+  where the record alone states the link. A link that would close a
+  cycle, at any time, is refused. A scratch run does this unattended in
+  its `places` stage; `yizkr reconcile-places` asks the same for a
+  curator, who approves the answers it writes. A GeoNames-imported edge
+  is stated in the GeoNames dataset item (ADR-0038 §6).
 - The inconsistency report suppresses value pairs connected by a path of
   `location` and `part_of` claims, differences of resolution rather than
   contradictions, and follows only a claim that a source states and a

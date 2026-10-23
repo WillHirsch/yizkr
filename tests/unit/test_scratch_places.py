@@ -144,12 +144,19 @@ def qualifiers(statement: dict) -> dict[str, int]:
 
 def graph(wiki) -> list:
     """What the query service would give of the in-memory instance: its
-    places, with their descriptions and the places it puts each in."""
+    places, with their aliases, their descriptions and the places it puts
+    each in."""
     place = PlaceWiki.ITEMS["place"]
     return [
         places.PlaceRecord(
             qid=qid,
             label=label(wiki, qid),
+            aliases=[
+                alias["value"]
+                for alias in wiki.entities[qid]
+                .get("aliases", {})
+                .get("en", [])
+            ],
             parents=item_values(wiki, qid, "part_of"),
             description=wiki.entities[qid]
             .get("descriptions", {})
@@ -1297,3 +1304,67 @@ class TestPauses:
         # batch once, over the two invocations
         assert run.engine.prompts[0] == answered[0]
         assert len(run.engine.prompts) == 3
+
+
+# -- the live test's scenario, offline ---------------------------------------
+
+
+class TestTheLiveScenario:
+    """tests/integration/test_live_scratch_places.py's documents and fake,
+    through the in-memory instance and the real clustering and writer: a
+    namesake the manifest kept apart is asked of and named with the
+    claim's time, a name the town and the district answer to is left
+    uncertain, a record's link is written with no time, and a cycle is
+    refused."""
+
+    def test_it_asks_and_writes_as_the_live_test_says(
+        self, tmp_path, monkeypatch
+    ):
+        from tests.integration import test_live_scratch_places as live
+
+        run = PlaceRun(tmp_path, monkeypatch, documents=live.documents())
+        engine = live.Adjudicator()
+        run.driver._engines[scratchwrite.PLACE_ROLE] = engine
+        run.past_the_barrier(until="write")
+        documents = run.record("write")["documents"]
+
+        def created(index: int, local_id: str) -> str:
+            found = documents[run.documents[index].sha1]
+            return found["created_items"][local_id]
+
+        def description(qid: str) -> str:
+            return run.wiki.entities[qid]["descriptions"]["en"]["value"]
+
+        namesake = created(1, "d2")
+        assert description(namesake) != description(created(1, "d"))
+        engine.choices = {
+            live.KALDOVSKY: f"({description(namesake)};",
+            live.PEILTAL: places.UNCERTAIN,
+        }
+        run.stage("places")
+        record = run.record("places")
+        (run_item,) = place_run_items(run.wiki)
+        (statement,) = stage_written(run.wiki, created(0, "m"))
+        assert statement["mainsnak"]["datavalue"]["value"]["id"] == created(
+            0, "h"
+        )
+        assert qualifiers(statement) == {}
+        (statement,) = stage_written(run.wiki, created(1, "k"))
+        assert statement["mainsnak"]["datavalue"]["value"]["id"] == namesake
+        assert qualifiers(statement) == {"point_in_time": 1941}
+        assert stage_written(run.wiki, created(2, "p")) == []
+        assert containment(run.wiki, created(3, "s")) == []
+        (refused,) = record["refused"]
+        assert (refused["child"], refused["parent"]) == (
+            created(3, "s"),
+            created(3, "r"),
+        )
+        counts = record["counts"]
+        assert (
+            counts["written"],
+            counts["record_only"],
+            counts["record_only_written"],
+            counts["uncertain"],
+            counts["cycles"],
+        ) == (2, 2, 1, 1, 1)
+        assert run_item == record["run_qid"]

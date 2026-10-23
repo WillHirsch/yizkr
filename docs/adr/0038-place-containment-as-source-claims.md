@@ -269,14 +269,56 @@ Applied with the implementation (accepted by the owner, 2026-10-23):
    - **The command `reconcile-places`** asks the same question for a
      curator, with the same CSV contract less the containment verdicts.
      Its `--apply` writes only links a source states, cited as above.
+
+   *Applied (#201):* `yizkr.pipeline.places` takes each link a record
+   states (`stated_links`), with the qualifiers of each claim of its
+   document that gives it (a `part_of` from the link's inner end to an
+   entity a name of which is the container's), and asks
+   (`build_worklist`) of a link whose container names more than one
+   place, or that no claim gives. A link a claim gives whose container
+   names one place is settled without a question, as the write wrote it
+   from the claim; a link whose container names no place, or whose
+   place is none of the graph's, is left out and counted (`unnamed`,
+   decision FC as applied). A question names the place, its chain, the
+   container and the numbered candidates; the answer names a candidate's
+   number or `uncertain`. The inner end of a later link is the place the
+   link before it resolved to; a link whose inner end an uncertain
+   answer left open is counted (`unresolved`) and not written. Each link
+   is written by `write_link`: `part of` the named item with the claim's
+   qualifiers, `stated in` the artifact with no page, `inferred from`
+   the run item, each its own reference block; a statement of the same
+   value and qualifiers that cites the artifact already is left as it
+   is, and one citing other sources gains the link's blocks. The prompt
+   names each place by its label and description too, which the
+   instance keeps unique with the label and the writer makes from the
+   identity map alone. Between rounds the graph's containment removes
+   no question: a candidate the graph already puts the place in may be
+   a namesake the source does not mean, so a later round asks again,
+   and the idempotent skip keeps each link from being written twice
+   (§9's "transitive elimination between rounds" as applied). The
+   scratch run's `places` stage (yizkr.pipeline.scratchwrite) writes
+   every answer unattended; `reconcile-places` writes the CSV's
+   approved `same` rows, with the columns of ADR-0009's contract (A the
+   place, B the candidate named) and the chain and the container's
+   index beside them.
 6. **The rebuild of #201's stage** reuses PR #513's plumbing as listed
    in point 5, and drops its competing-pair questions and its run-only
    provenance. Graphs written before it are scratch graphs, removed by
    the next reset (ADR-0025), so no migration is needed.
+   *Applied (#201):* the stage runs after the write, under the write's
+   guard and the live-stack lock, over a complete write alone, keyed by
+   the place key, with its record and raw answers in `corpus/places/`.
 7. **The cycle guard** still refuses a write that would close a cycle,
    at any time. A cycle across sources is almost always a namesake
    resolved to the wrong item, which is §3's question, so the refusal is
    counted and named in the run report (owner question 4).
+   *Applied (#201):* `places.plan` walks the graph's non-deprecated
+   `part_of` and `location` statements of any time and the links
+   planned before; the run report counts the refusals in its aggregates
+   (`refused_cycles`) and names each, by its places' labels and its
+   document, in report.json and report.html, which stay on the machine.
+   A record-only link's count is `record_only_links`, and of them those
+   written `record_only_links_written` (owner question 3).
 
 ### 9. What it supersedes in ADR-0009, and what stands
 
@@ -301,7 +343,8 @@ Applied with the implementation (accepted by the owner, 2026-10-23):
 
 - the worklist mechanics PR #513 built: stated-container candidates
   link by link, every namesake asked, spine-first ordering, transitive
-  elimination between rounds;
+  elimination between rounds (as applied by #201, §8.5: idempotent
+  skips, since the graph's containment answers no identity question);
 - the cycle guard;
 - reset-stable prompts (decision FD and the numbered questions);
 - decisions FB and FC;

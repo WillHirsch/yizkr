@@ -186,6 +186,15 @@ was answered by the engine in its run.
 (newly failing), and the other way round (no longer failing), by kind
 and by failure label, beside each report's count of failed documents.
 
+**Place hierarchy.** The place stage's counts (#201; docs/RUN_REPORT.md,
+Place hierarchy), figure by figure, in a section of their own:
+questions, calls, answered and uncertain, stated links left out, links
+written, referenced and already there, links a record alone states and
+of them those written, links unresolved, answers rejected by the
+schema, and cycles and conflicts refused. A run whose report has no
+such counts (its place stage has not run) is `absent` on its side, and
+a diff where neither has them says the section is not available.
+
 **Flags and contradictions.** Compared figure by figure when both reports
 count them; otherwise `not available`, with why. Today no stage makes
 flags (#112), and different-source contradictions are read from a
