@@ -166,6 +166,7 @@ comment above it.
 | A place inside a same-named parent | the town Rekau in the urban district Rekau (*Stadtkreis Rekau*) |
 | A place named two ways over time | Flörburg, *Bad Flörburg* from 1954; the 1984 tree uses the new name for an 1836 birth, the naturalisation spells it *Floerburg* |
 | A place under two parents | Fläckfeld: Kreis Mockburg (1905) or Kreis Peiltal (1984) |
+| A containment with a time (ADR-0038) | worked examples, which no source in the universe states: *Kaldovsky District, in Chadsk Oblast from 1937* (a `part_of` with `start_time` 1937) and *in 1941 Koshnovka belonged to Kaldovsky District* (a `part_of` with `point_in_time` 1941). Every containment the universe's sources state carries no time: the 1941 certificate's district field gives Koshnovka's `part_of` none, and the 1905 certificate and the 1984 tree give Fläckfeld's none, each read as of its source |
 | A place with no known location | Klurnau |
 | Persecution events (ADR-0014) | Leopold's arrest (3 Sep 1939), imprisonment in the Peiltal court prison and release (1 Oct 1939); Ida's deportation to Lager Klurnau (21 Aug 1942) and liberation at Klurnau (28 Jan 1945). Emigrations are `migration` events too |
 | Contradictory dates (ADR-0002) | Gustav born 7 Jan 1919 (civil register) and 1 July 1919 (naturalisation): day and month transposed. Also Fläckfeld's district, and Rahel's address in July 1939 (the booklet, below) |

@@ -415,13 +415,22 @@ Rules — these mirror the archive's non-negotiable conventions:
   Mockburg"), in the fields a form gives that place (a certificate's
   village, district and oblast fields), or in a chain of containers,
   which states each link ("Snylsjum, gemeente Drakeradiel, Fryslân" also
-  puts gemeente Drakeradiel in Fryslân). Containment the source does not
-  state is world knowledge, proposed later by the place pass (ADR-0009):
-  never infer it from what you know of a place (that Flörburg lies in
-  Kreis Peiltal, in Hesse), and never carry it over from another place
-  the document names.
+  puts gemeente Drakeradiel in Fryslân). Containment is a source's claim,
+  and one the source does not state is never written (ADR-0038): never
+  infer it from what you know of a place (that Flörburg lies in Kreis
+  Peiltal, in Hesse), and never carry it over from another place the
+  document names.
   Where a source writes "Flörburg, Kreis Peiltal" and, elsewhere, a bare
   "Fläckfeld", Fläckfeld takes no `part_of` at all.
+  Give a containment the time the source gives it, and none where it
+  gives none: `start_time` or `end_time` where the source dates when the
+  place came into or left the container ("Kaldovsky District, in Chadsk
+  Oblast from 1937"), `point_in_time` where it presents the place as in
+  the container at a date ("in 1941 Koshnovka belonged to Kaldovsky
+  District"), each with its range and circa as a period's are. The
+  document's own date is never the containment's time: a certificate of
+  1941 that writes "Koshnovka, Kaldovsky District" gives its `part_of`
+  no time.
 - Persecution and displacement are EVENTS, not relations and not
   locations on a person (ADR-0014). "Deported to Klurnau in 1942" is a
   `deportation`; "held at", "interned at", "taken to" an
