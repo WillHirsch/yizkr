@@ -306,12 +306,14 @@ FALLBACK_TIERS = frozenset({"manifest", "segmentation"})
 # the leading labels of the reasons an extraction sets a mention record
 # aside by (ADR-0035 §5): claims.set_aside_structure's `schema` and
 # `dropped` (a name part dropped for an empty string, which leaves the
-# record standing when what is left can stand) and
-# claims.structure_problems' own
+# record standing when what is left can stand), `read as text` (an entry
+# of a list of strings written as an object holding its text, read as
+# that text, which sets nothing aside) and claims.structure_problems' own
 SET_ASIDE_REASONS = frozenset(
     {
         "schema",
         "dropped",
+        "read as text",
         "kind",
         "addition",
         "initial",

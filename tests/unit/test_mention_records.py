@@ -1487,6 +1487,175 @@ class TestEmptyStrings:
             ]
 
 
+class TestListEntriesWrittenAsObjects:
+    """An entry of a list of strings written as an object holding only
+    `written`, the shape of a given name, a person's surname or a place's
+    name, is read as that text before validation (ADR-0035 §5, #514),
+    each giving the reason `read as text`; a family's surname may also
+    carry a person's surname `type`. Only the shape is read: the record
+    then stands or is set aside as any record does."""
+
+    def test_a_persons_string_lists_read_as_their_text(self):
+        ursula = entity(
+            "e1",
+            "Löbig, Ursula, Wwe.",
+            "human",
+            aliases=["Ursula Löbig"],
+            structure={
+                "kind": "human",
+                "status": "name",
+                "given": [{"written": "Ursula"}],
+                "surnames": [{"written": "Löbig"}],
+                "suffixes": [{"written": "Wwe."}],
+            },
+        )
+        kept, reasons = set_aside_structure(ursula)
+        assert reasons == [
+            "read as text: structure.human.suffixes.0: an object holding "
+            "only its written text"
+        ]
+        record = EntityRecord.model_validate(kept)
+        assert record.structure.suffixes == ["Wwe."]
+        assert structure_problems(record) == []
+        # the model's own entity is left as it wrote it
+        assert ursula["structure"]["suffixes"] == [{"written": "Wwe."}]
+        rudolf = entity(
+            "e2",
+            "Лёбиг Рудольф Феликсович",
+            "human",
+            aliases=["Mrs Cutmore", "Muckel", "Rudolf Löbig"],
+            structure={
+                "kind": "human",
+                "given": [{"written": "Рудольф"}],
+                "surnames": [{"written": "Лёбиг"}],
+                "patronymics": [{"written": "Феликсович"}],
+                "nicknames": ["Muckel", {"written": "Muckel"}],
+                "titles": [{"written": "Mrs"}],
+                "unsplit": [{"written": "Rudolf Löbig"}],
+            },
+        )
+        kept, reasons = set_aside_structure(rudolf)
+        assert [reason.split(": ")[1] for reason in reasons] == [
+            "structure.human.patronymics.0",
+            "structure.human.nicknames.1",
+            "structure.human.titles.0",
+            "structure.human.unsplit.0",
+        ]
+        assert {r.split(":", 1)[0] for r in reasons} == {"read as text"}
+        structure = EntityRecord.model_validate(kept).structure
+        assert structure.patronymics == ["Феликсович"]
+        assert structure.nicknames == ["Muckel", "Muckel"]
+        assert structure.titles == ["Mrs"]
+        assert structure.unsplit == ["Rudolf Löbig"]
+        # a name part of a model of its own is left as written
+        assert structure.given[0].written == "Рудольф"
+
+    def test_an_organisations_and_a_familys_lists_read_as_their_text(self):
+        shop = entity(
+            "e1",
+            "Hutmacherei zum Blauen Hut",
+            "organization",
+            structure={
+                "kind": "organization",
+                "names": [{"written": "zum Blauen Hut"}],
+                "kinds": [{"written": "Hutmacherei"}],
+            },
+        )
+        kept, reasons = set_aside_structure(shop)
+        assert [reason.split(": ")[1] for reason in reasons] == [
+            "structure.organization.names.0",
+            "structure.organization.kinds.0",
+        ]
+        assert kept["structure"]["names"] == ["zum Blauen Hut"]
+        assert kept["structure"]["kinds"] == ["Hutmacherei"]
+        family = entity(
+            "e2",
+            "the Löbigs",
+            "family",
+            aliases=["the Sörnes"],
+            structure={
+                "kind": "family",
+                "surnames": [
+                    {"written": "Löbig", "type": "birth"},
+                    {"written": "Sörne"},
+                ],
+            },
+        )
+        kept, reasons = set_aside_structure(family)
+        assert reasons == [
+            "read as text: structure.family.surnames.0: an object holding "
+            "its written text and a type",
+            "read as text: structure.family.surnames.1: an object holding "
+            "only its written text",
+        ]
+        assert kept["structure"]["surnames"] == ["Löbig", "Sörne"]
+
+    def test_the_text_read_stands_or_is_set_aside_as_any_part(self):
+        """A text read that is no name part of the entity is an addition,
+        and the record is set aside; one that is "" is dropped."""
+        eugen = entity(
+            "e1",
+            "Eugen Löbig",
+            "human",
+            structure={
+                "kind": "human",
+                "given": [{"written": "Eugen"}],
+                "titles": [{"written": "Hutmacher"}],
+            },
+        )
+        kept, reasons = set_aside_structure(eugen)
+        assert "structure" not in kept
+        assert [reason.split(":", 1)[0] for reason in reasons] == [
+            "read as text",
+            "addition",
+        ]
+        eugen["structure"]["titles"] = [{"written": ""}]
+        kept, reasons = set_aside_structure(eugen)
+        assert kept["structure"]["titles"] == []
+        assert reasons == [
+            "read as text: structure.human.titles.0: an object holding "
+            "only its written text",
+            "dropped: structure.human.titles.0: an empty string",
+        ]
+
+    def test_only_that_shape_is_read(self):
+        """An object holding more than its text, a text that is no
+        string, a type outside a family's surnames or of no surname type,
+        and a place's container are left to validation."""
+        for structure in (
+            {"kind": "human", "titles": [{"written": "Mrs", "standard": "x"}]},
+            {"kind": "human", "titles": [{"written": 7}]},
+            {"kind": "human", "titles": [{"text": "Mrs"}]},
+            {"kind": "human", "titles": [{"written": "Mrs", "type": "birth"}]},
+            {
+                "kind": "family",
+                "surnames": [{"written": "Löbig", "type": "maiden"}],
+            },
+            {
+                "kind": "family",
+                "surnames": [
+                    {"written": "Löbig", "type": "birth", "standard": "x"}
+                ],
+            },
+            {"kind": "human", "given": ["Eugen"]},
+            {"kind": "place", "within": [{"written": "Kreis Peiltal"}]},
+        ):
+            kept, reasons = set_aside_structure(
+                entity("e1", "Eugen Löbig Mrs", "human", structure=structure)
+            )
+            assert "structure" not in kept, structure
+            assert [reason.split(":", 1)[0] for reason in reasons] == [
+                "schema"
+            ], structure
+
+    def test_the_manifest_prompt_is_unchanged(self):
+        """The reading leaves the prompt as it is, so cached answers are
+        reused: it still shows these lists only as `[...]`."""
+        from yizkr.pipeline.chunking import ENTITY_MANIFEST_PROMPT
+
+        assert '"titles": [{"written"' not in ENTITY_MANIFEST_PROMPT
+
+
 # -- the bootstrap ------------------------------------------------------------
 
 
