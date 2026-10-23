@@ -9,7 +9,9 @@ family firm, "hat shop", among them:
   case, ADR-0035);
 * an entity whose hint a curator deprecated is not counted under it;
 * an entity whose unclassified kind a curator deprecated is not listed;
-* an entity held without a hint is counted under the empty hint.
+* an entity held without a hint is counted under the empty hint;
+* the rows are ordered by how many entities carry the hint, the shop's
+  two before the airship's one, which comes first alphabetically.
 
 Every hint carries the session's marker (conftest.fixture_mark), so the
 fixture's rows are its own whatever else the instance holds, and a
@@ -59,6 +61,8 @@ RUN = {
 SHOP = f"Hat Shop {MARK}"
 SHOP_AGAIN = f"hat shop {MARK}"
 CRAFT = f"aircraft {MARK}"
+# a hint of one entity, before the shop's alphabetically
+AIRSHIP = f"Airship {MARK}"
 LINER = f"ocean liner {MARK}"
 # local id -> (label, hint, source)
 ENTITIES = {
@@ -66,6 +70,7 @@ ENTITIES = {
     "stall": (f"Unclassified Hat Stall {MARK}", SHOP_AGAIN, NATURALISATION),
     "craft": (f"Unclassified Craft {MARK}", CRAFT, INTERVIEW),
     "liner": (f"Unclassified Liner {MARK}", LINER, NATURALISATION),
+    "airship": (f"Unclassified Airship {MARK}", AIRSHIP, NATURALISATION),
     "unhinted": (f"Unclassified Unhinted {MARK}", None, INTERVIEW),
 }
 
@@ -182,6 +187,15 @@ def test_one_hint_in_two_spellings_is_one_row(rows, written, config):
         ENTITIES["blue-hat"][0],
         ENTITIES["stall"][0],
     }
+
+
+def test_a_hint_of_one_entity_is_its_row(rows, written, config):
+    row = rows[AIRSHIP.lower()]
+    assert (row["entities"], row["artifacts"]) == ("1", "1")
+    assert (
+        row["example"] == f"{config.concept_uri}/entity/{written['airship']}"
+    )
+    assert row["exampleLabel"] == ENTITIES["airship"][0]
 
 
 def test_a_deprecated_hint_is_not_counted(rows):
