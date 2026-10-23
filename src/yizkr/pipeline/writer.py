@@ -24,12 +24,19 @@ Per batch, the writer:
    happens before anything is written: a batch that cites media no item
    carries is refused whole, since its statements would have no source
    to reference. A claim whose subject is its own source document (an
-   `artifact` subject, such as an `issued_by` claim; ADR-0035 §3.4) is
-   written on that artifact item. A document subject that names any
-   other document, or sits on a property the manifest does not mark
-   `document_subject`, and a claim of such a property whose subject is
-   anything but its own source document, are refused before the first
-   write, as a claim whose text the instance cannot hold is (below);
+   `artifact` subject, such as an `issued_by` or an `inception` claim;
+   ADR-0035 §3.4) is written on that artifact item. A claim whose subject
+   is an artifact its source places, on the one property the manifest
+   marks `placed_subject` (a `caption`, ADR-0039 §2.1), is written on
+   that artifact's item, resolved by its media SHA-1 as a source is: the
+   artifact must be among the derived media the caller registered for
+   that source in the same write (`placed`), and must have an item. A
+   document subject that names any other document, an artifact subject on
+   a property the manifest marks neither way, a placed subject that names
+   no artifact registered as its source's in this write, or one no item
+   carries, and a claim of either kind of property with any other
+   subject, are refused before the first write, as a claim whose text the
+   instance cannot hold is (below);
 1. mints an extraction-run item from the batch metadata (idempotent:
    matched by a deterministic label containing the batch content hash,
    which must name one item alone: when two items hold it the write
@@ -1292,17 +1299,68 @@ def unnamed_entities(
     return unnamed
 
 
+def subject_refusal(
+    claim: Claim,
+    placed: Mapping[str, Collection[str]],
+    resolved: Collection[str] = (),
+) -> tuple[str, str] | None:
+    """Why the writer refuses the claim's subject, with the decision that
+    gives the rule, or None (the module docstring, step 0): a
+    document-subject property's subject is the claim's own source
+    (ADR-0035 §3.4); a placed-subject property's is an artifact among the
+    derived media `placed` names for the claim's source, by their SHA-1s,
+    whose media SHA-1 an item carries (`resolved`, the SHA-1s resolved);
+    and no other property takes an artifact subject (ADR-0039 §2)."""
+    acceptance = load_acceptance()
+    prop, subject = claim.property, claim.subject
+    source = claim.source.artifact.sha1
+    if prop in acceptance.placed_subjects:
+        if not isinstance(subject, ArtifactRef):
+            reason = "its property takes only an artifact its source places"
+        elif subject.sha1 not in placed.get(source, ()):
+            reason = (
+                "its subject is no artifact registered in this write as "
+                "placed by its source"
+            )
+        elif subject.sha1 not in resolved:
+            reason = "no item carries its subject's media SHA-1"
+        else:
+            return None
+        return reason, "ADR-0039 §2.1"
+    if isinstance(subject, ArtifactRef):
+        reasons = []
+        if subject.sha1 != source:
+            reasons.append(
+                "its subject is a document other than its own source"
+            )
+        if prop not in acceptance.document_subjects:
+            reasons.append(
+                "its property does not take an artifact as its subject"
+            )
+        return ("; ".join(reasons), "ADR-0035 §3.4") if reasons else None
+    if prop in acceptance.document_subjects:
+        return "its property takes only its source document", "ADR-0035 §3.4"
+    return None
+
+
 def pre_plan_refusals(
-    batch: ClaimBatch, unnamed: Mapping[str, list[str]]
+    batch: ClaimBatch,
+    unnamed: Mapping[str, list[str]],
+    placed: Mapping[str, Collection[str]] | None = None,
+    resolved: Collection[str] = (),
 ) -> dict[int, str]:
     """The claims of `batch` the writer refuses, by their place in the
     batch, each with the warning that names it by its claim id and
     property and says why (the module docstring):
 
-    * a document subject that is not the claim's own source, or on a
-      property the manifest does not mark `document_subject`, and a
-      claim of such a property with any other subject (ADR-0035
-      §3.4): the statement would go on the wrong item;
+    * a subject the subject rules refuse (subject_refusal, with `placed`,
+      the derived media registered for each source in this write, and
+      `resolved`, the artifact SHA-1s an item carries): a document
+      subject that is not the claim's own source, an artifact subject on
+      a property that takes none, a caption whose subject is no artifact
+      its source places in this write, and a claim of a document-subject
+      or placed-subject property with any other subject (ADR-0035 §3.4,
+      ADR-0039 §2): the statement would go on the wrong item;
     * a claim whose own text the instance cannot hold as it is: for
       each of its texts, its value or a qualifier's, what keeps the
       instance from holding it in the form the writer sends it in
@@ -1318,29 +1376,14 @@ def pre_plan_refusals(
       from finding or minting its item (`unnamed`, from unnamed_entities).
 
     The warning quotes none of the texts."""
-    document_subjects = load_acceptance().document_subjects
     refusals = {}
     for index, claim in enumerate(batch.claims):
-        if isinstance(claim.subject, ArtifactRef):
-            reasons = []
-            if claim.subject.sha1 != claim.source.artifact.sha1:
-                reasons.append(
-                    "its subject is a document other than its own source"
-                )
-            if claim.property not in document_subjects:
-                reasons.append(
-                    "its property does not take the source document as "
-                    "its subject"
-                )
-        elif claim.property in document_subjects:
-            reasons = ["its property takes only its source document"]
-        else:
-            reasons = []
-        if reasons:
+        refusal = subject_refusal(claim, placed or {}, resolved)
+        if refusal is not None:
+            reason, rule = refusal
             refusals[index] = (
                 f"claim {claim_id(claim)} ({claim.property}) is "
-                f"refused, and nothing of it is written: "
-                f"{'; '.join(reasons)} (ADR-0035 §3.4)"
+                f"refused, and nothing of it is written: {reason} ({rule})"
             )
             continue
         texts = [("its value", claim.value)]
@@ -1755,6 +1798,39 @@ class BatchWriter:
             raise UnregisteredArtifactError(missing)
         return {sha1: self._artifact_qids[sha1] for sha1 in wanted}
 
+    def resolve_placed(
+        self, batch: ClaimBatch, placed: Mapping[str, Collection[str]]
+    ) -> set[str]:
+        """The SHA-1s of the artifacts the batch's claims take as placed
+        subjects, among those `placed` names for each claim's source, that
+        an item carries, each resolved as a source is (resolve_artifacts),
+        the index read afresh when one is not known. Reads only, and
+        raises nothing: a placed subject no item carries is refused with
+        its claim (pre_plan_refusals)."""
+        wanted = sorted(
+            {
+                claim.subject.sha1
+                for claim in batch.claims
+                if isinstance(claim.subject, ArtifactRef)
+                and claim.subject.sha1 != claim.source.artifact.sha1
+                and claim.subject.sha1
+                in placed.get(claim.source.artifact.sha1, ())
+            }
+        )
+        cached = self._media_sha1_index or {}
+        if any(
+            sha1 not in self._artifact_qids and sha1 not in cached
+            for sha1 in wanted
+        ):
+            self._media_sha1_index = self.client.string_statement_index(
+                self.properties["media_sha1"]
+            )
+        index = self._media_sha1_index or {}
+        for sha1 in wanted:
+            if sha1 not in self._artifact_qids and sha1 in index:
+                self._artifact_qids[sha1] = index[sha1]
+        return {sha1 for sha1 in wanted if sha1 in self._artifact_qids}
+
     def _source_artifact_qid(self, ref: ArtifactRef) -> str:
         return self._artifact_qids[ref.sha1]
 
@@ -1769,7 +1845,8 @@ class BatchWriter:
         if isinstance(ref, VocabRef):
             return self.items[ref.key]
         if isinstance(ref, ArtifactRef):
-            # a claim's own source document, resolved in step 0
+            # a claim's own source document, or an artifact its source
+            # places, resolved in step 0
             return self._artifact_qids[ref.sha1]
         if isinstance(ref, QidRef):
             qid = ref.qid
@@ -2971,6 +3048,7 @@ class BatchWriter:
         mapped_from: ClaimBatch | None = None,
         one_map: bool = True,
         claim_summary: str | None = None,
+        placed: Mapping[str, Collection[str]] | None = None,
     ) -> WriteResult:
         """Write `batch`, finding or minting the item of each of its local
         entities through the identity map `identity` alone (step 2 of the
@@ -2998,7 +3076,11 @@ class BatchWriter:
         the claims that name it (step 2 of the module docstring).
         `claim_summary` is the edit summary of each
         claim's write, by default one that says whether its batch was
-        reviewed row by row or accepted whole."""
+        reviewed row by row or accepted whole. `placed` names, by the SHA-1
+        of a source's media, the SHA-1s of the derived media registered for
+        that source in this write: the artifacts a `caption` claim of that
+        source may take as its subject (step 0 of the module docstring).
+        Without it a caption is refused."""
         self._clusters, self._document, self._terms, self._identity_hash = (
             check_batch(batch, identity, mapped_from)
         )
@@ -3011,8 +3093,11 @@ class BatchWriter:
                 if bulk_accepted
                 else "ingest: write reviewed claim"
             )
-        # every cited artifact must resolve before the first write
+        # every cited artifact must resolve before the first write; an
+        # artifact a source places resolves where an item carries it, and
+        # a caption about one that does not is refused below
         self.resolve_artifacts(batch)
+        resolved = self.resolve_placed(batch, placed or {})
         # the manifest as the depicts gate read it (ADR-0005): one lookup
         self._entity_records = entity_records(batch)
         self._mentions = {}
@@ -3035,7 +3120,7 @@ class BatchWriter:
         # whose own text the instance cannot hold, which the loop below
         # leaves out whole
         unnamed = unnamed_entities(batch, self._entity_records)
-        refusals = pre_plan_refusals(batch, unnamed)
+        refusals = pre_plan_refusals(batch, unnamed, placed, resolved)
         # settled before the first write too: where each entity's item is
         # found or made, and the entities that may join neither the item
         # under their label nor the one under their tagged label, refused

@@ -3230,6 +3230,7 @@ class TestWriteTimeRegistration:
                 identity=None,
                 mapped_from=None,
                 one_map=True,
+                placed=None,
             ):
                 mapped.append(
                     writer.mapped_clusters(batch, identity, mapped_from)
@@ -3264,6 +3265,52 @@ class TestWriteTimeRegistration:
         assert (
             tmp_path / "state" / "corpus" / "clustering" / "identity-map.json"
         ).is_file()
+
+    def test_the_writer_is_given_the_media_registered_for_it(
+        self, tmp_path, monkeypatch
+    ):
+        """A container's write hands the writer the derived media its
+        registration found or made, by SHA-1 with their items, as what its
+        captions may take as their subject (#456, ADR-0039 §2.1)."""
+        from yizkr.pipeline import writer
+
+        given = []
+        handed = []
+        image = "1" * 40
+
+        class Writer:
+            def __init__(self, client, dry_run=False, artifact_qids=None):
+                given.append(dict(artifact_qids or {}))
+
+            def write_batch(self, batch, placed=None, **_options):
+                handed.append(placed)
+                return writer.WriteResult(
+                    run_qid="Q999", written=len(batch.claims)
+                )
+
+        monkeypatch.setattr(writer, "BatchWriter", Writer)
+
+        class RealWrite(ScriptedOrchestrator):
+            _step_write = Orchestrator._step_write
+
+            def _step_register(self, doc):
+                self.registered_media()[doc.sha1] = {image: "Q101"}
+                return super()._step_register(doc)
+
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "letter.txt").write_text("Rahel was born in 1871.")
+        orchestrator = RealWrite(folder, tmp_path / "state", log=quiet)
+        orchestrator._client = object()  # the writer here never uses it
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_claims(doc)
+        assert orchestrator.run() == 0
+        assert given == [{doc.sha1: "Q100", image: "Q101"}]
+        assert handed == [{doc.sha1: {image}}]
 
     def test_a_new_directory_records_its_bytes_before_any_view(
         self, tmp_path, monkeypatch

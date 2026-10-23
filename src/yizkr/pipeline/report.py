@@ -5,7 +5,9 @@ It reports a run that went to the end, one still running, and one that
 stopped short (stopped by the control file, paused, interrupted, refused,
 failed or killed): every count is what the run directory holds as it is
 read. It reads the run directory, and the model manifest for the names
-report.md may give claims and entities (claims.load_vocabulary); never
+report.md may give claims and entities (claims.load_vocabulary) and for
+which properties a document states of itself or of what it places
+(model.schema.load_acceptance); never
 the wiki, the engine, the LLM cache or the corpus:
 
     run.json         the plan (each document's SHA-1, file, kind and
@@ -109,11 +111,13 @@ from pathlib import Path
 from typing import Any, get_args
 
 from yizkr.claims import (
+    REJECT_REASONS,
     JudgementNote,
     PersonStructure,
     PlaceStructure,
     load_vocabulary,
 )
+from yizkr.model.schema import load_acceptance
 from yizkr.pipeline.anomalies import (
     ERROR_EVENT,
     OUTPUT_LIMIT_REACHED,
@@ -1097,6 +1101,9 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
             views["coverage"] = {
                 "chunks": _count(coverage.get("chunks")),
                 "rejected_claims": _count(coverage.get("rejected_claims")),
+                "rejected_by_reason": _tally(
+                    coverage.get("rejected_by_reason")
+                ),
                 "unread_objects": _count(coverage.get("unread_objects")),
                 "fallback": sorted(
                     tier for tier in fallback if isinstance(tier, str)
@@ -2293,6 +2300,10 @@ def _aggregate_content(
     statuses: Counter = Counter()
     notes: Counter = Counter()
     absent: Counter = Counter()
+    # the rejects by reason code (claims.REJECT_REASONS), and the
+    # extractions whose coverage counts none
+    by_reason: Counter = Counter()
+    reasons_absent = 0
     record_extractions = records_given = recordless = notes_set_aside = 0
     records_set_aside = unsplit_forms = appellation_labels = 0
     appellation_parts = 0
@@ -2323,6 +2334,10 @@ def _aggregate_content(
             with_rejects += bool(
                 coverage["rejected_claims"] or coverage["unread_objects"]
             )
+            if coverage.get("rejected_by_reason") is None:
+                reasons_absent += 1
+            else:
+                by_reason.update(coverage["rejected_by_reason"])
             fallbacks.update(
                 _known(tier, FALLBACK_TIERS) for tier in coverage["fallback"]
             )
@@ -2387,7 +2402,12 @@ def _aggregate_content(
             "documents": with_rejects,
             "rate": _share(rejected + unread, rejected + unread + given),
             "failed_extractions": failed_rejecting,
+            "by_reason": _folded(
+                by_reason, lambda value: _known(value, REJECT_REASONS)
+            ),
+            "by_reason_absent": reasons_absent,
         },
+        "container_claims": _container_claims(claims, vocabulary),
         "zero_claims": {
             "documents": zero_claims.total(),
             "share": _share(zero_claims.total(), batches),
@@ -2449,6 +2469,30 @@ def _aggregate_content(
         "flags": {
             key: flags[key] for key in ("status", "why") if key in flags
         },
+    }
+
+
+def _container_claims(
+    claims: Mapping[str, int], vocabulary: _Vocabulary
+) -> dict[str, Any]:
+    """What sources say of the artifacts themselves (ADR-0039), from the
+    batches' claims by property: the captions given, a container's words
+    about an image it places (`placed_subject`), and the claims a document
+    gives about itself, by property (`document_subject`). The properties
+    are the manifest's own, so the counts name no document."""
+    acceptance = load_acceptance()
+    return {
+        "captions": sum(
+            claims.get(key, 0) for key in sorted(acceptance.placed_subjects)
+        ),
+        "document_subject_by_property": _folded(
+            {
+                key: claims[key]
+                for key in sorted(acceptance.document_subjects)
+                if claims.get(key)
+            },
+            lambda value: _known(value, vocabulary.properties),
+        ),
     }
 
 
@@ -3092,8 +3136,29 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
                     f"Rate: {_pct(rejects['rate'])} of the claims given",
                     "Extractions that failed with every claim rejected or "
                     f"unread: {_n(rejects['failed_extractions'])}",
+                    "Rejects by reason: "
+                    f"{_listed(rejects['by_reason'])}"
+                    + (
+                        f" (extractions that count none: "
+                        f"{_n(rejects['by_reason_absent'])})"
+                        if rejects["by_reason_absent"]
+                        else ""
+                    ),
                     f"Fallback tiers taken: {_listed(content['fallbacks'])}",
                 ]
+            ],
+            3,
+        ),
+        _Section(
+            "What sources say of the artifacts themselves",
+            [
+                f"Captions given, a container's words about an image it "
+                f"places: {_n(content['container_claims']['captions'])}. "
+                "Claims a document gives about itself, by property: "
+                + _listed(
+                    content["container_claims"]["document_subject_by_property"]
+                )
+                + "."
             ],
             3,
         ),

@@ -53,11 +53,16 @@ Entity references (subjects and item values) come in three kinds:
 
 A claim's subject may also be the document the claim comes from, named
 as its source is, by an ``artifact`` reference (ADR-0035 §3.4): the
-document itself is what a register office issued. Only a property the
-manifest marks `document_subject` takes such a subject, it must be the
-claim's own source, and such a property takes no other subject; the
-writer checks the same rule and resolves the subject to the artifact item
-as it resolves the source.
+document itself is what a register office issued, what a letter's writer
+dated. Only a property the manifest marks `document_subject` takes such a
+subject, it must be the claim's own source, and such a property takes no
+other subject. A claim's subject may otherwise be an artifact its source
+places, named by the SHA-1 of its bytes, on the one property the manifest
+marks `placed_subject` (`caption`, ADR-0039 §2.1), which takes no other
+subject: a container's words about an image on its page. A claim's
+subject is so its own source, or an artifact its source places by bytes,
+never one it only writes about. The writer checks the same rules and
+resolves either subject to the artifact item as it resolves the source.
 
 CLI:
     python3 claims.py --json-schema  # print JSON Schema (for LLM prompts)
@@ -72,6 +77,7 @@ import json
 import re
 import sys
 import unicodedata
+from collections.abc import Collection, Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal, get_args
@@ -790,6 +796,7 @@ def validate_against_manifest(
     manifest_path=DEFAULT_MANIFEST,
     vocabulary: tuple[dict[str, str], set[str]] | None = None,
     acceptance: Acceptance | None = None,
+    placed: Mapping[str, Collection[str]] | None = None,
 ) -> list[str]:
     """Check every key, datatype and value kind in the batch against the
     manifest.
@@ -822,7 +829,13 @@ def validate_against_manifest(
     * a claim whose subject is a document (an artifact reference) names
       its own source, by a property the manifest marks
       `document_subject`, and a claim of such a property has that
-      subject and no other (ADR-0035 §3.4);
+      subject and no other (ADR-0035 §3.4); or it names an artifact its
+      source places, by a property the manifest marks `placed_subject`
+      (`caption`), and a claim of such a property has such a subject and
+      no other (ADR-0039 §2.1). `placed` gives, by the SHA-1 of a
+      source's media, the SHA-1s of the artifacts that source places
+      (`placed_artifacts`); a source it does not name places none, so
+      without it every `caption` claim is refused;
     * a `name` claim, a name form of no stated type, is a person's or an
       unclassified entity's, never a vocabulary item's, and never
       restates its subject's label (ADR-0011): both are compared by
@@ -961,25 +974,10 @@ def validate_against_manifest(
         where = f"claims[{index}]"
         subject_kind = kind_of(claim.subject)
         check_ref(claim.subject, f"{where}.subject")
-        if isinstance(claim.subject, ArtifactRef):
-            if claim.subject.sha1 != claim.source.artifact.sha1:
-                errors.append(
-                    f"{where}.subject: a document subject names the claim's "
-                    f"own source, {claim.source.artifact}, not "
-                    f"{claim.subject} (ADR-0035 §3.4)"
-                )
-            if claim.property not in acceptance.document_subjects:
-                errors.append(
-                    f"{where}.subject: property {claim.property!r} does not "
-                    f"take the source document as its subject (ADR-0035 "
-                    f"§3.4)"
-                )
-        elif claim.property in acceptance.document_subjects:
-            errors.append(
-                f"{where}.subject: property {claim.property!r} takes only "
-                f"the claim's own source document, {claim.source.artifact}, "
-                f"as its subject (ADR-0035 §3.4)"
-            )
+        errors.extend(
+            f"{where}.subject: {problem}"
+            for problem in subject_problems(claim, acceptance, placed)
+        )
         check_property_value(claim.property, claim.value, where, subject_kind)
         subject_key = entity_key(claim.subject)
         check_not_subject(claim.value, subject_key, where)
@@ -1045,6 +1043,102 @@ def validate_against_manifest(
                 )
 
     return errors
+
+
+def placed_artifacts(pages: Iterable[object] | None) -> frozenset[str]:
+    """The SHA-1s of the artifacts a source places: the images a paged
+    container's transcription marks on its pages (ADR-0008), each page's
+    `images`. None, or pages that mark none, place nothing."""
+    return frozenset(
+        sha1 for page in pages or () for sha1 in getattr(page, "images", ())
+    )
+
+
+def subject_problems(
+    claim: Claim,
+    acceptance: Acceptance,
+    placed: Mapping[str, Collection[str]] | None = None,
+) -> list[str]:
+    """Why the claim's subject breaks the subject rules of ADR-0035 §3.4
+    and ADR-0039 §2, each ending in its reason code (SUBJECT_REASONS), or
+    none. A claim's subject is its own source on a property the manifest
+    marks `document_subject`, an artifact its source places on one it
+    marks `placed_subject`, and on any other property neither: no
+    property takes an artifact subject but those, and those take no other
+    subject. `placed` is as validate_against_manifest takes it."""
+    prop, subject = claim.property, claim.subject
+    source = claim.source.artifact
+    if prop in acceptance.placed_subjects:
+        places = (placed or {}).get(source.sha1, ())
+        if not isinstance(subject, ArtifactRef):
+            return [
+                f"property {prop!r} takes only an artifact the claim's "
+                f"source places as its subject (ADR-0039 §2.1) "
+                f"[{PLACED_SUBJECT}]"
+            ]
+        if subject.sha1 not in places:
+            return [
+                f"property {prop!r} takes an artifact the claim's source "
+                f"places, and {source} places no {subject} (ADR-0039 "
+                f"§2.1) [{PLACED_SUBJECT}]"
+            ]
+        return []
+    if prop in acceptance.document_subjects:
+        if not isinstance(subject, ArtifactRef):
+            return [
+                f"property {prop!r} takes only the claim's own source "
+                f"document, {source}, as its subject (ADR-0035 §3.4) "
+                f"[{DOCUMENT_SUBJECT}]"
+            ]
+        if subject.sha1 != source.sha1:
+            return [
+                f"a document subject names the claim's own source, "
+                f"{source}, not {subject} (ADR-0035 §3.4) "
+                f"[{DOCUMENT_SUBJECT}]"
+            ]
+        return []
+    if isinstance(subject, ArtifactRef):
+        return [
+            f"property {prop!r} does not take an artifact as its subject: "
+            f"only the document-subject properties take the source "
+            f"document, and `caption` an artifact the source places "
+            f"(ADR-0035 §3.4, ADR-0039 §2) [{ARTIFACT_SUBJECT}]"
+        ]
+    return []
+
+
+# The reason codes of the subject rules, which end each problem
+# subject_problems gives, so a run report can count rejects by reason
+# without quoting one: a document-subject property's subject is not its
+# source; a placed-subject property's is not an artifact its source
+# places; another property names an artifact as its subject.
+DOCUMENT_SUBJECT = "document_subject"
+PLACED_SUBJECT = "placed_subject"
+ARTIFACT_SUBJECT = "artifact_subject"
+SUBJECT_REASONS = (DOCUMENT_SUBJECT, PLACED_SUBJECT, ARTIFACT_SUBJECT)
+# a reject's other reasons: its JSON did not parse as a claim, or the
+# manifest refused it otherwise
+SCHEMA_REASON = "schema"
+MANIFEST_REASON = "manifest"
+REJECT_REASONS = (*SUBJECT_REASONS, SCHEMA_REASON, MANIFEST_REASON)
+
+
+def reject_reasons(problems: Iterable[str]) -> list[str]:
+    """The reason codes of a manifest reject's problems
+    (validate_against_manifest), each once in REJECT_REASONS order: a
+    subject rule's own code, MANIFEST_REASON for any other problem."""
+    found = set()
+    for problem in problems:
+        code = next(
+            (
+                reason
+                for reason in SUBJECT_REASONS
+                if problem.endswith(f"[{reason}]")
+            ),
+            MANIFEST_REASON,
+        )
+        found.add(code)
+    return [reason for reason in REJECT_REASONS if reason in found]
 
 
 def name_form_key(text: str) -> str:

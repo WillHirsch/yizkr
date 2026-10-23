@@ -1385,37 +1385,46 @@ ASSERTIONS = tuple(
         "studio-photo-1890s",
         ("studio-photo-1890s", "point_in_time", Date(1890, decade=True)),
         ("studio-bruesrich", "location", "peiltal", "Brüsrich · Peiltal"),
+        # what the portrait states of itself (ADR-0039 §2.2): its mount
+        # names the studio, and its reverse whom it shows, one statement a
+        # name; a source's words, never a confirmed depiction (ADR-0005)
         (
             "studio-photo-1890s",
-            "depicts",
+            "author",
+            "studio-bruesrich",
+            "Photograph Brüsrich",
+        ),
+        (
+            "studio-photo-1890s",
+            "shows",
             "eugen-loebig",
             {"referred_to_as": "Muckel"},
             "Muckel",
         ),
         (
             "studio-photo-1890s",
-            "depicts",
+            "shows",
             "caecilie-loebig",
             {"referred_to_as": "Cilli"},
             "Cilli",
         ),
         (
             "studio-photo-1890s",
-            "depicts",
+            "shows",
             "sebastian-loebig",
             {"referred_to_as": "Wastl"},
             "Wastl",
         ),
         (
             "studio-photo-1890s",
-            "depicts",
+            "shows",
             "rahel-loebig",
             {"referred_to_as": "Rahel"},
             "Rahel",
         ),
         (
             "studio-photo-1890s",
-            "depicts",
+            "shows",
             "felix-loebig",
             {"referred_to_as": "Felix"},
             "Felix",
@@ -2518,6 +2527,16 @@ ASSERTIONS = tuple(
         ),
         # the caption and the commentary are no translation: no marker
         ("sebastian-loebig", "nickname", "Wastl", "Wastl to Klara"),
+        # the caption is the booklet's words about the image it places on
+        # page 6, kept verbatim on the image's item (ADR-0039 §2.1); its
+        # "July 1939" is never the letter's date
+        (
+            "letter-excerpt-1939",
+            "caption",
+            "Wastl to Klara, July 1939.",
+            {"page_number": "6"},
+            "Wastl to Klara, July 1939.",
+        ),
         (
             "gustav-loebig",
             "sibling",
@@ -2527,11 +2546,26 @@ ASSERTIONS = tuple(
     )
     + _said(
         "letter-excerpt-1939",
+        # what the letter states of itself (ADR-0039 §2.2): its dateline,
+        # its heading and its greeting; the top of the letter names no
+        # writer, so it gives no author
         (
             "letter-excerpt-1939",
-            "point_in_time",
+            "inception",
             Date(1939, 7, 28),
             "den 28. Juli 1939",
+        ),
+        (
+            "letter-excerpt-1939",
+            "location_of_creation",
+            "brunnenring-35",
+            "Flörburg, Brunnenring 35, den",
+        ),
+        (
+            "letter-excerpt-1939",
+            "addressee",
+            "klara-loebig",
+            "Liebes Pünktchen",
         ),
         (
             "sebastian-loebig",

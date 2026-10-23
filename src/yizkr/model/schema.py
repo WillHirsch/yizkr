@@ -80,8 +80,13 @@ class ManifestProperty(BaseModel):
     offered: bool = True
     # Whether a claim of the property has its own source document as its
     # subject, named by the document's content key, and no other subject
-    # (`issued_by`, ADR-0035 §3.4).
+    # (`issued_by`, `author` and the other document-subject properties,
+    # ADR-0035 §3.4, ADR-0039 §2.2).
     document_subject: bool = False
+    # Whether a claim of the property has as its subject an artifact its
+    # source places, named by the SHA-1 of the artifact's bytes, and no
+    # other subject (`caption`, ADR-0039 §2.1).
+    placed_subject: bool = False
 
     @property
     def in_prompts(self) -> bool:
@@ -164,6 +169,13 @@ class Manifest(BaseModel):
                 seen[entry.label] = key
         self._check_classes()
         self._check_accepts()
+        for key, spec in self.properties.items():
+            if spec.document_subject and spec.placed_subject:
+                raise ValueError(
+                    f"properties.{key} is marked both document_subject and "
+                    f"placed_subject: a claim's subject is its own source "
+                    f"or an artifact its source places, never either"
+                )
         return self
 
     def _check_classes(self) -> None:
@@ -266,6 +278,9 @@ class Acceptance:
     # the properties whose claims take their source document, and only it,
     # as subject
     document_subjects: frozenset[str] = frozenset()
+    # the properties whose claims take an artifact their source places, and
+    # only such an artifact, as subject
+    placed_subjects: frozenset[str] = frozenset()
 
     @property
     def kind_keys(self) -> frozenset[str]:
@@ -372,6 +387,11 @@ def _acceptance(text: str) -> Acceptance:
             key
             for key, spec in manifest.properties.items()
             if spec.document_subject
+        ),
+        placed_subjects=frozenset(
+            key
+            for key, spec in manifest.properties.items()
+            if spec.placed_subject
         ),
     )
 

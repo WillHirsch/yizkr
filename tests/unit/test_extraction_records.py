@@ -46,6 +46,7 @@ from yizkr.pipeline.chunking import (
 )
 from yizkr.pipeline.extract import (
     EXTRACTION_PROMPT,
+    document_block,
     run_metadata,
     salvage_valid_claims,
     vocabulary_prompt_lines,
@@ -310,13 +311,15 @@ class TestTheChunkPrompt:
                 assignment_block="",
                 schema="",
                 document_block="",
+                document_paragraphs=document_block(transcription(), DOC_REF),
             )
         )
         assert (
-            "Its subject is the document, given exactly as the source's "
+            "Their subject is the document, given exactly as the source's "
             f'artifact: {{"kind": "artifact", "sha1": "{DOC_REF.sha1}"}}, '
-            "and never anything else."
+            "and never anything else"
         ) in rendered
+        assert "`issued_by`: the organization that issued it" in rendered
         properties, _items = vocabulary_prompt_lines()
         assert re.search(r"^\s*issued_by:", properties, re.M)
 
@@ -330,16 +333,16 @@ class TestTheChunkPrompt:
                 schema="",
                 language="de",
                 text="",
+                document_block=document_block(transcription(), DOC_REF),
             )
         )
         assert (
-            "The document itself: `issued_by` names the organization that "
-            "issued THIS document"
+            "The document itself: these properties state what THIS document is"
         ) in rendered
         assert (
-            "Its subject is the document, given exactly as the source's "
+            "Their subject is the document, given exactly as the source's "
             f'artifact: {{"kind": "artifact", "sha1": "{DOC_REF.sha1}"}}, '
-            "and never anything else."
+            "and never anything else"
         ) in rendered
 
     def test_judgement_notes_only_where_a_reader_could_differ(self):
@@ -1110,6 +1113,7 @@ class TestTheManifestsRecords:
             "chunks",
             "claims",
             "rejected_claims",
+            "rejected_by_reason",
             "unread_objects",
             "fallback",
         }
@@ -1238,7 +1242,7 @@ class TestTheDocumentAsSubject:
             {"extraction_run": run(), "claims": [dated]}
         )
         (problem,) = validate_against_manifest(batch)
-        assert "does not take the source document as its subject" in problem
+        assert "does not take an artifact as its subject" in problem
 
     def test_issued_by_takes_no_other_subject(self):
         """An `issued_by` claim is about the document itself (ADR-0035
@@ -1359,7 +1363,7 @@ class TestTheWriter:
                 DOC_REF,
                 "point_in_time",
                 {"type": "time", "year": 1941},
-                "does not take the source document as its subject",
+                "its property does not take an artifact as its subject",
             ),
         ],
     )

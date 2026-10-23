@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -37,10 +37,13 @@ from typing import Any
 
 import yizkr
 from yizkr.claims import (
+    SCHEMA_REASON,
     ArtifactRef,
     ClaimBatch,
     ExtractionRunMetadata,
     load_vocabulary,
+    placed_artifacts,
+    reject_reasons,
     validate_against_manifest,
 )
 from yizkr.model.schema import load_acceptance, load_manifest
@@ -50,7 +53,7 @@ from yizkr.pipeline.llm import (
     at_output_limit,
     reject_response,
 )
-from yizkr.pipeline.transcribe import Transcription
+from yizkr.pipeline.transcribe import DECK_ENGINE, Transcription
 
 EXTRACTION_PROMPT = """\
 You extract source-attributed genealogical claims from transcriptions of
@@ -124,12 +127,7 @@ Rules — these mirror the archive's non-negotiable conventions:
   `object_has_role` `spouse` (or `partner`), and the union is
   `started_by` its wedding and `ended_by` its end, each an event with its
   own date and place.
-- The document itself: `issued_by` names the organization that issued
-  THIS document, where the source shows it issuing (the register office
-  of a certificate, the court of a judgment). Its subject is the
-  document, given exactly as the source's artifact:
-  {{"kind": "artifact", "sha1": "{artifact_sha1}"}}, and never anything
-  else. No other property takes the document as its subject.
+{document_block}
 - Dating a period: a residence, an occupation or a membership is dated
   by its `start_time` and `end_time` qualifiers, a move in and a move out
   as its start and end. `point_in_time` on such a claim only records a
@@ -157,6 +155,98 @@ Transcription of artifact sha1:{artifact_sha1} (language: {language}):
 
 {text}
 """
+
+
+# The paragraph on the document itself, in both extraction prompts
+# (ADR-0035 §3.4, ADR-0039 §2.2): the document-subject properties, each
+# given only where the document states it of itself.
+DOCUMENT_ITSELF = """\
+- The document itself: these properties state what THIS document is,
+  each only where the document states it of itself, never from what
+  another document says of it. Their subject is the document, given
+  exactly as the source's artifact:
+  {{"kind": "artifact", "sha1": "{artifact_sha1}"}}, and never anything
+  else:
+  * `issued_by`: the organization that issued it, where the source shows
+    it issuing (the register office of a certificate, the court of a
+    judgment);
+  * `author`: who wrote, drew or made it, where it names them (a
+    letter's signature, a studio's name on a photograph's mount);
+  * `addressee`: whom it is addressed to (a letter's greeting, an
+    envelope's address);
+  * `inception`: when it was made (a letter's dateline), at the
+    precision it gives;
+  * `location_of_creation`: where it was made (a letter's heading);
+  * `main_subject`: what it is about (a letter's topic, the district a
+    map covers);
+  * `shows`: whom or what an image shows, as its own content names them
+    (an inscription on a print: one claim per name, no position read
+    into their order); never `depicts`, which only the faces flow
+    gives.
+  No other property takes the document as its subject."""
+
+# The paragraph on what the document places (ADR-0039 §3), in both
+# extraction prompts: the images its pages or slides place, each by its
+# artifact reference and its place, or that it places none.
+PLACED_ARTIFACTS = """\
+- What this document places: the images below stand on its pages or
+  slides, each marked where it sits by the SHA-1 of its bytes
+  ("[Page 6, image 1: sha1:…]"):
+{placed_lines}
+  Give each passage of THIS document's own text that speaks of one of
+  them (a caption, a heading over it, a sentence of commentary) as ONE
+  `caption` claim: its subject that image's artifact reference exactly
+  as listed, its value the passage exactly as written, in the language
+  it is written in, never cut, corrected or translated, its page number
+  the page the passage stands on. A passage that speaks of two images
+  gives one claim for each. Where the text does not say plainly that the
+  passage speaks of the image (a slide's title over its one image), add
+  a `relation` note. Give nothing else about an image: who made it, for
+  whom, when, where, what it is about or whom it shows is the image's
+  own claim, read from the image apart. The people a caption names are
+  entities of this document, with what it says of them, as anywhere
+  else."""
+
+NO_PLACED_ARTIFACTS = """\
+- This document places no image read on its own: give no `caption`
+  claim."""
+
+
+def placed_lines(transcription: Transcription) -> list[str]:
+    """Each image the transcription places, once for each place it has,
+    as the prompts list it: its artifact reference and its place ("page 6,
+    image 1", "slide 2, image 1"), in the order of the pages and of the
+    images on each page, as the transcription's markers give them."""
+    unit = "slide" if transcription.engine == DECK_ENGINE else "page"
+    return [
+        f'  {{"kind": "artifact", "sha1": "{sha1}"}}: {unit} {page.page}, '
+        f"image {place}"
+        for page in transcription.pages or ()
+        for place, sha1 in enumerate(page.images, start=1)
+    ]
+
+
+def document_block(transcription: Transcription, artifact: ArtifactRef) -> str:
+    """The prompts' paragraphs on the document itself and on what it
+    places (DOCUMENT_ITSELF, PLACED_ARTIFACTS): the images listed are the
+    ones the transcription's pages mark, never named by a QID, and never
+    with anything another document says of them (ADR-0039 §5)."""
+    lines = placed_lines(transcription)
+    placed = (
+        PLACED_ARTIFACTS.format(placed_lines="\n".join(lines))
+        if lines
+        else NO_PLACED_ARTIFACTS
+    )
+    return DOCUMENT_ITSELF.format(artifact_sha1=artifact.sha1) + "\n" + placed
+
+
+def placed_by(
+    transcription: Transcription, artifact: ArtifactRef
+) -> dict[str, frozenset[str]]:
+    """What validation is handed of the artifacts the document places
+    (claims.validate_against_manifest's `placed`): by the document's
+    content key, the SHA-1s its transcription's pages mark."""
+    return {artifact.sha1: placed_artifacts(transcription.pages)}
 
 
 def run_metadata(model_identifier: str) -> ExtractionRunMetadata:
@@ -399,7 +489,10 @@ def _normalize_claim_shape(claim: dict) -> dict:
 
 
 def salvage_valid_claims(
-    claims: list, extraction_run: dict, entities: list[dict] | None = None
+    claims: list,
+    extraction_run: dict,
+    entities: list[dict] | None = None,
+    placed: Mapping[str, Collection[str]] | None = None,
 ) -> tuple[ClaimBatch, list[dict]]:
     """Partition raw claim dicts into a valid ClaimBatch and rejects.
 
@@ -412,7 +505,13 @@ def salvage_valid_claims(
 
     With `entities` (an entity manifest, ADR-0007), local refs naming
     ids outside the manifest are rejected, and the manifest travels in
-    the returned batch.
+    the returned batch. `placed` names the artifacts each source places
+    (validate_against_manifest): a `caption` claim whose subject is none
+    of its source's is a reject (ADR-0039 §2.1).
+
+    Each reject carries its reason codes (`reasons`, claims.REJECT_REASONS),
+    for a report to count without quoting it: `schema` for a claim that
+    does not parse, else the manifest problems' codes (reject_reasons).
     """
     vocabulary = load_vocabulary()
     acceptance = load_acceptance()
@@ -445,13 +544,25 @@ def salvage_valid_claims(
                 }
             )
         except Exception as exc:  # pydantic ValidationError, in short form
-            rejects.append({"claim": claim, "problems": [str(exc)]})
+            rejects.append(
+                {
+                    "claim": claim,
+                    "problems": [str(exc)],
+                    "reasons": [SCHEMA_REASON],
+                }
+            )
             continue
         problems = validate_against_manifest(
-            batch, vocabulary=vocabulary, acceptance=acceptance
+            batch, vocabulary=vocabulary, acceptance=acceptance, placed=placed
         )
         if problems:
-            rejects.append({"claim": claim, "problems": problems})
+            rejects.append(
+                {
+                    "claim": claim,
+                    "problems": problems,
+                    "reasons": reject_reasons(problems),
+                }
+            )
         else:
             valid.append(claim)
     return (
@@ -580,25 +691,31 @@ class LlmClaimExtractor:
             artifact_sha1=artifact.sha1,
             language=transcription.language,
             text=transcription.prompt_text(),
+            document_block=document_block(transcription, artifact),
         )
         printed_pages = transcription.printed_pages()
+        placed = placed_by(transcription, artifact)
         try:
-            return self._extract(prompt, artifact, printed_pages)
+            return self._extract(prompt, artifact, printed_pages, placed)
         except _KeptAnswerRejected:
-            return self._extract(prompt, artifact, printed_pages, again=True)
+            return self._extract(
+                prompt, artifact, printed_pages, placed, again=True
+            )
 
     def _extract(
         self,
         prompt: str,
         artifact: ArtifactRef,
         printed_pages: Mapping[int, str],
+        placed: Mapping[str, Collection[str]],
         again: bool = False,
     ) -> ClaimBatch:
         """The batch one answer gives, each claim citing `artifact` and
         the page number printed on its page, where `printed_pages` gives
-        one (cite_artifact). A rejected answer the client kept from an
-        earlier call raises _KeptAnswerRejected, unless this is the call
-        made `again` after one."""
+        one (cite_artifact), validated with the artifacts the document
+        places (`placed`, salvage_valid_claims). A rejected answer the
+        client kept from an earlier call raises _KeptAnswerRejected,
+        unless this is the call made `again` after one."""
 
         def reject_answer(response: str, reason: str) -> None:
             if reject_response(self.client, response, reason) and not again:
@@ -623,6 +740,7 @@ class LlmClaimExtractor:
         batch, rejects = salvage_valid_claims(
             cite_artifact(payload.get("claims", []), artifact, printed_pages),
             run_metadata(self.client.model_identifier).model_dump(mode="json"),
+            placed=placed,
         )
         if self.rejects_dump is not None:
             if rejects:
@@ -659,8 +777,9 @@ class ClaimFileExtractor:
     The file holds either a full ClaimBatch or a bare {"claims": [...]}
     object; in the latter case run metadata is generated here. Its claims
     cite their artifacts themselves, by content key, and are validated as
-    they are: `extract` takes the same arguments as the other extractors
-    and uses none of them.
+    they are, with the artifacts the transcription's pages place taken as
+    placed by the transcription's artifact (placed_by): `extract` takes
+    the same arguments as the other extractors and uses only that.
     """
 
     def __init__(
@@ -681,7 +800,9 @@ class ClaimFileExtractor:
                 "claims": payload.get("claims", payload),
             }
         batch = ClaimBatch.model_validate(payload)
-        problems = validate_against_manifest(batch)
+        problems = validate_against_manifest(
+            batch, placed=placed_by(transcription, transcription.artifact)
+        )
         if problems:
             raise ValueError(
                 "claims file failed manifest validation:\n  "
