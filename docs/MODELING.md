@@ -1069,8 +1069,11 @@ language:
 - **a place:** a status (`toponym`, `deictic` or `generic`); its names,
   each with its toponym and generic head where they can be told apart; an
   address, with its street and number; and the containers the source puts
-  it in, in the source's order (`within`: *Snylsjum, gemeente
-  Drakeradiel, Fryslân, Nederlân* is Snylsjum within the other three);
+  it in, nearest first, whatever order the source writes them in
+  (`within`: *Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân* is
+  Snylsjum within the other three; a form whose fields run oblast,
+  district, village puts Koshnovka within Kaldovsky District, then
+  Chadsk Oblast);
 - **an organisation:** its proper names, the words naming its kind, and
   its places (*Калдовское районное бюро ЗАГС* has a kind and a place, and
   no proper name);
