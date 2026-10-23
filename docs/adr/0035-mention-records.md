@@ -541,6 +541,15 @@ is not made yet. The writer's line in the readers' list of §8 below (it
 "finds them by exact label until #109") is so settled
 (docs/MODELING.md, "General approach").
 
+Amended by #555 (2026-10-23): a place's `within` (§2.2) lists its
+containers nearest first, whatever order the source writes them in,
+the order the place stage reads (ADR-0009), which links each to the
+next. A form whose fields run oblast, district, village gives
+Koshnovka within Kaldovsky District and Chadsk Oblast, never within
+Chadsk Oblast and then Kaldovsky District, which would state a link
+the form never makes. The entity-manifest prompt asks for that order
+with an example from running text and one from a form.
+
 **Decided by the owner (2026-09-29):**
 
 - Before scratch run 1 (#145), extraction hands over the structure of
@@ -802,10 +811,14 @@ to `toponym`, and a surname's type to `other`.
 | `status` | what the label is: `toponym`, `deictic` or `generic` | only a `toponym` keys |
 | `names` | the place's own names as written, each with its toponym and generic head where they can be told apart | yes, each as written, with one exception below |
 | `address` | a street and a house number, as written, in the source's order; the address is also one of the names | yes, as written, among the names |
-| `within` | the places the source puts it in, as written, in the source's order | never; they decide nesting |
+| `within` | the places the source puts it in, as written, nearest first, whatever order the source writes them in | never; they decide nesting |
 
 - "Fläckfeld, Kreis Mockburg" (the marriage certificate) gives the name
   Fläckfeld, within Kreis Mockburg.
+- A form whose fields run oblast, district, village (Chadsk Oblast,
+  Kaldovsky District, Koshnovka) gives the name Koshnovka, within
+  Kaldovsky District and Chadsk Oblast, in that order: nearest first,
+  never the fields' order.
 - "Lager Klurnau" gives one name, with the head Lager and the toponym
   Klurnau. It keys as written, so the camp never meets the town Klurnau.
   "Stadtkreis Rekau" likewise never meets the town Rekau inside it.
