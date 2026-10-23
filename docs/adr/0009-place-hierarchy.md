@@ -21,7 +21,8 @@ which writes nothing. Competing pairs and the verdicts `same`,
 derivation" item 1 and "Adjudication and verdicts" below are
 superseded). An answered link is written `part of` the item the answer
 names, stated in the stating document's artifact (no page: a record has
-no locator) with the time its claim gives and none where the record
+no locator; since #593 with the container's evidence and its page:
+ADR-0038 §8.5) with the time its claim gives and none where the record
 alone states it, and inferred from the pass's run item; a link written
 already, stated in the same artifact with the same time, is not written
 again, and an equal statement another source states gains the link's

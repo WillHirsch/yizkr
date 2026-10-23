@@ -879,11 +879,12 @@ artifact a new QID, changes neither.
   its blocks as they are: for a link a claim of the document also gives,
   its block records the link and nothing is added; for one the record
   alone states, a block without the excerpt gains the excerpt's block
-  beside it, never a duplicate statement (ADR-0038 §8.5). A link that would close a
-  cycle, at any time, is refused. A scratch run does this unattended in
-  its `places` stage; `yizkr reconcile-places` asks the same for a
-  curator, who approves the answers it writes. A GeoNames-imported edge
-  is stated in the GeoNames dataset item (ADR-0038 §6).
+  beside it, never a duplicate statement (ADR-0038 §8.5). A link that
+  would close a cycle, at any time, is refused. A scratch run does this
+  unattended in its `places` stage; `yizkr reconcile-places` asks the
+  same for a curator, who approves the answers it writes. A
+  GeoNames-imported edge is stated in the GeoNames dataset item
+  (ADR-0038 §6).
 - The inconsistency report suppresses value pairs connected by a path of
   `location` and `part_of` claims, differences of resolution rather than
   contradictions, and follows only a claim that a source states and a

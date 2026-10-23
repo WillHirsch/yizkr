@@ -218,20 +218,23 @@ statements of their own (`links_written`), those an equal statement
 gained as references (`links_referenced`) and those already there; the
 links a record states that no claim of its document gives
 (`record_only_links`, a measure of extraction's recall on containment,
-ADR-0038 owner question 3) and of them those written, with no time,
-each citing its container's evidence (`record_only_links_written`); the
-links an uncertain answer left with no inner place, or that followed a
-container left out and so were never asked (`links_unresolved`); the answer lines rejected by the
-answer's schema; the links refused as each would close a cycle
-(`refused_cycles`) and the questions refused as conflicts (answered
-twice differently); and whether the instance-contents key was recorded;
-or that the instance held what the run's key makes, so nothing was asked
-again. Counts alone, never a QID or a label. Each refused cycle is
-named, by its two places' labels and the document that states it, in
-report.json (`place_cycles`) and report.html alone, which stay on the
-machine (ADR-0038 owner question 4). The place stage's calls count under
-their own role, `places`, in the calls' lines by role, apart from the
-extraction's; the clustering stage's adjudication of ambiguous pairs
+ADR-0038 owner question 3) and of them those written, with no time, each
+citing its container's evidence (`record_only_links_written`); the links
+an uncertain answer left with no inner place, or that followed a
+container left out and so were never asked (`links_unresolved`); the
+answer lines rejected by the answer's schema; the links refused as each
+would close a cycle (`refused_cycles`) and the questions refused as
+conflicts (answered twice differently); and whether the
+instance-contents key was recorded; or that the instance held what the
+run's key makes, so nothing was asked again. A stated link is counted
+with its container's evidence: two records of one document that resolve
+to one item, with one chain but other evidence, count as two links
+(ADR-0038 §8.5). Counts alone, never a QID or a label. Each refused
+cycle is named, by its two places' labels and the document that states
+it, in report.json (`place_cycles`) and report.html alone, which stay on
+the machine (ADR-0038 owner question 4). The place stage's calls count
+under their own role, `places`, in the calls' lines by role, apart from
+the extraction's; the clustering stage's adjudication of ambiguous pairs
 counts under `adjudication`, apart from the critique's, whose engine,
 model and effort it uses.
 

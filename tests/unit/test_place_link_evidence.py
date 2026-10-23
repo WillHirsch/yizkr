@@ -63,6 +63,7 @@ from yizkr.pipeline.transcription_record import (
 
 FIELD = "Koshnovka, Kaldovsky District, Chadsk Oblast"
 OTHER = "Koshnovka in the Kaldovsky District"
+CLAIMED = "in 1941 Koshnovka belonged to Kaldovsky District"
 
 
 def certificate(printed: str | None = "12", language="en") -> Transcription:
@@ -263,6 +264,29 @@ class TestEvidencePage:
     def test_a_blank_printed_number_is_none(self):
         assert evidence_page(certificate(printed=" "), FIELD) == ("2", None)
 
+    def test_a_document_s_transcription_is_read_once(self, monkeypatch):
+        """Each container of a document whose evidence is the same is
+        looked for once, in one reading of the transcription."""
+        from yizkr.core import verbatim
+
+        made, looked = [], []
+
+        class Counted(verbatim.Transcript):
+            def __init__(self, text):
+                made.append(text)
+                super().__init__(text)
+
+            def locate(self, excerpt):
+                looked.append(excerpt)
+                return super().locate(excerpt)
+
+        monkeypatch.setattr(verbatim, "Transcript", Counted)
+        first, second = stated_links(
+            death_batch(), CREATED, DEATH, certificate()
+        )
+        assert (first.page, second.page) == ("2", "2")
+        assert (len(made), looked) == (1, [FIELD])
+
 
 class TestExcerptLanguage:
     def test_the_transcription_s_language(self):
@@ -436,27 +460,33 @@ class TestWriteEvidence:
         ]
 
     def test_a_claim_s_link_keeps_the_claim_s_own_reference(self, written):
-        """The writer wrote the claim's statement, citing the certificate
-        under the claim's own excerpt: the claimed link is recorded by
-        it, and nothing is added."""
+        """The claim's statement cites the certificate under the claim's
+        own excerpt, the worked example's words (a block of the shape the
+        writer gives a claim, `stated in` with its page and excerpt): the
+        claimed link, whose container's evidence is other words, is
+        recorded by it, and nothing is added."""
         wiki, writer, child, parent, artifact = written
         runs = Runs(wiki)
-        bare = StatedLink(
+        claim_s = StatedLink(
             sha1=DEATH,
             place=child,
             chain=("Kaldovsky District",),
             index=0,
             qualifiers=dated().qualifiers,
             claimed=True,
+            evidence=CLAIMED,
+            language="en",
+            page="2",
         )
-        write_link(writer, child, parent, bare, artifact, runs)
+        write_link(writer, child, parent, claim_s, artifact, runs)
         writes = wiki.wbi.item.writes
+        assert dated().evidence == FIELD != CLAIMED
         assert write_link(writer, child, parent, dated(), artifact, runs) == (
             PRESENT
         )
         assert wiki.wbi.item.writes == writes
         (statement,) = statements(wiki, child)
-        assert excerpts(statement) == [[], []]
+        assert excerpts(statement) == [[(CLAIMED, "en")], []]
 
     def test_a_link_with_no_evidence_is_present_by_its_artifact(self, written):
         wiki, writer, child, parent, artifact = written
@@ -564,6 +594,7 @@ def test_the_scratch_stage_cites_the_evidence_on_its_page(
             RecordPage(page=1, status="transcribed", text="Dear Leopold,"),
             RecordPage(
                 page=2,
+                printed_page="3",
                 status="transcribed",
                 text=f"you were {words}.",
             ),
@@ -593,11 +624,10 @@ def test_the_scratch_stage_cites_the_evidence_on_its_page(
         snak["datavalue"]["value"]
         for snak in snaks[PlaceWiki.PROPERTIES["page_number"]]
     ] == ["2"]
-    # the write side's instance has no printed page number, nor this page
-    assert set(snaks) == {
-        PlaceWiki.PROPERTIES[key]
-        for key in ("stated_in", "page_number", "transcription_excerpt")
-    }
+    assert [
+        snak["datavalue"]["value"]
+        for snak in snaks[PlaceWiki.PROPERTIES["printed_page_number"]]
+    ] == ["3"]
     # the stage's record keeps the link's evidence and page
     planned = stage_record(run.context("places").directory)["planned"]
     assert [

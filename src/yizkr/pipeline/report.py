@@ -3544,7 +3544,7 @@ def _write_sections(content: Mapping[str, Any]) -> list[_Section]:
             f"Links a record states and no claim of its document gives: "
             f"{_n(places['record_only_links'])}, of them "
             f"{_n(places['record_only_links_written'])} written, with no "
-            "page and no time.",
+            "time, each citing its container's evidence.",
             f"Rejected by the schema: {_n(places['rejected_by_schema'])} "
             "answers; refused: "
             f"{_n(places['refused_cycles'])} links that would close a "

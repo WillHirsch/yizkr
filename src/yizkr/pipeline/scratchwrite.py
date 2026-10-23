@@ -22,11 +22,14 @@ time alone.
 **The place key.** What the place stage adds is named by the write key,
 the version of what it writes (PLACE_VERSION), the adjudication prompt's
 template, the batch size it asks in, and the engine, model and effort of
-the role it calls (PLACE_ROLE): never a QID. The instance holds what a
-run makes once its place stage has written its links, so the key the
-instance-contents record takes, and that the reset stage looks for
-(contents_key), is the place key when the driver runs a place stage, and
-the write key otherwise.
+the role it calls (PLACE_ROLE): never a QID. The documents'
+transcription views the stage reads (each container's evidence's page
+and language) are covered through their batches, which the write key
+names: a view whose content changes is extracted again. The instance
+holds what a run makes once its place stage has written its links, so
+the key the instance-contents record takes, and that the reset stage
+looks for (contents_key), is the place key when the driver runs a place
+stage, and the write key otherwise.
 
 **reset.** When the instance-contents record (yizkr.core.instance) still
 stands and records the contents key, the instance holds what the key
@@ -238,7 +241,7 @@ RESET, REGISTER, WRITE, PLACES, SITE = (
 # the role whose engine, model and effort the place stage calls, and the
 # version of what it writes for the same inputs and answers
 PLACE_ROLE = "extract"
-PLACE_VERSION = 1
+PLACE_VERSION = 2
 # the raw answers the place stage was given, in its directory of the run
 RESPONSES = "responses.json"
 # each stage's record of what it did, in its directory of the run

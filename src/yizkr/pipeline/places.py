@@ -90,6 +90,7 @@ from yizkr.core import verbatim
 from yizkr.core.config import Config
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.extract import scan_json_objects
+from yizkr.pipeline.gedcom import UNDETERMINED
 from yizkr.pipeline.llm import (
     CUT_OFF_AT_LIMIT,
     LlmClient,
@@ -100,8 +101,6 @@ from yizkr.queries.publish import prefix_block
 
 # the answer that names no candidate
 UNCERTAIN = "uncertain"
-# the language of an excerpt whose document says none
-UNDETERMINED = "und"
 BATCH_QUESTIONS = 40
 
 # the review CSV (yizkr reconcile-places): A is the place whose record
@@ -447,29 +446,57 @@ def read_transcription(path: Path):
         return None
 
 
+class EvidencePages:
+    """Where a document's container evidence lies: the page of
+    `transcription` the first line of an evidence lies on, found as the
+    extraction checked it (core.verbatim), as its physical number and
+    the number printed on it (extract.printed_page_number: None where the
+    page's record gives none); (None, None) for a transcription with no
+    pages, or one the evidence does not occur in. The transcription is
+    read once, and each evidence looked for once."""
+
+    def __init__(self, transcription) -> None:
+        self.transcription = transcription
+        self._pages = (
+            (transcription.pages or ()) if transcription is not None else ()
+        )
+        self._transcript = (
+            verbatim.Transcript(transcription.text) if self._pages else None
+        )
+        self._lines = (
+            transcription.text.splitlines(keepends=True) if self._pages else []
+        )
+        self._printed = transcription.printed_pages() if self._pages else {}
+        self._found: dict[str, tuple[str | None, str | None]] = {}
+
+    def __call__(self, evidence: str) -> tuple[str | None, str | None]:
+        if evidence not in self._found:
+            self._found[evidence] = self._page(evidence)
+        return self._found[evidence]
+
+    def _page(self, evidence: str) -> tuple[str | None, str | None]:
+        from yizkr.pipeline.extract import printed_page_number
+
+        if self._transcript is None:
+            return None, None
+        number = self._transcript.locate(evidence)
+        if number is None:
+            return None, None
+        start = sum(len(line) for line in self._lines[: number - 1])
+        for page in self._pages:
+            if page.start <= start <= page.end:
+                return str(page.page), printed_page_number(
+                    str(page.page), self._printed
+                )
+        return None, None
+
+
 def evidence_page(
     transcription, evidence: str
 ) -> tuple[str | None, str | None]:
-    """The page of `transcription` the first line of `evidence` lies on,
-    found as the extraction checked it (core.verbatim), as its physical
-    number and the number printed on it (None where the page's record
-    gives none); (None, None) for a transcription with no pages, or one
-    the evidence does not occur in."""
-    pages = (transcription.pages or ()) if transcription is not None else ()
-    if not pages:
-        return None, None
-    number = verbatim.Transcript(transcription.text).locate(evidence)
-    if number is None:
-        return None, None
-    lines = transcription.text.splitlines(keepends=True)
-    start = sum(len(line) for line in lines[: number - 1])
-    for page in pages:
-        if page.start <= start <= page.end:
-            printed = page.printed_page
-            return str(page.page), (
-                printed if printed and printed.strip() else None
-            )
-    return None, None
+    """The page of `transcription` the first line of `evidence` lies on
+    (EvidencePages)."""
+    return EvidencePages(transcription)(evidence)
 
 
 def excerpt_language(batch: ClaimBatch, transcription=None) -> str:
@@ -542,8 +569,9 @@ def stated_links(
 
     Each link carries its container's evidence, in the document's
     language (excerpt_language), and the page of `transcription` (the
-    document's, when given) its first line lies on (evidence_page); a
-    container with no evidence gives its link none."""
+    document's, when given) its first line lies on (EvidencePages, which
+    reads the transcription once); a container with no evidence gives its
+    link none."""
     from yizkr.pipeline.clustering import part_keys
 
     records = {entity.id: entity for entity in batch.entities}
@@ -570,6 +598,7 @@ def stated_links(
         if claim.property == "part_of" and isinstance(claim.value, ItemValue)
     ]
     language = excerpt_language(batch, transcription)
+    pages = EvidencePages(transcription)
     found: list[StatedLink] = []
     for entity in batch.entities:
         record = entity.structure
@@ -582,11 +611,7 @@ def stated_links(
         documents = [sha1] if sha1 else batch_artifacts(batch, entity.id)
         for index, container in enumerate(chain):
             evidence = record.within[index].evidence
-            page, printed = (
-                evidence_page(transcription, evidence)
-                if evidence
-                else (None, None)
-            )
+            page, printed = pages(evidence) if evidence else (None, None)
             outer = part_keys(container)
             inner = part_keys(chain[index - 1]) if index else frozenset()
             giving = [

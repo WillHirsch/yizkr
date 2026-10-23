@@ -352,6 +352,18 @@ Applied with the implementation (accepted by the owner, 2026-10-23):
    changing it, and the writer itself adds a block, never edits one,
    when the same artifact asserts a value at another place (its step 4).
    A re-run then finds the excerpt's block whole and adds nothing.
+   Whether a link is claimed is decided by its names (`stated_links`):
+   a claim of the document whose names do not match the record's
+   container leaves the link record-only, so the claim's own statement,
+   when it is the equal one, gains the excerpt's block and the run's
+   beside its own, accurate provenance that changes no block. The
+   scratch stage's version (`PLACE_VERSION`) moved with this, so an
+   instance written before it is not taken for what the place key
+   makes. The stage's counts count stated links, and a link now carries
+   its evidence: two records of one document that resolve to one item
+   with one chain but other evidence give two links, each counted
+   (`record_only_links` and the rest), and the second adds its block to
+   the first's statement.
 6. **The rebuild of #201's stage** reuses PR #513's plumbing as listed
    in point 5, and drops its competing-pair questions and its run-only
    provenance. Graphs written before it are scratch graphs, removed by
