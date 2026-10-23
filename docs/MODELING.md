@@ -1252,16 +1252,19 @@ report, the timeline, the kinship query, reconciliation, clustering and
 the static site) still read them; extraction refuses and counts any
 spouse claim.
 
-**The GEDCOM adapter makes unions (ADR-0036 §5).** A family with two
-partners (its `HUSB` and `WIFE`, or, with no `WIFE` or no `HUSB`, two
-`HUSB`s or two `WIFE`s, counted, the second a partner only and never
-the children's parent) is a `marriage` when a `MARR` of it states a
+**The GEDCOM adapter makes unions (ADR-0036 §5).** A family's couple
+are its first two `HUSB` and `WIFE` lines, in whatever combination (a
+`HUSB` and a `WIFE`, or two `HUSB`s or two `WIFE`s, as GEDCOM 5.5.1
+exports write a same-sex couple, counted), and each is the children's
+parent as its tag states: a `HUSB` their `father`, a `WIFE` their
+`mother`. A third is counted (`FAM.HUSB`, `FAM.WIFE`), not read. A
+family with two partners is a `marriage` when a `MARR` of it states a
 wedding, or when a `DIV` or `ANUL` states its end with no such `MARR`
 (a marriage with no wedding, counted), otherwise a `partnership` (the
 export gives Felix and Ida no `MARR`, so theirs is a partnership); its
 couple are its participants with the role `spouse` or `partner`. A family
-whose `HUSB` and `WIFE` name the same person gives no union and no
-parent claim, counted. A `MARR` states its
+whose two partner lines are a `HUSB` and a `WIFE` naming the same person
+gives no union and no parent claim, counted. A `MARR` states its
 wedding as a `DIV` its divorce, by a `Y` or a `DATE` or `PLAC` with a
 value: a `MARR N`, or one that states nothing, makes no wedding and is
 counted. The family's `MARR`s of one kind are one wedding, which the

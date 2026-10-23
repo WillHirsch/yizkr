@@ -14,9 +14,9 @@ Source-first conventions carry over unchanged:
   item), with the record's verbatim GEDCOM lines as the transcription
   excerpt — the human reviewer sees exactly the lines that assert the
   claim. Of a family record, a claim of its union holds the lines that
-  give it: the family's own line, its HUSB and WIFE, and its own
-  citations for the couple's claims, or the MARR, DIV or ANUL that gives
-  an event's claims. A person's image
+  give it: the family's own line, its couple's HUSB and WIFE lines, and
+  its own citations for the couple's claims, or the MARR, DIV or ANUL that
+  gives an event's claims. A person's image
   claim holds the object's lines, after those of the person's OBJE link
   when the link holds any beneath it. An excerpt is given in NFC, the
   form the instance stores text in, and holds at most 400 characters,
@@ -156,11 +156,14 @@ folds, a source record a folded citation cites and an object it maps,
 which the census takes whole, a SOUR it folds into no claim and an OBJE
 it maps to no media item are counted as well (SOUR.OBJE for a scan
 beneath a citation, FILE.SOUR for a citation beneath an object's FILE).
-A family has one husband and one wife, so the adapter reads a family's
-first HUSB and first WIFE alone, and a further one is counted with its
-parent's tag too (FAM.HUSB, FAM.WIFE); a family with no WIFE and two
-HUSBs, or no HUSB and two WIFEs, has those two as its couple, and its
-union is counted (FAM two HUSB/WIFE). A family's MARR, DIV and ANUL are
+A family has two partners, so the adapter reads a family's first two
+HUSB and WIFE lines, in whatever combination (a HUSB and a WIFE, two
+HUSBs, two WIFEs), and a further one is counted with its parent's tag
+too (FAM.HUSB, FAM.WIFE), as is a second that names the person the first
+does under the same tag. The two are the family's couple, and each is
+its children's parent as its tag states: a HUSB their father, a WIFE
+their mother; a couple of two HUSBs or two WIFEs is counted (FAM two
+HUSB/WIFE). A family's MARR, DIV and ANUL are
 events of the union of its couple, so in a family with one partner or
 none (its HUSB or its WIFE is missing, or names no person the adapter
 maps) they are counted as MARR, DIV and ANUL: no claim names the other
@@ -168,8 +171,8 @@ partner, and a claim has no unknown value to name them with. A MARR, a
 DIV or an ANUL states its event as a DEAT does (below); one that states
 none (a MARR N, a bare DIV) is counted as MARR, DIV or ANUL, and a
 family whose MARRs, DIVs and ANULs state none is a partnership; one
-whose HUSB and WIFE name the same person gives no union and no parent
-claim, counted. A DEAT states the death
+whose two partner lines are a HUSB and a WIFE naming the same person
+gives no union and no parent claim, counted. A DEAT states the death
 only as GEDCOM 5.5.1 has an event asserted, by a DATE or PLAC with a
 value (a DATE the grammar cannot parse, only when the DEAT's own line
 has none), or else by a Y on that line: one that states none (a bare
@@ -1723,9 +1726,8 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         "DIV": {"DATE", "PLAC"},
         "ANUL": {"DATE", "PLAC"},
     }
-    # the tags the adapter reads only the first of beneath a tag: a family
-    # has one husband and one wife, save one whose couple are two HUSBs or
-    # two WIFEs (partners), whose second is read too
+    # the tags the adapter reads only some of beneath a tag: a family's
+    # first two partner lines (partner_lines)
     reads_once = {"FAM": {"HUSB", "WIFE"}}
     # the tags each tag is read beneath
     read_beneath: dict[str, set[str]] = {}
@@ -1753,17 +1755,21 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     def count(tag: str) -> None:
         unsupported[tag] = unsupported.get(tag, 0) + 1
 
+    def partner_lines(fam: Record) -> list[Record]:
+        """The HUSB and WIFE lines the adapter reads of a family: its
+        first two of either tag, in the record's order, save a second
+        that names the person the first does under the same tag, which
+        restates it and is left to the census."""
+        pair = [p for p in fam.children if p.tag in ("HUSB", "WIFE")][:2]
+        if len(pair) == 2 and pair[0].own_line() == pair[1].own_line():
+            return pair[:1]
+        return pair
+
     def partners(fam: Record) -> list[Record]:
-        """The HUSB and WIFE lines that give a family's union its couple:
-        its first HUSB and first WIFE, or, in a family with no WIFE (or no
-        HUSB), its first two HUSBs (or WIFEs). Empty unless they name two
-        people, each a person the batch holds."""
-        husbands, wives = fam.all("HUSB"), fam.all("WIFE")
-        pair = (
-            [husbands[0], wives[0]]
-            if husbands and wives
-            else (husbands or wives)[:2]
-        )
+        """The partner lines that give a family's union its couple
+        (partner_lines): empty unless they name two people, each a person
+        the batch holds."""
+        pair = partner_lines(fam)
         if len(pair) < 2 or pair[0].value == pair[1].value:
             return []
         return pair if all(part.value in people for part in pair) else []
@@ -1840,10 +1846,9 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         within(obje, further)
 
     def census(record: Record) -> None:
-        seen: set[str] = set()
-        # the lines of a family's couple, each read where it stands
+        # the partner lines of a family, each read where it stands
         couple = (
-            {id(part) for part in partners(record)}
+            {id(part) for part in partner_lines(record)}
             if (record.tag == "FAM")
             else set()
         )
@@ -1858,14 +1863,11 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                 else:
                     mapped_object(child)
                 continue
-            # only a family's first HUSB and first WIFE are read, or its
-            # couple's two HUSBs or two WIFEs
+            # only a family's partner lines are read of its HUSBs and WIFEs
             further = (
-                child.tag in seen
-                and child.tag in reads_once.get(record.tag, set())
+                child.tag in reads_once.get(record.tag, set())
                 and id(child) not in couple
             )
-            seen.add(child.tag)
             if (
                 child.tag in reads.get(record.tag, set())
                 and not further
@@ -2517,10 +2519,11 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         * A partner's DEAT gives no end: GEDCOM does not say that the
           union lasted until the death.
 
-        Each claim's excerpt holds the family's own line, its HUSB and
-        WIFE, and the lines of the record that gives the claim; the SOUR
-        citations of that record, the family's for the couple and each
-        event's for its claims, are folded into its reference."""
+        Each claim's excerpt holds the family's own line, its couple's
+        HUSB and WIFE lines, and the lines of the record that gives the
+        claim; the SOUR citations of that record, the family's for the
+        couple and each event's for its claims, are folded into its
+        reference."""
         couple = partners(fam)
         if couple[0].tag == couple[1].tag:
             outcome("FAM two HUSB/WIFE")
@@ -2855,17 +2858,27 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                 )
 
     # families -> parentage claims and unions, between people the batch
-    # holds: a HUSB, WIFE or CHIL that names no one it holds gives none
+    # holds: a HUSB, WIFE or CHIL that names no one it holds gives none.
+    # Each partner line is the children's parent as its tag states: a
+    # HUSB their father, a WIFE their mother, so two HUSBs are two fathers
+    parent_props = {"HUSB": "father", "WIFE": "mother"}
     for fam in families.values():
-        husband = fam.text("HUSB")
-        wife = fam.text("WIFE")
-        if husband and husband == wife:
+        parents = [
+            (part.value, parent_props[part.tag]) for part in partner_lines(fam)
+        ]
+        # two lines naming one person are a HUSB and a WIFE, as
+        # partner_lines keeps one of two that restate each other
+        if (
+            len(parents) == 2
+            and parents[0][0]
+            and parents[0][0] == parents[1][0]
+        ):
             # one person as both father and mother is no reading the
             # record can mean, so neither is guessed, and no union is made
             outcome("FAM one person as HUSB and WIFE")
             continue
         for child in fam.all("CHIL"):
-            for parent_xref, prop in ((husband, "father"), (wife, "mother")):
+            for parent_xref, prop in parents:
                 if parent_xref and parent_xref == child.value:
                     # a person as their own parent is no reading the record
                     # can mean: that link alone is left out, and counted
