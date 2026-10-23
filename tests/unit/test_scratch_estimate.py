@@ -15,6 +15,7 @@ universe's (docs/EXAMPLES.md).
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import itertools
 import json
@@ -1397,6 +1398,40 @@ class TestCacheAsIs:
             json.loads(NESTED)
         assert scratch.runs_holder(runs) is None
         assert llm.cache_holder(cache) is None
+
+    @pytest.mark.parametrize("record", ["[]", "null", "7", '"a driver"'])
+    def test_a_lock_record_that_is_no_object_holds_nothing(
+        self, tmp_path, record
+    ):
+        """A lock record that decodes to no JSON object names no
+        holder, for the runs directory as for the cache."""
+        runs, cache = tmp_path / "runs", tmp_path / "cache"
+        for folder in (runs, cache):
+            folder.mkdir()
+            (folder / ".lock").write_text(record + "\n")
+        assert scratch.runs_holder(runs) is None
+        assert llm.cache_holder(cache) is None
+
+    def test_a_runs_lock_naming_no_holder_still_holds(self, tmp_path):
+        """A nested record names no holder, yet the lock is flock's, not
+        the record's: while it is held a driver is refused, and the next
+        driver to hold it replaces the record with its own (#533)."""
+        runs = tmp_path / "runs"
+        runs.mkdir(mode=0o700)
+        lock = runs / scratch.LOCK_FILE
+        lock.write_text(NESTED)
+        fd = os.open(lock, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            assert scratch.runs_holder(runs) is None
+            with pytest.raises(scratch.ScratchRunInUse), scratch.hold(runs):
+                pass
+        finally:
+            os.close(fd)
+        assert lock.read_text() == NESTED
+        with scratch.hold(runs):
+            assert f"process {os.getpid()} " in scratch.runs_holder(runs)
+        assert lock.read_text() == ""
 
 
 class TestNothingTouched:
