@@ -761,3 +761,122 @@ def test_the_monitor_counts_the_calls_under_adjudication(tmp_path):
     calls = summarise_run(rundir.path).calls
     assert calls.roles[NAME]["engine"] == 1
     assert set(calls.roles) == {NAME}
+
+
+# -- what verdicts settle -----------------------------------------------------
+
+
+def three_nicholases() -> list[Doc]:
+    """Nicholas Lobig's birth, 1950, as one register gives it and as a
+    misreading gives it, 1850 (the fixture corpus's misread year), and a
+    register with no date: the undated one pairs ambiguously with each,
+    and the two dated ones, whose dates cannot overlap, pair ambiguously
+    too."""
+
+    def nicholas(name: str, year: int | None) -> Doc:
+        claims = [("e1", "date_of_birth", day(year))] if year else []
+        return register(
+            name,
+            [human("e1", "Nicholas Lobig")],
+            claims,
+            {"e1": "nicholas-lobig"},
+        )
+
+    return [
+        nicholas("read", 1950),
+        nicholas("undated", None),
+        nicholas("misread", 1850),
+    ]
+
+
+def settle(docs: list[Doc], verdict_of) -> dict:
+    """The map under verdicts `verdict_of` gives each ambiguous pair, by
+    the two documents' keys."""
+    manifests = [doc.manifest for doc in docs]
+    identity = cluster_corpus(manifests)
+    names = {
+        doc.fingerprint("e1", identity): name
+        for doc, name in zip(docs, ("read", "undated", "misread"), strict=True)
+    }
+    verdicts = {
+        clustering._pair(*p["mentions"]): verdict_of(
+            frozenset(names[m] for m in p["mentions"])
+        )
+        for entry in identity["review"]
+        for p in entry["pairs"]
+        if p["link"] == AMBIGUOUS
+    }
+    assert len(verdicts) == 3
+    return cluster_corpus(manifests, None, verdicts)
+
+
+def test_members_no_same_joined_that_contradict_stay_apart():
+    """`same` joins each dated register to the undated one, but the two
+    dated ones are `different`: the part the closure makes holds two
+    members whose dates conflict and that no `same` joined, so all three
+    stay apart."""
+    settled = settle(
+        three_nicholases(),
+        lambda pair: DIFFERENT if pair == {"read", "misread"} else SAME,
+    )
+    assert {e["method"] for e in settled["mentions"].values()} == {AMBIGUOUS}
+    (entry,) = settled["review"]
+    assert entry["status"] == ADJUDICATED
+    assert entry["contradiction"]["evidence"].split("/")[1] == "conflict"
+
+
+def test_a_same_verdict_overrides_a_date_contradiction():
+    """A misreading disagrees on Nicholas's birth: when the adjudicator
+    says every pair is one person, the dates' conflict does not keep them
+    apart."""
+    settled = settle(three_nicholases(), lambda pair: SAME)
+    assert {e["method"] for e in settled["mentions"].values()} == {ADJUDICATED}
+    assert settled["summary"]["clusters"][ADJUDICATED] == 1
+    assert settled["summary"]["cluster_mentions"][ADJUDICATED] == 3
+
+
+def test_no_qid_reaches_the_evidence_or_the_prompt():
+    """An item already in the graph is named as one, and a QID in a
+    source's own words is masked in the prompt."""
+    doc = document(
+        "a register",
+        [human("e1", "Gustav Löbig")],
+        [
+            (
+                "e1",
+                "residence",
+                {"type": "item", "value": {"kind": "qid", "qid": "Q31"}},
+            )
+        ],
+        {"e1": "gustav-loebig"},
+        sha1="c" * 40,
+    )
+    lines = adjudication._Document(doc.manifest).lines("e1")
+    assert "residence: an item already in the graph" in lines
+    assert not any(QID.search(line) for line in lines)
+    other = gustav("one", dated=True)
+    identity = cluster_corpus([doc.manifest, other.manifest])
+    (pair,) = adjudication._links(identity)
+    evidence = adjudication.Evidence(
+        [doc.manifest, other.manifest], identity["mentions"]
+    )
+    evidence._documents[doc.sha1].names["e1"] = ("Gustav Q42 Löbig", "human")
+    prompt = adjudication.prompt_for([pair], {}, evidence)
+    assert QID.search(prompt) is None
+    assert "Gustav an item Löbig" in prompt
+
+
+def test_an_adjudicated_map_is_never_taken_for_clustering_s_own(tmp_path):
+    """The verdicts are part of the key a map is reused under: clustering
+    alone, over the same documents, makes its own map again rather than
+    read the adjudicated one as its."""
+    docs = [gustav("one", dated=True), gustav("two", dated=False)]
+    context = context_of(docs, tmp_path, Engine(truths(docs)))
+    adjudication.run_stage(context)
+    output = clustering.ensure_identity_map(
+        context.directory, context.documents
+    )
+    assert not output.reused
+    assert ADJUDICATED not in {
+        e["method"] for e in output.identity_map["mentions"].values()
+    }
