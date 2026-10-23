@@ -4,7 +4,10 @@ fixture corpus's calls from its recorded answers (answers.py).
 It answers every call the stages before write make of a document of the
 corpus, and tells the document by its bytes: a vision call by the SHA-1 of
 the image it is given, an extraction call by the artifact SHA-1 its prompt
-names, and a critique call by the entity manifest its prompt lists. It
+names, and a critique call by the entity manifest its prompt lists; the
+clustering stage's adjudication of ambiguous pairs (#106) it answers
+`uncertain` for every pair, as the recorded model gives no identity
+verdicts, so the identity map stays clustering's own. It
 holds conversations as the claude-code engine does: each is a session,
 whose transcript it gives to be kept (one .jsonl file holding the opening
 turn) and resumes only from such a transcript of the same turn, and it
@@ -14,8 +17,8 @@ without a call, from the transcript the cache kept (ADR-0032 §6). The text
 a call sends is the claude-code engine's own (`call_text`): an image's
 path goes in the prompt, as the cache's key leaves it out. Every call it
 answers is logged, as (what, document), with what one of vision,
-manifest, chunk or critique. A call it has no answer for fails the test
-that made it.
+manifest, chunk, critique or adjudication (whose document is the
+corpus). A call it has no answer for fails the test that made it.
 """
 
 from __future__ import annotations
@@ -54,6 +57,8 @@ CRITIQUE_PROMPT = "You review a genealogical extraction"
 # the category the recorded critic files a misread year under
 MISREAD = "implausible_value"
 SEGMENTATION_PROMPT = "You segment a document transcription"
+ADJUDICATION_PROMPT = "You adjudicate IDENTITY for a family archive"
+_ADJUDICATED_PAIR = re.compile(r"^(\d+)\. clustering's comparison", re.M)
 ASSIGNED = "Assigned entities:"
 _SHA1 = re.compile(r"[0-9a-f]{40}")
 _ASSIGNED_ID = re.compile(r"^- (\w+): ", re.MULTILINE)
@@ -203,6 +208,18 @@ class RecordedEngine:
         lines = [json.dumps(finding) for finding in findings]
         return "\n".join([*lines, json.dumps({"done": True})])
 
+    def _adjudication(self, prompt: str) -> str:
+        """`uncertain` for every pair the prompt asks of, and the
+        sentinel."""
+        self.calls.log("adjudication", "corpus")
+        lines = [
+            json.dumps(
+                {"pair": int(number), "verdict": "uncertain", "reason": "-"}
+            )
+            for number in _ADJUDICATED_PAIR.findall(prompt)
+        ]
+        return "\n".join([*lines, json.dumps({"done": True})])
+
     # -- the engine's calls --------------------------------------------------
 
     def complete(
@@ -231,6 +248,8 @@ class RecordedEngine:
             )
         if prompt.startswith(CRITIQUE_PROMPT):
             return self._critique(prompt)
+        if prompt.startswith(ADJUDICATION_PROMPT):
+            return self._adjudication(prompt)
         if MANIFEST_PROMPT in prompt:
             return self._manifest(prompt)
         if prompt.startswith(SEGMENTATION_PROMPT):

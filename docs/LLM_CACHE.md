@@ -335,6 +335,22 @@ its entry. A claude CLI update changes `config`, and so every key. The
 transcription prompt names the manifest's artifact classes (ADR-0037), so
 a change to them changes the prompt, and so every transcription key.
 
+**A scratch run's corpus stages** call through a role's client too, and
+name their calls apart in the run's events. The clustering stage's
+adjudication of ambiguous pairs (#106, src/yizkr/pipeline/README.md,
+"Corpus clustering") calls in the `critique` role, the run's main model
+at the review effort (ADR-0016), and its events name the role
+`adjudication` and the stage `clustering`; the place stage calls in the
+`extract` role, its events naming both `places`. Each adjudication call
+is keyed by its prompt, which holds each pair's two mention
+fingerprints, clustering's comparison and each mention's evidence: a
+change to a batch that changes a mention's evidence (its label, record
+or claims) changes the key of the call that asks of it, and of no
+other, while a batch made again the same leaves every key. The prompt
+names no QID, so a reset of the instance changes no key. Since the role
+is the critique's, `--refresh critique` and `--epoch critique=N` act on
+the adjudication's calls too.
+
 **What a key does not see.** Anything added on the engine's side of the
 call. The claude CLI fetches account data from the server at every start,
 which can change its system-prompt text, its default model and its
@@ -787,7 +803,9 @@ changed, or its replay failed) is no miss.
   role's views are made again in the run, current or not, and their calls
   go to the engine once per key whatever the cache holds; the new answer
   replaces the entry, which is kept aside. `extract` covers the GEDCOM
-  adapter's batches too. A refresh belongs to its run.
+  adapter's batches too, and `critique` a scratch run's adjudication of
+  ambiguous pairs, whose calls the clustering stage makes in that role.
+  A refresh belongs to its run.
 - `--epoch ROLE=N` (repeatable): the role's calls are keyed under epoch
   N, to sample them afresh while the answers of other epochs stay.
   Current views stand, so combine it with `--refresh` to re-sample them.

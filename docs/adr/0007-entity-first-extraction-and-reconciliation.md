@@ -63,6 +63,10 @@ claims extracted: the entity manifest names no entity", and the run's
 `zero-entities` and `zero-claims` checks read it as any batch without
 entities, never as a `fallback-manifest`.
 
+Amended by #106 (2026-10-23): step 3's adjudication runs at corpus
+level too, over the ambiguous pairs of the corpus clustering
+(`pipeline/adjudication.py`, Phase 3 below, "Corpus adjudication").
+
 Amends ADR-0006. The transport machinery specified there — forked
 conversations, NDJSON emission with sentinel, per-chunk state with
 resume, salvage validation — is unchanged; this ADR changes the *unit
@@ -302,6 +306,29 @@ A separate pipeline step between extract and resolve:
    the writer then also appends the new document's aliases to that
    item. Unapproved rows leave the local ref for exact-label resolve
    as today.
+
+**Corpus adjudication** (amended by #106, 2026-10-23). Corpus
+clustering (ADR-0025; the identity-map draft, ADR-0027, #66) replaces
+steps 1, 2 and 5 within a scratch run: it blocks and links every
+mention against every other on records alone, and merges only confident
+clusters. Step 3 then runs over what it could not decide: the ambiguous
+pairs of each ambiguous candidate cluster, never a conflicting
+cluster's, as one stage keyed by what each call sends (ADR-0032): the
+pairs' mention fingerprints and evidence, the prompt and the model.
+The prompt names mentions by fingerprint and pair number and documents
+by SHA-1, never an item by its QID, and gives each mention's kind, names,
+record, kin, places, roles and dates, each date at its own precision.
+The verdict per pair is `same`, `different` or `uncertain` with a
+one-sentence reason (the `distinct` of step 3 is `different` here, and
+a confidence is not asked); verdicts and the raw answers are kept with
+the run, as local-only data. Step 4 differs by stage: in a
+development-stage scratch run `same` merges unattended (ADR-0025 §1),
+a cluster all of whose ambiguous pairs are `same` or `different`
+splitting at its `different` pairs and merging each part with the
+method `adjudicated`, while a cluster with an `uncertain` or unanswered
+pair stays split whole; in keeper mode the verdicts are recorded for the
+cluster review sheet (#108) and merge nothing, so a human still
+approves every equivalence that is kept.
 
 **Graph-side reconciliation** (cleaning duplicates that already
 exist, e.g. the trial's two Leopolds): the same blocking + adjudication

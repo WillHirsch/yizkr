@@ -180,12 +180,18 @@ class Fakes:
         self.preflight_closes = 0
 
 
+# the clustering stage's adjudication prompt, and a pair it asks of
+ADJUDICATION_PROMPT = "You adjudicate IDENTITY for a family archive"
+ADJUDICATED_PAIR = re.compile(r"^(\d+)\. clustering's comparison", re.M)
+
+
 class Engine:
     """What a run reads off an engine client, and scripted answers: a
     reading of each image, an entity manifest of one person, one claim per
-    chunk that cites the document by the SHA-1 of its bytes, and a critic
-    with nothing to say. It holds no conversations, so chunks see the
-    document inline."""
+    chunk that cites the document by the SHA-1 of its bytes, a critic
+    with nothing to say, and an adjudicator of the clustering stage's
+    ambiguous pairs (#106) that is uncertain of every one. It holds no
+    conversations, so chunks see the document inline."""
 
     engine = "claude-code"
     system_prompt = "You are running inside a fictional pipeline."
@@ -213,6 +219,8 @@ class Engine:
         corpus = self.fakes.corpus
         if image_paths:
             what, name = "vision", Path(image_paths[0]).name
+        elif prompt.startswith(ADJUDICATION_PROMPT):
+            what, name = "adjudication", None
         else:
             name = corpus.about(prompt)
             if "manifest of EVERY distinct entity" in prompt:
@@ -228,6 +236,22 @@ class Engine:
             return record_answer(corpus.texts[name])
         if what == "critique":
             return '{"done": true, "findings_emitted": 0}'
+        if what == "adjudication":
+            return "\n".join(
+                [
+                    *(
+                        json.dumps(
+                            {
+                                "pair": int(n),
+                                "verdict": "uncertain",
+                                "reason": "-",
+                            }
+                        )
+                        for n in ADJUDICATED_PAIR.findall(prompt)
+                    ),
+                    '{"done": true}',
+                ]
+            )
         person = {
             "id": "e1",
             "label": "Eugen Löbig",

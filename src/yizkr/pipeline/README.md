@@ -592,11 +592,13 @@ per-document path; until then, two mechanisms remain:
 A scratch run decides identity once, across the whole corpus, before any
 write (#105, #58). Past the barrier, the scratch driver's first corpus
 stage, `clustering`, clusters the mentions of every document whose
-stages completed, and keeps the result in
+stages completed, asks the model about the pairs it could not decide
+(`adjudication.py`, #106, below), and keeps the result in
 `<run>/corpus/clustering/identity-map.json`. It reads the documents'
-batch views and nothing else: no wiki, no query service, no model
+batch views and, for adjudication alone, the run's engine through the
+LLM cache: no wiki, no query service
 (`tests/unit/test_no_wiki_before_write.py` runs it under a wiki that
-refuses). The module docstring is the full account; in short:
+refuses). The module docstrings are the full account; in short:
 
 - **Mentions and fingerprints** (`fingerprints.py`). Every entity of every
   manifest, the GEDCOM export's included, is a mention. Its fingerprint
@@ -717,10 +719,39 @@ refuses). The module docstring is the full account; in short:
   estimate of the calls. The defaults come from the corpus clustering
   experiment (#71, `scripts/experiments/cluster_calibration.py`); #74
   settles them on scratch runs.
+- **Adjudication** (`adjudication.py`, ADR-0007 as amended by #106,
+  ADR-0025). The ambiguous pairs of each ambiguous candidate cluster,
+  and no other (never a conflicting cluster's, never a confident link),
+  go to the model in batches of `pairs-per-call`, a cluster's pairs
+  together, through the run's LLM cache in the `critique` role's engine,
+  model and effort, the calls named `adjudication` in the run's events.
+  Each call is keyed by what it sends: the prompt, which gives each
+  pair's two mention fingerprints, clustering's comparison and each
+  mention's evidence (kind, label, aliases, its mention record, and its
+  document's claims about it and naming it, each value by its label and
+  kind, dates at their own precision as the site shows them, "the
+  1830s", "the 19th century"), and names documents by SHA-1 and no item
+  by its QID. Each pair gets `same`, `different` or `uncertain` with a
+  one-sentence reason; a line outside that schema, a pair answered two
+  ways and an answer cut off are refused and counted. In a
+  development-stage run the verdicts merge unattended: clustering is
+  made again under them, a cluster whose every ambiguous pair is `same`
+  or `different` is cut at its `different` pairs and each part merges
+  with the method `adjudicated` (unless two of its members no `same`
+  joined contradict each other), and a cluster with an `uncertain` pair
+  or one without a verdict stays apart whole. People are asked first,
+  then unions, then events, each group after clustering again, so a
+  union whose couple merged may need no call. In keeper mode every pending
+  pair is asked once, the verdicts are recorded for the cluster review
+  sheet (#108), and nothing merges. Verdicts, reasons, each call's pairs
+  and raw answer, and the counts are kept in
+  `<run>/corpus/clustering/adjudication.json`, local-only like the map;
+  both are reused while the clustering's inputs, the prompt, the role's
+  engine, model and effort, the batch size and the mode stand.
 - **The map.** Each mention's fingerprint maps to its cluster and the
-  method that put it there (`confident`, `ambiguous`, `conflicting`,
-  `singleton`, or `unclustered` for a mention its manifest does not mark
-  for extraction). The map's `hash` covers those decisions alone. It also
+  method that put it there (`confident`, `adjudicated`, `ambiguous`,
+  `conflicting`, `singleton`, or `unclustered` for a mention its manifest
+  does not mark for extraction). The map's `hash` covers those decisions alone. It also
   lists each ambiguous or conflicting candidate cluster with its pairs,
   the evidence for each, and the pair that makes it conflict or the
   members that contradict, then each hub key with the mentions holding
@@ -729,10 +760,13 @@ refuses). The module docstring is the full account; in short:
   the source of the modules that make it, the Unicode version and the
   thresholds stand, and makes it again otherwise; the same decisions give the same cluster ids
   and hash. What reaches the run's events is counts within fixed labels.
-- **Not yet.** Nothing reads the map to write: the writer resolves through
-  it with #109, adjudication of ambiguous pairs comes with #106, and
-  overrides with never-re-ask with #107. The owner reviews ambiguous and
-  conflicting clusters once, before the keeper run.
+- **Not yet.** Overrides with never-re-ask come with #107, and the
+  cluster review sheet, which is to show keeper mode's verdicts, with
+  #108. Whether the confident links inside an ambiguous cluster still
+  unsettled merge is an open decision (#568): adjudication settles a
+  cluster only when all its ambiguous pairs are `same` or `different`,
+  so that rule would apply to the clusters it leaves. The owner reviews
+  ambiguous and conflicting clusters once, before the keeper run.
 
 ## The scratch run's write side (`scratchwrite.py`, ADR-0025 §1, §2)
 

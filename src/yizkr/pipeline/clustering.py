@@ -207,27 +207,44 @@ Unions are clustered after people, places and organisations, and events
 after unions, since their links read the clusters their people and
 unions end in.
 
+**Adjudication.** Given an adjudicator's verdicts on ambiguous pairs
+(`cluster_corpus` with `verdicts`, which yizkr.pipeline.adjudication
+asks for), an ambiguous candidate cluster whose every ambiguous pair is
+`same` or `different` is settled: its `different` pairs are cut, the
+closure over its confident links and its `same` pairs gives its parts,
+and each part merges, with the method `adjudicated`, unless two of its
+members that no `same` verdict joined contradict each other, when they
+stay apart, each `ambiguous`. A member a `different` pair cut off alone
+is a cluster of its own, `adjudicated` too. An ambiguous cluster with an
+`uncertain` pair, or a pair without a verdict, stays apart whole, and a
+conflicting cluster never merges, whatever its verdicts. Each review
+pair of an ambiguous link records its verdict, or null, under such a
+map; pending_pairs gives the pairs no verdict settles yet.
+
 **The identity map** (`identity-map.json`, format FORMAT):
 
 - `mentions`: fingerprint -> its `cluster` (a cluster id, the hash of the
   sorted fingerprints of its members) and its `method` (`confident`,
-  `ambiguous`, `conflicting`, `singleton` or `unclustered`: what put it
-  where it is), with the document's SHA-1, the manifest's local id, the
-  label, the kind, the span and the occurrence it was made from;
+  `adjudicated`, `ambiguous`, `conflicting`, `singleton` or
+  `unclustered`: what put it where it is), with the document's SHA-1,
+  the manifest's local id, the label, the kind, the span and the
+  occurrence it was made from;
 - `hash`: the SHA-256 of every mention's cluster and method, and nothing
   else, so equal decisions hash equal whatever else the file holds;
 - `clusters`: cluster id -> its kind, method and members;
-- `review`: each ambiguous or conflicting candidate cluster, with its
-  members, its pairs (the link and the evidence of each), and the pair
+- `review`: each ambiguous, conflicting or adjudicated candidate
+  cluster, with its members, its pairs (the link and the evidence of
+  each, and an ambiguous link's verdict under verdicts), and the pair
   that makes it conflict and how, or the two members never linked that
   contradict each other; then each hub (`hub`), with its key and the
   mentions holding it;
-- `summary`: counts only, the adjudication-call estimate and the
-  recordless mentions among them;
+- `summary`: counts only, the clusters and mentions each method merged
+  or left apart, the adjudication-call estimate and the recordless
+  mentions among them;
 - `inputs`: the key it is reused under (VERSION, the digest of CODE's
-  source, the Unicode version, the thresholds' digest, and each
-  document's SHA-1, source and batch content hash); `config`: the
-  thresholds' digest.
+  source, the Unicode version, the thresholds' digest, each document's
+  SHA-1, source and batch content hash, and the verdicts' digest when
+  it was made under verdicts); `config`: the thresholds' digest.
 
 **Its read side.** The writer and the resolve step read a map through
 `IdentityMap`: which cluster each mention of a batch is in
@@ -298,7 +315,7 @@ from yizkr.pipeline.writer import stored_term
 # what cluster_corpus makes of a set of manifests: bumped whenever the same
 # manifests and thresholds would give another identity map, so that a
 # stored map is made again
-VERSION = 3
+VERSION = 4
 # the layout of identity-map.json
 FORMAT = 1
 STAGE = "clustering"
@@ -328,6 +345,9 @@ GEDCOM = "gedcom"
 # what put a mention in its cluster (a mention's `method`), which is also
 # a candidate cluster's status
 CONFIDENT = "confident"
+# a mention a candidate cluster settled by adjudication put where it is,
+# merged with others or apart (the adjudication stage, ADR-0025)
+ADJUDICATED = "adjudicated"
 AMBIGUOUS = "ambiguous"
 CONFLICTING = "conflicting"
 SINGLETON = "singleton"
@@ -335,6 +355,14 @@ UNCLUSTERED = "unclustered"
 # how a conflicting cluster conflicts
 HARD = "hard"
 SOFT = "soft"
+# an adjudicator's verdict on an ambiguous pair: one entity, two, or the
+# evidence cannot tell
+SAME = "same"
+DIFFERENT = "different"
+UNCERTAIN = "uncertain"
+VERDICTS = (SAME, DIFFERENT, UNCERTAIN)
+# the methods that merge a cluster's members
+MERGING = frozenset({CONFIDENT, ADJUDICATED})
 # a review entry of the mentions holding a hub key
 HUB = "hub"
 
@@ -1565,6 +1593,9 @@ class _Judge:
         self._widest = config.evidence.max_corroborating_years
         self._counted: dict[str, int] = {}
 
+    def node(self, node_id: str) -> _Node:
+        return self._nodes[node_id]
+
     def life(self, a: _Node, b: _Node) -> str:
         """Whether two people's births and deaths, each compared with
         each, agree, conflict or say nothing."""
@@ -2038,13 +2069,80 @@ class _Conflicts:
 class _Settled:
     """A candidate cluster: its members, its status, its pairs, and the
     pair that makes it conflict, or the pair never linked that
-    contradicts."""
+    contradicts. One adjudication settled (ADJUDICATED) holds the clusters
+    it ends in (`parts`), each with its method."""
 
     members: list[str]
     status: str
     pairs: list[Pair]
     conflict: tuple[str, Pair] | None = None
     contradiction: dict[str, Any] | None = None
+    parts: list[tuple[list[str], str]] | None = None
+
+    def clusters(self) -> list[tuple[list[str], str]]:
+        """The clusters its members end in, each with its method: one of
+        them all when it is confident, the parts adjudication made of
+        it, or else each member alone."""
+        if self.parts is not None:
+            return self.parts
+        if self.status == CONFIDENT:
+            return [(self.members, CONFIDENT)]
+        return [([member], self.status) for member in self.members]
+
+
+def _adjudicated(
+    members: Sequence[str],
+    own: Sequence[Pair],
+    links: Mapping[Pair, tuple[str, str]],
+    judge: _Judge,
+    verdicts: Mapping[Pair, str],
+) -> _Settled | None:
+    """An ambiguous candidate cluster as adjudication settles it, or None
+    while any of its ambiguous pairs has no verdict, or `uncertain`. A
+    `different` pair is cut; the closure over the confident links and the
+    `same` pairs gives its parts, and a part merges unless two of its
+    members that no `same` verdict joined contradict each other, when
+    each of them stays apart."""
+    ambiguous = [pair for pair in own if links[pair][0] == AMBIGUOUS]
+    if not all(verdicts.get(pair) in (SAME, DIFFERENT) for pair in ambiguous):
+        return None
+    joined = [
+        pair
+        for pair in own
+        if links[pair][0] == CONFIDENT or verdicts.get(pair) == SAME
+    ]
+    said_same = {pair for pair in joined if verdicts.get(pair) == SAME}
+    parts: list[tuple[list[str], str]] = []
+    contradiction = None
+    for part in _components(members, joined).groups():
+        found = None
+        if len(part) > 1:
+            found = next(
+                (
+                    {"mentions": [first, second], "evidence": evidence}
+                    for position, first in enumerate(part)
+                    for second in part[position + 1 :]
+                    if (first, second) not in said_same
+                    and (
+                        evidence := judge.contradicts(
+                            judge.node(first), judge.node(second)
+                        )
+                    )
+                ),
+                None,
+            )
+        if found is None:
+            parts.append((part, ADJUDICATED))
+        else:
+            contradiction = contradiction or found
+            parts.extend(([member], AMBIGUOUS) for member in part)
+    return _Settled(
+        list(members),
+        ADJUDICATED,
+        list(own),
+        contradiction=contradiction,
+        parts=parts,
+    )
 
 
 def _settle(
@@ -2052,9 +2150,11 @@ def _settle(
     links: Mapping[Pair, tuple[str, str]],
     judge: _Judge,
     conflicts: _Conflicts,
+    verdicts: Mapping[Pair, str],
 ) -> list[_Settled]:
     """The candidate clusters the links join among `ids`, each settled
-    (the module docstring says how)."""
+    (the module docstring says how), an ambiguous one by the adjudicator's
+    `verdicts` where they settle it (_adjudicated)."""
     candidates = _components(ids, links)
     pairs_of: dict[str, list[Pair]] = defaultdict(list)
     for pair in links:
@@ -2069,7 +2169,10 @@ def _settle(
         if conflict is not None:
             settled.append(_Settled(members, CONFLICTING, own, conflict))
         elif any(links[pair][0] == AMBIGUOUS for pair in own):
-            settled.append(_Settled(members, AMBIGUOUS, own))
+            settled.append(
+                _adjudicated(members, own, links, judge, verdicts)
+                or _Settled(members, AMBIGUOUS, own)
+            )
         else:
             contradiction = judge.contradiction(members)
             status = AMBIGUOUS if contradiction else CONFIDENT
@@ -2096,6 +2199,46 @@ def adjudication_calls(groups: Iterable[int], per_call: int) -> int:
                 count = 0
             count += chunk
     return calls + (1 if count else 0)
+
+
+def stage_group(kind: str | None) -> int:
+    """The order a kind's clusters are settled in: people, places and
+    everything else (0), then unions (1), then events (2), since a
+    union's link reads the clusters its couple end in, and an event's
+    those of its people or its union."""
+    if kind in UNION_KINDS:
+        return 1
+    return 2 if kind in EVENT_KINDS else 0
+
+
+def pending_pairs(
+    review: Iterable[Mapping[str, Any]],
+) -> list[tuple[int, list[Pair]]]:
+    """The ambiguous pairs of each ambiguous candidate cluster of a map's
+    review that no verdict settles yet (none given, or an answer that gave
+    none), with the cluster's stage_group, in the review's order. A
+    conflicting cluster never merges, so none of its pairs is pending."""
+    found = []
+    for entry in review:
+        if entry.get("status") != AMBIGUOUS:
+            continue
+        pairs = [
+            _pair(*pair["mentions"])
+            for pair in entry.get("pairs") or ()
+            if pair.get("link") == AMBIGUOUS and pair.get("verdict") is None
+        ]
+        if pairs:
+            found.append((stage_group(entry.get("kind")), pairs))
+    return found
+
+
+def pending_sizes(review: Iterable[Mapping[str, Any]]) -> dict[int, list[int]]:
+    """How many pairs are pending (pending_pairs) in each cluster, by its
+    stage group."""
+    sizes: dict[int, list[int]] = defaultdict(list)
+    for group, pairs in pending_pairs(review):
+        sizes[group].append(len(pairs))
+    return dict(sizes)
 
 
 def identity_hash(mentions: Mapping[str, Mapping[str, Any]]) -> str:
@@ -2139,30 +2282,43 @@ def _distinct(manifests: Iterable[Manifest]) -> list[Manifest]:
     return [taken[sha1] for sha1 in sorted(taken)]
 
 
-def inputs_key(manifests: Sequence[Manifest], config: ClusteringConfig) -> str:
+def verdicts_digest(verdicts: Mapping[Pair, str]) -> str:
+    """The SHA-256 of the verdicts an identity map was made under."""
+    return sha256_text(
+        canonical_json(
+            sorted([*pair, verdict] for pair, verdict in verdicts.items())
+        )
+    )
+
+
+def inputs_key(
+    manifests: Sequence[Manifest],
+    config: ClusteringConfig,
+    verdicts: Mapping[Pair, str] | None = None,
+) -> str:
     """The key an identity map is reused under: VERSION, the digest of
     CODE's source, the version of the Unicode database that normalises and
     folds names, the thresholds' digest, and each document's SHA-1,
-    source and batch content."""
-    return sha256_text(
-        canonical_json(
-            {
-                "stage": STAGE,
-                "version": VERSION,
-                "code": code_digest(),
-                "unicode": unicodedata.unidata_version,
-                "config": config.digest(),
-                "documents": [
-                    [
-                        manifest.sha1.lower(),
-                        manifest.source,
-                        batch_hash(manifest.batch),
-                    ]
-                    for manifest in _distinct(manifests)
-                ],
-            }
-        )
-    )
+    source and batch content; and, for a map made under an adjudicator's
+    verdicts, their digest."""
+    inputs = {
+        "stage": STAGE,
+        "version": VERSION,
+        "code": code_digest(),
+        "unicode": unicodedata.unidata_version,
+        "config": config.digest(),
+        "documents": [
+            [
+                manifest.sha1.lower(),
+                manifest.source,
+                batch_hash(manifest.batch),
+            ]
+            for manifest in _distinct(manifests)
+        ],
+    }
+    if verdicts is not None:
+        inputs["verdicts"] = verdicts_digest(verdicts)
+    return sha256_text(canonical_json(inputs))
 
 
 @dataclass(frozen=True)
@@ -2223,13 +2379,19 @@ def blocked_pairs(
 
 
 def cluster_corpus(
-    manifests: Sequence[Manifest], config: ClusteringConfig | None = None
+    manifests: Sequence[Manifest],
+    config: ClusteringConfig | None = None,
+    verdicts: Mapping[Pair, str] | None = None,
 ) -> dict[str, Any]:
     """The identity map of the manifests under the thresholds (by default
     clustering.yaml's), as identity-map.json holds it: the module
     docstring says how it is made and what it holds. Two manifests of one
-    SHA-1 are one document: the first is taken."""
+    SHA-1 are one document: the first is taken. With `verdicts`, an
+    adjudicator's on ambiguous pairs (each pair its two fingerprints,
+    sorted), each ambiguous candidate cluster they settle is settled by
+    them (the module docstring, "Adjudication")."""
     config = config or load_config()
+    settling: Mapping[Pair, str] = verdicts or {}
     corpus = _corpus(manifests, config)
     ordered, nodes = corpus.manifests, corpus.nodes
     index, clustered = corpus.index, corpus.clustered
@@ -2276,14 +2438,16 @@ def cluster_corpus(
             found,
             judge,
             conflicts,
+            settling,
         )
         links.update(found)
         settled.extend(entries)
         together.update(
-            (member, entry.members[0])
+            (member, part[0])
             for entry in entries
-            if entry.status == CONFIDENT
-            for member in entry.members
+            for part, method in entry.clusters()
+            if method in MERGING
+            for member in part
         )
 
     def event_link(a: _Node, b: _Node) -> tuple[str, str]:
@@ -2300,19 +2464,16 @@ def cluster_corpus(
     ambiguous_groups: list[int] = []
     all_groups: list[int] = []
     for entry in sorted(settled, key=lambda entry: entry.members):
-        merged_whole = entry.status == CONFIDENT
-        for part in (
-            [entry.members] if merged_whole else [[m] for m in entry.members]
-        ):
+        for part, method in entry.clusters():
             cid = cluster_id(part)
             clusters[cid] = {
                 "kind": index[part[0]].kind,
-                "method": entry.status,
+                "method": method,
                 "members": part,
             }
             for member in part:
                 assigned[member] = cid
-                status[member] = entry.status
+                status[member] = method
         if entry.status == SINGLETON:
             continue
         ambiguous = [
@@ -2333,6 +2494,12 @@ def cluster_corpus(
                         "mentions": list(pair),
                         "link": links[pair][0],
                         "evidence": links[pair][1],
+                        **(
+                            {"verdict": settling.get(pair)}
+                            if verdicts is not None
+                            and links[pair][0] == AMBIGUOUS
+                            else {}
+                        ),
                     }
                     for pair in entry.pairs
                 ],
@@ -2399,6 +2566,15 @@ def cluster_corpus(
     mentions_by_status = Counter(
         entry.status for entry in settled for _ in entry.members
     )
+    # the clusters adjudication merged, and their mentions
+    adjudicated_merges = [
+        part
+        for entry in settled
+        for part, method in entry.clusters()
+        if method == ADJUDICATED and len(part) > 1
+    ]
+    by_status[ADJUDICATED] = len(adjudicated_merges)
+    mentions_by_status[ADJUDICATED] = sum(map(len, adjudicated_merges))
     per_call = config.adjudication.pairs_per_call
     summary = {
         "documents": len(ordered),
@@ -2441,12 +2617,16 @@ def cluster_corpus(
         ),
         "clusters": {
             verdict: by_status[verdict]
-            for verdict in (CONFIDENT, AMBIGUOUS, CONFLICTING)
+            for verdict in (CONFIDENT, ADJUDICATED, AMBIGUOUS, CONFLICTING)
         },
         "cluster_mentions": {
             verdict: mentions_by_status[verdict]
-            for verdict in (CONFIDENT, AMBIGUOUS, CONFLICTING)
+            for verdict in (CONFIDENT, ADJUDICATED, AMBIGUOUS, CONFLICTING)
         },
+        # the candidate clusters adjudication settled, merged or apart
+        "adjudicated_candidate_clusters": sum(
+            entry.status == ADJUDICATED for entry in candidate_groups
+        ),
         "conflicting_hard": sum(
             entry["conflict"]["how"] == HARD
             for entry in review
@@ -2460,7 +2640,8 @@ def cluster_corpus(
             (len(entry.members) for entry in settled), default=0
         ),
         "identity_clusters": len(clusters),
-        "merged_mentions": mentions_by_status[CONFIDENT],
+        "merged_mentions": mentions_by_status[CONFIDENT]
+        + mentions_by_status[ADJUDICATED],
         "confident_links_only": {
             "clusters": len(linked_clusters),
             "mentions": sum(map(len, linked_clusters)),
@@ -2472,13 +2653,20 @@ def cluster_corpus(
                 ambiguous_groups, per_call
             ),
             "calls_all_pairs": adjudication_calls(all_groups, per_call),
+            # the calls the adjudication stage asks at most, of the
+            # ambiguous pairs of the ambiguous clusters still unsettled,
+            # each group of kinds packed apart (stage_group)
+            "calls_ambiguous_clusters": sum(
+                adjudication_calls(sizes, per_call)
+                for sizes in pending_sizes(review).values()
+            ),
         },
     }
     return {
         "format": FORMAT,
         "stage": STAGE,
         "version": VERSION,
-        "inputs": inputs_key(ordered, config),
+        "inputs": inputs_key(ordered, config, verdicts),
         "config": config.digest(),
         "hash": identity_hash(mentions),
         "mentions": mentions,
@@ -2759,9 +2947,12 @@ def _counted(count: int, noun: str) -> str:
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
 
-def attention(summary: Mapping[str, Any]) -> list[str]:
+def attention(
+    summary: Mapping[str, Any], *, adjudicated: bool = False
+) -> list[str]:
     """The reasons an identity map needs attention, from its summary:
-    counts within labels of its own."""
+    counts within labels of its own. A map the adjudication stage made
+    (`adjudicated`) gives no estimate of the calls it would take."""
     clusters = summary["clusters"]
     mentions = summary["cluster_mentions"]
     reasons = []
@@ -2779,7 +2970,7 @@ def attention(summary: Mapping[str, Any]) -> list[str]:
             f"{summary['conflicting_hard']} with a kin edge or a "
             "containment inside"
         )
-    if summary["ambiguous_pairs"]:
+    if summary["ambiguous_pairs"] and not adjudicated:
         adjudication = summary["adjudication"]
         reasons.append(
             "ambiguous pairs to adjudicate: "

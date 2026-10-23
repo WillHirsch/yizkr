@@ -260,9 +260,11 @@ KINDS = frozenset(DOCUMENT_STAGES)
 DOCUMENT_STAGE_NAMES = frozenset(
     stage for stages in DOCUMENT_STAGES.values() for stage in stages
 )
-# the roles calls are made in: the models', and the scratch run's place
-# stage, whose calls the run's events name apart
-ROLES = frozenset(MODEL_ROLES) | {PLACE_STAGE}
+# the roles calls are made in: the models', and the scratch run's
+# adjudication of ambiguous pairs and place stage, whose calls the run's
+# events name apart
+ADJUDICATION = "adjudication"
+ROLES = frozenset(MODEL_ROLES) | {ADJUDICATION, PLACE_STAGE}
 MODES = frozenset({"scratch run", "ingest run"})
 PROJECT_STAGES = frozenset({"development", "kept"})
 EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
@@ -331,7 +333,7 @@ RECORD_STATUSES = frozenset(
 MAP_STATES = frozenset({"read", "missing", "unreadable"})
 # the leading labels of the reasons stages give an output that needs
 # attention: the extraction's fallback tiers and empty batches, and the
-# clustering stage's clusters left unmerged
+# clustering stage's clusters left unmerged and pairs left undecided
 ATTENTION_LABELS = frozenset(
     {
         "entity manifest fell back to line-range segmentation",
@@ -341,6 +343,11 @@ ATTENTION_LABELS = frozenset(
         "conflicting clusters not merged",
         "ambiguous pairs to adjudicate",
         "hub keys not blocked on",
+        # what the adjudication of ambiguous pairs left undecided or
+        # refused (yizkr.pipeline.adjudication)
+        "adjudicated pairs without a verdict",
+        "adjudication answers refused",
+        "adjudication answers in conflict",
         # a container's image its reading does not read on its own
         # (presentation.UNREAD_IMAGE, and a PDF's image PDFium cannot give)
         "image not read on its own",
@@ -1794,6 +1801,10 @@ def _clusters(path: Path, fold: _Fold) -> dict[str, Any]:
         "identity clusters": number("identity_clusters"),
         "confident merges": number("clusters", "confident"),
         "mentions merged": number("cluster_mentions", "confident"),
+        "adjudicated merges": number("clusters", "adjudicated"),
+        "mentions merged by adjudication": number(
+            "cluster_mentions", "adjudicated"
+        ),
         "ambiguous, left split": number("clusters", "ambiguous"),
         "ambiguous mentions": number("cluster_mentions", "ambiguous"),
         "conflicting": number("clusters", "conflicting"),
@@ -1804,6 +1815,17 @@ def _clusters(path: Path, fold: _Fold) -> dict[str, Any]:
         "confident pairs": number("confident_pairs"),
         "ambiguous pairs": number("ambiguous_pairs"),
         "adjudication calls": number("adjudication", "calls_ambiguous_pairs"),
+        "pairs adjudicated": number("adjudication", "asked_pairs"),
+        "adjudication calls made": number("adjudication", "calls"),
+        "verdicts same": number("adjudication", "verdicts", "same"),
+        "verdicts different": number("adjudication", "verdicts", "different"),
+        "verdicts uncertain": number("adjudication", "verdicts", "uncertain"),
+        "pairs without a verdict": number("adjudication", "unanswered_pairs"),
+        "adjudication lines refused": number("adjudication", "rejected_lines"),
+        "adjudication calls refused": number("adjudication", "refused_calls"),
+        "adjudication answers in conflict": number(
+            "adjudication", "conflicting_answers"
+        ),
         "hub keys, not blocked on": number("hub_keys"),
         "mentions holding them": number("hub_mentions"),
     }

@@ -1,0 +1,763 @@
+"""Adjudication of ambiguous cluster pairs (#106): which pairs are asked,
+what each verdict does in a development-stage scratch run and in keeper
+mode, the answer's schema, the stage's reuse of its outputs and of the
+LLM cache, and what the prompt holds.
+
+Every document is one of the fictional universe's people
+(tests/fixtures/example_universe.py): the two Ursula Löbigs the universe
+keeps apart (Sebastian's daughter and the widow of the 1912 directory),
+and Gustav Löbig, mentioned in two registers, once with his birth date
+and once without. The engine is a fake that answers each pair by who the
+universe says its two mentions are. No wiki, no model.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from tests.unit.test_clustering import (
+    Doc,
+    day,
+    directory,
+    document,
+    entity,
+    family_tree,
+    gedcom,
+    human,
+    item,
+    register,
+    role,
+)
+from yizkr.pipeline import adjudication, clustering
+from yizkr.pipeline.adjudication import (
+    NAME,
+    RECORD,
+    ROLE,
+    adjudicate,
+    date_text,
+    ensure_adjudicated,
+    pack,
+    parse_answers,
+)
+from yizkr.pipeline.clustering import (
+    ADJUDICATED,
+    AMBIGUOUS,
+    CONFLICTING,
+    DIFFERENT,
+    IDENTITY_MAP,
+    SAME,
+    UNCERTAIN,
+    adjudication_calls,
+    cluster_corpus,
+)
+from yizkr.pipeline.llm import (
+    cached_client,
+    observed_client,
+    open_cache,
+    read_cache,
+)
+
+MODEL = "claude-test-model-0"
+
+# a pair of a prompt: its number and comparison, and its two mentions'
+# fingerprints
+PAIR = re.compile(r"^(\d+)\. clustering's comparison: .*$", re.M)
+MENTION = re.compile(r"Mention ([AB]): fingerprint ([0-9a-f]{64})")
+
+
+def gustav(name: str, *, dated: bool) -> Doc:
+    """A register naming Gustav Löbig, with his birth date or without."""
+    claims = [("e1", "date_of_birth", day(1919, 1, 7))] if dated else []
+    return register(
+        name, [human("e1", "Gustav Löbig")], claims, {"e1": "gustav-loebig"}
+    )
+
+
+def truths(docs: list[Doc]) -> dict[str, str]:
+    """Who the universe says each mention is, by its fingerprint."""
+    identity = cluster_corpus([doc.manifest for doc in docs])
+    by_document = {doc.sha1: doc for doc in docs}
+    return {
+        fingerprint: by_document[entry["document"]].truth[entry["local_id"]]
+        for fingerprint, entry in identity["mentions"].items()
+    }
+
+
+@dataclass
+class Engine:
+    """A fake engine: answers each pair of an adjudication prompt `same`
+    when the universe says its mentions are one person and `different`
+    otherwise, unless `verdict` overrides it; `lines` replaces the
+    answer's lines, and `sentinel` False leaves its sentinel out. It
+    records every prompt."""
+
+    who: dict[str, str]
+    verdict: str | None = None
+    lines: list[str] | None = None
+    sentinel: bool = True
+    prompts: list[str] = field(default_factory=list)
+    model = MODEL
+    model_identifier = MODEL
+    effort = "high"
+    config_hash = "0" * 64
+    cli_version = None
+
+    def complete(self, prompt: str, image_paths=()) -> str:
+        self.prompts.append(prompt)
+        lines = self.lines
+        if lines is None:
+            lines = []
+            starts = [m.start() for m in PAIR.finditer(prompt)] + [None]
+            for number, (start, end) in enumerate(
+                zip(starts, starts[1:], strict=False), start=1
+            ):
+                (a, b) = (
+                    fp for _letter, fp in MENTION.findall(prompt[start:end])
+                )
+                verdict = self.verdict or (
+                    SAME if self.who[a] == self.who[b] else DIFFERENT
+                )
+                lines.append(
+                    json.dumps(
+                        {
+                            "pair": number,
+                            "verdict": verdict,
+                            "reason": "fictional",
+                        }
+                    )
+                )
+        if self.sentinel:
+            lines = [*lines, '{"done": true}']
+        return "\n".join(lines)
+
+
+def run(docs: list[Doc], engine: Engine, *, merge: bool = True):
+    calls = []
+
+    def client():
+        calls.append(1)
+        return engine
+
+    made = adjudicate([doc.manifest for doc in docs], client, merge=merge)
+    return made, calls
+
+
+def method_of(made, docs: list[Doc], key: str, local_id: str) -> str:
+    (doc,) = [doc for doc in docs if doc.key == key or doc.sha1 == key]
+    return made.identity["mentions"][doc.fingerprint(local_id, made.identity)][
+        "method"
+    ]
+
+
+def cluster_of(made, doc: Doc, local_id: str) -> str:
+    return made.identity["mentions"][doc.fingerprint(local_id, made.identity)][
+        "cluster"
+    ]
+
+
+# -- verdicts -----------------------------------------------------------------
+
+
+class TestVerdicts:
+    def test_same_merges_in_a_scratch_run(self):
+        """Gustav, mentioned twice, once dated: an ambiguous pair, whose
+        `same` merges the two, with the method `adjudicated`, counted
+        apart from the confident merges."""
+        docs = [gustav("one", dated=True), gustav("two", dated=False)]
+        before = cluster_corpus([doc.manifest for doc in docs])
+        assert before["summary"]["clusters"][AMBIGUOUS] == 1
+        made, calls = run(docs, Engine(truths(docs)))
+        assert calls == [1]
+        assert cluster_of(made, docs[0], "e1") == cluster_of(
+            made, docs[1], "e1"
+        )
+        summary = made.identity["summary"]
+        assert summary["clusters"][ADJUDICATED] == 1
+        assert summary["cluster_mentions"][ADJUDICATED] == 2
+        assert summary["clusters"][AMBIGUOUS] == 0
+        assert summary["clusters"]["confident"] == 0
+        assert summary["merged_mentions"] == 2
+        assert {e["method"] for e in made.identity["mentions"].values()} == {
+            ADJUDICATED
+        }
+        assert summary["adjudication"]["verdicts"] == {
+            SAME: 1,
+            DIFFERENT: 0,
+            UNCERTAIN: 0,
+        }
+        # the map's decisions hash as any map's, and are read back
+        assert made.identity["hash"] == clustering.identity_hash(
+            made.identity["mentions"]
+        )
+
+    def test_same_does_not_merge_in_keeper_mode(self):
+        """In keeper mode the verdict is recorded and nothing merges: the
+        map is clustering's own."""
+        docs = [gustav("one", dated=True), gustav("two", dated=False)]
+        made, _ = run(docs, Engine(truths(docs)), merge=False)
+        assert cluster_of(made, docs[0], "e1") != cluster_of(
+            made, docs[1], "e1"
+        )
+        assert (
+            made.identity["hash"]
+            == cluster_corpus([doc.manifest for doc in docs])["hash"]
+        )
+        assert [verdict for verdict, _ in made.verdicts.values()] == [SAME]
+        assert made.identity["summary"]["clusters"][ADJUDICATED] == 0
+        assert made.identity["summary"]["adjudication"]["merge"] is False
+
+    def test_different_keeps_the_namesakes_apart(self):
+        """The tree's Ursula and the directory's widow, namesakes the
+        universe keeps apart: `different` settles their cluster apart."""
+        docs = [family_tree(), directory()]
+        made, _ = run(docs, Engine(truths(docs)))
+        daughter, widow = (docs[0], "e1"), (docs[1], "e4")
+        assert cluster_of(made, *daughter) != cluster_of(made, *widow)
+        assert method_of(made, docs, docs[0].key, "e1") == ADJUDICATED
+        assert method_of(made, docs, docs[1].key, "e4") == ADJUDICATED
+        assert (
+            made.identity["summary"]["adjudication"]["verdicts"][DIFFERENT]
+            == 1
+        )
+        # what adjudication merges is one person each
+        who = truths(docs)
+        for entry in made.identity["clusters"].values():
+            assert len({who[member] for member in entry["members"]}) == 1
+
+    def test_uncertain_leaves_the_cluster_apart_and_ambiguous(self):
+        docs = [gustav("one", dated=True), gustav("two", dated=False)]
+        made, _ = run(docs, Engine(truths(docs), verdict=UNCERTAIN))
+        assert cluster_of(made, docs[0], "e1") != cluster_of(
+            made, docs[1], "e1"
+        )
+        assert method_of(made, docs, docs[0].sha1, "e1") == AMBIGUOUS
+        assert made.identity["summary"]["clusters"][AMBIGUOUS] == 1
+        # asked once, never again within the invocation
+        assert made.counts["asked_pairs"] == 1
+        assert made.counts["calls"] == 1
+
+    def test_different_cuts_a_cluster_whose_confident_part_merges(self):
+        """Three registers give Gustav's birth date and link confidently;
+        a fourth gives none and links ambiguously with each. When every
+        ambiguous pair is `different`, the cluster is settled: the three
+        merge, by adjudication, and the fourth stays apart."""
+        docs = [gustav(n, dated=True) for n in ("one", "two", "three")]
+        docs.append(gustav("four", dated=False))
+        made, _ = run(docs, Engine(truths(docs), verdict=DIFFERENT))
+        dated = {cluster_of(made, doc, "e1") for doc in docs[:3]}
+        assert len(dated) == 1
+        assert cluster_of(made, docs[3], "e1") not in dated
+        assert made.identity["summary"]["clusters"][ADJUDICATED] == 1
+        assert made.identity["summary"]["cluster_mentions"][ADJUDICATED] == 3
+
+    def test_one_uncertain_pair_keeps_the_whole_cluster_apart(self):
+        docs = [gustav(n, dated=True) for n in ("one", "two", "three")]
+        docs.append(gustav("four", dated=False))
+        identity = cluster_corpus([doc.manifest for doc in docs])
+        (entry,) = identity["review"]
+        ambiguous = [p for p in entry["pairs"] if p["link"] == AMBIGUOUS]
+        verdicts = {
+            clustering._pair(*p["mentions"]): DIFFERENT for p in ambiguous
+        }
+        verdicts[clustering._pair(*ambiguous[0]["mentions"])] = UNCERTAIN
+        settled = cluster_corpus(
+            [doc.manifest for doc in docs], None, verdicts
+        )
+        assert {e["method"] for e in settled["mentions"].values()} == {
+            AMBIGUOUS
+        }
+        assert settled["hash"] == identity["hash"]
+
+    def test_a_conflicting_cluster_is_never_asked_and_never_merges(self):
+        """The export holds both Ursulas, and each document's Ursula is
+        ambiguous with both: a conflicting cluster. None of its pairs is
+        asked, and an engine that says `same` to anything merges none of
+        it, nor would its verdicts if given."""
+        docs = [gedcom(), family_tree(), directory()]
+        before = cluster_corpus([doc.manifest for doc in docs])
+        (conflicting,) = [
+            e for e in before["review"] if e["status"] == CONFLICTING
+        ]
+        engine = Engine(truths(docs), verdict=SAME)
+        made, _ = run(docs, engine)
+        asked = "\n".join(engine.prompts)
+        for member in conflicting["members"]:
+            assert member not in asked
+            assert made.identity["mentions"][member]["method"] == CONFLICTING
+        forced = {
+            clustering._pair(*p["mentions"]): SAME
+            for p in conflicting["pairs"]
+        }
+        again = cluster_corpus([doc.manifest for doc in docs], None, forced)
+        for member in conflicting["members"]:
+            assert again["mentions"][member]["method"] == CONFLICTING
+
+
+def born(name: str, *, dated: bool) -> Doc:
+    """A register of Gustav's birth: the event, with Gustav its
+    principal, dated or not; its date is his own."""
+    claims = [("b1", "participant", item("e1"), role("principal"))]
+    if dated:
+        claims.append(("b1", "point_in_time", day(1919, 1, 7)))
+    return register(
+        name,
+        [human("e1", "Gustav Löbig"), entity("b1", "Birth", "birth")],
+        claims,
+        {"e1": "gustav-loebig", "b1": "gustav-loebig-birth"},
+    )
+
+
+class TestRounds:
+    def test_people_are_settled_before_their_events(self):
+        """Two registers of Gustav's birth, one dated: his two mentions
+        are an ambiguous pair, and so are the births, whose principals
+        did not merge. The people are asked first; once `same` merges
+        them, each birth is its merged principal's own and links
+        confidently, so it is never asked."""
+        docs = [born("one", dated=True), born("two", dated=False)]
+        before = cluster_corpus([doc.manifest for doc in docs])
+        assert before["summary"]["ambiguous_pairs"] == 2
+        engine = Engine(truths(docs))
+        made, _ = run(docs, engine)
+        (prompt,) = engine.prompts
+        assert "a human in" in prompt and "a birth in" not in prompt
+        assert made.counts["rounds"] == 1
+        assert {e["method"] for e in made.identity["mentions"].values()} == {
+            ADJUDICATED,
+            "confident",
+        }
+        assert made.identity["summary"]["clusters"] == {
+            "confident": 1,
+            ADJUDICATED: 1,
+            AMBIGUOUS: 0,
+            CONFLICTING: 0,
+        }
+
+    def test_keeper_mode_asks_every_pending_pair_at_once(self):
+        docs = [born("one", dated=True), born("two", dated=False)]
+        engine = Engine(truths(docs))
+        made, _ = run(docs, engine, merge=False)
+        (prompt,) = engine.prompts
+        assert "a human in" in prompt and "a birth in" in prompt
+        assert made.counts["asked_pairs"] == 2
+
+
+# -- the answer's schema ------------------------------------------------------
+
+
+class TestSchema:
+    def test_an_answer_outside_the_schema_is_refused_and_counted(self):
+        docs = [gustav("one", dated=True), gustav("two", dated=False)]
+        engine = Engine(
+            truths(docs),
+            lines=[
+                json.dumps({"pair": 1, "verdict": "probably", "reason": "x"}),
+                json.dumps({"pair": 2, "verdict": SAME, "reason": "x"}),
+                json.dumps({"pair": 1, "verdict": SAME, "reason": 7}),
+                json.dumps({"pair": True, "verdict": SAME, "reason": "x"}),
+            ],
+        )
+        made, _ = run(docs, engine)
+        assert made.verdicts == {}
+        assert made.counts["rejected_lines"] == 4
+        assert made.counts["unanswered_pairs"] == 1
+        assert method_of(made, docs, docs[0].sha1, "e1") == AMBIGUOUS
+        assert any(
+            "outside the schema" in reason
+            for reason in adjudication.attention(made.identity["summary"])
+        )
+
+    def test_a_pair_answered_two_ways_is_refused(self):
+        answers = parse_answers(
+            "\n".join(
+                [
+                    json.dumps({"pair": 1, "verdict": SAME, "reason": "a"}),
+                    json.dumps(
+                        {"pair": 1, "verdict": DIFFERENT, "reason": "b"}
+                    ),
+                    '{"done": true}',
+                ]
+            ),
+            1,
+        )
+        assert answers.verdicts == {} and answers.conflicts == [1]
+
+    def test_an_answer_without_its_sentinel_is_refused_whole(self):
+        docs = [gustav("one", dated=True), gustav("two", dated=False)]
+        made, _ = run(docs, Engine(truths(docs), sentinel=False))
+        assert made.verdicts == {}
+        assert made.counts["refused_calls"] == 1
+        assert made.calls[0]["refused"]
+        assert method_of(made, docs, docs[0].sha1, "e1") == AMBIGUOUS
+
+    def test_a_refused_answer_the_cache_kept_is_asked_once_more(
+        self, tmp_path
+    ):
+        docs = [gustav("one", dated=True), gustav("two", dated=False)]
+        # an answer an earlier invocation kept, which this code refuses
+        probe = Engine(truths(docs))
+        run(docs, probe)
+        broken = Engine(truths(docs), sentinel=False)
+        cache = open_cache(tmp_path / "cache")
+        cached_client(broken, cache, role=ROLE).complete(probe.prompts[0])
+        good = Engine(truths(docs))
+        cache = open_cache(tmp_path / "cache")
+        made, _ = run(docs, cached_client(good, cache, role=ROLE))
+        assert made.counts["second_attempts"] == 1
+        assert [v for v, _ in made.verdicts.values()] == [SAME]
+
+
+# -- batches ------------------------------------------------------------------
+
+
+def test_packing_matches_the_estimate_of_the_calls():
+    """pack makes the calls clustering.adjudication_calls counts: a
+    cluster's pairs together, one larger than a call split first."""
+    for sizes in ([3, 2, 5], [41], [40, 1], [10] * 9, [1], []):
+        groups = [
+            [(f"{n}-{i}a", f"{n}-{i}b") for i in range(size)]
+            for n, size in enumerate(sizes)
+        ]
+        calls = pack(groups, 40)
+        assert len(calls) == adjudication_calls(sizes, 40)
+        assert all(len(call) <= 40 for call in calls)
+        assert [p for call in calls for p in call] == [
+            p for group in groups for p in group
+        ]
+    calls = pack([[("a", "b")] * 3, [("c", "d")] * 2], 4)
+    # the second cluster does not fit beside the first, so starts a call
+    assert [len(call) for call in calls] == [3, 2]
+
+
+# -- the prompt ---------------------------------------------------------------
+
+
+QID = re.compile(r"\bQ[1-9]\d*\b")
+
+
+class TestPrompt:
+    def docs(self) -> list[Doc]:
+        """Gustav twice, the undated register also giving a decade, a
+        century and a ranged date, and naming an item already in the
+        graph by its QID."""
+        dated = gustav("one", dated=True)
+        undated = document(
+            "a register",
+            [human("e1", "Gustav Löbig")],
+            [
+                (
+                    "e1",
+                    "residence",
+                    {"type": "item", "value": {"kind": "qid", "qid": "Q31"}},
+                    ("point_in_time", day(1930) | {"precision": "decade"}),
+                ),
+                (
+                    "e1",
+                    "occupation",
+                    {"type": "string", "value": "hatter"},
+                    ("point_in_time", day(1901) | {"precision": "century"}),
+                    ("earliest_date", day(1938)),
+                    ("latest_date", day(1939, 5)),
+                ),
+            ],
+            {"e1": "gustav-loebig"},
+            sha1="a" * 40,
+        )
+        return [dated, undated]
+
+    def test_names_no_qid(self):
+        docs = self.docs()
+        engine = Engine(truths(docs))
+        run(docs, engine)
+        (prompt,) = engine.prompts
+        assert QID.search(prompt) is None
+        assert "an item already in the graph" in prompt
+        # each mention by its fingerprint, each document by its SHA-1
+        assert len(MENTION.findall(prompt)) == 2
+        assert docs[0].sha1 in prompt and docs[1].sha1 in prompt
+
+    def test_renders_dates_at_their_precision(self):
+        docs = self.docs()
+        engine = Engine(truths(docs))
+        run(docs, engine)
+        (prompt,) = engine.prompts
+        assert "point_in_time: the 1930s" in prompt
+        assert "point_in_time: the 20th century" in prompt
+        assert "earliest_date: 1938; latest_date: 1939-05" in prompt
+        assert "date_of_birth: 1919-01-07" in prompt
+        assert "1901" not in prompt and "1930]" not in prompt
+
+    @pytest.mark.parametrize(
+        ("value", "shown"),
+        [
+            ({"year": 1801, "precision": "century"}, "the 19th century"),
+            ({"year": 1830, "precision": "decade"}, "the 1830s"),
+            ({"year": 1911}, "1911"),
+            ({"year": 1952, "month": 3}, "1952-03"),
+            ({"year": 1919, "month": 7, "day": 1}, "1919-07-01"),
+        ],
+    )
+    def test_a_date_at_its_precision(self, value, shown):
+        from yizkr.claims import TimeValue
+
+        assert date_text(TimeValue.model_validate(value)) == shown
+
+    def test_gives_kin_and_record(self):
+        docs = [family_tree(), directory()]
+        engine = Engine(truths(docs))
+        run(docs, engine)
+        (prompt,) = engine.prompts
+        assert "named as the child of 'Sebastian Löbig' (human)" in prompt
+        assert (
+            'record: {"status": "name", "given": [{"written": "Ursula"'
+            in prompt
+        )
+        assert "date_of_birth: 1911" in prompt
+
+
+# -- the stage: its outputs and the cache ------------------------------------
+
+
+@dataclass
+class Run:
+    """A run directory's manifest and events, as the stage reads them."""
+
+    stage: str = "development"
+    events: list[tuple[str, dict]] = field(default_factory=list)
+
+    def manifest(self) -> dict:
+        return {"project_stage": self.stage}
+
+    def emit(self, event: str, **fields) -> None:
+        self.events.append((event, fields))
+
+
+class Driver:
+    """The driver as the stage reads it: the role's settings, and its
+    client, behind an LLM cache in `cache`, counting the clients made."""
+
+    llm = "claude-code"
+
+    def __init__(self, engine: Engine, cache: Path) -> None:
+        self.engine = engine
+        self.cache = cache
+        self.clients = 0
+        self.refresh: tuple[str, ...] = ()
+        self.epochs: dict[str, int] = {}
+
+    def _engine_settings(self, role):
+        assert role == ROLE
+        return "high", None
+
+    def _configured_model(self, role):
+        return MODEL, "$YIZKR_LLM_MODEL"
+
+    def role_client(self, role, *, events=None):
+        assert role == ROLE
+        self.clients += 1
+        # as the orchestrator makes it (Orchestrator.role_client)
+        observed = observed_client(self.engine, role=role, events=events)
+        cache = open_cache(
+            self.cache, refresh=self.refresh, epochs=self.epochs
+        )
+        return cached_client(observed, cache, role=role, events=events)
+
+
+def context_of(docs, tmp_path, engine, *, stage="development"):
+    run = Run(stage)
+    documents = []
+    for doc in docs:
+        path = tmp_path / "views" / doc.sha1 / "batch.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(doc.manifest.batch.model_dump_json())
+        documents.append(
+            SimpleNamespace(sha1=doc.sha1, kind="text", batch=path)
+        )
+    logged: list[str] = []
+    return SimpleNamespace(
+        run=run,
+        documents=tuple(documents),
+        directory=tmp_path / "corpus" / "clustering",
+        env_file=None,
+        log=lambda line, **kwargs: logged.append(line),
+        driver=Driver(engine, tmp_path / "cache"),
+        logged=logged,
+    )
+
+
+class TestStage:
+    def test_outputs_persist_and_are_reused(self, tmp_path):
+        docs = [gustav("one", dated=True), gustav("two", dated=False)]
+        engine = Engine(truths(docs))
+        context = context_of(docs, tmp_path, engine)
+        first = adjudication.run_stage(context)
+        assert context.driver.clients == 1
+        record = json.loads((context.directory / RECORD).read_text())
+        assert [v["verdict"] for v in record["verdicts"]] == [SAME]
+        assert record["verdicts"][0]["reason"] == "fictional"
+        assert record["calls"][0]["response"].endswith('{"done": true}')
+        identity = json.loads((context.directory / IDENTITY_MAP).read_text())
+        assert identity["summary"]["clusters"][ADJUDICATED] == 1
+        # its calls are named apart in the run's events
+        roles = {f.get("role") for _e, f in context.run.events}
+        assert roles == {NAME}
+        assert {f.get("stage") for _e, f in context.run.events} <= {
+            None,
+            "clustering",
+        }
+        # a second invocation reuses both, with no client and no call
+        second = adjudication.run_stage(context)
+        assert context.driver.clients == 1
+        assert len(engine.prompts) == 1
+        assert "identity map reused" in context.logged[-1]
+        assert first == second
+
+    def test_the_cache_answers_a_stage_made_again(self, tmp_path):
+        """With the stage's outputs gone, it is made again, and the LLM
+        cache answers its calls: the engine is not asked again, and the
+        same map results."""
+        docs = [gustav("one", dated=True), gustav("two", dated=False)]
+        engine = Engine(truths(docs))
+        context = context_of(docs, tmp_path, engine)
+        adjudication.run_stage(context)
+        made = (context.directory / IDENTITY_MAP).read_text()
+        (context.directory / RECORD).unlink()
+        output = ensure_adjudicated(context)
+        assert not output.reused
+        assert len(engine.prompts) == 1
+        assert (context.directory / IDENTITY_MAP).read_text() == made
+        events = [e for e, _f in context.run.events]
+        assert events.count("cache-hit") == 1
+        assert read_cache(tmp_path / "cache") is not None
+
+    def test_a_refresh_of_the_role_asks_again_once(self, tmp_path):
+        """`--refresh critique` makes the stage's outputs again, asking
+        the engine afresh; an invocation that refreshes it again reuses
+        them. Another epoch of the role makes them again too."""
+        docs = [gustav("one", dated=True), gustav("two", dated=False)]
+        engine = Engine(truths(docs))
+        context = context_of(docs, tmp_path, engine)
+        adjudication.run_stage(context)
+        context.driver.refresh = (ROLE,)
+        adjudication.run_stage(context)
+        assert len(engine.prompts) == 2
+        adjudication.run_stage(context)
+        assert len(engine.prompts) == 2
+        context.driver.refresh = ()
+        context.driver.epochs = {ROLE: 1}
+        adjudication.run_stage(context)
+        assert len(engine.prompts) == 3
+
+    def test_keeper_mode_records_verdicts_and_merges_nothing(self, tmp_path):
+        docs = [gustav("one", dated=True), gustav("two", dated=False)]
+        context = context_of(
+            docs, tmp_path, Engine(truths(docs)), stage="kept"
+        )
+        adjudication.run_stage(context)
+        record = json.loads((context.directory / RECORD).read_text())
+        assert [v["verdict"] for v in record["verdicts"]] == [SAME]
+        identity = json.loads((context.directory / IDENTITY_MAP).read_text())
+        assert identity["summary"]["clusters"][ADJUDICATED] == 0
+        assert identity["summary"]["clusters"][AMBIGUOUS] == 1
+
+    def test_a_corpus_with_nothing_ambiguous_starts_no_client(self, tmp_path):
+        docs = [gustav("one", dated=True), gustav("two", dated=True)]
+        context = context_of(docs, tmp_path, Engine(truths(docs)))
+        adjudication.run_stage(context)
+        assert context.driver.clients == 0
+        identity = json.loads((context.directory / IDENTITY_MAP).read_text())
+        assert identity["summary"]["clusters"]["confident"] == 1
+
+
+# -- the report and the diff --------------------------------------------------
+
+
+def test_the_report_counts_the_calls_under_adjudication(tmp_path):
+    """The stage's calls are named apart in the run's events, and the run
+    report counts them under their own role, apart from the critique's."""
+    from tests.unit.test_scratch_write import _vocabulary
+    from yizkr.pipeline import report
+
+    docs = [gustav("one", dated=True), gustav("two", dated=False)]
+    context = context_of(docs, tmp_path, Engine(truths(docs)))
+    adjudication.run_stage(context)
+    fold = report._Fold()
+    for event, fields in context.run.events:
+        fold.fold({"event": event, **fields})
+    calls = report._aggregate_calls(fold, _vocabulary())
+    assert set(calls["by_role"]) == {NAME}
+    assert calls["engine_calls"]["by_role"] == {NAME: 1}
+
+
+def test_the_diff_lists_each_adjudicated_merge_apart():
+    """A merge the verdicts make is counted by its method in the diff's
+    aggregates, and listed, with its members, in its detail."""
+    from yizkr.pipeline import rundiff
+
+    docs = [gustav("one", dated=True), gustav("two", dated=False)]
+    baseline = cluster_corpus([doc.manifest for doc in docs])
+    made, _ = run(docs, Engine(truths(docs)))
+    names = rundiff._Names.of({}, {})
+    aggregate, detail = rundiff.compare_clusters(
+        baseline, made.identity, names
+    )
+    assert aggregate["merges"] == 1
+    assert aggregate["merges_by_method"] == {ADJUDICATED: 1}
+    assert aggregate["methods_changed"] == {"ambiguous → adjudicated": 2}
+    (merge,) = detail["merges"]
+    assert merge["method"] == ADJUDICATED
+    assert {m["label"] for m in merge["members"]} == {"Gustav Löbig"}
+    assert len(merge["members"]) == 2
+
+
+def test_the_stage_s_attention_labels_are_the_report_s():
+    """Every reason the stage gives is one the run report names, and
+    none is the estimate clustering gives before adjudication."""
+    from yizkr.pipeline.report import ATTENTION_LABELS
+
+    docs = [gustav("one", dated=True), gustav("two", dated=False)]
+    refused, _ = run(docs, Engine(truths(docs), sentinel=False))
+    conflicting = Engine(
+        truths(docs),
+        lines=[
+            json.dumps({"pair": 1, "verdict": SAME, "reason": "a"}),
+            json.dumps({"pair": 1, "verdict": UNCERTAIN, "reason": "b"}),
+            json.dumps({"pair": 9, "verdict": SAME, "reason": "c"}),
+        ],
+    )
+    answered, _ = run(docs, conflicting)
+    reasons = adjudication.attention(
+        refused.identity["summary"]
+    ) + adjudication.attention(answered.identity["summary"])
+    labels = {reason.split(":")[0] for reason in reasons}
+    assert labels == {
+        "ambiguous clusters not merged",
+        "adjudicated pairs without a verdict",
+        "adjudication answers refused",
+        "adjudication answers in conflict",
+    }
+    assert labels <= ATTENTION_LABELS
+
+
+def test_the_monitor_counts_the_calls_under_adjudication(tmp_path):
+    """The live monitor counts the stage's calls by their name, as it
+    counts the place stage's."""
+    from yizkr.pipeline.monitor import summarise_run
+    from yizkr.pipeline.rundir import RunDir
+
+    docs = [gustav("one", dated=True), gustav("two", dated=False)]
+    context = context_of(docs, tmp_path, Engine(truths(docs)))
+    rundir = RunDir(tmp_path / "run")
+    rundir.path.mkdir()
+    (rundir.path / "run.json").write_text("{}")
+    context.run.emit = rundir.emit
+    adjudication.run_stage(context)
+    calls = summarise_run(rundir.path).calls
+    assert calls.roles[NAME]["engine"] == 1
+    assert set(calls.roles) == {NAME}

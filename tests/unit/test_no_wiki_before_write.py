@@ -17,10 +17,11 @@ The steps are those #128 lists that have code: transcription (by vision,
 from a text file, from slide text and from a curator's correction) and
 its check, extraction (entity manifest, chunks, critique), the GEDCOM
 adapter, a deck's slide text and derived media, the reconcile step, the
-per-document adjudication (`reconcile.adjudicate`) given a roster, and
+per-document adjudication (`reconcile.adjudicate`) given a roster,
 corpus clustering (#105), the scratch driver's corpus stage, over the
-batches those steps made. Cluster adjudication and flags have no code
-yet; #106 and #112 require them to run under this refusing wiki. One
+batches those steps made, and the adjudication of its ambiguous pairs
+(#106) through a fake engine. Flags have no code yet; #112 requires them
+to run under this refusing wiki. One
 step before the write that is outside that list still uses the wiki in
 `ingest run`, and the orchestrator here replaces it: the resolve step's
 exact-label read, which goes with the identity-map writer (#109).
@@ -704,6 +705,26 @@ def test_corpus_clustering_asks_nothing_of_the_wiki(tmp_path, refusals):
     ]
     assert identity["review"] == []
     assert identity["summary"]["clusters"]["confident"] == 2
+
+
+def test_cluster_adjudication_asks_nothing_of_the_wiki(tmp_path, refusals):
+    """The clustering stage's adjudication (#106) asks the engine, through
+    the LLM cache, about the ambiguous pairs, and merges on its verdicts,
+    reading no graph, no query service and no connection setting."""
+    from tests.unit.test_adjudication import Engine, context_of, gustav, truths
+    from yizkr.pipeline import adjudication
+
+    docs = [gustav("one", dated=True), gustav("two", dated=False)]
+    engine = Engine(truths(docs))
+    context = context_of(docs, tmp_path, engine)
+    adjudication.run_stage(context)
+    adjudication.run_stage(context)
+    assert len(engine.prompts) == 1
+    identity = json.loads(
+        (context.directory / "identity-map.json").read_text()
+    )
+    assert identity["summary"]["clusters"]["adjudicated"] == 1
+    assert refusals.asked == []
 
 
 class ScriptedAdjudicator:
