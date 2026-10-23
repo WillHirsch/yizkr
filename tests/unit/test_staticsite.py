@@ -2501,14 +2501,14 @@ class TestWhatSourcesSay:
         page = self.page_of(
             tmp_path, vocabulary, [row], f"artifacts/{RAHELS_PORTRAIT}.html"
         )
-        section = self.section(page, "What sources say about this artifact")
-        assert re.findall(r"<dt>(.*?)</dt>\s*<dd>(.*?)</dd>", section) == [
-            (
-                "inception",
-                '1895 <span class="qualifiers">(sourcing circumstances: '
-                'circa)</span><span class="source">this artifact</span>',
-            )
-        ]
+        (section,) = re.findall(
+            r'<dl class="statements">(.*?)</dl>', page, flags=re.S
+        )
+        assert section == (
+            "<dt>inception</dt>"
+            '<dd>1895 <span class="qualifiers">(sourcing circumstances: '
+            'circa)</span><span class="source">this artifact</span></dd>'
+        )
 
     def test_a_blocks_pages_are_listed_once_each_in_order(
         self, tmp_path, vocabulary

@@ -946,8 +946,8 @@ SOURCES = (
         None,
         1895,
         "photograph",
-        text="[mount] Photograph Brüsrich · Peiltal · um 1895",
-        note="Its mount gives the year it was made as circa: um 1895.",
+        text="[mount] Photograph Brüsrich · Peiltal [mount, pencil] um 1895",
+        note="A pencilled note on its mount dates it as circa: um 1895.",
     ),
     Source(
         "marriage-cert-1905",
@@ -1445,7 +1445,7 @@ ASSERTIONS = tuple(
         "studio-photo-1895",
         # a document that gives its own date of making as circa states it
         # as its `inception` with circa as its sourcing circumstance
-        # (ADR-0039 §2.2): "um 1895" on the mount
+        # (ADR-0039 §2.2): "um 1895" pencilled on the mount
         (
             "studio-photo-1895",
             "inception",
