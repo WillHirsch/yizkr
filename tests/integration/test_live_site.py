@@ -439,6 +439,11 @@ def test_summary_counts_are_plausible(site):
     assert summary["gallery_items"] >= 1
     assert summary["timeline_rows"] >= 2
     assert summary["inconsistencies"] >= 1
+    # by property, as the site stage's record keeps them (#575): they sum
+    # to the total, and the fixture's two birth dates count under theirs
+    by_property = summary["inconsistencies_by_property"]
+    assert sum(by_property.values()) == summary["inconsistencies"]
+    assert by_property.get("date_of_birth", 0) >= 1
 
 
 def test_person_pages_show_coexisting_values_with_sources(site):
