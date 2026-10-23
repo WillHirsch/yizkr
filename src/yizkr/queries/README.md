@@ -118,6 +118,17 @@ uv run yizkr publish-queries             # or: make publish-queries
   listed under its whole, the fragment as `?source` and its label as
   `?sourceLabel`; time values carry
   their stated precision.
+- **unclassified-entities** — the input to the next vocabulary round
+  (ADR-0013 §A): entities held under the holding class
+  `unclassified_entity`, one row per English type hint (ADR-0035),
+  compared in lower case, with how many entities carry it
+  (`?entities`), how many artifacts state it (`?artifacts`) and one
+  entity as an example; an entity held without a hint is counted under
+  the empty hint. A deprecated kind or hint is not read; an entity a
+  curator has also given a modelled kind stays listed. A queue for the
+  owner's mint-or-defer decisions, never a defect report
+  (`tests/integration/test_live_unclassified.py`). The relation gaps
+  beside it are rolled up per run by `yizkr gaps rollup` (ADR-0013 §B).
 - **under-witnessed-statements** — the low-scrutiny reappraisal queue
   (ADR-0023): machine-written statements with a single stated-in
   source and no curator statement on the same subject+property, one
@@ -133,6 +144,8 @@ offline tests (`make test`) verify that every placeholder matches a
 real manifest key, so templates and model cannot drift apart; the live
 tests (`make test-live`) execute every query against WDQS, assert
 the zero-unreferenced-statements invariant, and pin the rows of the
-under-witnessed queue and the disagreement report on fictional fixtures
+under-witnessed queue, the disagreement report and the unclassified
+entities on fictional fixtures
 (`tests/integration/test_live_under_witnessed.py`,
-`tests/integration/test_live_disagreement.py`).
+`tests/integration/test_live_disagreement.py`,
+`tests/integration/test_live_unclassified.py`).

@@ -27,6 +27,8 @@ EXPECTED_QUERIES = {
     "artifact-assertions",
     "under-witnessed-statements",
     "kinship",
+    # unclassified entities by type hint, for the vocabulary round (#91)
+    "unclassified-entities",
 }
 
 
@@ -123,6 +125,33 @@ class TestLibrary:
         projection = q.split("WHERE", 1)[0]
         assert "?statement" in projection
         assert "?precision" in projection
+
+    def test_unclassified_entities_group_by_the_english_hint(self, templates):
+        # ADR-0013 §A, as ADR-0035 amends it: the holding class's entities
+        # grouped by their type hint, in lower case, by frequency (#91);
+        # tests/integration/test_live_unclassified.py pins the rows live
+        q = templates["unclassified-entities"]
+        query = "\n".join(
+            line for line in q.splitlines() if not line.startswith("#")
+        )
+        projection = query.split("WHERE", 1)[0]
+        for name in ("typeHint", "entities", "artifacts", "example"):
+            assert f"?{name}" in projection
+        assert "COUNT(DISTINCT ?entity) AS ?entities" in projection
+        assert "?kind ps:{P:instance_of} wd:{Q:unclassified_entity} ." in q
+        assert "?hintStatement ps:{P:type_hint} ?hint ." in q
+        assert "LCASE(STR(?hint))" in q
+        # an unhinted entity is counted, under the empty hint
+        assert (
+            q[: q.index(group_at(q, "?entity p:{P:type_hint}"))]
+            .rstrip()
+            .endswith("OPTIONAL")
+        )
+        assert re.search(
+            r"GROUP BY \?typeHint\s+ORDER BY DESC\(\?entities\)", q
+        )
+        # a deprecated kind or hint is a curator's rank, and not read
+        assert q.count("wikibase:rank wikibase:DeprecatedRank") == 2
 
 
 # a VALUES body: text and {P:key} placeholders (braces nest one level)

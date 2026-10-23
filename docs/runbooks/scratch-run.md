@@ -575,6 +575,12 @@ calls from the cache.
 - `yizkr scratch watch <run> --once`: the monitor's view, at any time,
   finished runs included.
 - `yizkr scratch report <run>`: the run report (docs/RUN_REPORT.md).
+- `yizkr gaps rollup [<run>]`: the relation gaps every document's
+  extraction logged, one row per normalised predicate, with its
+  frequency, the documents that logged it and an empty `decision`
+  column, written to `gaps-rollup.csv` in the run directory for
+  OpenRefine (ADR-0013 §B). It quotes evidence, so it stays local; what
+  to mint or defer is the owner's decision.
 - `yizkr scratch recheck [<run>] [--config FILE]`: the run's stored
   outputs checked again with the anomaly thresholds as they are now (or
   the file `--config` names), without recomputing any stage; it appends
