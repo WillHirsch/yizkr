@@ -87,8 +87,9 @@ def qid_of(binding: dict, name: str) -> str:
 # assesses: ``{people}`` is the privacy module's selection, every item with
 # person evidence at any rank, so a person whose `human` type a curator
 # deprecated or outranked, or who has no type but other evidence, is listed and
-# badged too. ?deceased is true when the graph holds any death-implying
-# statement of the person's own (date/place/cause of death, place of burial),
+# badged too, and an event is not listed on the death it states. ?deceased is
+# true when the graph holds any death-implying statement of the person's own
+# (date/place/cause of death, place of burial),
 # none of which needs a date. Death events, whose principal alone they mark
 # deceased, and births, for the birth-recency cutoff, are read apart, with the
 # reading the non-privileged export uses (core/privacy.py's read_evidence).
