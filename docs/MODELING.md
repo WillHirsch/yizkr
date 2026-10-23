@@ -11,8 +11,8 @@
   by `yizkr bootstrap`, which maintains the mapping table
   (local id – Wikidata id) on the wiki page `Project:Model mapping`.
   Local P/Q ids are per-instance and never recorded in the repo.
-- Every entity gets a label and a short description; name variants go
-  in aliases. English labels are the bootstrap's idempotency key: a
+- Every entity gets a label and a short description; name variants go in
+  aliases. English labels are the bootstrap's idempotency key: a
   property's and a manifest vocabulary item's label names one entity
   alone, and renames must happen on the wiki and in the manifest
   together. Other items may share a label: two people of one name are
@@ -22,14 +22,14 @@
   vocabulary item's (the vocabulary's whole read, the bootstrap) and a
   process item's, such as a run item's (#94). The vocabulary is read
   bounded where it can be (#507): the ids `Project:Model mapping` gives
-  the manifest's labels, each checked to carry its label, 50 a
-  request. That read sees only those ids, so another item under a
-  vocabulary item's label goes unseen there, and the bootstrap, which
-  reads every label, refuses it. When the page is missing, lacks or
-  repeats a manifest label, or an id is missing, a redirect or carries
-  another label, the vocabulary reads every label whole. No extracted entity is found by its
-  label (#109): the writer finds or mints its item through the identity
-  map alone (below).
+  the manifest's labels, each checked to carry its label, 50 a request.
+  That read sees only those ids, so another item under a vocabulary
+  item's label goes unseen there, and the bootstrap, which reads every
+  label, refuses it. When the page is missing, lacks or repeats a
+  manifest label, or an id is missing, a redirect or carries another
+  label, the vocabulary reads every label whole. No extracted entity is
+  found by its label (#109): the writer finds or mints its item through
+  the identity map alone (below).
 - **One item per cluster of the identity map** (#109; ADR-0035 as
   amended, ADR-0027 draft #66). Every mention of a batch (an entity of
   its manifest, or a local id of a batch without one) is in one cluster
