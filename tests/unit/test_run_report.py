@@ -2636,7 +2636,7 @@ class TestContent:
             )
         }
         assert written == report.SET_ASIDE_REASONS
-        # the record statuses are those the records allow, all nine
+        # the record statuses are those the records allow, all ten
         statuses = {
             "name",
             "role",
@@ -2647,6 +2647,7 @@ class TestContent:
             "toponym",
             "deictic",
             "generic",
+            "adjective",
         }
         assert statuses == report.RECORD_STATUSES
 

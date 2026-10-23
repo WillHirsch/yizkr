@@ -583,6 +583,35 @@ Chadsk Oblast and then Kaldovsky District, which would state a link
 the form never makes. The entity-manifest prompt asks for that order
 with an example from running text and one from a form.
 
+Amended by #572 (2026-10-23): each container a place's `within` (§2.2)
+lists is also a place entity of the manifest, with its own record, and so
+in turn is each of its own containers: "Fläckfeld, Kreis Mockburg, Hesse"
+gives three place entities. The writer mints an item only for an entity a
+claim names, and the place stage asks only about containers that name a
+graph place (ADR-0009), so a container that is no entity leaves its link
+with no place to name. A container's own record is held to §5's
+no-addition check like any other, so until #569 it is set aside wherever
+its own containers are in neither its label nor an alias.
+
+Amended by #573 (2026-10-23; decided by the implementing session, the
+owner may revisit): a country a source states as a person's citizenship
+is a place entity of the manifest, the country, whether the source gives
+it by its name or only by an adjective of nationality, and the relation
+of place `country_of_citizenship` is named in both prompts' lists of
+place relations (§3.5's table already lists it). A place's record gains
+the status `adjective` (§2.2): a country given only by an adjective
+("deutscher Staatsangehöriger", "an Australian citizen") is labelled with
+the adjective as written, "deutscher" or "Australian", which is no name
+of it, so like `deictic` and `generic` it keys nothing. The adjective is
+never mapped to a name of the country at extraction, which would add a
+word the source does not write and pick one state where the source
+gives only a nationality; where the document also names the country,
+the one entity takes that name, status `toponym`, and the adjective is
+no alias of it (a place's alias is a toponym). The critic's entity rows
+show a place's record status as they show a person's, so an `adjective`
+label reads as a country, and its `relation_kind_mismatch` names
+citizenship among the relations of place.
+
 Amended by #456 (2026-10-23, ADR-0039 accepted by the owner): §3.4's
 document-subject rule widens from `issued_by` to seven properties, each
 about the source itself, and `caption`, a container's verbatim words
@@ -849,7 +878,7 @@ to `toponym`, and a surname's type to `other`.
 
 | Field | What it holds | Keys? |
 |---|---|---|
-| `status` | what the label is: `toponym`, `deictic` or `generic` | only a `toponym` keys |
+| `status` | what the label is: `toponym`, `deictic`, `generic` or `adjective` | only a `toponym` keys |
 | `names` | the place's own names as written, each with its toponym and generic head where they can be told apart | yes, each as written, with one exception below |
 | `address` | a street and a house number, as written, in the source's order; the address is also one of the names | yes, as written, among the names |
 | `within` | the places the source puts it in, as written, nearest first, whatever order the source writes them in | never; they decide nesting |
@@ -876,6 +905,14 @@ to `toponym`, and a surname's type to `other`.
   refers back to the camp: "dort" is `deictic`, never an alias and never a
   place of its own (#42). A place named by a head alone ("Lager", with no
   toponym) is `generic`.
+- A worked example, which no source in the universe states: "Gustave
+  Lobig, an Australian citizen" gives a place labelled "Australian", the
+  country, status `adjective`, since the adjective is no name of it
+  (amended by #573). "Staatsangehörigkeit: Deutsches Reich" gives a place
+  of status `toponym` named Deutsches Reich.
+- Each container in `within` is a place entity of its own, with its own
+  record: "Fläckfeld, Kreis Mockburg, Hesse" also gives Kreis Mockburg,
+  within Hesse, and Hesse (amended by #572).
 - A head never keys on its own. A container never keys at all: it only
   decides whether one place nests in another (§7).
 

@@ -10,6 +10,7 @@ from yizkr.claims import (
     ClaimBatch,
     EntityRecord,
     LocalRef,
+    PlaceStructure,
     QidRef,
 )
 from yizkr.pipeline.reconcile import (
@@ -269,6 +270,26 @@ class TestBlocking:
             RosterEntity(qid="Q51", label="dort", kind="place"),
         ]
         assert block_candidates(found, graph) == {}
+
+    def test_a_country_given_by_an_adjective_keys_nothing(self):
+        """#573: "an Australian citizen" gives a place labelled with the
+        adjective, which is no name of the country (ADR-0035 §2.2)."""
+        found = [
+            EntityRecord(
+                id="e1",
+                label="Australian",
+                kind="place",
+                structure={"kind": "place", "status": "adjective"},
+            )
+        ]
+        graph = [RosterEntity(qid="Q52", label="Australian", kind="place")]
+        assert block_candidates(found, graph) == {}
+        toponym = found[0].model_copy(
+            update={"structure": PlaceStructure(status="toponym")}
+        )
+        assert [c.qid for c in block_candidates([toponym], graph)["e1"]] == [
+            "Q52"
+        ]
 
     def test_a_person_record_adds_its_unsplit_forms_and_nicknames(self):
         found = [
