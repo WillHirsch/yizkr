@@ -43,6 +43,7 @@ from yizkr.core.instance import (
 )
 from yizkr.pipeline import report, scratch, scratchwrite
 from yizkr.pipeline.orchestrate import DocumentRun
+from yizkr.pipeline.rundir import PROGRESS
 from yizkr.pipeline.scratch import CORPUS_DIR, CorpusContext, ScratchDriver
 from yizkr.pipeline.scratchwrite import ScratchWriteRefused
 from yizkr.staticsite import SiteBuilder, scratch_notice
@@ -66,6 +67,14 @@ RUN = {
 EXTRACT = b"\x89PNG synthetic scan of Leopold's 1914 birth register extract"
 LETTER = b"\x89PNG synthetic scan of Gustav's 1952 letter to Leopold"
 SHOP = b"\x89PNG synthetic photograph of the shop front at Brunnenring 35"
+
+
+# the steps the stand-in reset tells of, as the real one tells of its own
+RESET_STEPS = (
+    "stop the stack",
+    "set LocalSettings.php aside",
+    "start the stack",
+)
 
 
 def sha1(data: bytes) -> str:
@@ -214,12 +223,16 @@ class Run:
         monkeypatch.setattr(scratchwrite, "sleep", self._sleep)
         monkeypatch.setattr(scratchwrite, "clock", lambda: self.now)
 
-    def _reset(self, *, env_file, yes, log, lock=None):
+    def _reset(self, *, env_file, yes, log, lock=None, progress=None):
         from yizkr.core.instance import clear_contents
 
         assert yes
         with (lock or self._lock)():
             self.resets += 1
+            # the real reset's steps, told as each starts
+            for number, name in enumerate(RESET_STEPS, 1):
+                if progress is not None:
+                    progress(number, len(RESET_STEPS), name)
             clear_contents(CONFIG, "yizkr scratch reset")
             state = write_state_dir(CONFIG)
             if state.exists():
@@ -1361,3 +1374,216 @@ def test_a_record_that_does_not_count_self_references_holds_no_figure():
     assert content["write"]["claims_refused"] == 1
     (section,) = report._write_sections(content)
     assert "1 refused; 2 items minted," in section.blocks[0][0]
+
+
+# -- progress -----------------------------------------------------------------
+
+
+def progress_events(run, stage: str | None = None) -> list[dict]:
+    """The progress events the stages emitted, each without its time and
+    invocation: what the monitor reads (#561)."""
+    return [
+        {
+            key: value
+            for key, value in event.items()
+            if key not in ("at", "event", "invocation")
+        }
+        for event in run.driver.rundir.events()
+        if event["event"] == PROGRESS
+        and (stage is None or event["stage"] == stage)
+    ]
+
+
+class TestProgress:
+    """Each stage tells the run's events how far it has got, with counts
+    only (#561)."""
+
+    def test_register_tells_of_each_document(self, run):
+        run.past_the_barrier(until="register")
+        assert progress_events(run, "register") == [
+            {
+                "stage": "register",
+                "phase": "registering",
+                "unit": "documents",
+                "done": done,
+                "of": 2,
+                "failed": 0,
+                "refused": 0,
+            }
+            for done in (0, 1, 2)
+        ]
+
+    def test_write_tells_of_each_document_and_its_statements(self, run):
+        run.past_the_barrier(until="write")
+        events = progress_events(run, "write")
+        assert [(event["done"], event["of"]) for event in events] == [
+            (0, 2),
+            (1, 2),
+            (2, 2),
+        ]
+        assert {event["phase"] for event in events} == {"writing"}
+        documents = run.record("write")["documents"].values()
+        assert events[0]["written"] == 0
+        assert {
+            key: events[-1][key]
+            for key in ("written", "referenced", "skipped", "claims_refused")
+        } == {
+            "written": sum(d["written"] for d in documents),
+            "referenced": sum(d["referenced"] for d in documents),
+            "skipped": sum(d["skipped"] for d in documents),
+            "claims_refused": sum(d["refused"] for d in documents),
+        }
+        assert events[-1]["written"] > 0
+
+    def test_a_failed_document_counts_as_done_and_failed(
+        self, run, monkeypatch
+    ):
+        from yizkr.pipeline import writer
+
+        letter = run.documents[1]
+        real = writer.BatchWriter.write_batch
+
+        def failing(self, batch, *args, **kwargs):
+            if batch.claims[0].source.artifact.sha1 == letter.sha1:
+                raise ConnectionError("the wiki went away")
+            return real(self, batch, *args, **kwargs)
+
+        monkeypatch.setattr(writer.BatchWriter, "write_batch", failing)
+        run.past_the_barrier(until="write")
+        last = progress_events(run, "write")[-1]
+        assert (last["done"], last["of"], last["failed"]) == (2, 2, 1)
+
+    def test_an_invocation_that_goes_on_counts_what_was_done_before(
+        self, run, monkeypatch
+    ):
+        from yizkr.pipeline import writer
+
+        letter = run.documents[1]
+        real = writer.BatchWriter.write_batch
+
+        def failing(self, batch, *args, **kwargs):
+            if batch.claims[0].source.artifact.sha1 == letter.sha1:
+                raise ConnectionError("the wiki went away")
+            return real(self, batch, *args, **kwargs)
+
+        monkeypatch.setattr(writer.BatchWriter, "write_batch", failing)
+        run.past_the_barrier(until="write")
+        monkeypatch.setattr(writer.BatchWriter, "write_batch", real)
+        before = len(progress_events(run, "write"))
+        run.past_the_barrier(until="write")
+        again = progress_events(run, "write")[before:]
+        # the extract was written before: the letter alone is to go
+        assert [(event["done"], event["failed"]) for event in again] == [
+            (1, 0),
+            (2, 0),
+        ]
+
+    def test_reset_tells_of_each_step_as_it_starts(self, run):
+        run.past_the_barrier(until="reset")
+        assert progress_events(run, "reset") == [
+            {
+                "stage": "reset",
+                "phase": "resetting",
+                "unit": "steps",
+                "done": number,
+                "of": len(RESET_STEPS),
+                "step": name,
+            }
+            for number, name in enumerate(RESET_STEPS)
+        ]
+
+    def test_a_rerun_tells_that_it_skips(self, run, tmp_path, monkeypatch):
+        run.past_the_barrier()
+        again = Run(tmp_path, monkeypatch, wiki=run.wiki, run_id="run-2")
+        again.documents = run.documents
+        again.shown = ["run-1"]
+        before = len(progress_events(again))
+        again.past_the_barrier()
+        assert progress_events(again)[before:] == [
+            {"stage": "reset", "phase": "skipped"},
+            {"stage": "register", "phase": "skipped"},
+            {"stage": "write", "phase": "skipped"},
+            {"stage": "site", "phase": "building"},
+        ]
+
+    def test_an_invocation_that_goes_on_tells_that_it_resumed(self, run):
+        run.past_the_barrier(until="reset")
+        run.stage("reset")
+        assert progress_events(run, "reset")[-1] == {
+            "stage": "reset",
+            "phase": "resumed",
+        }
+
+    def test_the_site_tells_that_it_waits_and_then_builds(
+        self, run, monkeypatch
+    ):
+        run.past_the_barrier(until="write")
+        run.shown = []
+        polls = []
+
+        def sleep(seconds):
+            polls.append(seconds)
+            if len(polls) == 2:
+                run.shown = ["run-1"]
+
+        monkeypatch.setattr(scratchwrite, "sleep", sleep)
+        run.stage("site")
+        # one event for the wait, however often it polls
+        assert progress_events(run, "site") == [
+            {"stage": "site", "phase": "waiting"},
+            {"stage": "site", "phase": "building"},
+        ]
+
+    def test_a_site_whose_query_service_has_caught_up_does_not_wait(self, run):
+        run.past_the_barrier()
+        assert progress_events(run, "site") == [
+            {"stage": "site", "phase": "building"}
+        ]
+
+    def test_no_event_names_a_document(self, run):
+        run.past_the_barrier()
+        events = progress_events(run)
+        assert events
+        names = {"stage", "phase", "unit", "step"}
+        for event in events:
+            for key, value in event.items():
+                if key in names:
+                    assert value in (
+                        *RESET_STEPS,
+                        "reset",
+                        "register",
+                        "write",
+                        "site",
+                        "resetting",
+                        "registering",
+                        "writing",
+                        "building",
+                        "documents",
+                        "steps",
+                    )
+                else:
+                    assert type(value) is int
+
+
+def test_the_monitor_reads_what_the_stages_tell(run):
+    """The stages' own progress events, between the driver's start and
+    end of each, as the monitor shows them (#561)."""
+    from yizkr.pipeline.monitor import render_terminal, summarise_run
+
+    events = run.driver.rundir
+    for name in ("clustering", "reset", "register", "write", "site"):
+        events.emit("started", stage=name)
+        run.stage(name)
+        events.emit("done", stage=name)
+    summary = summarise_run(run.run_dir)
+    shown = {stage.name: stage for stage in summary.corpus}
+    assert list(shown) == ["clustering", "reset", "register", "write", "site"]
+    assert {stage.state for stage in shown.values()} == {"done"}
+    write = shown["write"]
+    assert (write.phase, write.done, write.of) == ("writing", 2, 2)
+    assert dict(write.counts)["written"] > 0
+    assert shown["site"].phase == "building"
+    view = render_terminal(summary, width=400)
+    assert "writing: 2 of 2 documents" in view
+    for document in run.documents:
+        assert document.sha1[:10] not in view

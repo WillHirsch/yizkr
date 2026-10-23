@@ -176,6 +176,52 @@ always the stage: each is counted for the stage that document has
 started and not yet ended, since a document's stages run one at a time.
 Events outside a stage count in the run's totals only.
 
+**Corpus stages** (#561). A scratch run's corpus stages, after the
+barrier: clustering, then the write side's reset, register, write,
+places and site (docs/runbooks/scratch-run.md, The write side). One line
+each, in order: those `run.json` records the latest invocation is to run
+(`scratch.corpus_stages`, up to `scratch.until`; none when it stops
+before the barrier), then any other its events name. A run that has
+none, an `ingest run`, shows none. Each is shown in its state in the
+latest invocation, since every invocation past the barrier runs every
+corpus stage afresh:
+
+| State | When |
+|---|---|
+| `pending` | the latest invocation has not started it, whatever an earlier one did with it; or the control file held it in an invocation that has ended |
+| `held` | the control file holds it (a pause or an abort of the run or the stage), with the request that holds it |
+| `running` | started by the running invocation, for how long |
+| `interrupted` | started by an invocation that has ended, by the rule `rundir.run_state` reads stages by: the next invocation runs it again |
+| `done` | done, and how long it took, with the reasons its output needs attention |
+| `skipped` | done, having found that the instance holds what the run's key makes (reset, register, write, places) |
+| `failed` | failed, after how long, with the exception's name only |
+
+What a stage is doing comes from its latest `progress` event (What it
+reads, below), shown with counts only:
+
+- **reset:** its step, as it starts ("resetting: step 6 of 9, start the
+  stack", the step's name shown only when it is lowercase words), or
+  that it resumed a reset this run made; a reset that is done has gone
+  through every step.
+- **register and write:** the documents done, out of those the stage
+  plans (registered or failed), and the documents failed, the batches
+  refused whole, and the statements written, referenced and skipped and
+  the claims refused so far.
+- **places:** "waiting for the query service", since when; then the
+  question batches answered out of those it asks; then the links written
+  out of those it plans; and the engine calls and the cache's answers its
+  role (`places`) made in this attempt, from the cache's events.
+- **site:** "waiting for the query service", since when, or "building".
+
+A count at zero is left out. While a stage runs, its rate is the units
+it did between its phase's first progress event and its latest, by
+their times; the time to go is what is left of its phase at that rate.
+Neither is shown for a reset's steps, which differ too much in length,
+and the rate is "unknown yet" until a phase has two events at least a
+second apart that differ in count. A stage written before the progress
+events existed, or one that emits none (clustering), shows its state
+from its `started`, `done`, `failed` and `held` events alone.
+
 **Documents that failed.** Every document that failed in the latest
 invocation, in a stage or outside its stages (a source or a `state.json`
 that could not be read, say), by kind and file suffix and by reason, and
@@ -200,7 +246,12 @@ made no call and is left out of the rate, which it would only lower; a
 stage the cache answered counts, since the cache will answer others like
 it. Stages of kinds with no ended attempt yet are listed apart, and the
 calls are `unknown`, not `~0`, while nothing to go has a rate. The canary
-ordering (#194) gives every kind a rate early.
+ordering (#194) gives every kind a rate early. Past them, a scratch
+run's corpus stages still to run (pending, held, running, interrupted or
+failed) follow: `corpus stages: write (412 of 1,200 documents, ~25m
+10s), places, site`, a running stage with its count and time to go where
+it has them, or that it waits for the query service. Only once none of
+either is left does `to go` say `nothing`.
 
 **In flight.** Each document the running invocation is in the middle of:
 its SHA-1 prefix, kind and stage, and for how long.
@@ -267,6 +318,10 @@ The terminal view and the page never quote a document:
   bracket, a quote or an equals sign, and only when that label is a
   lowercase phrase (`its source cannot be read`, `no claims extracted`);
   any other reason shows as `other`.
+- **A corpus stage's progress** is shown by its counts, which are
+  whole numbers, and its phase, unit and a reset's step, each a name from
+  the pipeline's vocabulary (above). Nothing else of a `progress` event is
+  shown, and its writers put nothing else in it.
 - **An alert's value** is shown when it is a number or a yes or no, and
   by its type otherwise (`(text)`, `(list)`, `(object)`): an alert's text
   can quote a transcription. Its other fields are not shown.
@@ -326,8 +381,32 @@ or given on the module's command line, reads the file the same way.
 From `events.jsonl` it reads the stage events (`started`, `done`,
 `reused`, `failed`, `held`), the LLM cache's events, the engine's call
 events, `document-failed`, `run-start`, `run-end` and `run-interrupted`,
-and `set-aside`. `alert` events are ignored: `alerts.jsonl` holds the
-alerts.
+`set-aside`, and the corpus stages' `progress` events. `alert` events
+are ignored: `alerts.jsonl` holds the alerts. A stage event that names
+no document (no `subject`) is a corpus stage's; one whose document is
+empty is left out, as above.
+
+**Progress events** (#561) are optional, so a run directory written
+before them still shows its corpus stages. The write side
+(`yizkr.pipeline.scratchwrite`, Progress) writes one while a corpus stage
+runs: as register and write start and after each document, as places
+starts asking and after each question batch, as it starts writing links
+and after each, at the start of each of a reset's steps, and when places
+and site start waiting for the query service, site starts building, or
+a stage skips. A progress event outside its stage's running attempt (of
+another invocation, or before the stage's start) is ignored. Every field
+but `event`, `stage` and `phase` is there only when it has something to
+say:
+
+| Field | What it holds |
+|---|---|
+| `stage` | the corpus stage |
+| `phase` | what it is doing: `resetting`, `resumed`, `registering`, `writing`, `waiting` (for the query service), `asking`, `building` or `skipped` |
+| `unit` | what `done` and `of` count: `steps`, `documents`, `batches` or `links` |
+| `done`, `of` | how many it has done (a reset's steps: before the one starting), out of how many |
+| `step` | a reset's step, by the reset's own name for it |
+| `failed`, `refused` | documents that failed in this attempt; batches refused whole (register) |
+| `written`, `referenced`, `skipped`, `claims_refused` | the write's statements so far: new, referenced on an equal statement, skipped, and the claims refused |
 
 **Call events** (#101) are optional. A run without them is shown from the
 cache's events alone; a run without the cache (`--no-cache`) and without
@@ -431,6 +510,7 @@ request.
   do the stages it left started, here and in `rundir.run_state`; the
   header's last-event age shows how quiet it has gone.
 - The estimate assumes the documents still to go of a kind behave like
-  the ended ones.
+  the ended ones, and a corpus stage's time to go that what it has left
+  goes at the rate of what it did in this attempt so far.
 - Reuse is inferred from the events of the stage's latest attempt; a
   stage with a hit and a miss is `done`, whatever the share.
