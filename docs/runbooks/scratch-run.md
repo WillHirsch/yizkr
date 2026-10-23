@@ -323,30 +323,30 @@ with `--until clustering` (or an earlier stage) needs none.
   instance: the identity map's hash, each document's SHA-1 with the
   content hash of its batch and what registration reads of it (its kind,
   its title, its file name, its derived media's record, an excerpt's
-  PDFs and decks), the never-ingest list's hash, the writer's version and the
-  source of the whole package but the modules that only read, and the
-  model manifest's hash. A batch's run stamps are in it, so every new run
-  resets and writes again; only a later invocation of the run that wrote
-  skips. The run's place key adds to it the place stage's version, its
-  prompt, the batch size it asks in, and the engine, model and effort of
-  the role it calls (`extract`); since the place stage writes after the
-  write, the key the instance holds is the place key. When the
-  instance-contents record still stands for that key (no other write
-  has voided it, and nothing has cleared it), the instance holds what
-  the key makes: the stage resets nothing, and register, write and
-  places skip. When this run reset the instance in an earlier invocation, for this
-  key, and nothing but this run has written to it since, the run goes on
-  where it stopped. Otherwise it resets the instance as `yizkr scratch
-  reset --yes` does (below, Reset the instance), under the live-stack
-  lock: **a run to the end resets the instance unattended**, which takes
-  minutes and discards everything on it. The reset refuses a kept
-  instance itself too. It then records, in the instance's write-phase
-  state (`scratch-run.json`, which every reset clears), the run, the
-  key, an epoch it draws for this reset and the instance's newest
-  revision and log entry, under the same hold of the lock as the reset,
-  so no session that takes the lock writes between them. The records
-  register, write, places and site kept of an earlier reset are removed,
-  and so are the place stage's raw answers.
+  PDFs and decks), the never-ingest list's hash, the writer's version
+  and the source of the whole package but the modules that only read,
+  and the model manifest's hash. A batch's run stamps are in it, so
+  every new run resets and writes again; only a later invocation of the
+  run that wrote skips. The run's place key adds to it the place stage's
+  version, its prompt, the batch size it asks in, and the engine, model
+  and effort of the role it calls (`extract`); since the place stage
+  writes after the write, the key the instance holds is the place key.
+  When the instance-contents record still stands for that key (no other
+  write has voided it, and nothing has cleared it), the instance holds
+  what the key makes: the stage resets nothing, and register, write and
+  places skip. When this run reset the instance in an earlier
+  invocation, for this key, and nothing but this run has written to it
+  since, the run goes on where it stopped. Otherwise it resets the
+  instance as `yizkr scratch reset --yes` does (below, Reset the
+  instance), under the live-stack lock: **a run to the end resets the
+  instance unattended**, which takes minutes and discards everything on
+  it. The reset refuses a kept instance itself too. It then records, in
+  the instance's write-phase state (`scratch-run.json`, which every
+  reset clears), the run, the key, an epoch it draws for this reset and
+  the instance's newest revision and log entry, under the same hold of
+  the lock as the reset, so no session that takes the lock writes
+  between them. The records register, write, places and site kept of an
+  earlier reset are removed, and so are the place stage's raw answers.
 - **register** registers each document as `ingest run` does at its
   write: the artifact item by the SHA-1 of its bytes, a deck's slides
   and images, a PDF's placed images, with registration's flags raised as
@@ -427,25 +427,25 @@ with `--until clustering` (or an earlier stage) needs none.
   containment: they use only what the manifests assert.
 - **The guard.** Register, write and places each refuse, before they
   write anything, unless the write-phase state names this run and this
-  key, and the instance's newest revision and log entry are still those this
-  run's last write left. So they write only to an instance this run
+  key, and the instance's newest revision and log entry are still those
+  this run's last write left. So they write only to an instance this run
   reset, which has taken no other write since: a live test session, a
   manual edit or another tool in between refuses them, and the next
   invocation's reset stage resets again. Each holds the live-stack lock
-  for the whole of its writes, so no live test session writes
-  meanwhile: **a scratch write keeps `make test-live` waiting while it
-  lasts**, and no live session should be started during one. A write
-  cut short in the middle of a document (Ctrl-C) leaves the instance a
-  revision the state does not record, so the next invocation resets and
-  writes everything again.
+  for the whole of its writes, so no live test session writes meanwhile:
+  **a scratch write keeps `make test-live` waiting while it lasts**, and
+  no live session should be started during one. A write cut short in the
+  middle of a document (Ctrl-C) leaves the instance a revision the state
+  does not record, so the next invocation resets and writes everything
+  again.
 - **site** builds the LAN site from the instance, as `yizkr
   publish-site` does, into `corpus/site/site/` in the run directory,
   once the query service shows the run items of the run whose writes the
   instance holds and has taken in the newest revision the write or the
-  place stage left (it waits up to five minutes). Every page's header says
-  the instance holds a development-stage scratch run and names it. Serve
-  it on the LAN only (`python -m http.server -d <that directory>`): it
-  holds possibly-living people.
+  place stage left (it waits up to five minutes). Every page's header
+  says the instance holds a development-stage scratch run and names it.
+  Serve it on the LAN only (`python -m http.server -d <that
+  directory>`): it holds possibly-living people.
 - **Records.** Each stage keeps what it did in
   `corpus/<stage>/record.json` in the run directory: local-only, like
   the rest of it. The run report counts the write's and the place

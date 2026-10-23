@@ -316,6 +316,37 @@ class TestRecordLinks:
         (tmp_path / "marriage" / "write.json").write_text(written)
         assert record_links(tmp_path) == []
 
+    def test_an_approved_equivalence_keeps_each_claim_s_link(self, tmp_path):
+        """reconcile resolved Kaldovsky District to its item, so the
+        approved batch names it by QID, as the value of link 0 and the
+        subject of link 1: each link is still the claim's, with its
+        time."""
+        from yizkr.pipeline.reconcile import apply_equivalences
+
+        approved = apply_equivalences(
+            koshnovka_batch(
+                _part_of(*IN_1941, DEATH, [_year("point_in_time", 1941)]),
+                _part_of(*FROM_1937, DEATH, [_year("start_time", 1937)]),
+            ),
+            {"kald": "Q31"},
+        )
+        assert approved.claims[0].value.value.kind == "qid"
+        assert approved.claims[1].subject.kind == "qid"
+        directory = tmp_path / "death"
+        directory.mkdir()
+        (directory / "batch.approved.json").write_text(
+            approved.model_dump_json()
+        )
+        (directory / "write.json").write_text(
+            json.dumps({"created_items": {"kosh": "Q30", "chadsk": "Q32"}})
+        )
+        (directory / "state.json").write_text(
+            json.dumps({"file": "x.png", "title": "x", "content_sha1": DEATH})
+        )
+        first, second = record_links(tmp_path)
+        assert first.claimed and times(first) == [("point_in_time", 1941)]
+        assert second.claimed and times(second) == [("start_time", 1937)]
+
     def test_a_missing_run_directory_holds_nothing(self, tmp_path):
         assert record_links(tmp_path / "absent") == []
 
@@ -548,14 +579,18 @@ class TestResetStablePrompts:
         )
 
     @pytest.mark.parametrize("order", [1, -1])
-    def test_namesakes_with_one_description_are_numbered(self, order):
-        """Namesakes whose descriptions and containers coincide are
-        numbered by their descriptions, then their documents, whatever
-        the order of the places or of their QIDs."""
+    def test_namesakes_nothing_tells_apart_go_in_the_order_given(self, order):
+        """Two Rekaus with no description, no container and no stating
+        document: nothing tells them apart, so they are numbered in the
+        order they are given (curated items, say)."""
         first = PlaceRecord(qid="Q20", label="Rekau")
         second = PlaceRecord(qid="Q21", label="Rekau")
-        names = place_names([first, second][::order])
-        assert {names["Q20"], names["Q21"]} == {"'Rekau' [1]", "'Rekau' [2]"}
+        given = [first, second][::order]
+        names = place_names(given)
+        assert [names[place.qid] for place in given] == [
+            "'Rekau' [1]",
+            "'Rekau' [2]",
+        ]
 
     @pytest.mark.parametrize("order", [1, -1])
     def test_namesakes_with_no_description_go_by_their_documents(self, order):
@@ -1022,7 +1057,7 @@ class TestCsv:
         assert (first["qid_b"], first["label_b"]) == ("Q43", "Hesse")
         assert first["verdict"] == SAME
         assert json.loads(first["chain"]) == list(PRISON)
-        assert first["container"] == "1"
+        assert first["container"] == "2"
         assert first["decision"] == ""
         assert (second["qid_b"], second["verdict"]) == ("", UNCERTAIN)
         assert "a_within_b" not in path.read_text()
@@ -1045,7 +1080,7 @@ class TestCsv:
         # a B that is no candidate, or a question the graph no longer asks
         rows[0]["qid_b"] = "Q41"
         assert approved_answers(rows, work) == []
-        rows[0]["qid_b"], rows[0]["container"] = "Q43", "0"
+        rows[0]["qid_b"], rows[0]["container"] = "Q43", "1"
         assert approved_answers(rows, work) == []
 
 

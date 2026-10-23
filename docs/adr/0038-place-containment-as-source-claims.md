@@ -274,36 +274,41 @@ Applied with the implementation (accepted by the owner, 2026-10-23):
      Its `--apply` writes only links a source states, cited as above.
 
    *Applied (#201):* `yizkr.pipeline.places` takes each link a record
-   states (`stated_links`), with the qualifiers of each claim of its
-   document that gives it (a `part_of` from the link's inner end to an
-   entity a name of which is the container's), and asks
-   (`build_worklist`) of a link whose container names more than one
-   place, or that no claim gives. A link a claim gives whose container
-   names one place is settled without a question, as the write wrote it
-   from the claim; a link whose container names no place, or whose
-   place is none of the graph's, is left out and counted (`unnamed`,
-   decision FC as applied). A question names the place, its chain, the
-   container and the numbered candidates; the answer names a candidate's
-   number or `uncertain`. The inner end of a later link is the place the
-   link before it resolved to; a link whose inner end an uncertain
-   answer left open is counted (`unresolved`) and not written. Each link
-   is written by `write_link`: `part of` the named item with the claim's
-   qualifiers, `stated in` the artifact with no page, `inferred from`
-   the run item, each its own reference block; a statement of the same
-   value and qualifiers that cites the artifact already is left as it
-   is, and one citing other sources gains the link's blocks. The prompt
-   names each place by its label and description too, which the
-   instance keeps unique with the label and the writer makes from the
-   identity map alone. Between rounds the graph's containment removes
-   no question: a candidate the graph already puts the place in may be
-   a namesake the source does not mean, so a later round asks again,
-   and the idempotent skip keeps each link from being written twice
-   (§9's "transitive elimination between rounds" as applied). The
-   scratch run's `places` stage (yizkr.pipeline.scratchwrite) writes
-   every answer unattended; `reconcile-places` writes the CSV's
-   approved `same` rows, with the columns of ADR-0009's contract (A the
-   place, B the candidate named) and the chain and the container's
-   index beside them.
+   states (`stated_links`), reading the record's chain nearest first,
+   the order #555 has the entity manifest ask for (ADR-0035 §2.2; the
+   stage relies on it, and #146 runs only after both merge), with the
+   qualifiers of each claim of its document that gives it (a `part_of`
+   from the link's inner end to an entity a name of which is the
+   container's), and asks (`build_worklist`) of a link whose container
+   names more than one place, or that no claim gives. A link a claim
+   gives whose container names one place is settled without a question,
+   as the write wrote it from the claim; a link whose container names no
+   place, or whose place is none of the graph's, is left out and counted
+   (`unnamed`, decision FC as applied). A question names the place, its
+   chain, the container and the numbered candidates; the answer names a
+   candidate's number or `uncertain`. The inner end of a later link is
+   the place the link before it resolved to; a link whose inner end an
+   uncertain answer left open is counted (`unresolved`) and not written.
+   Each link is written by `write_link`: `part of` the named item with
+   the claim's qualifiers, `stated in` the artifact with no page,
+   `inferred from` the run item, each its own reference block; a
+   statement of the same value and qualifiers that cites the artifact
+   already is left as it is, and one citing other sources gains the
+   link's blocks. The prompt names each place by its label and
+   description too, which the instance keeps unique with the label and
+   the writer makes from the identity map alone; places whose names
+   still coincide are numbered by the documents whose records name them,
+   else in the order given (decision FD as applied). Between rounds the
+   graph's containment removes no question: a candidate the graph
+   already puts the place in may be a namesake the source does not mean,
+   so a later round asks again, and the idempotent skip keeps each link
+   from being written twice (§9's "transitive elimination between
+   rounds" as applied). The scratch run's `places` stage
+   (yizkr.pipeline.scratchwrite) writes every answer unattended;
+   `reconcile-places` writes the CSV's approved `same` rows, with the
+   columns of ADR-0009's contract (A the place, B the candidate named)
+   and the chain and the container's number in it (from 1, as the
+   question gives it) beside them.
 6. **The rebuild of #201's stage** reuses PR #513's plumbing as listed
    in point 5, and drops its competing-pair questions and its run-only
    provenance. Graphs written before it are scratch graphs, removed by
@@ -352,7 +357,9 @@ Applied with the implementation (accepted by the owner, 2026-10-23):
 - reset-stable prompts (decision FD and the numbered questions);
 - decisions FB and FC;
 - the `same` verdict's routing to the curator-executed identity flow,
-  for any pair the command still asks;
+  for any pair the command still asks. As applied by #201 (§8.5) the
+  command asks no pair: its `same` now says the container is the
+  candidate B, and `--apply` writes the link it decides;
 - the GeoNames activation and its external ids and coordinates.
 
 ## Consequences

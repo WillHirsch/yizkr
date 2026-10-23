@@ -7,18 +7,18 @@ decision FA of #201's amendment (PR #513), with what follows from them
 (ADR-0038 §9). A containment is a source's claim, and no model answers
 whether one place lies within another; the rest stands.
 Amended by #201 (2026-10-23; ADR-0038 §8.5 to §8.7, as applied): the
-pass asks one question, of identity: which existing place a container
-of a chain a mention record states means. The worklist takes the links
-the records state, link by link (the place within its nearest
-container, each container within the next), and asks of a link whose
-container names more than one existing place, or that no claim of its
-document gives (a link the record alone states); a link a claim gives,
-whose container names one place, is not asked, as the write wrote it
-from the claim, and a link whose container names no place is left out
-and counted. The answer names a numbered candidate, or none
-(`uncertain`), which writes nothing. Competing pairs and the verdicts
-`same`, `a_within_b`, `b_within_a` and `distinct` are gone (the
-"Worklist derivation" item 1 and "Adjudication and verdicts" below are
+pass asks one question, of identity: which existing place a container of
+a chain a mention record states means. The worklist takes the links the
+records state, link by link (the place within its nearest container,
+each container within the next), and asks of a link whose container
+names more than one existing place, or that no claim of its document
+gives (a link the record alone states); a link a claim gives, whose
+container names one place, is not asked, as the write wrote it from the
+claim, and a link whose container names no place is left out and
+counted. The answer names a numbered candidate, or none (`uncertain`),
+which writes nothing. Competing pairs and the verdicts `same`,
+`a_within_b`, `b_within_a` and `distinct` are gone (the "Worklist
+derivation" item 1 and "Adjudication and verdicts" below are
 superseded). An answered link is written `part of` the item the answer
 names, stated in the stating document's artifact (no page: a record has
 no locator) with the time its claim gives and none where the record
@@ -30,21 +30,21 @@ guard stands, at any time, and a refused cycle is counted and named in
 the local run report. A scratch run asks and writes unattended in its
 `places` stage, after the write (reset → register → write → places →
 site; ADR-0025 §1), with decision FB (a complete write only) and FC (a
-link with no place to name is left out and counted). The prompts name
-no QID: each place goes by its label and description, the labels of the
-places the graph puts it in and the chains its records state, and
-namesakes nothing else tells apart are numbered by their items'
-descriptions, then their stating documents (decision FD), so a scratch
-run after a reset asks the same prompts. Between rounds the graph's
-containment answers no question: a candidate the graph already puts
-the place in may still be a namesake the source does not mean, so each
-round asks again, and the idempotent skip keeps a link from being
-written twice (transitive elimination, below, no longer removes
-questions). `reconcile-places` asks the same questions for a curator,
-with the same CSV columns (A the place whose record states the chain, B
-the candidate the answer names, the verdict `same` or `uncertain`, plus
-the chain and the container's place in it), and its `--apply` writes
-only the links the approved rows decide, cited as above.
+link with no place to name is left out and counted). The prompts name no
+QID: each place goes by its label and description, the labels of the
+places the graph puts it in and the chains its records state; places
+whose names still coincide are numbered by the documents whose records
+name them, else in the order given (decision FD), so a scratch run after
+a reset asks the same prompts. Between rounds the graph's containment
+answers no question: a candidate the graph already puts the place in may
+still be a namesake the source does not mean, so each round asks again,
+and the idempotent skip keeps a link from being written twice
+(transitive elimination, below, no longer removes questions).
+`reconcile-places` asks the same questions for a curator, with the same
+CSV columns (A the place whose record states the chain, B the candidate
+the answer names, the verdict `same` or `uncertain`, plus the chain and
+the container's number in it, from 1), and its `--apply` writes only the
+links the approved rows decide, cited as above.
 Amended by [ADR-0031](0031-the-relation-decides-the-kind.md) (#202,
 2026-09-29): a camp, prison or other site that a source names as where
 something happened is a place, inside its town or region, so it joins
@@ -148,9 +148,9 @@ to three short rounds, each cheaper than the last.
 ### Adjudication and verdicts
 
 (Superseded by ADR-0038 §3 and #201, above: the answer names a
-candidate, or none.) The ADR-0007 machinery (batched calls ≤40 pairs, NDJSON + sentinel,
-rulings restricted to given pairs) with an extended verdict
-vocabulary, because a competing-value pair poses a three-way
+candidate, or none.) The ADR-0007 machinery (batched calls ≤40 pairs,
+NDJSON + sentinel, rulings restricted to given pairs) with an extended
+verdict vocabulary, because a competing-value pair poses a three-way
 question:
 
     same        naming variants of one place -> routes to the

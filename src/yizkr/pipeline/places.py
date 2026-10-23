@@ -2,13 +2,14 @@
 a source states means.
 
 A place's mention record states the chain of containers its source puts
-it in, nearest first (ADR-0035 §2.2: "Fläckfeld, Kreis Mockburg, Hesse"
-is Fläckfeld within Kreis Mockburg within Hesse). Each link of the chain
-is a link the source states: the place within the nearest container, and
-each container within the next (stated_links). A label's punctuation
-never says what contains what, and no model is asked whether one place
-lies within another (ADR-0038 §3): a containment reaches the graph only
-from a source.
+it in, which the pass reads nearest first, as the record gives it
+(ADR-0035 §2.2: "Fläckfeld, Kreis Mockburg, Hesse" is Fläckfeld within
+Kreis Mockburg within Hesse). Each link of the chain is a link the
+source states: the place within the nearest container, and each
+container within the next (stated_links). A label's punctuation never
+says what contains what, and no model is asked whether one place lies
+within another (ADR-0038 §3): a containment reaches the graph only from
+a source.
 
 The one question asked is of identity: which existing place a container
 of a chain means, among the places whose label or an alias is its name,
@@ -36,14 +37,16 @@ references. A link that would close a cycle (`plan`), through the
 graph's containment or the links planned before it, at any time, is
 refused and counted, never written.
 
-The prompt names each place by its label, with the labels of the places
-the graph puts it in and the chains of containers its records state, and
-numbers namesakes nothing else tells apart by their items' descriptions
-(place_names). It numbers the questions of a batch and the candidates of
-each, and an answer names both by number, never by a QID. Questions are
-ordered spine-first, a question whose candidates the graph puts more
-places inside first, then by their text, so the prompt is the same for
-the same graph whatever QIDs an instance gave its items (ADR-0032).
+The prompt names each place by its label and its item's description,
+with the labels of the places the graph puts it in and the chains of
+containers its records state; places whose names still coincide are
+numbered by the documents whose records name them, else in the order
+they are given (place_names). It numbers the questions of a batch and
+the candidates of each, and an answer names both by number, never by a
+QID. Questions are ordered spine-first, a question whose candidates the
+graph puts more places inside first, then by their text, so the prompt
+is the same for the same graph whatever QIDs an instance gave its items
+(ADR-0032).
 
 The command (`yizkr reconcile-places`) exports the answers as a CSV a
 curator reviews, and its `--apply` writes the approved rows' links, cited
@@ -91,7 +94,8 @@ BATCH_QUESTIONS = 40
 # the review CSV (yizkr reconcile-places): A is the place whose record
 # states the chain, B the candidate the answer names; `verdict` is SAME
 # when the answer names B, UNCERTAIN when it names none; `chain` (JSON) and
-# `container` (its index in the chain, from 0) name the question
+# `container` (its number in the chain, from 1, as the question gives
+# it) name the question
 CSV_FIELDS = [
     "qid_a",
     "label_a",
@@ -129,7 +133,7 @@ class PlaceRecord:
     # its label, and which the writer makes from the identity map alone
     description: str = ""
     # each of its mention records' chains of containers, as written,
-    # nearest first, in the source's order (ADR-0035 §2.2)
+    # nearest first (ADR-0035 §2.2)
     chains: list[list[str]] = field(default_factory=list)
     # the documents (SHA-1s) stating each chain, by its place in
     # `chains`; empty where no one has said
@@ -420,21 +424,29 @@ def stated_links(
     link's inner end to its container: from the place itself at the
     first link, else from an entity a name of which is the inner
     container's, to an entity a name of which is the container's, names
-    compared folded (clustering.part_keys). Such a link carries each
+    compared folded (clustering.part_keys). An entity a claim names by
+    its item, as an approved equivalence leaves it (reconcile
+    .apply_equivalences), goes by the names of the batch's entity
+    resolved to that item. Such a link carries each
     claim's qualifiers, the time its source gives, one link per distinct
     set; a link no claim gives carries none."""
     from yizkr.pipeline.clustering import part_keys
 
     records = {entity.id: entity for entity in batch.entities}
 
+    resolved = {entity.qid: entity for entity in batch.entities if entity.qid}
+
     def keys(ref) -> frozenset[str]:
-        if not isinstance(ref, LocalRef):
+        if isinstance(ref, LocalRef):
+            record = records.get(ref.local_id)
+            fallback = [ref.label or ""]
+        elif isinstance(ref, QidRef):
+            # an entity an approved equivalence resolved to its item
+            record, fallback = resolved.get(ref.qid), []
+        else:
             return frozenset()
-        record = records.get(ref.local_id)
         names = (
-            [record.label, *record.aliases]
-            if record is not None
-            else [ref.label or ""]
+            [record.label, *record.aliases] if record is not None else fallback
         )
         return frozenset(key for name in names for key in part_keys(name))
 
@@ -1015,7 +1027,7 @@ def export_places_csv(
                     "chain": json.dumps(
                         list(question.chain), ensure_ascii=False
                     ),
-                    "container": question.index,
+                    "container": question.index + 1,
                 }
             )
     return len(adjudication.answers)
@@ -1035,7 +1047,7 @@ def approved_answers(rows: list[dict], work: Worklist) -> list[Answer]:
             continue
         try:
             chain = tuple(json.loads(row.get("chain") or "[]"))
-            index = int(row.get("container", ""))
+            index = int(row.get("container", "")) - 1
         except ValueError:
             continue
         question = by_key.get((row.get("qid_a", ""), chain, index))

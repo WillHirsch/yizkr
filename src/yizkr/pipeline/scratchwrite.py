@@ -104,36 +104,37 @@ gives. A link whose container names no place is left out and counted
 (`unnamed`). Its calls are keyed as that role's are, and reported to the
 run's events under the role and stage `places`. The prompts name no QID
 and order their places and questions by what the graph and the records
-say of them, namesakes by their items' descriptions, so the same batches
-ask the same prompts after any reset. An answer the cache kept from an
-earlier invocation that does not parse is rejected and asked once more;
-one the engine gave in this run is rejected and fails the stage. The
-counts, the answers and the links they decide, through the cycle guard
-(through the graph's containment as read, the links planned before, or
-both, at any time), go in the stage's record, and each batch's raw
-answer in RESPONSES beside it, both for this reset of the instance and
-this place key; the reset removes both. A subscription limit met while
-the stage asks leaves nothing recorded: the next invocation reads the
-graph and asks again, the batches already answered coming from the LLM
-cache. An invocation that finds the links recorded writes those not yet
-written without asking again; one cut short inside a write the wiki took
-finds the instance written since, and the next invocation resets. Each
-link is written with no review CSV, as a `part_of` statement at normal
-rank: the item the answer names, with the time the document's claim
-gives, `stated in` the document's artifact with no page, and `inferred
-from` the stage's run item, which records the asking model in its label
-and is marked as the write's run items are, each in a reference block of
-its own (places.write_link). A link written already, stated in the same
-artifact with the same time, is not written again; an equal statement
-another source states gains the link's references. An `uncertain`
-answer writes nothing. A link that would close a cycle, a question
-answered twice differently, and an answer line outside the answer's
-schema are refused and counted, never written; the record names each
-refused cycle by its places' labels, for the run report. Before its
-first write the stage clears the instance-contents record, and once it
-has written every link it records the place key. The stages before
-write never read this containment: they use only what the manifests
-assert.
+say of them, a place by its label and its item's description, and
+namesakes whose names still coincide by the documents that name them, so
+the same batches ask the same prompts after any reset. An answer the
+cache kept from an earlier invocation that does not parse is rejected
+and asked once more; one the engine gave in this run is rejected and
+fails the stage. The counts, the answers and the links they decide,
+through the cycle guard (through the graph's containment as read, the
+links planned before, or both, at any time), go in the stage's record,
+and each batch's raw answer in RESPONSES beside it, both for this reset
+of the instance and this place key; the reset removes both. A
+subscription limit met while the stage asks leaves nothing recorded: the
+next invocation reads the graph and asks again, the batches already
+answered coming from the LLM cache. An invocation that finds the links
+recorded writes those not yet written without asking again; one cut
+short inside a write the wiki took finds the instance written since, and
+the next invocation resets. Each link is written with no review CSV, as
+a `part_of` statement at normal rank: the item the answer names, with
+the time the document's claim gives, `stated in` the document's artifact
+with no page, and `inferred from` the stage's run item, which records
+the asking model in its label and is marked as the write's run items
+are, each in a reference block of its own (places.write_link). A link
+written already, stated in the same artifact with the same time, is not
+written again; an equal statement another source states gains the link's
+references. An `uncertain` answer writes nothing. A link that would
+close a cycle, a question answered twice differently, and an answer line
+outside the answer's schema are refused and counted, never written; the
+record names each refused cycle by its places' labels, for the run
+report. Before its first write the stage clears the instance-contents
+record, and once it has written every link it records the place key. The
+stages before write never read this containment: they use only what the
+manifests assert.
 
 **site** builds the LAN site (yizkr.staticsite) from the instance into
 the stage's directory of the run, once the query service shows the run
