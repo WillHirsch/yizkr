@@ -349,7 +349,11 @@ expects it and why:
   person, place or family by its members' labels and documents); and
   `confident_component` merges the same way, since a chain of confident
   links can join two people no one link would: each should be one
-  entity by its members' labels and documents. A union or an event
+  entity by its members' labels and documents. Read events with several
+  participants closely: their link asks only that one event's people be
+  among the other's, which is not transitive, so a component can join
+  an event of one person to an event of another through an event of
+  both. A union or an event
   whose people adjudication or a confident component merged links
   confidently, so its merge shows as `confident`: read a rise in
   confident merges of unions and events beside the adjudicated and
