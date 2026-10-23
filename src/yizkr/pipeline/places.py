@@ -623,10 +623,10 @@ def place_names(places: list[PlaceRecord]) -> dict[str, str]:
     description unique together, and the writer makes a minted item's
     description from the identity map alone, so items the writer minted
     read apart, and alike, after any reset. Places whose names still
-    coincide, having no description, are numbered [1], [2], ... in the
-    order of the documents whose records name them, never of their QIDs;
-    namesakes with no description and no stating document (curated
-    items, say) are numbered in the order they are given."""
+    coincide (with no description, or one alike) are numbered [1], [2],
+    ... in the order of the documents whose records name them, never of
+    their QIDs; namesakes no stating document tells apart (curated items,
+    say) are numbered in the order they are given."""
     labels = {place.qid: place.label for place in places}
     names = {}
     for place in places:
@@ -651,11 +651,8 @@ def place_names(places: list[PlaceRecord]) -> dict[str, str]:
         if len(same) < 2:
             continue
         same.sort(
-            key=lambda place: (
-                place.description,
-                sorted(
-                    sha1 for found in place.chain_sources for sha1 in found
-                ),
+            key=lambda place: sorted(
+                sha1 for found in place.chain_sources for sha1 in found
             )
         )
         for number, place in enumerate(same, start=1):

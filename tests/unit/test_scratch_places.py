@@ -914,6 +914,12 @@ class TestKeys:
         assert calls["by_role"]["places"]["engine"] == 1
         assert calls["engine_calls"]["by_role"] == {"places": 1}
 
+    def test_a_place_is_named_by_its_records_chains(self, run):
+        run.past_the_barrier()
+        (prompt,) = run.engine.prompts
+        assert "'Fläckfeld' (" in prompt
+        assert "a record places it in 'Kreis Peiltal')" in prompt
+
     def test_no_prompt_names_a_qid(self, run):
         run.past_the_barrier()
         (prompt,) = run.engine.prompts

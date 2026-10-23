@@ -408,6 +408,25 @@ class TestWorklist:
         (question,) = work.questions
         assert [found.sha1 for found in question.links] == [MARRIAGE, TREE]
 
+    def test_a_question_holding_more_places_comes_first(self):
+        """Hesse holds two places and lies in Germany; Klurnau holds none
+        and lies in nothing. Hesse's question comes first, though its
+        text and its candidate's depth would put it second."""
+        places = [
+            PlaceRecord(qid="Q1", label="Germany"),
+            PlaceRecord(qid="Q2", label="Hesse", parents=["Q1"]),
+            PlaceRecord(qid="Q3", label="Kreis Peiltal", parents=["Q2"]),
+            PlaceRecord(qid="Q4", label="Kreis Mockburg", parents=["Q2"]),
+            PlaceRecord(qid="Q5", label="Klurnau"),
+            PlaceRecord(qid="Q6", label="Fläckfeld"),
+            PlaceRecord(qid="Q7", label="Brunnenring 35"),
+        ]
+        work = build_worklist(
+            places,
+            [link("Q6", ("Hesse",), 0), link("Q7", ("Klurnau",), 0)],
+        )
+        assert [q.candidates for q in work.questions] == [["Q2"], ["Q5"]]
+
     def test_spine_first(self):
         """A question whose candidates the graph puts more places inside
         comes first: Hesse holds three, Kreis Peiltal two."""
@@ -499,6 +518,21 @@ class TestResetStablePrompts:
     def test_the_same_prompts_whatever_the_qids(self, shift):
         assert prompts(*renumbered(*namesakes(), shift)) == prompts(
             *namesakes()
+        )
+
+    @pytest.mark.parametrize("shift", [1, 91, 991])
+    def test_ties_go_by_their_text_whatever_the_qids(self, shift):
+        """Two questions alike but for their places' names, whose QIDs
+        turn round as strings when renumbered (Q9 and Q20 to Q100 and
+        Q111): the same prompt."""
+        places = [
+            PlaceRecord(qid="Q9", label="Brunnenring 35"),
+            PlaceRecord(qid="Q20", label="Angerring 11"),
+            PlaceRecord(qid="Q30", label="Flörburg"),
+        ]
+        links = [link("Q9", ("Flörburg",), 0), link("Q20", ("Flörburg",), 0)]
+        assert prompts(*renumbered(places, links, shift)) == prompts(
+            places, links
         )
 
     def test_namesakes_read_apart_by_their_descriptions(self):
@@ -1004,6 +1038,10 @@ class TestCsv:
             row["decision"] = "approve"
         (answer,) = approved_answers(rows, work)
         assert (answer.question, answer.place) == (work.questions[0], "Q43")
+        # a row whose verdict is not `same`, though its B is a candidate
+        rows[1]["qid_b"] = "Q42"
+        (answer,) = approved_answers(rows, work)
+        assert answer.question == work.questions[0]
         # a B that is no candidate, or a question the graph no longer asks
         rows[0]["qid_b"] = "Q41"
         assert approved_answers(rows, work) == []
