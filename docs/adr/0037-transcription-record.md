@@ -20,6 +20,14 @@ per slide, read from its XML (the page method `slide-xml`): each slide
 languages or notes, and the SHA-1s of the images it reads on its own; a
 deck has no `document_class` (§2, "Pages of a deck").
 
+Amended by #570 (2026-10-23): the prompt sets a table's layout. Every
+table, list in columns or form grid, ruled or not, is written one line
+per row, the header row included, its cells separated by ` | `, each
+empty cell kept as an empty field so every row has as many cells as the
+header; a cell whose text wraps stays on its row's line, joined by a
+space (§1, "Tables"). The prompt is in every vision transcription's
+cache key, so the next scratch run transcribes the corpus again (§7).
+
 Amended by #449 (2026-10-05): the claims review sheet shows a claim's
 printed page number in a `printed_page` column beside `page`, empty
 where its source has none. The sheet's locators are never read back, so
@@ -78,6 +86,25 @@ fails), a page called `transcribed` holds text, the class and the status
 come from the vocabulary above, the language codes are codes, and no
 other field is allowed. A missing or unknown status, an unknown class
 and bad page numbers fail the answer.
+
+**Tables.** A page's text keeps its line breaks, with one exception
+the prompt states: every table, list in columns or form grid, ruled or
+not, is written one line per row, the header row included, with the
+row's cells separated by ` | `. Each empty cell stays an empty field, so
+every row has as many cells as the header and each value keeps its
+column; a cell whose text runs over several lines stays on its row's
+line, its lines joined by a space. Text not set out in columns (prose,
+a title, a note under a table) is written as it stands. Without the
+rule each call chose its own layout (` | `, columns aligned with
+spaces, or cells run together), and a row run together loses its empty
+cells, and with them which column a value, such as a mark in one of two
+adjacent columns, stood in (#570). The prompt's example is a register
+row from the fictional universe:
+
+```
+Name | Alter | ledig | verh. | verw.
+Löbig, Eugen | 73 |  |  | x
+```
 
 A few harmless near-misses of the record's shape say what the record
 says, and are **normalised, not refused** (a Pydantic before-validator

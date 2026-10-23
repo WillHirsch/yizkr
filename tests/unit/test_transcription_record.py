@@ -603,6 +603,45 @@ class TestTheTranscriber:
             "spread), its object holds the text of both, in reading order."
         ) in " ".join(TRANSCRIPTION_PROMPT.split())
 
+    def test_the_prompt_lays_out_a_table_one_line_per_row(self):
+        # Without a layout rule each call picked its own, and a row run
+        # together lost its empty cells and with them which column each
+        # value stood in (#570).
+        flowing = " ".join(TRANSCRIPTION_PROMPT.split())
+        for rule in (
+            "write every table, list in columns or form grid, ruled or "
+            "not, one line per row, its header row included, with the "
+            'row\'s cells separated by " | ".',
+            "Keep each empty cell as an empty field, so that every row has "
+            "as many cells as the header and each value stays in its "
+            "column.",
+            "A cell whose text runs over several lines stays on its row's "
+            "line, its lines joined by a space; this is the one exception "
+            "to preserving line breaks.",
+            "Text that is not set out in columns (running prose, a title, "
+            "a note under a table) is written as it stands.",
+        ):
+            assert rule in flowing
+        # the example is a line per row, each row as wide as its header,
+        # with the empty cells kept as empty fields
+        lines = TRANSCRIPTION_PROMPT.splitlines()
+        header = lines.index("  Name | Alter | ledig | verh. | verw.")
+        row = lines[header + 1]
+        assert row == "  Löbig, Eugen | 73 |  |  | x"
+        assert len(row.split(" | ")) == len(lines[header].split(" | "))
+
+    def test_the_prompts_table_example_is_from_the_universe(self):
+        # Eugen's burial register entry: a widower of 73 (docs/EXAMPLES.md)
+        (register,) = (
+            source.text
+            for source in u.SOURCES
+            if source.key == "burial-register-1909"
+        )
+        assert "Löbig, Eugen" in register
+        assert "Alter: 73 Jahre" in register
+        assert "Witwer" in register
+        assert "Löbig, Eugen | 73 |  |  | x" in TRANSCRIPTION_PROMPT
+
     def test_the_record_reaches_the_view(self, tmp_path):
         answer = a_record(
             record_page(
