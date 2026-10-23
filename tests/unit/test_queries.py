@@ -182,9 +182,15 @@ class TestDisagreementReport:
         (fetched,) = values_blocks(q, "property")
         assert fetched == COMPARED
         # the single-valued properties, an event's own dates among them
-        # (#136), and the two that accumulate but are dated
+        # (#136), a document's date of making (#584), and the two that
+        # accumulate but are dated
         assert sorted(DATED) == ["residence", "spouse"]
-        assert {"birth_name", "point_in_time", "start_time"} <= SINGLE_VALUED
+        assert {
+            "birth_name",
+            "point_in_time",
+            "start_time",
+            "inception",
+        } <= SINGLE_VALUED
 
     def test_accumulating_names_are_never_fetched(self, q):
         # married names, nicknames, official names and appellations

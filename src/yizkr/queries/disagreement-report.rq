@@ -7,17 +7,17 @@
 #
 # The compared properties are the ones that hold at most one true value
 # per subject (dates and places of birth and death, parents, birth name,
-# an entity's own point in time, start and end, a place's identity), and
-# residence and spouse, whose dates are compared. Each row gives the
-# statement's rank, its value as the source states it (a time with its
-# precision; an item with the label of the item a merge redirect resolves
-# to), the earliest and latest dates the source gives it, the start time,
-# end time and point in time it carries as qualifiers, the latest start
-# date and earliest end date that bound a residence's or a marriage's
-# start and end, and each stated-in source with the artifact it belongs to
-# (a page fragment belongs to the artifact it is part of). A statement
-# with no stated-in source shows no source. Each time comes with the
-# calendar model its value node states, which the comparison checks: a
+# an entity's own point in time, start and end, a document's inception, a
+# place's identity), and residence and spouse, whose dates are compared.
+# Each row gives the statement's rank, its value as the source states it
+# (a time with its precision; an item with the label of the item a merge
+# redirect resolves to), the earliest and latest dates the source gives
+# it, the start time, end time and point in time it carries as qualifiers,
+# the latest start date and earliest end date that bound a residence's or
+# a marriage's start and end, and each stated-in source with the artifact
+# it belongs to (a page fragment belongs to the artifact it is part of). A
+# statement with no stated-in source shows no source. Each time comes with
+# the calendar model its value node states, which the comparison checks: a
 # date before the common era or in a calendar other than the proleptic
 # Gregorian stops the report (ADR-0034).
 #
@@ -46,6 +46,7 @@ WHERE {
     wd:{P:father} wd:{P:mother}
     wd:{P:birth_name}
     wd:{P:point_in_time} wd:{P:start_time} wd:{P:end_time}
+    wd:{P:inception}
     wd:{P:coordinate_location} wd:{P:geonames_id} wd:{P:whg_place_id}
     wd:{P:residence} wd:{P:spouse}
   }
