@@ -114,6 +114,44 @@ def leaks(text: str, run: Path, tmp_path: Path) -> list[str]:
 
 
 class TestTwoRuns:
+    def test_a_run_s_contradictions_show_against_a_baseline_without(
+        self, tmp_path, engine, monkeypatch
+    ):
+        """#575: the run's site record counts the contradictions and the
+        baseline has no site stage: the diff shows the run's counts, the
+        baseline's absent, rather than not available."""
+        first, second = two_runs(tmp_path, engine, monkeypatch)
+        folder = second / scratch.CORPUS_DIR / "site"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "record.json").write_text(
+            json.dumps(
+                {
+                    "run_id": second.name,
+                    "out": str(folder / "site"),
+                    "built_at": "2026-10-05T09:00:00+00:00",
+                    "disagreements": {
+                        "total": 2,
+                        "by_property": {"place_of_death": 2},
+                    },
+                }
+            )
+        )
+        aggregate = rundiff.build(first, second, rebuild=True)["aggregate"]
+        section = aggregate["contradictions"]
+        assert section["status"] == "compared"
+        rows = {
+            r["figure"]: (r["baseline"], r["run"], r["delta"])
+            for r in section["figures"]
+        }
+        assert rows == {
+            "contradictions.different_source": (ABSENT, 2, None),
+            "contradictions.by_property.place_of_death": (ABSENT, 2, None),
+        }
+        text = rundiff.render_markdown(aggregate)
+        block = text.split("## Contradictions", 1)[1].split("## ", 1)[0]
+        assert "Not available" not in block
+        assert leaks(text, second, tmp_path) == []
+
     def test_each_recompute_is_put_down_to_the_component_that_changed(
         self, tmp_path, engine, monkeypatch
     ):
@@ -1420,6 +1458,82 @@ class TestAnomalies:
         assert missing["status"] == NOT_AVAILABLE
         assert "does not count them" in missing["why"]
         assert "does not hold them" in missing["why"]
+
+    def test_contradictions_one_report_does_not_count_are_absent(self):
+        """#575: a baseline whose report does not count them (no site
+        stage, or a site record that did not count them) is absent on its
+        side, never 0, and the run's counts still show."""
+        counted = {
+            "different_source": 3,
+            "by_property": {"mother": 2, "date_of_birth": 1},
+        }
+        run = {"content": {"contradictions": counted}}
+        for baseline in (
+            {"content": {"contradictions": {"status": NOT_AVAILABLE}}},
+            {"content": {}},
+            {},
+        ):
+            section = rundiff._counted_section(baseline, run, "contradictions")
+            assert section["status"] == "compared"
+            rows = {r["figure"]: r for r in section["figures"]}
+            assert rows == {
+                "contradictions.different_source": {
+                    "figure": "contradictions.different_source",
+                    "baseline": ABSENT,
+                    "run": 3,
+                    "delta": None,
+                },
+                "contradictions.by_property.mother": {
+                    "figure": "contradictions.by_property.mother",
+                    "baseline": ABSENT,
+                    "run": 2,
+                    "delta": None,
+                },
+                "contradictions.by_property.date_of_birth": {
+                    "figure": "contradictions.by_property.date_of_birth",
+                    "baseline": ABSENT,
+                    "run": 1,
+                    "delta": None,
+                },
+            }
+            # and the other way round: the run's side is absent
+            back = rundiff._counted_section(run, baseline, "contradictions")
+            assert {r["run"] for r in back["figures"]} == {ABSENT}
+        text = rundiff.render_markdown(an_aggregate(contradictions=section))
+        block = text.split("## Contradictions", 1)[1].split("## ", 1)[0]
+        assert "different_source" in block
+        assert "absent" in block and "Not available" not in block
+
+    def test_contradictions_both_reports_count_are_compared_by_property(
+        self,
+    ):
+        baseline = {
+            "content": {
+                "contradictions": {
+                    "different_source": 2,
+                    "by_property": {"mother": 2},
+                }
+            }
+        }
+        run = {
+            "content": {
+                "contradictions": {
+                    "different_source": 3,
+                    "by_property": {"mother": 1, "place_of_death": 2},
+                }
+            }
+        }
+        section = rundiff._counted_section(baseline, run, "contradictions")
+        rows = {
+            r["figure"]: (r["baseline"], r["run"], r["delta"])
+            for r in section["figures"]
+        }
+        assert rows == {
+            "contradictions.different_source": (2, 3, 1),
+            "contradictions.by_property.mother": (2, 1, -1),
+            # a property one report counted none of is 0, as a tally's
+            "contradictions.by_property.place_of_death": (0, 2, 2),
+        }
 
 
 # -- settings -----------------------------------------------------------------

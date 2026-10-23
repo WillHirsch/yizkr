@@ -166,7 +166,11 @@ its rank, and a statement with no stated-in source. The paired and
 filtered view is the static site's inconsistencies page. The scratch-run
 report (#124) can read the same rows through `disagreements()`, and
 `counts_by_property` gives them as aggregate counts, with no row about
-any one entity.
+any one entity. *Amended (#575):* the run report reads the run directory
+alone (ADR-0025 §3), so it never calls `disagreements()`: the site stage
+keeps `counts_by_property` of the rows it compared on the written graph,
+with their total, in its record (`corpus/site/record.json`), and the run
+report and the diff read them from there.
 
 ### 4. One SPARQL client, which POSTs
 
