@@ -515,6 +515,23 @@ class TestTheRunReport:
             "excerpt: 1"
         ) in drilled(made, CERT)
 
+    def test_the_miss_total_is_each_coverage_s_own(self, run):  # noqa: F811
+        """A by-property tally that lost an entry never changes the
+        total the report gives, nor its rate."""
+        with_excerpts(
+            run,
+            CERT,
+            {
+                "checked": 4,
+                "without_excerpt": 0,
+                "not_in_source": 2,
+                "not_in_source_by_property": {"date_of_birth": 1},
+            },
+        )
+        quotes = build(run, now=NOW)["aggregate"]["content"]["quotes"]
+        assert (quotes["not_in_source"], quotes["rate"]) == (2, 0.5)
+        assert quotes["not_in_source_by_property"] == {"date_of_birth": 1}
+
     def test_a_coverage_that_predates_the_count_is_absent(self, made):
         from tests.unit.test_run_report import DECK
 
