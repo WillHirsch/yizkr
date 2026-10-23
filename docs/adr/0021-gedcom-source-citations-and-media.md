@@ -41,6 +41,10 @@ writer describes every item it makes by its kind and the kind of its
 source alone, as "human named in a genealogical report"
 (docs/MODELING.md, "General approach"), and the summary stays in the
 batch's manifest.
+Amended by #353 (2026-10-23): a family's first two HUSB and WIFE lines,
+in either combination, are its couple and its children's parents as
+their tags state, so two HUSBs are two fathers; a further one is
+counted: see Amendments.
 
 ## Context
 
@@ -522,3 +526,19 @@ what #308, #323 and #324 say of the spouse claims is superseded:
 - the HEAD's LANG gives the language of every excerpt and name the
   adapter writes (ADR-0035 §6), `und` where the export states none the
   adapter knows.
+
+Amended by #353 (2026-10-23; owner decision): **a family's first two
+partner lines are its couple and its children's parents.** The #322
+reading above (a family's first HUSB and first WIFE alone) and the #408
+line that the second of two HUSBs or two WIFEs is never a parent are
+superseded: GEDCOM 5.5.1 exports write a same-sex couple as two HUSBs or
+two WIFEs, where a second father or a second mother is what the record
+means. The adapter reads a family's first two HUSB and WIFE lines, in
+whatever combination and order, as its couple, a HUSB before a WIFE
+(ADR-0036 §5), and each
+gives the children a `father` (HUSB) or a `mother` (WIFE) claim. A third
+is counted as `FAM.HUSB` or `FAM.WIFE`, not read; a line that restates
+one before it (same tag, same person) is counted and passed over; a
+family whose two
+partner lines are a HUSB and a WIFE naming one person still gives no
+union and no parent claim, counted.
