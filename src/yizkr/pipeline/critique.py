@@ -126,7 +126,8 @@ CATEGORIES: dict[str, str] = {
         "written (ADR-0038): suggest drop. Also a time a `part_of` claim "
         "carries (a point in time, a start or end time, a bound of one, or "
         "circa) that its excerpt does not state for the containment, such "
-        "as the document's own date: suggest drop the qualifier"
+        "as the document's own date or the date of an event at the place: "
+        "suggest drop the qualifier"
     ),
 }
 
@@ -361,20 +362,12 @@ CONTAINMENT_TIMES = (
 )
 
 
-def _qualifier_value(value: Any) -> str:
-    """A dating qualifier's value as the containment block lists it: a
-    vocabulary item (circa) by its key, a date as the review sheet shows
-    it."""
-    if isinstance(value, ItemValue):
-        return _ref_id(value.value)
-    return describe_value(value)
-
-
 def _containment_block(batch: ClaimBatch) -> str:
     """Each `part_of` claim as the claims block lists it, with the time it
-    carries (CONTAINMENT_TIMES, in brackets, where it carries one) and the
-    excerpt its source cites ("-" for none), so the critic can check that
-    the source states the containment and its time (ADR-0038 §2). Each
+    carries (CONTAINMENT_TIMES, after a comma, where it carries one, so the
+    claim's listing stays whole) and the excerpt its source cites ("-"
+    for none), so the critic can check that the source states the
+    containment and its time (ADR-0038 §2). Each
     line opens with a dash and lists the claim without the claims block's
     separators, so it is never taken for a claim or an entity row; the
     excerpt is quoted as a JSON string, with the line breaks JSON leaves
@@ -386,12 +379,12 @@ def _containment_block(batch: ClaimBatch) -> str:
         if prop != "part_of":
             continue
         times = "; ".join(
-            f"{qualifier.property} {_qualifier_value(qualifier.value)}"
+            f"{qualifier.property} {describe_value(qualifier.value)}"
             for qualifier in claim.qualifiers
             if qualifier.property in CONTAINMENT_TIMES
         )
         if times:
-            value = f"{value} ({times})"
+            value = f"{value}, carrying {times}"
         excerpt = claim.source.transcription_excerpt
         quoted = (
             json.dumps(excerpt.text, ensure_ascii=False).translate(

@@ -1266,6 +1266,15 @@ class TestRuleTwoReadsTheReportsEdges:
         assert containment.contains("Q12", "Q35")
         assert not containment.contains("Q35", "Q12")
 
+    def test_a_cycle_ends(self):
+        # two sources nest two places each in the other: the closure still
+        # ends, each place among the other's containers
+        containment = read_place_containment(
+            [_edge("Q211", "Q212"), _edge("Q212", "Q211")]
+        )
+        assert containment.containers("Q211") == {"Q211", "Q212"}
+        assert containment.contains("Q211", "Q212")
+
     def test_a_preferred_claim_is_followed(self):
         containment = read_place_containment(
             [_edge("Q35", "Q30", rank="PreferredRank")]

@@ -422,15 +422,17 @@ Rules — these mirror the archive's non-negotiable conventions:
   document names.
   Where a source writes "Flörburg, Kreis Peiltal" and, elsewhere, a bare
   "Fläckfeld", Fläckfeld takes no `part_of` at all.
-  Give a containment the time the source gives it, and none where it
-  gives none: `start_time` or `end_time` where the source dates when the
-  place came into or left the container ("Kaldovsky District, in Chadsk
-  Oblast from 1937"), `point_in_time` where it presents the place as in
-  the container at a date ("in 1941 Koshnovka belonged to Kaldovsky
-  District"), each with its range and circa as a period's are. The
-  document's own date is never the containment's time: a certificate of
-  1941 that writes "Koshnovka, Kaldovsky District" gives its `part_of`
-  no time.
+  Give a containment the time the source gives it for the containment,
+  and none where it gives none: `start_time` or `end_time` where the
+  source dates when the place came into or left the container
+  ("Kaldovsky District, in Chadsk Oblast from 1937"), `point_in_time`
+  where it presents the place as in the container at a date ("in 1941
+  Koshnovka belonged to Kaldovsky District"), each with its range and
+  circa as a period's are. The document's own date is never the
+  containment's time, nor is the date of an event the source places
+  there: a birth "in 1836 at Flörburg, Kreis Peiltal" gives Flörburg's
+  `part_of` no time, and a certificate of 1941 that writes "Koshnovka,
+  Kaldovsky District" gives its `part_of` none either.
 - Persecution and displacement are EVENTS, not relations and not
   locations on a person (ADR-0014). "Deported to Klurnau in 1942" is a
   `deportation`; "held at", "interned at", "taken to" an

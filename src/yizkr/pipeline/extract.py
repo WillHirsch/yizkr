@@ -116,7 +116,9 @@ Rules — these mirror the archive's non-negotiable conventions:
   `point_in_time` where it presents the place as in the container at a
   date ("in 1941 Koshnovka belonged to Kaldovsky District"), each with
   its range and circa as a period's are. The document's own date is
-  never the containment's time.
+  never the containment's time, nor is the date of an event the source
+  places there: a birth "in 1836 at Flörburg, Kreis Peiltal" gives
+  Flörburg's `part_of` no time.
 - Use ONLY these property keys (property key: datatype — what it means),
   for claims and qualifiers alike — a claim naming any other key is
   discarded. The description is authoritative: it says what the VALUE
