@@ -1499,7 +1499,9 @@ class TestIngestWriteRefusesUnapprovedDepicts:
         faces_json.write_text(portrait_faces().model_dump_json(indent=2))
         wiki = wiki_with_portrait()
 
-        with pytest.raises(UnapprovedDepictsError):
+        with pytest.raises(
+            SystemExit, match="carry no per-row human approval"
+        ):
             self.run(
                 monkeypatch, wiki, "ingest", "write", "--batch", faces_json
             )
@@ -1562,7 +1564,9 @@ class TestIngestWriteRefusesUnapprovedDepicts:
         )
         approved_json.write_text(json.dumps(edited, indent=2))
 
-        with pytest.raises(UnapprovedDepictsError):
+        with pytest.raises(
+            SystemExit, match="carry no per-row human approval"
+        ):
             self.run(
                 monkeypatch, wiki, "ingest", "write", "--batch", approved_json
             )
