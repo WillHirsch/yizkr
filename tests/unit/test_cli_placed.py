@@ -15,6 +15,7 @@ to Klara, July 1939."
 
 from __future__ import annotations
 
+import json
 import sys
 
 import pytest
@@ -310,7 +311,10 @@ class TestWrite:
         out, err = capsys.readouterr()
         # each claim is refused alone, as the writer refuses it
         assert status == EXIT_OK
-        assert '"written": 0' in out
+        result = json.loads(out)
+        assert result["written"] == 0
+        # counted under the subject rule's reason
+        assert result["refusal_reasons"] == ["subject_rule", "subject_rule"]
         assert "is no artifact given to this write as placed" in out
         assert unplaced_hint(2) in err
         for qid in qids.values():

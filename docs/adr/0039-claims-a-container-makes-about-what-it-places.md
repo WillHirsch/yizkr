@@ -8,6 +8,10 @@ accepted it as written, each owner question settled by its
 recommendation (below). It covers both kinds of container: a PDF whose
 pages place images (ADR-0008, as amended by #176 and #397) and a deck
 whose slides embed them, which #502 makes excerpts too.
+Amended by #554 (2026-10-23): the critic's `relation_kind_mismatch`
+category names `author` and `addressee`, as relations of authorship or
+address, with the kinds they take (a person, an organization or a
+family), as ADR-0031 records for the relations of agency.
 
 Revised 2026-10-16 on the owner's direction on #517, quoted: "Wait, are
 these fields about a source's relevance to its container, or independent

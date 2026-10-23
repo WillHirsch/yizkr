@@ -700,6 +700,10 @@ artifact a new QID, changes neither.
   item (ADR-0035 §3.4). The other document-subject properties (`author`,
   `addressee`, `inception`, `location_of_creation`, `main_subject`,
   `shows`) take the document as their subject the same way (ADR-0039).
+  `author` and `addressee` take a person, an organization or a family,
+  and the critic's `relation_kind_mismatch` category names them, as
+  relations of authorship or address, with those kinds, as it names the
+  relations of place and of agency.
   `carried_out_by` links an event to the organization that carried it
   out, such as the court of a divorce.
 - `employer` (P108) links a person to an organization, orthogonal to
