@@ -36,6 +36,7 @@ from yizkr.pipeline import clustering
 from yizkr.pipeline.clustering import (
     AMBIGUOUS,
     CONFIDENT,
+    CONFIDENT_COMPONENT,
     CONFLICTING,
     GEDCOM,
     HARD,
@@ -3010,9 +3011,11 @@ class TestEvents:
     def test_the_deaths_of_a_person_held_for_review_stay_apart(self):
         """The export gives Sebastian, 'Wastl', born 1862; the tree and a
         register each give him born 1862 and his death, the tree's in 1945
-        and the register's undated; a photo's 'Wastl' keeps his cluster
-        ambiguous. His deaths stay apart while he does: an event reads the
-        clusters its principals end in, never their links."""
+        and the register's undated; a photo's 'Wastl' keeps his candidate
+        cluster ambiguous. The export's, the tree's and the register's
+        mentions are its confident component, which merges (#568), and his
+        deaths merge with it, confidently, while the photo's 'Wastl' stays
+        apart: an event reads the clusters its principals end in."""
         ged = export(
             "0 @I3@ INDI\n1 NAME Sebastian /Löbig/\n2 NICK Wastl\n"
             "1 SEX M\n1 BIRT\n2 DATE 1862\n",
@@ -3047,13 +3050,20 @@ class TestEvents:
         docs = [ged, tree, book, photo]
         identity = identity_of(*docs)
         assert_no_false_merge(docs, identity)
-        for local_id in ("e1", "e2"):
+        for local_id, method in (
+            ("e1", CONFIDENT_COMPONENT),
+            ("e2", CONFIDENT),
+        ):
             assert [
                 identity["mentions"][doc.fingerprint(local_id, identity)][
                     "method"
                 ]
                 for doc in (tree, book)
-            ] == [AMBIGUOUS, AMBIGUOUS]
+            ] == [method, method]
+        assert (
+            identity["mentions"][photo.fingerprint("e1", identity)]["method"]
+            == AMBIGUOUS
+        )
         # without the photo, Sebastian merges, and his deaths with him
         docs = [ged, tree, book]
         identity = identity_of(*docs)
@@ -4996,12 +5006,11 @@ class TestHomonyms:
         assert_no_false_merge(docs, identity)
         assert identity["summary"]["clusters"][AMBIGUOUS] >= 1
 
-    def test_one_ambiguous_link_leaves_the_whole_cluster_unmerged(self):
+    def test_one_ambiguous_link_leaves_its_confident_component_merged(self):
         """Three registers give a Xxx Yyy born 1911, a fourth an undated
         one: the three link confidently, the fourth ambiguously with each.
-        A candidate cluster merges whole or not at all, so none of the four
-        merges; its confident links alone would join the three
-        (placeholders)."""
+        The candidate cluster is ambiguous, but its confident component,
+        the three, merges (#568); the fourth stays apart (placeholders)."""
 
         def person(name: str, year: int | None) -> Doc:
             claims = [("e1", "date_of_birth", day(year))] if year else []
@@ -5012,7 +5021,22 @@ class TestHomonyms:
         docs = [person(name, 1911) for name in ("one", "two", "three")]
         docs.append(person("four", None))
         identity = identity_of(*docs)
-        assert merged(docs, identity) == []
+        methods = [
+            identity["mentions"][doc.fingerprint("e1", identity)]["method"]
+            for doc in docs
+        ]
+        assert methods == [CONFIDENT_COMPONENT] * 3 + [AMBIGUOUS]
+        assert (
+            len(
+                {
+                    identity["mentions"][doc.fingerprint("e1", identity)][
+                        "cluster"
+                    ]
+                    for doc in docs
+                }
+            )
+            == 2
+        )
         (review,) = identity["review"]
         assert review["status"] == AMBIGUOUS
         assert sorted(p["link"] for p in review["pairs"]) == (

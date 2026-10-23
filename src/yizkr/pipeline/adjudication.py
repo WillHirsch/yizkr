@@ -2,13 +2,17 @@
 driver's clustering stage (ADR-0007 phase 3 at corpus level; ADR-0025).
 
 Clustering (yizkr.pipeline.clustering) links each candidate pair on
-deterministic evidence alone, confidently or ambiguously, and merges only
-confident clusters. This stage asks the model about the pairs it could
-not decide: the ambiguous pairs of each ambiguous candidate cluster, and
-no other. A conflicting cluster joins a cannot-link pair, and never
-merges whatever a verdict says, so none of its pairs is asked; nor is a
-confident link, nor a cluster ambiguous only because two members never
-paired contradict each other.
+deterministic evidence alone, confidently or ambiguously, and merges
+confident clusters and the confident components of ambiguous ones. This
+stage asks the model about the pairs it could not decide: the ambiguous
+pairs of each ambiguous candidate cluster that no merged confident
+component holds, so those between components (and inside a component
+its re-check kept apart), and no other. Each is asked on its own two
+mentions' evidence, whatever components they lie in. A conflicting
+cluster joins a cannot-link pair, and never merges whatever a verdict
+says, so none of its pairs is asked; nor is a confident link, nor a
+cluster ambiguous only because two members never paired contradict each
+other.
 
 **The calls.** The pairs go to the model in batches of the thresholds'
 `pairs-per-call` (clustering.yaml): a cluster's pairs stay together in
@@ -52,24 +56,30 @@ next invocation asks again.
 **Merging.** In a run of the development stage (ADR-0025), the verdicts
 settle what they can, unattended: clustering is made again under them
 (clustering.cluster_corpus with `verdicts`, whose docstring has the
-rule). An ambiguous candidate cluster whose every ambiguous pair is
+rule). An ambiguous candidate cluster whose every pending pair is
 `same` or `different` is cut at its `different` pairs, and the closure
-over its confident links and its `same` pairs gives its parts. A part
-merges, `adjudicated` when a `same` pair is among its links and
-`confident` otherwise, unless it holds a pair contradicted: a
-`different` pair the closure joined another way, a `same` pair whose
+over its confident links and its `same` pairs gives its parts: its
+confident components, joined by `same` pairs. A `same` on any pair
+between two components joins them whole, and a `different` on any pair
+between them keeps them apart. A part merges, `adjudicated` when a
+`same` pair is among its links (every member of the components it joins
+included) and `confident_component` otherwise, unless it holds a pair
+contradicted: a `different` pair the closure joined another way (two
+components given both verdicts among them, say), a `same` pair whose
 evidence says they differ by more than their own dates (a verdict
 excuses a date conflict on its own pair, never stated sexes, civil
 statuses or kin that conflict, a place's containers or an
 organisation's places that differ, or event kinds that cannot be one),
-or two other members whose evidence says they differ; then each of its
-members stays apart. A candidate cluster of two whose one pair no
+or two other members whose evidence says they differ; then it falls
+back to its confident components, each merged or apart as without
+verdicts. A candidate cluster of two whose one pair no
 `same` could merge (clustering.cannot_merge) is not asked, since no
 verdict on it changes a cluster, and is counted
-(`unmergeable_pairs_not_asked`). A cluster with
-an `uncertain` pair, or one without a verdict, stays apart whole, as it
-would without adjudication. Unions are settled after people, and events
-after unions, since their links read the clusters their people end in:
+(`unmergeable_pairs_not_asked`). A cluster with an `uncertain` pending
+pair, or one without a verdict, stays as it is without adjudication: its
+confident components merged, the rest apart. Unions are settled after
+people, and events after unions, since their links read the clusters
+their people end in:
 the stage asks the pending pairs of the first group of kinds
 (clustering.stage_group), clusters again, and asks the next group's,
 so a union whose couple adjudication merged may link confidently and

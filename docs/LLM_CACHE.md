@@ -347,7 +347,9 @@ fingerprints, clustering's comparison and each mention's evidence. A
 change that alters a mention's evidence (its label, record or claims)
 changes the call that asks of it; one that adds, removes or resizes an
 ambiguous cluster re-packs the calls after it, since calls are filled
-in the review's order; and a changed verdict on people changes the
+in the review's order; so does one that changes which pairs are
+pending, as a confident component that now merges settles the ambiguous
+pairs inside it (#568); and a changed verdict on people changes the
 later rounds' calls, of unions and events. A batch made again the same
 leaves every key. The prompt names no QID, so a reset of the instance
 changes no key. Since the role

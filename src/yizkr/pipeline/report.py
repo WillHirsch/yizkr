@@ -1817,6 +1817,12 @@ def _clusters(path: Path, fold: _Fold) -> dict[str, Any]:
         "identity clusters": number("identity_clusters"),
         "confident merges": number("clusters", "confident"),
         "mentions merged": number("cluster_mentions", "confident"),
+        "confident component merges": number(
+            "clusters", "confident_component"
+        ),
+        "mentions merged by confident component": number(
+            "cluster_mentions", "confident_component"
+        ),
         "adjudicated merges": number("clusters", "adjudicated"),
         "mentions merged by adjudication": number(
             "cluster_mentions", "adjudicated"

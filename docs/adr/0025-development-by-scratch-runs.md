@@ -271,7 +271,12 @@ The owner replaced that plan on 2026-09-27, for four reasons.
   from confident merges; a conflicting cluster never merges, and a
   cluster with an `uncertain` pair stays split (ADR-0007, as amended by
   #106). In keeper mode the verdicts are only recorded, for cluster
-  review.
+  review. Amended by #568 (2026-10-23): an ambiguous cluster no longer
+  stays split whole; each of its confident components merges, re-checked
+  as a cluster is, with the method `confident_component`, counted apart
+  in the same three places, and only the pairs between components are
+  adjudicated (ADR-0007, as amended by #568). This holds in keeper mode
+  too.
 - **It writes to the one existing instance, which one command resets and
   repopulates per run** (#199). The reset stops the stack, removes its
   graph volumes (the database, the search index, the query service and
