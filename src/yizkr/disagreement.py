@@ -41,7 +41,10 @@ Each rule of MODELING.md "Contradictions" is one function here:
 * ``from_different_artifacts``: two readings of one artifact are not two
   sources, and a page fragment counts as its artifact; ``one_claim``: nor
   are two readings of one statement's value, however many artifacts
-  it cites.
+  it cites;
+* ``stated_together``: a child may have two fathers or two mothers, so two
+  parents that one artifact states both of are compared only between
+  artifacts that each state one and not the other.
 
 Every time the fetch lists, a statement's value or a qualifier's, is read
 with the calendar model its value node states, and one before the common
@@ -98,6 +101,8 @@ SINGLE_VALUED = frozenset(
 )
 # the place-valued ones, which the recorded containment refines
 PLACES = frozenset({"place_of_birth", "place_of_death"})
+# the parents, of which one source may state two of one gender
+PARENTS = frozenset({"father", "mother"})
 # Properties whose values accumulate over a life (two spouses from one
 # source are remarriages), compared only through the dates of one place
 # or one spouse.
@@ -626,6 +631,31 @@ def from_different_artifacts(a: Iterable[Source], b: Iterable[Source]) -> bool:
     return len({source.artifact for source in (*a, *b)}) > 1
 
 
+def stated_together(
+    x: Reading,
+    y: Reading,
+    keys: Mapping[Reading, str],
+    stated: Mapping[str, frozenset[str]],
+) -> bool:
+    """Two parents that one artifact states both of: a child may have two
+    fathers or two mothers, so a source that names both states them
+    together, not against each other, and a source that names one of them
+    does not disagree with it. A father or a mother is compared only
+    between two artifacts that each state one of the two values and not
+    the other: the pair is set aside unless some artifact of `x`'s
+    statement does not state `y`'s value and some artifact of `y`'s does
+    not state `x`'s. `stated` holds, for each artifact, the comparison
+    keys of every value it states of the pair's aspect. Other properties
+    are never set aside here."""
+    if x.aspect.property not in PARENTS:
+        return False
+    return not any(
+        keys[y] not in stated[p.artifact] and keys[x] not in stated[q.artifact]
+        for p in x.statement.sources
+        for q in y.statement.sources
+    )
+
+
 # -- pairing ------------------------------------------------------------------
 
 
@@ -754,8 +784,9 @@ def compare(
     statements: Iterable[Statement], containment: Containment
 ) -> list[Disagreement]:
     """The report's rows: each pair of values that different artifacts
-    attribute to one aspect, listed once, with differences of resolution
-    and a statement's ``one_claim`` set aside. Sources that state one
+    attribute to one aspect, listed once, with differences of resolution,
+    a statement's ``one_claim`` and parents ``stated_together`` set aside.
+    Sources that state one
     value alike are listed together."""
     aspects: defaultdict[Aspect, list[Reading]] = defaultdict(list)
     for statement in statements:
@@ -770,6 +801,11 @@ def compare(
     for aspect, readings in aspects.items():
         keys = {r: comparison_key(r.value, containment) for r in readings}
         orders = {r: stored_alike_order(r) for r in readings}
+        by_artifact: defaultdict[str, set[str]] = defaultdict(set)
+        for r in readings:
+            for s in r.statement.sources:
+                by_artifact[s.artifact].add(keys[r])
+        stated = {a: frozenset(found) for a, found in by_artifact.items()}
         sides = {
             r: (keys[r], r.value.precision, r.value.earliest, r.value.latest)
             for r in readings
@@ -779,6 +815,7 @@ def compare(
                 paired(x, y)
                 and in_order(x, y, keys, orders)
                 and not differ_in_resolution(x, y, containment)
+                and not stated_together(x, y, keys, stated)
             ):
                 row = rows.setdefault((aspect, sides[x], sides[y]), _Row())
                 row.a.append(x)

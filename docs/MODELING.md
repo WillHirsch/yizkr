@@ -1630,9 +1630,18 @@ not a signal to grow the schema on.
   source.) A deprecated statement is left out; a preferred one is listed
   like any other, so the report never needs a preference.
 - It compares values only for properties that can hold at most one true
-  value per subject (dates/places of birth and death, parents, birth
-  name, an event's or other entity's own point in time or start/end time,
-  a document's `inception`, a place's identity properties). A document's
+  value per subject (dates/places of birth and death, birth name, an
+  event's or other entity's own point in time or start/end time, a
+  document's `inception`, a place's identity properties), and for the
+  parents. A child may have two fathers or two mothers (a GEDCOM family
+  of two `HUSB`s or two `WIFE`s, ADR-0036, amended by #353), so a source
+  that names two parents of one gender states them together: its two
+  values never disagree with each other, nor with a source that names
+  one of them. Two sources disagree on a parent only when each names one
+  the other does not: a source naming, say, Leopold and Rudolf as Eugen's
+  fathers disagrees with no source naming one of them, but a source
+  naming only Leopold still disagrees with one naming only Rudolf, and a
+  source naming Felix with each. A document's
   date of making can come from more than one source: the document itself
   and, read as a curator's claim, a container's caption (ADR-0039), so
   two sources that date one document differently are listed side by
