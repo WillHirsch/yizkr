@@ -2046,7 +2046,7 @@ class TestWriterArtifactResolution:
         args = cli.build_parser().parse_args(
             ["ingest", "write", "--batch", str(batch_json)]
         )
-        with pytest.raises(ValidationError, match="artifact"):
+        with pytest.raises(SystemExit, match="artifact.*nothing was written"):
             args.func(args)
 
 
