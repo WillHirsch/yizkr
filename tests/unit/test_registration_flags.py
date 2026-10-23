@@ -3527,7 +3527,11 @@ class TestTheWriteStepRaisesTheFlag:
         identity.write_text(json.dumps(mapped(batch).data))
         monkeypatch.setattr(cli, "_client", lambda args: wiki)
         args = Namespace(
-            batch=path, identity_map=identity, dry_run=False, env_file=None
+            batch=path,
+            identity_map=identity,
+            dry_run=False,
+            env_file=None,
+            placed=[],
         )
 
         assert cli.cmd_write(args) == 0

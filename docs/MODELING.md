@@ -333,7 +333,14 @@ since `yizkr write` takes a batch without validating it against the
 manifest, against the derived media registered for the source in the
 same write: it refuses such a claim before the first write, names it in
 its `refused` list and warns why, as it refuses a claim whose text the
-instance cannot hold.
+instance cannot hold. From the command line, `yizkr ingest write`,
+`yizkr claims --validate` and `claims.py --validate` take a source's
+placed media with `--placed`: the container's record of derived media
+the pipeline keeps in its document directory (`derived-media.json`, or
+that directory), or the source's SHA-1 and theirs
+(`<source>=<sha1>[,<sha1>...]`); the write then needs an item to carry
+each, as a registration makes it. Without it each caption is refused,
+and the command says how to give them (#551).
 
 **A retired property** stays in the instance and takes no new claim: it
 accepts nothing, validation refuses every claim of it, and no prompt that

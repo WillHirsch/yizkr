@@ -70,6 +70,34 @@ def _load_batch(path: Path) -> ClaimBatch:
     return ClaimBatch.model_validate_json(path.read_text())
 
 
+def _placed(args) -> dict[str, frozenset[str]]:
+    """The artifacts each source places, as `--placed` gives them
+    (yizkr.claims.read_placed): what a caption may take as its subject
+    (ADR-0039 §2.1). Exits, before any batch is read, on a value that
+    gives none."""
+    from yizkr.claims import read_placed
+
+    try:
+        return read_placed(args.placed)
+    except ValueError as exc:
+        sys.exit(f"--placed: {exc}")
+
+
+def _add_placed(parser) -> None:
+    parser.add_argument(
+        "--placed",
+        action="append",
+        default=[],
+        metavar="RECORD|SOURCE=SHA1,...",
+        help="the artifacts a source places, which its caption claims may "
+        "take as their subject (ADR-0039 §2.1): the record of a "
+        "container's derived media the pipeline keeps in its document "
+        "directory (derived-media.json, or that directory), or a source's "
+        "SHA-1, '=', and the SHA-1s of what it places, comma-separated; "
+        "repeatable. Without it every caption is refused",
+    )
+
+
 def _refuse_if_excluded(
     args, path: Path | None = None, *, sha1: str | None = None
 ) -> None:
@@ -311,19 +339,27 @@ def cmd_publish_site(args) -> int:
 def cmd_claims(args) -> int:
     from pydantic import ValidationError
 
-    from yizkr.claims import validate_against_manifest
+    from yizkr.claims import (
+        unplaced_captions,
+        unplaced_hint,
+        validate_against_manifest,
+    )
 
     if args.json_schema:
         print(json.dumps(ClaimBatch.model_json_schema(), indent=2))
         return 0
+    placed = _placed(args)
     try:
         batch = ClaimBatch.model_validate_json(args.validate.read_text())
     except ValidationError as exc:
         print(f"Schema errors in {args.validate}:\n{exc}", file=sys.stderr)
         return 1
-    problems = validate_against_manifest(batch)
+    problems = validate_against_manifest(batch, placed=placed)
     for problem in problems:
         print(f"manifest check: {problem}", file=sys.stderr)
+    unplaced = unplaced_captions(batch, placed)
+    if unplaced:
+        print(unplaced_hint(unplaced), file=sys.stderr)
     if problems:
         return 1
     print(
@@ -686,6 +722,7 @@ def cmd_accept_all(args) -> int:
 def cmd_write(args) -> int:
     from pydantic import ValidationError
 
+    from yizkr.claims import unplaced_captions, unplaced_hint
     from yizkr.pipeline.clustering import UnmappedMention
     from yizkr.pipeline.review import unapproved_depicts
     from yizkr.pipeline.writer import (
@@ -696,9 +733,11 @@ def cmd_write(args) -> int:
         mapped_clusters,
     )
 
-    # a batch file that does not load, or a local entity the identity map
-    # does not hold, is refused before the instance is contacted; an
-    # unapproved depicts claim is refused first, by the writer
+    # a batch file that does not load, a --placed that gives no placed
+    # media, or a local entity the identity map does not hold, is refused
+    # before the instance is contacted; an unapproved depicts claim is
+    # refused first, by the writer
+    placed = _placed(args)
     try:
         batch = _load_batch(args.batch)
     except OSError as exc:
@@ -721,7 +760,7 @@ def cmd_write(args) -> int:
     # the writer's refusals, each before its first write
     try:
         result = BatchWriter(_client(args), dry_run=args.dry_run).write_batch(
-            batch, identity=identity
+            batch, identity=identity, placed=placed
         )
     except (
         UnapprovedDepictsError,
@@ -730,6 +769,9 @@ def cmd_write(args) -> int:
     ) as exc:
         sys.exit(str(exc))
     print(json.dumps(dataclasses.asdict(result), indent=2))
+    unplaced = unplaced_captions(batch, placed)
+    if unplaced:
+        print(unplaced_hint(unplaced), file=sys.stderr)
     if args.dry_run:
         print("(dry run: nothing written)")
     return 0
@@ -1396,6 +1438,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="schema + manifest check a batch file",
     )
+    _add_placed(p)
     p.set_defaults(func=cmd_claims)
 
     ingest = sub.add_parser("ingest", help="pipeline steps")
@@ -1619,6 +1662,7 @@ def build_parser() -> argparse.ArgumentParser:
         "as a GEDCOM export's or a face batch's, is refused (the scratch "
         "run's write is the write path)",
     )
+    _add_placed(p)
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_write)
 
