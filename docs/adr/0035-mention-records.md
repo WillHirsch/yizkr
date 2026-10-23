@@ -51,6 +51,10 @@ two unknowns are never made one place; it is counted. PLACs that name
 the same components (spaced otherwise, or with a wordless component
 between them) are one place, labelled by its components comma-joined.
 
+Amended by #583 (2026-10-23): §6's OBJE DATE row. An object's own DATE is
+the `inception` of its media item (ADR-0039 §2.2), at the GEDCOM's
+precision, with its range and circa, never narrowed.
+
 Amended by #386 (2026-09-29): the critic's findings are validated records
 that name their entity and claim by id and give their axis and a
 category (ADR-0023 §3), so the sweep's item on the critic's target
@@ -1491,6 +1495,7 @@ and brackets in a NAME value, which §10 names.
 | PLAC | its first component is the place's name and the rest are `within`, each as written, with no head or toponym split, and each with the PLAC's value as its evidence (amended by #569): GEDCOM lists jurisdictions from the lowest. Each jurisdiction is a place too, its record made the same way from the components from it on: one entity per distinct tail of components in the export, which is the place of a PLAC that names those components alone. Each place is labelled by its components, comma-joined, and its own name is its label or an alias. Each link of the chain, the place within its nearest jurisdiction and each jurisdiction within the next, is a `part_of` claim cited by the PLAC's line, with no time (ADR-0038 §2). An empty component, or one without a word ('?', '-'), names nothing and is left out wherever it stands, the latter counted (`PLAC component without a word`); a component with a word is kept as written. A placeholder word, one of the list in `pipeline/gedcom_placeholders.yaml` (German, English and Dutch; compared whole and folded, case and accents ignored), is record-only (owner decision on #582, 2026-10-23): in a jurisdiction's position it stays in `within` as written, with no entity and no `part_of` to or from it, and none across it, since the source states no link between the components beside it; the containers on either side keep their entities and links where the PLAC states one between two names. As the place's own name it is left out, and the place is the first jurisdiction named. Each is counted (`PLAC placeholder component`). A PLAC that names no place (no component with a word, or placeholders alone) gives no place, though a value still states its event (#571) |
 | HEAD.LANG | GEDCOM 5.5.1's language name, mapped to a BCP 47 code, sets the language of the adapter's texts instead of a fixed `en` (`GEDCOM_LANGUAGES`, `UNDETERMINED` in `pipeline/gedcom.py`); an absent or unknown one gives undetermined (`und`), counted |
 | a DEAT that states the death and gives no date, place or cause | a `death` event with the person as principal |
+| OBJE's DATE | an `inception` claim on the object's un-held media item, each DATE a claim of its own, with the range (`earliest_date`, `latest_date`) and circa its phrase states, at its precision, never narrowed, citing the object's lines (ADR-0021, ADR-0039 §2.2; amended by #583); the person's `image` claim is undated |
 
 - **No NAME part is dropped without a count** (#352). A part the NAME's
   value does not restate still reaches its field, and the name the parts

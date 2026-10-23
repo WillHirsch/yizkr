@@ -316,10 +316,14 @@ scratch run's run-item marks are (`scratch_run`, `run_manifest_hash`,
 `identity_map_hash`; #200). A
 property marked `document_subject: true` takes the claim's own source
 document as its subject, named by an `artifact` reference to the
-source's media, and no other subject: the seven document-subject
-properties, `issued_by`, `author`, `addressee`, `inception`,
-`location_of_creation`, `main_subject` and `shows`, each what a source
-states of itself (ADR-0035 §3.4, ADR-0039 §2.2). One property is marked
+source's media, and no other subject but an un-held media item: the
+seven document-subject properties, `issued_by`, `author`, `addressee`,
+`inception`, `location_of_creation`, `main_subject` and `shows`, each
+what a source states of itself (ADR-0035 §3.4, ADR-0039 §2.2). A batch
+entity of an artifact kind (`artifact` or a `subclass_of` it), the
+un-held media item a structured export describes, takes them too: the
+GEDCOM adapter gives an OBJE's own DATE as its media item's `inception`
+(#583). One property is marked
 `placed_subject: true` instead, `caption`: a container's verbatim words
 about an artifact it places, whose subject is an `artifact` reference
 to an image the source's record of derived media names, and nothing
@@ -1064,7 +1068,10 @@ and reference the artifact itself or the producing run.
   objects as **un-held media items** (kind `artifact`, with no `media file`
   and no `media SHA-1` — the missing content hash *is* the un-held marker):
   the bytes are referenced from the export, never fetched from a third
-  party (privacy rule 7). Acquiring the bytes is a separate,
+  party (privacy rule 7). The `image` claim is undated: an object's own
+  DATE is when it was made, its media item's `inception`, with the
+  range and circa the date states, at its precision (ADR-0039 §2.2).
+  Acquiring the bytes is a separate,
   explicitly-instructed step, after which the medium joins the SHA-1-keyed
   artifact path (ADR-0010).
 - **`shows` and `caption` are a source's words, never a depiction**

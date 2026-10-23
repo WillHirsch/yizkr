@@ -27,6 +27,7 @@ from yizkr.pipeline.gedcom import (
     parse_gedcom,
     parse_gedcom_date,
 )
+from yizkr.pipeline.writer import pre_plan_refusals, subject_refusal
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "example-family.ged"
 # the export's content key, which every claim it gives cites (#102); the
@@ -189,10 +190,12 @@ class TestAdapter:
         assert death.qualifiers[0].property == "earliest_date"
         (birth,) = claims_for(batch, "i2", "date_of_birth")  # ABT 1833
         assert birth.qualifiers[0].property == "sourcing_circumstances"
-        # the studio portrait is dated only to the 1890s
+        # the studio portrait is dated only to the 1890s: the range is its
+        # inception's, and Eugen's image of it is undated (#583)
         (portrait,) = claims_for(batch, "i1", "image")
-        assert {q.property for q in portrait.qualifiers} == {
-            "point_in_time",
+        assert portrait.qualifiers == []
+        (made,) = claims_for(batch, portrait.value.value.local_id, "inception")
+        assert {q.property for q in made.qualifiers} == {
             "earliest_date",
             "latest_date",
         }
@@ -712,6 +715,11 @@ class TestSourceCitations:
         assert birth.source.page_number is None
 
 
+# a year, as `shown` gives it, for the parameters below
+YEAR_1890 = (1890, None, None, "year")
+YEAR_1900 = (1900, None, None, "year")
+
+
 class TestMediaObjects:
     """OBJE becomes a lightweight un-held media item (ADR-0021)."""
 
@@ -725,12 +733,27 @@ class TestMediaObjects:
         assert media.label == "School report for Rudolf Löbig"
         assert "never fetched" in media.summary
 
-    def test_media_association_carries_the_objects_date(self):
+    def test_the_objects_date_is_its_inception(self):
+        # the school report's own DATE is when it was made, a claim on its
+        # media item, not a date of Rudolf's image of it (ADR-0039 §2.2;
+        # #583)
         batch = adapt_gedcom(CENSUS_GEDCOM, artifact=EXPORT).batch
         (image,) = claims_for(batch, "i1", "image")
-        (qualifier,) = image.qualifiers
-        assert qualifier.property == "point_in_time"
-        assert qualifier.value.year == 1930
+        assert image.qualifiers == []
+        media = image.value.value.local_id
+        (made,) = claims_for(batch, media, "inception")
+        assert (made.value.year, made.value.precision) == (1930, "year")
+        assert made.qualifiers == []
+        assert made.source.artifact == EXPORT
+        # its excerpt is the object's lines alone
+        assert made.source.transcription_excerpt.text == (
+            "0 @O1@ OBJE | "
+            "1 FILE https://example.test/school-report-1930.jpg | "
+            "2 FORM jpg | "
+            "2 TITL School report for Rudolf Löbig | "
+            "1 DATE 1930"
+        )
+        assert [c.property for c in claims_for(batch, media)] == ["inception"]
 
     def test_batch_stays_manifest_valid(self):
         batch = adapt_gedcom(CENSUS_GEDCOM, artifact=EXPORT).batch
@@ -749,6 +772,113 @@ class TestMediaObjects:
         assert len(media) == 1  # deduped by xref across both people
         assert len(claims_for(batch, "i1", "image")) == 1
         assert len(claims_for(batch, "i2", "image")) == 1
+
+    def test_a_shared_object_is_made_once(self):
+        # Eugen and Cäcilie both link the studio portrait, Cäcilie's link
+        # with a citation of its own: the portrait's DATE is one inception,
+        # citing the object alone, beside two image claims (#583)
+        gedcom = (
+            "0 @S1@ SOUR\n1 TITL Löbig family album\n"
+            "0 @O1@ OBJE\n1 FILE studio-portrait-1890s.jpg\n"
+            "1 DATE ABT 1895\n"
+            "0 @I1@ INDI\n1 NAME Eugen /Löbig/\n1 OBJE @O1@\n"
+            "0 @I2@ INDI\n1 NAME Cäcilie /Tarle/\n1 OBJE @O1@\n"
+            "2 SOUR @S1@\n3 PAGE 4\n"
+            "0 TRLR\n"
+        )
+        batch = adapt_gedcom(gedcom, artifact=EXPORT).batch
+        (made,) = claims_for(batch, "md1", "inception")
+        assert made.source.page_number is None
+        assert "Löbig family album" not in (
+            made.source.transcription_excerpt.text
+        )
+        (image,) = claims_for(batch, "i2", "image")
+        assert image.source.page_number == "4"
+        assert validate_against_manifest(batch) == []
+
+    def test_the_fixtures_portrait_has_one_inception(self):
+        # five people of the universe's export link the studio portrait
+        batch = fixture_result().batch
+        images = {
+            claim.value.value.local_id
+            for claim in batch.claims
+            if claim.property == "image"
+        }
+        (portrait,) = images
+        assert len(claims_for(batch, portrait, "inception")) == 1
+
+    @pytest.mark.parametrize(
+        ("date", "expected"),
+        [
+            # (here) the portrait "about March 1895": a month, circa
+            (
+                "ABT MAR 1895",
+                [
+                    (
+                        (1895, 3, None, "month"),
+                        [("sourcing_circumstances", "circa")],
+                    )
+                ],
+            ),
+            # before 1900, and after 1890: a bound, never narrowed to it
+            (
+                "BEF 1900",
+                [(YEAR_1900, [("latest_date", YEAR_1900)])],
+            ),
+            (
+                "AFT 1890",
+                [(YEAR_1890, [("earliest_date", YEAR_1890)])],
+            ),
+            (
+                "12 JUN 1895",
+                [((1895, 6, 12, "day"), [])],
+            ),
+        ],
+    )
+    def test_the_inception_keeps_the_dates_precision_and_bounds(
+        self, date, expected
+    ):
+        text = (
+            "0 @O1@ OBJE\n1 FILE studio-portrait-1890s.jpg\n"
+            f"1 DATE {date}\n" + eugen("1 OBJE @O1@")
+        )
+        assert stated(text, "md1", "inception") == expected
+
+    def test_an_unparsed_object_date_warns_and_gives_no_inception(self):
+        text = (
+            "0 @O1@ OBJE\n1 FILE studio-portrait-1890s.jpg\n"
+            "1 DATE SOMEDAY MAYBE\n" + eugen("1 OBJE @O1@")
+        )
+        result = adapt_gedcom(text, artifact=EXPORT)
+        assert result.warnings == [
+            "line 3: unparsed media date 'SOMEDAY MAYBE' — inception omitted"
+        ]
+        assert claims_for(result.batch, "md1", "inception") == []
+        assert stated(text, "i1", "image") == [
+            ("studio-portrait-1890s.jpg", [])
+        ]
+
+    def test_only_an_artifact_kind_takes_an_inception(self):
+        # the writer and validation take the media item's inception, and
+        # refuse the same claim on Rudolf (ADR-0039 §2.2)
+        batch = adapt_gedcom(CENSUS_GEDCOM, artifact=EXPORT).batch
+        (made,) = (c for c in batch.claims if c.property == "inception")
+        assert pre_plan_refusals(batch, {}) == {}
+        assert subject_refusal(made, {}, (), "artifact") is None
+        assert subject_refusal(made, {}, (), "photograph") is None
+        assert subject_refusal(made, {}, (), "human") == (
+            "its property takes only its source document or an un-held "
+            "media item",
+            "ADR-0035 §3.4",
+        )
+        misplaced = made.model_copy(
+            update={"subject": batch.claims[0].subject}
+        )
+        assert getattr(misplaced.subject, "local_id", None) == "i1"
+        moved = batch.model_copy(update={"claims": [misplaced]})
+        (problem,) = validate_against_manifest(moved)
+        assert problem.endswith("[document_subject]")
+        assert pre_plan_refusals(moved, {})[0][0] == "subject_rule"
 
     def test_dangling_pointer_warns_and_skips(self):
         result = adapt_gedcom(
@@ -1635,16 +1765,16 @@ class TestPeriods:
             ],
             id="BURI",
         ),
-        # (here) the studio portrait dated "from 1890 to 1899"
+        # (here) the studio portrait dated "from 1890 to 1899": its
+        # inception's range (#583)
         pytest.param(
             "0 @O1@ OBJE\n1 FILE studio-portrait-1890s.jpg\n"
             "1 DATE FROM 1890 TO 1899\n" + eugen("1 OBJE @O1@"),
-            "i1",
-            "image",
+            "md1",
+            "inception",
             [
                 ("earliest_date", year(1890)),
                 ("latest_date", year(1899)),
-                ("point_in_time", year(1890)),
             ],
             id="OBJE",
         ),
@@ -2099,22 +2229,25 @@ class TestRepeatedDetails:
             ("Hatter", sorted([*observed, ("location", town)])),
         ]
 
-    def test_each_date_of_a_media_object_dates_a_claim_of_its_own(self):
-        # the studio portrait of the 1890s, dated (here) to 1895 as well
+    def test_each_date_of_a_media_object_is_an_inception_of_its_own(self):
+        # the studio portrait of the 1890s, dated (here) to 1895 as well:
+        # two inceptions, and one undated image (#583)
         text = (
             "0 @O1@ OBJE\n1 FILE studio-portrait-1890s.jpg\n"
             "1 DATE BET 1890 AND 1899\n1 DATE 1895\n" + eugen("1 OBJE @O1@")
         )
         assert stated(text, "i1", "image") == [
+            ("studio-portrait-1890s.jpg", []),
+        ]
+        assert stated(text, "md1", "inception") == [
             (
-                "studio-portrait-1890s.jpg",
+                year(1890),
                 [
                     ("earliest_date", year(1890)),
                     ("latest_date", year(1899)),
-                    ("point_in_time", year(1890)),
                 ],
             ),
-            ("studio-portrait-1890s.jpg", [("point_in_time", year(1895))]),
+            (year(1895), []),
         ]
 
     def test_an_unparsed_date_adds_no_undated_claim(self):

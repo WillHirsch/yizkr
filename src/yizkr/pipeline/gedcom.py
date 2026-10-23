@@ -18,7 +18,8 @@ Source-first conventions carry over unchanged:
   its own citations for the couple's claims, or the MARR, DIV or ANUL that
   gives an event's claims. A person's image
   claim holds the object's lines, after those of the person's OBJE link
-  when the link holds any beneath it. An excerpt is given in NFC, the
+  when the link holds any beneath it, and an object's inception claim
+  holds the object's lines alone. An excerpt is given in NFC, the
   form the instance stores text in, and holds at most 400 characters,
   as a Wikibase text value does: a longer one keeps every line of the
   citations folded into its claim (below) and the titles they resolve
@@ -118,14 +119,18 @@ reference of each claim that the record they stand beneath gives
 (ADR-0021): the event, fact or NAME a claim cites; the family record,
 for its parent claims and its couple's; each MARR, DIV or ANUL, for its
 event's claims and the union's claim that points to the event; the
-object, for its image claims, and the person's OBJE link to it. Each
+object, for its image and inception claims, and the person's OBJE link
+to it, for the image claim. Each
 PAGE of a citation is a locator of the reference's page number, and the
 cited source's title, each TITL it gives, is surfaced in the excerpt —
 the upstream source is resolved, never fetched. Multimedia objects (OBJE) of
 an individual become lightweight un-held media items (an `artifact`)
 linked to the person with `image`, each standing for the object's first
 FILE and labelled by the object's first title, its other titles being
-aliases; the bytes are referenced, never downloaded from a third party
+aliases. An object's own DATE is the date it was made: an `inception`
+claim on its media item, citing the object, with the range and circa the
+date states (ADR-0039 §2.2), while the person's `image` claim is undated;
+the bytes are referenced, never downloaded from a third party
 (privacy rule 7). Sibling relations are deliberately NOT
 derived from shared parents: the export asserts parentage, not
 siblinghood (docs/MODELING.md — never derive). Dates accept the
@@ -2178,6 +2183,31 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     def local(entity_id: str) -> dict:
         return {"kind": "local", "local_id": entity_id}
 
+    def made_on(media_id: str, obje: Record) -> None:
+        """The object's own DATEs, each an `inception` claim on its media
+        item, with the range and circa the date states as the claim's own
+        qualifiers (ADR-0039 §2.2): the date the object was made, not one
+        of the person's image of it. Each claim cites the object, its
+        lines its excerpt, so that every person linking to it gives the
+        same claim. A date the grammar cannot parse gives no claim and a
+        warning."""
+        for date_record in obje.all("DATE"):
+            value, quals = parse_gedcom_date(date_record.value)
+            if value is None:
+                warnings.append(
+                    f"line {date_record.line_number}: unparsed media date "
+                    f"{date_record.value!r} — inception omitted"
+                )
+                continue
+            claim(
+                media_id,
+                "inception",
+                value,
+                obje,
+                quals,
+                passage=list(obje.walk()),
+            )
+
     # the PLACs a claim names a place by, each once, in order: each gives
     # the containment its components state, made once the claims are (the
     # containment pass below)
@@ -2972,18 +3002,17 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             else:
                 obje = obje_ptr  # media embedded inline under the person
             mapped.update({obje_ptr.line_number, obje.line_number})
-            media = {"type": "item", "value": local(media_entity(obje))}
+            media_id = media_entity(obje)
             passage = [node for held in (*link, obje) for node in held.walk()]
-            for quals in each_date(obje, dated_qualifiers, "media"):
-                claim(
-                    person_id(xref),
-                    "image",
-                    media,
-                    obje,
-                    quals,
-                    passage=passage,
-                    events=link,
-                )
+            claim(
+                person_id(xref),
+                "image",
+                {"type": "item", "value": local(media_id)},
+                obje,
+                passage=passage,
+                events=link,
+            )
+            made_on(media_id, obje)
 
     # families -> parentage claims and unions, between people the batch
     # holds: a HUSB, WIFE or CHIL that names no one it holds gives none.

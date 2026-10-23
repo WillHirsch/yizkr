@@ -12,6 +12,10 @@ Amended by #554 (2026-10-23): the critic's `relation_kind_mismatch`
 category names `author` and `addressee`, as relations of authorship or
 address, with the kinds they take (a person, an organization or a
 family), as ADR-0031 records for the relations of agency.
+Amended by #583 (2026-10-23): §2.2's properties also take, as their
+subject, a batch entity of an artifact kind, an un-held media item
+(ADR-0021): the GEDCOM adapter gives an OBJE's own DATE as the
+`inception` of the object's media item.
 
 Revised 2026-10-16 on the owner's direction on #517, quoted: "Wait, are
 these fields about a source's relevance to its container, or independent
@@ -210,6 +214,15 @@ claim's own source, and these properties take no other subject.
   unapproved one anyway (ADR-0005, as amended by #226). The faces flow
   may later read a `shows` statement or a caption as a hint for whom to
   propose, outside the graph until a person confirms it.
+- **An un-held media item takes them too** (amended by #583). A
+  structured export describes the objects it links, each an un-held
+  media item of an artifact kind that the batch makes (ADR-0021); the
+  GEDCOM adapter gives an OBJE's own DATE as that item's `inception`,
+  with the range and circa the date states, citing the export. Validation
+  and the writer take such a subject, a batch entity of an artifact kind
+  (`artifact` or a `subclass_of` it), on these properties beside the
+  claim's own source; no extraction prompt offers an artifact kind, so
+  only the adapter makes one.
 - **A container never gives these about what it places.** The caption's
   facts stay its text (§2.1). From the keeper run on, a curator may
   promote one (§4).

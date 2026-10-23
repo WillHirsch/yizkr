@@ -275,12 +275,14 @@ class Acceptance:
     entity_classes: frozenset[str] = frozenset()
     # the properties written only in references
     references: frozenset[str] = frozenset()
-    # the properties whose claims take their source document, and only it,
-    # as subject
+    # the properties whose claims take their source document as subject,
+    # or an un-held media item of an artifact kind the batch makes
     document_subjects: frozenset[str] = frozenset()
     # the properties whose claims take an artifact their source places, and
     # only such an artifact, as subject
     placed_subjects: frozenset[str] = frozenset()
+    # the artifact kinds: `artifact`, and each item a `subclass_of` it
+    artifact_kinds: frozenset[str] = frozenset()
 
     @property
     def kind_keys(self) -> frozenset[str]:
@@ -392,6 +394,11 @@ def _acceptance(text: str) -> Acceptance:
             key
             for key, spec in manifest.properties.items()
             if spec.placed_subject
+        ),
+        artifact_kinds=frozenset(
+            key
+            for key, item in manifest.items.items()
+            if key == "artifact" or item.subclass_of == "artifact"
         ),
     )
 
