@@ -4,6 +4,15 @@ Status: **accepted** (owner decision 2026-09-29, #385). Like ADR-0031
 and ADR-0036, the owner's merge of the PR that adds it records its
 acceptance; #385's implementation carries it out.
 
+Amended by #571 (2026-10-23): §6's PLAC row. Each jurisdiction of a PLAC
+is a place entity of its own, one per distinct tail of components in the
+export, named by its own name as its label or an alias, and each link of
+the PLAC's chain is an undated `part_of` claim cited by the PLAC's line
+(ADR-0038 §8.5). A component without a word is left out and counted,
+wherever it stands; one with a word is kept as written. PLACs that name
+the same components (spaced otherwise, or with a wordless component
+between them) are one place, labelled by its components comma-joined.
+
 Amended by #386 (2026-09-29): the critic's findings are validated records
 that name their entity and claim by id and give their axis and a
 category (ADR-0023 §3), so the sweep's item on the critic's target
@@ -1367,7 +1376,7 @@ and brackets in a NAME value, which §10 names.
 | TYPE official, legal, change, immigrant or adopted | `other`, and its `official_name` claim |
 | any other TYPE, or none | `other`, with no typed-name claim; the NAME's form, unless it is the label's, a `name` claim of no type (ADR-0011) |
 | `_MARNM` | a `married` surname: the part between its slashes; a value without them is `unsplit` |
-| PLAC | its first non-empty component is the place's name and the rest are `within`, each as written, with no head or toponym split: GEDCOM lists jurisdictions from the lowest |
+| PLAC | its first component is the place's name and the rest are `within`, each as written, with no head or toponym split: GEDCOM lists jurisdictions from the lowest. Each jurisdiction is a place too, its record made the same way from the components from it on: one entity per distinct tail of components in the export, which is the place of a PLAC that names those components alone. Each place is labelled by its components, comma-joined, and its own name is its label or an alias. Each link of the chain, the place within its nearest jurisdiction and each jurisdiction within the next, is a `part_of` claim cited by the PLAC's line, with no time (ADR-0038 §2). An empty component, or one without a word ('?', '-'), names nothing and is left out wherever it stands, the latter counted (`PLAC component without a word`); a component with a word is kept as written, as the adapter cannot tell a name from a word that is none. A PLAC with no component that has a word gives no place, though a value still states its event (#571) |
 | HEAD.LANG | GEDCOM 5.5.1's language name, mapped to a BCP 47 code, sets the language of the adapter's texts instead of a fixed `en` (`GEDCOM_LANGUAGES`, `UNDETERMINED` in `pipeline/gedcom.py`); an absent or unknown one gives undetermined (`und`), counted |
 | a DEAT that states the death and gives no date, place or cause | a `death` event with the person as principal |
 

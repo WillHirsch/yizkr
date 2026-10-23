@@ -859,6 +859,12 @@ artifact a new QID, changes neither.
   `location` and `part_of` claims, differences of resolution rather than
   contradictions, and follows only a claim that a source states and a
   curator has not deprecated, at any time it carries ("Contradictions").
+- The GEDCOM adapter gives each link of a PLAC's chain of components as
+  a `part_of` claim of the export, from the place to its nearest
+  jurisdiction and from each jurisdiction to the next, each jurisdiction
+  a place of its own, with no time, since a PLAC states none:
+  "Brunnenring 35, Flörburg, Hesse, Germany" gives Brunnenring 35 in
+  Flörburg, Flörburg in Hesse and Hesse in Germany (ADR-0035 §6).
 - Extraction gives a place's `part_of` only where the source states it
   (in the place's mention, "Fläckfeld, Kreis Mockburg"; in the fields a
   form gives that place; or as a link of a chain of containers), never
@@ -1214,6 +1220,11 @@ counted; in a NAME with no value, a prefix or suffix with no given name
 or surname beside it is counted instead, so none is dropped silently. A
 NICK and a `_MARNM` are aliases too. A place's record takes its PLAC's
 first component as its name and the rest as the places it is within.
+Each of those jurisdictions is a place of its own too, one per distinct
+tail of components in the export, and each place carries its own name
+as its label or an alias; each link of the chain is an undated
+`part_of` claim cited by the PLAC's line. A component without a word
+('?') is left out and counted (ADR-0035 §6).
 What a marker in a name asserts (a widow's
 marker, "the late", a patronymic's father, a married-name marker) is a
 claim: a `civil_status`, a death, a `father`, a `married_name`.

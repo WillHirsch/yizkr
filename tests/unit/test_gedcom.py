@@ -1983,7 +1983,12 @@ class TestRepeatedDetails:
                         [("point_in_time", day(1909, 3, 20))],
                     )
                 ],
-                ["Friedhof Flörburg, Hesse, Germany"],
+                # the cemetery, and the jurisdictions its PLAC names
+                [
+                    "Friedhof Flörburg, Hesse, Germany",
+                    "Hesse, Germany",
+                    "Germany",
+                ],
                 [],
             ),
             (
