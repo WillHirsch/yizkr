@@ -157,6 +157,14 @@ class TestReadPlaced:
             unplaced_captions(batch_of(itself("inception", JULY_28)), None)
             == 0
         )
+        # another property's claim about the image the booklet places
+        dated = itself(
+            "inception",
+            JULY_28,
+            source=BOOKLET_REF,
+            subject=LETTER_REF.model_dump(),
+        )
+        assert unplaced_captions(batch_of(dated), None) == 0
         of_itself = caption(BOOKLET_REF.model_dump())
         assert unplaced_captions(batch_of(of_itself), None) == 0
 
