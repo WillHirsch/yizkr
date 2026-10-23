@@ -1535,7 +1535,7 @@ def container_problem(
             return EVIDENCE_NOT_IN_SOURCE, (
                 None if nearest is None else (nearest, nearest)
             )
-    if not _occurs(container.name, [verbatim.words(container.evidence)]):
+    if not _occurs(container.name, verbatim.word_readings(container.evidence)):
         return EVIDENCE_DOES_NOT_NAME, lines
     return None, lines
 

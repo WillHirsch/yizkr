@@ -7,10 +7,14 @@ typographic quotes, apostrophes and dashes read as their plain forms,
 every run of whitespace, line breaks among it, made one space, and a
 hyphen at a line's end joined to the next line's word, so "Drake-" on one
 line and "radiel" on the next read "Drakeradiel". A hyphenated name the
-line breaks at its own hyphen ("Peiltal-" then "Süd") is read a second
-way, the hyphen kept ("Peiltal-Süd"), which is tried when the joined
-reading holds no match. An excerpt matches whole words only: it may not
-start or end inside a word of the transcription. Nothing else is
+line breaks at its own hyphen ("Mockburg-" then "Süd") is read a second
+way, the hyphen kept ("Mockburg-Süd"), which is tried when the joined
+reading holds no match, and only for an excerpt that crosses the hyphen:
+an excerpt that stops at the hyphen ("gemeente Drake", where a line
+breaks "Drake-" from "radiel") or starts after it ("radiel, Fryslân")
+quotes part of a word, and is no match. An excerpt matches whole words
+only: it may not start or end inside a word of the transcription.
+Nothing else is
 forgiven: a word the transcription does not hold, or holds in another
 order, is no match. A mention record's container evidence is checked
 this way, and a claim's excerpt can be.
@@ -51,13 +55,17 @@ def fold(text: str) -> str:
     ).translate(_PLAIN)
 
 
-def _flat(text: str, keep_hyphen: bool = False) -> tuple[str, list[int]]:
-    """The text as it is compared (the module's reading), and for each of
-    its characters the number of the line (from 1) it comes from. With
-    `keep_hyphen`, a hyphen at a line's end stays, with no space after
-    it, instead of being joined away."""
+def _flat(
+    text: str, keep_hyphen: bool = False
+) -> tuple[str, list[int], frozenset[int]]:
+    """The text as it is compared (the module's reading); for each of its
+    characters the number of the line (from 1) it comes from; and the
+    indexes of the hyphens at a line's end it keeps. With `keep_hyphen`,
+    a hyphen at a line's end stays, with no space after it, instead of
+    being joined away."""
     chars: list[str] = []
     numbers: list[int] = []
+    kept: set[int] = set()
     for number, line in enumerate(text.splitlines(), start=1):
         line = unicodedata.normalize("NFC", line).strip()
         if not line:
@@ -68,7 +76,9 @@ def _flat(text: str, keep_hyphen: bool = False) -> tuple[str, list[int]]:
             )
             if hyphen and line[0].isalnum():
                 # a hyphen at the line's end joins the next line's word
-                if not keep_hyphen:
+                if keep_hyphen:
+                    kept.add(len(chars) - 1)
+                else:
                     chars.pop()
                     numbers.pop()
             else:
@@ -83,15 +93,27 @@ def _flat(text: str, keep_hyphen: bool = False) -> tuple[str, list[int]]:
             for folded in fold(char):
                 chars.append(folded)
                 numbers.append(number)
-    return "".join(chars), numbers
+    return "".join(chars), numbers, frozenset(kept)
 
 
-def _whole(flat: str, wanted: str) -> int | None:
+def _whole(
+    flat: str, wanted: str, kept: frozenset[int] = frozenset()
+) -> int | None:
     """Where `wanted` first occurs in `flat` neither starting nor ending
-    inside a word, or None."""
+    inside a word, or None. Where `flat` keeps hyphens at a line's end
+    (`kept`, their indexes), a match must cross one, and may neither
+    start just after nor end just before one: elsewhere the reading that
+    joins them decides."""
     start = flat.find(wanted)
     while start >= 0:
         end = start + len(wanted)
+        if kept and (
+            not any(start < j < end - 1 for j in kept)
+            or start - 1 in kept
+            or end in kept
+        ):
+            start = flat.find(wanted, start + 1)
+            continue
         opens = (
             not wanted[0].isalnum() or not flat[start - 1 : start].isalnum()
         )
@@ -111,6 +133,13 @@ def joined(text: str) -> str:
 def words(text: str) -> list[str]:
     """The folded words of `text`, a hyphen at a line's end joined."""
     return _WORDS.findall(fold(joined(text)))
+
+
+def word_readings(text: str) -> list[list[str]]:
+    """The folded words of `text` read both ways: a hyphen at a line's
+    end joined, and kept, as for a hyphenated name a line breaks at its
+    own hyphen."""
+    return [words(text), _WORDS.findall(fold(text))]
 
 
 class Transcript:
@@ -139,8 +168,8 @@ class Transcript:
         for wanted in dict.fromkeys(readings):
             if not wanted:
                 continue
-            for flat, numbers in self._readings:
-                start = _whole(flat, wanted)
+            for flat, numbers, kept in self._readings:
+                start = _whole(flat, wanted, kept)
                 if start is not None:
                     return numbers[start], numbers[start + len(wanted) - 1]
         return None

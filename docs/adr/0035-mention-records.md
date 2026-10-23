@@ -13,8 +13,8 @@ fields of their own and so never in the place's label; each container is
 checked on its own, with three reasons each counted apart: `no-evidence`,
 `evidence-not-in-source` (compared folded, typographic punctuation read
 plain, every run of whitespace and line breaks made one space, a hyphen
-at a line's end joined, or kept where the name is hyphenated, and whole
-words only; `core/verbatim.py`, the comparison claims' excerpts can
+at a line's end joined, or kept, for an excerpt that crosses the
+hyphen, where the name is hyphenated, and whole words only; `core/verbatim.py`, the comparison claims' excerpts can
 share) and
 `evidence-does-not-name` (the evidence does not hold the container's
 name, folded, as whole words). By the owner's option B, a container that
@@ -1429,8 +1429,10 @@ surname types, roles, classes and note categories. Beyond the schema:
   compared folded, typographic quotes, apostrophes and dashes read
   plain, with every run of whitespace and line breaks made one space and
   a hyphen at a line's end joined, or, where the joined reading finds
-  nothing, kept, for a hyphenated name a line breaks at its own hyphen
-  (`core/verbatim.py`); `evidence-does-not-name`, the evidence does not
+  nothing, kept, for an excerpt that crosses the hyphen, as a hyphenated
+  name a line breaks at its own hyphen is quoted; an excerpt that stops
+  at such a hyphen or starts after it quotes part of a word and is no
+  match (`core/verbatim.py`); `evidence-does-not-name`, the evidence does not
   hold the container's name, folded, as whole words. Whether the evidence
   states the containment, and not only names both places (a list of
   towns) or gives the container's name alone, stays a judgement: the

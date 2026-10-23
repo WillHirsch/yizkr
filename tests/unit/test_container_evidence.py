@@ -111,8 +111,8 @@ class TestTheComparison:
     def test_whitespace_and_line_breaks_are_one_space(self):
         found = Transcript(LETTER)
         assert found.locate("Nijks Snylsjum") == 2
-        assert found.locate("radiel, Fryslân") == 4
-        assert found.locate("radiel,\n\tFryslân") == 4
+        assert found.locate("Drakeradiel,  Fryslân") == 3
+        assert found.locate("Drakeradiel,\n\tFryslân") == 3
 
     def test_a_hyphen_at_a_line_s_end_is_joined(self):
         found = Transcript(LETTER)
@@ -169,6 +169,61 @@ class TestWholeWords:
             Transcript("Fläckfeld, Kreis Mockburg"),
         )
         assert reason == EVIDENCE_NOT_IN_SOURCE
+
+
+class TestAWordBrokenForLayout:
+    """A word a line breaks at a hyphen for layout alone is one word: the
+    reading that keeps the hyphen takes only an excerpt that crosses it,
+    so a part of the word on either side is no match (#569, review)."""
+
+    def test_a_part_before_the_hyphen_is_no_match(self):
+        assert Transcript(LETTER).locate("Snylsjum, gemeente Drake") is None
+        assert (
+            Transcript("Geboren in Mockburg-\nSüd").locate(
+                "Geboren in Mockburg"
+            )
+            is None
+        )
+
+    def test_a_part_after_the_hyphen_is_no_match(self):
+        assert Transcript(LETTER).locate("radiel, Fryslân") is None
+
+    def test_a_match_may_not_start_or_end_at_another_kept_hyphen(self):
+        # two breaks in one word: an excerpt crossing one hyphen but
+        # stopping at the other quotes part of the word
+        found = Transcript("Mock-\nburg-\nSüd")
+        assert found.locate("burg-Süd") is None
+        assert found.locate("Mock-burg") is None
+        assert found.locate("Mock-burg-Süd") == 1
+
+    def test_an_excerpt_crossing_the_hyphen_matches_both_ways(self):
+        found = Transcript(LETTER)
+        assert found.locate("gemeente Drakeradiel") == 3
+        assert found.locate("gemeente Drake-radiel") == 3
+
+    def test_a_container_quoting_part_of_the_word_is_not_in_the_source(self):
+        reason, _ = container_problem(
+            Container(name="Drake", evidence="Snylsjum, gemeente Drake"),
+            Transcript(LETTER),
+        )
+        assert reason == EVIDENCE_NOT_IN_SOURCE
+        reason, _ = container_problem(
+            Container(name="Mockburg", evidence="Geboren in Mockburg"),
+            Transcript("Geboren in Mockburg-\nSüd"),
+        )
+        assert reason == EVIDENCE_NOT_IN_SOURCE
+
+    def test_an_excerpt_s_own_kept_hyphen(self):
+        assert (
+            Transcript("Mockburg-Süd, Kreis Mockburg").locate(
+                "Mockburg-\nSüd, Kreis Mockburg"
+            )
+            == 1
+        )
+        # and its name is read in the kept reading too
+        assert container_problem(
+            Container(name="Mockburg-Süd", evidence="Mockburg-\nSüd"), None
+        ) == (None, None)
 
 
 class TestReadings:
@@ -306,6 +361,21 @@ class TestOptionB:
             "names_place": True,
             "name_only": False,
         }
+
+    def test_the_place_named_by_a_record_name_or_an_alias(self):
+        # the label is not in the evidence as written, but the record's
+        # name is
+        given = snylsjum(entry("Fryslân", SENDER))
+        given["label"] = "Snylsjum, Fryslân"
+        _, audit = drop_containers(given, Transcript(LETTER))
+        assert audit[0]["names_place"] is True
+        # an alias alone holds the place
+        given = snylsjum(entry("Nederlân", SENDER))
+        given["label"] = "Snylsjum, Nederlân"
+        given["structure"]["names"] = [{"written": "Snylsjum, Nederlân"}]
+        given["aliases"] = ["Snylsjum"]
+        _, audit = drop_containers(given, Transcript(LETTER))
+        assert audit[0]["names_place"] is True
 
     def test_the_audit_tells_name_only_evidence_apart(self):
         given = snylsjum(
@@ -600,7 +670,9 @@ class TestTheCritic:
                 "extraction_run": RUN,
                 "entities": [
                     snylsjum(
-                        entry("gemeente Drakeradiel", SENDER), entry("Fryslân")
+                        entry("gemeente Drakeradiel", SENDER),
+                        entry("Fryslân"),
+                        entry("Nederlân", "Nederlân"),
                     )
                 ],
                 "claims": [],
@@ -617,6 +689,7 @@ class TestTheCritic:
         assert (
             f'- e1 within gemeente Drakeradiel: "{SENDER}"\n'
             "- e1 within Fryslân: -\n"
+            '- e1 within Nederlân: "Nederlân"\n'
         ) in prompt
         assert "evidence_does_not_state" in prompt
 

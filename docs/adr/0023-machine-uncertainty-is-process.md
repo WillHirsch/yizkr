@@ -27,7 +27,8 @@ critic sees each `part_of` claim's time beside its excerpt (§3).
 Amended by #569 (2026-10-23, ADR-0035 §5): the fixed list gains
 `evidence_does_not_state`, a container in a place's mention record whose
 evidence names both places but does not state that one is within the
-other (a list of towns); the critic sees each container with its
+other (a list of towns), or gives only the container's name, outside a
+field of a form about the place; the critic sees each container with its
 evidence, and a finding names the container by its name (`container`).
 It is advisory, as every finding is, and counted with the critic's
 categories, apart from the deterministic reasons a container is dropped
