@@ -699,7 +699,8 @@ def stage_key(
     merge: bool,
 ) -> str:
     """The key the stage's outputs are reused under (the module
-    docstring)."""
+    docstring). The pairs per call are among the thresholds, which
+    clustering's inputs key covers."""
     return sha256_text(
         canonical_json(
             {
@@ -709,7 +710,6 @@ def stage_key(
                 "prompt": sha256_text(PROMPT),
                 "code": code_digest(),
                 "model": dict(model),
-                "pairs_per_call": config.adjudication.pairs_per_call,
                 "merge": merge,
             }
         )

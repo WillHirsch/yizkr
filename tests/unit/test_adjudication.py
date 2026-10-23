@@ -509,13 +509,14 @@ class TestRounds:
         engine = Engine(truths(docs))
         made, clients = run(docs, engine)
         assert clients == [1]
-        assert made.counts["rounds"] >= 2
-        assert not any(kind in engine.prompts[0] for kind in UNION_KINDS)
-        assert any(
-            kind in prompt
-            for prompt in engine.prompts[1:]
-            for kind in UNION_KINDS
-        )
+        # people, then the union, then its wedding, whose union merged
+        # but whose year still conflicts
+        people, union, wedding = engine.prompts
+        assert made.counts["rounds"] == 3
+        assert not any(kind in people for kind in UNION_KINDS)
+        assert any(kind in union for kind in UNION_KINDS)
+        assert "a wedding in" not in union
+        assert "a wedding in" in wedding
 
     def test_people_are_settled_before_their_events(self):
         """Two registers of Gustav's birth, one dated: his two mentions
@@ -600,6 +601,8 @@ class TestSchema:
             cached_client(good, open_cache(tmp_path / "cache"), role=ROLE),
         )
         assert len(good.prompts) == 1
+        # the cache held no answer to reject: the engine was asked once
+        assert made.counts["second_attempts"] == 0
         assert [v for v, _ in made.verdicts.values()] == [SAME]
 
     def test_an_answer_outside_the_schema_is_refused_and_counted(self):
