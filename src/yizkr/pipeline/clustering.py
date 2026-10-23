@@ -2168,6 +2168,7 @@ def _confident_components(
     (_Judge.contradiction); then each of its members stays apart,
     `ambiguous`, as does a member no confident link reaches."""
     confident = [pair for pair in own if links[pair][0] == CONFIDENT]
+    different_pairs = [pair for pair in own if verdicts.get(pair) == DIFFERENT]
     parts: list[tuple[list[str], str]] = []
     contradiction = None
     for component in _components(members, confident).groups():
@@ -2175,10 +2176,8 @@ def _confident_components(
             inside = set(component)
             said_different = sorted(
                 pair
-                for pair in own
-                if verdicts.get(pair) == DIFFERENT
-                and pair[0] in inside
-                and pair[1] in inside
+                for pair in different_pairs
+                if pair[0] in inside and pair[1] in inside
             )
             conflict = conflicts.find(component)
             if conflict is not None:
@@ -2783,8 +2782,10 @@ def cluster_corpus(
     candidate_groups = [entry for entry in settled if len(entry.members) > 1]
     # the clusters each method merged, with their mentions; a candidate
     # cluster that left any member apart counts among the ambiguous or
-    # conflicting ones, with those members; and the members a `different`
-    # left alone
+    # conflicting ones, with those members, and so does an ambiguous one
+    # left split between merged components, unsettled or contradicted
+    # (its members counted under the components'); and the members a
+    # `different` left alone
     by_status: Counter[str] = Counter()
     mentions_by_status: Counter[str] = Counter()
     adjudicated_apart = 0
@@ -2804,6 +2805,11 @@ def cluster_corpus(
         for method, left in apart.items():
             by_status[method] += 1
             mentions_by_status[method] += left
+        split = (entry.status == AMBIGUOUS and len(entry.clusters()) > 1) or (
+            entry.status == ADJUDICATED and entry.contradiction is not None
+        )
+        if split and not apart[AMBIGUOUS]:
+            by_status[AMBIGUOUS] += 1
     per_call = config.adjudication.pairs_per_call
     summary = {
         "documents": len(ordered),

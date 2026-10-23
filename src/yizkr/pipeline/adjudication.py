@@ -86,8 +86,9 @@ so a union whose couple adjudication merged may link confidently and
 need no call. A pair asked once in an invocation is not asked again in
 it. In keeper mode (a run whose manifest records another project stage)
 every pending pair is asked once, each group of kinds packed apart, the
-verdicts are recorded for the cluster review sheet, and nothing merges:
-the identity map is clustering's own.
+verdicts are recorded for the cluster review sheet, and no verdict
+merges anything: the identity map is clustering's own, its confident
+components merged.
 
 **Outputs.** `identity-map.json` is the map the write reads; RECORD
 beside it keeps every verdict with its reason, each call's pairs and raw
@@ -131,6 +132,7 @@ from yizkr.claims import (
 from yizkr.pipeline import clustering
 from yizkr.pipeline.clustering import (
     AMBIGUOUS,
+    CONFIDENT_COMPONENT,
     DIFFERENT,
     EVENT_KINDS,
     GEDCOM,
@@ -907,7 +909,9 @@ def run_stage(context: Any) -> list[str]:
         + f": {_counted(summary['clustered_mentions'], 'mention')} of "
         f"{_counted(summary['documents'], 'document')} in "
         f"{_counted(summary['identity_clusters'], 'cluster')}, "
-        f"{_counted(summary['merged_mentions'], 'mention')} merged; "
+        f"{_counted(summary['merged_mentions'], 'mention')} merged, "
+        f"{summary['cluster_mentions'][CONFIDENT_COMPONENT]} of them by the "
+        "confident components of ambiguous clusters; "
         f"{NAME}: {_counted(counts['asked_pairs'], 'pair')} in "
         f"{_counted(counts['calls'], 'call')}, {found[SAME]} same, "
         f"{found[DIFFERENT]} different, {found[UNCERTAIN]} uncertain; "

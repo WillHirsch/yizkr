@@ -314,7 +314,7 @@ A separate pipeline step between extract and resolve:
 clustering (ADR-0025; the identity-map draft, ADR-0027, #66) replaces
 steps 1, 2 and 5 within a scratch run: it blocks and links every
 mention against every other on records alone, and merges only confident
-clusters. Step 3 then runs over what it could not decide: the ambiguous
+clusters (until the #568 amendment below). Step 3 then runs over what it could not decide: the ambiguous
 pairs of each ambiguous candidate cluster, never a conflicting
 cluster's, as one stage keyed by what each call sends (ADR-0032): the
 pairs' mention fingerprints and evidence, the prompt and the model.
@@ -342,9 +342,11 @@ a development-stage run a candidate cluster of two whose one pair no
 cluster, and is counted; in keeper mode it is asked, for the review
 sheet.
 A part merges with the method `adjudicated` when a `same` pair is among
-its links, and `confident` when its confident links alone join it, so
+its links, and `confident` when its confident links alone join it
+(`confident_component` since the #568 amendment below), so
 the identity map says what made each merge; a cluster with an
-`uncertain` or unanswered pair stays split whole. In keeper mode the
+`uncertain` or unanswered pair stays split whole (until the #568
+amendment below). In keeper mode the
 verdicts are recorded for the cluster review sheet (#108) and merge
 nothing, so a human still approves every equivalence that is kept.
 

@@ -769,7 +769,8 @@ refuses). The module docstrings are the full account; in short:
   events, each group after clustering again, so a union whose couple
   merged may need no call. In keeper mode every pending pair is asked
   once, the verdicts are recorded for the cluster review sheet (#108),
-  and nothing merges. Verdicts, reasons, each call's pairs and raw
+  and the verdicts merge nothing (the confident components merge, as in
+  clustering's own map). Verdicts, reasons, each call's pairs and raw
   answer, and the counts are kept in
   `<run>/corpus/clustering/adjudication.json`, local-only like the map;
   both are reused while the clustering's inputs, the prompt, the stage's

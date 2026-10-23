@@ -15,16 +15,24 @@ the 1912 directory. No wiki, no model.
 
 from __future__ import annotations
 
-from tests.unit.test_adjudication import Engine, gustav, klara, run, truths
+from tests.unit.test_adjudication import (
+    Engine,
+    context_of,
+    gustav,
+    klara,
+    run,
+    truths,
+)
 from tests.unit.test_clustering import (
     Doc,
     assert_no_false_merge,
     day,
+    export,
     human,
     item,
     register,
 )
-from yizkr.pipeline import clustering, report, rundiff
+from yizkr.pipeline import adjudication, clustering, report, rundiff
 from yizkr.pipeline.clustering import (
     ADJUDICATED,
     AMBIGUOUS,
@@ -220,6 +228,46 @@ class TestTheRecheck:
         }
         assert [len(pairs) for _group, pairs in pending_pairs([entry])] == [1]
 
+    def test_two_members_never_paired_that_contradict_keep_it_apart(self):
+        """The export gives Gustav a son, Nicholas Lobig, with no date;
+        the register that reads his birth 1950 and the one that misreads
+        it 1850 each name his father Gustav, and an undated register names
+        Nicholas alone. Each dated register meets the export's Nicholas,
+        its anchor, and links to it on their kin, so the three are one
+        confident component; the two dated ones are never a pair, but
+        their years cannot overlap. The re-check reads every two members
+        of a component, not only its links, so the component stays
+        apart: a chain of confident links joins no two people that no one
+        link would."""
+        ged = export(
+            "0 @I1@ INDI\n1 NAME Gustav /Löbig/\n1 SEX M\n"
+            "0 @I2@ INDI\n1 NAME Nicholas /Lobig/\n1 SEX M\n"
+            "0 @F1@ FAM\n1 HUSB @I1@\n1 CHIL @I2@\n",
+            {"i1": "gustav-loebig", "i2": "nicholas-lobig"},
+        )
+        read, misread = nicholas("read", 1950), nicholas("misread", 1850)
+        docs = [ged, read, misread, nicholas_alone("undated", None)]
+        identity = identity_of(docs)
+        assert_no_false_merge(docs, identity)
+        dated = {
+            read.fingerprint("e1", identity),
+            misread.fingerprint("e1", identity),
+        }
+        entry = entry_of(identity, read)
+        assert dated not in [set(p["mentions"]) for p in entry["pairs"]]
+        assert entry["status"] == AMBIGUOUS
+        assert set(entry["contradiction"]["mentions"]) == dated
+        assert {
+            p["link"] for p in entry["pairs"] if set(p["mentions"]) & dated
+        } == {CONFIDENT}
+        assert (
+            mention(identity, read)["cluster"]
+            != (mention(identity, misread)["cluster"])
+        )
+        assert {mention(identity, doc)["method"] for doc in docs[1:]} == {
+            AMBIGUOUS
+        }
+
     def test_a_same_verdict_joins_a_component_kept_apart(self):
         """A `same` on the pending pair excuses its own dates' conflict
         (ADR-0007, as amended by #106): the part it joins merges,
@@ -280,6 +328,14 @@ class TestTheRecheck:
             CONFIDENT_COMPONENT
         ] * 3 + [ADJUDICATED]
         assert settled["summary"]["adjudicated_apart"] == 1
+        # the settled review still says which pair the component settled
+        settled_entry = entry_of(settled, docs[0])
+        assert settled_entry["status"] == ADJUDICATED
+        assert {
+            clustering._pair(*p["mentions"]): p["inside_component"]
+            for p in settled_entry["pairs"]
+            if p["link"] == AMBIGUOUS
+        } == {inside[0]: True, **{pair: False for pair in between}}
 
     def test_an_uncertain_pair_inside_a_component_leaves_it_merged(self):
         """`uncertain` is no cannot-link: the component still merges, as
@@ -556,3 +612,118 @@ class TestTheCounts:
         summary = rundiff.render_markdown(an_aggregate(clusters=aggregate))
         assert "by method: confident_component 1" in summary
         assert "Gustav" not in summary
+
+
+def two_components() -> list[Doc]:
+    """Gustav in two registers that give his birth year, and in two that
+    name his father Sebastian: the dated two link on their dates, the
+    other two on their kin, and each dated one ambiguously with each
+    of the others, with nothing to corroborate their name."""
+    return [
+        gustav_with("d1", born=1919, father=False),
+        gustav_with("d2", born=1919, father=False),
+        gustav_with("k1", born=None, father=True),
+        gustav_with("k2", born=None, father=True),
+    ]
+
+
+class TestBetweenComponents:
+    def test_the_pairs_between_two_components_are_pending(self):
+        docs = two_components()
+        identity = identity_of(docs)
+        assert_no_false_merge(docs, identity)
+        assert {mention(identity, doc)["method"] for doc in docs} == {
+            CONFIDENT_COMPONENT
+        }
+        clusters = [mention(identity, doc)["cluster"] for doc in docs]
+        assert clusters[0] == clusters[1] != clusters[2] == clusters[3]
+        entry = entry_of(identity, docs[0])
+        between = [p for p in entry["pairs"] if p["link"] == AMBIGUOUS]
+        assert [p["inside_component"] for p in between] == [False] * 4
+        ((_group, pending),) = pending_pairs([entry])
+        assert sorted(pending) == sorted(ambiguous_pairs(entry))
+        # left split between its components: an ambiguous cluster, with
+        # no member left apart alone
+        summary = identity["summary"]
+        assert summary["clusters"][CONFIDENT_COMPONENT] == 2
+        assert summary["clusters"][AMBIGUOUS] == 1
+        assert summary["cluster_mentions"][AMBIGUOUS] == 0
+
+    def test_same_between_components_joins_them(self):
+        docs = two_components()
+        made, _ = run(docs, Engine(truths(docs)))
+        assert made.counts["asked_pairs"] == 4
+        methods = {
+            made.identity["mentions"][doc.fingerprint("e1", made.identity)][
+                "method"
+            ]
+            for doc in docs
+        }
+        assert methods == {ADJUDICATED}
+        assert (
+            len(
+                {
+                    made.identity["mentions"][
+                        doc.fingerprint("e1", made.identity)
+                    ]["cluster"]
+                    for doc in docs
+                }
+            )
+            == 1
+        )
+        assert made.identity["summary"]["clusters"][AMBIGUOUS] == 0
+
+    def test_mixed_verdicts_between_components_fall_back(self):
+        """One `same` and three `different` between the two components:
+        the part the `same` makes joins `different` pairs, so it falls
+        back to the two components; the cluster is left split, counted,
+        and needs attention."""
+        docs = two_components()
+        identity = identity_of(docs)
+        pairs = sorted(ambiguous_pairs(entry_of(identity, docs[0])))
+        settled = identity_of(
+            docs,
+            {pair: SAME if pair == pairs[0] else DIFFERENT for pair in pairs},
+        )
+        assert {mention(settled, doc)["method"] for doc in docs} == {
+            CONFIDENT_COMPONENT
+        }
+        assert len({mention(settled, doc)["cluster"] for doc in docs}) == 2
+        entry = entry_of(settled, docs[0])
+        assert entry["status"] == ADJUDICATED
+        assert entry["contradiction"]["evidence"] == DIFFERENT
+        summary = settled["summary"]
+        assert summary["clusters"][CONFIDENT_COMPONENT] == 2
+        assert summary["clusters"][AMBIGUOUS] == 1
+        assert clustering.attention(summary, adjudicated=True)[0].startswith(
+            "ambiguous clusters not merged: 1 cluster"
+        )
+
+    def test_uncertain_between_components_leaves_it_split_and_flagged(self):
+        docs = two_components()
+        made, _ = run(docs, Engine(truths(docs), verdict=UNCERTAIN))
+        assert made.counts["asked_pairs"] == 4
+        summary = made.identity["summary"]
+        assert summary["clusters"][CONFIDENT_COMPONENT] == 2
+        assert summary["clusters"][AMBIGUOUS] == 1
+        assert adjudication.attention(summary)[0].startswith(
+            "ambiguous clusters not merged: 1 cluster"
+        )
+
+
+class TestTheLogLines:
+    def test_both_stages_say_how_many_the_components_merged(self, tmp_path):
+        docs = three_with_one_undated()
+        context = context_of(docs, tmp_path / "own", Engine(truths(docs)))
+        clustering.run_stage(context)
+        (line,) = context.logged
+        assert "3 mentions merged, 3 of them by the confident components" in (
+            line
+        )
+        engine = Engine(truths(docs), verdict=DIFFERENT)
+        context = context_of(docs, tmp_path / "adjudicated", engine)
+        adjudication.run_stage(context)
+        (line,) = [line for line in context.logged if "identity map" in line]
+        assert "3 mentions merged, 3 of them by the confident components" in (
+            line
+        )

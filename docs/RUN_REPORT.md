@@ -355,10 +355,11 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   mentions, adjudicated merges (those the adjudicator's `same` verdicts
   made in a development-stage run, #106) and their mentions, the members
   a `different` verdict left alone, ambiguous clusters left split (those
-  that left any member apart, counted with the members left apart, the
-  members of their merged components not among them; an adjudicated
-  cluster that left members apart for a contradiction among them
-  included), conflicting clusters (and how many of
+  that end in more than one cluster for want of a settlement: a member
+  left apart, a pending pair unsettled between merged components, or a
+  contradiction an adjudicated cluster fell back from; counted with the
+  members left apart alone, the members of their merged components
+  not among them), conflicting clusters (and how many of
   them hard), singletons, the recordless mentions (those of a kind that
   takes a mention record and have none, which never link confidently,
   ADR-0035 §7), the mentions clustered by kind, the candidate

@@ -3021,7 +3021,7 @@ class TestEvents:
             (AMBIGUOUS, "key/conflict/unknown")
         ]
 
-    def test_the_deaths_of_a_person_held_for_review_stay_apart(self):
+    def test_the_deaths_of_a_person_merge_with_his_confident_component(self):
         """The export gives Sebastian, 'Wastl', born 1862; the tree and a
         register each give him born 1862 and his death, the tree's in 1945
         and the register's undated; a photo's 'Wastl' keeps his candidate
