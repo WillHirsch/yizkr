@@ -1016,6 +1016,20 @@ and reference the artifact itself or the producing run.
   container with the caption as its excerpt, or combine two sources'
   values as a new statement with both references and the qualifier
   `determination_method` → `combined_from_sources` (ADR-0039 §4).
+- **The static site shows what sources say about an artifact** (ADR-0039
+  §7). An artifact's page has a section "What sources say about this
+  artifact": its captions first, each with the container that gives it
+  and the page and printed page it stands on ("per *Our Family from
+  Germany*, page 6 (printed 4)"), then its own document-subject
+  statements, each property's values listed together, each with its
+  source ("per this artifact" where the artifact states it of itself),
+  none preferred, in the order of their text; a date at its stated
+  precision with its qualifiers (its range, circa), an item by its label,
+  a person the roster lists linked to their page and, when possibly
+  living, badged as on the index. A person's page has a section "Named in
+  artifacts": each document-subject statement whose value is the person
+  ("shown in" the portrait, "addressee of" the letter), with its
+  sources. A caption names no one, so it is never listed there.
 - **Machine-assisted preparation is a sourcing circumstance.** When a
   compilation states that its text was prepared with machine assistance
   (that its translations are machine translations, say), each claim read

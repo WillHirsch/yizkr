@@ -151,6 +151,23 @@ says the instance holds a development-stage scratch run, and names it.
 
 Each stage keeps what it did in its directory of the run (RECORD); the
 run report reads the write's.
+
+**Progress.** Each stage tells the run's events how far it has got, in
+`progress` events (rundir.PROGRESS) that the live monitor shows: what it
+is doing, as a word of this module's vocabulary, and counts, never a
+document's words, a SHA-1 or a QID (docs/MONITOR.md). reset gives each
+step of a reset as it starts, or that it skipped or resumed; register
+and write give the documents done out of those they plan, once as they
+start and once per document, with the documents that failed, the
+batches refused whole and, for write, the statements written,
+referenced and skipped and the claims refused so far; places says
+that it reads the graph and the records once the query service shows
+the write, then gives the question batches answered out of those it
+asks, once as it starts asking and once per batch, and then the links
+written out of those it plans, once as it starts writing and once per
+link; places and site say when they start waiting for
+the query service, and site when it starts building. register, write and
+places say when they skip, as the instance holds what the key makes.
 """
 
 from __future__ import annotations
@@ -176,6 +193,7 @@ from yizkr.core.instance import (
     watermark,
     write_state_dir,
 )
+from yizkr.pipeline.rundir import PROGRESS
 from yizkr.pipeline.stages import (
     atomic_write_text,
     canonical_json,
@@ -224,6 +242,18 @@ STATE_FILE = "scratch-run.json"
 STATE_FORMAT = 1
 # what the reset stage did
 SKIPPED, RESUMED, RESET_DONE = "skipped", "resumed", "reset"
+# what a stage's progress event says it is doing, besides SKIPPED and
+# RESUMED, and what its counts count
+RESETTING, REGISTERING, WRITING, ASKING, WAITING, READING, BUILDING = (
+    "resetting",
+    "registering",
+    "writing",
+    "asking",
+    "waiting",
+    "reading",
+    "building",
+)
+STEPS, DOCUMENTS, BATCHES, LINKS = "steps", "documents", "batches", "links"
 # the property a depicts claim has: never written by a scratch run
 DEPICTS = "depicts"
 # the edit summary of a claim's write
@@ -252,6 +282,14 @@ class ScratchWriteRefused(RuntimeError):
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def progress(context: Any, stage: str, phase: str, **counts: Any) -> None:
+    """Tell the run's events how far `stage` has got (the module
+    docstring, Progress): `phase` says what it is doing, and `counts`
+    are numbers, besides the unit they count (`unit`) and a reset's step
+    (`step`), whose name is the reset's own."""
+    context.run.emit(PROGRESS, stage=stage, phase=phase, **counts)
 
 
 # -- what the write side reads of the run --------------------------------
@@ -518,14 +556,23 @@ def check_state(client: Any, run_id: str, key: str) -> dict:
 # -- what the tests replace ----------------------------------------------
 
 
-def reset_instance(env_file: Path | None, log: Callable[..., None]) -> Any:
+def reset_instance(
+    env_file: Path | None,
+    log: Callable[..., None],
+    progress: Callable[[int, int, str], Any] | None = None,
+) -> Any:
     """`yizkr scratch reset --yes` on the stack beside the env file
-    (yizkr.reset). Its caller holds the live-stack lock (run_reset), so
-    the reset takes no hold of its own."""
+    (yizkr.reset), telling `progress` of each step as it starts. Its
+    caller holds the live-stack lock (run_reset), so the reset takes no
+    hold of its own."""
     from yizkr.reset import reset_instance as reset
 
     return reset(
-        env_file=env_file, yes=True, log=log, lock=contextlib.nullcontext
+        env_file=env_file,
+        yes=True,
+        log=log,
+        lock=contextlib.nullcontext,
+        progress=progress,
     )
 
 
@@ -613,6 +660,7 @@ def run_reset(context: Any) -> list[str]:
             f"{RESET}: the instance holds what this run's key makes, written "
             f"by scratch run {recorded.run_id}: no reset, and no write"
         )
+        progress(context, RESET, SKIPPED)
         save_record(
             context.directory,
             {
@@ -633,6 +681,7 @@ def run_reset(context: Any) -> list[str]:
             f"{RESET}: this run reset the instance, which holds its writes "
             "alone: the run goes on where it stopped"
         )
+        progress(context, RESET, RESUMED)
         save_record(
             context.directory,
             {
@@ -650,11 +699,23 @@ def run_reset(context: Any) -> list[str]:
         with contextlib.suppress(FileNotFoundError):
             (context.directory.parent / stage / RECORD).unlink()
     (context.directory.parent / PLACES / RESPONSES).unlink(missing_ok=True)
+
+    def step(number: int, steps: int, name: str) -> None:
+        progress(
+            context,
+            RESET,
+            RESETTING,
+            unit=STEPS,
+            done=number - 1,
+            of=steps,
+            step=name,
+        )
+
     # the reset and the state it records under one hold of the lock, so
     # no session that takes the lock writes between them, where the state
     # would take its write for this run's
     with live_stack():
-        reset_instance(context.env_file, context.log)
+        reset_instance(context.env_file, context.log, progress=step)
         _forget_client(context)
         epoch = uuid.uuid4().hex
         save_state(client_of(context), run_id, key, epoch)
@@ -700,6 +761,7 @@ def _skipped(context: Any, stage: str) -> dict | None:
         context.log(
             f"{stage}: skipped, the instance holds what this write key makes"
         )
+        progress(context, stage, SKIPPED)
         return record
     return None
 
@@ -760,12 +822,30 @@ def run_register(context: Any) -> list[str]:
         record["refused"] = refused
         save_record(context.directory, record)
         driver = context.driver
-        for doc in context.documents:
-            if doc.sha1 in refused or doc.sha1 in record["documents"]:
+        planned = [doc for doc in context.documents if doc.sha1 not in refused]
+        done = sum(doc.sha1 in record["documents"] for doc in planned)
+        failed = 0
+
+        def told() -> None:
+            progress(
+                context,
+                REGISTER,
+                REGISTERING,
+                unit=DOCUMENTS,
+                done=done,
+                of=len(planned),
+                failed=failed,
+                refused=len(refused),
+            )
+
+        told()
+        for doc in planned:
+            if doc.sha1 in record["documents"]:
                 continue
             try:
                 qid = driver._step_register(doc)
             except Exception as exc:
+                failed += 1
                 record["failed"][doc.sha1] = type(exc).__name__
                 context.log(
                     f"{REGISTER}: {doc.sha1[:12]} not registered "
@@ -781,6 +861,8 @@ def run_register(context: Any) -> list[str]:
                 record["failed"].pop(doc.sha1, None)
             save_state(client_of(context), run_id, key, epoch)
             save_record(context.directory, record)
+            done += 1
+            told()
     context.log(
         f"{REGISTER}: {len(record['documents'])} documents registered, "
         f"{len(refused)} refused, {len(record['failed'])} failed"
@@ -853,8 +935,29 @@ def run_write(context: Any) -> list[str]:
         }
         qids = registered.get("documents") or {}
         placed = registered.get("placed") or {}
-        for doc in context.documents:
-            if doc.sha1 not in qids or doc.sha1 in record["documents"]:
+        planned = [doc for doc in context.documents if doc.sha1 in qids]
+        done = sum(doc.sha1 in record["documents"] for doc in planned)
+        failed = 0
+
+        def told() -> None:
+            written = record["documents"].values()
+            progress(
+                context,
+                WRITE,
+                WRITING,
+                unit=DOCUMENTS,
+                done=done,
+                of=len(planned),
+                failed=failed,
+                written=sum(d.get("written", 0) for d in written),
+                referenced=sum(d.get("referenced", 0) for d in written),
+                skipped=sum(d.get("skipped", 0) for d in written),
+                claims_refused=sum(d.get("refused", 0) for d in written),
+            )
+
+        told()
+        for doc in planned:
+            if doc.sha1 in record["documents"]:
                 continue
             extracted = extracted_batch(doc)
             batch, left_out = batch_to_write(extracted)
@@ -872,6 +975,7 @@ def run_write(context: Any) -> list[str]:
                     placed={doc.sha1: set(media)},
                 )
             except Exception as exc:
+                failed += 1
                 record["failed"][doc.sha1] = type(exc).__name__
                 context.log(
                     f"{WRITE}: {doc.sha1[:12]} not written "
@@ -900,6 +1004,8 @@ def run_write(context: Any) -> list[str]:
             state = save_state(client_of(context), run_id, key, epoch)
             record["revision"] = state["watermark"]["revision"]
             save_record(context.directory, record)
+            done += 1
+            told()
         complete = (
             not record["failed"]
             and all(
@@ -933,18 +1039,27 @@ def run_write(context: Any) -> list[str]:
 
 
 def await_query_service(
-    config: Any, expected: str | None, revision: int, what: str
+    config: Any,
+    expected: str | None,
+    revision: int,
+    what: str,
+    waiting: Callable[[], Any] | None = None,
 ) -> None:
     """Wait until the query service shows the run items of the run
     `expected` and an entity of revision `revision` or a later one, for
     at most SITE_WAIT seconds; ScratchWriteRefused, saying `what` was not
-    done, after that."""
+    done, after that. `waiting`, when given, is called once, when the
+    first look finds the query service behind."""
     probe = query_service_probe(config)
     deadline = clock() + SITE_WAIT
+    told = False
     while True:
         shown, newest = probe()
         if expected in shown and newest >= revision:
             return
+        if waiting is not None and not told:
+            waiting()
+            told = True
         if clock() >= deadline:
             raise ScratchWriteRefused(
                 f"the query service has not caught up with the write "
@@ -970,8 +1085,13 @@ def run_site(context: Any) -> list[str]:
     config = client_of(context).config
     if written.get("skipped") or written.get("documents"):
         await_query_service(
-            config, expected, revision, "the site was not built"
+            config,
+            expected,
+            revision,
+            "the site was not built",
+            lambda: progress(context, SITE, WAITING),
         )
+    progress(context, SITE, BUILDING)
     out = context.directory / "site"
     summary = build_site(config, out)
     save_record(
@@ -1041,14 +1161,21 @@ def _propose(
             _reset_record(context).get("run_id"),
             written.get("revision") or 0,
             "no place was reconciled",
+            lambda: progress(context, PLACES, WAITING),
         )
+        progress(context, PLACES, READING)
         places = place_graph(client)
         links = _stated_links(context, written)
         hierarchy.attach_chains(places, links)
         work = hierarchy.build_worklist(places, links)
         if work.questions:
             found = hierarchy.adjudicate(
-                place_client(context), work.questions, places
+                place_client(context),
+                work.questions,
+                places,
+                progress=lambda done, of: progress(
+                    context, PLACES, ASKING, unit=BATCHES, done=done, of=of
+                ),
             )
     planned = hierarchy.links_to_write(work, found.answers)
     graph = {place.qid: place.parents for place in places}
@@ -1220,7 +1347,20 @@ def run_places(context: Any) -> list[str]:
                     f"no artifact is registered for the document {sha1}, "
                     "whose record states a link: no place was reconciled"
                 )
-        for index, entry in enumerate(record["planned"]):
+        planned = record["planned"]
+
+        def told() -> None:
+            progress(
+                context,
+                PLACES,
+                WRITING,
+                unit=LINKS,
+                done=len(record["outcomes"]),
+                of=len(planned),
+            )
+
+        told()
+        for index, entry in enumerate(planned):
             if str(index) in record["outcomes"]:
                 continue
             link = hierarchy.StatedLink.from_json(entry["link"])
@@ -1238,6 +1378,7 @@ def run_places(context: Any) -> list[str]:
                 state = save_state(client, run_id, key, epoch)
                 record["revision"] = state["watermark"]["revision"]
             save_record(context.directory, record)
+            told()
         record["counts"] = counts = _counts(record)
         if not record.get("recorded"):
             record_contents(client, target, run_id)
