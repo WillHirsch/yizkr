@@ -1292,6 +1292,8 @@ class TestTheDocumentAsSubject:
         assert reject["claim"]["subject"]["sha1"] == OTHER_REF.sha1
         coverage = side_output(tmp_path, "coverage.json")
         assert coverage["rejected_claims"] == 1
+        # counted by its reason, for the run report (#456)
+        assert coverage["rejected_by_reason"] == {"document_subject": 1}
 
 
 class IssuingWiki(FakeWiki):

@@ -42,6 +42,7 @@ from yizkr.model.schema import Manifest, load_acceptance, load_manifest
 from yizkr.pipeline.chunking import (
     ENTITY_ASSIGNMENT_BLOCK,
     LINE_ASSIGNMENT_BLOCK,
+    ChunkedClaimExtractor,
     rejected_by_reason,
 )
 from yizkr.pipeline.extract import (
@@ -515,6 +516,35 @@ class TestThePrompts:
         ]
         (reject,) = json.loads(rejects.read_text())
         assert reject["reasons"] == ["placed_subject"]
+
+    def test_a_chunked_extraction_keeps_its_captions(self, tmp_path):
+        """The chunked extractor lists the placed images in its chunk
+        prompts and validates with them; a caption of an image the booklet
+        does not place is a reject counted by its reason."""
+        wastl = {
+            "id": "e1",
+            "label": "Wastl",
+            "kind": "human",
+            "mention_lines": [4],
+        }
+        llm = ScriptedLlm(
+            [
+                json.dumps({"entities": [wastl]}),
+                ndjson([caption(), caption(STRAY_REF.model_dump())]),
+            ]
+        )
+        batch = ChunkedClaimExtractor(
+            llm, state_dir=tmp_path / "state"
+        ).extract(booklet(), BOOKLET_REF)
+        prompts = [prompt for _method, prompt in llm.calls[1:]]
+        assert prompts and all(LETTER_REF.sha1 in p for p in prompts)
+        assert [(c.property, c.subject) for c in batch.claims] == [
+            ("caption", LETTER_REF)
+        ]
+        coverage = json.loads(
+            (tmp_path / "state" / "coverage.json").read_text()
+        )
+        assert coverage["rejected_by_reason"] == {"placed_subject": 1}
 
     def test_the_excerpt_s_extraction_never_reads_the_caption(self):
         """The excerpt's prompt holds the excerpt's text alone: neither the
