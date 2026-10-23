@@ -540,11 +540,9 @@ class TestRegistration:
     @staticmethod
     def made(tmp_path, exclusions=None, **documents):
         corpus = folder(tmp_path, **documents)
+        options = {} if exclusions is None else {"exclusions": exclusions}
         orchestrator = run(
-            tmp_path,
-            corpus,
-            Reader({LETTER_SHA1: EXCERPT}),
-            exclusions=exclusions,
+            tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}), **options
         )
         wiki = FakeWiki()
         orchestrator._client = wiki
