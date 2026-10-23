@@ -736,7 +736,8 @@ class TestAcceptAllRefusesDepicts:
         assert (result.mode, result.total, result.approved) == ("claims", 1, 1)
 
     def test_depicts_row_without_claim_id_is_named_by_position(self, tmp_path):
-        # a damaged sheet is still refused
+        # a damaged sheet is still refused; row 2 stands for the portrait's
+        # date, whose subject is the scan itself
         sheet = tmp_path / "review.csv"
         sheet.write_text(
             "claim_id,property,decision\n"  # row 1, as a spreadsheet counts
