@@ -233,6 +233,7 @@ class TestContainmentClaims:
 
 
 COUNTED = "PLAC component without a word"
+PLACEHOLDER = "PLAC placeholder component"
 
 
 class TestPlaceholderComponents:
@@ -289,34 +290,6 @@ class TestPlaceholderComponents:
 
     def test_named_components_count_nothing(self):
         assert COUNTED not in adapted().outcomes
-
-    def test_a_placeholder_with_a_word_is_kept_as_written(self):
-        """A component with a word is kept as written, as the adapter
-        cannot tell a name from a word that is none (ADR-0035 §6): the
-        export's 'unbekannt' district is a jurisdiction of its own, which
-        each PLAC through it lies within, and nothing is counted."""
-        result = adapted(
-            born("Fläckfeld, unbekannt, Hesse, Germany")
-            + "1 RESI\n2 PLAC Kredfeld, unbekannt, Hesse, Germany\n"
-        )
-        batch = result.batch
-        fläckfeld = places(batch)["Fläckfeld, unbekannt, Hesse, Germany"]
-        assert fläckfeld.structure.within == ["unbekannt", "Hesse", "Germany"]
-        district = places(batch)["unbekannt, Hesse, Germany"]
-        assert district.aliases == ["unbekannt"]
-        assert containment(batch) == {
-            (
-                "Fläckfeld, unbekannt, Hesse, Germany",
-                "unbekannt, Hesse, Germany",
-            ),
-            (
-                "Kredfeld, unbekannt, Hesse, Germany",
-                "unbekannt, Hesse, Germany",
-            ),
-            ("unbekannt, Hesse, Germany", "Hesse, Germany"),
-            ("Hesse, Germany", "Germany"),
-        }
-        assert COUNTED not in result.outcomes
 
     def test_empty_components_are_no_placeholders(self):
         # (here) a tool left Flörburg's district and its country empty
@@ -392,3 +365,118 @@ class TestThePlaceStage:
         assert sorted(question.candidates) == sorted(
             ["Q900", created[places(batch)["Hesse, Germany"].id]]
         )
+
+
+class TestPlaceholderWords:
+    """A worded placeholder ('unbekannt') is record-only (ADR-0035 §6,
+    the owner's decision on #582): it stays in the place's `within` as
+    written, with no entity and no `part_of` to, from or across it, so
+    that two unknowns are never one place. It is counted."""
+
+    def test_two_unknown_districts_are_never_one_place(self):
+        result = adapted(
+            born("Fläckfeld, unbekannt, Hesse, Germany")
+            + "1 RESI\n2 PLAC Kredfeld, unbekannt, Hesse, Germany\n"
+        )
+        batch = result.batch
+        assert sorted(places(batch)) == [
+            "Fläckfeld, unbekannt, Hesse, Germany",
+            "Germany",
+            "Hesse, Germany",
+            "Kredfeld, unbekannt, Hesse, Germany",
+        ]
+        for town in ("Fläckfeld", "Kredfeld"):
+            place = places(batch)[f"{town}, unbekannt, Hesse, Germany"]
+            assert place.structure.within == ["unbekannt", "Hesse", "Germany"]
+            assert place.aliases == [town]
+        # no claim to the placeholder, and none across it: only the link
+        # the PLAC states beyond it
+        assert containment(batch) == {("Hesse, Germany", "Germany")}
+        assert result.outcomes[PLACEHOLDER] == 2
+        assert COUNTED not in result.outcomes
+
+    def test_the_containers_before_a_placeholder_keep_their_links(self):
+        batch = adapted(
+            born("Brunnenring 35, Flörburg, unbekannt, Germany")
+        ).batch
+        assert containment(batch) == {
+            (
+                "Brunnenring 35, Flörburg, unbekannt, Germany",
+                "Flörburg, unbekannt, Germany",
+            ),
+        }
+        flörburg = places(batch)["Flörburg, unbekannt, Germany"]
+        assert flörburg.structure.within == ["unbekannt", "Germany"]
+        # the country's one link would run across the placeholder, so it
+        # is a container of the records alone
+        assert "Germany" not in places(batch)
+
+    def test_placeholders_compare_folded_and_whole(self):
+        result = adapted(
+            born(
+                "Fläckfeld, UNBEKANNT, Hesse",
+                "Kredfeld, Onbekend , Hesse",
+                "Moshausen, Unknown  Place, Germany",
+                # a name that holds the word is no placeholder
+                "Rekau, Unbekanntdorf, Hesse",
+            )
+        )
+        assert result.outcomes[PLACEHOLDER] == 3
+        assert "Unbekanntdorf, Hesse" in places(result.batch), sorted(
+            places(result.batch)
+        )
+
+    def test_a_placeholder_as_the_place_s_name_places_it_beyond(self):
+        # (here) the export knows only that the birth was in Hesse
+        result = adapted(born("unbekannt, Hesse, Germany"))
+        (birth,) = [
+            c for c in result.batch.claims if c.property == "place_of_birth"
+        ]
+        labels = {e.id: e.label for e in result.batch.entities}
+        assert labels[birth.value.value.local_id] == "Hesse, Germany"
+        assert "unbekannt" not in {
+            n.written
+            for e in places(result.batch).values()
+            for n in e.structure.names
+        }
+        assert result.outcomes[PLACEHOLDER] == 1
+
+    def test_a_plac_of_placeholders_alone_places_nothing(self):
+        result = adapted(
+            "0 @I1@ INDI\n1 NAME Eugen /Löbig/\n1 DEAT\n2 PLAC unbekannt\n"
+        )
+        assert places(result.batch) == {}
+        assert result.outcomes[PLACEHOLDER] == 1
+
+    def test_the_stage_asks_nothing_of_a_placeholder(self):
+        """The record's links to and from a placeholder are record-only:
+        its container names no place, and the link after it is left
+        unresolved, so nothing is written to, from or across it. The link
+        the PLAC states beyond it is claimed, as the export's own."""
+        batch = adapted(born("Fläckfeld, unbekannt, Hesse, Germany")).batch
+        created, graph = graph_of(batch)
+        links = stated_links(batch, created, EXPORT.sha1)
+        fläckfeld = created[
+            places(batch)["Fläckfeld, unbekannt, Hesse, Germany"].id
+        ]
+        own = [link for link in links if link.place == fläckfeld]
+        assert [link.claimed for link in own] == [False, False, True]
+        work = build_worklist(graph, links)
+        assert all(q.place != fläckfeld for q in work.questions)
+        assert {key[2] for key in work.settled if key[0] == fläckfeld} == {2}
+        assert (work.unnamed, work.unresolved) == (1, 1)
+
+
+class TestThePlaceholderList:
+    def test_every_entry_is_a_placeholder_with_a_word(self):
+        import yaml
+
+        from yizkr.pipeline.gedcom import PLACEHOLDERS, _is_placeholder
+
+        data = yaml.safe_load(PLACEHOLDERS.read_text(encoding="utf-8"))
+        assert data["version"] == 1
+        entries = data["placeholders"]
+        assert {"unbekannt", "unknown", "onbekend"} <= set(entries)
+        for entry in entries:
+            assert any(c.isalnum() for c in entry), entry
+            assert _is_placeholder(entry.upper()), entry

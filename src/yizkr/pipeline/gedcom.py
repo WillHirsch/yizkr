@@ -142,7 +142,12 @@ within the next) is a `part_of` claim cited by the PLAC's line, with no
 time, as a PLAC states none (ADR-0038 §2). A place is labelled by its
 components, comma-joined, and its own name, the first, is its label or
 an alias, by which the place stage finds it as a container. A component
-without a word ('?') names nothing and is left out, counted.
+without a word ('?') names nothing and is left out, counted. A
+placeholder word ('unbekannt', 'unknown'; the list in
+gedcom_placeholders.yaml) is counted too, and kept in the record of a
+place within it, as written, with no entity and no `part_of` to or from
+it; as a place's own name it is left out, and the place is the first
+jurisdiction the PLAC names.
 Tags the adapter does not map (e.g.
 REPO, SUBM, tool-specific `_` tags) are counted and reported, not
 silently dropped: the census walks every record and nesting level and
@@ -204,17 +209,22 @@ counted in the outcomes (AdapterResult): each union and union event by
 kind, an undated divorce or annulment, a marriage with no wedding, a
 couple of two HUSBs or two WIFEs, a name part kept as an unsplit form or
 counted rather than placed (one with no word among them), a PLAC
-component without a word, and an undetermined language.
+component without a word, a PLAC placeholder component, and an
+undetermined language.
 """
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import re
 import unicodedata
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from importlib.resources import files
+
+import yaml
 
 from yizkr.claims import (
     ArtifactRef,
@@ -1336,17 +1346,73 @@ def _names_a_place(plac: str) -> bool:
     return bool(plac.replace(",", " ").strip())
 
 
-def _place_parts(plac: str) -> tuple[tuple[str, ...], int]:
-    """The components of a PLAC that name a place, each as written, the
-    place's own name first and then each jurisdiction it is within, from
-    the lowest; and how many were left out as naming none. An empty
-    component names nothing, and neither does one without a word ('?',
-    '-', a placeholder for a name the source does not know), wherever it
-    stands: a place named by it would be named by nothing. A PLAC none of
-    whose components has a word gives no parts, and so no place."""
+# the words a PLAC component may hold in place of a name it does not know,
+# kept as data beside this module (ADR-0035 §6)
+PLACEHOLDERS = files("yizkr.pipeline") / "gedcom_placeholders.yaml"
+
+
+def _placeholder_key(text: str) -> str:
+    """A component as the placeholder list compares it: folded (case and
+    accents), runs of spaces one space."""
+    from yizkr.pipeline.clustering import fold
+
+    return " ".join(fold(text).split())
+
+
+@functools.lru_cache(maxsize=1)
+def _placeholder_keys() -> frozenset[str]:
+    """The placeholder list's entries (PLACEHOLDERS), each as compared."""
+    data = yaml.safe_load(PLACEHOLDERS.read_text(encoding="utf-8"))
+    return frozenset(
+        key
+        for entry in data["placeholders"]
+        if (key := _placeholder_key(str(entry)))
+    )
+
+
+def _is_placeholder(component: str) -> bool:
+    """Whether a PLAC component is, whole, a word that stands in for a
+    name the source does not know ('unbekannt', 'unknown', 'onbekend')."""
+    return _placeholder_key(component) in _placeholder_keys()
+
+
+@dataclass(frozen=True)
+class _PlaceParts:
+    """A PLAC's components as the adapter reads them (_place_parts)."""
+
+    # the place's own name first, then each jurisdiction it is within,
+    # from the lowest, each as written
+    parts: tuple[str, ...]
+    # the components left out as holding no word
+    wordless: int
+    # the components that are placeholders, those left out included
+    placeholders: int
+
+
+def _place_parts(plac: str) -> _PlaceParts:
+    """The components of a PLAC that the place's record holds, each as
+    written, the place's own name first and then each jurisdiction it is
+    within, from the lowest.
+
+    An empty component names nothing, and neither does one without a word
+    ('?', '-'), wherever it stands: each is left out, the latter counted.
+    A placeholder (_is_placeholder) is kept in a jurisdiction's position,
+    as the source writes it, though it names no place (record-only: the
+    containment pass makes it no entity and no `part_of`). A placeholder
+    as the place's own name is left out, so that the place is the first
+    jurisdiction the PLAC names. A PLAC that names no place gives no
+    parts."""
     named = [part for piece in plac.split(",") if (part := piece.strip())]
-    kept = tuple(part for part in named if _has_word(part))
-    return kept, len(named) - len(kept)
+    worded = [part for part in named if _has_word(part)]
+    placeholders = sum(map(_is_placeholder, worded))
+    start = 0
+    while start < len(worded) and _is_placeholder(worded[start]):
+        start += 1
+    return _PlaceParts(
+        parts=tuple(worded[start:]),
+        wordless=len(named) - len(worded),
+        placeholders=placeholders,
+    )
 
 
 def _source_title(record: Record) -> str:
@@ -2114,7 +2180,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     def place_item(plac: Record) -> dict:
         """An item value naming the place the PLAC `plac` names."""
         placing.setdefault(id(plac), plac)
-        parts, _left_out = _place_parts(plac.value)
+        parts = _place_parts(plac.value).parts
         return {"type": "item", "value": local(place_entity(parts))}
 
     def located(plac: Record) -> dict:
@@ -2155,13 +2221,16 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         """The PLACs of an event that name a place (_place_parts), the
         first of each value, in their order: a further PLAC is an
         alternative, placed by a claim of its own. Each component without
-        a word that a PLAC with a value holds is counted."""
+        a word, and each placeholder, that a PLAC with a value holds is
+        counted."""
         first: dict[str, Record] = {}
         for place in event.all("PLAC"):
-            parts, left_out = _place_parts(place.value)
-            for _ in range(left_out):
+            read = _place_parts(place.value)
+            for _ in range(read.wordless):
                 outcome("PLAC component without a word")
-            if parts:
+            for _ in range(read.placeholders):
+                outcome("PLAC placeholder component")
+            if read.parts:
                 first.setdefault(place.value, place)
         return list(first.values())
 
@@ -2953,11 +3022,18 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     # ADR-0038 §1): each jurisdiction is a place, the one entity of its
     # parts in the export, and each link of the chain, the place within
     # its nearest jurisdiction and each jurisdiction within the next, is a
-    # `part_of` claim cited by the PLAC's own line. A PLAC states no time,
-    # so no claim carries one (ADR-0038 §2).
+    # `part_of` claim cited by the PLAC's own line, but for a link to or
+    # from a placeholder, which stays in the record alone. A PLAC states
+    # no time, so no claim carries one (ADR-0038 §2).
     for plac in list(placing.values()):
-        parts, _left_out = _place_parts(plac.value)
+        parts = _place_parts(plac.value).parts
         for index in range(len(parts) - 1):
+            # a placeholder is record-only, and no claim links across it:
+            # the source states no link between the components beside it
+            if _is_placeholder(parts[index]) or _is_placeholder(
+                parts[index + 1]
+            ):
+                continue
             claim(
                 place_entity(parts[index:]),
                 "part_of",

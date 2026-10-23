@@ -29,14 +29,16 @@ pytestmark = pytest.mark.live
 
 # what the fixture is; a change to it gives the fixture new items
 FIXTURE = (
-    "#571: a GEDCOM export's birth at a street in a town in a shire, and a "
-    "residence in the town"
+    "#571: a GEDCOM export's birth at a street in a town in a shire, a "
+    "residence in the town, and a burial at a chapel in an unknown town "
+    "in the shire"
 )
 MARK = fixture_mark(FIXTURE, writer, gedcom, places)
 
 STREET = f"Integration Street {MARK}"
 TOWN = f"Integration Town {MARK}"
 SHIRE = f"Integration Shire {MARK}"
+CHAPEL = f"Integration Chapel {MARK}"
 
 GEDCOM = f"""\
 0 HEAD
@@ -49,6 +51,9 @@ GEDCOM = f"""\
 1 RESI
 2 DATE 1960
 2 PLAC {TOWN}, {SHIRE}
+1 BURI
+2 DATE 2020
+2 PLAC {CHAPEL}, unbekannt, {SHIRE}
 0 TRLR
 """
 
@@ -150,13 +155,47 @@ def test_the_place_stage_names_and_settles_every_link(client, config, written):
     _, export, batch, write = written
     wait_for_query_service(config, client, list(_qids(batch, write).values()))
     graph = places.fetch_places(client, config)
+    qid = _qids(batch, write)
+    chapel = qid[f"{CHAPEL}, unbekannt, {SHIRE}"]
     links = places.stated_links(batch, write.created_items, export.sha1)
-    assert links and all(link.claimed for link in links)
-    work = places.build_worklist(graph, links)
+    stated = [link for link in links if link.place != chapel]
+    assert stated and all(link.claimed for link in stated)
+    work = places.build_worklist(graph, stated)
     assert (work.unnamed, work.unresolved) == (0, 0)
     assert work.questions == []
-    qid = _qids(batch, write)
     street = qid[f"{STREET}, {TOWN}, {SHIRE}"]
     chain = (TOWN, SHIRE)
     assert work.settled[(street, chain, 0)] == qid[f"{TOWN}, {SHIRE}"]
     assert work.settled[(street, chain, 1)] == qid[SHIRE]
+
+
+def test_a_placeholder_is_record_only(client, config, written):
+    """The burial's 'unbekannt' town stays in the chapel's record alone:
+    no item is made of it, no part_of runs from the chapel to it or across
+    it to the shire, and the place stage asks nothing of the chapel's
+    links and settles none (the owner's decision on #582)."""
+    _, export, batch, write = written
+    qid = _qids(batch, write)
+    chapel = qid[f"{CHAPEL}, unbekannt, {SHIRE}"]
+    assert not any(label.startswith("unbekannt") for label in qid)
+    assert _statements(client, chapel, "part_of") == []
+    wait_for_query_service(config, client, [chapel])
+    # this session's places: a place another test named 'unbekannt' would
+    # make its container a question
+    graph = [
+        place
+        for place in places.fetch_places(client, config)
+        if MARK in place.label
+    ]
+    links = [
+        link
+        for link in places.stated_links(
+            batch, write.created_items, export.sha1
+        )
+        if link.place == chapel
+    ]
+    assert [link.container for link in links] == ["unbekannt", SHIRE]
+    assert not any(link.claimed for link in links)
+    work = places.build_worklist(graph, links)
+    assert work.questions == [] and work.settled == {}
+    assert (work.unnamed, work.unresolved) == (1, 1)

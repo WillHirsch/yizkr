@@ -1242,7 +1242,12 @@ Each of those jurisdictions is a place of its own too, one per distinct
 tail of components in the export, and each place carries its own name
 as its label or an alias; each link of the chain is an undated
 `part_of` claim cited by the PLAC's line. A component without a word
-('?') is left out and counted (ADR-0035 §6).
+('?') is left out and counted. A placeholder word ('unbekannt',
+'unknown', 'onbekend'; the list in `pipeline/gedcom_placeholders.yaml`,
+which is data and may be extended) is record-only, by the owner's
+decision: it stays in the place's `within` as written, with no place,
+no `part_of` to or from it and none across it, so that two unknowns are
+never one place; it is counted (ADR-0035 §6).
 What a marker in a name asserts (a widow's
 marker, "the late", a patronymic's father, a married-name marker) is a
 claim: a `civil_status`, a death, a `father`, a `married_name`.
