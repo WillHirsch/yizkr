@@ -1629,10 +1629,10 @@ not a signal to grow the schema on.
   and, read as a curator's claim, a container's caption (ADR-0039), so
   two sources that date one document differently are listed side by
   side, each with its source; as for any other date, one whose span lies
-  inside the other's differs only in resolution (below). A name compares as text: spellings that
-  differ only in letter case (a sharp s written SS among them) or
-  language tag are one value, listed once with the sources of all of
-  them. Properties that legitimately accumulate values over a life —
+  inside the other's differs only in resolution (below). A name
+  compares as text: spellings that differ only in letter case (a sharp
+  s written SS among them) or language tag are one value, listed once
+  with the sources of all of them. Properties that legitimately accumulate values over a life —
   spouse, residence, married names, nicknames, official names, names
   of no stated type — are
   multi-valued by nature: two spouses asserted by one source are

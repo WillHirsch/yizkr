@@ -30,8 +30,9 @@ running stack, then pins the report's rows for the fixture subjects:
   while nicknames accumulate and are never compared;
 * a document's date of making is single-valued (#584, ADR-0039): a letter
   dated 28 July 1939 by its own dateline and 1940 by a curator's claim
-  stated in another artifact is listed, each date with its source, while a
-  curator's July 1939 from a third artifact holds the dateline and is not.
+  stated in another artifact is listed, each date with its source. A
+  curator's July 1939 from a third artifact holds the dateline and is not
+  listed beside it, but is listed beside 1940.
 
 The whole graph is queried, and rows are filtered to the fixture subjects,
 so unrelated data on the instance cannot make the assertions flaky. Like
@@ -559,7 +560,7 @@ def fixture_graph(client, config):
     )
     # the letter dated by two other artifacts' claims: 1940 per source B,
     # which disagrees with its dateline, and July 1939 per source C, which
-    # holds it
+    # holds the dateline and so is listed only beside 1940
     qids["letter"] = registered["D"].qid
     add_inception(client, qids["letter"], date(1940), registered["B"].qid)
     add_inception(client, qids["letter"], date(1939, 7), registered["C"].qid)
@@ -753,6 +754,7 @@ EXPECTED = {
         frozenset({"1938-06-22", "1938-08-19"}),
     ),
     ("letter", "inception", "", "", frozenset({"1939-07-28", "1940"})),
+    ("letter", "inception", "", "", frozenset({"1939-07", "1940"})),
 }
 
 
@@ -790,6 +792,7 @@ def test_each_value_names_the_artifacts_that_state_it(
         "1938-06-22": {source["B"]},
         "1938-08-19": {source["A"]},
         "1939-07-28": {source["D"]},
+        "1939-07": {source["C"]},
         "1940": {source["B"]},
     }
     for row in report_rows(client, config, qids):
@@ -932,7 +935,12 @@ def test_what_the_report_leaves_out(client, config, fixture_graph):
     # a curator's July 1939 holds the letter's 28 July 1939, and is not
     # listed beside it
     assert len(statements(client, qids["letter"], "inception")) == 3
-    assert "1939-07" not in shown_values
+    letter_pairs = {
+        row_key(row, qids)[4]
+        for row in rows
+        if row_key(row, qids)[0] == "letter"
+    }
+    assert frozenset({"1939-07", "1939-07-28"}) not in letter_pairs
     # residence observations and a one-sided end time are not compared
     assert len(statements(client, person, "residence")) == 4
     residence_rows = [

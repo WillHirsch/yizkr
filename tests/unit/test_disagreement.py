@@ -406,6 +406,29 @@ class TestComparedValues:
         september = said(POSTCARD, "inception", u.Date(1938, 9), INTERVIEW)
         assert len(listed(postmark, september)) == 1
 
+    def test_each_pair_of_dates_of_making_is_compared_on_its_own(self):
+        # 28 July 1939 per the letter's image, (here) July 1939 per the
+        # booklet's caption and 1940 per the interview: the caption's month
+        # holds the dateline, and both disagree with 1940
+        (own,) = [
+            said(a.subject, a.property, a.value, a.source)
+            for a in u.about("letter-excerpt-1939", "inception")
+        ]
+        caption = said(
+            "letter-excerpt-1939",
+            "inception",
+            u.Date(1939, 7),
+            "family-booklet-2011",
+        )
+        later = said(
+            "letter-excerpt-1939", "inception", u.Date(1940), INTERVIEW
+        )
+        name = label("letter-excerpt-1939")
+        assert listed(own, caption, later) == [
+            (name, "inception", "", "", "1939-07-01/10", "1940-01-01/9"),
+            (name, "inception", "", "", "1939-07-28/11", "1940-01-01/9"),
+        ]
+
     def test_two_spouses_or_residences_never_conflict(self):
         # two places of residence, and two spouses (the second a
         # placeholder): values that accumulate over a life
