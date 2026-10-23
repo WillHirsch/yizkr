@@ -11,9 +11,11 @@ amended by #397). One batch writes the booklet's caption over the image,
 4 (ADR-0037); the image's own dateline (28 July 1939, day precision), its
 heading's address and its greeting's addressee, Klara; and the studio
 portrait's own studio and two of the names on its reverse, Rahel and
-Felix, as `shows`. The site is built from the whole instance, and the
-image's, the booklet's and the portrait's pages and Klara's, Rahel's
-and Felix's are read.
+Felix, as `shows`; and Rahel's portrait's own date of making, pencilled
+"um 1895" on its mount: 1895 at year precision, with circa as its
+sourcing circumstance (ADR-0039 §2.2, #601). The site is built from the
+whole instance, and the image's, the booklet's and both portraits' pages
+and Klara's, Rahel's and Felix's are read.
 
 Every title, label, caption and media byte carries the session's marker
 (conftest.fixture_mark), so each session meets the fixture as a first
@@ -61,7 +63,7 @@ FIXTURE = (
     "#550: a booklet whose page 6 (printed 4) places an image of a letter, "
     "its caption over the image, the image's own dateline, heading and "
     "greeting, and the studio portrait's studio and two of the names on "
-    "its reverse"
+    "its reverse; Rahel's portrait's own circa, year-precision inception"
 )
 MARK = f"(sources test {fixture_mark(FIXTURE, registrar, writer, staticsite)})"
 
@@ -75,6 +77,9 @@ def marked(key: str) -> str:
 
 BOOKLET = marked("family-booklet-2011")
 PORTRAIT = marked("studio-photo-1890s")
+RAHELS_PORTRAIT = marked("studio-photo-1895")
+# Rahel's portrait dates its own making, "um 1895" on its mount
+(MADE,) = u.about("studio-photo-1895", "inception")
 KLARA = marked("klara-loebig")
 RAHEL = marked("rahel-loebig")
 FELIX = marked("felix-loebig")
@@ -96,23 +101,36 @@ def item(ref: dict) -> dict:
     return {"type": "item", "value": ref}
 
 
+def time_value(date: u.Date) -> dict:
+    """`date` as a time value at its own precision: the claim's precision
+    defaults to the finest field given."""
+    parts = {"year": date.year, "month": date.month, "day": date.day}
+    return {"type": "time", **{k: v for k, v in parts.items() if v}}
+
+
 def fixture_batch(
-    booklet: ArtifactRef, image: ArtifactRef, portrait: ArtifactRef
+    booklet: ArtifactRef,
+    image: ArtifactRef,
+    portrait: ArtifactRef,
+    rahels_portrait: ArtifactRef,
 ) -> ClaimBatch:
     """The booklet's caption on the image, what the image states of
-    itself and what the portrait states of itself, each citing its source
-    by the SHA-1 of its media."""
+    itself and what each portrait states of itself, each citing its
+    source by the SHA-1 of its media."""
     klara = local("klara", KLARA, "human")
     rahel = local("rahel", RAHEL, "human")
     felix = local("felix", FELIX, "human")
     address = local("address", ADDRESS, "place")
     studio = local("studio", STUDIO, "organization")
 
-    def claim(subject, prop, value, source, excerpt, language, **where):
+    def claim(
+        subject, prop, value, source, excerpt, language, qualifiers=(), **where
+    ):
         return {
             "subject": subject.model_dump(),
             "property": prop,
             "value": value,
+            "qualifiers": list(qualifiers),
             "source": {
                 "artifact": source.model_dump(),
                 **where,
@@ -178,6 +196,22 @@ def fixture_batch(
                 ),
                 claim(portrait, "shows", item(rahel), portrait, "Rahel", "de"),
                 claim(portrait, "shows", item(felix), portrait, "Felix", "de"),
+                claim(
+                    rahels_portrait,
+                    MADE.property,
+                    time_value(MADE.value),
+                    rahels_portrait,
+                    MADE.excerpt,
+                    "de",
+                    [
+                        {
+                            "property": "sourcing_circumstances",
+                            "value": item(
+                                {"kind": "vocab", "key": MADE.value.qualifier}
+                            ),
+                        }
+                    ],
+                ),
             ],
         }
     )
@@ -190,6 +224,7 @@ class Site:
     image: str  # the letter's image's QID
     image_label: str
     portrait: str
+    rahels_portrait: str
     people: dict[str, str]  # "klara", "rahel", "felix" -> QID
 
     def read(self, relative: str) -> str:
@@ -206,8 +241,13 @@ def site(client, config, tmp_path_factory):
         assert excerpt in UNIVERSE["letter-excerpt-1939"].text
     for excerpt in ("Photograph Brüsrich", "Rahel", "Felix"):
         assert excerpt in UNIVERSE["studio-photo-1890s"].text
+    assert MADE.source == "studio-photo-1895"
+    assert MADE.value == u.Date(1895, qualifier="circa")
+    assert MADE.excerpt == "um 1895"
+    assert MADE.excerpt in UNIVERSE["studio-photo-1895"].text
     booklet = register_fictional(client, BOOKLET, "artifact")
     portrait = register_fictional(client, PORTRAIT, "photograph")
+    rahels_portrait = register_fictional(client, RAHELS_PORTRAIT, "photograph")
     data = fictional_png(f"yizkr live test: {BOOKLET}, page 6, image 1")
     image = ArtifactRef.from_bytes(data)
     directory = tmp_path_factory.mktemp("derived")
@@ -228,7 +268,7 @@ def site(client, config, tmp_path_factory):
     image_qid = derived[image.sha1]
     written = write_mapped(
         BatchWriter(client),
-        fixture_batch(booklet.ref, image, portrait.ref),
+        fixture_batch(booklet.ref, image, portrait.ref, rahels_portrait.ref),
         placed={booklet.ref.sha1: set(derived)},
     )
     assert written.refused == []
@@ -239,7 +279,13 @@ def site(client, config, tmp_path_factory):
     wait_for_query_service(
         config,
         client,
-        [booklet.qid, image_qid, portrait.qid, *people.values()],
+        [
+            booklet.qid,
+            image_qid,
+            portrait.qid,
+            rahels_portrait.qid,
+            *people.values(),
+        ],
     )
     image_label = client.wbi.item.get(image_qid).labels.get("en").value
 
@@ -252,6 +298,7 @@ def site(client, config, tmp_path_factory):
             image=image_qid,
             image_label=image_label,
             portrait=portrait.qid,
+            rahels_portrait=rahels_portrait.qid,
             people=people,
         )
     finally:
@@ -319,6 +366,18 @@ def test_the_portraits_page_lists_every_name_it_shows(site):
         ' <span class="badge">possibly living</span>' + ITSELF
         for key, label in (("rahel", RAHEL), ("felix", FELIX))
     )
+
+
+def test_a_date_its_artifact_gives_as_circa_shows_its_year_and_circa(site):
+    # the query reads the statement's year precision, so the page shows
+    # 1895, not a day; and its sourcing circumstance, circa, beside it
+    # (ADR-0039 §2.2, §7; #601)
+    assert entries(site, site.rahels_portrait) == {
+        "inception": [
+            '1895 <span class="qualifiers">(sourcing circumstances: '
+            "circa)</span>" + ITSELF
+        ]
+    }
 
 
 def test_the_caption_is_the_images_never_the_booklets(site):
