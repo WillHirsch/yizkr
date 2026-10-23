@@ -25,8 +25,9 @@ import pytest
 from tests.fixtures import example_universe as u
 from tests.fixtures.identity import run_label, write_mapped
 from tests.integration.conftest import fictional_png, fixture_mark
+from yizkr import cli
 from yizkr.claims import ArtifactRef, ClaimBatch
-from yizkr.cli import build_parser
+from yizkr.core.exits import EXIT_REFUSED
 from yizkr.pipeline import faces, writer
 from yizkr.pipeline.faces import (
     DetectedFace,
@@ -153,18 +154,23 @@ def test_raw_detect_faces_batch_is_refused(client, portrait, raw_faces):
 
 
 def test_ingest_write_refuses_the_raw_batch_file(
-    client, portrait, raw_faces, tmp_path
+    client, portrait, raw_faces, tmp_path, capsys
 ):
     faces_json = tmp_path / "faces-batch.json"
     faces_json.write_text(raw_faces.model_dump_json(indent=2))
     check = nothing_written(client, portrait, raw_faces)
-    args = build_parser().parse_args(
-        ["ingest", "write", "--batch", str(faces_json)]
+
+    status = cli.main(["ingest", "write", "--batch", str(faces_json)])
+
+    # the writer's refusal is the command's: its message, and the refused
+    # status (yizkr.core.exits)
+    assert status == EXIT_REFUSED
+    err = capsys.readouterr().err
+    assert err.startswith(
+        f"{len(raw_faces.claims)} depicts claim(s) carry no per-row human"
     )
-
-    with pytest.raises(UnapprovedDepictsError):
-        args.func(args)
-
+    for claim in raw_faces.claims:
+        assert claim_id(claim) in err
     check()
 
 
