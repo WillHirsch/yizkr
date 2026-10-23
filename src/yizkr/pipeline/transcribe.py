@@ -204,6 +204,22 @@ JSON object and nothing else, in this form:
   with [?], and text that is blacked out or covered with [redacted]. Do
   not translate, do not normalise, and put no commentary in the text.
   An empty string for a page with no text.
+- Tables: write every table, list in columns or form grid, ruled or not,
+  one line per row, with the row's cells separated by " | ". The header
+  follows the same rule: a header of several lines is written one line
+  per header line, and a heading that spans several columns stands in
+  the first of its cells. Keep each empty cell as an empty field, so
+  that every row has as many cells as the table has columns and each
+  value stays in its column. A cell whose text runs over several lines
+  stays on its row's line, its lines joined by a space; this is the one
+  exception to preserving line breaks. Running prose is never laid out
+  this way, even where it is printed in several columns (a newspaper's
+  columns, a page set in two columns): write each column in turn, in
+  reading order. A title, or a note above or under a table, is written
+  as it stands. For example, a register with the columns Name, Alter,
+  ledig, verh. and verw., whose one entry is marked in the last column:
+  Name | Alter | ledig | verh. | verw.
+  Löbig, Eugen | 73 |  |  | x
 - "languages": the language codes (ISO 639-1, such as "en", "de", "ru",
   "fy") of the languages the page's text is written in, the one that
   holds most of it first; an empty list for a page with no text.

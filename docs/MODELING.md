@@ -290,11 +290,20 @@ A `time_period` claim from extraction is, for now, a counted reject:
 `time_period` accepts only a period, an entity of `time_period_class`, no
 entity kind offers one and no QID exists before write.
 `country_of_citizenship` accepts a place, since the place model has no
-country class; its description, which the prompt carries, says the value
-is a country, never a town, city or region within one, and validation
-does not tell them apart. `part_of`'s list is flat for now: it takes a
-place or an artifact whatever its subject, so a place `part_of` an artifact
-passes the check, which reads the value alone.
+country class; its description, which the chunk and single-pass prompts
+carry, says the value is a country, never a town, city or region within
+one, and validation does not tell them apart. The entity-manifest and
+chunk prompts name it among the relations of place, and the manifest gives
+the country a source states as a person's citizenship as a place entity,
+whether the source names it or gives only an adjective of nationality. A
+country given only by an adjective is labelled with the adjective as
+written (*an Australian citizen* gives the place "Australian"), with the
+record status `adjective`, which keys nothing: the adjective is never
+turned into a name of the country, which would add a word the source does
+not write and pick one state where the source gives a nationality
+(ADR-0035, amended by #573). `part_of`'s list is flat for now: it takes a
+place or an artifact whatever its subject, so a place `part_of` an
+artifact passes the check, which reads the value alone.
 
 **Reference properties** (`stated_in`, `inferred_from_extraction_run`,
 and the judgement note's `judgement` and `judgement_note`) are marked
@@ -673,13 +682,13 @@ artifact a new QID, changes neither.
 
 - An `organization` is an agent — a company, bank, committee, government
   body, school, or congregation. It is **distinct from `place`**: an
-  organization has a `location`, it is not one. **The relation decides
-  the kind** (ADR-0031): a relation of place (born, died or buried at,
-  lives at, located at, deported to, held at) takes a place, and a
+  organization has a `location`, it is not one. **The relation decides the
+  kind** (ADR-0031): a relation of place (born, died or buried at, lives
+  at, located at, deported to, held at, a citizen of) takes a place, and a
   relation of agency (`issued_by`, `carried_out_by`, `employer`,
   `educated_at`, `member_of`) an organization. So a camp, a prison, a
-  hospital or a school named only as where something happened is a
-  place, and one the source shows acting is an organization: the
+  hospital or a school named only as where something happened is a place,
+  and one the source shows acting is an organization: the
   registration card's Peiltal court prison, where Leopold was held, is a
   place; the Landgericht Rekau, which divorces Leopold and Agnes, is an
   organization. Where one source uses one institution both ways, it
@@ -1192,14 +1201,19 @@ language:
   ADR-0018); titles, honorifics and ranks and never a kinship word, and
   suffixes, which never key; and `unsplit` forms whose given name and
   surname the source does not tell apart;
-- **a place:** a status (`toponym`, `deictic` or `generic`); its names,
-  each with its toponym and generic head where they can be told apart; an
-  address, with its street and number; and the containers the source puts
-  it in, nearest first, whatever order the source writes them in
+- **a place:** a status (`toponym`, `deictic`, `generic`, or `adjective`
+  for a country a source gives only by an adjective of nationality, which
+  keys nothing); its names, each with its toponym and generic head where
+  they can be told apart; an address, with its street and number; and
+  the containers the source puts it in, nearest first, whatever order the
+  source writes them in
   (`within`: *Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân* is
   Snylsjum within the other three; a form whose fields run oblast,
   district, village puts Koshnovka within Kaldovsky District, then
-  Chadsk Oblast);
+  Chadsk Oblast). Each container in `within` is a place entity of the
+  manifest too, with its own record, and so in turn is each of its own
+  containers (*Fläckfeld, Kreis Mockburg, Hesse* gives three place
+  entities; ADR-0035, amended by #572);
 - **an organisation:** its proper names, the words naming its kind, and
   its places (*Калдовское районное бюро ЗАГС* has a kind and a place, and
   no proper name);

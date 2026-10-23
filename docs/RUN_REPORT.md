@@ -173,10 +173,24 @@ written new, those that gained a reference, the claims already there and
 those the writer refused, and of them those whose item value is their
 subject's item, as the identity map may make it
 (`aggregate.content.write.claims_self_referencing`, absent for a write
-that did not count them; #491), apart from extraction's rejects, the
-items minted, the judgement notes written (the noted run blocks,
-ADR-0035 §4; #410), the batches refused whole
-before registration, the documents that failed, and whether the
+that did not count them; #491), apart from extraction's rejects, and
+the claims refused by reason
+(`aggregate.content.write.claims_refused_by_reason`, #552): every reason
+of `yizkr.pipeline.writer.REFUSAL_REASONS`, in that order, each refused
+claim counted under the first that refused it, so they sum to the claims
+refused: `retired_or_reference_property` (a retired or reference
+property, ADR-0036, ADR-0035 §4), `subject_rule` (a document-subject
+claim whose subject is not its own source, a caption whose subject its
+source does not place, or an artifact subject on a property that takes
+none: ADR-0035 §3.4, ADR-0039 §2), `text` (a text the instance cannot
+hold as it is, the claim's own, a locator's or a mentioned entity's
+label), `side_rule` (an entity the side rule blocks, ADR-0010) and
+`self_reference` (an item value that is the subject's item, counted
+again in `claims_self_referencing`); absent, not 0, unless every
+document's write record counts them, and a reason absent unless every
+record gives it a count. Then the items minted, the judgement notes
+written (the noted run blocks, ADR-0035 §4; #410), the batches refused
+whole before registration, the documents that failed, and whether the
 instance-contents key was recorded; or that the instance held what the
 run's write key makes, so nothing was reset or written. In both, the
 depicts claims the write left out of the batches: no scratch run writes
@@ -209,7 +223,9 @@ named, by its two places' labels and the document that states it, in
 report.json (`place_cycles`) and report.html alone, which stay on the
 machine (ADR-0038 owner question 4). The place stage's calls count under
 their own role, `places`, in the calls' lines by role, apart from the
-extraction's.
+extraction's; the clustering stage's adjudication of ambiguous pairs
+counts under `adjudication`, apart from the critique's, whose engine,
+model and effort it uses.
 
 **Anomalies.** The alerts by check and by stage, each finding (a
 document or the run, a stage and a check) counted once: new when any of
@@ -253,7 +269,8 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
 - mention records and judgement notes, summed from each extraction's
   `coverage.json` (ADR-0035 §4, §5, #420): the mention records given,
   and those by label status (`name`, `role`, `kinship`, `courtesy`,
-  `placeholder`, `description`, `toponym`, `deictic`, `generic`, the
+  `placeholder`, `description`, `toponym`, `deictic`, `generic`,
+  `adjective`, the
   statuses of `claims.PersonStructure` and `claims.PlaceStructure`;
   `report.RECORD_STATUSES`); the unsplit name forms the records given
   hold (a person's `unsplit`: forms whose given name and surname the
@@ -333,11 +350,19 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   category from the critic's fixed list (`critique.CATEGORIES`), and the
   findings that failed their checks, counted apart as invalid;
 - clusters, from the clustering stage's identity map: confident merges,
-  ambiguous clusters left split, conflicting clusters (and how many of
+  adjudicated merges (those the adjudicator's `same` verdicts made in a
+  development-stage run, #106) and their mentions, the members a
+  `different` verdict left alone, ambiguous clusters left split (an
+  adjudicated cluster that left members apart for a contradiction among
+  them), conflicting clusters (and how many of
   them hard), singletons, the recordless mentions (those of a kind that
   takes a mention record and have none, which never link confidently,
   ADR-0035 §7), the mentions clustered by kind, the candidate
-  pairs, the adjudication estimate, and the hub keys not blocked on and
+  pairs, the adjudication estimate, the adjudication itself (the pairs
+  asked and the calls made, the verdicts `same`, `different` and
+  `uncertain`, the pairs left without a verdict, and the answer lines
+  refused by the schema, the calls refused whole and the pairs answered
+  two ways), and the hub keys not blocked on and
   the mentions holding them; `not run` when the run has no clustering
   stage, and the map's state when it is missing or of another format.
   The map's summary also holds `confident_links_only`, what merging over

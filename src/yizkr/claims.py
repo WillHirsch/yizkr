@@ -653,7 +653,7 @@ class PlaceStructure(StrictModel):
     keys; the containers only decide nesting."""
 
     kind: Literal["place"] = "place"
-    status: Literal["toponym", "deictic", "generic"] = "toponym"
+    status: Literal["toponym", "deictic", "generic", "adjective"] = "toponym"
     names: list[PlaceName] = []
     address: Address | None = None
     # the places the source puts it in, nearest first, whatever order

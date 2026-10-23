@@ -37,6 +37,7 @@ from yizkr.claims import (
     ItemValue,
     LocalRef,
     PersonStructure,
+    PlaceStructure,
     QuantityValue,
     load_vocabulary,
 )
@@ -107,7 +108,8 @@ CATEGORIES: dict[str, str] = {
     "relation_kind_mismatch": (
         "a claim whose relation takes a kind its value is not (ADR-0031: "
         "the relation decides the kind): a relation of place (place of "
-        "birth, death or burial, residence, location) takes a place; a "
+        "birth, death or burial, residence, location, citizenship) takes a "
+        "place; a "
         "relation of agency (issued by, carried out by, employer, educated "
         "at, member of) takes an organization; a relation of authorship or "
         "address (author, addressee: who wrote or made a document, and "
@@ -259,17 +261,19 @@ def _categories_block() -> str:
 
 
 def _entities_block(batch: ClaimBatch) -> str:
-    """One row per entity. A person with a mention record shows its status
-    after its kind, so the critic can tell a person the document never
-    names, whose label is rightly the document's words for them
-    (ADR-0018), from one it names."""
+    """One row per entity. A person or a place with a mention record shows
+    its status after its kind, so the critic can tell a person the
+    document never names, whose label is rightly the document's words for
+    them (ADR-0018), from one it names, and a country a source gives only
+    by an adjective of nationality from a place it names (ADR-0035
+    §2.2)."""
     lines = []
     for entity in batch.entities:
         aliases = ", ".join(entity.aliases) if entity.aliases else "-"
         hint = f" (hint: {entity.type_hint})" if entity.type_hint else ""
         status = (
             f" (status: {entity.structure.status})"
-            if isinstance(entity.structure, PersonStructure)
+            if isinstance(entity.structure, (PersonStructure, PlaceStructure))
             else ""
         )
         lines.append(

@@ -131,6 +131,7 @@ from yizkr.pipeline.rundir import (
     settings_conflicts,
 )
 from yizkr.pipeline.scratch import (
+    CORPUS_DIR,
     DEFAULT_RUNS,
     PHASES,
     PreflightFailed,
@@ -145,6 +146,8 @@ from yizkr.pipeline.stages import content_hash
 from yizkr.pipeline.transcribe import ImageReading, Transcription
 from yizkr.pipeline.transcription_record import BLANK, NOT_A_DOCUMENT_PAGE
 
+# the corpus stage whose adjudication calls the estimate counts
+CLUSTERING = "clustering"
 # the LLM cache's events the estimate counts (rundir.CACHE_EVENTS): an
 # answer it gives, a call it cannot answer, and the replay of an opening
 # turn for a fork
@@ -336,6 +339,9 @@ class Estimate:
     # which are not estimated, and those that make no call
     corpus_stages: list[str] = field(default_factory=list)
     callless_stages: list[str] = field(default_factory=list)
+    # the clustering stage's adjudication calls, as the latest identity
+    # map counts them, and whose map that is (_adjudication)
+    adjudication: tuple[int, str] | None = None
     # who holds the runs directory and the cache now
     holders: list[str] = field(default_factory=list)
     # what the run's preflight would refuse now, beyond what the estimate
@@ -599,6 +605,10 @@ class Estimator(ScratchDriver):
         estimate.callless_stages = [
             s.name for s in self._corpus_in_range() if not s.calls_engine
         ]
+        if CLUSTERING in estimate.corpus_stages:
+            estimate.adjudication = self._adjudication()
+            if estimate.adjudication is not None:
+                estimate.corpus_stages.remove(CLUSTERING)
         if past or not taken:
             return estimate
         self._refreshed = self._refreshes_made()
@@ -963,6 +973,40 @@ class Estimator(ScratchDriver):
             calls.estimated += max(0, count)
             calls.estimated_documents += 1
             calls.measured += counted.measured
+
+    def _adjudication(self) -> tuple[int, str] | None:
+        """The calls the clustering stage's adjudication asks at most, and
+        whose identity map counts them: the run's own, when the run it
+        would invoke again has one, else the newest run's in the runs
+        directory that has one; None when no run has. A map the stage
+        adjudicated records the count it planned before any verdict; an
+        older one, the calls its ambiguous pairs would take."""
+        from yizkr.pipeline import adjudication, clustering
+
+        own = [self.state_dir] if self.state_dir.is_dir() else []
+        others = [
+            run
+            for run in reversed(runs_in(self.state_dir.parent))
+            if run.resolve() != self.state_dir.resolve()
+        ]
+        for run in own + others:
+            directory = run / CORPUS_DIR / CLUSTERING
+            record = adjudication.read_record(directory)
+            planned = ((record or {}).get("counts") or {}).get("planned_calls")
+            if isinstance(planned, int):
+                return planned, run.name
+            identity = clustering.read_identity_map(
+                directory / clustering.IDENTITY_MAP
+            )
+            if identity is None:
+                continue
+            counts = identity["summary"].get("adjudication") or {}
+            calls = counts.get(
+                "calls_ambiguous_clusters", counts.get("calls_ambiguous_pairs")
+            )
+            if isinstance(calls, int):
+                return calls, run.name
+        return None
 
     def _baseline(self, needed: set[tuple[str, str]]) -> dict:
         """(document SHA-1, stage) -> the calls the latest invocation to
@@ -1356,6 +1400,16 @@ def _notes(estimate: Estimate) -> list[str]:
             f"- No call: the corpus stage{'' if one else 's'} "
             + ", ".join(estimate.callless_stages)
             + (" makes none." if one else " make none.")
+        )
+    if estimate.adjudication is not None:
+        calls, run = estimate.adjudication
+        notes.append(
+            f"- Up to {_plural(calls, 'adjudication call')} more for the "
+            "clustering stage's ambiguous pairs, as the identity map of run "
+            f"{run} counts them: the pairs of each ambiguous cluster, "
+            "packed as the stage packs them. Up to, since the LLM cache may "
+            "answer them, and people the verdicts merge can settle a union's "
+            "or an event's pair with no call."
         )
     if estimate.corpus_stages:
         notes.append(

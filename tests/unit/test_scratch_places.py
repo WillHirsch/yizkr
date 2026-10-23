@@ -517,9 +517,16 @@ def test_the_place_stage_runs_after_the_write_and_before_the_site():
     (stage,) = [s for s in scratch.CORPUS_STAGES if s.name == "places"]
     assert stage.touches_wiki
     assert stage.calls_engine
-    # the write side's only stage that calls the engine
+    # the write side's only stage that calls the engine; before the write,
+    # clustering calls it to adjudicate its ambiguous pairs (#106)
+    assert [
+        s.name
+        for s in scratch.CORPUS_STAGES
+        if s.calls_engine and s.touches_wiki
+    ] == ["places"]
     assert [s.name for s in scratch.CORPUS_STAGES if s.calls_engine] == [
-        "places"
+        "clustering",
+        "places",
     ]
 
 

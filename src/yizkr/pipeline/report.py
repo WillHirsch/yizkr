@@ -176,6 +176,7 @@ from yizkr.pipeline.rundir import (
 )
 from yizkr.pipeline.scratch import BARRIER, CORPUS_DIR, CORPUS_STAGES
 from yizkr.pipeline.stages import read_jsonl, staging_path
+from yizkr.pipeline.writer import REFUSAL_REASONS
 
 # the version of report.json's layout
 FORMAT = 1
@@ -260,9 +261,11 @@ KINDS = frozenset(DOCUMENT_STAGES)
 DOCUMENT_STAGE_NAMES = frozenset(
     stage for stages in DOCUMENT_STAGES.values() for stage in stages
 )
-# the roles calls are made in: the models', and the scratch run's place
-# stage, whose calls the run's events name apart
-ROLES = frozenset(MODEL_ROLES) | {PLACE_STAGE}
+# the roles calls are made in: the models', and the scratch run's
+# adjudication of ambiguous pairs and place stage, whose calls the run's
+# events name apart
+ADJUDICATION = "adjudication"
+ROLES = frozenset(MODEL_ROLES) | {ADJUDICATION, PLACE_STAGE}
 MODES = frozenset({"scratch run", "ingest run"})
 PROJECT_STAGES = frozenset({"development", "kept"})
 EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
@@ -331,7 +334,7 @@ RECORD_STATUSES = frozenset(
 MAP_STATES = frozenset({"read", "missing", "unreadable"})
 # the leading labels of the reasons stages give an output that needs
 # attention: the extraction's fallback tiers and empty batches, and the
-# clustering stage's clusters left unmerged
+# clustering stage's clusters left unmerged and pairs left undecided
 ATTENTION_LABELS = frozenset(
     {
         "entity manifest fell back to line-range segmentation",
@@ -341,6 +344,11 @@ ATTENTION_LABELS = frozenset(
         "conflicting clusters not merged",
         "ambiguous pairs to adjudicate",
         "hub keys not blocked on",
+        # what the adjudication of ambiguous pairs left undecided or
+        # refused (yizkr.pipeline.adjudication)
+        "adjudicated pairs without a verdict",
+        "adjudication answers refused",
+        "adjudication answers in conflict",
         # a container's image its reading does not read on its own
         # (presentation.UNREAD_IMAGE, and a PDF's image PDFium cannot give)
         "image not read on its own",
@@ -1694,6 +1702,21 @@ def _aggregate_write(written: Mapping[str, Any] | None) -> dict[str, Any]:
         isinstance(record.get("self_references"), int) for record in documents
     ):
         counted["claims_self_referencing"] = total("self_references")
+    # the claims refused by reason, the reasons of REFUSAL_REASONS in their
+    # order (yizkr.pipeline.writer): only when every document's record
+    # counts them, so that they sum to the claims refused, and each reason
+    # only when every record gives it a count; absent, not 0, otherwise
+    by_reason = [record.get("refused_by_reason") for record in documents]
+    if all(isinstance(counts, dict) for counts in by_reason):
+        counted["claims_refused_by_reason"] = {
+            reason: sum(_count(counts[reason]) for counts in by_reason)
+            for reason in REFUSAL_REASONS
+            if all(
+                isinstance(counts.get(reason), int)
+                and not isinstance(counts.get(reason), bool)
+                for counts in by_reason
+            )
+        }
     return counted
 
 
@@ -1794,6 +1817,11 @@ def _clusters(path: Path, fold: _Fold) -> dict[str, Any]:
         "identity clusters": number("identity_clusters"),
         "confident merges": number("clusters", "confident"),
         "mentions merged": number("cluster_mentions", "confident"),
+        "adjudicated merges": number("clusters", "adjudicated"),
+        "mentions merged by adjudication": number(
+            "cluster_mentions", "adjudicated"
+        ),
+        "members adjudicated apart": number("adjudicated_apart"),
         "ambiguous, left split": number("clusters", "ambiguous"),
         "ambiguous mentions": number("cluster_mentions", "ambiguous"),
         "conflicting": number("clusters", "conflicting"),
@@ -1804,6 +1832,20 @@ def _clusters(path: Path, fold: _Fold) -> dict[str, Any]:
         "confident pairs": number("confident_pairs"),
         "ambiguous pairs": number("ambiguous_pairs"),
         "adjudication calls": number("adjudication", "calls_ambiguous_pairs"),
+        "pairs adjudicated": number("adjudication", "asked_pairs"),
+        "pairs not asked, a same cannot merge": number(
+            "adjudication", "unmergeable_pairs_not_asked"
+        ),
+        "adjudication calls made": number("adjudication", "calls"),
+        "verdicts same": number("adjudication", "verdicts", "same"),
+        "verdicts different": number("adjudication", "verdicts", "different"),
+        "verdicts uncertain": number("adjudication", "verdicts", "uncertain"),
+        "pairs without a verdict": number("adjudication", "unanswered_pairs"),
+        "adjudication lines refused": number("adjudication", "rejected_lines"),
+        "adjudication calls refused": number("adjudication", "refused_calls"),
+        "adjudication answers in conflict": number(
+            "adjudication", "conflicting_answers"
+        ),
         "hub keys, not blocked on": number("hub_keys"),
         "mentions holding them": number("hub_mentions"),
     }
@@ -3314,6 +3356,37 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
     return sections
 
 
+# how the report names each reason the writer refuses a claim for
+# (yizkr.pipeline.writer.REFUSAL_REASONS)
+_REFUSAL_NAMES = {
+    "retired_or_reference_property": "a retired or reference property",
+    "subject_rule": "the subject rules",
+    "text": "a text the instance cannot hold",
+    "side_rule": "an entity the side rule blocks",
+    "self_reference": "an item value that is the subject's item",
+}
+
+
+def _refused_by_reason(write: Mapping[str, Any]) -> str:
+    """The claims refused by reason, each reason counted in its order, as
+    the write's line gives them; for a write that did not count them, those
+    whose item value is their subject's item when it counted those, and
+    otherwise nothing."""
+    counts = write.get("claims_refused_by_reason")
+    if not isinstance(counts, Mapping):
+        if "claims_self_referencing" in write:
+            return (
+                f", {_n(write['claims_self_referencing'])} of them for an "
+                "item value that is their subject's item"
+            )
+        return ""
+    return ": " + ", ".join(
+        f"{_n(counts[reason])} for {_REFUSAL_NAMES[reason]}"
+        for reason in REFUSAL_REASONS
+        if reason in counts
+    )
+
+
 def _write_sections(content: Mapping[str, Any]) -> list[_Section]:
     """The write stage's counts, when it ran."""
     write, depicts = content["write"], content["depicts"]
@@ -3331,13 +3404,8 @@ def _write_sections(content: Mapping[str, Any]) -> list[_Section]:
             f"{_n(write['statements_referenced'])} gained a reference, "
             f"{_n(write['claims_skipped'])} claims already there, "
             f"{_n(write['claims_refused'])} refused"
-            + (
-                f", {_n(write['claims_self_referencing'])} of them for an "
-                "item value that is their subject's item; "
-                if "claims_self_referencing" in write
-                else "; "
-            )
-            + f"{_n(write['items_minted'])} items minted, "
+            + _refused_by_reason(write)
+            + f"; {_n(write['items_minted'])} items minted, "
             f"{_n(write.get('notes_written', 0))} judgement notes written. "
             f"{_n(write['batches_refused'])} batches refused whole, "
             f"{_n(write['documents_failed'])} documents failed; the "

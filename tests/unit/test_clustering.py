@@ -1623,6 +1623,36 @@ class TestKeys:
         assert pair(camp, "e1", other_camp, "e1") in pairs
         assert not [p for p in pairs if (heads[0].sha1, "e1") in p]
 
+    def test_a_country_given_by_an_adjective_keys_nothing(self):
+        """#573: "an Australian citizen" gives a place labelled with the
+        adjective, which is no name of the country, so two such places
+        never pair; as toponyms they would."""
+
+        def countries(status: str) -> list[Doc]:
+            return [
+                register(
+                    f"citizen-{status}-{n}",
+                    [
+                        place(
+                            "e1",
+                            "Australian",
+                            names=["Australian"],
+                            status=status,
+                        )
+                    ],
+                    [],
+                    {"e1": "australia"},
+                )
+                for n in range(2)
+            ]
+
+        adjectives = countries("adjective")
+        pairs = blocked_pairs([doc.manifest for doc in adjectives])
+        assert pair(adjectives[0], "e1", adjectives[1], "e1") not in pairs
+        toponyms = countries("toponym")
+        pairs = blocked_pairs([doc.manifest for doc in toponyms])
+        assert pair(toponyms[0], "e1", toponyms[1], "e1") in pairs
+
     def test_an_address_keys_as_written(self):
         """The naturalisation's address meets the export's place of that
         name, which lies in more containers, and nests in it."""

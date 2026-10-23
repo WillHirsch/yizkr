@@ -185,8 +185,11 @@ SHA-1 when no file is named) counts once, by its later failure.
 
 **Calls.** The engine calls and the cache's answers, with the share the
 cache answered and its reasons, resumes, replays, rejections and
-adoptions, and the same per role. When the engine reports its calls
-(below): how many, their mean duration, the outcomes other than `ok` and
+adoptions, and the same per role, where a scratch run's corpus stages
+name their calls apart: `adjudication` for the clustering stage's
+adjudication of ambiguous pairs (#106), `places` for the place stage.
+When the engine reports its calls (below): how many, their mean
+duration, the outcomes other than `ok` and
 the errors by name, the waits for the subscription, the attempts a limit
 refused and why calls were held, and, when the latest invocation paused
 for the subscription, why and from when it can go on.

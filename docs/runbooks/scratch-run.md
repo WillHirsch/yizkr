@@ -111,11 +111,11 @@ and `yizkr.reset` for the reset.
   preflight reads no run state: **a resume makes these calls even when
   it will reuse every view**, a few trivial calls accepted as the cost
   of a check that never predicts what the run will reuse. An invocation
-  past the barrier only, whose corpus stages call no engine
-  (clustering), makes none. Every invocation whose range holds a
-  per-document stage, or a corpus stage that may call the engine, makes
-  them, the driver's own after a subscription limit included, unless the
-  installed claude CLI is not the run's (below).
+  past the barrier only makes them too, since clustering adjudicates
+  its ambiguous pairs through the engine (#106). Every invocation whose
+  range holds a per-document stage, or a corpus stage that may call the
+  engine, makes them, the driver's own after a subscription limit
+  included, unless the installed claude CLI is not the run's (below).
 
   When the installed claude CLI is not the one the run recorded, the
   preflight checks no model, refuses nothing, and says so in one line.
@@ -281,13 +281,23 @@ uv run yizkr scratch run
   barrier, so a corpus stage keeps its outputs in `corpus/<stage>/` in
   the run directory and reuses them while their inputs stand, as the
   documents' views are reused. The first is clustering (#105): it
-  writes the corpus's identity map to
-  `corpus/clustering/identity-map.json`, from the documents' batches
-  alone, with no wiki and no model (src/yizkr/pipeline/README.md,
-  "Corpus clustering"). Its `done` event carries its counts: the
-  ambiguous and conflicting clusters it left apart, the adjudication
-  calls they would take, and the count of hub keys. The write side
-  follows (below, The write side).
+  clusters the documents' batches, with no wiki, then asks the model
+  about the ambiguous pairs of each ambiguous cluster (#106), through
+  the LLM cache in the `critique` role's engine, model and effort, its
+  calls named `adjudication` in the events, the report and the monitor
+  (src/yizkr/pipeline/README.md, "Corpus clustering"). In a
+  development-stage run the `same` verdicts merge unattended, with the
+  method `adjudicated`; a conflicting cluster never merges, and one with
+  an `uncertain` pair stays apart. It writes the corpus's identity map to
+  `corpus/clustering/identity-map.json`, and the verdicts with their
+  reasons, each call's pairs and raw answer, and the counts to
+  `corpus/clustering/adjudication.json`, both local-only data, and
+  reuses both while their inputs stand. Its log line and `done` event
+  carry its counts: the pairs asked and the calls, the verdicts, the
+  clusters merged on verdicts, the ambiguous and conflicting clusters
+  left apart, and the pairs left without a verdict and the answers
+  refused, which need a look. The write side follows (below, The write
+  side).
 - **Options.** `--until STAGE` stops after a stage (`transcription`,
   `extraction`, `critique`, or a corpus stage; `gedcom` stops with
   `extraction`). `--cache DIR` names the LLM cache (default
@@ -312,8 +322,8 @@ uv run yizkr scratch run
 
 After clustering come five corpus stages that touch the wiki (#200,
 #201; `yizkr.pipeline.scratchwrite`, ADR-0025 §1 and §2): `reset`,
-`register`, `write`, `places` and `site`. Only `places` makes model
-calls, through the LLM cache. The driver runs each only while
+`register`, `write`, `places` and `site`. Of them only `places` makes
+model calls, through the LLM cache. The driver runs each only while
 the stack answers and the instance carries no kept-state marker, which
 the preflight checks before anything is dispatched and the driver checks
 again before each of them. So a run to the end needs the stack up; a run
@@ -781,7 +791,10 @@ Nothing from them goes into the repository, GitHub or a cloud session.
 
 ## Not yet
 
-- The estimate counts the per-document stages' calls. It says which
-  corpus stages make none (clustering, and the write side but the place
-  stage) and names the one it does not count: `places`, whose questions
-  depend on the graph the write makes.
+- The estimate counts the per-document stages' calls, and clustering's
+  adjudication calls as up to the count the newest identity map planned
+  (this run's, or else the latest run's in the runs directory; not
+  estimated before any run has one), since its pairs depend on the
+  batches the run makes. It says which corpus stages make none (the
+  write side but the place stage) and names the one it does not count:
+  `places`, whose questions depend on the graph the write makes.

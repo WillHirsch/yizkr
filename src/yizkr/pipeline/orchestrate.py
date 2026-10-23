@@ -2244,6 +2244,9 @@ class Orchestrator:
             # of `refused`, the claims whose item value is their subject's
             # item (yizkr.pipeline.writer.self_references)
             "self_references": result.self_references,
+            # `refused` counted by reason (yizkr.pipeline.writer
+            # .REFUSAL_REASONS), every reason in its order
+            "refused_by_reason": result.refused_by_reason(),
             "refused_terms": result.refused_terms,
             "approved_claims": len(approved.claims),
         }

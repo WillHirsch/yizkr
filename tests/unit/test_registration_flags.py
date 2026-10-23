@@ -1882,6 +1882,10 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
             written = write_gedcom(wiki, TWO_PEOPLE_GEDCOM)
 
             assert written.refused == named
+            # counted under the side rule alone (#552)
+            assert written.refusal_reasons == ["side_rule"]
+            assert written.refused_by_reason()["side_rule"] == 1
+            assert sum(written.refused_by_reason().values()) == 1
             assert "md1" not in written.created_items
             assert "i1" not in written.created_items
             assert images(wiki, written.created_items["i2"]) == [
