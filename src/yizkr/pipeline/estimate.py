@@ -74,10 +74,14 @@ whose reading the cache cannot answer, or answers with one the check
 fails, is read again and counted. A container whose transcription
 stands reads nothing again: its excerpts are those its directory holds, read
 from files as the driver reads them (ScratchDriver._known_excerpts), and
-each counts the stages whose views do not stand, and every stage after
-the first of them. An image of a container whose transcription is made again
-counts every excerpt stage, though an excerpt the run holds for it may have
-views that stand. Each excerpt stage's calls are counted by the mean
+each counts the stages whose views do not stand, as the driver rechecks
+them (its transcription against the check, its critique's entries), and
+every stage after the first of them. An image of a container whose
+transcription is made again counts every excerpt stage, though an excerpt
+the run holds for it may have views that stand. An excerpt stage left to
+make starts its role's engine client, as the run does, so a client the run
+refuses (another claude CLI than the run's among them) refuses the
+estimate too. Each excerpt stage's calls are counted by the mean
 for excerpts over every run in the runs directory that measured the
 stage for one, older runs, on other prompts or models, among them, else
 as typical (llm.estimate_calls), rounded up, and given as up to so many
@@ -122,6 +126,7 @@ from yizkr.pipeline.orchestrate import (
     TRANSCRIPTION_VOLATILE,
     DocumentRun,
     _findings,
+    _unreadable_critique,
     route_transcription,
 )
 from yizkr.pipeline.rundir import (
@@ -187,6 +192,9 @@ STAND_IN_READING = json.dumps(
 _READ_FILES = tuple(sorted(VISION_SUFFIXES))
 # the parts of an extraction the estimate counts apart
 _FIRST, _CHUNK_CALLS = "first turns", "chunks"
+# the role whose engine an excerpt's stage calls: its transcription is the
+# reading its container made of it, which asks no model
+_EXCERPT_ROLES = {"extraction": "extract", "critique": "critique"}
 
 
 class _Unanswered(BaseException):
@@ -614,6 +622,9 @@ class Estimator(ScratchDriver):
         self._refreshed = self._refreshes_made()
         try:
             made = {doc: self._count(doc) for doc in taken}
+            # an excerpt's stage left to make starts its role's engine
+            # client too, as the run starts it
+            excerpts = self._excerpts_found(made, docs)
         finally:
             estimate.cli_version = next(
                 (_text(c, "cli_version") for c in self._clients.values()),
@@ -624,7 +635,7 @@ class Estimator(ScratchDriver):
             for stage, outcome in stages.items():
                 self._add(estimate, stage, outcome)
         self._estimate_extractions(estimate, made)
-        estimate.excerpts = self._excerpts_found(made, docs)
+        estimate.excerpts = excerpts
         estimate.stages = dict(
             sorted(estimate.stages.items(), key=lambda item: PHASES[item[0]])
         )
@@ -860,7 +871,10 @@ class Estimator(ScratchDriver):
             not fresh
             and before.view is not None
             and not before.changed
-            and self._stands(doc, doc.critique, _findings) is not None
+            and self._stands(
+                doc, doc.critique, _findings, _unreadable_critique
+            )
+            is not None
         ):
             return _Made(reused=True)
         self._engine_for("critique")
@@ -1029,7 +1043,10 @@ class Estimator(ScratchDriver):
         """The excerpts the planned run may make, and their calls (the
         module docstring says how): each image once, however many containers
         place it, and none whose bytes a document of the corpus (`docs`) has,
-        as the driver takes them (Orchestrator._excerpts_of)."""
+        as the driver takes them (Orchestrator._excerpts_of). Each stage
+        left to make starts the engine client of its role (_engine_for),
+        as it would in the run, so that a client the run refuses stops the
+        estimate here."""
         corpus = frozenset(doc.sha1 for doc in docs)
         planned = [s for s in DOCUMENT_STAGES[EXCERPT] if self._within(s)]
         # image SHA-1 -> the excerpt stages it counts
@@ -1052,6 +1069,11 @@ class Estimator(ScratchDriver):
                     if sha1 not in corpus
                 }
             found = {sha1: left for sha1, left in found.items() if left}
+            for stage in planned:
+                if stage in _EXCERPT_ROLES and any(
+                    stage in left for left in found.values()
+                ):
+                    self._engine_for(_EXCERPT_ROLES[stage])
             containers += bool(found)
             for sha1, left in found.items():
                 images.setdefault(sha1, set()).update(left)
@@ -1080,15 +1102,29 @@ class Estimator(ScratchDriver):
         self, excerpt: DocumentRun, planned: list[str]
     ) -> list[str]:
         """The planned stages of an excerpt the run holds already whose
-        views it makes: the first whose view does not stand (_stands),
-        and every one after it."""
+        views it makes: the first whose view does not stand (_stands), with
+        the driver's rechecks (Orchestrator._transcription, _critique), and
+        every one after it."""
+        checked = self._route(excerpt) in (
+            "vision",
+            PAGED,
+            "text-file",
+            EXCERPT,
+        )
         views = {
             "transcription": (
                 excerpt.transcription,
                 Transcription.model_validate_json,
+                functools.partial(self._transcription_failure, excerpt)
+                if checked
+                else None,
             ),
-            "extraction": (excerpt.batch, ClaimBatch.model_validate_json),
-            "critique": (excerpt.critique, _findings),
+            "extraction": (
+                excerpt.batch,
+                ClaimBatch.model_validate_json,
+                None,
+            ),
+            "critique": (excerpt.critique, _findings, _unreadable_critique),
         }
         fresh = self._fresh(excerpt)
         for at, stage in enumerate(planned):

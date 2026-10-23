@@ -61,8 +61,8 @@ from yizkr.pipeline.presentation import (
     derived_transcription,
     read_derived_media,
 )
-from yizkr.pipeline.rundir import RunDir
-from yizkr.pipeline.scratch import EXIT_OK, LATEST
+from yizkr.pipeline.rundir import RunDir, RunSettingsConflict
+from yizkr.pipeline.scratch import EXIT_OK, LATEST, runs_in
 from yizkr.pipeline.stages import content_hash, sha1_file
 from yizkr.pipeline.textlayer import png
 from yizkr.pipeline.transcribe import (
@@ -1442,6 +1442,148 @@ class TestTheCallEstimateCountsExcerpts:
             "extraction": 2,
             "critique": 1,
         }
+
+    def test_a_held_excerpts_stage_starts_its_engine(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        """Every view of the booklet stands and the letter's excerpt has
+        its critique left to make: the estimate starts the critique role's
+        engine client for it, as the run does, names the CLI it runs, and
+        closes it (#494)."""
+        corpus = the_booklet(tmp_path)
+        run_scratch(tmp_path, corpus, engine)
+        lose_the_excerpts_critique(tmp_path)
+        closed = engine.closed
+        counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
+        assert per_stage(counted, "reused") == {
+            "transcription": 1,
+            "extraction": 1,
+            "critique": 1,
+        }
+        assert counted.excerpts.stale["critique"] == 1
+        assert counted.cli_version == "9.9.9"
+        assert engine.closed - closed == 1
+
+    def test_a_claude_cli_updated_refuses_a_held_excerpts_stage(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        """Another CLI than the run recorded, with every view of the
+        booklet standing: the excerpt's critique left to make starts an
+        engine, so the estimate refuses, as the run would (#494); with no
+        excerpt stage left within --until, it does not."""
+        corpus = the_booklet(tmp_path)
+        run_scratch(tmp_path, corpus, engine)
+        lose_the_excerpts_critique(tmp_path)
+        engine.cli = "9.9.10"
+        with pytest.raises(RunSettingsConflict, match="engine.cli_version"):
+            estimate_of(tmp_path, corpus, engine, resume=LATEST)
+        counted = estimate_of(
+            tmp_path, corpus, engine, resume=LATEST, until="extraction"
+        )
+        assert counted.excerpts.images == 0
+        assert counted.cli_version is None
+
+    def test_newly_read_images_start_their_stages_engines(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        """The booklet's transcription view is lost, and made again from
+        the cache, while its extraction and critique stand: the image it
+        reads counts every excerpt stage, and the estimate starts the
+        extract and critique roles' clients for them, besides the
+        transcribe role's (#494)."""
+        corpus = the_booklet(tmp_path)
+        run_scratch(tmp_path, corpus, engine)
+        (container,) = runs_dir(tmp_path).glob("*/booklet")
+        (container / "transcription.json").unlink()
+        closed = engine.closed
+        counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
+        assert per_stage(counted, "reused") == {
+            "extraction": 1,
+            "critique": 1,
+        }
+        assert counted.excerpts.stale == {
+            "transcription": 1,
+            "extraction": 1,
+            "critique": 1,
+        }
+        assert engine.closed - closed == 3
+
+    def test_a_held_excerpts_transcription_the_check_fails_now(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        """The letter's excerpt holds a vision transcription with no
+        record, which the check fails: the driver sets it aside and makes
+        every stage again, and the estimate counts them (#494)."""
+        corpus = the_booklet(tmp_path)
+        run_scratch(tmp_path, corpus, engine)
+        (excerpt,) = runs_dir(tmp_path).glob("*/excerpts/*")
+        view = excerpt / "transcription.json"
+        kept = json.loads(view.read_text())
+        view.write_text(json.dumps(dict(kept, pages=None)))
+        counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
+        assert counted.excerpts.stale == {
+            "transcription": 1,
+            "extraction": 1,
+            "critique": 1,
+        }
+        run_scratch(tmp_path, corpus, engine, resume=LATEST)
+        assert set_aside_stages(tmp_path) == [("excerpt", "transcription")]
+
+    def test_a_critique_of_an_earlier_format_is_made_again(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        """The booklet's critique and the letter excerpt's hold a finding
+        in an earlier format, neither a finding nor one that failed its
+        checks: the driver sets each aside and makes it again, and the
+        estimate counts both (#494)."""
+        corpus = the_booklet(tmp_path)
+        run_scratch(tmp_path, corpus, engine)
+        (excerpt,) = runs_dir(tmp_path).glob("*/excerpts/*")
+        (container,) = runs_dir(tmp_path).glob("*/booklet")
+        earlier = json.dumps([{"target": "e1", "issue": "a concern"}])
+        for doc in (container, excerpt):
+            (doc / "critique.json").write_text(earlier)
+        counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
+        assert per_stage(counted, "made") == {"critique": 1}
+        assert counted.excerpts.stale == {
+            "transcription": 0,
+            "extraction": 0,
+            "critique": 1,
+        }
+        run_scratch(tmp_path, corpus, engine, resume=LATEST)
+        assert sorted(set_aside_stages(tmp_path)) == [
+            ("excerpt", "critique"),
+            ("pdf", "critique"),
+        ]
+
+
+def lose_the_excerpts_critique(tmp_path: Path) -> None:
+    """Remove the critique view of the one excerpt a run holds."""
+    (excerpt,) = runs_dir(tmp_path).glob("*/excerpts/*")
+    lost = list(excerpt.glob("critique*"))
+    assert lost
+    for path in lost:
+        path.unlink()
+
+
+def set_aside_stages(tmp_path: Path) -> list[tuple[str, str]]:
+    """(kind, stage) of each set-aside event of the latest run."""
+    run_dir = runs_in(runs_dir(tmp_path))[-1]
+    return [
+        (event["kind"], event["stage"])
+        for event in RunDir(run_dir).events()
+        if event.get("event") == "set-aside"
+    ]
 
 
 def stricter_check(monkeypatch, phrase: str) -> None:
