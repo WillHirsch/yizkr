@@ -790,7 +790,10 @@ artifact a new QID, changes neither.
 - The place-hierarchy pass, `yizkr reconcile-places` (ADR-0009), still
   proposes containment from a model's verdicts until its rebuild as the
   place stage (ADR-0038 §8.5, #201); a GeoNames-imported edge adds
-  `stated in` → the GeoNames dataset item.
+  `stated in` → the GeoNames dataset item. Until that rebuild, its edges
+  cite the pass's run alone, with no stated-in source, so neither the
+  inconsistency report nor the impossibility filter (ADR-0017 rule 2)
+  follows them.
 - The inconsistency report suppresses value pairs connected by a path of
   `location` and `part_of` claims, differences of resolution rather than
   contradictions, and follows only a claim that a source states and a
@@ -799,9 +802,12 @@ artifact a new QID, changes neither.
   (in the place's mention, "Fläckfeld, Kreis Mockburg"; in the fields a
   form gives that place; or as a link of a chain of containers), never
   from what is known of the place or from another place's container,
-  with the time the source gives it and none where it gives none; the
+  with the time the source gives it for the containment and none where
+  it gives none. Neither the document's own date nor the date of an
+  event the source places there is that time: a birth "in 1836 at
+  Flörburg, Kreis Peiltal" gives Flörburg's `part_of` no time. The
   extraction critic flags a `part_of` claim its excerpt does not state,
-  or a time on one that its excerpt does not state
+  or a time on one that its excerpt does not state for the containment
   (`unsupported_containment`, ADR-0023).
 
 ## Artifact coverage — cross-domain relations (planned)
@@ -1489,35 +1495,35 @@ not a signal to grow the schema on.
   reported. A place lies inside another along a path of `location` and
   `part_of` claims, each one a source states (with a stated-in source)
   at normal or preferred rank, whatever time it carries: one path at any
-  time is enough (ADR-0038 §5). A date's span is the whole period its precision names (a
-  month, a year, a decade, or a century as Wikibase counts it, which
-  holds 1900 in the 19th century and 1800 in the 18th: "Uncertainty and
-  time"), or the range its source states with `earliest date` and
-  `latest date`, open-ended when only one is given: 1909 and 16 March
-  1909 agree, as do "between 1938 and 1939" and either 22 June 1938 or
-  3 September 1939, and "before 1926" and 1912, while "after 1945" and
-  1941 disagree. The 19th century agrees with 1900 and with the 1890s,
-  and disagrees with 1800 and with the decade 1900–1909, which reaches
-  past it. A stated range is never widened back to its precision (rule
-  5): 1939 stated "between September 1939 and 1 October 1939" and August
-  1939 disagree. A precision coarser than a century names no span. A range
-  dates only a time: on any other value, such as a place, a person or a
-  name, it sets nothing apart. Two dates stored alike are compared
-  through the ranges their statements state: "before 1945" and "after
-  1945", both stored as 1945, disagree; with the same stated ranges, or
-  none, they differ at most in resolution, as do dates stored alike whose
-  spans nest: the 1890s stated as a decade, as "between 1890 and 1899" or
-  as 1890, all stored as 1890. A statement that carries two earliest (or
-  latest) dates states its value once per range, and each is compared
-  with other statements' values; its own readings alone are one claim,
-  never listed against each other, however many artifacts cite it. A
-  residence's or a spouse's start and end times are compared like any
-  other date, each through the range its statement states for that end:
-  a start from the earliest date to the latest start date, an end from
-  the earliest end date to the latest date. So a marriage begun "between
-  1946 and 1947" and one begun on 8 February 1947 differ only in
-  resolution, while a latest date, which bounds the end, sets no start
-  apart.
+  time is enough (ADR-0038 §5). A date's span is the whole period its
+  precision names (a month, a year, a decade, or a century as Wikibase
+  counts it, which holds 1900 in the 19th century and 1800 in the 18th:
+  "Uncertainty and time"), or the range its source states with `earliest
+  date` and `latest date`, open-ended when only one is given: 1909 and
+  16 March 1909 agree, as do "between 1938 and 1939" and either 22 June
+  1938 or 3 September 1939, and "before 1926" and 1912, while "after
+  1945" and 1941 disagree. The 19th century agrees with 1900 and with
+  the 1890s, and disagrees with 1800 and with the decade 1900–1909,
+  which reaches past it. A stated range is never widened back to its
+  precision (rule 5): 1939 stated "between September 1939 and 1 October
+  1939" and August 1939 disagree. A precision coarser than a century
+  names no span. A range dates only a time: on any other value, such as
+  a place, a person or a name, it sets nothing apart. Two dates stored
+  alike are compared through the ranges their statements state: "before
+  1945" and "after 1945", both stored as 1945, disagree; with the same
+  stated ranges, or none, they differ at most in resolution, as do dates
+  stored alike whose spans nest: the 1890s stated as a decade, as
+  "between 1890 and 1899" or as 1890, all stored as 1890. A statement
+  that carries two earliest (or latest) dates states its value once per
+  range, and each is compared with other statements' values; its own
+  readings alone are one claim, never listed against each other, however
+  many artifacts cite it. A residence's or a spouse's start and end
+  times are compared like any other date, each through the range its
+  statement states for that end: a start from the earliest date to the
+  latest start date, an end from the earliest end date to the latest
+  date. So a marriage begun "between 1946 and 1947" and one begun on 8
+  February 1947 differ only in resolution, while a latest date, which
+  bounds the end, sets no start apart.
 - **Machine uncertainty is process, not graph data (ADR-0023).** The
   graph records the *source's* vagueness (circa, ranges, precision) but
   never the *machine's* confidence. Contentiousness surfaces ephemerally

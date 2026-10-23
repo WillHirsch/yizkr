@@ -229,9 +229,12 @@ Applied with the implementation (accepted by the owner, 2026-10-23):
    *Applied (#515):* the single-call and chunk prompts ask for
    `start_time` or `end_time` where the source dates the containment's
    start or end, `point_in_time` where it presents it as holding at a
-   date, with ranges and circa, and none otherwise, never the
-   document's date. The critic's containment block shows each `part_of`
-   claim's dating qualifiers beside its excerpt.
+   date, with ranges and circa, and none otherwise. Neither the
+   document's own date nor the date of an event the source places there
+   is the containment's time: a containment belongs to the place (§2). The
+   critic's containment block shows each `part_of` claim's dating
+   qualifiers beside its excerpt, and `unsupported_containment` names
+   both dates as times the excerpt does not state for the containment.
 4. **The writer** writes a `part_of` claim's time qualifiers like any
    claim's. The claim schema and the manifest accept, where they don't yet, `point_in_time`,
    `start_time`, `end_time`, the four range qualifiers and

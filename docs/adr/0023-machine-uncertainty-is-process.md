@@ -21,9 +21,9 @@ a place's `part_of` claim that its excerpt does not state for that place
 check it (§3).
 Amended by #515 (2026-10-23, ADR-0038 §8.3): `unsupported_containment` also
 covers a time on a `part_of` claim (a point in time, a start or end time, a
-bound of one, or circa) that its excerpt does not state, such as the
-document's own date; the critic sees each `part_of` claim's time beside its
-excerpt (§3).
+bound of one, or circa) that its excerpt does not state for the containment,
+such as the document's own date or the date of an event at the place; the
+critic sees each `part_of` claim's time beside its excerpt (§3).
 Superseded in part by [ADR-0035](0035-mention-records.md) (owner
 decision 2026-09-29, #385): §2 and Ruling 1 no longer keep every machine
 judgement out of the graph. An extraction's judgement note, a category

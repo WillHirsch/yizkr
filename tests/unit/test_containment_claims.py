@@ -20,6 +20,7 @@ which states no time.
 from __future__ import annotations
 
 import pytest
+import yaml
 
 from tests.fixtures.identity import write_mapped
 from tests.unit.test_pipeline import (
@@ -31,6 +32,7 @@ from tests.unit.test_pipeline import (
     FakeWiki,
 )
 from yizkr.claims import ClaimBatch, validate_against_manifest
+from yizkr.model.schema import read_manifest_data
 from yizkr.pipeline.writer import BatchWriter
 
 # the dating qualifiers, each with a value a source might give it
@@ -113,6 +115,15 @@ def _batch(*claims: dict) -> ClaimBatch:
 
 
 class TestTheSchemaTakesAContainmentsTime:
+    def test_the_manifest_says_a_containment_takes_its_sources_time(self):
+        properties = yaml.safe_load(read_manifest_data())["properties"]
+        assert properties["part_of"]["description"] == (
+            "this entity is a part of that entity; links an artifact "
+            "fragment to its artifact, and a place to a container its source "
+            "states, with the time the source gives (start_time, end_time or "
+            "point_in_time) and none where it gives none"
+        )
+
     @pytest.mark.parametrize("prop", ["part_of", "location"])
     @pytest.mark.parametrize("qualifier", sorted(DATING))
     def test_each_dating_qualifier(self, prop, qualifier):
@@ -255,5 +266,5 @@ class TestTheWriterWritesAContainmentsTime:
         wiki = PlaceWiki({MEDIA_SHA1: "Q23"})
         first = write_mapped(BatchWriter(wiki), _batch(*claims))
         again = write_mapped(BatchWriter(wiki), _batch(*claims))
-        assert again.written == 0
+        assert (again.written, again.referenced, again.skipped) == (0, 0, 2)
         assert len(_written(wiki, first.created_items["koshnovka"])) == 2

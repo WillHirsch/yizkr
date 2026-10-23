@@ -5,7 +5,8 @@ writes, through the running stack, a dated and an undated containment of
 one hamlet in one district (`part_of` with a `point_in_time`, per a
 letter that says the hamlet belonged to the district in 1941, and
 without, per a certificate's district field), and the district in an
-oblast, undated. Then it checks:
+oblast from 1937, the only link to the oblast, so the path runs through
+a dated claim. Then it checks:
 
 * the two containments of the hamlet coexist as two statements, the dated
   one with its point in time and range, the undated one with no time;
@@ -17,6 +18,10 @@ oblast, undated. Then it checks:
 * a containment a curator deprecated is not followed: a second person,
   born in the hamlet per one source and in a decoy district per another,
   is listed, though a deprecated claim puts the hamlet in the decoy;
+* a containment that cites a run alone, as the place-hierarchy pass
+  writes one, is not followed: a third person, born in the hamlet per one
+  source and in a second decoy per another, is listed, and the query
+  says no source states that edge;
 * the impossibility filter's closure (ADR-0017 rule 2) reads the same
   edges.
 
@@ -51,6 +56,11 @@ from yizkr.disagreement import (
 )
 from yizkr.pipeline import reconcile, writer
 from yizkr.pipeline.reconcile import fetch_place_containment
+from yizkr.pipeline.registrar import (
+    _append,
+    _existing_claim_targets,
+    _item_claim,
+)
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.queries.publish import load_templates, render_for_instance
 
@@ -59,8 +69,9 @@ pytestmark = pytest.mark.live
 # what the fixture is; a change to it gives the fixture new items
 FIXTURE = (
     "ADR-0038: a hamlet in a district at a point in time per a letter and "
-    "undated per a certificate, the district in an oblast, a deprecated "
-    "containment in a decoy district, and two people born in them"
+    "undated per a certificate, the district in an oblast from 1937, a "
+    "deprecated containment in a decoy district, a run-only one in a "
+    "second decoy, and three people born in them"
 )
 MARK = fixture_mark(FIXTURE, disagreement, reconcile, writer)
 RUN = {
@@ -83,8 +94,10 @@ HAMLET = _local("hamlet", "Containment-Test Koshnovka", "place")
 DISTRICT = _local("district", "Containment-Test Kaldovsky District", "place")
 OBLAST = _local("oblast", "Containment-Test Chadsk Oblast", "place")
 DECOY = _local("decoy", "Containment-Test Decoy District", "place")
+UNSTATED = _local("unstated", "Containment-Test Second Decoy", "place")
 REFINED = _local("refined", "Containment-Test Rudolf", "human")
 LISTED = _local("listed", "Containment-Test Nina", "human")
+RUN_ONLY = _local("run-only", "Containment-Test Pavel", "human")
 
 
 def _time(year: int) -> dict:
@@ -112,9 +125,10 @@ def _batch(*claims: dict) -> ClaimBatch:
 @pytest.fixture(scope="module")
 def written(client, config):
     """Write the letter's and the certificate's claims with one identity
-    map, deprecate the decoy containment as a curator would, and wait
-    until the query service holds every item. Returns the QIDs by local
-    id."""
+    map, deprecate the decoy containment as a curator would, write a
+    containment in the second decoy that cites the letter's run alone, as
+    the place-hierarchy pass writes one, and wait until the query service
+    holds every item. Returns the QIDs by local id."""
     letter, certificate = (
         register_fictional(client, f"Containment-Test {kind} {MARK}", kind)
         for kind in ("letter", "certificate")
@@ -134,8 +148,17 @@ def written(client, config):
             dated,
         ),
         _claim(HAMLET, "part_of", DECOY, letter.ref, "Koshnovka, Decoy"),
+        _claim(
+            DISTRICT,
+            "part_of",
+            OBLAST,
+            letter.ref,
+            "Kaldovsky District, in Chadsk Oblast from 1937",
+            [{"property": "start_time", "value": _time(1937)}],
+        ),
         _claim(REFINED, "place_of_birth", HAMLET, letter.ref, "Koshnovka"),
         _claim(LISTED, "place_of_birth", HAMLET, letter.ref, "Koshnovka"),
+        _claim(RUN_ONLY, "place_of_birth", HAMLET, letter.ref, "Koshnovka"),
     )
     said_in_certificate = _batch(
         _claim(
@@ -146,22 +169,24 @@ def written(client, config):
             "Koshnovka, Kaldovsky District",
         ),
         _claim(
-            DISTRICT,
-            "part_of",
-            OBLAST,
-            certificate.ref,
-            "Kaldovsky District, Chadsk Oblast",
-        ),
-        _claim(
             REFINED, "place_of_birth", OBLAST, certificate.ref, "Chadsk Oblast"
         ),
         _claim(LISTED, "place_of_birth", DECOY, certificate.ref, "Decoy"),
+        _claim(
+            RUN_ONLY,
+            "place_of_birth",
+            UNSTATED,
+            certificate.ref,
+            "Second Decoy",
+        ),
     )
     identity = by_label(said_in_letter, said_in_certificate)
     qids: dict[str, str] = {}
+    runs = []
     for batch in (said_in_letter, said_in_certificate):
         result = write_mapped(BatchWriter(client), batch, identity=identity)
         qids.update(result.created_items)
+        runs.append(result.run_qid)
         # written again, the batch finds every item and statement
         again = write_mapped(BatchWriter(client), batch, identity=identity)
         assert (again.written, again.referenced) == (0, 0)
@@ -175,6 +200,21 @@ def written(client, config):
     if decoy.rank != WikibaseRank.DEPRECATED:
         decoy.rank = WikibaseRank.DEPRECATED
         hamlet.write(summary="integration test: curator rank on a fixture")
+    # a containment that cites a run alone, with no stated-in source
+    hamlet = client.wbi.item.get(qids["hamlet"])
+    if qids["unstated"] not in _existing_claim_targets(
+        hamlet, properties["part_of"]
+    ):
+        _append(
+            hamlet,
+            _item_claim(
+                properties["part_of"],
+                qids["unstated"],
+                properties["inferred_from_extraction_run"],
+                runs[0],
+            ),
+        )
+        hamlet.write(summary="integration test: a run-only containment")
     wait_for_query_service(
         config, client, [*qids.values(), letter.qid, certificate.qid]
     )
@@ -239,8 +279,9 @@ def test_the_query_lists_each_edge_with_its_rank_and_source(
     client, config, written
 ):
     entity = f"{config.concept_uri}/entity/"
-    hamlet, district, decoy = (
-        entity + written[key] for key in ("hamlet", "district", "decoy")
+    hamlet, district, decoy, unstated = (
+        entity + written[key]
+        for key in ("hamlet", "district", "decoy", "unstated")
     )
     edges = sorted(
         (
@@ -256,6 +297,7 @@ def test_the_query_lists_each_edge_with_its_rank_and_source(
             (district, "NormalRank", "true"),
             (district, "NormalRank", "true"),
             (decoy, DEPRECATED.rsplit("#", 1)[-1], "true"),
+            (unstated, "NormalRank", "false"),
         ]
     )
 
@@ -263,13 +305,15 @@ def test_the_query_lists_each_edge_with_its_rank_and_source(
 def test_the_report_reads_the_path_at_any_time(client, config, written):
     entity = f"{config.concept_uri}/entity/"
     containment = read_containment(_containment_rows(client, config))
-    hamlet, oblast, decoy = (
-        entity + written[key] for key in ("hamlet", "oblast", "decoy")
+    hamlet, oblast, decoy, unstated = (
+        entity + written[key]
+        for key in ("hamlet", "oblast", "decoy", "unstated")
     )
-    # through the dated claim and the undated one
+    # through the district, whose only link to the oblast is dated
     assert place_within(containment, hamlet, oblast)
-    # never through a deprecated claim
+    # never through a deprecated claim, nor one no source states
     assert not place_within(containment, hamlet, decoy)
+    assert not place_within(containment, hamlet, unstated)
     properties, items = client.vocabulary()
     rows = {
         row.entity_qid: row
@@ -279,14 +323,16 @@ def test_the_report_reads_the_path_at_any_time(client, config, written):
             items,
             config.concept_uri,
         )
-        if row.entity_qid in (written["refined"], written["listed"])
+        if row.entity_qid
+        in (written["refined"], written["listed"], written["run-only"])
     }
     assert written["refined"] not in rows
-    listed = rows[written["listed"]]
-    assert {listed.a.value.term.value, listed.b.value.term.value} == {
-        hamlet,
-        decoy,
-    }
+    for person, place in (("listed", decoy), ("run-only", unstated)):
+        row = rows[written[person]]
+        assert {row.a.value.term.value, row.b.value.term.value} == {
+            hamlet,
+            place,
+        }
 
 
 def test_the_impossibility_filter_reads_the_same_edges(
@@ -296,3 +342,4 @@ def test_the_impossibility_filter_reads_the_same_edges(
     assert containment.contains(written["district"], written["hamlet"])
     assert containment.contains(written["oblast"], written["hamlet"])
     assert not containment.contains(written["decoy"], written["hamlet"])
+    assert not containment.contains(written["unstated"], written["hamlet"])

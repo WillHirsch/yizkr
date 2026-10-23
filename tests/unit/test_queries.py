@@ -320,6 +320,12 @@ class TestDisagreementReport:
             assert f"wdt:{{P:{key}}}" not in containment, key
         for rank in ("DeprecatedRank", "PreferredRank", "BestRank"):
             assert rank not in containment
+        # at any time (owner question 2): no qualifier, time or exclusion
+        # narrows the edges the query lists
+        assert (
+            re.search(r"\bpqv?:|timeValue|NOT EXISTS|MINUS", containment)
+            is None
+        )
         stated = group_at(containment, "?statement prov:wasDerivedFrom")
         assert "?reference pr:{P:stated_in} ?source ." in stated
         assert (
