@@ -7,6 +7,8 @@ fake adjudicator, through the run's LLM cache, which existing place each
 container a mention record states means, where the container names more
 than one place or no claim of the document gives the link. It checks:
 
+* the records' containers carry their evidence (#569), and the stage
+  reads them by name, nearest first, each link from the next;
 * a link a record alone states (the 1905 marriage certificate's Kreis
   Mockburg within Hesse) is written with no page and no time: `part of`
   the place named, stated in the certificate's artifact and inferred
@@ -150,6 +152,9 @@ def place(local_id: str, label: str) -> dict:
 
 
 def entity(local_id: str, label: str, within=None, aliases=()) -> dict:
+    """A place entity; its record's containers, nearest first, each with
+    the mention that states it, the place and its chain, as its evidence
+    (ADR-0035 §2.2, #569)."""
     found = {
         "id": local_id,
         "label": label,
@@ -157,7 +162,13 @@ def entity(local_id: str, label: str, within=None, aliases=()) -> dict:
         "aliases": list(aliases),
     }
     if within is not None:
-        found["structure"] = {"kind": "place", "within": list(within)}
+        evidence = ", ".join([label, *within])
+        found["structure"] = {
+            "kind": "place",
+            "within": [
+                {"name": name, "evidence": evidence} for name in within
+            ],
+        }
     return found
 
 

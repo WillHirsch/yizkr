@@ -675,10 +675,13 @@ def records(
     unsplit_forms=None,
     appellation_labels=None,
     appellation_parts=None,
+    containers_checked=None,
+    containers_dropped=None,
 ) -> dict:
     """coverage.json's records; with no `set_aside_records`,
-    `unsplit_forms` or `appellation_labels`, as one written before it
-    counted them (#420, #499)."""
+    `unsplit_forms`, `appellation_labels` or the place containers checked
+    and dropped, as one written before it counted them (#420, #499,
+    #569)."""
     newer = {
         name: count
         for name, count in (
@@ -686,6 +689,8 @@ def records(
             ("unsplit_forms", unsplit_forms),
             ("appellation_labels", appellation_labels),
             ("appellation_parts", appellation_parts),
+            ("containers_checked", containers_checked),
+            ("containers_dropped", containers_dropped),
         )
         if count is not None
     }
@@ -772,6 +777,13 @@ def views() -> dict[str, dict[str, object]]:
                     unsplit_forms=3,
                     appellation_labels=2,
                     appellation_parts=1,
+                    # #569: containers dropped alone, their records
+                    # standing, never among the records set aside
+                    containers_checked=4,
+                    containers_dropped={
+                        "no-evidence": 1,
+                        "evidence-not-in-source": 2,
+                    },
                 ),
                 notes={"identity": 2, "date_reading": 3},
             ),
@@ -2010,8 +2022,17 @@ class TestContent:
                 "addition": 1,
                 "no toponym": 1,
             },
+            # the certificate's containers dropped alone (#569), counted
+            # apart from the records set aside
+            "containers_checked": 4,
+            "containers_dropped": 3,
+            "containers_dropped_by_reason": {
+                "evidence-not-in-source": 2,
+                "no-evidence": 1,
+            },
             # the deck's coverage predates the three newer counts, the
-            # postcard's those of unsplit forms and the appellation counts
+            # postcard's those of unsplit forms and the appellation counts,
+            # and both predate the containers'
             "absent": {
                 "predating": 1,
                 "line_range": 1,
@@ -2019,6 +2040,7 @@ class TestContent:
                 "unsplit_forms": 2,
                 "appellation_labels": 2,
                 "appellation_parts": 2,
+                "containers": 2,
             },
         }
         assert content["notes"] == {
@@ -2041,13 +2063,16 @@ class TestContent:
             "record gives: 2; record name parts that are appellations: 1\n"
             "- Records set aside: 2; reasons records were set aside: 4 (a "
             "record can give several)\n"
+            "- Place containers checked: 4; dropped alone, their records "
+            "standing, so counted apart from records set aside: 3\n"
             "- Judgement notes: 7; notes set aside: 5\n"
             "- Extractions not counted: 1 whose coverage predates these "
             "counts; 1 that fell back to line ranges (all their mentions "
             "recordless)\n"
             "- Extractions counted whose coverage gives no count of it, so "
             "left out of that count: records set aside 1; unsplit name "
-            "forms 2; appellation labels 2; appellation parts 2\n\n"
+            "forms 2; appellation labels 2; appellation parts 2; place "
+            "containers 2\n\n"
             "| Record status | Records |\n"
             "|---|---:|\n"
             "| name | 3 |\n"
@@ -2057,6 +2082,10 @@ class TestContent:
             "| initial | 2 |\n"
             "| addition | 1 |\n"
             "| no toponym | 1 |\n\n"
+            "| Container dropped reason | Containers |\n"
+            "|---|---:|\n"
+            "| evidence-not-in-source | 2 |\n"
+            "| no-evidence | 1 |\n\n"
             "| Note category | Notes |\n"
             "|---|---:|\n"
             "| date_reading | 3 |\n"
@@ -2076,6 +2105,11 @@ class TestContent:
             "appellation_labels": 2,
             "appellation_parts": 1,
             "set_aside_by_reason": {"initial": 2, "addition": 1},
+            "containers_checked": 4,
+            "containers_dropped_by_reason": {
+                "evidence-not-in-source": 2,
+                "no-evidence": 1,
+            },
         }
         assert cert["notes"] == {
             "by_category": {"identity": 2, "date_reading": 3},
@@ -2091,6 +2125,8 @@ class TestContent:
             "appellation_labels": None,
             "appellation_parts": None,
             "set_aside_by_reason": {},
+            "containers_checked": None,
+            "containers_dropped_by_reason": None,
         }
         assert deck["notes"] == {"by_category": {}, "set_aside": 0}
         for absent in (CARD, DIRECTORY):
@@ -2102,7 +2138,8 @@ class TestContent:
             "unsplit name forms: 3; appellation labels: 2; appellation "
             "parts: 1; recordless: 1; "
             "records set aside: 1; reasons set aside: initial 2, addition 1; "
-            "judgement notes: "
+            "place containers checked: 4; dropped: evidence-not-in-source "
+            "2, no-evidence 1; judgement notes: "
             "date_reading 3, identity 2; notes set aside: 3"
         ) in drilled(made, CERT)
         predates = "not counted (its coverage gives no count of it)"
@@ -2111,16 +2148,18 @@ class TestContent:
             f"forms: {predates}; appellation labels: {predates}; "
             f"appellation parts: {predates}; "
             "recordless: 0; records set aside: "
-            f"{predates}; reasons set aside: none; judgement notes: none; "
-            "notes set aside: 0"
+            f"{predates}; reasons set aside: none; place containers "
+            f"checked: {predates}; dropped: not counted; judgement notes: "
+            "none; notes set aside: 0"
         ) in drilled(made, DECK)
         assert (
             "Mention records given: 0, by status: none; unsplit name forms: "
             f"{predates}; appellation labels: {predates}; appellation parts: "
             f"{predates}; recordless: 1; "
             "records set aside: 1; reasons set "
-            "aside: no toponym 1; judgement notes: kind 1, relation 1; notes "
-            "set aside: 2"
+            "aside: no toponym 1; place containers checked: "
+            f"{predates}; dropped: not counted; judgement notes: kind 1, "
+            "relation 1; notes set aside: 2"
         ) in drilled(made, POSTCARD)
         assert (
             "Mention records and judgement notes: not counted, as its "
@@ -2193,6 +2232,9 @@ class TestContent:
             "appellation_parts": 0,
             "set_aside_reasons": 2,
             "set_aside_by_reason": {"addition": 2},
+            "containers_checked": 0,
+            "containers_dropped": 0,
+            "containers_dropped_by_reason": {},
             "absent": {
                 "predating": 0,
                 "line_range": 0,
@@ -2200,6 +2242,7 @@ class TestContent:
                 "unsplit_forms": 0,
                 "appellation_labels": 0,
                 "appellation_parts": 0,
+                "containers": 0,
             },
         }
         assert content["notes"] == {
@@ -2216,13 +2259,16 @@ class TestContent:
             "record gives: 0; record name parts that are appellations: 0\n"
             "- Records set aside: 1; reasons records were set aside: 2 (a "
             "record can give several)\n"
+            "- Place containers checked: 0; dropped alone, their records "
+            "standing, so counted apart from records set aside: 0\n"
             "- Judgement notes: 1; notes set aside: 1\n"
             "- Extractions not counted: 0 whose coverage predates these "
             "counts; 0 that fell back to line ranges (all their mentions "
             "recordless)\n"
             "- Extractions counted whose coverage gives no count of it, so "
             "left out of that count: records set aside 0; unsplit name "
-            "forms 0; appellation labels 0; appellation parts 0\n\n"
+            "forms 0; appellation labels 0; appellation parts 0; place "
+            "containers 0\n\n"
             "| Record status | Records |\n"
             "|---|---:|\n"
             "| name | 1 |\n\n"
@@ -2241,7 +2287,8 @@ class TestContent:
             "Mention records given: 1, by status: name 1; unsplit name "
             "forms: 2; appellation labels: 0; appellation parts: 0; "
             "recordless: 1; records set "
-            "aside: 1; reasons set aside: addition 2; judgement notes: "
+            "aside: 1; reasons set aside: addition 2; place containers "
+            "checked: 0; dropped: none; judgement notes: "
             "identity 1; notes set aside: 1"
         ) in drilled(made, CERT)
         said = ("hatter", "Klara", "Ida", "read as Hildegard")
@@ -2312,6 +2359,10 @@ class TestContent:
             "| initial | 2 |\n"
             "| addition | 1 |\n"
             "| schema | 1 |\n\n"
+            "| Container dropped reason | Containers |\n"
+            "|---|---:|\n"
+            "| evidence-not-in-source | 2 |\n"
+            "| no-evidence | 1 |\n\n"
             "| Note category | Notes |\n"
             "|---|---:|\n"
             "| relation | 4 |\n"
@@ -2345,6 +2396,8 @@ class TestContent:
                     unsplit_forms=0,
                     appellation_labels=0,
                     appellation_parts=0,
+                    containers_checked=0,
+                    containers_dropped={},
                 ),
                 notes={},
             ),
@@ -2366,6 +2419,9 @@ class TestContent:
             "appellation_parts": 0,
             "set_aside_reasons": 0,
             "set_aside_by_reason": {},
+            "containers_checked": 0,
+            "containers_dropped": 0,
+            "containers_dropped_by_reason": {},
             "absent": {
                 "predating": 2,
                 "line_range": 1,
@@ -2373,6 +2429,7 @@ class TestContent:
                 "unsplit_forms": 1,
                 "appellation_labels": 1,
                 "appellation_parts": 1,
+                "containers": 1,
             },
         }
         assert content["notes"] == {
@@ -2390,13 +2447,16 @@ class TestContent:
             "record gives: 0; record name parts that are appellations: 0\n"
             "- Records set aside: 0; reasons records were set aside: 0 (a "
             "record can give several)\n"
+            "- Place containers checked: 0; dropped alone, their records "
+            "standing, so counted apart from records set aside: 0\n"
             "- Judgement notes: 0; notes set aside: 0\n"
             "- Extractions not counted: 2 whose coverage predates these "
             "counts; 1 that fell back to line ranges (all their mentions "
             "recordless)\n"
             "- Extractions counted whose coverage gives no count of it, so "
             "left out of that count: records set aside 1; unsplit name "
-            "forms 1; appellation labels 1; appellation parts 1\n\n"
+            "forms 1; appellation labels 1; appellation parts 1; place "
+            "containers 1\n\n"
             "| Record status | Records |\n"
             "|---|---:|\n"
             "| name | 1 |\n\n"
@@ -2412,6 +2472,8 @@ class TestContent:
             "appellation_labels": 0,
             "appellation_parts": 0,
             "set_aside_by_reason": {},
+            "containers_checked": 0,
+            "containers_dropped_by_reason": {},
         }
         assert (
             "Mention records given: 0, by status: none; unsplit name forms: "
@@ -2479,6 +2541,8 @@ class TestContent:
             "appellation_labels": None,
             "appellation_parts": None,
             "set_aside_by_reason": {"kind": 1, "addition": 0},
+            "containers_checked": None,
+            "containers_dropped_by_reason": None,
         }
         assert cert["notes"] == {"by_category": {"kind": 2}, "set_aside": 0}
         for half in (DECK, POSTCARD):
@@ -2496,6 +2560,9 @@ class TestContent:
             "appellation_parts": 0,
             "set_aside_reasons": 1,
             "set_aside_by_reason": {"kind": 1, "addition": 0},
+            "containers_checked": 0,
+            "containers_dropped": 0,
+            "containers_dropped_by_reason": {},
             "absent": {
                 "predating": 3,
                 "line_range": 1,
@@ -2503,6 +2570,7 @@ class TestContent:
                 "unsplit_forms": 1,
                 "appellation_labels": 1,
                 "appellation_parts": 1,
+                "containers": 1,
             },
         }
         assert content["notes"] == {
@@ -2539,6 +2607,7 @@ class TestContent:
             "unsplit_forms": 2,
             "appellation_labels": 2,
             "appellation_parts": 2,
+            "containers": 2,
         }
         assert content["rejects"]["extractions"] == 4
 
@@ -2562,6 +2631,9 @@ class TestContent:
             "appellation_parts": 0,
             "set_aside_reasons": 0,
             "set_aside_by_reason": {},
+            "containers_checked": 0,
+            "containers_dropped": 0,
+            "containers_dropped_by_reason": {},
             "absent": {
                 "predating": 0,
                 "line_range": 0,
@@ -2569,6 +2641,7 @@ class TestContent:
                 "unsplit_forms": 0,
                 "appellation_labels": 0,
                 "appellation_parts": 0,
+                "containers": 0,
             },
         }
         assert content["notes"] == {
@@ -3469,6 +3542,9 @@ class TestAScratchRun:
             "appellation_parts": 0,
             "set_aside_reasons": 0,
             "set_aside_by_reason": {},
+            "containers_checked": 0,
+            "containers_dropped": 0,
+            "containers_dropped_by_reason": {},
             "absent": {
                 "predating": 0,
                 "line_range": 0,
@@ -3476,6 +3552,7 @@ class TestAScratchRun:
                 "unsplit_forms": 0,
                 "appellation_labels": 0,
                 "appellation_parts": 0,
+                "containers": 0,
             },
         }
         assert content["notes"] == {

@@ -1207,7 +1207,7 @@ def _derive_place(node: _Node, record: PlaceStructure) -> None:
     ):
         names.append(keys)
     within: list[Part] = []
-    for container in record.within:
+    for container in record.containers():
         keys = part_keys(container)
         if keys and not any(keys & seen for seen in within):
             within.append(keys)

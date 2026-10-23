@@ -11,7 +11,10 @@ applied to extraction, and it is what catches the "MOTHER as a name" and
 
 Each finding is a record that names what it concerns by id: the entity
 (a manifest id), and optionally one claim (its subject id, property key
-and value as the prompt lists them) and one alias; the statement-part it
+and value as the prompt lists them), one alias and one container of a
+place's mention record (by its name, which locates the entry's evidence
+and the transcription line it was compared with in the extraction's
+local `containers.json`); the statement-part it
 doubts (`axis`, ADR-0023); a `category` from CATEGORIES; the issue; and a
 suggestion whose kind or property, when given, is a manifest key. Code
 checks every record against the batch and the model manifest. A record
@@ -135,6 +138,14 @@ CATEGORIES: dict[str, str] = {
         "as the document's own date or the date of an event at the place: "
         "suggest drop the qualifier"
     ),
+    "evidence_does_not_state": (
+        "a place's `within` entry whose evidence names the place and its "
+        "container but does not state that one is within the other, such "
+        "as a list of towns, or a form's line that names the container "
+        "and no field of the place: name the entry by its container as "
+        "listed (`container`), suggest drop; a form's field line that "
+        "gives the container of the place the form is about states it"
+    ),
 }
 
 
@@ -169,6 +180,8 @@ class Finding(BaseModel):
     entity: str
     claim: ClaimRef | None = None
     alias: str | None = None
+    # a container of the entity's place record, by its name as listed
+    container: str | None = None
     axis: str
     category: str
     issue: str
@@ -237,11 +250,19 @@ Check each against its excerpt: a containment the excerpt does not state
 link of a chain of containers) is a concern (unsupported_containment), and
 so is a time the excerpt does not state for the containment.
 
+Each container a place's mention record puts it in, nearest first, with
+the excerpt of the source it gives as evidence:
+{within_block}
+Check each against its evidence: evidence that names both places but does
+not state that one is within the other is a concern
+(evidence_does_not_state).
+
 Output NDJSON, one finding per line, no prose, no code fences:
 {{"entity": "<the entity id the finding concerns>",
 "claim": {{"subject": "<subject as listed>", "property": "<property as \
 listed>", "value": "<value as listed>"}} or null,
 "alias": "<the alias as listed>" or null,
+"container": "<the container as listed>" or null,
 "axis": "<subject | predicate | value | existence>",
 "category": "<one category key above>",
 "issue": "<one line>",
@@ -249,7 +270,8 @@ listed>", "value": "<value as listed>"}} or null,
 or null, "note": "<one line, or 'drop'>"}}}}
 Name a claim when the finding concerns one: its entity is then the claim's
 subject or the entity its value names. Name an alias only when the finding
-concerns one of the entity's aliases. Emit a line ONLY for a genuine
+concerns one of the entity's aliases, and a container only when it
+concerns one of the place's containers. Emit a line ONLY for a genuine
 concern; emit NONE if the extraction looks sound. After the last finding,
 end with exactly one final line:
 {{"done": true}}
@@ -405,6 +427,27 @@ def _containment_block(batch: ClaimBatch) -> str:
     return "\n".join(lines)
 
 
+def _within_block(batch: ClaimBatch) -> str:
+    """Each container of each place's mention record, nearest first, with
+    its evidence quoted as the containment block quotes an excerpt ("-"
+    for none), so the critic can check that the evidence states the
+    containment (ADR-0035 §5); each line opens with a dash."""
+    lines = []
+    for entity in batch.entities:
+        if not isinstance(entity.structure, PlaceStructure):
+            continue
+        for container in entity.structure.within:
+            quoted = (
+                json.dumps(container.evidence, ensure_ascii=False).translate(
+                    _LINE_BREAKS
+                )
+                if container.evidence
+                else "-"
+            )
+            lines.append(f"- {entity.id} within {container.name}: {quoted}")
+    return "\n".join(lines)
+
+
 def named(claim: Claim) -> list[str]:
     """The local ids a claim names: its subject, its value and its
     qualifiers' values, in that order."""
@@ -471,6 +514,21 @@ def check(
         and finding.alias not in (entity.label, *entity.aliases)
     ):
         why.append(f"alias {finding.alias!r} is not the entity's")
+    if finding.container is not None and entity is not None:
+        record = entity.structure
+        listed = (
+            record.containers() if isinstance(record, PlaceStructure) else []
+        )
+        if finding.container not in listed:
+            why.append(
+                f"container {finding.container!r} is not one the entity's "
+                "record lists"
+            )
+    if (
+        finding.category == "evidence_does_not_state"
+        and finding.container is None
+    ):
+        why.append("an evidence_does_not_state finding names no container")
     suggested = finding.suggestion
     if suggested.kind is not None and suggested.kind not in set(items):
         why.append(f"suggested kind {suggested.kind!r} is not a manifest key")
@@ -546,6 +604,7 @@ def run_critique(
         entities_block=_entities_block(batch) or "(none)",
         claims_block=_claims_block(batch) or "(none)",
         containment_block=_containment_block(batch) or "(none)",
+        within_block=_within_block(batch) or "(none)",
     )
     try:
         response = client.complete(prompt)
@@ -625,6 +684,8 @@ def note(finding: Finding) -> str:
     where = finding.entity
     if finding.alias is not None:
         where += f" alias {finding.alias!r}"
+    if finding.container is not None:
+        where += f" within {finding.container!r}"
     text = f"critique [{finding.axis}, {finding.category}] {where}: "
     text += finding.issue
     suggested = finding.suggestion

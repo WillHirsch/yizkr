@@ -141,8 +141,9 @@ chain (the place within its nearest jurisdiction, each jurisdiction
 within the next) is a `part_of` claim cited by the PLAC's line, with no
 time, as a PLAC states none (ADR-0038 §2). A place is labelled by its
 components, comma-joined, and its own name, the first, is its label or
-an alias, by which the place stage finds it as a container. A component
-without a word ('?') names nothing and is left out, counted. A
+an alias, by which the place stage finds it as a container. Each
+container in a place's record carries the PLAC's value as its evidence.
+A component without a word ('?') names nothing and is left out, counted. A
 placeholder word ('unbekannt', 'unknown'; the list in
 gedcom_placeholders.yaml) is counted too, and kept in the record of a
 place within it, as written, with no entity and no `part_of` to or from
@@ -232,6 +233,7 @@ from yizkr.claims import (
     PersonStructure,
     _occurs,
     _words,
+    container_problems,
     name_form_key,
     structure_problems,
     validate_against_manifest,
@@ -2098,7 +2100,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     def person_id(xref: str) -> str:
         return xref.strip("@").lower()
 
-    def place_entity(parts: tuple[str, ...]) -> str:
+    def place_entity(parts: tuple[str, ...], plac: str) -> str:
         """The entity of the place `parts` names, its own name first and
         then the jurisdictions it is within (_place_parts): one per
         distinct `parts` in the export, so that a PLAC and the tail of
@@ -2106,9 +2108,11 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         by its parts, comma-joined. Its mention record (ADR-0035 §6) takes
         the first part as the place's name and the rest as the places it
         is within, each as written: GEDCOM lists jurisdictions from the
-        lowest. Its own name is its label or an alias, by which the place
-        stage finds it as a container (places.stated_links,
-        places.build_worklist)."""
+        lowest. Each container takes as its evidence `plac`, the value of
+        the PLAC that first names the place, which states the chain. A
+        placeholder among them stays in the record alone. Its own name
+        is its label or an alias, by which the place stage finds it as a
+        container (places.stated_links, places.build_worklist)."""
         if parts not in place_ids:
             place_ids[parts] = fresh(f"pl{len(place_ids) + 1}")
             own, *within = parts
@@ -2123,7 +2127,9 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                     "structure": {
                         "kind": "place",
                         "names": [{"written": own}],
-                        "within": within,
+                        "within": [
+                            {"name": name, "evidence": plac} for name in within
+                        ],
                     },
                 }
             )
@@ -2181,7 +2187,10 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         """An item value naming the place the PLAC `plac` names."""
         placing.setdefault(id(plac), plac)
         parts = _place_parts(plac.value).parts
-        return {"type": "item", "value": local(place_entity(parts))}
+        return {
+            "type": "item",
+            "value": local(place_entity(parts, plac.value)),
+        }
 
     def located(plac: Record) -> dict:
         """A location qualifier naming the place the PLAC `plac` names."""
@@ -3035,11 +3044,13 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             ):
                 continue
             claim(
-                place_entity(parts[index:]),
+                place_entity(parts[index:], plac.value),
                 "part_of",
                 {
                     "type": "item",
-                    "value": local(place_entity(parts[index + 1 :])),
+                    "value": local(
+                        place_entity(parts[index + 1 :], plac.value)
+                    ),
                 },
                 plac,
                 passage=[plac],
@@ -3074,7 +3085,10 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     problems += [
         f"entity {entity.id!r}: {problem}"
         for entity in batch.entities
-        for problem in structure_problems(entity)
+        for problem in [
+            *structure_problems(entity),
+            *container_problems(entity),
+        ]
     ]
     if problems:
         # deterministic code emitting invalid claims is a bug, not input noise

@@ -4,6 +4,33 @@ Status: **accepted** (owner decision 2026-09-29, #385). Like ADR-0031
 and ADR-0036, the owner's merge of the PR that adds it records its
 acceptance; #385's implementation carries it out.
 
+Amended by #569 (2026-10-23, the owner's design): each container a
+place's `within` lists (§2.2) is a name and its `evidence`, a verbatim
+excerpt of the document's transcription that states the containment:
+the mention itself in running text, a field's line on a form. The
+no-addition check (§5) no longer reads containers, which a form gives in
+fields of their own and so never in the place's label; each container is
+checked on its own, with three reasons each counted apart: `no-evidence`,
+`evidence-not-in-source` (compared folded, every run of whitespace and
+line breaks made one space, a hyphen at a line's end joined;
+`core/verbatim.py`, the comparison claims' excerpts can share) and
+`evidence-does-not-name` (the evidence does not hold the container's
+name, folded, as whole words). By the owner's option B, a container that
+fails is dropped alone: the record stands with its names, keys and other
+containers, and the drop is counted by reason in the extraction's
+coverage (`records.containers_dropped`) and the run report, apart from
+the records set aside. The critic sees each container with its evidence
+and may flag `evidence_does_not_state` (the evidence names both places
+but does not state that one is within the other), an advisory finding
+counted with the critic's categories, never gating a write. Each
+container checked, kept or dropped, is kept in the extraction's local
+`containers.json` with its field path, evidence, reason and the
+transcription line it was compared with; reports carry counts alone. An
+older answer's container written as a bare string is read with the check
+that answer was made for: it stands where its name occurs in the label or
+an alias, and is dropped as `no-evidence` otherwise. The GEDCOM adapter
+gives each container its PLAC's value as its evidence (§6).
+
 Amended by #571 (2026-10-23): §6's PLAC row. Each jurisdiction of a PLAC
 is a place entity of its own, one per distinct tail of components in the
 export, named by its own name as its label or an alias, and each link of
@@ -895,10 +922,17 @@ to `toponym`, and a surname's type to `other`.
 | `status` | what the label is: `toponym`, `deictic`, `generic` or `adjective` | only a `toponym` keys |
 | `names` | the place's own names as written, each with its toponym and generic head where they can be told apart | yes, each as written, with one exception below |
 | `address` | a street and a house number, as written, in the source's order; the address is also one of the names | yes, as written, among the names |
-| `within` | the places the source puts it in, as written, nearest first, whatever order the source writes them in | never; they decide nesting |
+| `within` | the places the source puts it in, as written, nearest first, whatever order the source writes them in, each a `name` with its `evidence`, a verbatim excerpt of the transcription that states the containment (amended by #569) | never; they decide nesting |
 
 - "Fläckfeld, Kreis Mockburg" (the marriage certificate) gives the name
-  Fläckfeld, within Kreis Mockburg.
+  Fläckfeld, within Kreis Mockburg, whose evidence is the mention,
+  "Fläckfeld, Kreis Mockburg".
+- A container's evidence is the words of the source that state it,
+  copied verbatim: in running text the mention itself (each of
+  Snylsjum's containers in the 1952 letter takes "Snylsjum, gemeente
+  Drakeradiel, Fryslân, Nederlân"), on a form the line of the
+  container's field (Koshnovka's "Kaldovsky District" takes the
+  certificate's district line) (amended by #569).
 - A form whose fields run oblast, district, village (Chadsk Oblast,
   Kaldovsky District, Koshnovka) gives the name Koshnovka, within
   Kaldovsky District and Chadsk Oblast, in that order: nearest first,
@@ -1374,8 +1408,31 @@ surname types, roles, classes and note categories. Beyond the schema:
   alias, folded, as whole words (a family's surname may end inside a
   word, as in "the Löbigs"). The model may divide and label a name, never
   add to it: ADR-0022 §4's hallucination check, made structural. Standard
-  forms are exempt. A record that gives the naturalisation's Gustave the
-  surname Sörne, which no form of his holds, is set aside;
+  forms are exempt, and so are a place's containers, which are checked by
+  their evidence instead (below). A record that gives the
+  naturalisation's Gustave the surname Sörne, which no form of his holds,
+  is set aside;
+- **a container stands on its evidence** (amended by #569, the owner's
+  option B): each container of a place's `within` is checked on its own,
+  and one that fails is dropped alone, the record standing with its
+  names, keys and other containers. Each reason is counted apart, in the
+  coverage's `records.containers_dropped` and the run report, never among
+  the records set aside: `no-evidence`, the entry gives none;
+  `evidence-not-in-source`, the evidence does not occur in the
+  transcription, the two compared folded, with every run of whitespace
+  and line breaks made one space and a hyphen at a line's end joined
+  (`core/verbatim.py`); `evidence-does-not-name`, the evidence does not
+  hold the container's name, folded, as whole words. Whether the evidence
+  states the containment, and not only names both places (a list of
+  towns), stays a judgement: the critic may flag it
+  (`evidence_does_not_state`), advisory and counted with its findings.
+  Each container checked is kept, with its field path, evidence, reason
+  and the transcription line it was compared with, in the extraction's
+  local `containers.json`, so each reason's cases can be sampled; report
+  and diff carry counts alone. An older answer's container given as a
+  bare string, with no evidence, is read with the check that answer was
+  made for: it stands where its name occurs in the label or an alias,
+  and is dropped as `no-evidence` otherwise;
 - a `name` status needs a name part, and a `toponym` status a name or an
   address;
 - a claim's value is of a kind its property accepts (§3.5), and a death's
@@ -1418,7 +1475,7 @@ and brackets in a NAME value, which §10 names.
 | TYPE official, legal, change, immigrant or adopted | `other`, and its `official_name` claim |
 | any other TYPE, or none | `other`, with no typed-name claim; the NAME's form, unless it is the label's, a `name` claim of no type (ADR-0011) |
 | `_MARNM` | a `married` surname: the part between its slashes; a value without them is `unsplit` |
-| PLAC | its first component is the place's name and the rest are `within`, each as written, with no head or toponym split: GEDCOM lists jurisdictions from the lowest. Each jurisdiction is a place too, its record made the same way from the components from it on: one entity per distinct tail of components in the export, which is the place of a PLAC that names those components alone. Each place is labelled by its components, comma-joined, and its own name is its label or an alias. Each link of the chain, the place within its nearest jurisdiction and each jurisdiction within the next, is a `part_of` claim cited by the PLAC's line, with no time (ADR-0038 §2). An empty component, or one without a word ('?', '-'), names nothing and is left out wherever it stands, the latter counted (`PLAC component without a word`); a component with a word is kept as written. A placeholder word, one of the list in `pipeline/gedcom_placeholders.yaml` (German, English and Dutch; compared whole and folded, case and accents ignored), is record-only (owner decision on #582, 2026-10-23): in a jurisdiction's position it stays in `within` as written, with no entity and no `part_of` to or from it, and none across it, since the source states no link between the components beside it; the containers on either side keep their entities and links where the PLAC states one between two names. As the place's own name it is left out, and the place is the first jurisdiction named. Each is counted (`PLAC placeholder component`). A PLAC that names no place (no component with a word, or placeholders alone) gives no place, though a value still states its event (#571) |
+| PLAC | its first component is the place's name and the rest are `within`, each as written, with no head or toponym split, and each with the PLAC's value as its evidence (amended by #569): GEDCOM lists jurisdictions from the lowest. Each jurisdiction is a place too, its record made the same way from the components from it on: one entity per distinct tail of components in the export, which is the place of a PLAC that names those components alone. Each place is labelled by its components, comma-joined, and its own name is its label or an alias. Each link of the chain, the place within its nearest jurisdiction and each jurisdiction within the next, is a `part_of` claim cited by the PLAC's line, with no time (ADR-0038 §2). An empty component, or one without a word ('?', '-'), names nothing and is left out wherever it stands, the latter counted (`PLAC component without a word`); a component with a word is kept as written. A placeholder word, one of the list in `pipeline/gedcom_placeholders.yaml` (German, English and Dutch; compared whole and folded, case and accents ignored), is record-only (owner decision on #582, 2026-10-23): in a jurisdiction's position it stays in `within` as written, with no entity and no `part_of` to or from it, and none across it, since the source states no link between the components beside it; the containers on either side keep their entities and links where the PLAC states one between two names. As the place's own name it is left out, and the place is the first jurisdiction named. Each is counted (`PLAC placeholder component`). A PLAC that names no place (no component with a word, or placeholders alone) gives no place, though a value still states its event (#571) |
 | HEAD.LANG | GEDCOM 5.5.1's language name, mapped to a BCP 47 code, sets the language of the adapter's texts instead of a fixed `en` (`GEDCOM_LANGUAGES`, `UNDETERMINED` in `pipeline/gedcom.py`); an absent or unknown one gives undetermined (`und`), counted |
 | a DEAT that states the death and gives no date, place or cause | a `death` event with the person as principal |
 

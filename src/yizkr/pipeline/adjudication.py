@@ -110,6 +110,7 @@ from yizkr.claims import (
     WIKIBASE_PRECISION,
     ClaimBatch,
     CoordinateValue,
+    EntityRecord,
     ItemValue,
     LocalRef,
     MonolingualValue,
@@ -221,6 +222,26 @@ def date_text(value: TimeValue) -> str:
     return f"the {text}" if precision in ("century", "decade") else text
 
 
+def record_line(entity: EntityRecord) -> str:
+    """An entity's mention record as the prompt shows it: each field it
+    fills, a place's containers by name, nearest first (their evidence
+    is the extraction's to check, ADR-0035 §5)."""
+    record = {
+        name: part
+        for name, part in entity.structure.model_dump(
+            mode="json", exclude_none=True
+        ).items()
+        if part not in ([], {}, "") and name != "kind"
+    }
+    if "within" in record:
+        record["within"] = [
+            container["name"] for container in record["within"]
+        ]
+    return "record: " + json.dumps(
+        record, ensure_ascii=False, separators=(", ", ": ")
+    )
+
+
 class _Document:
     """What the prompt reads of one document's batch: each local id's
     label and kind, and the claims about each, as subject and as value.
@@ -310,19 +331,7 @@ class _Document:
                 + ", ".join(repr(alias) for alias in entity.aliases)
             )
         if entity is not None and entity.structure is not None:
-            record = {
-                name: part
-                for name, part in entity.structure.model_dump(
-                    mode="json", exclude_none=True
-                ).items()
-                if part not in ([], {}, "") and name != "kind"
-            }
-            found.append(
-                "record: "
-                + json.dumps(
-                    record, ensure_ascii=False, separators=(", ", ": ")
-                )
-            )
+            found.append(record_line(entity))
         about = self.about.get(local_id, [])
         found += [
             f"{claim.property}: {self.value(claim.value)}"

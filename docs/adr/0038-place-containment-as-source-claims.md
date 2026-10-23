@@ -309,6 +309,12 @@ Applied with the implementation (accepted by the owner, 2026-10-23):
    columns of ADR-0009's contract (A the place, B the candidate named)
    and the chain and the container's number in it (from 1, as the
    question gives it) beside them.
+   *Applied (#569):* `stated_links` and `build_worklist` read the
+   containers that stand, each a name with its evidence, by name and
+   nearest first as before: a container whose evidence fails its checks
+   is dropped from the record at extraction, its record standing
+   (ADR-0035 §5), so it states no link here. No model gives geography:
+   the evidence is the source's words, checked against its transcription.
    *Applied (#571):* the GEDCOM export states the containment its PLACs
    give as the extracted documents do. Each jurisdiction of a PLAC is a
    place entity, one per distinct tail of components in the export, and

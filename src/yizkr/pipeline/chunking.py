@@ -38,9 +38,11 @@ from yizkr.claims import (
     EntityRecord,
     JudgementNote,
     PersonStructure,
+    drop_containers,
     load_vocabulary,
     set_aside_structure,
 )
+from yizkr.core.verbatim import Transcript
 from yizkr.pipeline.extract import (
     cite_artifact,
     claim_schema_prompt_text,
@@ -755,7 +757,7 @@ as an empty string ("").
   "status": "<toponym, deictic, generic or adjective>",
   "names": [{{"written": "...", "toponym": "...", "head": "..."}}],
   "address": {{"written": "...", "street": "...", "number": "..."}},
-  "within": [...]}}.
+  "within": [{{"name": "...", "evidence": "..."}}]}}.
   * status: `toponym` for a place's own name; `deictic` for a reference
     back ("dort"); `generic` for a head with no toponym ("Lager");
     `adjective` for a country given only by an adjective of nationality
@@ -772,6 +774,16 @@ as an empty string ("").
     oblast, district, village, giving Chadsk Oblast, Kaldovsky District
     and Koshnovka, is Koshnovka within "Kaldovsky District" and "Chadsk
     Oblast".
+  * each container's evidence: copy, verbatim from the document, the
+    words that state the place is in it, the container's name among
+    them. In running text that is the mention itself: each of
+    Snylsjum's three containers takes the evidence "Snylsjum, gemeente
+    Drakeradiel, Fryslân, Nederlân". On a form it is the line of the
+    container's field: Koshnovka's "Kaldovsky District" takes its
+    district line, "District: Kaldovsky District", and "Chadsk Oblast"
+    its oblast line. Give a container only where the document states
+    it; one with no evidence, or evidence the document does not hold or
+    that does not name it, is dropped.
   * each container in within is also a place entity of the manifest,
     with its own record, and so in turn is each of its own containers:
     "Fläckfeld, Kreis Mockburg, Hesse" is Fläckfeld within "Kreis
@@ -1147,7 +1159,14 @@ def prefix_local_ids(claim: dict, prefix: str) -> dict:
 
 
 # what a complete extraction writes to its state directory, when it has one
-SIDE_OUTPUTS = ("coverage.json", "rejects.json", "gaps.ndjson")
+SIDE_OUTPUTS = (
+    "coverage.json",
+    "rejects.json",
+    "gaps.ndjson",
+    # each place container checked, with its evidence and the line it was
+    # compared with (claims.drop_containers): local, never in a report
+    "containers.json",
+)
 
 
 class ChunkedClaimExtractor:
@@ -1173,9 +1192,9 @@ class ChunkedClaimExtractor:
     answer.
 
     `state_dir`, when given, receives the advisory side outputs of a
-    complete extraction: `coverage.json`, and `rejects.json` and
-    `gaps.ndjson` when there are any (a file the extraction no longer
-    has anything for is removed).
+    complete extraction: `coverage.json`, and `rejects.json`,
+    `gaps.ndjson` and `containers.json` when there are any (a file the
+    extraction no longer has anything for is removed).
 
     Matches LlmClaimExtractor's extract() signature so the CLI treats the
     strategies interchangeably. After extract(), `failed_chunks` lists
@@ -1233,6 +1252,9 @@ class ChunkedClaimExtractor:
         # entities whose mention record was set aside
         self._set_aside: dict[str, int] = {}
         self._set_aside_records = 0
+        # each place container the manifest's records gave, checked and
+        # kept or dropped alone (claims.drop_containers)
+        self._containers: list[dict] = []
         # what settling the manifest's names counted (_settle_names)
         self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
         # how chunk calls saw the document: fork, inline or compressed
@@ -1327,12 +1349,14 @@ class ChunkedClaimExtractor:
         )
         return self._first_turn(
             prompt,
-            lambda response: self._parse_entity_manifest(response, line_count),
+            lambda response: self._parse_entity_manifest(
+                response, line_count, transcription.text
+            ),
         )
 
     @staticmethod
     def _parse_entity_manifest(
-        response: str, line_count: int
+        response: str, line_count: int, text: str | None = None
     ) -> tuple[_Manifest | None, list[str]]:
         """(manifest, problems); the manifest is None when the answer holds
         no entity list. Only a list, or null, is one, and any other value
@@ -1346,7 +1370,10 @@ class ChunkedClaimExtractor:
         kind, and the manifest counts each reason by its category, and the
         records set aside (one record can give several reasons, and one
         whose only reasons are name parts dropped for an empty string
-        stands)."""
+        stands). A place's container that cannot stand is dropped alone,
+        its record standing (claims.drop_containers): its evidence is
+        looked for in `text`, the transcription, when given, and each
+        container checked is kept for the local audit."""
         _, item_keys = load_vocabulary()
         for obj in scan_json_objects(response):
             if "entities" not in obj:
@@ -1358,6 +1385,8 @@ class ChunkedClaimExtractor:
                 ]
             set_aside: dict[str, int] = {}
             set_aside_records = 0
+            transcript = None if text is None else Transcript(text)
+            containers: list[dict] = []
             try:
                 records = []
                 for raw in listed or []:
@@ -1366,6 +1395,8 @@ class ChunkedClaimExtractor:
                     data, reasons = _set_aside_note(data)
                     data, more = set_aside_structure(data)
                     set_aside_records += bool(more) and "structure" not in data
+                    data, checked = drop_containers(data, transcript)
+                    containers += checked
                     for reason in reasons + more:
                         category = reason.split(":", 1)[0]
                         set_aside[category] = set_aside.get(category, 0) + 1
@@ -1388,7 +1419,10 @@ class ChunkedClaimExtractor:
                     for number in record.mention_lines
                     if 1 <= number <= line_count
                 ]
-            return _Manifest(records, set_aside, set_aside_records), problems
+            return (
+                _Manifest(records, set_aside, set_aside_records, containers),
+                problems,
+            )
         return None, ["no JSON object with an 'entities' array"]
 
     # -- phase 1b: line-range segmentation (fallback tier) -----------------
@@ -1473,6 +1507,7 @@ class ChunkedClaimExtractor:
         if manifest is not None:
             self._set_aside = manifest.set_aside
             self._set_aside_records = manifest.set_aside_records
+            self._containers = manifest.containers
             return manifest.entities, None, handle
         if not answered:
             raise RuntimeError(
@@ -1683,6 +1718,7 @@ class ChunkedClaimExtractor:
         self._unread = {}
         self._set_aside = {}
         self._set_aside_records = 0
+        self._containers = []
         self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
 
         entities, segmentation, handle = self._phase_one(
@@ -1999,6 +2035,10 @@ class ChunkedClaimExtractor:
             extras["rejects.json"] = json.dumps(rejects, indent=2)
         if gaps:
             extras["gaps.ndjson"] = "\n".join(map(json.dumps, gaps))
+        if self._containers:
+            extras["containers.json"] = json.dumps(
+                self._containers, indent=2, ensure_ascii=False
+            )
         if entities is not None:
             coverage = self._manifest_coverage(entities, batch)
         else:
@@ -2027,6 +2067,8 @@ class ChunkedClaimExtractor:
         the records given, by status, and the unsplit name forms they
         hold; the mentions recordless; the records set aside, and the
         reasons they and the notes were set aside by, by category; the
+        place containers checked, and those dropped alone from records
+        that stand, by reason (claims.drop_containers); the
         labels the appellation label rule replaced with a name
         (names.appellation_label), the `name` claims dropped for
         restating one, and the record name parts that are an
@@ -2073,6 +2115,16 @@ class ChunkedClaimExtractor:
                 ),
                 "set_aside_records": self._set_aside_records,
                 "set_aside": dict(sorted(self._set_aside.items())),
+                "containers_checked": len(self._containers),
+                "containers_dropped": dict(
+                    sorted(
+                        Counter(
+                            found["reason"]
+                            for found in self._containers
+                            if found["reason"] is not None
+                        ).items()
+                    )
+                ),
                 "appellation_labels": self._appellations["labels"],
                 "appellation_label_names": self._appellations["label_names"],
                 "appellation_parts": self._appellations["parts"],
@@ -2245,12 +2297,15 @@ def _settle_names(
 class _Manifest(NamedTuple):
     """An entity manifest as parsed: its entities; the mention records
     and judgement notes set aside, counted by the category of each
-    reason; and the number of entities whose mention record was set
-    aside."""
+    reason; the number of entities whose mention record was set
+    aside; and the audit of each place container checked."""
 
     entities: list[EntityRecord]
     set_aside: dict[str, int]
     set_aside_records: int
+    # each place container checked, kept or dropped
+    # (claims.drop_containers)
+    containers: list[dict] = []
 
 
 def _set_aside_note(entity: dict) -> tuple[dict, list[str]]:

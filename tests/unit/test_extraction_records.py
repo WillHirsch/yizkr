@@ -909,6 +909,8 @@ class TestTheManifestsRecords:
             "unsplit_forms": 0,
             "set_aside_records": 0,
             "set_aside": {},
+            "containers_checked": 0,
+            "containers_dropped": {},
             "appellation_labels": 0,
             "appellation_label_names": 0,
             "appellation_parts": 0,
@@ -940,6 +942,8 @@ class TestTheManifestsRecords:
             "unsplit_forms": 0,
             "set_aside_records": 3,
             "set_aside": {"addition": 1, "kind": 1, "schema": 1},
+            "containers_checked": 0,
+            "containers_dropped": {},
             "appellation_labels": 0,
             "appellation_label_names": 0,
             "appellation_parts": 0,
@@ -1028,6 +1032,8 @@ class TestTheManifestsRecords:
                 "no toponym": 1,
                 "note": 1,
             },
+            "containers_checked": 0,
+            "containers_dropped": {},
         }
         assert "Klara" not in json.dumps(coverage)
 
@@ -1078,6 +1084,8 @@ class TestTheManifestsRecords:
             "unsplit_forms": 0,
             "set_aside_records": 1,
             "set_aside": {"dropped": 3, "no toponym": 1},
+            "containers_checked": 0,
+            "containers_dropped": {},
             "appellation_labels": 0,
             "appellation_label_names": 0,
             "appellation_parts": 0,

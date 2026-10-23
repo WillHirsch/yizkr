@@ -1045,14 +1045,6 @@ class TestMoreParts:
                 "place",
                 {
                     "kind": "place",
-                    "names": [{"written": "Stupfield"}],
-                    "within": ["Tasmania"],
-                },
-            ),
-            (
-                "place",
-                {
-                    "kind": "place",
                     "names": [{"written": "Stupfield", "toponym": "Snylsjum"}],
                 },
             ),
