@@ -973,6 +973,25 @@ class TestStage:
         monkeypatch.setattr(adjudication, "PROMPT", adjudication.PROMPT + "\n")
         assert not ensure_adjudicated(context, config).reused
 
+    def test_other_code_is_made_again(self, tmp_path, monkeypatch):
+        """The stage's outputs are keyed on its own source and the site's
+        date formatter (code_digest): other code makes them again."""
+        from yizkr import staticsite
+
+        docs = [gustav("one", dated=True), gustav("two", dated=False)]
+        context = context_of(docs, tmp_path, Engine(truths(docs)))
+        adjudication.run_stage(context)
+        digest = adjudication.code_digest()
+
+        def format_time(value, precision, where="a date"):
+            return value
+
+        monkeypatch.setattr(staticsite, "format_time", format_time)
+        assert adjudication.code_digest() != digest
+        monkeypatch.undo()
+        monkeypatch.setattr(adjudication, "code_digest", lambda: "other")
+        assert not ensure_adjudicated(context).reused
+
     def test_a_map_another_stage_wrote_over_is_made_again(self, tmp_path):
         """When the map in the directory is not the one the record made
         (clustering alone wrote over it), the stage makes its own again."""
