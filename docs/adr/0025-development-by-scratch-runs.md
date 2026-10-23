@@ -104,6 +104,16 @@ engine reads none of them; the usage-credits pause still follows
 `isUsingOverage` alone. The CLI version is in every claude-code cache
 key (ADR-0032), so the next run redoes every claude-code call.
 
+Amended by #559 (2026-10-23): the pass runs on claude CLI 2.1.309, the
+version installed on the run machine. The engine runs it with three
+Read-error wordings added to `_READ_ERRORS`: a device or process file
+and a pipe or device read as an image are `unsupported-format`, and an
+image over the CLI's size limit is `too-large`. Its `rate_limit_event`
+is as on 2.1.296; `rate_limit_info` may also carry `usageCreditOffer`
+and `adminRequestOffer`, which the engine does not read. The CLI
+version is in every claude-code cache key (ADR-0032), so the next run
+redoes every claude-code call, transcriptions included.
+
 Amended by #197 (2026-10-04): §4's claim fingerprints are defined in
 `pipeline/fingerprints.py`, beside the mention fingerprints and cluster
 ids. A claim's fingerprint hashes:

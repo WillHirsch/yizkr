@@ -1073,13 +1073,13 @@ in, and the kind of call:
 
 **What a call's stream reported.** A claude-code call's `call` event
 carries what its stream-json output reported of it (`llm.stream_report`,
-as CLI 2.1.296 prints it), each field only when the stream gave it in
+as CLI 2.1.309 prints it), each field only when the stream gave it in
 the form expected of it, whether the call was answered or not. The
 fields are those its final attempt's stream reported: from its init
 event, the `model` it ran on (the model id the configured name resolved
 to, which the `model-mismatch` anomaly check compares with the run
 manifest's, docs/ANOMALIES.md) and the `cli_version`; from its result
-event, its `num_turns` (2.1.296 counts its own retries at the output
+event, its `num_turns` (2.1.309 counts its own retries at the output
 limit among them), its `subtype` (`success`, `error_max_turns`,
 `error_during_execution`; the CLI reports an API error as a `success`
 whose call fails) and its `stop_reason`, why its model stopped on its
@@ -1099,7 +1099,7 @@ off before its init event names no model.
 A call the CLI gave up on at the output limit (Rejection, above) has the
 outcome `error`, its `error` is `OutputLimitReached`, its `api_error` is
 `max_output_tokens`, and its `stop_reason` is the notice's
-(`stop_sequence`), as CLI 2.1.296 prints them. The anomaly checks count
+(`stop_sequence`), as CLI 2.1.309 prints them. The anomaly checks count
 such a chunk call as a truncation, never as a failed call
 (docs/ANOMALIES.md), and the run report counts it, per stage, among the
 calls stopped at the output limit (docs/RUN_REPORT.md). A give-up an
@@ -1226,7 +1226,7 @@ time. A call a limit refuses never fails a document, and the engine
 stops its calls at a reserve of each window left to development
 sessions (#101; `yizkr.pipeline.llm`, "Subscription limits").
 
-**What the CLI reports**, as the pinned 2.1.296 prints it in its
+**What the CLI reports**, as the pinned 2.1.309 prints it in its
 stream-json output:
 
 - a `rate_limit_event` whenever its view of the limits changes, which in
@@ -1239,7 +1239,7 @@ stream-json output:
   passes one of the CLI's own warning thresholds: for the five-hour
   window, 90%, and only while at most 72% of the window has elapsed;
   for the weekly window, 75%, 50% or 25%, early in the week (as CLI
-  2.1.296's `-p` mode reports them). Short of that threshold, or past
+  2.1.309's `-p` mode reports them). Short of that threshold, or past
   its elapsed-time gate, `rate_limit_info` has no `utilization`. Every
   `rate_limit_event` also carries `unifiedWindows`, the use of the
   `five_hour` and `seven_day` windows (`utilization` and `resetsAt`

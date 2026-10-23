@@ -397,6 +397,36 @@ READ_ERRORS = [
         "too-many-tokens",
         REQUEST_ERROR,
     ),
+    # the device-file refusal as CLI 2.1.296 words it (#526)
+    (
+        "Cannot read '/dev/zero': this device file would block or produce "
+        "infinite output.",
+        "unsupported-format",
+        FILE_ERROR,
+    ),
+    # as CLI 2.1.309 words them (#559): the device-file refusal reworded, and
+    # the refusals of an image over the size limit and of a pipe or device
+    # read as an image, which also says "not a regular file"
+    (
+        "Cannot read '/proc/self/fd/0': this path names a device or process "
+        "file that this tool does not read.",
+        "unsupported-format",
+        FILE_ERROR,
+    ),
+    (
+        "File is too large to read as an image (the limit is 128 MB): "
+        "/srv/intake/scan-0001.png. If it is an image, resize it or export a "
+        "smaller copy, then read that.",
+        "too-large",
+        FILE_ERROR,
+    ),
+    (
+        "Cannot read this as an image: /srv/intake/scan-0001.png is a pipe or "
+        "a device, not a regular file, and it sent more than 128 MB without "
+        "ending.",
+        "unsupported-format",
+        FILE_ERROR,
+    ),
     ("An error no CLI words yet.", UNCLASSIFIED, FILE_ERROR),
 ]
 RENDERER_MISSING = READ_ERRORS[7][0]
@@ -417,7 +447,8 @@ class TestIsolation:
         assert command[command.index("--allowedTools") + 1] == "Read"
         assert command[command.index("--tools") + 1] == "Read"
         # the permission mode is named, never left to the CLI version and
-        # the account (2.1.296 starts -p in auto mode with telemetry off)
+        # the account (2.1.296 started -p in auto mode with telemetry off;
+        # 2.1.309 starts it in default mode)
         assert command[command.index("--permission-mode") + 1] == "default"
 
     def test_forks_carry_the_permission_mode_and_the_socket_setting(self, cli):
@@ -811,8 +842,8 @@ class TestEffectiveConfig:
     def test_hash_follows_the_permission_mode_and_the_socket(
         self, cli, monkeypatch
     ):
-        """Both settings that keep a call as 2.1.237 ran it on 2.1.288 and
-        2.1.296 are in the hashed config (#452, #526)."""
+        """Both settings that keep a call as 2.1.237 ran it on 2.1.288,
+        2.1.296 and 2.1.309 are in the hashed config (#452, #526, #559)."""
         before = ClaudeCodeClient().config_hash
         monkeypatch.setitem(
             llm._PINNED_ENVIRONMENT, "CLAUDE_CODE_HARBOR_KITE", "1"

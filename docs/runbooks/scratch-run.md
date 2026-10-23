@@ -36,13 +36,13 @@ and `yizkr.reset` for the reset.
   - `$YIZKR_CLAUDE_RESERVE` and `$YIZKR_CLAUDE_MAX_WAIT`, the engine's
     pacing (docs/LLM_CACHE.md, Subscription limits).
 - **Keep the claude CLI still.** A run keeps the claude CLI version it
-  started on. The pinned version is 2.1.296 (`claude-opus-5-5` needs
+  started on. The pinned version is 2.1.309 (`claude-opus-5-5` needs
   2.1.280 or newer); install exactly that one, with the updater off:
 
   ```sh
   export DISABLE_AUTOUPDATER=1
-  npm install -g @anthropic-ai/claude-code@2.1.296
-  claude --version   # 2.1.296 (Claude Code)
+  npm install -g @anthropic-ai/claude-code@2.1.309
+  claude --version   # 2.1.309 (Claude Code)
   ```
 
   Keep `DISABLE_AUTOUPDATER=1` set in every shell and Claude Code
