@@ -233,9 +233,11 @@ its subject's label.
 cluster of the run whose mentions come from several clusters of the
 baseline is a *merge*; one of the baseline whose mentions go to several
 of the run's, a *split*; with the mentions in each, by kind, the merges
-by the method of the run's cluster (`confident`, or `adjudicated` for
-one the adjudicator's verdicts made, #106), and the mentions whose method
-changed (`confident → ambiguous`, `ambiguous → adjudicated`, ...).
+by the method of the run's cluster (`confident`; `confident_component`
+for a confident component of an ambiguous candidate cluster, #568; or
+`adjudicated` for one the adjudicator's verdicts made, #106), and the
+mentions whose method changed (`confident → ambiguous`, `ambiguous →
+adjudicated`, `ambiguous → confident_component`, ...).
 `Same decisions` says whether the two maps' decisions hash alike. Claim
 fingerprints never name a cluster, so a clustering that changes no claim
 shows here and nowhere among the claims. Every merge and split is
@@ -347,10 +349,18 @@ expects it and why:
   change does not explain, or verdicts that swing from one kind to
   another with no change to the prompt, the model or the batches
   (read the merges in `diff.json`: each adjudicated merge should be one
-  person, place or family by its members' labels and documents). A
-  union or an event whose people adjudication merged links confidently,
-  so its merge shows as `confident`: read a rise in confident merges of
-  unions and events beside the adjudicated merges of people;
+  person, place or family by its members' labels and documents); and
+  `confident_component` merges the same way, since a chain of confident
+  links can join two people no one link would: each should be one
+  entity by its members' labels and documents. Read events with several
+  participants closely: their link asks only that one event's people be
+  among the other's, which is not transitive, so a component can join
+  an event of one person to an event of another through an event of
+  both. A union or an event
+  whose people adjudication or a confident component merged links
+  confidently, so its merge shows as `confident`: read a rise in
+  confident merges of unions and events beside the adjudicated and
+  confident-component merges of people;
 - calls to the engine far above what the change explains (a cache miss
   for every call of a stage the change does not touch).
 

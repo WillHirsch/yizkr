@@ -163,9 +163,10 @@ itself in its own `--help`.
   came about, its anomalies (none, on a clean corpus) and its clusters,
   and report.md must say none of it by a universe name, a file name or a
   document's SHA-1; and the clustering stage's identity map must meet the
-  traps `TRAPS` sets for it, read in the universe's terms, with the two
-  the whole-cluster merge rule cannot meet (#361) recorded as expected by
-  a strict `xfail` that turns when the rule does. The driver's write side
+  traps `TRAPS` sets for it, read in the universe's terms, with the one
+  no merge rule meets (a conflicting cluster's confident component,
+  #361, #568) recorded as expected by a strict `xfail` that turns when
+  the rule does. The driver's write side
   (reset, register, write, places and site, #200, #201) needs a stack,
   so every unit
   test runs the driver with clustering as its only corpus stage (the

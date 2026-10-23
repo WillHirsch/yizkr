@@ -51,6 +51,7 @@ from yizkr.pipeline.adjudication import (
 from yizkr.pipeline.clustering import (
     ADJUDICATED,
     AMBIGUOUS,
+    CONFIDENT_COMPONENT,
     CONFLICTING,
     DIFFERENT,
     IDENTITY_MAP,
@@ -257,10 +258,12 @@ class TestVerdicts:
 
     def test_different_cuts_a_cluster_whose_confident_part_merges(self):
         """Three registers give Gustav's birth date and link confidently;
-        a fourth gives none and links ambiguously with each. When every
-        ambiguous pair is `different`, the cluster is settled: the three
-        merge, on their confident links alone, so with the method
-        `confident`, and the fourth stays apart, `adjudicated`."""
+        a fourth gives none and links ambiguously with each. The three
+        are a confident component, merged before any verdict (#568). When
+        every ambiguous pair is `different`, the cluster is settled: the
+        three stay merged, on their confident links alone, so with the
+        method `confident_component`, and the fourth stays apart,
+        `adjudicated`."""
         docs = [gustav(n, dated=True) for n in ("one", "two", "three")]
         docs.append(gustav("four", dated=False))
         made, _ = run(docs, Engine(truths(docs), verdict=DIFFERENT))
@@ -268,13 +271,14 @@ class TestVerdicts:
         assert len(dated) == 1
         assert cluster_of(made, docs[3], "e1") not in dated
         assert {method_of(made, docs, d.sha1, "e1") for d in docs[:3]} == {
-            "confident"
+            CONFIDENT_COMPONENT
         }
         assert method_of(made, docs, docs[3].sha1, "e1") == ADJUDICATED
         summary = made.identity["summary"]
         assert summary["clusters"][ADJUDICATED] == 0
-        assert summary["clusters"]["confident"] == 1
-        assert summary["cluster_mentions"]["confident"] == 3
+        assert summary["clusters"]["confident"] == 0
+        assert summary["clusters"][CONFIDENT_COMPONENT] == 1
+        assert summary["cluster_mentions"][CONFIDENT_COMPONENT] == 3
         assert summary["adjudicated_candidate_clusters"] == 1
         assert summary["adjudicated_apart"] == 1
         assert summary["clusters"][AMBIGUOUS] == 0
@@ -318,8 +322,10 @@ class TestVerdicts:
     def test_a_different_pair_beside_a_confident_link_is_kept_apart(self):
         """Two dated registers link confidently; `same` joins the second to
         an undated one, `different` the first to it: the confident link
-        would join the two the adjudicator kept apart, so the part merges
-        nothing."""
+        would join the two the adjudicator kept apart, so the part does not
+        merge, and falls back to its confident component, the two dated
+        ones, which holds no pair said `different` and merges as it does
+        without verdicts (#568)."""
         docs = [gustav("one", dated=True), gustav("two", dated=True)]
         docs.append(gustav("four", dated=False))
         identity = cluster_corpus([d.manifest for d in docs])
@@ -336,9 +342,18 @@ class TestVerdicts:
             names[m]: e["cluster"] for m, e in settled["mentions"].items()
         }
         assert clusters["one"] != clusters["four"]
-        assert {e["method"] for e in settled["mentions"].values()} == {
-            AMBIGUOUS
+        assert clusters["one"] == clusters["two"]
+        methods = {
+            names[m]: e["method"] for m, e in settled["mentions"].items()
         }
+        assert methods == {
+            "one": CONFIDENT_COMPONENT,
+            "two": CONFIDENT_COMPONENT,
+            "four": AMBIGUOUS,
+        }
+        (entry,) = settled["review"]
+        assert entry["status"] == ADJUDICATED
+        assert entry["contradiction"]["evidence"] == DIFFERENT
 
     def test_same_never_excuses_stated_sexes_that_differ(self):
         """Klara Löbig, born 1917, in two registers, one misreading her
@@ -458,8 +473,11 @@ class TestVerdicts:
         settled = cluster_corpus(
             [doc.manifest for doc in docs], None, verdicts
         )
+        # unsettled, the cluster is as it is without verdicts: its
+        # confident component merged, the undated register apart
         assert {e["method"] for e in settled["mentions"].values()} == {
-            AMBIGUOUS
+            CONFIDENT_COMPONENT,
+            AMBIGUOUS,
         }
         assert settled["hash"] == identity["hash"]
 
@@ -616,6 +634,7 @@ class TestRounds:
         }
         assert made.identity["summary"]["clusters"] == {
             "confident": 1,
+            CONFIDENT_COMPONENT: 0,
             ADJUDICATED: 1,
             AMBIGUOUS: 0,
             CONFLICTING: 0,

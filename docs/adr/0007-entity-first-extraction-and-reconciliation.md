@@ -66,6 +66,9 @@ entities, never as a `fallback-manifest`.
 Amended by #106 (2026-10-23): step 3's adjudication runs at corpus
 level too, over the ambiguous pairs of the corpus clustering
 (`pipeline/adjudication.py`, Phase 3 below, "Corpus adjudication").
+Amended by #568 (2026-10-23): the confident components of an ambiguous
+corpus cluster merge before adjudication, which asks only the ambiguous
+pairs between them (Phase 3 below, "Confident components").
 
 Amends ADR-0006. The transport machinery specified there — forked
 conversations, NDJSON emission with sentinel, per-chunk state with
@@ -311,7 +314,7 @@ A separate pipeline step between extract and resolve:
 clustering (ADR-0025; the identity-map draft, ADR-0027, #66) replaces
 steps 1, 2 and 5 within a scratch run: it blocks and links every
 mention against every other on records alone, and merges only confident
-clusters. Step 3 then runs over what it could not decide: the ambiguous
+clusters (until the #568 amendment below). Step 3 then runs over what it could not decide: the ambiguous
 pairs of each ambiguous candidate cluster, never a conflicting
 cluster's, as one stage keyed by what each call sends (ADR-0032): the
 pairs' mention fingerprints and evidence, the prompt and the model.
@@ -339,11 +342,59 @@ a development-stage run a candidate cluster of two whose one pair no
 cluster, and is counted; in keeper mode it is asked, for the review
 sheet.
 A part merges with the method `adjudicated` when a `same` pair is among
-its links, and `confident` when its confident links alone join it, so
+its links, and `confident` when its confident links alone join it
+(`confident_component` since the #568 amendment below), so
 the identity map says what made each merge; a cluster with an
-`uncertain` or unanswered pair stays split whole. In keeper mode the
+`uncertain` or unanswered pair stays split whole (until the #568
+amendment below). In keeper mode the
 verdicts are recorded for the cluster review sheet (#108) and merge
 nothing, so a human still approves every equivalence that is kept.
+
+**Confident components** (amended by #568, 2026-10-23; the owner chose
+option 2 of #568). Corpus clustering no longer holds a whole ambiguous
+candidate cluster apart for one ambiguous link. Each *confident
+component* of an ambiguous candidate cluster, the closure over its
+confident links, merges with the method `confident_component`, after
+the same re-check the cluster check makes: a component that joins a
+cannot-link pair (which a component of a cluster that joins none cannot),
+holds a pair said `different` (a cannot-link, as above), or holds two
+members whose evidence says they differ, stays apart, each member
+`ambiguous`. A chain of confident links can join two people no one link
+would; the re-check guards against that but cannot rule it out, so
+every such merge is counted apart in the identity map, the run report
+and the run diff, whose detail lists each one with its members. A
+conflicting cluster merges nothing, its components included. The rule
+holds in both modes: in keeper mode the components merge in the
+identity map as confident clusters do, proposals the cluster review
+ratifies (#108, #147). It changes adjudication in three ways.
+
+1. *What is asked.* An ambiguous pair whose two mentions one merged
+   component holds is settled by it and never asked. The pairs asked
+   are the ambiguous pairs between components (a mention no confident
+   link reaches being a component of one), and those inside a
+   component its re-check kept apart, where a verdict can still change
+   the outcome (a `same` excuses a date conflict on its own pair). Each
+   is asked as before, on its own two mentions' evidence; the prompt
+   gives no evidence of the rest of either component.
+2. *What a verdict does.* A part is the closure over the confident
+   links and the `same` pairs, so a `same` on any pair between two
+   components joins both whole, and a `different` on any pair between
+   them keeps them apart; two components given both verdicts are a
+   part that joins a `different` pair, which does not merge. A part
+   that does not merge falls back to its confident components, each
+   merged or apart as without verdicts, so a verdict can add merges to
+   the components but never undo one, unless it says `different` of a
+   pair inside one. A cluster with an `uncertain` or unanswered pending
+   pair is left as without verdicts: its components merged, the rest
+   apart.
+3. *What a method says.* A part merges `adjudicated` when a `same`
+   pair is among its links, every member of the components it joins
+   included, since the verdict made the merge; `confident_component`
+   when its confident links alone join it, whether or not a verdict cut
+   it from the rest; `confident` only for a whole confident candidate
+   cluster. With the owner's extension of #130 (2026-10-23), each item's
+   merge method (confident, adjudicated, confident component, owner
+   override, singleton) is to be traceable in the graph.
 
 **Graph-side reconciliation** (cleaning duplicates that already
 exist, e.g. the trial's two Leopolds): the same blocking + adjudication
