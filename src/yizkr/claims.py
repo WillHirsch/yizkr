@@ -1099,7 +1099,9 @@ def read_placed(values: Iterable[str]) -> dict[str, frozenset[str]]:
                     path.read_bytes()
                 )
             except OSError as exc:
-                raise ValueError(f"{path}: {exc.strerror}") from None
+                raise ValueError(
+                    f"{path}: {exc.strerror}; give {PLACED_OPTION}"
+                ) from None
             except ValidationError:
                 raise ValueError(
                     f"{path} is not a record of a container's derived media "
@@ -1120,12 +1122,16 @@ def unplaced_captions(
     acceptance: Acceptance | None = None,
 ) -> int:
     """How many claims of `batch`, of a property the manifest marks
-    `placed_subject` (`caption`), cite a source `placed` gives no placed
-    media for: each is refused, by validation and the writer, until its
-    source's placed media are given."""
+    `placed_subject` (`caption`), whose subject is an artifact other than
+    their source, cite a source `placed` gives no placed media for: each
+    is refused, by validation and the writer, until its source's placed
+    media are given. A caption of anything else is refused whatever is
+    given, so it is not counted."""
     acceptance = acceptance if acceptance is not None else load_acceptance()
     return sum(
         claim.property in acceptance.placed_subjects
+        and isinstance(claim.subject, ArtifactRef)
+        and claim.subject.sha1 != claim.source.artifact.sha1
         and claim.source.artifact.sha1 not in (placed or {})
         for claim in batch.claims
     )

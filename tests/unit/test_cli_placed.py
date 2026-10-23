@@ -23,12 +23,14 @@ from tests.unit.test_container_claims import (
     BOOKLET_REF,
     CAPTION,
     DECK_REF,
+    JULY_28,
     LETTER_REF,
     STRAY_REF,
     CaptionWiki,
     artifacts,
     batch_of,
     caption,
+    itself,
 )
 from yizkr import claims as claims_module
 from yizkr import cli
@@ -95,6 +97,12 @@ class TestReadPlaced:
         # the same digests in capitals name the same bytes
         assert read_placed([value.upper()]) == read_placed([value])
 
+    def test_the_whole_value_is_the_pair(self):
+        """A value with more than a pair in it is read as a path, never
+        cut to the pair it begins with."""
+        with pytest.raises(ValueError, match="--placed <derived-media"):
+            read_placed([f"{BOOKLET_REF.sha1}={LETTER_REF.sha1}0"])
+
     def test_values_for_one_source_add_up(self, tmp_path):
         path = record(tmp_path / "booklet")
         assert read_placed(
@@ -117,12 +125,21 @@ class TestReadPlaced:
         with pytest.raises(ValueError, match="derived media") as refusal:
             read_placed([str(other)])
         assert "--placed <derived-media.json>" in str(refusal.value)
-        with pytest.raises(ValueError, match="booklet"):
+        # a path that is not there, or a mistyped pair, says what to give
+        with pytest.raises(ValueError, match="booklet") as refusal:
             read_placed([str(tmp_path / "booklet")])
+        assert PLACED_OPTION in str(refusal.value)
 
     def test_a_source_never_places_itself(self):
         with pytest.raises(ValueError, match="does not place itself"):
             read_placed([f"{BOOKLET_REF.sha1}={BOOKLET_REF.sha1}"])
+
+    def test_a_record_never_places_its_own_container(self, tmp_path):
+        path = record(
+            tmp_path / "booklet", BOOKLET_REF, LETTER_REF, BOOKLET_REF
+        )
+        with pytest.raises(ValueError, match="does not place itself"):
+            read_placed([str(path)])
 
     def test_the_captions_left_without_their_placed_media(self):
         batch = batch_of(caption(), caption(text="Wastl to Klara."))
@@ -132,6 +149,16 @@ class TestReadPlaced:
         assert unplaced_captions(batch, {BOOKLET_REF.sha1: set()}) == 0
         assert "--placed" in unplaced_hint(2)
         assert PLACED_OPTION in unplaced_hint(2)
+
+    def test_only_a_caption_of_another_artifact_wants_them(self):
+        """A batch without captions wants no placed media, and a caption
+        of anything but another artifact is refused whatever is given."""
+        assert (
+            unplaced_captions(batch_of(itself("inception", JULY_28)), None)
+            == 0
+        )
+        of_itself = caption(BOOKLET_REF.model_dump())
+        assert unplaced_captions(batch_of(of_itself), None) == 0
 
 
 class TestValidate:
@@ -212,7 +239,9 @@ class TestClaimsScript:
             )
             == 0
         )
-        assert "valid (1 claims" in capsys.readouterr().out
+        captured = capsys.readouterr()
+        assert "valid (1 claims" in captured.out
+        assert captured.err == ""
 
     def test_without_them_the_caption_is_refused(
         self, tmp_path, monkeypatch, capsys
@@ -227,7 +256,10 @@ class TestClaimsScript:
         batch = batch_file(tmp_path)
         argv = ("--validate", str(batch), "--placed", str(batch))
         assert self.main(monkeypatch, *argv) == 1
-        assert capsys.readouterr().err.startswith("--placed: ")
+        err = capsys.readouterr().err
+        assert err.startswith("--placed: ")
+        # refused before the batch is checked
+        assert "manifest check" not in err
 
 
 class TestWrite:
@@ -263,14 +295,34 @@ class TestWrite:
         wiki = CaptionWiki()
         qids = artifacts(wiki, BOOKLET_REF, LETTER_REF)
         monkeypatch.setattr(cli, "_client", lambda args: wiki)
-        status = cli.main(
-            ["ingest", "write", "--batch", str(batch_file(tmp_path))]
+        batch = batch_file(
+            tmp_path, caption(), caption(text="Wastl to Klara.", page="7")
         )
+        status = cli.main(["ingest", "write", "--batch", str(batch)])
         out, err = capsys.readouterr()
-        # the claim is refused alone, as the writer refuses it
+        # each claim is refused alone, as the writer refuses it
         assert status == EXIT_OK
         assert '"written": 0' in out
         assert "is no artifact given to this write as placed" in out
+        assert unplaced_hint(2) in err
+        for qid in qids.values():
+            assert not wiki.wbi.item.get(qid).claims.get("P91")
+
+    def test_another_source_s_placed_media_leave_it_refused(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        wiki = CaptionWiki()
+        qids = artifacts(wiki, BOOKLET_REF, LETTER_REF)
+        monkeypatch.setattr(cli, "_client", lambda args: wiki)
+        status = cli.main(
+            [
+                *("ingest", "write", "--batch", str(batch_file(tmp_path))),
+                *("--placed", f"{DECK_REF.sha1}={LETTER_REF.sha1}"),
+            ]
+        )
+        out, err = capsys.readouterr()
+        assert status == EXIT_OK
+        assert '"written": 0' in out
         assert unplaced_hint(1) in err
         for qid in qids.values():
             assert not wiki.wbi.item.get(qid).claims.get("P91")
@@ -285,6 +337,19 @@ class TestWrite:
         batch = batch_file(tmp_path)
         status = cli.main(
             ["ingest", "write", "--batch", str(batch), "--placed", str(batch)]
+        )
+        assert status != EXIT_OK
+        assert capsys.readouterr().err.startswith("--placed: ")
+
+    def test_a_bad_placed_is_refused_before_the_batch_is_read(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(cli, "_client", lambda args: CaptionWiki())
+        status = cli.main(
+            [
+                *("ingest", "write", "--batch", str(tmp_path / "none.json")),
+                *("--placed", str(tmp_path / "nothing")),
+            ]
         )
         assert status != EXIT_OK
         assert capsys.readouterr().err.startswith("--placed: ")

@@ -12,8 +12,8 @@ nothing. A caption written without the derived media its container
 registered is refused before the first write. `yizkr ingest write` takes
 them from the booklet's record of derived media with `--placed` (#551),
 and without it refuses the caption and says how to give them. The
-non-privileged export
-leaves the caption out, whole, and keeps the image's own statement.
+non-privileged export leaves the caption out, whole, and keeps the
+image's own statement.
 
 Every title, label, caption and media byte carries the session's marker
 (conftest.fixture_mark), so each session meets the fixture as a first
