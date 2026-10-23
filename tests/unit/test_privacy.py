@@ -20,7 +20,9 @@ from yizkr.core.privacy import (
     BIRTH_EVENT_DATES_QUERY,
     BIRTHS_QUERY,
     CENTURY,
+    DEATH_EVIDENCE_PROPERTIES,
     DECADE,
+    EVENT_DEATH_PROPERTIES,
     FAMILY_CLASS,
     MILLENNIUM,
     NON_PERSON_CLASSES,
@@ -35,7 +37,9 @@ from yizkr.core.privacy import (
     YEAR,
     Participation,
     birth_event_dates_query,
+    event_kinds,
     event_principal,
+    family_type,
     is_possibly_living,
     latest_birth_year,
     latest_births,
@@ -665,14 +669,38 @@ class TestThePeopleSelection:
         "wikibase:rank ?otherRank . "
         "FILTER(?otherRank != wikibase:DeprecatedRank) }"
     )
+    events = " ".join(f"wd:{ITEMS[key]}" for key in sorted(event_kinds()))
+    # each death evidence property's statements, beside its truthy values
+    deaths = " ".join(
+        f"(p:{PROPERTIES[key]} wdt:{PROPERTIES[key]})"
+        for key in EVENT_DEATH_PROPERTIES
+    )
+    # what sets an event's own death evidence aside: a truthy value of the
+    # property, as the check reads death evidence, beside an event type a
+    # curator has not deprecated
+    event_set_aside = (
+        "FILTER NOT EXISTS { "
+        "?person ?direct ?death . "
+        f"VALUES ?eventClass {{ {events} }} "
+        f"?person p:{typing} ?eventTyping . "
+        f"?eventTyping {typed} ?eventClass ; "
+        "wikibase:rank ?eventRank . "
+        "FILTER(?eventRank != wikibase:DeprecatedRank) "
+        f"FILTER(!{' '.join(family_type(PROPERTIES, ITEMS).split())}) }}"
+    )
 
     def test_people_are_read_through_statement_nodes_at_every_rank(self):
         # never the truthy values, which hold only the best-ranked type,
         # and no rank filter on any evidence, so a deprecated statement
-        # counts too: only the type that sets a participant aside is read
-        # with its rank
+        # counts too: only the types that set a participant or an event's
+        # own death aside are read with their rank, and only an event's
+        # death evidence through its truthy values, beside its statements
         assert "wdt:" not in PEOPLE_SELECTION
-        assert "rank" not in self.selection.replace(self.set_aside, "")
+        rest = self.selection.replace(self.set_aside, "").replace(
+            self.event_set_aside, ""
+        )
+        assert "rank" not in rest
+        assert "wdt:" not in rest.replace(self.deaths, "")
         typing = self.typing
         assert (
             f"{{ ?person p:{typing} ?typing . "
@@ -681,7 +709,9 @@ class TestThePeopleSelection:
 
     def test_each_kind_of_evidence_selects(self):
         subjects = " ".join(
-            f"p:{PROPERTIES[key]}" for key in PERSON_SUBJECT_PROPERTIES
+            f"p:{PROPERTIES[key]}"
+            for key in PERSON_SUBJECT_PROPERTIES
+            if key not in EVENT_DEATH_PROPERTIES
         )
         # a person-valued property marks its value in a statement and in
         # a qualifier alike
@@ -699,6 +729,10 @@ class TestThePeopleSelection:
             f"{{ VALUES ?link {{ {subjects} }} ?person ?link ?statement . }}"
         ) in self.selection
         assert (
+            f"{{ VALUES (?link ?direct) {{ {self.deaths} }} "
+            f"?person ?link ?statement . {self.event_set_aside} }}"
+        ) in self.selection
+        assert (
             f"{{ VALUES ?link {{ {values} }} ?statement ?link ?person . }}"
         ) in self.selection
         assert (
@@ -713,13 +747,33 @@ class TestThePeopleSelection:
     def test_every_type_is_read_through_its_redirects(self):
         # a class a curator merged into `human`, an event kind or a
         # non-person class types as the one it redirects to
-        assert self.selection.count(self.typed) == 3
+        # the family type that keeps an event listed is the fifth
+        assert self.selection.count(self.typed) == 5
 
     def test_a_non_person_type_sets_only_a_participant_aside(self):
         # once, in the participant's part of the union, and after it the
         # union closes: the other evidence selects whatever the type
         assert self.selection.count(self.set_aside) == 1
         assert f"{self.set_aside} }} }} }} FILTER(REGEX" in self.selection
+
+    def test_an_event_is_no_person_on_the_death_it_states(self):
+        # #577: a death event's `cause of death` made it a person. An item
+        # typed as an event is set aside on its own death evidence alone,
+        # once, in that part of the union; every other subject property,
+        # a `date of birth` included, selects it whatever its type
+        assert self.selection.count(self.event_set_aside) == 1
+        assert self.selection.count("VALUES ?eventClass") == 1
+        assert EVENT_DEATH_PROPERTIES == DEATH_EVIDENCE_PROPERTIES
+        assert set(EVENT_DEATH_PROPERTIES) <= set(PERSON_SUBJECT_PROPERTIES)
+        assert "date_of_birth" not in EVENT_DEATH_PROPERTIES
+        # every event class the manifest has, the person kinds of event
+        # among them, and never `human`, a family or a union
+        kinds = event_kinds()
+        assert {"event", "death", "birth", "migration"} <= kinds
+        assert not {"human", "family", "partnership"} & kinds
+        for key in kinds:
+            assert f"wd:{ITEMS[key]}" in self.events.split()
+        assert f"wd:{ITEMS['human']} " not in f"{self.events} "
 
     def test_an_unknown_value_or_a_redirect_is_no_person(self):
         # an unknown value is a blank node or a skolem IRI, never an
