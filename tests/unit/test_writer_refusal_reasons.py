@@ -105,6 +105,16 @@ class TestEachReason:
             self_reference=1,
         )
         assert sum(by_reason.values()) == len(result.refused) == 5
+        # each claim's reason, in batch order beside its claim id
+        assert list(
+            zip(result.refused, result.refusal_reasons, strict=True)
+        ) == [
+            (claim_id(claim), reason)
+            for claim, reason in zip(
+                batch.claims, [*reasons, None, "text"], strict=True
+            )
+            if reason is not None
+        ]
         assert result.self_references == [claim_id(batch.claims[0])]
         assert result.written == 1
 

@@ -253,6 +253,9 @@ class TestWriteStepSummary:
         ]
         assert summary["written"] == 2
         assert summary["refused"] == summary["self_references"] == loops
+        # counted by reason too (#552)
+        assert summary["refused_by_reason"]["self_reference"] == len(loops)
+        assert sum(summary["refused_by_reason"].values()) == len(loops)
 
     @pytest.mark.skipif(
         unicodedata.category("\U0001e08f") != "Cn",

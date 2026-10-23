@@ -1695,19 +1695,20 @@ def _aggregate_write(written: Mapping[str, Any] | None) -> dict[str, Any]:
         isinstance(record.get("self_references"), int) for record in documents
     ):
         counted["claims_self_referencing"] = total("self_references")
-    # the claims refused by reason, every reason of REFUSAL_REASONS in its
+    # the claims refused by reason, the reasons of REFUSAL_REASONS in their
     # order (yizkr.pipeline.writer): only when every document's record
-    # counts them, so that they sum to the claims refused; absent, not 0,
-    # otherwise
+    # counts them, so that they sum to the claims refused, and each reason
+    # only when every record gives it a count; absent, not 0, otherwise
     by_reason = [record.get("refused_by_reason") for record in documents]
     if all(isinstance(counts, dict) for counts in by_reason):
         counted["claims_refused_by_reason"] = {
-            reason: sum(
-                _count(counts.get(reason))
-                for counts in by_reason
-                if isinstance(counts.get(reason), int)
-            )
+            reason: sum(_count(counts[reason]) for counts in by_reason)
             for reason in REFUSAL_REASONS
+            if all(
+                isinstance(counts.get(reason), int)
+                and not isinstance(counts.get(reason), bool)
+                for counts in by_reason
+            )
         }
     return counted
 
@@ -3341,8 +3342,8 @@ _REFUSAL_NAMES = {
 
 
 def _refused_by_reason(write: Mapping[str, Any]) -> str:
-    """The claims refused by reason, every reason in its order, as the
-    write's line gives them; for a write that did not count them, those
+    """The claims refused by reason, each reason counted in its order, as
+    the write's line gives them; for a write that did not count them, those
     whose item value is their subject's item when it counted those, and
     otherwise nothing."""
     counts = write.get("claims_refused_by_reason")
@@ -3354,8 +3355,9 @@ def _refused_by_reason(write: Mapping[str, Any]) -> str:
             )
         return ""
     return ": " + ", ".join(
-        f"{_n(counts.get(reason, 0))} for {_REFUSAL_NAMES[reason]}"
+        f"{_n(counts[reason])} for {_REFUSAL_NAMES[reason]}"
         for reason in REFUSAL_REASONS
+        if reason in counts
     )
 
 

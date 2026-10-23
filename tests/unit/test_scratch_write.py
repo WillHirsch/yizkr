@@ -1398,6 +1398,52 @@ def test_the_refusals_by_reason_sum_over_the_documents():
     assert sum(by_reason.values()) == content["write"]["claims_refused"]
 
 
+@pytest.mark.parametrize(
+    "malformed", [[1], "text", None, 3], ids=["list", "str", "null", "int"]
+)
+def test_a_malformed_record_by_reason_holds_no_figure(malformed):
+    # a record's counts by reason that are not a mapping: no figure, and
+    # the report is still made
+    record = {
+        "depicts_left_out": 0,
+        "documents": {
+            "a" * 40: {"refused": 1, "refused_by_reason": malformed},
+            "b" * 40: {
+                "refused": 1,
+                "refused_by_reason": dict.fromkeys(REFUSAL_REASONS, 0)
+                | {"text": 1},
+            },
+        },
+    }
+    content = report._aggregate_content({}, {}, {}, _vocabulary(), record)
+    assert "claims_refused_by_reason" not in content["write"]
+    (section,) = report._write_sections(content)
+    assert "2 refused; " in section.blocks[0][0]
+
+
+def test_a_reason_a_record_does_not_count_is_absent_not_zero():
+    # a reason one record lacks, or gives as no count, is left out: absent
+    # in the run diff, never 0; the reasons every record counts remain
+    record = {
+        "depicts_left_out": 0,
+        "documents": {
+            "a" * 40: {
+                "refused": 1,
+                "refused_by_reason": {"text": "x", "subject_rule": 1},
+            },
+            "b" * 40: {
+                "refused": 2,
+                "refused_by_reason": dict.fromkeys(REFUSAL_REASONS, 0)
+                | {"text": 1, "subject_rule": 1},
+            },
+        },
+    }
+    content = report._aggregate_content({}, {}, {}, _vocabulary(), record)
+    assert content["write"]["claims_refused_by_reason"] == {"subject_rule": 2}
+    (section,) = report._write_sections(content)
+    assert "3 refused: 2 for the subject rules; " in section.blocks[0][0]
+
+
 def test_an_older_record_gives_its_self_references_alone():
     # a write that counted self-references but no reasons: the line says
     # how many of the refused are self-references, as it did

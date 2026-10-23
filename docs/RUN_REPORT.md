@@ -187,9 +187,10 @@ hold as it is, the claim's own, a locator's or a mentioned entity's
 label), `side_rule` (an entity the side rule blocks, ADR-0010) and
 `self_reference` (an item value that is the subject's item, counted
 again in `claims_self_referencing`); absent, not 0, unless every
-document's write record counts them. Then the items minted, the
-judgement notes written (the noted run blocks, ADR-0035 §4; #410), the
-batches refused whole before registration, the documents that failed, and whether the
+document's write record counts them, and a reason absent unless every
+record gives it a count. Then the items minted, the judgement notes
+written (the noted run blocks, ADR-0035 §4; #410), the batches refused
+whole before registration, the documents that failed, and whether the
 instance-contents key was recorded; or that the instance held what the
 run's write key makes, so nothing was reset or written. In both, the
 depicts claims the write left out of the batches: no scratch run writes
