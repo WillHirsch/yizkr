@@ -176,6 +176,7 @@ from yizkr.pipeline.rundir import (
 )
 from yizkr.pipeline.scratch import BARRIER, CORPUS_DIR, CORPUS_STAGES
 from yizkr.pipeline.stages import read_jsonl, staging_path
+from yizkr.pipeline.writer import REFUSAL_REASONS
 
 # the version of report.json's layout
 FORMAT = 1
@@ -1701,6 +1702,21 @@ def _aggregate_write(written: Mapping[str, Any] | None) -> dict[str, Any]:
         isinstance(record.get("self_references"), int) for record in documents
     ):
         counted["claims_self_referencing"] = total("self_references")
+    # the claims refused by reason, the reasons of REFUSAL_REASONS in their
+    # order (yizkr.pipeline.writer): only when every document's record
+    # counts them, so that they sum to the claims refused, and each reason
+    # only when every record gives it a count; absent, not 0, otherwise
+    by_reason = [record.get("refused_by_reason") for record in documents]
+    if all(isinstance(counts, dict) for counts in by_reason):
+        counted["claims_refused_by_reason"] = {
+            reason: sum(_count(counts[reason]) for counts in by_reason)
+            for reason in REFUSAL_REASONS
+            if all(
+                isinstance(counts.get(reason), int)
+                and not isinstance(counts.get(reason), bool)
+                for counts in by_reason
+            )
+        }
     return counted
 
 
@@ -3337,6 +3353,37 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
     return sections
 
 
+# how the report names each reason the writer refuses a claim for
+# (yizkr.pipeline.writer.REFUSAL_REASONS)
+_REFUSAL_NAMES = {
+    "retired_or_reference_property": "a retired or reference property",
+    "subject_rule": "the subject rules",
+    "text": "a text the instance cannot hold",
+    "side_rule": "an entity the side rule blocks",
+    "self_reference": "an item value that is the subject's item",
+}
+
+
+def _refused_by_reason(write: Mapping[str, Any]) -> str:
+    """The claims refused by reason, each reason counted in its order, as
+    the write's line gives them; for a write that did not count them, those
+    whose item value is their subject's item when it counted those, and
+    otherwise nothing."""
+    counts = write.get("claims_refused_by_reason")
+    if not isinstance(counts, Mapping):
+        if "claims_self_referencing" in write:
+            return (
+                f", {_n(write['claims_self_referencing'])} of them for an "
+                "item value that is their subject's item"
+            )
+        return ""
+    return ": " + ", ".join(
+        f"{_n(counts[reason])} for {_REFUSAL_NAMES[reason]}"
+        for reason in REFUSAL_REASONS
+        if reason in counts
+    )
+
+
 def _write_sections(content: Mapping[str, Any]) -> list[_Section]:
     """The write stage's counts, when it ran."""
     write, depicts = content["write"], content["depicts"]
@@ -3354,13 +3401,8 @@ def _write_sections(content: Mapping[str, Any]) -> list[_Section]:
             f"{_n(write['statements_referenced'])} gained a reference, "
             f"{_n(write['claims_skipped'])} claims already there, "
             f"{_n(write['claims_refused'])} refused"
-            + (
-                f", {_n(write['claims_self_referencing'])} of them for an "
-                "item value that is their subject's item; "
-                if "claims_self_referencing" in write
-                else "; "
-            )
-            + f"{_n(write['items_minted'])} items minted, "
+            + _refused_by_reason(write)
+            + f"; {_n(write['items_minted'])} items minted, "
             f"{_n(write.get('notes_written', 0))} judgement notes written. "
             f"{_n(write['batches_refused'])} batches refused whole, "
             f"{_n(write['documents_failed'])} documents failed; the "

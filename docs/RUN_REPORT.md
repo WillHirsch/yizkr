@@ -173,10 +173,24 @@ written new, those that gained a reference, the claims already there and
 those the writer refused, and of them those whose item value is their
 subject's item, as the identity map may make it
 (`aggregate.content.write.claims_self_referencing`, absent for a write
-that did not count them; #491), apart from extraction's rejects, the
-items minted, the judgement notes written (the noted run blocks,
-ADR-0035 §4; #410), the batches refused whole
-before registration, the documents that failed, and whether the
+that did not count them; #491), apart from extraction's rejects, and
+the claims refused by reason
+(`aggregate.content.write.claims_refused_by_reason`, #552): every reason
+of `yizkr.pipeline.writer.REFUSAL_REASONS`, in that order, each refused
+claim counted under the first that refused it, so they sum to the claims
+refused: `retired_or_reference_property` (a retired or reference
+property, ADR-0036, ADR-0035 §4), `subject_rule` (a document-subject
+claim whose subject is not its own source, a caption whose subject its
+source does not place, or an artifact subject on a property that takes
+none: ADR-0035 §3.4, ADR-0039 §2), `text` (a text the instance cannot
+hold as it is, the claim's own, a locator's or a mentioned entity's
+label), `side_rule` (an entity the side rule blocks, ADR-0010) and
+`self_reference` (an item value that is the subject's item, counted
+again in `claims_self_referencing`); absent, not 0, unless every
+document's write record counts them, and a reason absent unless every
+record gives it a count. Then the items minted, the judgement notes
+written (the noted run blocks, ADR-0035 §4; #410), the batches refused
+whole before registration, the documents that failed, and whether the
 instance-contents key was recorded; or that the instance held what the
 run's write key makes, so nothing was reset or written. In both, the
 depicts claims the write left out of the batches: no scratch run writes
