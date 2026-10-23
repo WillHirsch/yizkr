@@ -608,27 +608,56 @@ class TestTheTranscriber:
         # together lost its empty cells and with them which column each
         # value stood in (#570).
         flowing = " ".join(TRANSCRIPTION_PROMPT.split())
+        # the general rule the table rule is the one exception to
+        assert "Preserve line breaks" in flowing
         for rule in (
             "write every table, list in columns or form grid, ruled or "
-            "not, one line per row, its header row included, with the "
-            'row\'s cells separated by " | ".',
+            "not, one line per row, with the row's cells separated by "
+            '" | ".',
+            "The header follows the same rule: a header of several lines "
+            "is written one line per header line, and a heading that spans "
+            "several columns stands in the first of its cells.",
             "Keep each empty cell as an empty field, so that every row has "
-            "as many cells as the header and each value stays in its "
-            "column.",
+            "as many cells as the table has columns and each value stays "
+            "in its column.",
             "A cell whose text runs over several lines stays on its row's "
             "line, its lines joined by a space; this is the one exception "
             "to preserving line breaks.",
-            "Text that is not set out in columns (running prose, a title, "
-            "a note under a table) is written as it stands.",
+            # prose is carved out by what it is, not by its layout: a
+            # newspaper's columns are not a table
+            "Running prose is never laid out this way, even where it is "
+            "printed in several columns (a newspaper's columns, a page set "
+            "in two columns): write each column in turn, in reading order.",
+            "A title, or a note above or under a table, is written as it "
+            "stands.",
         ):
             assert rule in flowing
+        introduction = (
+            "For example, a register with the columns Name, Alter, ledig, "
+            "verh. and verw., whose one entry is marked in the last column:"
+        )
+        assert introduction in flowing
         # the example is a line per row, each row as wide as its header,
         # with the empty cells kept as empty fields
         lines = TRANSCRIPTION_PROMPT.splitlines()
         header = lines.index("  Name | Alter | ledig | verh. | verw.")
-        row = lines[header + 1]
-        assert row == "  Löbig, Eugen | 73 |  |  | x"
-        assert len(row.split(" | ")) == len(lines[header].split(" | "))
+        end = next(
+            n
+            for n in range(header + 1, len(lines))
+            if lines[n].startswith("- ")
+        )
+        example = lines[header:end]
+        assert example[1:] == ["  Löbig, Eugen | 73 |  |  | x"]
+        columns = example[0].strip().split(" | ")
+        for line in example:
+            assert len(line.split(" | ")) == len(columns)
+        # the introduction names the header's columns, and the entry's
+        # mark is in the last of them
+        assert (
+            "the columns " + ", ".join(columns[:-1]) + " and " + columns[-1]
+            in introduction
+        )
+        assert example[1].split(" | ")[-1] == "x"
 
     def test_the_prompts_table_example_is_from_the_universe(self):
         # Eugen's burial register entry: a widower of 73 (docs/EXAMPLES.md)

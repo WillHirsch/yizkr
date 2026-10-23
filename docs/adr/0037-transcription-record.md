@@ -14,6 +14,12 @@ a claim keeps the physical page as its `page number` and gains the
 printed one, from the record and never guessed, as a `printed page
 number` in its source block (§2, "Page numbers for extraction").
 
+Amended by #449 (2026-10-05): the claims review sheet shows a claim's
+printed page number in a `printed_page` column beside `page`, empty
+where its source has none. The sheet's locators are never read back, so
+a curator's edit to the column is ignored and the value stays the
+record's.
+
 Amended by #502 (2026-10-16): a deck's transcription has pages too, one
 per slide, read from its XML (the page method `slide-xml`): each slide
 `transcribed`, or `blank` when it holds no text, with no printed number,
@@ -22,17 +28,13 @@ deck has no `document_class` (§2, "Pages of a deck").
 
 Amended by #570 (2026-10-23): the prompt sets a table's layout. Every
 table, list in columns or form grid, ruled or not, is written one line
-per row, the header row included, its cells separated by ` | `, each
-empty cell kept as an empty field so every row has as many cells as the
-header; a cell whose text wraps stays on its row's line, joined by a
-space (§1, "Tables"). The prompt is in every vision transcription's
-cache key, so the next scratch run transcribes the corpus again (§7).
-
-Amended by #449 (2026-10-05): the claims review sheet shows a claim's
-printed page number in a `printed_page` column beside `page`, empty
-where its source has none. The sheet's locators are never read back, so
-a curator's edit to the column is ignored and the value stays the
-record's.
+per row, its cells separated by ` | `, each empty cell kept as an empty
+field so every row has as many cells as the table has columns; a header
+follows the same rule, and a cell whose text wraps stays on its row's
+line, joined by a space. Running prose is never laid out so, even when
+printed in columns (§1, "Tables"). The prompt is in every vision
+transcription's cache key, so the next scratch run asks every vision
+transcription again (§7).
 
 ## Context
 
@@ -89,12 +91,19 @@ and bad page numbers fail the answer.
 
 **Tables.** A page's text keeps its line breaks, with one exception
 the prompt states: every table, list in columns or form grid, ruled or
-not, is written one line per row, the header row included, with the
-row's cells separated by ` | `. Each empty cell stays an empty field, so
-every row has as many cells as the header and each value keeps its
-column; a cell whose text runs over several lines stays on its row's
-line, its lines joined by a space. Text not set out in columns (prose,
-a title, a note under a table) is written as it stands. Without the
+not, is written one line per row, with the row's cells separated by
+` | `. The header follows the same rule: a header of several lines is
+written one line per header line, and a heading that spans several
+columns stands in the first of its cells. Each empty cell stays an
+empty field, so every row has as many cells as the table has columns
+and each value keeps its column; a cell whose text runs over several
+lines stays on its row's line, its lines joined by a space. Running
+prose is never laid out this way, even where it is printed in several
+columns (a newspaper's columns, a page set in two columns): each column
+is written in turn, in reading order. A title, or a note above or under
+a table, is written as it stands. The carve-out is by what the text is,
+not by its layout, since a rule by layout would put a newspaper's
+columns side by side as rows and interleave their lines. Without the
 rule each call chose its own layout (` | `, columns aligned with
 spaces, or cells run together), and a row run together loses its empty
 cells, and with them which column a value, such as a mark in one of two
