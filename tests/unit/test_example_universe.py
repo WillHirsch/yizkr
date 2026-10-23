@@ -14,7 +14,7 @@ from itertools import combinations
 import pytest
 
 from tests.fixtures import example_universe as u
-from yizkr.model.schema import load_manifest
+from yizkr.model.schema import load_acceptance, load_manifest
 from yizkr.pipeline.gedcom import parse_gedcom, parse_gedcom_date
 
 KEYS = u.by_key()
@@ -119,6 +119,27 @@ class TestIntegrity:
                     assert isinstance(value, int), (prop, value)
                 else:
                     assert isinstance(value, str) and value, (prop, value)
+
+    def test_a_claim_about_a_document_follows_the_subject_rules(self):
+        # ADR-0035 §3.4 as amended by ADR-0039: a document-subject property
+        # is its own source's claim about itself, a caption its source's
+        # words about an artifact it places, and part_of the composition
+        # link a container states (ADR-0008)
+        acceptance = load_acceptance()
+        placed = {
+            (a.subject, a.value)
+            for a in u.ASSERTIONS
+            if a.property == "part_of" and a.value == a.source
+        }
+        about_documents = [a for a in u.ASSERTIONS if a.subject in SOURCES]
+        assert about_documents
+        for a in about_documents:
+            if a.property in acceptance.document_subjects:
+                assert a.subject == a.source, a
+            elif a.property in acceptance.placed_subjects:
+                assert (a.subject, a.source) in placed, a
+            else:
+                assert a.property == "part_of", a
 
     def test_planned_vocabulary_is_not_in_the_manifest_yet(self):
         # an item leaves u.PLANNED_VOCABULARY when the manifest gains it
@@ -669,6 +690,51 @@ class TestEventsAndDates:
         assert value["year"] == when.year
         assert {q["property"] for q in quals} == qualifiers
 
+    # each document the universe dates by its own making, with the
+    # precision and circa it gives and the passage it gives it in; the
+    # portrait's decade comes from its mount, no passage (ADR-0039 §2.2,
+    # #553)
+    SELF_DATED = {
+        "studio-photo-1890s": (u.Date(1890, decade=True), ""),
+        "postcard-1938": (
+            u.Date(1938, 8, 19, qualifier="before"),
+            "[postmark] Flörburg 19.8.38",
+        ),
+        "letter-excerpt-1939": (u.Date(1939, 7, 28), "den 28. Juli 1939"),
+        "death-certificate-1941": (
+            u.Date(1941, 3, 7),
+            "Дата выдачи: 7 марта 1941 г.",
+        ),
+        "letter-to-sipkje-1952": (
+            u.Date(1952, 1, 24),
+            "Snylsjum, 24 jannewaris 1952",
+        ),
+        "letter-to-leopold-1958": (
+            u.Date(1958, 12, 25),
+            "25 декабря 1958 г.",
+        ),
+        "family-history-2008": (u.Date(2008), "Stupfield, 2008"),
+        "family-booklet-2011": (u.Date(2011), "Stupfield, 2011"),
+        "library-talk-2018": (u.Date(2018), "library talk, 2018"),
+    }
+
+    def test_a_document_dates_its_own_making_with_inception(self):
+        made = {a.subject for a in u.ASSERTIONS if a.property == "inception"}
+        assert made == set(self.SELF_DATED)
+        for key in made:
+            (stated,) = u.about(key, "inception")
+            assert stated.source == key
+            assert (stated.value, stated.excerpt) == self.SELF_DATED[key]
+
+    def test_no_document_states_a_point_in_time_of_itself(self):
+        # a date a document gives for anything else is that thing's own:
+        # the postcard's postmark is its latest date of making
+        assert [
+            a
+            for a in u.ASSERTIONS
+            if a.property == "point_in_time" and a.subject in SOURCES
+        ] == []
+
     def test_exactly_one_possibly_living_person(self):
         # born, and no source asserts a death: the privacy example
         living = [
@@ -884,9 +950,7 @@ class TestNamingPatterns:
     @staticmethod
     def written(source: str) -> u.Date:
         (when,) = [
-            a.value
-            for a in u.about(source, "point_in_time")
-            if a.source == source
+            a.value for a in u.about(source, "inception") if a.source == source
         ]
         return when
 
@@ -1233,7 +1297,7 @@ class TestGedcomFixture:
         assert media
         for obje in media:
             key = titles[obje.first("FILE").text("TITL")]
-            assert obje.text("DATE") in _gedcom_dates(key, "point_in_time")
+            assert obje.text("DATE") in _gedcom_dates(key, "inception")
 
     def test_the_possibly_living_person_has_no_death(self, records, by_xref):
         (nicholas,) = [
