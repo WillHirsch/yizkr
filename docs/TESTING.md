@@ -168,7 +168,8 @@ itself in its own `--help`.
   (`tests/fixtures/corpus/verdicts.py`, #587), with the ones no merge
   rule meets (a conflicting cluster's confident component, #361, #568;
   a `same` a contradiction overrules, #587) recorded as expected by
-  strict `xfail`s that turn when the rule does. The driver's write side
+  strict `xfail`s, each with premises on inputs a fix to the rule leaves
+  in place, so it turns when the rule does. The driver's write side
   (reset, register, write, places and site, #200, #201) needs a stack,
   so every unit
   test runs the driver with clustering as its only corpus stage (the

@@ -1386,14 +1386,15 @@ class TestTheTrapsInTheIdentityMap:
                 batches.said(name), "gustav-loebig", "date_of_death"
             ) == {u.Date(1996)}, name
         # merging over the confident links alone would join 17 clusters,
-        # none conflicting (an event or a union links confidently once
-        # the clusters holding its people merge, adjudicated ones
-        # included); the rule merges 51 mentions, among them the export's
-        # Hesse and Australia, jurisdictions of its PLACs, with the
-        # sources' own (#571), the confident components of ambiguous
-        # clusters (Gustav's and Nicholas's) and the clusters
-        # adjudication merged, each counted apart; it leaves the
-        # conflicting clusters' confident links unmerged
+        # none conflicting (an event links confidently once the clusters
+        # holding its people merge, and a wedding once its marriage
+        # merges, adjudicated ones included); the rule merges 51
+        # mentions, among them the export's Hesse and Australia,
+        # jurisdictions of its PLACs, with the sources' own (#571), the
+        # confident components of the clusters adjudication could not
+        # merge (Gustav's and Nicholas's) and the clusters adjudication
+        # merged, each counted apart; it leaves the conflicting clusters'
+        # confident links unmerged
         summary = identity.map["summary"]
         assert summary["confident_links_only"] == {
             "clusters": 17,
@@ -1564,14 +1565,13 @@ class TestTheTrapsInTheIdentityMap:
             "adjudication says the postcard's Gustl is the export's Gustav",
         )
         _premise(
-            identity.keys_of(
-                (entry["contradiction"] or {}).get("mentions", ())
-            )
-            == {
-                ("gustav-loebig", fc.LETTER),
-                ("gustav-loebig", fc.CERTIFICATE),
-            },
-            "'Gustl' contradicts the certificate's Gustave Lobig",
+            not any(
+                set(pair["mentions"])
+                == {gustav[fc.LETTER], gustav[fc.CERTIFICATE]}
+                for pair in entry["pairs"]
+            ),
+            "the postcard's Gustl and the certificate's mention are no "
+            "pair of the cluster",
         )
         assert identity.cluster(gustav[fc.LETTER]) == identity.cluster(
             gustav[fc.EXPORT]
@@ -1630,9 +1630,10 @@ class TestTheVerdicts:
     faithful model's, so `same` exactly when the two are one entity of
     the universe. Every pair asked is one of the four that make a trap's
     candidate cluster ambiguous (Klara's, Gustav's and Nicholas's people,
-    and Gustav and Florence's marriage) or of the events whose people
-    they hold, and the namesakes never are: the Ursulas' and Florence's
-    clusters conflict, and a conflicting cluster is never asked."""
+    and Gustav and Florence's marriage) or of Klara's emigrations, asked
+    because two of the three give no date; and the namesakes never are:
+    the Ursulas' and Florence's clusters conflict, and a conflicting
+    cluster is never asked."""
 
     def test_every_pair_asked_has_its_recorded_verdict(
         self, runs, first, calls
@@ -1723,7 +1724,10 @@ class TestTheVerdicts:
         model's misreading, and the export's: adjudication says `same`,
         which excuses the dates of that pair alone. The talk's 1950
         contradicts the early birth, so the family history's mention
-        stays apart, and the talk's and the export's merge."""
+        stays apart, and the talk's and the export's merge. The corpus
+        cannot show the excuse itself, since the talk's conflict is met
+        first either way: test_adjudication.py covers it
+        (test_a_same_verdict_overrides_a_date_contradiction)."""
         nicholas = identity.of("nicholas-lobig")
         entry = identity.candidate(nicholas[fc.EXPORT])
         assert entry["status"] == clustering.ADJUDICATED
@@ -1757,8 +1761,8 @@ class TestTheVerdicts:
         """Were the postcard's Klara said to be another than the export's,
         the `different` would cut the cluster's one pending pair: the
         postcard's mention would be a cluster of its own, adjudicated
-        apart, and the confident component of the rest would merge, with
-        no false merge either way."""
+        apart, and the confident component of the rest would merge, and
+        no cluster would hold two universe entities."""
         pair = frozenset(
             ((fc.LETTER, "Klara Löbig"), (fc.EXPORT, "Klara Löbig"))
         )

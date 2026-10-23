@@ -19,8 +19,8 @@ The documents are in `documents/` (FOLDER), made by `build.py`:
 Each is one kind of document the scratch driver plans: a text file, a
 deck, a GEDCOM file and three images. `engine.RecordedEngine` answers their
 calls from their recorded answers (`answers.py`), which carry one model
-mistake, and `tests/unit/test_fixture_corpus.py` runs a whole scratch run
-over them.
+mistake, and clustering's adjudication from `verdicts.py`; and
+`tests/unit/test_fixture_corpus.py` runs a whole scratch run over them.
 
 TRAPS names the patterns the corpus sets for later stages to meet, and
 PRIVACY_TRAPS the evidence the privacy traps turn on, in the universe's

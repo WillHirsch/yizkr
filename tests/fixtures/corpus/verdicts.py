@@ -61,8 +61,8 @@ VERDICTS = (
         (NARRATIVE, "Nicholas Lobig"),
         (EXPORT, "Nicholas Lobig"),
         SAME,
-        "Both are Gustav and Florence's son; the family history's 1850 "
-        "birth is a misread of its own '50.",
+        "Both are Gustave/Gustav Lobig's son Nicholas; a birth in 1850 to "
+        "a father who died in 1996 cannot be right.",
     ),
     Verdict(
         (LETTER, "Gustl"),
@@ -95,19 +95,22 @@ VERDICTS = (
         (DECK, "Emigration of Klara Löbig"),
         (LETTER, "Emigration of Klara Löbig"),
         SAME,
-        "Klara's one emigration, to Australia in 1938.",
+        "Both are the emigration of Klara Löbig as its principal, and "
+        "nothing either source gives tells against one event.",
     ),
     Verdict(
         (DECK, "Emigration of Klara Löbig"),
         (NARRATIVE, "Emigration of Klara Löbig"),
         SAME,
-        "Klara's one emigration, to Australia in 1938.",
+        "Both are the emigration of Klara Löbig as its principal, and "
+        "nothing either source gives tells against one event.",
     ),
     Verdict(
         (LETTER, "Emigration of Klara Löbig"),
         (NARRATIVE, "Emigration of Klara Löbig"),
         SAME,
-        "Klara's one emigration, to Australia in 1938.",
+        "Both are the emigration of Klara Löbig as its principal, and "
+        "nothing either source gives tells against one event.",
     ),
 )
 

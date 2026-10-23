@@ -229,9 +229,14 @@ class RecordedEngine:
         blocks = _ADJUDICATED_PAIR.split(prompt)[1:]
         pairs = {}
         for number, block in zip(blocks[::2], blocks[1::2], strict=True):
+            found = _ADJUDICATED_MENTION.findall(block)
+            if any(sha1 not in documents for sha1, _label in found):
+                raise NoAnswer(
+                    f"pair {number} names a document outside the corpus"
+                )
             mentions = frozenset(
                 (documents[sha1], ast.literal_eval(label))
-                for sha1, label in _ADJUDICATED_MENTION.findall(block)
+                for sha1, label in found
             )
             if len(mentions) != 2:
                 raise NoAnswer(f"pair {number} names no two mentions")
