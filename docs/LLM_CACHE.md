@@ -1064,7 +1064,8 @@ add `file`, the source's file name, which names a document whose source
 could not be read and so has no `subject`; stage events add `stage`
 (`transcription`, `extraction`, `critique` or `gedcom`; in a scratch
 run, a corpus stage's `started`, `done`, `failed` and `held` name the
-corpus stage, and no document); cache events add `role` and `key`, and
+corpus stage, and no document, and so do its `progress` events); cache
+events add `role` and `key`, and
 all of them but `cache-reject` and `cache-adopt` the kind of call
 (`call`); call events add `role`, the `stage` the role's calls are made
 in, and the kind of call:
@@ -1078,6 +1079,7 @@ in, and the kind of call:
 | `failed` | a stage failed | `reason` |
 | `held` | the control file stopped a stage's dispatch | `reason` |
 | `barrier` | a scratch run went past the barrier: every document's stages had ended, and its corpus stages come next | `documents` (whose stages all completed), `failed` (with a failed stage) |
+| `progress` | in a scratch run, how far a corpus stage of the write side has got: as register, write and each of the place stage's phases start, then once per document (register, write), question batch or link (places), at the start of each reset step, and as a stage starts waiting for the query service, reading the graph (places), building (site), or skipping (docs/MONITOR.md, Progress events) | `phase`; when it has something to say, `unit`, `done`, `of`, `step`, and counts: `failed`, `refused`, `written`, `referenced`, `skipped`, `claims_refused`. Never a document's words, a SHA-1 or a QID |
 | `refreshed` | in a scratch run, a stage's view made under a refresh of its role (`--refresh`) was saved: the run's later invocations that refresh the role reuse it | `role` |
 | `set-aside` | a document directory was moved aside and started afresh; or, with `stage`, a transcription view that fails the check again was moved aside, to be made again | `file` (a directory's), `reason` (`content changed`, no `derivations.json`, or no `state.json`; or the check's reason), `kept` |
 | `document-failed` | a document failed, and only it: a stage failed (with its own `failed` event too), or something outside its stages, such as its source or `state.json` that could not be read, its first record, or a step between the stages | `file`, `reason` |

@@ -681,10 +681,12 @@ class InstanceReset:
     it asks, through `ask`, when `interactive` (by default, when standard
     input is a terminal), and refuses when not. `lock` gives the hold on
     the live-stack lock (by default live_stack_lock()): a caller that
-    holds the lock already passes contextlib.nullcontext. The other
-    arguments serve the tests: the docker runner, the wiki clients, the
-    steps that repopulate, the instance record's directory, the clock and
-    the log."""
+    holds the lock already passes contextlib.nullcontext. `progress`, when
+    given, is told of each step as it starts: its number, the number of
+    steps and its name, as the log's "[6/9] start the stack" gives them.
+    The other arguments serve the tests: the docker runner, the wiki
+    clients, the steps that repopulate, the instance record's directory,
+    the clock and the log."""
 
     def __init__(
         self,
@@ -707,6 +709,7 @@ class InstanceReset:
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Any] = time.sleep,
         log: Callable[..., None] = print,
+        progress: Callable[[int, int, str], Any] | None = None,
     ) -> None:
         self.compose = compose
         self.config = config
@@ -730,6 +733,7 @@ class InstanceReset:
         self.clock = clock
         self.sleep = sleep
         self.log = log
+        self.progress = progress
         self.report: ResetReport | None = None
 
     # -- the run ----------------------------------------------------------
@@ -761,6 +765,8 @@ class InstanceReset:
             self.report = ResetReport(held_plan)
             steps = self._steps(held_plan)
             for number, (name, action) in enumerate(steps, 1):
+                if self.progress is not None:
+                    self.progress(number, len(steps), name)
                 self._step(f"[{number}/{len(steps)}]", name, action)
         return self.report
 

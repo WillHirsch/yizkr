@@ -67,6 +67,7 @@ import urllib.request
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from yizkr.claims import (
     ClaimBatch,
@@ -746,9 +747,12 @@ def adjudicate(
     questions: list[Question],
     places: list[PlaceRecord],
     batch_questions: int = BATCH_QUESTIONS,
+    progress: Callable[[int, int], Any] | None = None,
 ) -> Adjudication:
     """Ask the questions in batches of `batch_questions`, in their order,
-    each batch one call (adjudication_prompt)."""
+    each batch one call (adjudication_prompt). `progress`, when given, is
+    told the batches answered and the batches there are: before the
+    first, and after each."""
     names = place_names(places)
     found = Adjudication()
     batches = [
@@ -760,6 +764,8 @@ def adjudicate(
         f"{len(batches)} batch(es) of <= {batch_questions}",
         file=sys.stderr,
     )
+    if progress is not None:
+        progress(0, len(batches))
     for index, chunk in enumerate(batches, start=1):
         prompt = adjudication_prompt(chunk, names)
         response = client.complete(prompt)
@@ -790,6 +796,8 @@ def adjudicate(
         found.answers.extend(parsed.answers)
         found.rejected += parsed.rejected
         found.conflicts.extend(parsed.conflicts)
+        if progress is not None:
+            progress(index, len(batches))
     return found
 
 

@@ -111,6 +111,9 @@ SET_ASIDE = "set-aside"
 DOCUMENT_FAILED = "document-failed"
 # a stage's events: "reused" says its view was current and stands
 STAGE_EVENTS = ("started", "done", "reused", "failed", "held")
+# how far a corpus stage of a scratch run has got: what it is doing and
+# counts, never a document's words (yizkr.pipeline.scratchwrite)
+PROGRESS = "progress"
 # the LLM cache's events (yizkr.pipeline.llmcache), counted per role
 CACHE_EVENTS = (
     "cache-hit",
