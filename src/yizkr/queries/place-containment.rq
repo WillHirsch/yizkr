@@ -1,17 +1,33 @@
 # Place containment — the recorded hierarchy the disagreement report reads
-# (ADR-0009, ADR-0033): every location and part-of edge, and every merge
-# redirect. A place value that lies inside another, following these edges
-# (an address in the town another source names), or the same item
-# through a redirect, differs from it only in resolution, and the
+# (ADR-0009, ADR-0033, ADR-0038 §5): every location and part-of statement
+# as an edge, with its rank and whether it has a stated-in source, and
+# every merge redirect. A place value that lies inside another, following
+# these edges (an address in the town another source names), or the same
+# item through a redirect, differs from it only in resolution, and the
 # comparison in yizkr.disagreement leaves such a pair out (MODELING.md
-# "Contradictions"). Recording the hierarchy is what makes the report
+# "Contradictions"). Each edge is a source's claim: the comparison follows
+# one that a source states and a curator has not deprecated, whatever
+# time it carries. Recording the hierarchy is what makes the report
 # sharpen over time.
-SELECT ?item ?itemLabel ?link ?target ?targetLabel
+SELECT ?item ?itemLabel ?link ?target ?targetLabel ?rank ?stated
 WHERE {
-  VALUES ?link {
-    wdt:{P:location} wdt:{P:part_of} <http://www.w3.org/2002/07/owl#sameAs>
+  {
+    # every statement, whatever its rank, and not the truthy triple,
+    # which holds best-rank values only: the comparison reads the rank
+    VALUES ?link { wd:{P:location} wd:{P:part_of} }
+    ?link wikibase:claim ?p ;
+          wikibase:statementProperty ?ps .
+    ?item ?p ?statement .
+    ?statement ?ps ?target ;
+               wikibase:rank ?rank .
+    BIND(EXISTS { ?statement prov:wasDerivedFrom ?reference .
+                  ?reference pr:{P:stated_in} ?source . } AS ?stated)
   }
-  ?item ?link ?target .
+  UNION
+  {
+    VALUES ?link { <http://www.w3.org/2002/07/owl#sameAs> }
+    ?item ?link ?target .
+  }
   OPTIONAL { ?item rdfs:label ?itemLabel . FILTER(LANG(?itemLabel) = "en") }
   OPTIONAL { ?target rdfs:label ?targetLabel .
              FILTER(LANG(?targetLabel) = "en") }

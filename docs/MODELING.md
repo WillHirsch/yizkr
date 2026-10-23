@@ -506,9 +506,8 @@ artifact a new QID, changes neither.
   runs and for the place-hierarchy pass's runs alike. An untyped item is
   missing from the non-privileged export until it is typed ("Living
   persons and privacy"), and every statement it backs loses its run
-  reference there: an extraction's claims would read as curated, and the
-  place-hierarchy pass's containment, which cites the run alone, as
-  unreferenced.
+  reference there: an extraction's claims, and the place-hierarchy
+  pass's links, would read as curated, stated in their sources alone.
 - **A scratch run marks its run items** (#200; ADR-0025 §1). The run
   item of each batch a scratch run writes states, in the same second
   write as its kind and stated in itself, `unratified scratch run → <run
@@ -776,21 +775,59 @@ artifact a new QID, changes neither.
   store external ids and coordinate location.
 - Historical places that no longer exist are ordinary place items with
   their own time bounds.
-- Containment between places (`part_of`) is world knowledge, not a
-  source assertion: proposed by `yizkr reconcile-places` (ADR-0009),
-  human-approved, cycle-guarded, and referenced to the pass's run item
-  (process provenance; a GeoNames-imported edge adds `stated in` → the
-  GeoNames dataset item). The inconsistency report suppresses value
-  pairs connected by a `(location|part_of)+` path — differences of
-  resolution, not contradictions. ADR-0038 (proposed) would make each
-  containment a source's time-scoped claim instead; until the owner
-  accepts it, this bullet stands.
+- **Containment between places is a source's claim** (ADR-0038). `A
+  part of B` is stated in the source that says so, with its locator, at
+  normal rank beside any contrary source's claim, and a machine-written
+  one also cites its run. No source, no containment: nothing writes a
+  `part_of` no source states, and process provenance alone never backs
+  one. `location`, which places an organisation or an event, follows the
+  same rule. The 1905 marriage certificate puts Fläckfeld in Kreis
+  Mockburg and the 1984 family tree in Kreis Peiltal: both claims stand,
+  each with its source. No model answers whether one place lies within
+  another; the only question a model may be asked is which existing
+  place a source's container name means (ADR-0038 §3).
+- **A containment carries the time its source gives, and nothing
+  else**, dated as a residence is ("Marriages, residences and other
+  periods"): `start_time` and `end_time` where the source dates its
+  start or end, each with its own range (a start from its `earliest
+  date` to its `latest start date`, an end from its `earliest end date`
+  to its `latest date`); `point_in_time` where the source presents it as
+  holding at a date, bounded by `earliest date` and `latest date` where
+  the source gives a range; circa as `sourcing circumstances`. A source
+  that states no time gives a containment with no time qualifier: the
+  document's own date is never written as the containment's point in
+  time (rule 5). Views read an undated claim as of its source, labelled
+  by that source ("Fläckfeld: in Kreis Mockburg per the 1905 marriage
+  certificate; in Kreis Peiltal per the 1984 family tree").
+- **The place hierarchy asks identity alone** (ADR-0009, ADR-0038 §3 and
+  §8.5, #201). A place's mention record states the chain of containers
+  its source puts it in, and each link of the chain is a link the source
+  states. Where a link's container names more than one existing place,
+  or no claim of the document gives the link, a model is asked which
+  existing place the container means, among the places that bear its
+  name; it answers with one of them, or none. The link is then written
+  `part of` the place named, at normal rank, `stated in` the document's
+  artifact (with no page: a record has no locator) and `inferred from`
+  the pass's run item, with the time the document's claim gives and none
+  where the record alone states the link. A link that would close a
+  cycle, at any time, is refused. A scratch run does this unattended in
+  its `places` stage; `yizkr reconcile-places` asks the same for a
+  curator, who approves the answers it writes. A GeoNames-imported edge
+  is stated in the GeoNames dataset item (ADR-0038 §6).
+- The inconsistency report suppresses value pairs connected by a path of
+  `location` and `part_of` claims, differences of resolution rather than
+  contradictions, and follows only a claim that a source states and a
+  curator has not deprecated, at any time it carries ("Contradictions").
 - Extraction gives a place's `part_of` only where the source states it
   (in the place's mention, "Fläckfeld, Kreis Mockburg"; in the fields a
   form gives that place; or as a link of a chain of containers), never
-  from what is known of the place or from another place's container; the
-  extraction critic
-  flags a `part_of` claim its excerpt does not state
+  from what is known of the place or from another place's container,
+  with the time the source gives it for the containment and none where
+  it gives none. Neither the document's own date nor the date of an
+  event the source places there is that time: a birth "in 1836 at
+  Flörburg, Kreis Peiltal" gives Flörburg's `part_of` no time. The
+  extraction critic flags a `part_of` claim its excerpt does not state,
+  or a time on one that its excerpt does not state for the containment
   (`unsupported_containment`, ADR-0023).
 
 ## Artifact coverage — cross-domain relations (planned)
@@ -1457,9 +1494,12 @@ not a signal to grow the schema on.
   structurally contradict, never merely dissimilar ones; unknowns stay
   live candidates. Deliberately excluded is a date disagreement: that is
   healthy coexistence (ADR-0002) to surface, not proof of distinctness.
-  A rejected equivalence that is really a containment (a camp within a
-  country) is handed to reconcile-places as a `part_of` proposal rather
-  than discarded.
+  The containment it reads is the edges the inconsistency report follows:
+  a `part_of` or `location` claim a source states, not deprecated. A
+  rejected equivalence between two places, one inside the other, is a
+  `distinct` verdict and nothing more: the adjudicator names no container
+  (ADR-0038 §8.2), and a reviewer who knows the containment records it by
+  citing the source it rests on.
 
 ## Contradictions
 
@@ -1505,35 +1545,38 @@ not a signal to grow the schema on.
   ("Marriages, residences and other periods"), and is not compared.
 - A date whose span lies inside another's and a place the graph records
   inside the other differ in resolution, not substance, and are not
-  reported. A date's span is the whole period its precision names (a
-  month, a year, a decade, or a century as Wikibase counts it, which
-  holds 1900 in the 19th century and 1800 in the 18th: "Uncertainty and
-  time"), or the range its source states with `earliest date` and
-  `latest date`, open-ended when only one is given: 1909 and 16 March
-  1909 agree, as do "between 1938 and 1939" and either 22 June 1938 or
-  3 September 1939, and "before 1926" and 1912, while "after 1945" and
-  1941 disagree. The 19th century agrees with 1900 and with the 1890s,
-  and disagrees with 1800 and with the decade 1900–1909, which reaches
-  past it. A stated range is never widened back to its precision (rule
-  5): 1939 stated "between September 1939 and 1 October 1939" and August
-  1939 disagree. A precision coarser than a century names no span. A range
-  dates only a time: on any other value, such as a place, a person or a
-  name, it sets nothing apart. Two dates stored alike are compared
-  through the ranges their statements state: "before 1945" and "after
-  1945", both stored as 1945, disagree; with the same stated ranges, or
-  none, they differ at most in resolution, as do dates stored alike whose
-  spans nest: the 1890s stated as a decade, as "between 1890 and 1899" or
-  as 1890, all stored as 1890. A statement that carries two earliest (or
-  latest) dates states its value once per range, and each is compared
-  with other statements' values; its own readings alone are one claim,
-  never listed against each other, however many artifacts cite it. A
-  residence's or a spouse's start and end times are compared like any
-  other date, each through the range its statement states for that end:
-  a start from the earliest date to the latest start date, an end from
-  the earliest end date to the latest date. So a marriage begun "between
-  1946 and 1947" and one begun on 8 February 1947 differ only in
-  resolution, while a latest date, which bounds the end, sets no start
-  apart.
+  reported. A place lies inside another along a path of `location` and
+  `part_of` claims, each one a source states (with a stated-in source)
+  at normal or preferred rank, whatever time it carries: one path at any
+  time is enough (ADR-0038 §5). A date's span is the whole period its
+  precision names (a month, a year, a decade, or a century as Wikibase
+  counts it, which holds 1900 in the 19th century and 1800 in the 18th:
+  "Uncertainty and time"), or the range its source states with `earliest
+  date` and `latest date`, open-ended when only one is given: 1909 and
+  16 March 1909 agree, as do "between 1938 and 1939" and either 22 June
+  1938 or 3 September 1939, and "before 1926" and 1912, while "after
+  1945" and 1941 disagree. The 19th century agrees with 1900 and with
+  the 1890s, and disagrees with 1800 and with the decade 1900–1909,
+  which reaches past it. A stated range is never widened back to its
+  precision (rule 5): 1939 stated "between September 1939 and 1 October
+  1939" and August 1939 disagree. A precision coarser than a century
+  names no span. A range dates only a time: on any other value, such as
+  a place, a person or a name, it sets nothing apart. Two dates stored
+  alike are compared through the ranges their statements state: "before
+  1945" and "after 1945", both stored as 1945, disagree; with the same
+  stated ranges, or none, they differ at most in resolution, as do dates
+  stored alike whose spans nest: the 1890s stated as a decade, as
+  "between 1890 and 1899" or as 1890, all stored as 1890. A statement
+  that carries two earliest (or latest) dates states its value once per
+  range, and each is compared with other statements' values; its own
+  readings alone are one claim, never listed against each other, however
+  many artifacts cite it. A residence's or a spouse's start and end
+  times are compared like any other date, each through the range its
+  statement states for that end: a start from the earliest date to the
+  latest start date, an end from the earliest end date to the latest
+  date. So a marriage begun "between 1946 and 1947" and one begun on 8
+  February 1947 differ only in resolution, while a latest date, which
+  bounds the end, sets no start apart.
 - **Machine uncertainty is process, not graph data (ADR-0023).** The
   graph records the *source's* vagueness (circa, ranges, precision) but
   never the *machine's* confidence. Contentiousness surfaces ephemerally

@@ -290,11 +290,10 @@ class TestDisagreementReport:
     def test_containment_lists_location_part_of_and_redirects(
         self, containment
     ):
-        (links,) = re.findall(r"VALUES\s+\?link\s*" + VALUES_BODY, containment)
-        assert placeholder_keys(links)[0] == {"location", "part_of"}
-        assert "<http://www.w3.org/2002/07/owl#sameAs>" in links
-        # truthy edges: a deprecated containment is not followed
-        assert "wdt:{P:location}" in links and "wdt:{P:part_of}" in links
+        links = re.findall(r"VALUES\s+\?link\s*" + VALUES_BODY, containment)
+        assert len(links) == 2
+        assert placeholder_keys(links[0])[0] == {"location", "part_of"}
+        assert links[1].strip() == "<http://www.w3.org/2002/07/owl#sameAs>"
         assert "?item ?link ?target ." in containment
         # every edge, flat: the comparison walks the paths, and the only
         # filters pick a label's language
@@ -304,6 +303,39 @@ class TestDisagreementReport:
         projection = containment.split("WHERE", 1)[0]
         for column in ("?item", "?link", "?target"):
             assert column in projection
+
+    def test_containment_edges_carry_rank_and_whether_a_source_states_them(
+        self, containment
+    ):
+        # ADR-0038 §5: each edge is a source's claim, so the comparison
+        # reads its rank and its stated-in source; no truthy triple, which
+        # holds best-rank values only, stands in for a statement, and no
+        # filter on rank drops one before the comparison reads it
+        projection = containment.split("WHERE", 1)[0]
+        assert "?rank" in projection and "?stated" in projection
+        assert "?item ?p ?statement ." in containment
+        assert "?statement ?ps ?target ;" in containment
+        assert "wikibase:rank ?rank ." in containment
+        for key in ("location", "part_of"):
+            assert f"wdt:{{P:{key}}}" not in containment, key
+        for rank in ("DeprecatedRank", "PreferredRank", "BestRank"):
+            assert rank not in containment
+        # at any time (owner question 2): no qualifier, time or exclusion
+        # narrows the edges the query lists
+        assert (
+            re.search(r"\bpqv?:|timeValue|NOT EXISTS|MINUS", containment)
+            is None
+        )
+        stated = group_at(containment, "?statement prov:wasDerivedFrom")
+        assert "?reference pr:{P:stated_in} ?source ." in stated
+        assert (
+            containment[: containment.index(stated)]
+            .rstrip()
+            .endswith("BIND(EXISTS")
+        )
+        assert containment[containment.index(stated) :].startswith(
+            stated + " AS ?stated)"
+        )
 
 
 class TestRendering:

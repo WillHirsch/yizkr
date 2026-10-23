@@ -41,7 +41,11 @@ properties:
 
   part_of:
     label: part of
-    description: this entity is a part of that entity; links an artifact fragment to its artifact
+    description: >-
+      this entity is a part of that entity; links an artifact fragment to
+      its artifact, and a place to a container its source states, with the
+      time the source gives (start_time, end_time or point_in_time) and
+      none where it gives none
     datatype: wikibase-item
     accepts: [place, artifact, unclassified_entity]
     wikidata: P361
@@ -423,8 +427,8 @@ properties:
     description: >-
       qualifier; earliest possible date for the statement's date (its value
       or its point in time), for ranges and vague sources; on a statement
-      with start or end time qualifiers (a residence, an employment),
-      the earliest its start can be
+      with start or end time qualifiers (a residence, an employment, a
+      containment), the earliest its start can be
     datatype: time
     wikidata: P1319
 
@@ -433,8 +437,8 @@ properties:
     description: >-
       qualifier; latest possible date for the statement's date (its value or
       its point in time), for ranges and vague sources; on a statement with
-      start or end time qualifiers (a residence, an employment), the latest
-      its end can be
+      start or end time qualifiers (a residence, an employment, a
+      containment), the latest its end can be
     datatype: time
     wikidata: P1326
 

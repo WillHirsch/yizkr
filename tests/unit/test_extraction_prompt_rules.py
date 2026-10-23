@@ -407,8 +407,45 @@ class TestContainmentInThePrompts:
 
     def test_the_chunk_says_why(self):
         assert (
-            "Containment the source does not state is world knowledge, "
-            "proposed later by the place pass (ADR-0009)"
+            "Containment is a source's claim, and one the source does not "
+            "state is never written (ADR-0038)"
+        ) in CHUNK
+        assert "world knowledge" not in CHUNK
+
+    # ADR-0038 §2 (#515): the time the source gives, never the document's
+
+    @pytest.mark.parametrize(
+        "prompt", [CHUNK, SINGLE], ids=["chunk", "single"]
+    )
+    def test_a_containment_takes_the_time_its_source_gives(self, prompt):
+        assert (
+            "the time the source gives it for the containment, and none "
+            "where it gives none: "
+            "`start_time` or `end_time` where the source dates when the "
+            'place came into or left the container ("Kaldovsky District, in '
+            'Chadsk Oblast from 1937"), `point_in_time` where it presents '
+            'the place as in the container at a date ("in 1941 Koshnovka '
+            'belonged to Kaldovsky District"), each with its range and circa '
+            "as a period's are."
+        ) in prompt
+
+    @pytest.mark.parametrize(
+        "prompt", [CHUNK, SINGLE], ids=["chunk", "single"]
+    )
+    def test_never_the_documents_date_nor_an_events(self, prompt):
+        # ADR-0038 §2: a containment belongs to the place, not to the
+        # event a source describes there
+        assert (
+            "The document's own date is never the containment's time, nor "
+            "is the date of an event the source places there: a birth "
+            '"in 1836 at Flörburg, Kreis Peiltal" gives Flörburg\'s '
+            "`part_of` no time"
+        ) in prompt
+
+    def test_the_chunk_shows_an_undated_field(self):
+        assert (
+            'a certificate of 1941 that writes "Koshnovka, Kaldovsky '
+            'District" gives its `part_of` none either.'
         ) in CHUNK
 
     def test_the_chunk_never_infers_or_carries_it_over(self):
@@ -504,6 +541,13 @@ class Recording:
         return json.dumps({"done": True})
 
 
+def containment_block(prompt: str) -> str:
+    return prompt.split(
+        "Each `part_of` claim above, with the time it carries and the "
+        "excerpt of\nthe source it cites:\n"
+    )[1].split("\nCheck each")[0]
+
+
 def critic_prompt(batch_: ClaimBatch) -> str:
     llm = Recording()
     critique.run_critique(llm, batch_)
@@ -529,7 +573,17 @@ class TestTheCriticChecksContainment:
             '(Fläckfeld put in Kreis Peiltal on an excerpt that reads only "'
             'Fläckfeld")'
         ) in CONTAINMENT_CATEGORY
-        assert "(ADR-0009): suggest drop" in CONTAINMENT_CATEGORY
+        assert "is never written (ADR-0038): suggest drop" in (
+            CONTAINMENT_CATEGORY
+        )
+
+    def test_the_category_names_an_unstated_time(self):
+        assert (
+            "Also a time a `part_of` claim carries (a point in time, a start "
+            "or end time, a bound of one, or circa) that its excerpt does not "
+            "state for the containment, such as the document's own date or "
+            "the date of an event at the place: suggest drop the qualifier"
+        ) in CONTAINMENT_CATEGORY
 
     def test_the_prompt_lists_the_category_and_asks_for_the_check(self):
         prompt = critic_prompt(containment_batch(("e01", "e02", "Fläckfeld")))
@@ -538,7 +592,8 @@ class TestTheCriticChecksContainment:
             "Check each against its excerpt: a containment the excerpt does "
             "not state (in the place's mention, in the fields a form gives "
             "that place, or as a link of a chain of containers) is a concern "
-            "(unsupported_containment)."
+            "(unsupported_containment), and so is a time the excerpt does "
+            "not state for the containment."
         ) in flat(prompt)
 
     def test_each_part_of_claim_is_shown_with_its_excerpt(self):
@@ -548,10 +603,7 @@ class TestTheCriticChecksContainment:
                 ("e01", "e03", "Fläckfeld"),
             )
         )
-        block = prompt.split(
-            "Each `part_of` claim above, with the excerpt of the source it "
-            "cites:\n"
-        )[1].split("\nCheck each")[0]
+        block = containment_block(prompt)
         assert block.splitlines() == [
             '- e01 part_of e02: "Fläckfeld, Kreis Mockburg"',
             '- e01 part_of e03: "Fläckfeld"',
@@ -564,7 +616,7 @@ class TestTheCriticChecksContainment:
     def test_a_batch_without_containment_shows_none(self):
         prompt = critic_prompt(containment_batch())
         assert (
-            "with the excerpt of the source it cites:\n(none)\nCheck each"
+            "the excerpt of\nthe source it cites:\n(none)\nCheck each"
         ) in prompt
 
     def test_an_excerpt_stays_on_its_line(self):
@@ -585,6 +637,98 @@ class TestTheCriticChecksContainment:
             ("e02", "Kreis Mockburg"),
             ("e03", "Kreis Peiltal"),
         }
+
+    def test_a_dated_claim_is_shown_with_its_time(self):
+        # Koshnovka (e01) in Kaldovsky District (e02) at a date, with a
+        # range and circa; an undated claim beside it shows no time
+        batch_ = containment_batch(
+            ("e01", "e02", "in 1941 Koshnovka belonged to Kaldovsky District"),
+            ("e01", "e03", "Koshnovka"),
+        )
+        dated = batch_.claims[0].model_dump(mode="json")
+        dated["qualifiers"] = [
+            {
+                "property": "point_in_time",
+                "value": {"type": "time", "year": 1941},
+            },
+            {
+                "property": "earliest_date",
+                "value": {"type": "time", "year": 1940},
+            },
+            {
+                "property": "sourcing_circumstances",
+                "value": {
+                    "type": "item",
+                    "value": {"kind": "vocab", "key": "circa"},
+                },
+            },
+            {
+                "property": "location",
+                "value": {
+                    "type": "item",
+                    "value": {"kind": "local", "local_id": "e03"},
+                },
+            },
+        ]
+        given = batch_.model_dump(mode="json")
+        given["claims"][0] = dated
+        block = containment_block(
+            critic_prompt(ClaimBatch.model_validate(given))
+        )
+        assert block.splitlines() == [
+            "- e01 part_of e02, carrying point_in_time 1941; earliest_date "
+            '1940; sourcing_circumstances circa: "in 1941 Koshnovka belonged '
+            'to Kaldovsky District"',
+            '- e01 part_of e03: "Koshnovka"',
+        ]
+
+    @pytest.mark.parametrize(
+        "time",
+        [
+            "start_time",
+            "end_time",
+            "latest_date",
+            "latest_start_date",
+            "earliest_end_date",
+        ],
+    )
+    def test_every_dating_qualifier_is_shown(self, time):
+        given = containment_batch(("e01", "e02", "Fläckfeld")).model_dump(
+            mode="json"
+        )
+        given["claims"][0]["qualifiers"] = [
+            {"property": time, "value": {"type": "time", "year": 1905}}
+        ]
+        block = containment_block(
+            critic_prompt(ClaimBatch.model_validate(given))
+        )
+        assert f"- e01 part_of e02, carrying {time} 1905: " in block
+
+    def test_a_finding_on_a_dated_containment_names_its_claim(self):
+        # the block's listing of a dated claim, up to its time, is the
+        # claim as a finding names it
+        given = containment_batch(("e01", "e02", "Fläckfeld")).model_dump(
+            mode="json"
+        )
+        given["claims"][0]["qualifiers"] = [
+            {
+                "property": "point_in_time",
+                "value": {"type": "time", "year": 1905},
+            }
+        ]
+        batch_ = ClaimBatch.model_validate(given)
+        (line,) = containment_block(critic_prompt(batch_)).splitlines()
+        subject, prop, value = line[2:].split(", carrying")[0].split(" ")
+        finding = {
+            "entity": "e01",
+            "claim": {"subject": subject, "property": prop, "value": value},
+            "axis": "value",
+            "category": "unsupported_containment",
+            "issue": "the excerpt gives the containment no date",
+            "suggestion": {"note": "drop the qualifier"},
+        }
+        checked = critique.check(finding, batch_, load_vocabulary())
+        assert isinstance(checked, critique.Finding)
 
     def test_a_finding_on_a_containment_is_valid(self):
         batch_ = containment_batch(("e01", "e03", "Fläckfeld"))

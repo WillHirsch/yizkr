@@ -56,13 +56,13 @@ changing what they check:
   under tests/integration read the real env file.
 
 - **No write side in a scratch run.** The scratch driver's corpus
-  stages that touch the wiki (reset, register, write and site,
+  stages that touch the wiki (reset, register, write, places and site,
   yizkr.pipeline.scratchwrite) need a stack, which no unit test has: a
   run that went past the barrier would be refused at its preflight. So
   `scratch.CORPUS_STAGES` holds clustering alone in every unit test (the
   `_no_write_side` fixture). A test marked `write_side` keeps them, and
   gives the stages the fake wiki and stand-ins they use
-  (test_scratch_write.py).
+  (test_scratch_write.py, test_scratch_places.py).
 
 test_conftest.py tests the first two and the last three, and
 test_anomalies.py the third.

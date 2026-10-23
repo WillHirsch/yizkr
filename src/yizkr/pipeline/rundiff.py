@@ -44,6 +44,11 @@ model, the configuration, the attempt, the epoch.
 - *Failures*: the documents that fail in one run and not the other.
 - *Flags* and *contradictions*: compared when both reports count them;
   otherwise not available, with why.
+- *Place hierarchy*: the place stage's counts (questions, calls,
+  answered, uncertain and unanswered, stated links left out, links
+  written, referenced and already there, links a record alone states
+  and of them those written, links unresolved, answers rejected by the
+  schema, and cycles and conflicts refused), side by side, as figures.
 - *Claims*, per document and property, matched by their claim
   fingerprints (yizkr.pipeline.fingerprints) as multisets: those only
   the baseline holds are removed and those only the run holds added,
@@ -166,6 +171,8 @@ METHODS = frozenset(
 # the aggregates' sections whose figures the diff sets side by side;
 # times are left out, as they differ from run to run whatever changed
 FIGURE_SECTIONS = ("documents", "stages", "content", "anomalies", "calls")
+# the figures of the place stage's counts, shown in a section of their own
+PLACE_FIGURES = "content.place_hierarchy."
 _TIMES = re.compile(r"(^|_)seconds$")
 # figures never set side by side: the documents per language, since the
 # corpus's languages are never posted
@@ -1880,6 +1887,31 @@ def render_markdown(aggregate: Mapping[str, Any]) -> str:
                     for r in section["figures"]
                 ],
             )
+    lines += ["## Place hierarchy", ""]
+    places = [
+        row
+        for row in aggregate["figures"]
+        if row["figure"].startswith(PLACE_FIGURES)
+    ]
+    if places:
+        lines += _table(
+            ("figure", "baseline", "run", "delta"),
+            [
+                (
+                    row["figure"].removeprefix(PLACE_FIGURES),
+                    row["baseline"],
+                    row["run"],
+                    _delta(row["delta"]),
+                )
+                for row in places
+            ],
+        )
+    else:
+        lines += [
+            "Not available: neither run's place stage has counted its "
+            "questions.",
+            "",
+        ]
     lines += [
         "## Figures that differ",
         "",

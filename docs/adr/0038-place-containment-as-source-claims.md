@@ -1,15 +1,17 @@
 # ADR-0038: Place containment as time-scoped source claims
 
-Status: **proposed** (drafted 2026-10-16 for #515, on the owner's
-direction of that day). Supersedes in part
+Status: **accepted** (accepted by the owner, 2026-10-23; drafted
+2026-10-16 for #515, on the owner's direction of that day). Each owner
+question below is settled by its recommendation. Supersedes in part
 [ADR-0009](0009-place-hierarchy.md): its "Provenance" section and
 decision FA of #201's amendment (PR #513, parked), with the parts of its
 adjudication that follow from them (§9 below). The rest of ADR-0009
-stands. Until the owner accepts this ADR, ADR-0009, ADR-0017 and
-MODELING.md stay as they are; the consequences in §8 are applied with
-the code that implements it. Its implementation comes before #146, the
-first scratch run that writes, since the owner resolves every open issue
-that affects write structure first (2026-10-16).
+stands. ADR-0017 carries the amendment §8.2 gives it. The consequences in
+§8 are applied with the code that implements them: items 1 to 4 with
+#515's implementation, items 5 to 7 with the rebuild of #201's stage.
+Its implementation comes before #146, the first scratch run that writes,
+since the owner resolves every open issue that affects write structure
+first (2026-10-16).
 
 ## Context
 
@@ -193,12 +195,16 @@ account (#164), and coordinates and external ids come with it.
 
 ### 8. What follows from it
 
-Applied with the implementation, once the owner accepts this ADR:
+Applied with the implementation (accepted by the owner, 2026-10-23):
 
 1. **The inconsistency report** reads the containment path as §5
    says. `place-containment.rq` fetches, for each edge, its rank and
    whether it has a stated-in source; `yizkr.disagreement` keeps only
    the edges §5 reads. The report's other rules are unchanged.
+   *Applied (#515):* the query lists each `part_of` and `location`
+   statement, not its truthy triple, with `?rank` and `?stated`;
+   `yizkr.disagreement.followed` keeps an edge whose rank is not
+   deprecated and that has a stated-in source.
 2. **ADR-0017.**
    - **Rule 2 stands.** A source's claim that A lies within B is still
      a referenced fact that A and B are two places, at any time, since
@@ -210,17 +216,36 @@ Applied with the implementation, once the owner accepts this ADR:
      The `distinct` verdict stands; no `-containment.csv` row comes from
      it.
    - ADR-0017 gains an amendment line saying so.
+   *Applied (#515):* the graph-dedup prompt asks for no container, a
+   proposal carries none, and `reconcile-graph` writes no
+   `-containment.csv`. Rule 2's closure (`fetch_place_containment`)
+   runs `place-containment.rq` and keeps the edges `followed` keeps.
 3. **Extraction's containment rule** keeps "only where the source
    states it", and asks for the time the source gives (§2), never the
    document's date. The extraction critic's `unsupported_containment`
    also flags a time qualifier its excerpt does not state. This changes
    a prompt, so its PR carries `needs:scratch-diff` and `stage:extraction`
    (ADR-0025 §4).
+   *Applied (#515):* the single-call and chunk prompts ask for
+   `start_time` or `end_time` where the source dates the containment's
+   start or end, `point_in_time` where it presents it as holding at a
+   date, with ranges and circa, and none otherwise. Neither the
+   document's own date nor the date of an event the source places there
+   is the containment's time: a containment belongs to the place (§2). The
+   critic's containment block shows each `part_of` claim's dating
+   qualifiers beside its excerpt, and `unsupported_containment` names
+   both dates as times the excerpt does not state for the containment.
 4. **The writer** writes a `part_of` claim's time qualifiers like any
    claim's. The claim schema and the manifest accept, where they don't yet, `point_in_time`,
    `start_time`, `end_time`, the four range qualifiers and
    `sourcing_circumstances` on `part_of` and `location`. The write test
    covers a dated and an undated containment.
+   *Applied (#515):* the claim schema already takes any manifest
+   property as a qualifier, and the writer writes a qualifier as it
+   writes any claim's; the manifest's `part_of` description now names
+   the time a source gives. tests/unit/test_containment_claims.py and
+   tests/integration/test_live_containment.py cover a dated and an
+   undated containment, side by side.
 5. **The place stage and `reconcile-places`** become the identity
    question of §3, on the worklist ADR-0009 builds:
    - **Questions** come only from stated links: each chain of
@@ -247,14 +272,61 @@ Applied with the implementation, once the owner accepts this ADR:
    - **The command `reconcile-places`** asks the same question for a
      curator, with the same CSV contract less the containment verdicts.
      Its `--apply` writes only links a source states, cited as above.
+
+   *Applied (#201):* `yizkr.pipeline.places` takes each link a record
+   states (`stated_links`), reading the record's chain nearest first,
+   the order #555 has the entity manifest ask for (ADR-0035 §2.2; the
+   stage relies on it, and #146 runs only after both merge), with the
+   qualifiers of each claim of its document that gives it (a `part_of`
+   from the link's inner end to an entity a name of which is the
+   container's), and asks (`build_worklist`) of a link whose container
+   names more than one place, or that no claim gives. A link a claim
+   gives whose container names one place is settled without a question,
+   as the write wrote it from the claim; a link whose container names no
+   place, or whose place is none of the graph's, is left out and counted
+   (`unnamed`, decision FC as applied). A question names the place, its
+   chain, the container and the numbered candidates; the answer names a
+   candidate's number or `uncertain`. The inner end of a later link is
+   the place the link before it resolved to; a link whose inner end an
+   uncertain answer left open is counted (`unresolved`) and not written.
+   Each link is written by `write_link`: `part of` the named item with
+   the claim's qualifiers, `stated in` the artifact with no page,
+   `inferred from` the run item, each its own reference block; a
+   statement of the same value and qualifiers that cites the artifact
+   already is left as it is, and one citing other sources gains the
+   link's blocks. The prompt names each place by its label and
+   description too, which the instance keeps unique with the label and
+   the writer makes from the identity map alone; places whose names
+   still coincide are numbered by the documents whose records name them,
+   else in the order given (decision FD as applied). Between rounds the
+   graph's containment removes no question: a candidate the graph
+   already puts the place in may be a namesake the source does not mean,
+   so a later round asks again, and the idempotent skip keeps each link
+   from being written twice (§9's "transitive elimination between
+   rounds" as applied). The scratch run's `places` stage
+   (yizkr.pipeline.scratchwrite) writes every answer unattended;
+   `reconcile-places` writes the CSV's approved `same` rows, with the
+   columns of ADR-0009's contract (A the place, B the candidate named)
+   and the chain and the container's number in it (from 1, as the
+   question gives it) beside them.
 6. **The rebuild of #201's stage** reuses PR #513's plumbing as listed
    in point 5, and drops its competing-pair questions and its run-only
    provenance. Graphs written before it are scratch graphs, removed by
    the next reset (ADR-0025), so no migration is needed.
+   *Applied (#201):* the stage runs after the write, under the write's
+   guard and the live-stack lock, over a complete write alone, keyed by
+   the place key, with its record and raw answers in `corpus/places/`.
 7. **The cycle guard** still refuses a write that would close a cycle,
    at any time. A cycle across sources is almost always a namesake
    resolved to the wrong item, which is §3's question, so the refusal is
    counted and named in the run report (owner question 4).
+   *Applied (#201):* `places.plan` walks the graph's non-deprecated
+   `part_of` and `location` statements of any time and the links
+   planned before; the run report counts the refusals in its aggregates
+   (`refused_cycles`) and names each, by its places' labels and its
+   document, in report.json and report.html, which stay on the machine.
+   A record-only link's count is `record_only_links`, and of them those
+   written `record_only_links_written` (owner question 3).
 
 ### 9. What it supersedes in ADR-0009, and what stands
 
@@ -279,12 +351,15 @@ Applied with the implementation, once the owner accepts this ADR:
 
 - the worklist mechanics PR #513 built: stated-container candidates
   link by link, every namesake asked, spine-first ordering, transitive
-  elimination between rounds;
+  elimination between rounds (as applied by #201, §8.5: idempotent
+  skips, since the graph's containment answers no identity question);
 - the cycle guard;
 - reset-stable prompts (decision FD and the numbered questions);
 - decisions FB and FC;
 - the `same` verdict's routing to the curator-executed identity flow,
-  for any pair the command still asks;
+  for any pair the command still asks. As applied by #201 (§8.5) the
+  command asks no pair: its `same` now says the container is the
+  candidate B, and `--apply` writes the link it decides;
 - the GeoNames activation and its external ids and coordinates.
 
 ## Consequences
@@ -316,24 +391,37 @@ Applied with the implementation, once the owner accepts this ADR:
    writing), stated in itself like its registrar statements, with
    precision, ranges and circa as any date. It gets its own issue.
    Until then views label a container by its source alone.
+   *Settled (owner, 2026-10-23):* as recommended. An artifact's own
+   date gets an issue of its own; until it lands, views label a
+   container by its source alone.
 2. **The report's suppression in time.** *Recommendation:* a path at
    any time, through stated, non-deprecated claims (§5). Revisit "as of
    the claims' times" once question 1 is settled and dated containment
    exists in numbers.
+   *Settled (owner, 2026-10-23):* as recommended, a path at any time
+   through stated, non-deprecated claims (§5, §8.1).
 3. **A link a record states that no claim gives.** *Recommendation:*
    the place stage writes it, stated in the document's artifact, with no
    page and no time (a record has no locator and states no time, as PR
    #513 found). The run report counts such links, a measure of
    extraction's recall on containment. The alternative is to count them
    only, and fix extraction until claims carry every link.
+   *Settled (owner, 2026-10-23):* as recommended, the place stage
+   writes such a link and the run report counts it (§8.5).
 4. **A cycle across sources.** *Recommendation:* refuse and count, as
    now (§8.7). The alternative, letting it stand as two sources'
    coexisting claims, would need every reader of the closure to handle
    cycles.
+   *Settled (owner, 2026-10-23):* as recommended, refuse and count
+   (§8.7).
 5. **ADR-0017 §2's hand-off.** *Recommendation:* withdraw it (§8.2),
    since its container comes from the model's knowledge. A reviewer who
    knows a containment records it by citing a source.
+   *Settled (owner, 2026-10-23):* as recommended, the hand-off is
+   withdrawn (§8.2).
 6. **A curator's own containment.** *Recommendation:* a curator cites
    the source it rests on (§1), and never asserts geography on their own
    authority. The alternative is a curator-assertion reference, as
    ADR-0002 allows for resolutions.
+   *Settled (owner, 2026-10-23):* as recommended, a curator cites the
+   source a containment rests on (§1).

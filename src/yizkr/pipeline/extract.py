@@ -112,7 +112,16 @@ Rules — these mirror the archive's non-negotiable conventions:
   containers, which states each link ("Snylsjum, gemeente Drakeradiel,
   Fryslân" also puts gemeente Drakeradiel in Fryslân). Never infer it
   from what you know of a place, and never carry it over from another
-  place the document names.
+  place the document names. Give it the time the source gives it for
+  the containment, and none where it gives none: `start_time` or
+  `end_time` where the source dates when the place came into or left
+  the container ("Kaldovsky District, in Chadsk Oblast from 1937"),
+  `point_in_time` where it presents the place as in the container at a
+  date ("in 1941 Koshnovka belonged to Kaldovsky District"), each with
+  its range and circa as a period's are. The document's own date is
+  never the containment's time, nor is the date of an event the source
+  places there: a birth "in 1836 at Flörburg, Kreis Peiltal" gives
+  Flörburg's `part_of` no time.
 - Use ONLY these property keys (property key: datatype — what it means),
   for claims and qualifiers alike — a claim naming any other key is
   discarded. The description is authoritative: it says what the VALUE

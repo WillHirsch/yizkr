@@ -166,13 +166,16 @@ itself in its own `--help`.
   traps `TRAPS` sets for it, read in the universe's terms, with the two
   the whole-cluster merge rule cannot meet (#361) recorded as expected by
   a strict `xfail` that turns when the rule does. The driver's write side
-  (reset, register, write and site, #200) needs a stack, so every unit
+  (reset, register, write, places and site, #200, #201) needs a stack,
+  so every unit
   test runs the driver with clustering as its only corpus stage (the
   `_no_write_side` fixture in tests/unit/conftest.py); a test marked
   `write_side` keeps them. `tests/unit/test_scratch_write.py` runs the
   write side's stages in order over a run's documents on the in-memory
   instance, with stand-ins for the reset, the live-stack lock and the
-  site's build.
+  site's build; `tests/unit/test_scratch_places.py` runs the place stage
+  with a fake engine behind the run's LLM cache and the graph read from
+  the in-memory instance.
 - **Live tests** (`tests/integration`, every module marked `live`) run
   against the deployed stack (`make up` or `make up-local`) through
   `make test-live`, which is `uv run pytest -m live tests/integration -v`.
