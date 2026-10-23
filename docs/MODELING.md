@@ -305,16 +305,26 @@ prompt offers it. A property may also be held back from the prompts with
 prompt lists it, the critique's list of properties included, as a
 scratch run's run-item marks are (`scratch_run`, `run_manifest_hash`,
 `identity_map_hash`; #200). A
-property marked `document_subject: true` (`issued_by`) takes the
-claim's own source document as its subject, named by an `artifact`
-reference to the source's media, and no other subject; validation
-refuses such a subject on any other property, or naming another
-document, and a claim of such a property with any other subject
-(ADR-0035 §3.4). The writer checks the same rule itself, since `yizkr
-write` takes a batch without validating it against the manifest: it
-refuses such a claim before the first write, names it in its `refused`
-list and warns why, as it refuses a claim whose text the instance cannot
-hold.
+property marked `document_subject: true` takes the claim's own source
+document as its subject, named by an `artifact` reference to the
+source's media, and no other subject: the seven document-subject
+properties, `issued_by`, `author`, `addressee`, `inception`,
+`location_of_creation`, `main_subject` and `shows`, each what a source
+states of itself (ADR-0035 §3.4, ADR-0039 §2.2). One property is marked
+`placed_subject: true` instead, `caption`: a container's verbatim words
+about an artifact it places, whose subject is an `artifact` reference
+to an image the source's record of derived media names, and nothing
+else (ADR-0039 §2.1). Validation refuses an artifact subject on any
+other property, a document subject naming another document, a caption
+whose subject is no artifact its source places, and a claim of either
+kind of property with any other subject; it is handed the SHA-1s of the
+images each source places (the transcription's pages record them),
+beside the source's own key. The writer checks the same rules itself,
+since `yizkr write` takes a batch without validating it against the
+manifest, against the derived media registered for the source in the
+same write: it refuses such a claim before the first write, names it in
+its `refused` list and warns why, as it refuses a claim whose text the
+instance cannot hold.
 
 **A retired property** stays in the instance and takes no new claim: it
 accepts nothing, validation refuses every claim of it, and no prompt that
@@ -640,8 +650,11 @@ artifact a new QID, changes neither.
   it, such as the register office of a certificate. Its subject is the
   document itself: a claim names it by the SHA-1 of its media, as its
   source is named, and the writer writes the statement on the artifact
-  item (ADR-0035 §3.4). `carried_out_by` links an event to the
-  organization that carried it out, such as the court of a divorce.
+  item (ADR-0035 §3.4). The other document-subject properties (`author`,
+  `addressee`, `inception`, `location_of_creation`, `main_subject`,
+  `shows`) take the document as their subject the same way (ADR-0039).
+  `carried_out_by` links an event to the organization that carried it
+  out, such as the court of a divorce.
 - `employer` (P108) links a person to an organization, orthogonal to
   `occupation`: what someone does (occupation, an occupation item) and
   whom they work for (employer, an organization item) are independent,
@@ -811,7 +824,9 @@ Planned first instance — **georeferenced map artifacts**:
 Other domains follow the same shape rather than inventing new
 machinery: temporal coverage (the period a map *depicts*, distinct
 from when it was made) reuses `time period` / date properties, and
-subject coverage reuses `depicts`. Prefer an existing
+subject coverage uses `main subject`; who or what an image shows, as
+its own content states it, is `shows`; `depicts` is the faces flow's
+confirmed depiction (ADR-0005; ADR-0039 §2.2). Prefer an existing
 Wikidata-mirrored property, keep values structured (never strings),
 and reference the artifact itself or the producing run.
 
@@ -881,6 +896,22 @@ and reference the artifact itself or the producing run.
   witness has its own transcription and its own batch, and an extractor
   cites the document it read, so neither witness's claims can cite the
   other.
+- **A container's words about an artifact it places are its `caption`**
+  (ADR-0039). A caption, a heading over an image or a sentence of
+  commentary that speaks of it is one verbatim `caption` statement
+  (monolingual text, in the container's language) on that artifact's
+  item, `stated in` the container with the page or slide it stands on;
+  nothing in it is normalised, cut or translated. What the artifact is
+  (who made it, for whom, when, where, what it is about, whom it shows)
+  stays its own claims, which cite it: the booklet's "Wastl to Klara,
+  July 1939." is the booklet's caption on the letter's image, and the
+  letter's "28. Juli 1939" is the image's own `inception`. Nothing
+  crosses: the excerpt's extraction never reads a caption, and the
+  pipeline never turns one into a structured statement. From the keeper
+  run on, a curator may promote a caption's fact, `stated in` the
+  container with the caption as its excerpt, or combine two sources'
+  values as a new statement with both references and the qualifier
+  `determination_method` → `combined_from_sources` (ADR-0039 §4).
 - **Machine-assisted preparation is a sourcing circumstance.** When a
   compilation states that its text was prepared with machine assistance
   (that its translations are machine translations, say), each claim read
@@ -918,6 +949,13 @@ and reference the artifact itself or the producing run.
   party (privacy rule 7). Acquiring the bytes is a separate,
   explicitly-instructed step, after which the medium joins the SHA-1-keyed
   artifact path (ADR-0010).
+- **`shows` and `caption` are a source's words, never a depiction**
+  (ADR-0039). `shows` is who or what an image shows as its own content
+  states it (an inscription on a print, one statement per name), and
+  `caption` a container's words about an image it places. Neither is
+  tied to a region or confirmed by a person, and neither maps to P180.
+  The faces flow may read them as a hint for whom to propose, outside
+  the graph until a person confirms a `depicts`.
 
 ## Names (see ADR-0011)
 
@@ -1671,7 +1709,13 @@ not a signal to grow the schema on.
   a text can name a possibly living relative, and it is visible in the
   non-privileged view: a consequence presented to the owner with the
   rule on 2026-09-29, which drew no objection. The extractor's
-  judgement notes never leave (ADR-0035), in any form. A line the export
+  judgement notes never leave (ADR-0035), in any form, and neither do
+  caption statements (ADR-0039 §7): a caption is a raw source quotation
+  that may name possibly living people as text the export cannot read,
+  so each goes whole, with its references and the excerpts only it
+  holds, failing closed. The document-subject statements need no rule
+  of their own: one whose value is an item left out goes whole, as any
+  statement does. A line the export
   cannot read as a triple is dropped, and a dump that holds a sitelink,
   whose page's own triples never name its entity, or a property of a
   type the model does not use (a URL, a media file, a shape) makes the

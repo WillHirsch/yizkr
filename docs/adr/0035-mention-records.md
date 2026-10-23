@@ -541,6 +541,14 @@ is not made yet. The writer's line in the readers' list of §8 below (it
 "finds them by exact label until #109") is so settled
 (docs/MODELING.md, "General approach").
 
+Amended by #456 (2026-10-23, ADR-0039 accepted by the owner): §3.4's
+document-subject rule widens from `issued_by` to seven properties, each
+about the source itself, and `caption`, a container's verbatim words
+about an artifact it places, is the one property whose subject is an
+artifact the source places (`placed_subject`); §3.5's table and §3.6's
+vocabulary gain them, with `determination_method` and
+`combined_from_sources`.
+
 **Decided by the owner (2026-09-29):**
 
 - Before scratch run 1 (#145), extraction hands over the structure of
@@ -1012,11 +1020,18 @@ then reads classes instead of its term table
 
 ADR-0031 §1 leaves both to this revision.
 
-Proposed (2026-10-16): ADR-0039 adds `author`, `addressee`,
-`inception`, `location_of_creation`, `main_subject` and `shows` beside
-`issued_by`, each about the source itself, and `caption`, a container's
-verbatim words about an artifact it places (#456). This section stands
-until the owner accepts it.
+Amended by #456 (2026-10-23): "`issued_by`" below becomes "the
+document-subject properties (`issued_by`, `author`, `addressee`,
+`inception`, `location_of_creation`, `main_subject`, `shows`;
+ADR-0039)"; the subject is still the source artifact itself, and these
+properties take no other subject. `caption` is the one property the
+manifest marks `placed_subject`: its subject is an artifact the
+source's record of derived media names, named by the SHA-1 of its
+bytes, and it takes no other subject (ADR-0039 §2.1). Validation is
+handed the SHA-1s of the images the source places beside the source's
+own key, and the writer the derived media registered for the source in
+the same write; a breach is a counted reject in validation and a
+refusal in the writer.
 
 - **`issued_by`** (P2378): a document → the organisation that issued it.
   The claim's subject is the source artifact itself, named by the SHA-1
@@ -1082,6 +1097,10 @@ The critic no longer has to spot a mismatch by reading wording.
 | `participant`, `perspective` | human, family |
 | `member_of` | organization, family |
 | `employer`, `educated_at`, `issued_by`, `carried_out_by` | organization |
+| `author`, `addressee` (ADR-0039) | human, organization, family |
+| `location_of_creation` (ADR-0039) | place |
+| `main_subject`, `shows` (ADR-0039) | any kind |
+| `determination_method` (ADR-0039 §4) | `combined_from_sources` |
 | `occupation` | occupation_class |
 | `time_period` | time_period_class |
 | `image` | artifact |
@@ -1112,6 +1131,14 @@ theirs too: an artifact, an extraction run, and a class.
 | `degree`, `removes` | qualifiers on `relative` | quantity | — |
 | the kinship classes, `paternal`, `maternal` | their values | items | — |
 | `issued_by` | document → organisation | item | P2378 |
+| `author`, `addressee` (ADR-0039) | document → who made it, whom it was addressed to | item | P50, P1817 |
+| `inception` (ADR-0039) | document → when it was made | time | P571 |
+| `location_of_creation` (ADR-0039) | document → where it was made | item | P1071 |
+| `main_subject` (ADR-0039) | document → what it is about | item | P921 |
+| `shows` (ADR-0039) | image → who or what it shows, as its own content says | item | — (P180 is `depicts`) |
+| `caption` (ADR-0039) | placed artifact → a container's verbatim words about it | monolingual text | P2096 |
+| `determination_method` (ADR-0039 §4) | qualifier on a curator's combined value | item | P459 |
+| `combined_from_sources` (ADR-0039 §4) | its value | item | — |
 | `carried_out_by` | event → organisation | item | — (nearest P4884, P664) |
 | `civil_status` | a person's stated civil status | item | — |
 | `unmarried`, `married`, `widowed`, `divorced` | its values | items | — |
