@@ -3518,7 +3518,70 @@ def test_the_write_section_counts_the_judgement_notes_written():
     )
     assert written["notes_written"] == 3
     (section,) = report._write_sections(
-        {"write": written, "depicts": {"left_out": 0}}
+        {
+            "write": written,
+            "depicts": {"left_out": 0},
+            "place_hierarchy": {"status": report.NOT_AVAILABLE},
+        }
     )
     ((line, _),) = section.blocks
     assert "0 items minted, 3 judgement notes written." in line
+
+
+class TestWhatSourcesSayOfArtifacts:
+    """The run report counts, as aggregates, the captions given, the
+    claims a document gives about itself by property, and the rejects by
+    reason (#456, ADR-0039 §8)."""
+
+    @pytest.fixture
+    def counted(self, tmp_path) -> dict:
+        path = record(tmp_path / RUN_ID)
+        directory = path / slugify(Path(FILES[CERT][0]).stem)
+        view = json.loads((directory / "batch.json").read_text())
+        view["claims"] += [
+            claim("e1", "caption", "Wastl to Klara, July 1939.", CERT),
+            claim("e1", "inception", "28. Juli 1939", CERT),
+            claim("e1", "inception", "1905", CERT),
+            claim("e1", "shows", "Muckel", CERT),
+        ]
+        (directory / "batch.json").write_text(json.dumps(view))
+        covered = directory / "extraction" / "coverage.json"
+        counts = json.loads(covered.read_text())
+        counts["rejected_by_reason"] = {
+            "placed_subject": 2,
+            "schema": 1,
+            HOSTILE: 1,
+        }
+        covered.write_text(json.dumps(counts))
+        return build(path, now=NOW)
+
+    def test_captions_and_a_document_s_own_claims(self, counted):
+        content = counted["aggregate"]["content"]
+        assert content["container_claims"] == {
+            "captions": 1,
+            "document_subject_by_property": {"inception": 2, "shows": 1},
+        }
+
+    def test_rejects_by_reason(self, counted):
+        rejects = counted["aggregate"]["content"]["rejects"]
+        assert rejects["by_reason"] == {
+            "placed_subject": 2,
+            "schema": 1,
+            OTHER: 1,
+        }
+        # the other extractions' coverage, written before it counted
+        # reasons, counts none
+        assert rejects["by_reason_absent"] == rejects["extractions"] - 1
+
+    def test_report_md_gives_them_by_name_alone(self, counted):
+        text = render_markdown(counted["aggregate"])
+        assert (
+            "Captions given, a container's words about an image it places: "
+            "1. Claims a document gives about itself, by property: "
+            "inception 2, shows 1."
+        ) in text
+        assert "Rejects by reason: placed_subject 2, other 1, schema 1" in (
+            text
+        )
+        assert leaks(text) == []
+        assert "Wastl" not in text and HOSTILE not in text

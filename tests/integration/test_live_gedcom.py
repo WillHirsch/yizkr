@@ -2,7 +2,8 @@
 a residence's date period (#308), a repeated event's alternatives (#322),
 an undated death (#323), a marriage's citation (#324), and a family's
 union with its events, the death's principal and the undetermined
-language of an export that states none (#408).
+language of an export that states none (#408), and a couple of two WIFEs
+with their child (#353).
 
 A source citation (SOUR) must fold into the birth statement's reference
 as a page-number locator, and a multimedia object (OBJE) must become an
@@ -18,7 +19,10 @@ the role spouse, started by a wedding item that holds each MARR's date
 as a statement of its own, the citation beneath a MARR in its reference,
 and ended by a divorce item that holds the DIV's date and place
 (ADR-0036 §5); a family whose only event is a DIV must become a marriage
-item with no wedding. A DEAT that gives
+item with no wedding. A family of two WIFEs and no MARR must become a
+partnership item whose two partners are its participants with the role
+partner, and its child must hold a mother statement for each of them.
+A DEAT that gives
 no date, place or cause must become a death event: an item that is an
 instance of `death`, with the person as its principal participant, which
 is what the possibly-living check reads as death evidence (ADR-0020 §2).
@@ -53,7 +57,8 @@ pytestmark = pytest.mark.live
 # what the fixture is; a change to it gives the fixture new items
 FIXTURE = (
     "ADR-0021: a GEDCOM export's person with a cited birth, a portrait, a "
-    "residence period, repeated events, an undated death and two families"
+    "residence period, repeated events, an undated death and three "
+    "families, one of two WIFEs with a child"
 )
 MARK = fixture_mark(FIXTURE, writer, gedcom)
 
@@ -116,6 +121,13 @@ TEMPLATE = """\
 1 WIFE @I3@
 1 DIV
 2 DATE 1970
+0 @I4@ INDI
+1 NAME Gedcom Child /Tester {marker}/
+1 FAMC @F3@
+0 @F3@ FAM
+1 WIFE @I2@
+1 WIFE @I3@
+1 CHIL @I4@
 0 TRLR
 """
 
@@ -485,6 +497,41 @@ def test_gedcom_divorce_without_a_wedding_is_of_a_marriage(
     assert [
         v["time"] for v in _claim_values(client, divorce_qid, "point_in_time")
     ] == ["+1970-00-00T00:00:00Z"]
+
+
+def test_gedcom_two_wives_are_partners_and_their_childs_mothers(
+    client, gedcom_artifact
+):
+    """A family of two WIFEs and no MARR lands as a partnership item, its
+    two partners its participants with the role partner, and its child
+    holds a mother statement for each of them (ADR-0036 §5, #353)."""
+    _, export = gedcom_artifact
+    write = write_mapped(
+        BatchWriter(client), adapt_gedcom(GEDCOM, artifact=export).batch
+    )
+    union_qid = write.created_items["f3"]
+    _, items = client.vocabulary()
+    assert {
+        v["id"] for v in _claim_values(client, union_qid, "instance_of")
+    } == {items["partnership"]}
+    couple = sorted(
+        (
+            statement["mainsnak"]["datavalue"]["value"]["id"],
+            _qualifier_values(client, statement, "object_has_role"),
+        )
+        for statement in _statements(client, union_qid, "participant")
+    )
+    assert couple == sorted(
+        [
+            (write.created_items["i2"], [items["partner"]]),
+            (write.created_items["i3"], [items["partner"]]),
+        ]
+    )
+    child_qid = write.created_items["i4"]
+    assert sorted(
+        v["id"] for v in _claim_values(client, child_qid, "mother")
+    ) == sorted([write.created_items["i2"], write.created_items["i3"]])
+    assert _claim_values(client, child_qid, "father") == []
 
 
 def test_gedcom_excerpts_of_an_export_without_a_language_are_undetermined(

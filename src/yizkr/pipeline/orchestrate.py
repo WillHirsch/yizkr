@@ -1293,7 +1293,9 @@ class Orchestrator:
 
     def _register(self, registrar: Any, doc: DocumentRun) -> tuple[str, dict]:
         """(the document's QID, its derived media's QIDs by SHA-1), as
-        `_step_register` registers a document that is not an excerpt."""
+        `_step_register` registers a document that is not an excerpt. The
+        derived media are kept by the document's SHA-1 too
+        (registered_media), for the write of its claims."""
         artifact_type = self.artifact_type
         pages = 0
         if doc.kind == "presentation":
@@ -1321,6 +1323,7 @@ class Orchestrator:
         derived: dict[str, str] = {}
         if record is not None:
             derived = registrar.register_derived_media(record, doc.dir)
+            self.registered_media()[doc.sha1] = dict(derived)
             left_out = len(record.media) - len(derived)
             self.log(
                 f"  derived media: {len(derived)} registered"
@@ -1331,6 +1334,15 @@ class Orchestrator:
                 )
             )
         return result.artifact_qid, derived
+
+    def registered_media(self) -> dict[str, dict[str, str]]:
+        """The derived media this orchestrator registered, by the SHA-1 of
+        their container: each medium's QID by its SHA-1 (_register). They
+        are what a container's `caption` claims may take as their subject
+        (ADR-0039 §2.1, yizkr.pipeline.writer)."""
+        if not hasattr(self, "_registered_media"):
+            self._registered_media: dict[str, dict[str, str]] = {}
+        return self._registered_media
 
     def _placed_images(self, doc: DocumentRun):
         """The record of the images a paged container places on its pages
@@ -2189,17 +2201,22 @@ class Orchestrator:
             approved = self._approved(doc, batch)
         identity, extracted = self._mapped(doc, approved)
         # the artifact the write registered (_step_register), which the
-        # claims cite by the SHA-1 of its bytes
+        # claims cite by the SHA-1 of its bytes, and the derived media it
+        # registered for it, which its captions may take as their subject
         registered = doc.state.artifact_qid
+        media = self.registered_media().get(doc.sha1, {}) if registered else {}
         result = BatchWriter(
             self.client,
-            artifact_qids={doc.sha1: registered} if registered else None,
+            artifact_qids={doc.sha1: registered, **media}
+            if registered
+            else None,
         ).write_batch(
             approved,
             bulk_accepted=is_bulk_accepted(doc.review_reviewed),
             identity=identity,
             mapped_from=extracted,
             one_map=self.one_map,
+            placed={doc.sha1: set(media)} if media else None,
         )
         # a registered artifact under the label of an artifact-kind entity
         # of the batch, such as a GEDCOM media object, flagged as

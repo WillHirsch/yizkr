@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Callable
+from collections import Counter
+from collections.abc import Callable, Collection, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -28,6 +29,9 @@ from typing import Any, NamedTuple
 from pydantic import BaseModel, ConfigDict, Field
 
 from yizkr.claims import (
+    MANIFEST_REASON,
+    REJECT_REASONS,
+    SCHEMA_REASON,
     STRUCTURED_KINDS,
     ArtifactRef,
     ClaimBatch,
@@ -40,7 +44,9 @@ from yizkr.claims import (
 from yizkr.pipeline.extract import (
     cite_artifact,
     claim_schema_prompt_text,
+    document_block,
     entity_kind_prompt_lines,
+    placed_by,
     run_metadata,
     salvage_valid_claims,
     scan_json_objects,
@@ -383,12 +389,7 @@ Rules — these mirror the archive's non-negotiable conventions:
     document's own date is no date of the marriage; a directory or a
     census that lists a couple as married gives the union a
     `point_in_time`, an observation, never a wedding date.
-- The document itself: `issued_by` names the organization that issued
-  THIS document, where the source shows it issuing (the register office
-  of a certificate, the court of a judgment). Its subject is the
-  document, given exactly as the source's artifact:
-  {{"kind": "artifact", "sha1": "{artifact_sha1}"}}, and never anything
-  else. No other property takes the document as its subject.
+{document_paragraphs}
 - Residence: an address stated on a form is asserted for the person that
   field names (e.g. the informant/applicant on a certificate), NOT for
   everyone the document mentions. Do not copy one person's stated address
@@ -415,13 +416,24 @@ Rules — these mirror the archive's non-negotiable conventions:
   Mockburg"), in the fields a form gives that place (a certificate's
   village, district and oblast fields), or in a chain of containers,
   which states each link ("Snylsjum, gemeente Drakeradiel, Fryslân" also
-  puts gemeente Drakeradiel in Fryslân). Containment the source does not
-  state is world knowledge, proposed later by the place pass (ADR-0009):
-  never infer it from what you know of a place (that Flörburg lies in
-  Kreis Peiltal, in Hesse), and never carry it over from another place
-  the document names.
+  puts gemeente Drakeradiel in Fryslân). Containment is a source's claim,
+  and one the source does not state is never written (ADR-0038): never
+  infer it from what you know of a place (that Flörburg lies in Kreis
+  Peiltal, in Hesse), and never carry it over from another place the
+  document names.
   Where a source writes "Flörburg, Kreis Peiltal" and, elsewhere, a bare
   "Fläckfeld", Fläckfeld takes no `part_of` at all.
+  Give a containment the time the source gives it for the containment,
+  and none where it gives none: `start_time` or `end_time` where the
+  source dates when the place came into or left the container
+  ("Kaldovsky District, in Chadsk Oblast from 1937"), `point_in_time`
+  where it presents the place as in the container at a date ("in 1941
+  Koshnovka belonged to Kaldovsky District"), each with its range and
+  circa as a period's are. The document's own date is never the
+  containment's time, nor is the date of an event the source places
+  there: a birth "in 1836 at Flörburg, Kreis Peiltal" gives Flörburg's
+  `part_of` no time, and a certificate of 1941 that writes "Koshnovka,
+  Kaldovsky District" gives its `part_of` none either.
 - Persecution and displacement are EVENTS, not relations and not
   locations on a person (ADR-0014). "Deported to Klurnau in 1942" is a
   `deportation`; "held at", "interned at", "taken to" an
@@ -494,7 +506,9 @@ Ownership rule: every claim whose SUBJECT is a person/place/event/union
 of an assigned unit belongs to you, including relations to entities
 outside the unit — a unit person's father/mother from the enclosing tree
 structure or the unit's context line, their unions, their instance_of,
-and the `issued_by` claim of an issuer the unit names.
+and the `issued_by` claim of an issuer the unit names. A claim about the
+document itself, and a `caption` claim, belongs to the unit whose lines
+hold the passage that states it.
 Do not skip a claim because its object or evidence lies partly outside
 your units.
 
@@ -512,9 +526,12 @@ The full manifest (id = canonical label):
 Emit every claim whose SUBJECT is one of your ASSIGNED entities below —
 and only those. Relations to entities outside your assignment (their
 parents, unions, locations) still belong to you when your entity is
-the subject; refer to the other entity by its manifest id. The
-`issued_by` claim, whose subject is the document itself, belongs to the
-chunk assigned the organization that issued it. Do not emit claims whose
+the subject; refer to the other entity by its manifest id. Every claim
+whose subject is the document itself (`issued_by`, `author`,
+`addressee`, `inception`, `location_of_creation`, `main_subject`,
+`shows`), and every `caption` claim, belongs to the chunk assigned
+{first_entity}, the first entity assigned for extraction, whatever its
+value. Do not emit claims whose
 subject is not assigned to you, and do not emit instance_of claims (the
 manifest's kind already records it).
 
@@ -1486,6 +1503,7 @@ class ChunkedClaimExtractor:
             property_keys=property_keys,
             item_keys=item_keys,
             assignment_block=assignment_block,
+            document_paragraphs=document_block(transcription, artifact),
             schema=claim_schema_prompt_text(),
             document_block=self._document_block(
                 transcription, artifact, inline_document
@@ -1551,7 +1569,9 @@ class ChunkedClaimExtractor:
         )
         return self._render_chunk_prompt(
             ENTITY_ASSIGNMENT_BLOCK.format(
-                roster_block=roster_block, entities_block=entities_block
+                roster_block=roster_block,
+                entities_block=entities_block,
+                first_entity=first_assigned(all_entities),
             ),
             transcription,
             artifact,
@@ -1746,6 +1766,7 @@ class ChunkedClaimExtractor:
             text_lines,
             artifact,
             transcription.printed_pages(),
+            placed_by(transcription, artifact),
         )
         self._refuse_empty(batch, chunks=total)
         self.attention = self._attention(batch, chunks=total)
@@ -1896,11 +1917,15 @@ class ChunkedClaimExtractor:
         text_lines: list[str],
         artifact: ArtifactRef,
         printed_pages: dict[int, str],
+        placed: Mapping[str, Collection[str]] | None = None,
     ) -> tuple[ClaimBatch, dict[str, str]]:
         """Merge chunk claims into one validated batch, each claim citing
         `artifact`, the page number printed on its page where
-        `printed_pages` gives one, and each once (cite_artifact), with
-        rejects, gaps and the coverage report as side outputs."""
+        `printed_pages` gives one, and each once (cite_artifact), validated
+        with the artifacts the document places (`placed`,
+        salvage_valid_claims), with rejects, gaps and the coverage report
+        as side outputs: the coverage counts the rejects by reason
+        (rejected_by_reason)."""
         raw_claims: list[dict] = []
         transform_rejects: list[dict] = []
         gaps: list[dict] = []
@@ -1922,6 +1947,7 @@ class ChunkedClaimExtractor:
                         {
                             "claim": claim,
                             "problems": [f"transform failed: {exc}"],
+                            "reasons": [SCHEMA_REASON],
                         }
                     )
             gaps.extend(chunk.gaps)
@@ -1947,7 +1973,7 @@ class ChunkedClaimExtractor:
         else:
             entities_payload = []
         batch, rejects = salvage_valid_claims(
-            deduped, run, entities=entities_payload
+            deduped, run, entities=entities_payload, placed=placed
         )
         rejects = transform_rejects + settled_rejects + rejects
         self._rejects = rejects
@@ -1967,6 +1993,7 @@ class ChunkedClaimExtractor:
             "chunks": len(chunk_ids),
             "claims": len(batch.claims),
             "rejected_claims": len(rejects),
+            "rejected_by_reason": rejected_by_reason(rejects),
             "unread_objects": sum(len(found) for found in unread.values()),
             "fallback": dict(self.fallback),
         }
@@ -2083,6 +2110,28 @@ class _Settled(NamedTuple):
     labels: int
     label_names: int
     parts: int
+
+
+def first_assigned(entities: list[EntityRecord]) -> str:
+    """The id of the first manifest entity a chunk is assigned
+    (pack_entities assigns those marked for extraction alone), whose
+    chunk owns the claims about the document itself and its captions;
+    "none" when no entity is assigned."""
+    return next((entity.id for entity in entities if entity.extract), "none")
+
+
+def rejected_by_reason(rejects: Iterable[dict]) -> dict[str, int]:
+    """How many rejects give each reason code (claims.REJECT_REASONS), in
+    that order, each reject counted once under each of its reasons: a
+    reject that records none counts as `manifest`."""
+    counts = Counter(
+        reason
+        for reject in rejects
+        for reason in (reject.get("reasons") or [MANIFEST_REASON])
+    )
+    return {
+        reason: counts[reason] for reason in REJECT_REASONS if counts[reason]
+    }
 
 
 def _name_text(claim: dict) -> str | None:

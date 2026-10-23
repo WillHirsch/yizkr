@@ -122,8 +122,12 @@ CATEGORIES: dict[str, str] = {
         "containers: inferred from what is known of the place, or carried "
         "over from another place's container "
         "(Fläckfeld put in Kreis Peiltal on an excerpt that reads only "
-        '"Fläckfeld"); containment the source does not state is proposed '
-        "later, never extracted (ADR-0009): suggest drop"
+        '"Fläckfeld"); containment the source does not state is never '
+        "written (ADR-0038): suggest drop. Also a time a `part_of` claim "
+        "carries (a point in time, a start or end time, a bound of one, or "
+        "circa) that its excerpt does not state for the containment, such "
+        "as the document's own date or the date of an event at the place: "
+        "suggest drop the qualifier"
     ),
 }
 
@@ -219,11 +223,13 @@ description):
 Claims (subject | property | value):
 {claims_block}
 
-Each `part_of` claim above, with the excerpt of the source it cites:
+Each `part_of` claim above, with the time it carries and the excerpt of
+the source it cites:
 {containment_block}
 Check each against its excerpt: a containment the excerpt does not state
 (in the place's mention, in the fields a form gives that place, or as a
-link of a chain of containers) is a concern (unsupported_containment).
+link of a chain of containers) is a concern (unsupported_containment), and
+so is a time the excerpt does not state for the containment.
 
 Output NDJSON, one finding per line, no prose, no code fences:
 {{"entity": "<the entity id the finding concerns>",
@@ -341,20 +347,44 @@ def _claims_block(batch: ClaimBatch) -> str:
     return "\n".join(" | ".join(listing) for listing in listings(batch))
 
 
+# the qualifiers that date a containment, or say how its source dates it
+# (ADR-0038 §2): the containment block shows them, so the critic can check
+# each against the excerpt
+CONTAINMENT_TIMES = (
+    "point_in_time",
+    "start_time",
+    "end_time",
+    "earliest_date",
+    "latest_date",
+    "latest_start_date",
+    "earliest_end_date",
+    "sourcing_circumstances",
+)
+
+
 def _containment_block(batch: ClaimBatch) -> str:
-    """Each `part_of` claim as the claims block lists it, with the excerpt
-    its source cites ("-" for none), so the critic can check that the
-    source states the containment (ADR-0009). Each line opens with a dash
-    and lists the claim without the claims block's separators, so it is
-    never taken for a claim or an entity row; the excerpt is quoted as a
-    JSON string, with the line breaks JSON leaves raw escaped
-    (_LINE_BREAKS), so it stays on its line."""
+    """Each `part_of` claim as the claims block lists it, with the time it
+    carries (CONTAINMENT_TIMES, after a comma, where it carries one, so the
+    claim's listing stays whole) and the excerpt its source cites ("-"
+    for none), so the critic can check that the source states the
+    containment and its time (ADR-0038 §2). Each
+    line opens with a dash and lists the claim without the claims block's
+    separators, so it is never taken for a claim or an entity row; the
+    excerpt is quoted as a JSON string, with the line breaks JSON leaves
+    raw escaped (_LINE_BREAKS), so it stays on its line."""
     lines = []
     for claim, (subject, prop, value) in zip(
         batch.claims, listings(batch), strict=True
     ):
         if prop != "part_of":
             continue
+        times = "; ".join(
+            f"{qualifier.property} {describe_value(qualifier.value)}"
+            for qualifier in claim.qualifiers
+            if qualifier.property in CONTAINMENT_TIMES
+        )
+        if times:
+            value = f"{value}, carrying {times}"
         excerpt = claim.source.transcription_excerpt
         quoted = (
             json.dumps(excerpt.text, ensure_ascii=False).translate(

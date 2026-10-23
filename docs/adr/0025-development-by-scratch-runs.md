@@ -289,10 +289,23 @@ The owner replaced that plan on 2026-09-27, for four reasons.
   as ADR-0005 rules, in every stage, and the faces work is parked
   (#160).
 - **Place-hierarchy reconciliation runs as an unattended post-write
-  stage** (#201). Its `part_of` proposals (ADR-0009, ADR-0017) are
-  applied at normal rank, with ADR-0009's provenance and cycle guard and
-  no review CSV. The stages before write use only the containment the
-  manifests assert; graph containment is a product of the write.
+  stage** (#201). Amended by ADR-0038 §8.5 (#201, 2026-10-23): the
+  stage, `places`, runs after the write and before the site, and asks
+  which existing place each container a written place's mention record
+  states means (ADR-0038 §3), never whether one place lies within
+  another. It writes each answered link at normal rank, with no review
+  CSV: `part of` the item the answer names, stated in the stating
+  document's artifact with the time its claim gives (none for a link a
+  record alone states) and inferred from the stage's run item, marked
+  as the write's run items are; the cycle guard refuses a link that
+  would close a cycle, and the run report counts it. It holds the
+  write's guard and the live-stack lock, asks only over a complete
+  write, and calls the engine through the LLM cache in the `extract`
+  role, with prompts that name no QID, so a run after another reset asks
+  the engine nothing; its key, the place key, is what the
+  instance-contents record takes once it has written every link. The
+  stages before write use only the containment the manifests assert;
+  graph containment is a product of the write.
 - **Problems are fixed in the pipeline and regenerated, never repaired in
   the graph.** A problem found in a run report, a diff or the views of a
   scratch graph is filed as an issue with the `stage:*` label of the

@@ -59,9 +59,14 @@ from yizkr.core import sparql
 from yizkr.core.config import Config
 from yizkr.core.dates import unsupported_in_graph
 from yizkr.core.wiki import WikiClient
+from yizkr.disagreement import followed
 from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.llm import CUT_OFF_AT_LIMIT, LlmClient, at_output_limit
-from yizkr.queries.publish import prefix_block
+from yizkr.queries.publish import (
+    load_templates,
+    prefix_block,
+    render_for_instance,
+)
 
 
 class RosterEntity(BaseModel):
@@ -406,21 +411,16 @@ def roster_name_keys(roster_entity: RosterEntity) -> set[str]:
 PLACE_KIND = "place"
 KINSHIP_PROPERTIES = ("father", "mother", "spouse", "child", "sibling")
 
-CONTAINMENT_QUERY = """\
-SELECT ?place ?ancestor WHERE {{
-  ?place wdt:{instance_of} wd:{place_item} .
-  ?place (wdt:{part_of}|wdt:{location})+ ?ancestor .
-}}"""
-
 
 class PlaceContainment:
     """Transitive place-containment closure, read once from the graph.
 
-    ``ancestors[q]`` is every place that transitively CONTAINS ``q`` (via
-    ``(part_of|location)+`` — the same closure the reconcile-places pass
-    uses, ADR-0009). A place is never identical to a place strictly
-    containing it, so a containment edge between two candidates rules the
-    pair out.
+    ``ancestors[q]`` is every place that transitively CONTAINS ``q``, along
+    the edges the inconsistency report follows: a ``part_of`` or
+    ``location`` statement that a source states and a curator has not
+    deprecated, at any time it carries (ADR-0038 §5). A place is never
+    identical to a place strictly containing it, so a containment edge
+    between two candidates rules the pair out.
     """
 
     def __init__(self, ancestors: dict[str, set[str]]) -> None:
@@ -435,30 +435,49 @@ class PlaceContainment:
         return set(self._ancestors.get(qid, set()))
 
 
+def read_place_containment(rows: Iterable[dict]) -> PlaceContainment:
+    """The containment query's rows (``place-containment.rq``, the one the
+    inconsistency report reads) as the closure over the edges
+    ``yizkr.disagreement.followed`` keeps, by QID. A merge redirect's row
+    is no statement and states no source, so it is passed over: it is no
+    containment."""
+    up: dict[str, set[str]] = {}
+    for row in rows:
+        stated = row.get("stated", {}).get("value") == "true"
+        if not followed(row.get("rank", {}).get("value", ""), stated):
+            continue
+        item, container = (
+            row[name]["value"].rsplit("/", 1)[-1]
+            for name in ("item", "target")
+        )
+        up.setdefault(item, set()).add(container)
+    ancestors: dict[str, set[str]] = {}
+    for item in up:
+        seen: set[str] = set()
+        stack = list(up[item])
+        while stack:
+            container = stack.pop()
+            if container in seen:
+                continue
+            seen.add(container)
+            stack.extend(up.get(container, ()))
+        ancestors[item] = seen
+    return PlaceContainment(ancestors)
+
+
 def fetch_place_containment(
     client: WikiClient, config: Config
 ) -> PlaceContainment:
-    """One SPARQL query -> the transitive place-containment closure."""
+    """One SPARQL query, the inconsistency report's containment query ->
+    the transitive place-containment closure."""
     properties, items = client.vocabulary()
-    query = prefix_block(config.concept_uri) + CONTAINMENT_QUERY.format(
-        instance_of=properties["instance_of"],
-        part_of=properties["part_of"],
-        location=properties["location"],
-        place_item=items[PLACE_KIND],
+    query = render_for_instance(
+        load_templates()["place-containment"],
+        properties,
+        items,
+        config.concept_uri,
     )
-    url = (
-        config.sparql_url
-        + "?"
-        + urllib.parse.urlencode({"query": query, "format": "json"})
-    )
-    with urllib.request.urlopen(url, timeout=120) as response:
-        bindings = json.load(response)["results"]["bindings"]
-    ancestors: dict[str, set[str]] = {}
-    for binding in bindings:
-        place = binding["place"]["value"].rsplit("/", 1)[-1]
-        ancestor = binding["ancestor"]["value"].rsplit("/", 1)[-1]
-        ancestors.setdefault(place, set()).add(ancestor)
-    return PlaceContainment(ancestors)
+    return read_place_containment(sparql.runner(config)(query))
 
 
 @dataclass
@@ -647,11 +666,6 @@ class Proposal(BaseModel):
     verdict: str  # same | uncertain | distinct
     confidence: float | None = None
     evidence: str = ""
-    # hand-off (ADR-0017): on a `distinct` verdict where one item is
-    # spatially/organizationally INSIDE the other, the QID of the CONTAINER.
-    # A rejected equivalence that is really a containment feeds a part_of
-    # proposal to reconcile-places instead of being discarded.
-    contained_in: str | None = None
 
 
 # Pairs per adjudication call. Bounds each response — the same
@@ -1005,13 +1019,6 @@ For every pair below, output one NDJSON line:
 "confidence": <0-1>, "evidence": "<one sentence naming the deciding facts>"}}
 No wrapper object, no code fences, no prose.
 
-CONTAINMENT: if you rule a pair "distinct" AND both are PLACES with one
-spatially INSIDE the other (a camp within a country, a street within a
-town), add `"contained_in": "<QID of the LARGER, containing place>"` to
-that line. This is not identity — it records a part-of relation the graph
-may be missing, for a separate review. Only add it for two places where
-one genuinely contains the other; never for people or organizations.
-
 After the last line, end with exactly one final line:
 {{"done": true}}
 
@@ -1115,67 +1122,3 @@ def export_graph_pairs_csv(
                 }
             )
     return len(proposals)
-
-
-def place_containment_proposals(
-    proposals: list[Proposal], roster: list[RosterEntity]
-) -> list[dict]:
-    """Rejected-equivalence containments -> reconcile-places rows (ADR-0017).
-
-    A `distinct` proposal whose `contained_in` names one of its pair as the
-    container becomes an `a_within_b` row (child within parent) in the
-    reconcile-places CSV format, so `reconcile-places --apply` writes the
-    referenced part_of edge after human review. The graph gains the
-    containment the equivalence pass discovered; future reconcile passes
-    then prune the pair deterministically via the impossibility filter.
-
-    Only pairs where BOTH members are places produce rows — `part_of` is a
-    place-hierarchy edge, and a stray `contained_in` on a non-place pair
-    must never reach reconcile-places (which would write a bogus edge)."""
-    by_qid = {roster_entity.qid: roster_entity for roster_entity in roster}
-    labels = {qid: entity.label for qid, entity in by_qid.items()}
-    rows: list[dict] = []
-    for proposal in proposals:
-        parent = proposal.contained_in
-        if proposal.verdict != "distinct" or not parent:
-            continue
-        pair = {proposal.entity_id, proposal.qid}
-        if parent not in pair or len(pair) != 2:
-            # the container must be exactly one of the adjudicated pair
-            continue
-        # both members must be known places (guard against a mis-emitted
-        # contained_in on a person/organization pair)
-        if any(
-            qid not in by_qid or by_qid[qid].kind != PLACE_KIND for qid in pair
-        ):
-            continue
-        (child,) = pair - {parent}
-        rows.append(
-            {
-                "qid_a": child,
-                "label_a": labels.get(child, ""),
-                "qid_b": parent,
-                "label_b": labels.get(parent, ""),
-                "question": (
-                    f"reconcile flagged {child} as contained in {parent}"
-                ),
-                "verdict": "a_within_b",
-                "confidence": proposal.confidence,
-                "evidence": proposal.evidence,
-                "decision": "",
-            }
-        )
-    return rows
-
-
-def export_place_containment_csv(rows: list[dict], path: Path) -> int:
-    """Write containment hand-off rows in the reconcile-places CSV format,
-    so `reconcile-places --apply <path>` consumes them after review."""
-    from yizkr.pipeline.places import CSV_FIELDS
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
-        writer.writeheader()
-        writer.writerows(rows)
-    return len(rows)

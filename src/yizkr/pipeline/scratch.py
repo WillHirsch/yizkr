@@ -27,9 +27,12 @@ whose stages all completed, excerpts among them: every one, in each
 invocation that goes past the barrier, so a corpus stage reuses its own
 outputs while their inputs stand, as the views do. They are clustering,
 which makes the identity map, and then the write side
-(yizkr.pipeline.scratchwrite): reset, register, write and site, which
-touch the wiki and make no model call. Face detection is never a stage
-of a scratch run, and no scratch run writes a depicts statement.
+(yizkr.pipeline.scratchwrite): reset, register, write, places and site,
+which touch the wiki. Of them only places, the place-hierarchy
+reconciliation after the write, calls the engine, through the LLM cache
+like every stage, so its calls pause for a subscription limit as any
+call does. Face detection is never a stage of a scratch run, and no
+scratch run writes a depicts statement.
 
 **Order.** One document of each kind, the first by name, goes through
 every per-document stage first: the canaries. The rest follow stage by
@@ -318,8 +321,8 @@ def _clustering(context: CorpusContext) -> Sequence[str]:
 
 def _write_side(name: str) -> Callable[[CorpusContext], Sequence[str]]:
     """The stage `name` of the write side (yizkr.pipeline.scratchwrite):
-    reset, register, write or site. The module is imported as the stage
-    runs, since only a run past the barrier needs it."""
+    reset, register, write, places or site. The module is imported as the
+    stage runs, since only a run past the barrier needs it."""
 
     def run(context: CorpusContext) -> Sequence[str]:
         from yizkr.pipeline import scratchwrite
@@ -331,14 +334,18 @@ def _write_side(name: str) -> Callable[[CorpusContext], Sequence[str]]:
 
 
 # the corpus stages, in the order they run after the barrier: clustering,
-# then the write side, which touches the wiki and makes no model call
+# then the write side, which touches the wiki; of it only places, the
+# place-hierarchy reconciliation, calls the engine
 CORPUS_STAGES: tuple[CorpusStage, ...] = (
     CorpusStage("clustering", _clustering, calls_engine=False),
     *(
         CorpusStage(
-            name, _write_side(name), touches_wiki=True, calls_engine=False
+            name,
+            _write_side(name),
+            touches_wiki=True,
+            calls_engine=name == "places",
         )
-        for name in ("reset", "register", "write", "site")
+        for name in ("reset", "register", "write", "places", "site")
     ),
 )
 

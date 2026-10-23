@@ -43,10 +43,12 @@ uv run yizkr publish-queries             # or: make publish-queries
   See MODELING.md "Contradictions" for the rules; the offline tests are
   `tests/unit/test_disagreement.py`.
 - **place-containment** — the recorded hierarchy the disagreement report
-  reads: every location and part-of edge (best rank only, as truthy
-  triples hold them) and every merge redirect, flat. A place value inside
-  another, or the same item through a redirect, differs from it only in
-  resolution (ADR-0009).
+  reads: every location and part-of statement as an edge, with its rank
+  and whether it has a stated-in source, and every merge redirect, flat.
+  A place value inside another, or the same item through a redirect,
+  differs from it only in resolution (ADR-0009). The comparison follows
+  an edge a source states and a curator has not deprecated, at any time
+  (ADR-0038 §5).
 - **person-timeline** — every dated assertion about each person
   (statements, the dates their statements carry as qualifiers, and events
   participated in, by each event's point in time and its own start and

@@ -50,7 +50,7 @@ from tests.unit.test_engine_limits import (
     recorder,
     usage_window,
 )
-from tests.unit.test_places import places
+from tests.unit.test_places import PRISON, link, peiltal
 from yizkr.pipeline import anomalies, llm
 from yizkr.pipeline.anomalies import AnomalyChecks, load_config
 from yizkr.pipeline.chunking import ChunkedClaimExtractor, ExtractionFailed
@@ -74,7 +74,7 @@ from yizkr.pipeline.llm import (
     stream_report,
 )
 from yizkr.pipeline.llmcache import call_key
-from yizkr.pipeline.places import Question, adjudicate_places
+from yizkr.pipeline.places import adjudicate, build_worklist
 from yizkr.pipeline.rundir import RunDir, usage_counts
 
 PINNED = "2.1.237"
@@ -2066,8 +2066,8 @@ class TestCallersOfAnAnswerTheCliGaveUpOn:
 
     def test_a_place_adjudication_raises_as_cut_off(self, cli):
         cli.edit = gave_up
-        question = Question(kind="parent", qid_a="Q3", qid_b="Q2")
+        work = build_worklist(peiltal(), [link("Q40", PRISON, 0)])
         with pytest.raises(OutputLimitReached, match="cut off at max_tokens"):
-            adjudicate_places(
-                ClaudeCodeClient(model=MODEL), [question], places()
+            adjudicate(
+                ClaudeCodeClient(model=MODEL), work.questions, peiltal()
             )

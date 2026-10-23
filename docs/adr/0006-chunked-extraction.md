@@ -337,6 +337,11 @@ batch, a reused one included. It is written only when no chunk failed,
 so its `failed_chunks` is always empty; chunk failures are the
 extraction's error (§5).
 
+Amended by #456 (2026-10-23): `coverage.json` also counts the rejects by
+reason (`rejected_by_reason`: each code of `claims.REJECT_REASONS` that
+a reject gives, such as `placed_subject` for a caption whose subject is
+no artifact its source places; ADR-0039), for the run report.
+
 ### 7. Strategy selection and CLI surface
 
     yizkr ingest extract ... --strategy auto|single|chunked

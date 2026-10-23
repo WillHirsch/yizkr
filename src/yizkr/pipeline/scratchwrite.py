@@ -1,9 +1,9 @@
 """The write side of a scratch run (ADR-0025 §1 and §2): the corpus
-stages after clustering, in order, `reset`, `register`, `write` and
-`site`, each a stage of the scratch driver (yizkr.pipeline.scratch).
-They make no model call, and each touches the wiki, so the driver runs
-them only while the stack answers and the instance carries no kept-state
-marker, which it checks before each.
+stages after clustering, in order, `reset`, `register`, `write`,
+`places` and `site`, each a stage of the scratch driver
+(yizkr.pipeline.scratch). Each touches the wiki, so the driver runs them
+only while the stack answers and the instance carries no kept-state
+marker, which it checks before each; only `places` makes model calls.
 
 **The write key.** What the write side would put on the instance is named
 by one key (write_key): the identity map's hash; each document's SHA-1
@@ -19,19 +19,29 @@ and only a later invocation of the run that wrote finds the instance
 holding what its key makes; writing makes no model call, so this costs
 time alone.
 
+**The place key.** What the place stage adds is named by the write key,
+the version of what it writes (PLACE_VERSION), the adjudication prompt's
+template, the batch size it asks in, and the engine, model and effort of
+the role it calls (PLACE_ROLE): never a QID. The instance holds what a
+run makes once its place stage has written its links, so the key the
+instance-contents record takes, and that the reset stage looks for
+(contents_key), is the place key when the driver runs a place stage, and
+the write key otherwise.
+
 **reset.** When the instance-contents record (yizkr.core.instance) still
-stands and records this key, the instance holds what the key makes: the
-stage resets nothing, and register and write skip, so a rerun on
-unchanged batches and code reuses the instance as a view is reused. When
-this run reset the instance in an earlier invocation, with this key, and
-nothing has written to it since but this run's own stages (the
-write-phase state below), the stage resets nothing and the run goes on
-where it stopped. Otherwise it resets the instance as `yizkr scratch
+stands and records the contents key, the instance holds what the key
+makes: the stage resets nothing, and register, write and places skip, so
+a rerun on unchanged batches and code reuses the instance as a view is
+reused. When this run reset the instance in an earlier invocation, with
+this key, and nothing has written to it since but this run's own stages
+(the write-phase state below), the stage resets nothing and the run goes
+on where it stopped. Otherwise it resets the instance as `yizkr scratch
 reset --yes` does (yizkr.reset), which refuses a kept instance itself,
 and records the write-phase state, both under one hold of the live-stack
 lock, so no session that takes the lock writes between the reset and the
 state, which would take its write for this run's. The records register,
-write and site kept of an earlier reset go with it.
+write, places and site kept of an earlier reset go with it, and so do
+the place stage's raw answers (RESPONSES).
 
 **The write-phase state** (STATE_FILE, in the instance's write-phase
 directory, which the reset clears) names the run that reset the
@@ -49,7 +59,9 @@ document afresh.
 as `ingest run` registers a document at its write (the orchestrator's
 _step_register): its artifact item, a deck's slides and the images it
 embeds, and the images a PDF places, each by the SHA-1 of its bytes,
-with registration's flags raised as alerts of the write. A batch the
+with registration's flags raised as alerts of the write. Its record keeps
+the derived media registered for each container, by SHA-1 with their
+QIDs, for the write. A batch the
 writer would refuse whole is refused here first, before anything of its
 document is registered (check_batch): a mention the identity map does
 not hold, an unsupported date, a run item's term the instance may keep
@@ -62,21 +74,77 @@ extraction's batch, which holds only claims the claim schema and the
 manifest take, through the run's one identity map, at normal rank, with
 both references (stated in the artifact or fragment with its locator,
 inferred from the run item), and no approval file: the development stage
-has no human gate (ADR-0025 §1). The record counts, per document, the
-claims the writer refused, and of them those whose item value is their
-subject's item, as the map may make it (yizkr.pipeline.writer,
-self_references), apart from extraction's rejects. Depicts claims are
+has no human gate (ADR-0025 §1). A container's `caption` claims take as
+their subject the derived media the register stage registered for it,
+and no other artifact (ADR-0039 §2.1, yizkr.pipeline.writer). The record
+counts, per document, the claims the writer refused, and of them those
+whose item value is their subject's item, as the map may make it
+(yizkr.pipeline.writer, self_references), apart from extraction's
+rejects. Depicts claims are
 left out of what the writer is given, and counted: no scratch run writes
 a depicts statement (ADR-0005). Each run item is marked an unratified
 scratch run's (the `scratch_run` statement, naming the run) and records
 the hashes of the run manifest's settings and of the identity map, each
 stated in itself.
 Once every document is written, the instance-contents record takes the
-write key.
+write key, unless the run has already recorded the instance's contents:
+once the place stage has written, the instance holds more than the
+write key makes.
+
+**places** asks which existing place each container a written place's
+mention record states means (yizkr.pipeline.places; ADR-0009, ADR-0038
+§3), and writes the links the sources state, unattended, under the guard
+the write takes (the reset stage's record, the write-phase state and the
+live-stack lock, held for the whole stage), over the whole of what the
+write wrote: until the write record says the write is complete, the
+stage does nothing and records nothing, so its questions are never asked
+of part of a write. Once the query service shows the write, it reads the
+graph's places, their containment and descriptions, takes the links each
+written document's mention records state, with the time a claim of the
+document gives each and none for a link the record alone states, and
+asks the adjudicator, through the run's LLM cache in the role
+PLACE_ROLE, the questions the worklist derives from them: a link whose
+container names more than one place, or that no claim of its document
+gives. A link whose container names no place is left out and counted
+(`unnamed`). Its calls are keyed as that role's are, and reported to the
+run's events under the role and stage `places`. The prompts name no QID
+and order their places and questions by what the graph and the records
+say of them, a place by its label and its item's description, and
+namesakes whose names still coincide by the documents that name them, so
+the same batches ask the same prompts after any reset. An answer the
+cache kept from an earlier invocation that does not parse is rejected
+and asked once more; one the engine gave in this run is rejected and
+fails the stage. The counts, the answers and the links they decide,
+through the cycle guard (through the graph's containment as read, the
+links planned before, or both, at any time), go in the stage's record,
+and each batch's raw answer in RESPONSES beside it, both for this reset
+of the instance and this place key; the reset removes both. A
+subscription limit met while the stage asks leaves nothing recorded: the
+next invocation reads the graph and asks again, the batches already
+answered coming from the LLM cache. An invocation that finds the links
+recorded writes those not yet written without asking again; one cut
+short inside a write the wiki took finds the instance written since, and
+the next invocation resets. Each link is written with no review CSV, as
+a `part_of` statement at normal rank: the item the answer names, with
+the time the document's claim gives, `stated in` the document's artifact
+with no page, and `inferred from` the stage's run item, which records
+the asking model in its label and is marked as the write's run items
+are, each in a reference block of its own (places.write_link). A link
+written already, stated in the same artifact with the same time, is not
+written again; an equal statement another source states gains the link's
+references. An `uncertain` answer writes nothing. A link that would
+close a cycle, a question answered twice differently, and an answer line
+outside the answer's schema are refused and counted, never written; the
+record names each refused cycle by its places' labels, for the run
+report. Before its first write the stage clears the instance-contents
+record, and once it has written every link it records the place key. The
+stages before write never read this containment: they use only what the
+manifests assert.
 
 **site** builds the LAN site (yizkr.staticsite) from the instance into
 the stage's directory of the run, once the query service shows the run
-items of the run whose writes the instance holds. Every page's header
+items of the run whose writes the instance holds and the newest revision
+the write or the place stage left. Every page's header
 says the instance holds a development-stage scratch run, and names it.
 
 Each stage keeps what it did in its directory of the run (RECORD); the
@@ -99,6 +167,7 @@ from typing import Any
 
 from yizkr.claims import ClaimBatch
 from yizkr.core.instance import (
+    clear_contents,
     private_dir,
     record_contents,
     recorded_contents,
@@ -133,7 +202,19 @@ READ_ONLY = frozenset(
 MANIFEST = files("yizkr.model") / "manifest.yaml"
 KEY_FORMAT = 1
 # the stages, in the order they run after clustering
-RESET, REGISTER, WRITE, SITE = "reset", "register", "write", "site"
+RESET, REGISTER, WRITE, PLACES, SITE = (
+    "reset",
+    "register",
+    "write",
+    "places",
+    "site",
+)
+# the role whose engine, model and effort the place stage calls, and the
+# version of what it writes for the same inputs and answers
+PLACE_ROLE = "extract"
+PLACE_VERSION = 1
+# the raw answers the place stage was given, in its directory of the run
+RESPONSES = "responses.json"
 # each stage's record of what it did, in its directory of the run
 RECORD = "record.json"
 # the write-phase state, in the instance's write-phase directory
@@ -145,6 +226,11 @@ SKIPPED, RESUMED, RESET_DONE = "skipped", "resumed", "reset"
 DEPICTS = "depicts"
 # the edit summary of a claim's write
 CLAIM_SUMMARY = "scratch run: write unratified claim"
+# the description of the place stage's run item
+PLACE_RUN_DESCRIPTION = (
+    "scratch run place stage (ADR-0009, ADR-0025, ADR-0038): which place "
+    "each container a source states names, unreviewed and unratified"
+)
 # how long the site stage waits for the query service to show the run
 SITE_WAIT = 300.0
 SITE_POLL = 5.0
@@ -295,6 +381,47 @@ def manifest_hash(run: Any) -> str:
     return sha256_text(canonical_json(_fixed_settings(run.manifest())))
 
 
+def place_model(context: Any) -> dict:
+    """The engine, model and effort the place stage calls (PLACE_ROLE),
+    as the driver configures the role: what the place key names."""
+    driver = context.driver
+    effort, _ = driver._engine_settings(PLACE_ROLE)
+    model, _ = driver._configured_model(PLACE_ROLE)
+    return {"engine": driver.llm, "model": model, "effort": effort}
+
+
+def place_key(context: Any, key: str) -> str:
+    """The place key (the module docstring) for the write key `key`."""
+    from yizkr.pipeline.places import ADJUDICATION_PROMPT, BATCH_QUESTIONS
+
+    return sha256_text(
+        canonical_json(
+            {
+                "format": KEY_FORMAT,
+                "write": key,
+                "version": PLACE_VERSION,
+                "prompt": sha256_text(ADJUDICATION_PROMPT),
+                "batch_questions": BATCH_QUESTIONS,
+                "model": place_model(context),
+            }
+        )
+    )
+
+
+def runs_places(context: Any) -> bool:
+    """Whether the driver runs a place stage."""
+    return PLACES in (
+        stage.name for stage in getattr(context.driver, "corpus_stages", ())
+    )
+
+
+def contents_key(context: Any, key: str) -> str:
+    """The key the instance-contents record takes once the run has made
+    what the instance holds: the place key when the driver runs a place
+    stage, the write key otherwise."""
+    return place_key(context, key) if runs_places(context) else key
+
+
 # -- the stage's own record, in its directory of the run ----------------------
 
 
@@ -434,6 +561,31 @@ def query_service_probe(config: Any) -> Callable[[], tuple[list[str], int]]:
     return probe(config)
 
 
+def place_graph(client: Any) -> list[Any]:
+    """The graph's places, with their descriptions and the places it puts
+    each in, as the query service gives them (places.fetch_places)."""
+    from yizkr.pipeline.places import fetch_places
+
+    return fetch_places(client, client.config)
+
+
+def place_client(context: Any) -> Any:
+    """The client the place stage calls the engine through: the run's
+    engine in PLACE_ROLE, behind the run's LLM cache and keyed as that
+    role's calls are, every call and what the cache does reported to the
+    run's events under the role and stage `places`, so the report and
+    the monitor count them apart from the extraction's."""
+
+    def emit(event: str, **fields: Any) -> Any:
+        if "role" in fields:
+            fields["role"] = PLACES
+        if fields.get("stage") is not None:
+            fields["stage"] = PLACES
+        return context.run.emit(event, **fields)
+
+    return context.driver.role_client(PLACE_ROLE, events=emit)
+
+
 # -- reset ----------------------------------------------------------------
 
 
@@ -453,14 +605,20 @@ def run_reset(context: Any) -> list[str]:
     run_id = context.driver.run_id
     client = client_of(context)
     recorded = recorded_contents(client)
-    if recorded.key == key:
+    contents = contents_key(context, key)
+    if recorded.key == contents:
         context.log(
-            f"{RESET}: the instance holds what this write key makes, written "
+            f"{RESET}: the instance holds what this run's key makes, written "
             f"by scratch run {recorded.run_id}: no reset, and no write"
         )
         save_record(
             context.directory,
-            {"key": key, "action": SKIPPED, "run_id": recorded.run_id},
+            {
+                "key": key,
+                "contents": contents,
+                "action": SKIPPED,
+                "run_id": recorded.run_id,
+            },
         )
         return []
     held = read_state(client.config)
@@ -486,9 +644,10 @@ def run_reset(context: Any) -> list[str]:
     context.log(f"{RESET}: resetting the instance ({recorded.why})")
     # what the stages after it recorded of an earlier reset no longer
     # holds, and is not shown as this one's
-    for stage in (REGISTER, WRITE, SITE):
+    for stage in (REGISTER, WRITE, PLACES, SITE):
         with contextlib.suppress(FileNotFoundError):
             (context.directory.parent / stage / RECORD).unlink()
+    (context.directory.parent / PLACES / RESPONSES).unlink(missing_ok=True)
     # the reset and the state it records under one hold of the lock, so
     # no session that takes the lock writes between them, where the state
     # would take its write for this run's
@@ -612,6 +771,11 @@ def run_register(context: Any) -> list[str]:
                 )
             else:
                 record["documents"][doc.sha1] = qid
+                # the derived media registered for it, which its captions
+                # may take as their subject (ADR-0039 §2.1)
+                media = driver.registered_media().get(doc.sha1)
+                if media:
+                    record.setdefault("placed", {})[doc.sha1] = dict(media)
                 record["failed"].pop(doc.sha1, None)
             save_state(client_of(context), run_id, key, epoch)
             save_record(context.directory, record)
@@ -686,21 +850,24 @@ def run_write(context: Any) -> list[str]:
             MARK_MAP: identity.hash,
         }
         qids = registered.get("documents") or {}
+        placed = registered.get("placed") or {}
         for doc in context.documents:
             if doc.sha1 not in qids or doc.sha1 in record["documents"]:
                 continue
             extracted = extracted_batch(doc)
             batch, left_out = batch_to_write(extracted)
+            media = placed.get(doc.sha1) or {}
             try:
                 result = BatchWriter(
                     client_of(context),
-                    artifact_qids={doc.sha1: qids[doc.sha1]},
+                    artifact_qids={doc.sha1: qids[doc.sha1], **media},
                     run_marks=marks,
                 ).write_batch(
                     batch,
                     identity=identity,
                     mapped_from=extracted,
                     claim_summary=CLAIM_SUMMARY,
+                    placed={doc.sha1: set(media)},
                 )
             except Exception as exc:
                 record["failed"][doc.sha1] = type(exc).__name__
@@ -720,6 +887,10 @@ def run_write(context: Any) -> list[str]:
                     "depicts_left_out": left_out,
                     "items_minted": len(result.minted),
                     "notes_written": result.notes_written,
+                    # local id -> QID, through which the place stage
+                    # finds the places the batch's records put in a
+                    # container
+                    "created_items": dict(result.created_items),
                 }
                 record["failed"].pop(doc.sha1, None)
                 context.driver._raise_flags(doc, result.flags)
@@ -735,7 +906,7 @@ def run_write(context: Any) -> list[str]:
             )
             and not (registered.get("failed") or {})
         )
-        if complete:
+        if complete and not record.get("recorded"):
             record_contents(client_of(context), key, run_id)
             record["recorded"] = True
         save_record(context.directory, record)
@@ -758,32 +929,46 @@ def run_write(context: Any) -> list[str]:
 # -- site -------------------------------------------------------------------
 
 
+def await_query_service(
+    config: Any, expected: str | None, revision: int, what: str
+) -> None:
+    """Wait until the query service shows the run items of the run
+    `expected` and an entity of revision `revision` or a later one, for
+    at most SITE_WAIT seconds; ScratchWriteRefused, saying `what` was not
+    done, after that."""
+    probe = query_service_probe(config)
+    deadline = clock() + SITE_WAIT
+    while True:
+        shown, newest = probe()
+        if expected in shown and newest >= revision:
+            return
+        if clock() >= deadline:
+            raise ScratchWriteRefused(
+                f"the query service has not caught up with the write "
+                f"after {SITE_WAIT:.0f} seconds: it shows the run items "
+                f"of {', '.join(shown) or 'no scratch run'} and "
+                f"revision {newest}, waiting for {expected}'s and "
+                f"revision {revision}: {what}"
+            )
+        sleep(SITE_POLL)
+
+
 def run_site(context: Any) -> list[str]:
     """The site stage (the module docstring). It waits for the query
     service only when the instance holds a run item of the run, one this
     run wrote or the one whose writes it kept: until it shows that run,
     and, after this run's write, an entity of the newest revision the
-    write left or a later one, for at most SITE_WAIT seconds."""
+    write or the place stage left or a later one, for at most SITE_WAIT
+    seconds."""
     expected = _reset_record(context).get("run_id")
     written = read_record(context.directory.parent / WRITE)
-    revision = written.get("revision") or 0
+    placed = read_record(context.directory.parent / PLACES)
+    revision = max(written.get("revision") or 0, placed.get("revision") or 0)
     config = client_of(context).config
     if written.get("skipped") or written.get("documents"):
-        probe = query_service_probe(config)
-        deadline = clock() + SITE_WAIT
-        while True:
-            shown, newest = probe()
-            if expected in shown and newest >= revision:
-                break
-            if clock() >= deadline:
-                raise ScratchWriteRefused(
-                    f"the query service has not caught up with the write "
-                    f"after {SITE_WAIT:.0f} seconds: it shows the run items "
-                    f"of {', '.join(shown) or 'no scratch run'} and "
-                    f"revision {newest}, waiting for {expected}'s and "
-                    f"revision {revision}: the site was not built"
-                )
-            sleep(SITE_POLL)
+        await_query_service(
+            config, expected, revision, "the site was not built"
+        )
     out = context.directory / "site"
     summary = build_site(config, out)
     save_record(
@@ -797,3 +982,294 @@ def run_site(context: Any) -> list[str]:
         f"only: python -m http.server -d {out}"
     )
     return []
+
+
+# -- places -----------------------------------------------------------------
+
+
+def _place_record(context: Any, key: str, epoch: str) -> dict:
+    """The place stage's record of this reset of the instance and this
+    place key: the one in its directory, when it was made for them, else
+    a new one."""
+    record = read_record(context.directory)
+    if record.get("key") == key and record.get("epoch") == epoch:
+        return record
+    return {"key": key, "epoch": epoch, "outcomes": {}}
+
+
+def _stated_links(context: Any, written: dict) -> list:
+    """The links the mention records of the documents the write wrote
+    state (places.stated_links), each document stating its own."""
+    from yizkr.pipeline.places import stated_links
+
+    documents = written.get("documents") or {}
+    links = []
+    for doc in context.documents:
+        done = documents.get(doc.sha1)
+        if not isinstance(done, dict):
+            continue
+        extracted = extracted_batch(doc)
+        if extracted is None:
+            continue
+        created = done.get("created_items")
+        links += stated_links(
+            extracted, created if isinstance(created, dict) else {}, doc.sha1
+        )
+    return links
+
+
+def _propose(
+    context: Any, key: str, epoch: str, written: dict, record: dict
+) -> None:
+    """Read the graph, ask the adjudicator, and keep in the record what
+    it answered and the links its answers decide, through the cycle guard
+    against the graph's containment as read and the links before them;
+    its raw answers go in RESPONSES. A write that wrote no document
+    leaves nothing to read or ask."""
+    from yizkr.pipeline import places as hierarchy
+
+    places, links = [], []
+    work = hierarchy.Worklist()
+    found = hierarchy.Adjudication()
+    if written.get("documents"):
+        client = client_of(context)
+        await_query_service(
+            client.config,
+            _reset_record(context).get("run_id"),
+            written.get("revision") or 0,
+            "no place was reconciled",
+        )
+        places = place_graph(client)
+        links = _stated_links(context, written)
+        hierarchy.attach_chains(places, links)
+        work = hierarchy.build_worklist(places, links)
+        if work.questions:
+            found = hierarchy.adjudicate(
+                place_client(context), work.questions, places
+            )
+    planned = hierarchy.links_to_write(work, found.answers)
+    graph = {place.qid: place.parents for place in places}
+    kept, refused = hierarchy.plan(
+        planned.edges, lambda node: graph.get(node, ())
+    )
+    labels = {place.qid: place.label for place in places}
+    context.directory.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(
+        context.directory / RESPONSES,
+        json.dumps(
+            {"key": key, "epoch": epoch, "responses": found.responses},
+            indent=2,
+        )
+        + "\n",
+    )
+    record.update(
+        questions=len(work.questions),
+        unnamed=work.unnamed,
+        calls=len(found.responses),
+        answers=[
+            {
+                "place": answer.question.place,
+                "chain": list(answer.question.chain),
+                "index": answer.question.index,
+                "answer": answer.place,
+                "confidence": answer.confidence,
+                "evidence": answer.evidence,
+            }
+            for answer in found.answers
+        ],
+        answered=sum(answer.place is not None for answer in found.answers),
+        uncertain=sum(answer.place is None for answer in found.answers),
+        # the links stated by a record that no claim of its document gives
+        record_only=sum(not link.claimed for link in links),
+        unresolved=planned.unresolved,
+        schema_rejected=found.rejected,
+        conflicts=len(found.conflicts),
+        # the questions the answer left unanswered, neither answered nor
+        # in conflict
+        unanswered=len(work.questions)
+        - len(found.answers)
+        - len(found.conflicts),
+        planned=[
+            {"child": child, "parent": parent, "link": link.as_json()}
+            for child, parent, link in kept
+        ],
+        # each link refused as it would close a cycle, by its places'
+        # labels and its document, for the run report to name
+        refused=[
+            {
+                "child": child,
+                "parent": parent,
+                "child_label": labels.get(child, ""),
+                "parent_label": labels.get(parent, ""),
+                "sha1": link.sha1,
+            }
+            for child, parent, link in refused
+        ],
+    )
+    save_record(context.directory, record)
+
+
+def _counts(record: dict) -> dict:
+    from yizkr.pipeline import places as hierarchy
+
+    outcomes = record["outcomes"]
+    planned = record["planned"]
+    applied = (hierarchy.WRITTEN, hierarchy.REFERENCED)
+    return {
+        "questions": record.get("questions", 0),
+        "unnamed": record.get("unnamed", 0),
+        "calls": record.get("calls", 0),
+        "answered": record.get("answered", 0),
+        "uncertain": record.get("uncertain", 0),
+        "written": list(outcomes.values()).count(hierarchy.WRITTEN),
+        "referenced": list(outcomes.values()).count(hierarchy.REFERENCED),
+        "present": list(outcomes.values()).count(hierarchy.PRESENT),
+        "record_only": record.get("record_only", 0),
+        "record_only_written": sum(
+            outcomes.get(str(index)) in applied
+            and not entry["link"].get("claimed")
+            for index, entry in enumerate(planned)
+        ),
+        "unresolved": record.get("unresolved", 0),
+        "schema_rejected": record.get("schema_rejected", 0),
+        "cycles": len(record.get("refused") or []),
+        "conflicts": record.get("conflicts", 0),
+        "unanswered": record.get("unanswered", 0),
+    }
+
+
+def run_places(context: Any) -> list[str]:
+    """The place stage (the module docstring)."""
+    from yizkr.pipeline import places as hierarchy
+    from yizkr.pipeline.writer import BatchWriter
+
+    _, key = _key_of(context)
+    target = place_key(context, key)
+    skipped = _skipped(context, PLACES)
+    if skipped is not None:
+        own = read_record(context.directory)
+        if own.get("key") == target and own.get("recorded"):
+            # this run made what the instance holds: its counts stand
+            return []
+        save_record(
+            context.directory,
+            {"key": target, "skipped": True, "run_id": skipped.get("run_id")},
+        )
+        return []
+    written = read_record(context.directory.parent / WRITE)
+    registered = read_record(context.directory.parent / REGISTER)
+    with live_stack():
+        run_id, epoch, _ = _held(context, key)
+        if (written.get("key"), written.get("epoch")) != (key, epoch):
+            raise ScratchWriteRefused(
+                "the write stage has not written the documents for this "
+                "reset of the instance: no place was reconciled"
+            )
+        if not written.get("recorded"):
+            # questions are asked over the whole write alone, never over
+            # part of it: the stage waits for an invocation whose write
+            # completes, and records nothing meanwhile
+            context.log(
+                f"{PLACES}: the write is not complete, so no place is "
+                "reconciled in this invocation"
+            )
+            return ["the write is not complete: no place was reconciled"]
+        record = _place_record(context, target, epoch)
+        record["run_id"] = run_id
+        if "planned" not in record:
+            _propose(context, target, epoch, written, record)
+        artifacts = registered.get("documents") or {}
+        client = client_of(context)
+        writer = BatchWriter(client)
+
+        def run_item() -> str:
+            """The stage's run item, made before the stage's first write,
+            which first clears the instance-contents record: the instance
+            is to hold more than the write key makes."""
+            if not record.get("cleared"):
+                clear_contents(
+                    client.config, f"scratch run {run_id}: {PLACES}"
+                )
+                record["cleared"] = True
+                save_record(context.directory, record)
+            if record.get("run_qid") is None:
+                record["run_qid"] = hierarchy.ensure_places_run_item(
+                    client,
+                    target[:10],
+                    place_model(context)["model"] or "engine-default",
+                    description=PLACE_RUN_DESCRIPTION,
+                    marks={
+                        MARK_RUN: run_id,
+                        MARK_MANIFEST: manifest_hash(context.run),
+                        MARK_MAP: identity_map(context).hash,
+                    },
+                )
+                state = save_state(client, run_id, key, epoch)
+                record["revision"] = state["watermark"]["revision"]
+                save_record(context.directory, record)
+            return record["run_qid"]
+
+        # every link's document has its artifact before anything is written
+        for entry in record["planned"]:
+            sha1 = entry["link"]["sha1"]
+            if not isinstance(artifacts.get(sha1), str):
+                raise ScratchWriteRefused(
+                    f"no artifact is registered for the document {sha1}, "
+                    "whose record states a link: no place was reconciled"
+                )
+        for index, entry in enumerate(record["planned"]):
+            if str(index) in record["outcomes"]:
+                continue
+            link = hierarchy.StatedLink.from_json(entry["link"])
+            artifact = artifacts[link.sha1]
+            outcome = hierarchy.write_link(
+                writer,
+                entry["child"],
+                entry["parent"],
+                link,
+                artifact,
+                run_item,
+            )
+            record["outcomes"][str(index)] = outcome
+            if outcome != hierarchy.PRESENT:
+                state = save_state(client, run_id, key, epoch)
+                record["revision"] = state["watermark"]["revision"]
+            save_record(context.directory, record)
+        record["counts"] = counts = _counts(record)
+        if not record.get("recorded"):
+            record_contents(client, target, run_id)
+            record["recorded"] = True
+        save_record(context.directory, record)
+    context.log(
+        f"{PLACES}: {counts['questions']} questions in {counts['calls']} "
+        f"calls ({counts['unnamed']} stated links left out, with no place "
+        f"to name), {counts['answered']} answered and "
+        f"{counts['uncertain']} uncertain; {counts['written']} links "
+        f"written, {counts['referenced']} referenced on an equal "
+        f"statement, {counts['present']} already there; "
+        f"{counts['record_only']} links stated by a record alone, "
+        f"{counts['record_only_written']} of them written; "
+        f"{counts['unresolved']} links unresolved; "
+        f"{counts['schema_rejected']} answers rejected by the schema, "
+        f"{counts['cycles']} cycles and {counts['conflicts']} conflicts "
+        "refused"
+        + (
+            ""
+            if record.get("recorded")
+            else "; the instance-contents key is not recorded"
+        )
+    )
+    attention = []
+    if counts["cycles"]:
+        attention.append(
+            f"{counts['cycles']} place links refused: each would close a cycle"
+        )
+    if counts["conflicts"]:
+        attention.append(
+            f"{counts['conflicts']} place questions answered in conflict"
+        )
+    if counts["schema_rejected"]:
+        attention.append(
+            f"{counts['schema_rejected']} place answers rejected by the schema"
+        )
+    return attention

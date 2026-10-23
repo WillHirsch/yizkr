@@ -221,68 +221,74 @@ def cmd_publish_queries(args) -> int:
 
 def cmd_reconcile_places(args) -> int:
     from yizkr.pipeline.places import (
-        adjudicate_places,
-        apply_containment,
+        adjudicate,
+        apply_answers,
+        attach_chains,
         build_worklist,
         export_places_csv,
-        fetch_competing_pairs,
         fetch_places,
-        record_containers,
-        stated_parent_candidates,
+        record_links,
     )
 
     config = Config.load(args.env_file)
     client = WikiClient(config)
+    links = [
+        link for run_dir in args.run or () for link in record_links(run_dir)
+    ]
     if args.apply:
-        summary = apply_containment(
-            client, config, args.apply, "curator-reviewed"
+        if not links:
+            print(
+                "note: no --run directory states a link, so no row decides "
+                "a question: give the --run the CSV was made with",
+                file=sys.stderr,
+            )
+        summary = apply_answers(
+            client, config, args.apply, links, "curator-reviewed"
         )
         for note in summary["notes"]:
             print(f"note: {note}", file=sys.stderr)
         print(
-            f"containment written: {summary['written']}, already present: "
-            f"{summary['skipped']}"
+            f"links written: {summary['written']}, referenced on an equal "
+            f"statement: {summary['referenced']}, already present: "
+            f"{summary['skipped']}; refused as cycles: {summary['cycles']}, "
+            f"unresolved: {summary['unresolved']}; approved rows passed "
+            f"over, deciding no question asked: {summary['passed_over']}"
             + (
-                f", run item {summary['run_qid']}"
+                f"; run item {summary['run_qid']}"
                 if summary["run_qid"]
                 else ""
             )
-        )
-        remaining = len(fetch_competing_pairs(client, config))
-        print(
-            f"{remaining} competing place pair(s) still unresolved — re-run "
-            f"`yizkr reconcile-places` to derive the next (smaller) worklist."
         )
         return 0
 
     from yizkr.pipeline.llm import make_client
 
     places = fetch_places(client, config)
-    for run_dir in args.run or ():
-        stated = record_containers(run_dir)
-        for place in places:
-            place.chains.extend(
-                c for c in stated.get(place.qid, ()) if c not in place.chains
-            )
-    competing = fetch_competing_pairs(client, config)
-    parents = stated_parent_candidates(places)
-    worklist = build_worklist(places, competing, parents)
+    attach_chains(places, links)
+    work = build_worklist(places, links)
     print(
-        f"places: {len(places)}; unresolved competing pairs: "
-        f"{len(competing)}; stated-parent candidates: {len(parents)}; "
-        f"questions after transitive elimination + dedupe: {len(worklist)}"
+        f"places: {len(places)}; links their records state: {len(links)}, "
+        f"{sum(not link.claimed for link in links)} of them by a record "
+        f"alone; left out, with no place to name: {work.unnamed}; "
+        f"questions: {len(work.questions)}"
     )
-    if not worklist:
-        print(
-            "nothing to adjudicate — the hierarchy already answers everything"
-        )
+    if not work.questions:
+        print("nothing to ask: no stated link needs its container named")
         return 0
-    proposals = adjudicate_places(make_client(args.llm), worklist, places)
-    rows = export_places_csv(proposals, worklist, places, args.out)
+    found = adjudicate(make_client(args.llm), work.questions, places)
+    rows = export_places_csv(found, places, args.out)
+    if found.conflicts or found.rejected:
+        print(
+            f"left out: {len(found.conflicts)} question(s) answered twice "
+            f"differently, {found.rejected} answer line(s) outside the "
+            "answer's schema"
+        )
     print(
-        f"wrote {args.out} ({rows} proposals). Fill the 'decision' column, "
-        f"then re-run with --apply. Containment rows write referenced "
-        f"part_of statements; 'same' rows stay curator-executed."
+        f"wrote {args.out} ({rows} answers). Fill the 'decision' column, "
+        "then re-run with the same --run and --apply. An approved 'same' "
+        "row writes the links its record states, part of the place it "
+        "names, stated in the record's document; 'uncertain' rows write "
+        "nothing."
     )
     return 0
 
@@ -594,10 +600,8 @@ def cmd_reconcile_graph(args) -> int:
     from yizkr.pipeline.llm import make_client
     from yizkr.pipeline.reconcile import (
         export_graph_pairs_csv,
-        export_place_containment_csv,
         fetch_place_containment,
         fetch_roster,
-        place_containment_proposals,
         propose_graph_pairs,
     )
 
@@ -615,18 +619,6 @@ def cmd_reconcile_graph(args) -> int:
         f"on the wiki, or add a referenced 'said to be the same as' "
         f"statement where the equivalence is itself a judgement."
     )
-    # hand-off (ADR-0017): distinct pairs the adjudicator flagged as one
-    # containing the other become part_of proposals for reconcile-places.
-    containment_rows = place_containment_proposals(proposals, roster)
-    if containment_rows:
-        out = args.out.with_name(args.out.stem + "-containment.csv")
-        export_place_containment_csv(containment_rows, out)
-        print(
-            f"wrote {out} ({len(containment_rows)} containment proposal(s) "
-            f"discovered while rejecting equivalences). Review, then apply "
-            f"with `yizkr reconcile-places --apply {out}` to write the "
-            f"part_of edges — which then prune these pairs from future runs."
-        )
     return 0
 
 
@@ -1355,8 +1347,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "reconcile-places",
-        help="propose place containment for unresolved competing values "
-        "(ADR-0009); approved edges write referenced part_of statements",
+        help="ask which existing place each container the places' mention "
+        "records state means (ADR-0009, ADR-0038); approved answers write "
+        "the links the sources state, as referenced part_of statements",
     )
     p.add_argument(
         "--llm", default="anthropic", choices=["anthropic", "claude-code"]
@@ -1366,14 +1359,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--run",
         type=Path,
         action="append",
-        help="a run directory that wrote the graph: the containers its "
-        "places' mention records state propose parents (repeatable)",
+        help="a run directory that wrote the graph: the chains of "
+        "containers its places' mention records state are the links asked "
+        "of (repeatable; needed by --apply too)",
     )
     p.add_argument(
         "--apply",
         type=Path,
-        help="reviewed CSV: write approved containment rows and report "
-        "what transitive elimination removed",
+        help="reviewed CSV: write the links its approved rows decide",
     )
     p.set_defaults(func=cmd_reconcile_places)
 

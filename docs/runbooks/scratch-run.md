@@ -310,9 +310,10 @@ uv run yizkr scratch run
 
 ## The write side
 
-After clustering come four corpus stages that touch the wiki and make no
-model call (#200; `yizkr.pipeline.scratchwrite`, ADR-0025 §1 and §2):
-`reset`, `register`, `write` and `site`. The driver runs each only while
+After clustering come five corpus stages that touch the wiki (#200,
+#201; `yizkr.pipeline.scratchwrite`, ADR-0025 §1 and §2): `reset`,
+`register`, `write`, `places` and `site`. Only `places` makes model
+calls, through the LLM cache. The driver runs each only while
 the stack answers and the instance carries no kept-state marker, which
 the preflight checks before anything is dispatched and the driver checks
 again before each of them. So a run to the end needs the stack up; a run
@@ -322,26 +323,30 @@ with `--until clustering` (or an earlier stage) needs none.
   instance: the identity map's hash, each document's SHA-1 with the
   content hash of its batch and what registration reads of it (its kind,
   its title, its file name, its derived media's record, an excerpt's
-  PDFs and decks), the never-ingest list's hash, the writer's version and the
-  source of the whole package but the modules that only read, and the
-  model manifest's hash. A batch's run stamps are in it, so every new run
-  resets and writes again; only a later invocation of the run that wrote
-  skips. When
-  the instance-contents record still stands for this key (no other write
-  has voided it, and nothing has cleared it), the instance holds what
-  the key makes: the stage resets nothing, and register and write skip.
-  When this run reset the instance in an earlier invocation, for this
-  key, and nothing but this run has written to it since, the run goes on
-  where it stopped. Otherwise it resets the instance as `yizkr scratch
-  reset --yes` does (below, Reset the instance), under the live-stack
-  lock: **a run to the end resets the instance unattended**, which takes
-  minutes and discards everything on it. The reset refuses a kept
-  instance itself too. It then records, in the instance's write-phase
-  state (`scratch-run.json`, which every reset clears), the run, the
-  key, an epoch it draws for this reset and the instance's newest
-  revision and log entry, under the same hold of the lock as the reset,
-  so no session that takes the lock writes between them. The records
-  register, write and site kept of an earlier reset are removed.
+  PDFs and decks), the never-ingest list's hash, the writer's version
+  and the source of the whole package but the modules that only read,
+  and the model manifest's hash. A batch's run stamps are in it, so
+  every new run resets and writes again; only a later invocation of the
+  run that wrote skips. The run's place key adds to it the place stage's
+  version, its prompt, the batch size it asks in, and the engine, model
+  and effort of the role it calls (`extract`); since the place stage
+  writes after the write, the key the instance holds is the place key.
+  When the instance-contents record still stands for that key (no other
+  write has voided it, and nothing has cleared it), the instance holds
+  what the key makes: the stage resets nothing, and register, write and
+  places skip. When this run reset the instance in an earlier
+  invocation, for this key, and nothing but this run has written to it
+  since, the run goes on where it stopped. Otherwise it resets the
+  instance as `yizkr scratch reset --yes` does (below, Reset the
+  instance), under the live-stack lock: **a run to the end resets the
+  instance unattended**, which takes minutes and discards everything on
+  it. The reset refuses a kept instance itself too. It then records, in
+  the instance's write-phase state (`scratch-run.json`, which every
+  reset clears), the run, the key, an epoch it draws for this reset and
+  the instance's newest revision and log entry, under the same hold of
+  the lock as the reset, so no session that takes the lock writes
+  between them. The records register, write, places and site kept of an
+  earlier reset are removed, and so are the place stage's raw answers.
 - **register** registers each document as `ingest run` does at its
   write: the artifact item by the SHA-1 of its bytes, a deck's slides
   and images, a PDF's placed images, with registration's flags raised as
@@ -362,31 +367,89 @@ with `--until clustering` (or an earlier stage) needs none.
   `run manifest hash` (the run manifest's settings) and the `identity
   map hash`, each stated in the run item itself. When every document is
   written, the instance-contents record takes the write key.
-- **The guard.** Register and write each refuse, before they write
-  anything, unless the write-phase state names this run and this key,
-  and the instance's newest revision and log entry are still those this
-  run's last write left. So they write only to an instance this run
+- **places** asks which existing place each container a written place's
+  mention record states means, and writes the links the sources state
+  (ADR-0009, ADR-0038 §3 and §8.5), unattended, after the write and
+  before the site, so the site shows them. It waits for a complete
+  write: while a document's registration or write has failed, it does
+  nothing and records nothing, and the next invocation that completes
+  the write asks over all of it. Once the query service shows the
+  write, it reads the graph's places, their containment and
+  descriptions, and takes, link by link, the chains of containers the
+  written documents' mention records state, each link with the time a
+  claim of its document gives it, and none where the record alone
+  states it. It asks of a link whose container names more than one
+  existing place, or that no claim of its document gives; a link whose
+  container names no place is left out and counted. It asks in batches
+  of 40, in the role `extract`, through the LLM cache; the run's events,
+  the monitor and the report name these calls `places`. Its prompt names
+  each place by its label and description (with the labels of the
+  places the graph puts it in and the containers its records state, and
+  [1], [2], ... for namesakes nothing else tells apart) and each
+  question and candidate by its number, and orders nothing by a QID, so
+  a run on the same batches after another reset asks the engine
+  nothing. The answer names a candidate, or none (`uncertain`), which
+  writes nothing. An answer the cache kept that does not parse is
+  rejected and asked once more; one the engine gave in this run is
+  rejected and fails the stage. The answers, the links they decide and
+  the counts go in `corpus/places/record.json`, and the raw answers in
+  `corpus/places/responses.json`, both for this reset; a reset removes
+  both. Each answered link is written with no review CSV, as a
+  `part_of` statement at normal rank, to the item the answer names,
+  with the time the document's claim gives (none for a link a record
+  alone states), `stated in` the document's artifact with no page, and
+  `inferred from` the stage's run item, `place-hierarchy run <model>
+  <key>`, marked as the write's run items are. A link already written,
+  stated in the same artifact with the same time, is not written again;
+  an equal statement another source states gains the link's
+  references. A link that would close a cycle (through the graph's
+  containment, another link, or both, at any time), a question answered
+  twice differently (a conflict) and an answer line outside the
+  answer's schema are refused and counted, never written; the local
+  report names each refused cycle. It holds the live-stack lock for the
+  whole stage, its model calls included, and refuses as register and
+  write do (the guard, below). A subscription limit met while the stage
+  asks leaves nothing recorded: the driver waits, invokes the run again,
+  and the stage reads the graph and asks again, the batches already
+  answered coming from the LLM cache. A stage cut short after asking
+  (Ctrl-C between two writes, say) writes the rest of its links without
+  asking again; one cut short inside a write the wiki took leaves a
+  revision the state does not record, and the next invocation resets.
+  It clears the instance-contents record before its first write, and
+  once it has written every link the record takes the place key. A run
+  invoked `--until write` leaves the write key recorded, not the place
+  key: invoking the same run again goes on where it stopped, and another
+  run resets and writes again. A run whose write failed a document ends
+  complete (exit 0), with the write's and the place stage's attention
+  labels; `yizkr scratch run --resume <run>` invokes it again, which
+  retries the write and then asks of the places, while the bare command
+  starts a new run. The stages before the write never read this
+  containment: they use only what the manifests assert.
+- **The guard.** Register, write and places each refuse, before they
+  write anything, unless the write-phase state names this run and this
+  key, and the instance's newest revision and log entry are still those
+  this run's last write left. So they write only to an instance this run
   reset, which has taken no other write since: a live test session, a
   manual edit or another tool in between refuses them, and the next
-  invocation's reset stage resets again. Both hold the live-stack lock
-  for the whole of their writes, so no live test session writes
-  meanwhile: **a scratch write keeps `make test-live` waiting while it
-  lasts**, and no live session should be started during one. A write
-  cut short in the middle of a document (Ctrl-C) leaves the instance a
-  revision the state does not record, so the next invocation resets and
-  writes everything again.
+  invocation's reset stage resets again. Each holds the live-stack lock
+  for the whole of its writes, so no live test session writes meanwhile:
+  **a scratch write keeps `make test-live` waiting while it lasts**, and
+  no live session should be started during one. A write cut short in the
+  middle of a document (Ctrl-C) leaves the instance a revision the state
+  does not record, so the next invocation resets and writes everything
+  again.
 - **site** builds the LAN site from the instance, as `yizkr
   publish-site` does, into `corpus/site/site/` in the run directory,
   once the query service shows the run items of the run whose writes the
-  instance holds and has taken in the newest revision the write left (it
-  waits up to five minutes). Every page's header says
-  the instance holds a development-stage scratch run and names it. Serve
-  it on the LAN only (`python -m http.server -d <that directory>`): it
-  holds possibly-living people.
+  instance holds and has taken in the newest revision the write or the
+  place stage left (it waits up to five minutes). Every page's header
+  says the instance holds a development-stage scratch run and names it.
+  Serve it on the LAN only (`python -m http.server -d <that
+  directory>`): it holds possibly-living people.
 - **Records.** Each stage keeps what it did in
   `corpus/<stage>/record.json` in the run directory: local-only, like
-  the rest of it. The run report counts the write's
-  (docs/RUN_REPORT.md, Write).
+  the rest of it. The run report counts the write's and the place
+  stage's (docs/RUN_REPORT.md, Write and Place hierarchy).
 
 ## Watch
 
@@ -718,7 +781,7 @@ Nothing from them goes into the repository, GitHub or a cloud session.
 
 ## Not yet
 
-- Place-hierarchy reconciliation (#201) is not a stage yet: it will run
-  after the write and before the site.
-  The estimate counts the per-document stages' calls, says that
-  clustering makes none, and names any corpus stage it does not count.
+- The estimate counts the per-document stages' calls. It says which
+  corpus stages make none (clustering, and the write side but the place
+  stage) and names the one it does not count: `places`, whose questions
+  depend on the graph the write makes.

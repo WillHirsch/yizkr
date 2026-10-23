@@ -32,6 +32,7 @@ from yizkr.disagreement import (
     Time,
     compare,
     counts_by_property,
+    place_within,
     read_containment,
     read_statements,
 )
@@ -1540,16 +1541,34 @@ def rows_of(statement: Statement, properties=PROPERTIES) -> list[dict]:
 def containment_rows(
     edges: Iterable[tuple[str, str]] = (),
     redirects: Iterable[tuple[str, str]] = (),
+    *,
+    rank: str = NORMAL,
+    stated: bool = True,
 ) -> list[dict]:
-    link = f"{CONCEPT}/prop/direct/{PROPERTIES['part_of']}"
+    """The containment query's rows: each edge a part-of statement with
+    `rank`, stated in a source or not, and each merge redirect."""
+    link = f"{CONCEPT}/entity/{PROPERTIES['part_of']}"
+    boolean = "http://www.w3.org/2001/XMLSchema#boolean"
     return [
         {
             "item": {"type": "uri", "value": item},
-            "link": {"type": "uri", "value": predicate},
+            "link": {"type": "uri", "value": link},
+            "target": {"type": "uri", "value": target},
+            "rank": {"type": "uri", "value": rank},
+            "stated": {
+                "type": "literal",
+                "datatype": boolean,
+                "value": "true" if stated else "false",
+            },
+        }
+        for item, target in edges
+    ] + [
+        {
+            "item": {"type": "uri", "value": item},
+            "link": {"type": "uri", "value": OWL_SAME_AS},
             "target": {"type": "uri", "value": target},
         }
-        for pairs, predicate in ((edges, link), (redirects, OWL_SAME_AS))
-        for item, target in pairs
+        for item, target in redirects
     ]
 
 
@@ -1614,6 +1633,45 @@ class TestReading:
             iri("brunnenring-35")
         )
         assert containment.reachable(iri("brunnenring")) == frozenset()
+
+
+class TestContainmentEdges:
+    """followed: the path reads a containment as a source's claim
+    (ADR-0038 §5): through a part-of or location statement that a source
+    states, at normal or preferred rank, at any time it carries."""
+
+    ADDRESS = (iri("brunnenring-35"), iri("floerburg"))
+
+    def within(self, **edge) -> bool:
+        containment = read_containment(
+            containment_rows([self.ADDRESS], **edge)
+        )
+        return place_within(containment, *self.ADDRESS)
+
+    def test_a_stated_claim_is_followed_at_normal_or_preferred_rank(self):
+        assert self.within()
+        assert self.within(rank=PREFERRED)
+
+    def test_a_deprecated_claim_is_not_followed(self):
+        assert not self.within(rank=DEPRECATED)
+
+    def test_a_claim_no_source_states_is_not_followed(self):
+        # process provenance alone, a run with no stated-in source, never
+        # backs a containment (ADR-0038 §1)
+        assert not self.within(stated=False)
+
+    def test_one_unstated_link_breaks_the_path(self):
+        # the extract's Brunnenring 35 and the naturalisation's Flörburg
+        # differ only in resolution through a stated path; where no source
+        # states the street's part in the town, the two stay side by side
+        address = [(iri("brunnenring-35"), iri("brunnenring"))]
+        street = [(iri("brunnenring"), iri("floerburg"))]
+        stated = read_containment(containment_rows(address + street))
+        unstated = read_containment(
+            containment_rows(address) + containment_rows(street, stated=False)
+        )
+        assert listed(*TestPlaces.BIRTHPLACES, containment=stated) == []
+        assert len(listed(*TestPlaces.BIRTHPLACES, containment=unstated)) == 1
 
 
 class TestTheEntryPoint:

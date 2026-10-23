@@ -5,7 +5,9 @@ It reports a run that went to the end, one still running, and one that
 stopped short (stopped by the control file, paused, interrupted, refused,
 failed or killed): every count is what the run directory holds as it is
 read. It reads the run directory, and the model manifest for the names
-report.md may give claims and entities (claims.load_vocabulary); never
+report.md may give claims and entities (claims.load_vocabulary) and for
+which properties a document states of itself or of what it places
+(model.schema.load_acceptance); never
 the wiki, the engine, the LLM cache or the corpus:
 
     run.json         the plan (each document's SHA-1, file, kind and
@@ -59,8 +61,9 @@ again. No document's directory can take that name: the orchestrator
 names them by slugs, which never start with a dot, and a directory it
 sets aside by `.<name>.superseded-<n>`.
 
-    report.json  everything the report holds: the aggregates, and every
-                 document's stages, calls, views, alerts and reasons
+    report.json  everything the report holds: the aggregates, every
+                 document's stages, calls, views, alerts and reasons,
+                 and the place links refused as cycles
     report.html  the same as one self-contained page (inline style, no
                  script), with a drill-down per document
     report.md    the aggregates alone, for an issue or a PR
@@ -87,10 +90,14 @@ by its check and stage, never by its value or limit.
 
 Some counts need what the run directory does not hold, and the report
 says so (NOT_AVAILABLE) rather than count none: depicts proposals, since
-face detection is never a stage of a scratch run; place-hierarchy
-proposals applied and different-source contradictions, which only a write
-stage makes; and flags by tier and class, until a stage makes them
-(`_flags` is where the report reads them).
+face detection is never a stage of a scratch run; the place stage's
+questions and links, until the run's place stage has run (its record in
+CORPUS_DIR/places/ gives them); different-source contradictions, which
+only a written graph holds; and flags by tier and class, until a stage
+makes them (`_flags` is where the report reads them). The links the
+place stage refused as each would close a cycle are counted in the
+aggregates and named, by their places' labels and their documents, in
+report.json and report.html alone (`place_cycles`).
 """
 
 from __future__ import annotations
@@ -109,11 +116,13 @@ from pathlib import Path
 from typing import Any, get_args
 
 from yizkr.claims import (
+    REJECT_REASONS,
     JudgementNote,
     PersonStructure,
     PlaceStructure,
     load_vocabulary,
 )
+from yizkr.model.schema import load_acceptance
 from yizkr.pipeline.anomalies import (
     ERROR_EVENT,
     OUTPUT_LIMIT_REACHED,
@@ -208,6 +217,27 @@ IDENTITY_MAP_FORMAT = 1
 # the write stage and its record of what it wrote (in CORPUS_DIR/<stage>/)
 WRITE_STAGE = "write"
 WRITE_RECORD = "record.json"
+# the place stage, which keeps its counts and the links it refused in a
+# record of the same name
+PLACE_STAGE = "places"
+# the counts of the place stage's record, as the report names them
+PLACE_COUNTS = {
+    "questions": "questions",
+    "unnamed": "links_left_out_unnamed",
+    "calls": "calls",
+    "answered": "answered",
+    "uncertain": "uncertain",
+    "written": "links_written",
+    "referenced": "links_referenced",
+    "present": "already_present",
+    "record_only": "record_only_links",
+    "record_only_written": "record_only_links_written",
+    "unresolved": "links_unresolved",
+    "schema_rejected": "rejected_by_schema",
+    "cycles": "refused_cycles",
+    "conflicts": "refused_conflicts",
+    "unanswered": "unanswered",
+}
 
 # how many times the report reads run.json and the events while an
 # invocation starts or ends as it reads them, as run_state reads them
@@ -230,7 +260,9 @@ KINDS = frozenset(DOCUMENT_STAGES)
 DOCUMENT_STAGE_NAMES = frozenset(
     stage for stages in DOCUMENT_STAGES.values() for stage in stages
 )
-ROLES = frozenset(MODEL_ROLES)
+# the roles calls are made in: the models', and the scratch run's place
+# stage, whose calls the run's events name apart
+ROLES = frozenset(MODEL_ROLES) | {PLACE_STAGE}
 MODES = frozenset({"scratch run", "ingest run"})
 PROJECT_STAGES = frozenset({"development", "kept"})
 EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
@@ -1097,6 +1129,9 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
             views["coverage"] = {
                 "chunks": _count(coverage.get("chunks")),
                 "rejected_claims": _count(coverage.get("rejected_claims")),
+                "rejected_by_reason": _tally(
+                    coverage.get("rejected_by_reason")
+                ),
                 "unread_objects": _count(coverage.get("unread_objects")),
                 "fallback": sorted(
                     tier for tier in fallback if isinstance(tier, str)
@@ -1325,6 +1360,7 @@ def build(path: Path | str, *, now: datetime | None = None) -> dict[str, Any]:
     run = _run(manifest, fold, ended, now)
     clusters = _clusters(path, fold)
     written = _written(path)
+    placed = _place_stage(path)
     return {
         "format": FORMAT,
         "generated_at": now.isoformat(timespec="seconds"),
@@ -1342,6 +1378,7 @@ def build(path: Path | str, *, now: datetime | None = None) -> dict[str, Any]:
             vocabulary=vocabulary,
             now=now,
             written=written,
+            placed=placed,
         ),
         "documents": [_document_record(d) for d in documents.values()],
         "failed_unread": [
@@ -1355,6 +1392,7 @@ def build(path: Path | str, *, now: datetime | None = None) -> dict[str, Any]:
         },
         "clusters": clusters,
         "control": control,
+        "place_cycles": _place_cycles(placed, documents),
     }
 
 
@@ -1659,6 +1697,65 @@ def _aggregate_write(written: Mapping[str, Any] | None) -> dict[str, Any]:
     return counted
 
 
+def _place_stage(path: Path) -> dict[str, Any] | None:
+    """The place stage's record (yizkr.pipeline.scratchwrite), when the run
+    directory holds one with its counts, or one of a stage that skipped."""
+    found = _json(path / CORPUS_DIR / PLACE_STAGE / WRITE_RECORD)
+    if not isinstance(found, dict):
+        return None
+    if found.get("skipped") is True or isinstance(found.get("counts"), dict):
+        return found
+    return None
+
+
+def _place_cycles(
+    placed: Mapping[str, Any] | None, documents: Mapping[str, Document]
+) -> list[dict[str, str]]:
+    """Each link the place stage refused as it would close a cycle, by the
+    labels of its two places and the document that states it: for the
+    local report alone, as labels and file names are local-only data."""
+    if placed is None or placed.get("skipped"):
+        return []
+    found = []
+    for refused in placed.get("refused") or []:
+        if not isinstance(refused, dict):
+            continue
+        sha1 = refused.get("sha1")
+        document = documents.get(sha1) if isinstance(sha1, str) else None
+        found.append(
+            {
+                "place": str(refused.get("child_label") or ""),
+                "container": str(refused.get("parent_label") or ""),
+                "document": (
+                    f"{sha1[:12]} {document.files[0]}"
+                    if document is not None and document.files
+                    else str(sha1 or "")[:12]
+                ),
+            }
+        )
+    return found
+
+
+def _aggregate_places(placed: Mapping[str, Any] | None) -> dict[str, Any]:
+    """What the place stage asked and wrote, in counts alone."""
+    if placed is None:
+        return {
+            "status": NOT_AVAILABLE,
+            "why": "no place stage of this run has run to its end",
+        }
+    if placed.get("skipped"):
+        return {"skipped": True}
+    counts = placed["counts"]
+    return {
+        "skipped": False,
+        **{
+            shown: _count(counts.get(key))
+            for key, shown in PLACE_COUNTS.items()
+        },
+        "contents_recorded": bool(placed.get("recorded")),
+    }
+
+
 def _clusters(path: Path, fold: _Fold) -> dict[str, Any]:
     """The clustering stage: its state, and the counts the summary of its
     identity map gives, when the run directory holds a map of the format
@@ -1873,6 +1970,7 @@ def _aggregate(
     vocabulary: _Vocabulary,
     now: datetime,
     written: Mapping[str, Any] | None = None,
+    placed: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The report's aggregates, which report.md shows all of but the
     documents per language: counts, rates and times, keyed by names of
@@ -1887,7 +1985,7 @@ def _aggregate(
         "corpus_stages": _aggregate_corpus(fold, run, vocabulary),
         "anomalies": _aggregate_alerts(alerts, fold, vocabulary),
         "content": _aggregate_content(
-            documents, clusters, flags, vocabulary, written
+            documents, clusters, flags, vocabulary, written, placed
         ),
         "calls": _aggregate_calls(fold, vocabulary),
         "control": _aggregate_control(control, vocabulary),
@@ -2280,6 +2378,7 @@ def _aggregate_content(
     flags: Mapping[str, Any],
     vocabulary: _Vocabulary,
     written: Mapping[str, Any] | None = None,
+    placed: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     entities: Counter = Counter()
     claims: Counter = Counter()
@@ -2294,6 +2393,10 @@ def _aggregate_content(
     statuses: Counter = Counter()
     notes: Counter = Counter()
     absent: Counter = Counter()
+    # the rejects by reason code (claims.REJECT_REASONS), and the
+    # extractions whose coverage counts none
+    by_reason: Counter = Counter()
+    reasons_absent = 0
     record_extractions = records_given = recordless = notes_set_aside = 0
     records_set_aside = unsplit_forms = appellation_labels = 0
     appellation_parts = 0
@@ -2324,6 +2427,10 @@ def _aggregate_content(
             with_rejects += bool(
                 coverage["rejected_claims"] or coverage["unread_objects"]
             )
+            if coverage.get("rejected_by_reason") is None:
+                reasons_absent += 1
+            else:
+                by_reason.update(coverage["rejected_by_reason"])
             fallbacks.update(
                 _known(tier, FALLBACK_TIERS) for tier in coverage["fallback"]
             )
@@ -2388,7 +2495,12 @@ def _aggregate_content(
             "documents": with_rejects,
             "rate": _share(rejected + unread, rejected + unread + given),
             "failed_extractions": failed_rejecting,
+            "by_reason": _folded(
+                by_reason, lambda value: _known(value, REJECT_REASONS)
+            ),
+            "by_reason_absent": reasons_absent,
         },
+        "container_claims": _container_claims(claims, vocabulary),
         "zero_claims": {
             "documents": zero_claims.total(),
             "share": _share(zero_claims.total(), batches),
@@ -2437,11 +2549,7 @@ def _aggregate_content(
         "clusters": _aggregate_clusters(clusters, vocabulary),
         "depicts": _depicts(written),
         "write": _aggregate_write(written),
-        "place_hierarchy": {
-            "status": NOT_AVAILABLE,
-            "why": "no stage of a scratch run applies place-hierarchy "
-            "proposals yet",
-        },
+        "place_hierarchy": _aggregate_places(placed),
         "contradictions": {
             "status": NOT_AVAILABLE,
             "why": "different-source contradictions are read from a written "
@@ -2450,6 +2558,30 @@ def _aggregate_content(
         "flags": {
             key: flags[key] for key in ("status", "why") if key in flags
         },
+    }
+
+
+def _container_claims(
+    claims: Mapping[str, int], vocabulary: _Vocabulary
+) -> dict[str, Any]:
+    """What sources say of the artifacts themselves (ADR-0039), from the
+    batches' claims by property: the captions given, a container's words
+    about an image it places (`placed_subject`), and the claims a document
+    gives about itself, by property (`document_subject`). The properties
+    are the manifest's own, so the counts name no document."""
+    acceptance = load_acceptance()
+    return {
+        "captions": sum(
+            claims.get(key, 0) for key in sorted(acceptance.placed_subjects)
+        ),
+        "document_subject_by_property": _folded(
+            {
+                key: claims[key]
+                for key in sorted(acceptance.document_subjects)
+                if claims.get(key)
+            },
+            lambda value: _known(value, vocabulary.properties),
+        ),
     }
 
 
@@ -3093,8 +3225,29 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
                     f"Rate: {_pct(rejects['rate'])} of the claims given",
                     "Extractions that failed with every claim rejected or "
                     f"unread: {_n(rejects['failed_extractions'])}",
+                    "Rejects by reason: "
+                    f"{_listed(rejects['by_reason'])}"
+                    + (
+                        f" (extractions that count none: "
+                        f"{_n(rejects['by_reason_absent'])})"
+                        if rejects["by_reason_absent"]
+                        else ""
+                    ),
                     f"Fallback tiers taken: {_listed(content['fallbacks'])}",
                 ]
+            ],
+            3,
+        ),
+        _Section(
+            "What sources say of the artifacts themselves",
+            [
+                f"Captions given, a container's words about an image it "
+                f"places: {_n(content['container_claims']['captions'])}. "
+                "Claims a document gives about itself, by property: "
+                + _listed(
+                    content["container_claims"]["document_subject_by_property"]
+                )
+                + "."
             ],
             3,
         ),
@@ -3146,7 +3299,7 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
                         ("Depicts claims left out", "depicts"),
                         ("The write", "write"),
                         (
-                            "Place-hierarchy proposals applied",
+                            "Place questions and links",
                             "place_hierarchy",
                         ),
                         ("Different-source contradictions", "contradictions"),
@@ -3194,7 +3347,45 @@ def _write_sections(content: Mapping[str, Any]) -> list[_Section]:
     lines.append(
         f"Depicts claims left out, never written: {_n(depicts['left_out'])}."
     )
-    return [_Section("Write", [lines], 3)]
+    sections = [_Section("Write", [lines], 3)]
+    places = content["place_hierarchy"]
+    if places.get("status") == NOT_AVAILABLE:
+        return sections
+    if places.get("skipped"):
+        shown = [
+            "The instance held what this run's key makes: no place was "
+            "reconciled again."
+        ]
+    else:
+        shown = [
+            f"{_n(places['questions'])} place questions asked in "
+            f"{_n(places['calls'])} calls, of which container a record "
+            f"states each place means: {_n(places['answered'])} answered "
+            f"with a place, {_n(places['uncertain'])} uncertain, "
+            f"{_n(places['unanswered'])} unanswered; "
+            f"{_n(places['links_left_out_unnamed'])} stated links left "
+            "out, with no place to name.",
+            f"Links written: {_n(places['links_written'])} new, "
+            f"{_n(places['links_referenced'])} referenced on an equal "
+            f"statement, {_n(places['already_present'])} already there; "
+            f"{_n(places['links_unresolved'])} unresolved, their inner "
+            "place unanswered.",
+            f"Links a record states and no claim of its document gives: "
+            f"{_n(places['record_only_links'])}, of them "
+            f"{_n(places['record_only_links_written'])} written, with no "
+            "page and no time.",
+            f"Rejected by the schema: {_n(places['rejected_by_schema'])} "
+            "answers; refused: "
+            f"{_n(places['refused_cycles'])} links that would close a "
+            f"cycle (named in the local report), "
+            f"{_n(places['refused_conflicts'])} conflicting answers. The "
+            "instance-contents key is "
+            + (
+                "recorded." if places["contents_recorded"] else "not recorded."
+            ),
+        ]
+    sections.append(_Section("Place hierarchy", [shown], 3))
+    return sections
 
 
 def _records_blocks(
@@ -3631,6 +3822,21 @@ def render_html(report: Mapping[str, Any]) -> str:
                         for r in report["control"]
                     ],
                 )
+            )
+        )
+    cycles = report.get("place_cycles") or []
+    if cycles:
+        parts.append(
+            '<h2 id="place-cycles">Place links refused as cycles</h2>'
+        )
+        parts.append(
+            _html_block(
+                [
+                    f"{cycle['place']} within {cycle['container']}, as "
+                    f"{cycle['document']} states: refused, as it would "
+                    "close a cycle"
+                    for cycle in cycles
+                ]
             )
         )
     parts += _html_documents(report)

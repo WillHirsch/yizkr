@@ -369,11 +369,13 @@ class TestTheStages:
             "reset",
             "register",
             "write",
+            "places",
             "site",
         ]
         for stage in scratch.CORPUS_STAGES[1:]:
             assert stage.touches_wiki
-            assert not stage.calls_engine
+            # the place stage alone calls the engine (#201)
+            assert stage.calls_engine == (stage.name == "places")
 
     def test_the_driver_reads_the_kept_state_marker(self):
         assert scratch.KEPT_STATE is scratch._instance_is_kept
@@ -473,6 +475,72 @@ class TestTheWrite:
         (extract,) = by_label(run.wiki, "leopold-birth-extract")
         description = run.wiki.entities[extract]["descriptions"]["en"]
         assert "yizkr scratch run" in description["value"]
+
+
+class CaptionWiki(Wiki):
+    """The in-memory instance, with a container's caption in its
+    vocabulary."""
+
+    PROPERTIES = {**Wiki.PROPERTIES, "caption": "P76"}
+
+
+BOOKLET = b"%PDF synthetic Our Family from Germany"
+TOP_OF_LETTER = b"\x89PNG synthetic top of Sebastian's 1939 letter"
+
+
+def captioned(data: bytes, image: bytes) -> dict:
+    return claim(
+        data,
+        {"kind": "artifact", "sha1": sha1(image)},
+        "caption",
+        {
+            "type": "monolingual",
+            "value": {"text": "Wastl to Klara, July 1939.", "language": "en"},
+        },
+    )
+
+
+def test_a_caption_lands_on_the_image_its_container_registered(
+    tmp_path, monkeypatch
+):
+    """The register stage records the derived media it registered for
+    each container, and the write gives them to the writer: the booklet's
+    caption over the letter's image is written on the image's item, and
+    one naming an image the booklet does not place is refused (#456,
+    ADR-0039 §2.1)."""
+    made = Run(tmp_path, monkeypatch, wiki=CaptionWiki())
+    booklet = made.add(
+        "family-booklet-2011.png",
+        BOOKLET,
+        batch(captioned(BOOKLET, TOP_OF_LETTER), captioned(BOOKLET, SHOP)),
+    )
+    real = made.driver._step_register
+
+    def registering(doc):
+        qid = real(doc)
+        image = made.wiki.item(
+            "Our Family from Germany — page 6, image 1",
+            ("media_sha1", sha1(TOP_OF_LETTER), None),
+        )
+        made.driver.registered_media()[doc.sha1] = {sha1(TOP_OF_LETTER): image}
+        return qid
+
+    monkeypatch.setattr(made.driver, "_step_register", registering)
+    made.past_the_barrier(until="write")
+    placed = made.record("register")["placed"][booklet.sha1]
+    image = placed[sha1(TOP_OF_LETTER)]
+    (statement,) = made.wiki.entities[image]["claims"].get(
+        CaptionWiki.PROPERTIES["caption"], []
+    )
+    assert statement["mainsnak"]["datavalue"]["value"] == {
+        "text": "Wastl to Klara, July 1939.",
+        "language": "en",
+    }
+    assert cited(statement, "stated_in") == [
+        made.record("register")["documents"][booklet.sha1]
+    ]
+    written = made.record("write")["documents"][booklet.sha1]
+    assert (written["written"], written["refused"]) == (1, 1)
 
 
 # -- the refusals -------------------------------------------------------------

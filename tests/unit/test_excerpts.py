@@ -568,6 +568,10 @@ class TestRegistration:
         (name,) = [n for n, sha in wiki.files.items() if sha == LETTER_SHA1]
         assert name.endswith("page 6, image 1.png")
         assert wiki.drift() == []
+        # kept for the PDF's write, whose captions may name it (#456)
+        assert orchestrator.registered_media()[doc.sha1] == {
+            LETTER_SHA1: image
+        }
 
         # the excerpt's write finds its item, and registers nothing new
         writes = wiki.writes

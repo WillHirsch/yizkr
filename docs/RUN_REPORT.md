@@ -184,6 +184,33 @@ a depicts statement (ADR-0005, ADR-0025 §1), and each one the batches
 hold is counted here (`aggregate.content.depicts.left_out`). Counts
 alone, never a document, a QID or a label.
 
+**Place hierarchy.** Once the run's place stage has run (#201;
+yizkr.pipeline.scratchwrite, ADR-0009, ADR-0038 §8.5), in
+`aggregate.content.place_hierarchy`: the place questions asked (which
+existing place a container a record states names) and the calls they
+took; the answers that named a place, those `uncertain`, and the
+questions left unanswered (`unanswered`); the stated links left out with
+no place to name (`links_left_out_unnamed`: a container that names no
+place, or a place that is none of the graph's); the links written as
+statements of their own (`links_written`), those an equal statement
+gained as references (`links_referenced`) and those already there; the
+links a record states that no claim of its document gives
+(`record_only_links`, a measure of extraction's recall on containment,
+ADR-0038 owner question 3) and of them those written, with no page and
+no time (`record_only_links_written`); the links an uncertain answer
+left with no inner place, or that followed a container left out and so
+were never asked (`links_unresolved`); the answer lines rejected by the
+answer's schema; the links refused as each would close a cycle
+(`refused_cycles`) and the questions refused as conflicts (answered
+twice differently); and whether the instance-contents key was recorded;
+or that the instance held what the run's key makes, so nothing was asked
+again. Counts alone, never a QID or a label. Each refused cycle is
+named, by its two places' labels and the document that states it, in
+report.json (`place_cycles`) and report.html alone, which stay on the
+machine (ADR-0038 owner question 4). The place stage's calls count under
+their own role, `places`, in the calls' lines by role, apart from the
+extraction's.
+
 **Anomalies.** The alerts by check and by stage, each finding (a
 document or the run, a stage and a check) counted once: new when any of
 its alerts was new (on an output the engine answered in the run), carried
@@ -206,7 +233,21 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   the claims given; and how many extractions failed with every claim
   rejected or unread. A failed extraction's reason can quote a model's
   answer, which can quote a document, so the number of claims it gives
-  stays with its document, in `report.html` and `report.json`;
+  stays with its document, in `report.html` and `report.json`. The
+  rejects are counted by reason too (#456), from each coverage's
+  `rejected_by_reason`: the codes of `claims.REJECT_REASONS`,
+  `document_subject` (a document-subject property whose subject is not
+  its own source), `placed_subject` (a caption whose subject is no
+  artifact its source places), `artifact_subject` (another property
+  with an artifact subject), `schema` (a claim that does not parse) and
+  `manifest` (any other manifest problem), with the extractions whose
+  coverage counts none (`aggregate.content.rejects.by_reason`,
+  `by_reason_absent`);
+- what sources say of the artifacts themselves (ADR-0039): the captions
+  given, a container's verbatim words about an image it places, and the
+  claims a document gives about itself, by property
+  (`aggregate.content.container_claims`: `captions`,
+  `document_subject_by_property`);
 - zero-claim documents, by kind, and batches with no entity; the chunks
   and the fallback tiers taken;
 - mention records and judgement notes, summed from each extraction's
@@ -358,7 +399,7 @@ never counted as none:
 
 - depicts claims left out, and the write's counts: until the write stage
   has run (above);
-- place-hierarchy proposals applied: no stage applies them yet (#201);
+- the place stage's questions and links: until it has run (above);
 - different-source contradictions: they are read from a written graph;
 - flags by tier and class: no stage makes flags yet. `_flags` in
   `yizkr.pipeline.report` is where the report reads them once the flags

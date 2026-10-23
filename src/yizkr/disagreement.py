@@ -6,7 +6,8 @@ reader can weigh the evidence, not to pick a value. Two library queries
 fetch what it compares. ``disagreement-report.rq`` lists every statement of
 the compared properties with its rank, its value as stated, the range and
 dates it carries, and its stated-in sources; ``place-containment.rq`` lists
-the recorded location and part-of edges and the merge redirects. This
+the recorded location and part-of statements, each with its rank and
+whether a source states it, and the merge redirects. This
 module compares those rows. It does no I/O itself: the caller passes a
 runner (``yizkr.core.sparql``), and the comparison is a function of the
 rows alone.
@@ -32,6 +33,9 @@ Each rule of MODELING.md "Contradictions" is one function here:
   ``spans_nest`` then set aside a date whose span lies inside the other's;
 * ``stored_alike_order``: two dates stored alike are compared through the
   ranges their statements state;
+* ``followed``: a containment edge is a source's claim, and the path
+  follows one that a source states and a curator has not deprecated, at
+  any time it carries (ADR-0038 §5);
 * ``place_within``: a place the graph records inside the other differs
   only in resolution;
 * ``from_different_artifacts``: two readings of one artifact are not two
@@ -332,7 +336,7 @@ def read_statements(
 
 def read_containment(rows: Iterable[Mapping[str, dict]]) -> Containment:
     """The containment query's rows: an edge per location or part-of
-    statement, and each merge redirect."""
+    statement that ``followed`` keeps, and each merge redirect."""
     containment = Containment()
     for row in rows:
         item, link, target = (
@@ -340,7 +344,7 @@ def read_containment(rows: Iterable[Mapping[str, dict]]) -> Containment:
         )
         if link == OWL_SAME_AS:
             containment.add_redirect(item, target)
-        else:
+        elif followed(_cell(row, "rank"), _cell(row, "stated") == "true"):
             containment.add_edge(item, target)
     return containment
 
@@ -594,6 +598,15 @@ def stored_alike_order(reading: Reading) -> tuple | None:
         for time in (value.earliest, value.latest)
     )
     return extent, bounds
+
+
+def followed(rank: str, stated: bool) -> bool:
+    """A location or part-of statement is a source's claim (ADR-0038 §1),
+    and the containment path reads it as the comparison reads any value:
+    one a curator deprecated is left out, and one with no stated-in source
+    takes no part. A time it carries does not matter: one path, at any
+    time, is enough (ADR-0038 §5)."""
+    return rank != DEPRECATED and stated
 
 
 def place_within(containment: Containment, inner: str, outer: str) -> bool:
