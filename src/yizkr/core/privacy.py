@@ -60,7 +60,12 @@ happens to people, each read through its statement node at every rank, so
 that a deprecated or outranked `human` type hides no one. An item typed,
 at normal or preferred rank, as a vessel, a military unit or an
 organization (``NON_PERSON_CLASSES``) is taken at its type on its part in
-such an event: any other evidence makes it a person. The non-privileged export
+such an event: any other evidence makes it a person. An item typed, at
+normal or preferred rank, as an event (``event_kinds``) is taken at its
+type on the death evidence it states, which describes the death it is
+(``EVENT_DEATH_PROPERTIES``): its statements of a property it has a
+truthy value of are no person evidence, and any other evidence still
+makes it a person. The non-privileged export
 reads the same evidence from its own dump, and keeps an item that has any
 of it only once this check has released it; it leaves out an item that
 states no type, so no type at all hides no one either. A family
@@ -76,6 +81,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from yizkr.core.dates import check_time
+from yizkr.model.schema import load_manifest
 
 # Birth-recency cutoff: a birth at least this many years ago is taken as
 # proof the person is not living, absent any death evidence. Shared by
@@ -161,6 +167,20 @@ PERSON_EVENTS = (
     "imprisonment",
     "release",
 )
+# The class of every event, a key of the model manifest; ``event_kinds``
+# gives it and the classes the manifest makes subclasses of it.
+EVENT_CLASS = "event"
+# The person-only properties that an event states of the death it is: an
+# item typed, at normal or preferred rank, as an event (``event_kinds``) is
+# not taken for a person on its statements of one of these when it has a
+# truthy value of it. Each is death evidence (``DEATH_EVIDENCE_PROPERTIES``),
+# which the check reads through the truthy values, so such an item would be
+# marked deceased were it a person: setting it aside releases no one the
+# check would keep. A statement of one with no truthy value beside it (one
+# a curator deprecated, or of no value) is still evidence, and so is every
+# other person-only property, a `date of birth` included, and a `human`
+# type at any rank.
+EVENT_DEATH_PROPERTIES = DEATH_EVIDENCE_PROPERTIES
 # The types of what takes part in an event without being a person: a
 # vessel, a military unit and an organization, as a ship or a firm takes
 # part in a migration. An item typed so, at normal or preferred rank, is
@@ -199,8 +219,12 @@ EXISTS {{
 # Every item with person evidence, once each, read through statement
 # nodes at every rank, never through the truthy wdt: values; only the
 # type that sets a participant aside must be one a curator has not
-# deprecated. A person-valued property's value counts in a statement
-# (ps:) and in a qualifier (pq:) alike. A type is read through the
+# deprecated. The death evidence an event states of itself
+# (``EVENT_DEATH_PROPERTIES``) is set aside beside an event type a curator
+# has not deprecated, and only where the event has a truthy value of the
+# property (wdt:), as the check reads death evidence. A person-valued
+# property's value counts in a statement (ps:) and in a qualifier (pq:)
+# alike. A type is read through the
 # redirects it may name ({same_as}*), so a class a curator merged into
 # `human`, an event kind or a non-person class types as that one does. A
 # value that is not an item (an unknown value) is left out, and so is a
@@ -219,6 +243,17 @@ PEOPLE_SELECTION = """\
           }} UNION {{
             VALUES ?link {{ {subject_links} }}
             ?person ?link ?statement .
+          }} UNION {{
+            VALUES (?link ?direct) {{ {death_links} }}
+            ?person ?link ?statement .
+            FILTER NOT EXISTS {{
+              ?person ?direct ?death .
+              VALUES ?eventClass {{ {event_classes} }}
+              ?person p:{instance_of} ?eventTyping .
+              ?eventTyping ps:{instance_of}/{same_as}* ?eventClass ;
+                           wikibase:rank ?eventRank .
+              FILTER(?eventRank != wikibase:DeprecatedRank)
+            }}
           }} UNION {{
             VALUES ?link {{ {value_links} }}
             ?statement ?link ?person .
@@ -256,7 +291,16 @@ def people_selection(
         participant=properties["participant"],
         human=items[PERSON_CLASS],
         subject_links=" ".join(
-            f"p:{properties[key]}" for key in PERSON_SUBJECT_PROPERTIES
+            f"p:{properties[key]}"
+            for key in PERSON_SUBJECT_PROPERTIES
+            if key not in EVENT_DEATH_PROPERTIES
+        ),
+        death_links=" ".join(
+            f"(p:{properties[key]} wdt:{properties[key]})"
+            for key in EVENT_DEATH_PROPERTIES
+        ),
+        event_classes=" ".join(
+            f"wd:{items[key]}" for key in sorted(event_kinds()) if key in items
         ),
         value_links=" ".join(
             f"{prefix}:{properties[key]}"
@@ -268,6 +312,21 @@ def people_selection(
             f"wd:{items[key]}" for key in NON_PERSON_CLASSES
         ),
     )
+
+
+def event_kinds(root: str = EVENT_CLASS) -> set[str]:
+    """The keys of the model manifest's classes under `root`: `root` itself
+    and every item the manifest makes a subclass of it, directly or
+    through another; by default the event classes (``EVENT_CLASS``)."""
+    manifest = load_manifest()
+    kinds = {root}
+    while wider := {
+        key
+        for key, spec in manifest.items.items()
+        if spec.subclass_of in kinds and key not in kinds
+    }:
+        kinds |= wider
+    return kinds
 
 
 def family_type(

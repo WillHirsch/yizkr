@@ -30,6 +30,18 @@ strict reading of #345's acceptance, the orchestrator's choice: the
 issue allowed a role-less death to count for its one participant "until
 roles exist", and roles exist now (ADR-0035). The export and the site
 read both with `yizkr.core.privacy.read_evidence` (§2, §4).
+Amended by #577 (2026-10-23): an event is no person on the death it
+states. An item typed, at normal or preferred rank, as an event (`event`
+or a class the manifest makes a subclass of it, read through redirects)
+is not selected on its `date of death`, `place of death`, `cause of
+death` or `place of burial` statements (`EVENT_DEATH_PROPERTIES`), of
+each of these it has a truthy value of, at the query service and in the
+export's dump alike. That truthy value is death evidence as the check
+reads it, so such an item would be released were it a person: setting it
+aside keeps no badge off a page and lets nothing into the export that the
+check would hold back. Every other evidence still selects it, a death
+statement with no truthy value beside it (deprecated, or of no value), a
+`date of birth` and a `human` type at any rank included (§4).
 Amended by [ADR-0035](0035-mention-records.md) (owner decision
 2026-09-29, #385): a stated
 civil status (`civil_status`) is person evidence for the check (ADR-0035
@@ -394,6 +406,19 @@ from the database while the check reads the query service. Now:
   (`ps:P/owl:sameAs*`): a class a curator merged into `human`, an event
   kind or a non-person class types as the one it now redirects to. The
   check and the site select people with it.
+- **An event is no person on the death it states** (#577). A death
+  event that states its cause, or its date or place, or a burial, was
+  selected as a person for it, and the site gave it a person page. An
+  item typed as an event (`privacy.event_kinds`) at normal or preferred
+  rank is set aside on those statements (`EVENT_DEATH_PROPERTIES`, the
+  death evidence) of each property it has a truthy value of; on anything
+  else it is selected, a deprecated or no-value death statement alone, a
+  `date of birth` or a `human` type at any rank included. The check reads
+  death evidence through those same truthy values, so the items this
+  sets aside are only ones it would have released: no page loses its
+  badge and the export keeps nothing it held back.
+  `read_dump` reads the same rule, so the export keeps such an event as
+  the event it is.
 - **A non-person type outweighs a part in an event** (owner,
   2026-09-29). A ship or a firm takes part in a migration, so an item
   typed as a vessel, a military unit or an organization
