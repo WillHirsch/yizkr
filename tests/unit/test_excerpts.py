@@ -693,6 +693,7 @@ class TestAScratchRun:
             "unsplit_forms": 0,
             "appellation_labels": 0,
             "appellation_parts": 0,
+            "containers": 0,
         }
         text = render_markdown(report["aggregate"])
         assert (

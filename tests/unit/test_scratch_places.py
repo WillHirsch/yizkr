@@ -58,7 +58,7 @@ from tests.unit.test_scratch_write import (
     progress_events,
     sha1,
 )
-from yizkr.claims import ClaimBatch
+from yizkr.claims import ClaimBatch, Container
 from yizkr.core.instance import clear_contents, recorded_contents
 from yizkr.pipeline import places, report, rundiff, scratch, scratchwrite
 from yizkr.pipeline.llm import UsageLimitReached
@@ -775,7 +775,9 @@ class TestRefusedAndCounted:
         self, tmp_path, monkeypatch
     ):
         letter = letter_batch()
-        letter.entities[1].structure.within = ["Kreis Rekau"]
+        letter.entities[1].structure.within = [
+            Container(name="Kreis Rekau", evidence="Fläckfeld, Kreis Rekau")
+        ]
         run = PlaceRun(
             tmp_path,
             monkeypatch,

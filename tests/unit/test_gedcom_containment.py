@@ -91,10 +91,10 @@ class TestJurisdictions:
         batch = adapted().batch
         hesse = places(batch)["Hesse, Germany"]
         assert [n.written for n in hesse.structure.names] == ["Hesse"]
-        assert hesse.structure.within == ["Germany"]
+        assert hesse.structure.containers() == ["Germany"]
         germany = places(batch)["Germany"]
         assert [n.written for n in germany.structure.names] == ["Germany"]
-        assert germany.structure.within == []
+        assert germany.structure.containers() == []
 
     def test_each_place_carries_its_own_name(self):
         batch = adapted().batch
@@ -251,7 +251,7 @@ class TestPlaceholderComponents:
             "Hesse, Germany",
         ]
         fläckfeld = places(batch)["Fläckfeld, Hesse, Germany"]
-        assert fläckfeld.structure.within == ["Hesse", "Germany"]
+        assert fläckfeld.structure.containers() == ["Hesse", "Germany"]
         assert containment(batch) == {
             ("Fläckfeld, Hesse, Germany", "Hesse, Germany"),
             ("Hesse, Germany", "Germany"),
@@ -387,7 +387,11 @@ class TestPlaceholderWords:
         ]
         for town in ("Fläckfeld", "Kredfeld"):
             place = places(batch)[f"{town}, unbekannt, Hesse, Germany"]
-            assert place.structure.within == ["unbekannt", "Hesse", "Germany"]
+            assert place.structure.containers() == [
+                "unbekannt",
+                "Hesse",
+                "Germany",
+            ]
             assert place.aliases == [town]
         # no claim to the placeholder, and none across it: only the link
         # the PLAC states beyond it
@@ -406,7 +410,7 @@ class TestPlaceholderWords:
             ),
         }
         flörburg = places(batch)["Flörburg, unbekannt, Germany"]
-        assert flörburg.structure.within == ["unbekannt", "Germany"]
+        assert flörburg.structure.containers() == ["unbekannt", "Germany"]
         # the country's one link would run across the placeholder, so it
         # is a container of the records alone
         assert "Germany" not in places(batch)

@@ -116,6 +116,7 @@ from pathlib import Path
 from typing import Any, get_args
 
 from yizkr.claims import (
+    CONTAINER_REASONS,
     REJECT_REASONS,
     JudgementNote,
     PersonStructure,
@@ -1162,8 +1163,10 @@ def _records(coverage: dict) -> dict[str, Any]:
     unsplit name forms they hold, the mentions recordless, the records set
     aside and the reasons they were set aside by, by category, and the
     labels that were appellations and became names, and the record name
-    parts that are appellations (ADR-0018); and the notes by category,
-    and the notes set aside. Each name is folded into
+    parts that are appellations (ADR-0018); the place containers checked,
+    those dropped alone, their records standing, by reason, and those kept
+    whose evidence is the container's name alone; and the
+    notes by category, and the notes set aside. Each name is folded into
     the report's fixed vocabulary, OTHER for one it does not know.
 
     The coverage's `set_aside` counts reasons, not records: a record that
@@ -1174,14 +1177,16 @@ def _records(coverage: dict) -> dict[str, Any]:
     The extraction writes its records and its notes together, so both
     are None unless the coverage holds both, as the line-range tier's and
     one written before these counts do not: absent, never zero. The
-    records set aside, the unsplit forms, the appellation labels and the
-    appellation parts are each None when the coverage, though it holds
-    both, gives no count of them."""
+    records set aside, the unsplit forms, the appellation labels, the
+    appellation parts and the containers checked and dropped are each
+    None when the coverage, though it holds both, gives no count of
+    them."""
     records, notes = coverage.get("records"), _tally(coverage.get("notes"))
     if not isinstance(records, dict) or notes is None:
         return {"records": None, "notes": None}
     reasons = _tally(records.get("set_aside")) or {}
     noted = reasons.pop(NOTE_SET_ASIDE, 0)
+    dropped = _tally(records.get("containers_dropped"))
     return {
         "records": {
             "given": _count(records.get("given")),
@@ -1196,6 +1201,17 @@ def _records(coverage: dict) -> dict[str, Any]:
             "appellation_parts": _counted(records.get("appellation_parts")),
             "set_aside_by_reason": _folded(
                 reasons, lambda value: _known(value, SET_ASIDE_REASONS)
+            ),
+            "containers_checked": _counted(records.get("containers_checked")),
+            "containers_name_only": _counted(
+                records.get("containers_name_only")
+            ),
+            "containers_dropped_by_reason": (
+                None
+                if dropped is None
+                else _folded(
+                    dropped, lambda value: _known(value, CONTAINER_REASONS)
+                )
             ),
         },
         "notes": {
@@ -2447,7 +2463,10 @@ def _aggregate_content(
     reasons_absent = 0
     record_extractions = records_given = recordless = notes_set_aside = 0
     records_set_aside = unsplit_forms = appellation_labels = 0
-    appellation_parts = 0
+    appellation_parts = containers_checked = containers_name_only = 0
+    # the place containers dropped alone from records that stand, by
+    # reason (claims.drop_containers)
+    containers_dropped: Counter = Counter()
     batches = not_extracted = zero_entities = 0
     extractions = chunks = rejected = unread = with_rejects = given = 0
     failed_rejecting = critiques = with_findings = findings = invalid = 0
@@ -2507,6 +2526,16 @@ def _aggregate_content(
                 else:
                     appellation_parts += records["appellation_parts"]
                 set_aside.update(records["set_aside_by_reason"])
+                if records["containers_dropped_by_reason"] is None:
+                    absent["containers"] += 1
+                else:
+                    containers_dropped.update(
+                        records["containers_dropped_by_reason"]
+                    )
+                    containers_checked += records["containers_checked"] or 0
+                    containers_name_only += (
+                        records["containers_name_only"] or 0
+                    )
                 notes.update(noted["by_category"])
                 notes_set_aside += noted["set_aside"]
         failed_rejecting += document.unusable is not None
@@ -2569,6 +2598,10 @@ def _aggregate_content(
             "appellation_parts": appellation_parts,
             "set_aside_reasons": set_aside.total(),
             "set_aside_by_reason": _by_count(set_aside),
+            "containers_checked": containers_checked,
+            "containers_dropped": containers_dropped.total(),
+            "containers_dropped_by_reason": _by_count(containers_dropped),
+            "containers_name_only": containers_name_only,
             "absent": {
                 "predating": absent["predating"],
                 "line_range": absent["line_range"],
@@ -2576,6 +2609,7 @@ def _aggregate_content(
                 "unsplit_forms": absent["unsplit_forms"],
                 "appellation_labels": absent["appellation_labels"],
                 "appellation_parts": absent["appellation_parts"],
+                "containers": absent["containers"],
             },
         },
         "notes": {
@@ -3482,6 +3516,12 @@ def _records_blocks(
             "reasons records were set aside: "
             f"{_n(records['set_aside_reasons'])} (a record can give "
             "several)",
+            "Place containers checked: "
+            f"{_n(records['containers_checked'])}; dropped alone, their "
+            "records standing, so counted apart from records set aside: "
+            f"{_n(records['containers_dropped'])}; kept whose evidence is "
+            "the container's name alone: "
+            f"{_n(records['containers_name_only'])}",
             f"Judgement notes: {_n(notes['total'])}; notes set aside: "
             f"{_n(notes['set_aside'])}",
             "Extractions not counted: "
@@ -3493,7 +3533,8 @@ def _records_blocks(
             f"{_n(absent['set_aside_records'])}; unsplit name forms "
             f"{_n(absent['unsplit_forms'])}; appellation labels "
             f"{_n(absent['appellation_labels'])}; appellation parts "
-            f"{_n(absent['appellation_parts'])}",
+            f"{_n(absent['appellation_parts'])}; place containers "
+            f"{_n(absent['containers'])}",
         ]
     ]
     if records["by_status"]:
@@ -3509,6 +3550,14 @@ def _records_blocks(
             _table(
                 ("Set-aside reason", "Reasons"),
                 records["set_aside_by_reason"].items(),
+                numbers=(1,),
+            )
+        )
+    if records["containers_dropped_by_reason"]:
+        blocks.append(
+            _table(
+                ("Container dropped reason", "Containers"),
+                records["containers_dropped_by_reason"].items(),
                 numbers=(1,),
             )
         )
@@ -4079,7 +4128,18 @@ def _html_document(document: Mapping[str, Any]) -> str:
                 f"{_absent(records['set_aside_records'])}; reasons set "
                 "aside: "
                 f"{_listed(_by_count(records['set_aside_by_reason']))}; "
-                "judgement notes: "
+                "place containers checked: "
+                f"{_absent(records['containers_checked'])}; kept whose "
+                "evidence is the name alone: "
+                f"{_absent(records['containers_name_only'])}; dropped: "
+                + (
+                    "not counted"
+                    if records["containers_dropped_by_reason"] is None
+                    else _listed(
+                        _by_count(records["containers_dropped_by_reason"])
+                    )
+                )
+                + "; judgement notes: "
                 f"{_listed(_by_count(notes['by_category']))}; notes set "
                 f"aside: {notes['set_aside']}"
             )

@@ -96,6 +96,7 @@ from pydantic import (
 )
 from pydantic.json_schema import SkipJsonSchema
 
+from yizkr.core import verbatim
 from yizkr.core.dates import (
     GREGORIAN,
     GREGORIAN_NAME,
@@ -650,6 +651,17 @@ class Address(StrictModel):
     number: str | None = Field(default=None, min_length=1)
 
 
+class Container(StrictModel):
+    """One place a place's record puts it in (ADR-0035 §2.2): its name as
+    written, and its evidence, a verbatim excerpt of the transcription
+    that states the containment (the place's mention, or the line of a
+    form's field). An entry with no evidence is read as
+    `container_problem` says."""
+
+    name: str = Field(min_length=1)
+    evidence: str | None = Field(default=None, min_length=1)
+
+
 class PlaceStructure(StrictModel):
     """A place's mention record (ADR-0035 §2.2). Only a `toponym` status
     keys; the containers only decide nesting."""
@@ -660,7 +672,23 @@ class PlaceStructure(StrictModel):
     address: Address | None = None
     # the places the source puts it in, nearest first, whatever order
     # the source writes them in (the place stage links each to the next)
-    within: list[str] = []
+    within: list[Container] = []
+
+    @field_validator("within", mode="before")
+    @classmethod
+    def _bare_names(cls, value: object) -> object:
+        """An entry written as a bare string, a name alone, is a container
+        of that name with no evidence."""
+        if isinstance(value, list):
+            return [
+                {"name": entry} if isinstance(entry, str) else entry
+                for entry in value
+            ]
+        return value
+
+    def containers(self) -> list[str]:
+        """The names of the places it is within, nearest first."""
+        return [container.name for container in self.within]
 
 
 class OrganizationStructure(StrictModel):
@@ -1246,12 +1274,9 @@ def name_form_key(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _fold(text: str) -> str:
-    """Case and accents folded after Unicode normalisation."""
-    decomposed = unicodedata.normalize(
-        "NFD", unicodedata.normalize("NFC", text).casefold()
-    )
-    return "".join(c for c in decomposed if not unicodedata.combining(c))
+# case, accents and typographic punctuation folded, as every comparison
+# of an excerpt or a name reads them (core/verbatim.py)
+_fold = verbatim.fold
 
 
 def _words(text: str) -> list[str]:
@@ -1285,7 +1310,9 @@ def structure_problems(entity: EntityRecord) -> list[str]:
     * `addition`: a part occurs in neither the label nor an alias, folded,
       as whole words. The model may divide and label a name, never add
       to it. A given name's standard form is exempt, as are an
-      organisation's places, which its `location` claims may name;
+      organisation's places, which its `location` claims may name, and a
+      place's containers, which carry their own evidence and are checked
+      one by one (`container_problem`);
     * `initial`: an initial gives a standard form;
     * `no name part`: a person whose status is `name` has no name part;
     * `no toponym`: a place whose status is `toponym` has no name and no
@@ -1332,7 +1359,6 @@ def structure_problems(entity: EntityRecord) -> list[str]:
             parts += [
                 part for part in (address.street, address.number) if part
             ]
-        parts += structure.within
         if structure.status == "toponym" and not (
             structure.names or structure.address
         ):
@@ -1380,7 +1406,7 @@ def _clear_empty_part(part, model: type) -> tuple[object, str | None]:
     """A name part with each optional field the model wrote as an empty
     string left out, or None and where the empty string is when the part
     itself, or one of its required fields, is one."""
-    if model is str:
+    if model is str or (model is Container and isinstance(part, str)):
         return (None, "") if part == "" else (part, None)
     if not isinstance(part, dict):
         return part, None
@@ -1468,6 +1494,154 @@ def set_aside_structure(entity: dict) -> tuple[dict, list[str]]:
         return rest, [*dropped, f"schema: {location}: {first['msg']}"]
     problems = structure_problems(record)
     return (rest, dropped + problems) if problems else (entity, dropped)
+
+
+# the reasons a place's container is dropped from its record, the record
+# standing (ADR-0035 §5), each counted on its own
+NO_EVIDENCE = "no-evidence"
+EVIDENCE_NOT_IN_SOURCE = "evidence-not-in-source"
+EVIDENCE_DOES_NOT_NAME = "evidence-does-not-name"
+CONTAINER_REASONS = (
+    NO_EVIDENCE,
+    EVIDENCE_NOT_IN_SOURCE,
+    EVIDENCE_DOES_NOT_NAME,
+)
+
+
+def container_problem(
+    container: Container, transcript: verbatim.Transcript | None
+) -> tuple[str | None, tuple[int, int] | None]:
+    """(why a place's container cannot stand, or None when it can; the
+    first and last numbers of the transcription lines its evidence was
+    compared with, or None) (ADR-0035 §5).
+
+    * `no-evidence`: the entry gives none, a name alone among them;
+    * `evidence-not-in-source`: the evidence does not occur in the
+      transcription, compared as `core.verbatim` reads both, whole words
+      only (the lines are the one sharing the most of its words);
+    * `evidence-does-not-name`: the evidence does not hold the
+      container's name, folded, as whole words (the lines are those the
+      evidence spans).
+
+    With no transcript (an adapter's record, whose source is no
+    transcription), the evidence is not looked for in one."""
+    if container.evidence is None or not verbatim.words(container.evidence):
+        return NO_EVIDENCE, None
+    lines = None
+    if transcript is not None:
+        lines = transcript.span(container.evidence)
+        if lines is None:
+            nearest = transcript.nearest(container.evidence)
+            return EVIDENCE_NOT_IN_SOURCE, (
+                None if nearest is None else (nearest, nearest)
+            )
+    if not _occurs(container.name, verbatim.word_readings(container.evidence)):
+        return EVIDENCE_DOES_NOT_NAME, lines
+    return None, lines
+
+
+def name_only(container: Container) -> bool:
+    """Whether a container's evidence gives its name and nothing else,
+    folded, as words: evidence that names no place it is said to hold."""
+    return container.evidence is not None and verbatim.words(
+        container.evidence
+    ) == verbatim.words(container.name)
+
+
+def container_problems(entity: EntityRecord) -> list[str]:
+    """Why each of a place's containers cannot stand, checked with no
+    transcript (`container_problem`), each reason first and then the
+    entry's field path."""
+    structure = entity.structure
+    if not isinstance(structure, PlaceStructure):
+        return []
+    found = []
+    for index, container in enumerate(structure.within):
+        reason, _ = container_problem(container, None)
+        if reason is not None:
+            found.append(
+                f"{reason}: structure.place.within.{index}: {container.name!r}"
+            )
+    return found
+
+
+def _place_forms(entity: dict, structure: dict) -> list[list[str]]:
+    """The folded words of each form a place goes by: its label, its
+    aliases, and its record's names and address as written."""
+    forms = [entity.get("label") or "", *(entity.get("aliases") or [])]
+    for name in structure.get("names") or []:
+        forms.append(name.get("written") or "")
+    address = structure.get("address")
+    if isinstance(address, dict):
+        forms.append(address.get("written") or "")
+    return [_words(form) for form in forms if form]
+
+
+def drop_containers(
+    entity: dict, transcript: verbatim.Transcript | None
+) -> tuple[dict, list[dict]]:
+    """An entity of an entity manifest whose record stands
+    (`set_aside_structure`), with each container of its place record that
+    cannot stand dropped alone (`container_problem`), the record standing
+    with its names, keys and other entries (ADR-0035 §5). An entry written
+    as a bare string gives a name alone, no evidence, and is dropped as
+    `no-evidence` like any other.
+
+    Also an audit entry for each container checked, kept or dropped: the
+    entity's id; the entry's field path (its index counts the entries
+    left once those written as empty strings were dropped,
+    `set_aside_structure`); its name and evidence; the reason it was
+    dropped (None when kept); the first and last numbers of the
+    transcription lines its evidence was compared with, and the first
+    line's text; whether the evidence names the place itself (its label,
+    an alias or a name its record gives, folded, as whole words); and
+    whether the evidence is the container's name alone (`name_only`).
+    The audit stays with the document's local extraction records, never
+    in a report."""
+    structure = entity.get("structure")
+    if not isinstance(structure, dict) or structure.get("kind") != "place":
+        return entity, []
+    within = structure.get("within")
+    if not isinstance(within, list) or not within:
+        return entity, []
+    forms = _place_forms(entity, structure)
+    kept: list[object] = []
+    audit: list[dict] = []
+    for index, raw in enumerate(within):
+        container = (
+            Container(name=raw) if isinstance(raw, str) else Container(**raw)
+        )
+        reason, lines = container_problem(container, transcript)
+        first, last = lines if lines is not None else (None, None)
+        evidence = container.evidence
+        audit.append(
+            {
+                "entity": entity.get("id"),
+                "field": f"structure.place.within.{index}",
+                "name": container.name,
+                "evidence": evidence,
+                "reason": reason,
+                "line": first,
+                "last_line": last,
+                "line_text": (
+                    transcript.line(first)
+                    if transcript is not None and first is not None
+                    else None
+                ),
+                "names_place": evidence is not None
+                and any(
+                    _occurs(" ".join(form), [verbatim.words(evidence)])
+                    for form in forms
+                    if form
+                ),
+                "name_only": name_only(container),
+            }
+        )
+        if reason is None:
+            kept.append(raw)
+    if len(kept) == len(within):
+        return entity, audit
+    return {**entity, "structure": {**structure, "within": kept}}, audit
 
 
 # ---------------------------------------------------------------------------

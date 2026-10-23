@@ -4042,8 +4042,8 @@ class TestTheExtractor:
         # the parser now asks for what the stored answer lacks
         original = getattr(ChunkedClaimExtractor, parse)
 
-        def stricter(response, line_count):
-            parsed, problems = original(response, line_count)
+        def stricter(response, line_count, *text):
+            parsed, problems = original(response, line_count, *text)
             if parsed is not None:
                 problems += [
                     f"{name}: undescribed" for name in missing(parsed)

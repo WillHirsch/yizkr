@@ -80,8 +80,8 @@ transcription that the check now fails is moved aside as
 again. `--refresh ROLE` makes the role's views again, in place, current or not
 (their calls then go to the engine whatever the cache holds); a view made
 again with the same content invalidates nothing after it. The extractor's
-side outputs (`extraction/coverage.json`, `rejects.json`, `gaps.ndjson`)
-are written with the batch they describe.
+side outputs (`extraction/coverage.json`, `rejects.json`, `gaps.ndjson`,
+`containers.json`) are written with the batch they describe.
 
 **A PDF read page by page.** The paged route reads a PDF page by page
 when any of its pages has a usable text layer, and otherwise reads it

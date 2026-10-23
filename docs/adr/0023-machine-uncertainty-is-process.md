@@ -24,6 +24,15 @@ covers a time on a `part_of` claim (a point in time, a start or end time, a
 bound of one, or circa) that its excerpt does not state for the containment,
 such as the document's own date or the date of an event at the place; the
 critic sees each `part_of` claim's time beside its excerpt (§3).
+Amended by #569 (2026-10-23, ADR-0035 §5): the fixed list gains
+`evidence_does_not_state`, a container in a place's mention record whose
+evidence names both places but does not state that one is within the
+other (a list of towns), or gives only the container's name, outside a
+field of a form about the place; the critic sees each container with its
+evidence, and a finding names the container by its name (`container`).
+It is advisory, as every finding is, and counted with the critic's
+categories, apart from the deterministic reasons a container is dropped
+by (§3).
 Superseded in part by [ADR-0035](0035-mention-records.md) (owner
 decision 2026-09-29, #385): §2 and Ruling 1 no longer keep every machine
 judgement out of the graph. An extraction's judgement note, a category

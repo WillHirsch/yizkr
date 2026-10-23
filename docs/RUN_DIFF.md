@@ -340,6 +340,9 @@ expects it and why:
   or regions;
 - mentions removed in bulk, or mention records set aside up
   (`content.records.set_aside_records`), recordless mentions up;
+  place containers dropped up (`content.records.containers_dropped`, by
+  reason in `containers_dropped_by_reason`) where the change does not
+  touch what the manifest gives as a container's evidence;
 - clusters: merges where the change should split, or the reverse; a rise
   in `conflicting` or hard conflicts; `methods_changed` toward
   `ambiguous` in bulk; adjudicated merges (`merges_by_method`) the

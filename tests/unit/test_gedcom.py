@@ -3345,7 +3345,11 @@ class TestMentionRecords:
             if e.label == "Fläckfeld, Kreis Mockburg, Hesse, Germany"
         ]
         assert [n.written for n in place.structure.names] == ["Fläckfeld"]
-        assert place.structure.within == ["Kreis Mockburg", "Hesse", "Germany"]
+        assert place.structure.containers() == [
+            "Kreis Mockburg",
+            "Hesse",
+            "Germany",
+        ]
 
 
 class TestLanguage:

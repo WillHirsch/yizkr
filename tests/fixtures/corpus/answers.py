@@ -151,16 +151,22 @@ def place(*names: str) -> dict:
     }
 
 
-def address(written: str, street: str, number: str, *within: str) -> dict:
+def address(
+    written: str, street: str, number: str, *within: str, evidence: str = ""
+) -> dict:
     """An address's mention record: the address as written, its street
-    and its number, and the places the label puts it in, in its order."""
+    and its number, and the places the label puts it in, in its order,
+    each with `evidence`, the document's words that state it (ADR-0035
+    §2.2, #569)."""
     record: dict = {
         "kind": "place",
         "status": "toponym",
         "address": {"written": written, "street": street, "number": number},
     }
     if within:
-        record["within"] = list(within)
+        record["within"] = [
+            {"name": name, "evidence": evidence} for name in within
+        ]
     return record
 
 
@@ -198,6 +204,7 @@ RECORDED = {
                     "8",
                     "Stupfield",
                     "Victoria",
+                    evidence="8 Hawthorn Road, Stupfield, Victoria",
                 ),
             ),
             Entity(
@@ -269,6 +276,9 @@ RECORDED = {
                     "Stupfield",
                     "Victoria",
                     "Australien",
+                    evidence=(
+                        "31 Juniper Street, Stupfield, Victoria, Australien"
+                    ),
                 ),
             ),
             Entity(

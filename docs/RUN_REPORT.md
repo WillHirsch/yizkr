@@ -275,7 +275,16 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   `report.RECORD_STATUSES`); the unsplit name forms the records given
   hold (a person's `unsplit`: forms whose given name and surname the
   source does not tell apart, ADR-0035 §2.1); the recordless mentions;
-  the records set aside; the reasons records were set aside by, by
+  the records set aside; the place containers checked, and those
+  dropped alone from records that stand, by reason (`no-evidence`,
+  `evidence-not-in-source`, `evidence-does-not-name`;
+  `claims.CONTAINER_REASONS`, ADR-0035 §5 as amended by #569), a drop
+  being no record set aside and no reason among theirs, and those kept
+  whose evidence is the container's name alone (`containers_name_only`),
+  never quoted
+  (each container checked, with its evidence and the transcription line
+  it was compared with, stays in the extraction's local
+  `containers.json`); the reasons records were set aside by, by
   category (`schema`, `dropped`, `kind`, `addition`, `initial`,
   `no name part`, `no toponym`; `report.SET_ASIDE_REASONS`); the notes by category
   (`kind`, `relation`, `date_reading`, `identity`, `other`, the
@@ -324,13 +333,16 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   carry: its coverage counts no notes. A coverage that holds its records
   and notes but predates `records.set_aside_records`,
   `records.unsplit_forms`, `records.appellation_labels` or
-  `records.appellation_parts` (or gives one that is no count) still
+  `records.appellation_parts`, or the place containers'
+  `records.containers_checked` and `records.containers_dropped` (or
+  gives one that is no count) still
   counts
   its other figures, but is counted in none of the counts it lacks,
   never as zero: the report says how many extractions it counted lack
   each (`absent.set_aside_records`,
   `absent.unsplit_forms`, `absent.appellation_labels`,
-  `absent.appellation_parts`), and a document's own view gives the count as
+  `absent.appellation_parts`, `absent.containers`), and a document's own
+  view gives the count as
   null and its drill-down says it is not counted. A reason, status or
   category whose count is no count (not a whole number of at least 0) is
   dropped, never a 0 row; a genuine 0 stays.
@@ -339,9 +351,13 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   `report.json`'s `aggregate.content.records` (`extractions`, `given`,
   `recordless`, `by_status`, `unsplit_forms`, `set_aside_records`,
   `appellation_labels`, `appellation_parts`, `set_aside_reasons`,
-  `set_aside_by_reason`, `absent.predating`, `absent.line_range`,
-  `absent.set_aside_records`, `absent.unsplit_forms`,
-  `absent.appellation_labels`, `absent.appellation_parts`) and `aggregate.content.notes`
+  `set_aside_by_reason`, `containers_checked`, `containers_dropped`,
+  `containers_dropped_by_reason`, `containers_name_only`,
+  `absent.predating`,
+  `absent.line_range`, `absent.set_aside_records`,
+  `absent.unsplit_forms`, `absent.appellation_labels`,
+  `absent.appellation_parts`, `absent.containers`) and
+  `aggregate.content.notes`
   (`total`, `by_category`, `set_aside`) sit beside the rejects, chunks
   and fallback tiers, where the run-to-run diff (#198) is to compare them
   with the other extraction counts;

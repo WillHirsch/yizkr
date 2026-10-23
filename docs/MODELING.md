@@ -1231,7 +1231,10 @@ language:
   (`within`: *Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân* is
   Snylsjum within the other three; a form whose fields run oblast,
   district, village puts Koshnovka within Kaldovsky District, then
-  Chadsk Oblast). Each container in `within` is a place entity of the
+  Chadsk Oblast). Each container carries its evidence, a verbatim
+  excerpt of the transcription that states the containment: the mention
+  in running text, the field's line on a form (ADR-0035, amended by
+  #569). Each container in `within` is a place entity of the
   manifest too, with its own record, and so in turn is each of its own
   containers (*Fläckfeld, Kreis Mockburg, Hesse* gives three place
   entities; ADR-0035, amended by #572);
@@ -1245,7 +1248,11 @@ a name, not something a source asserts, so ADR-0022's Ruling 1 holds for
 the graph. Records live in the batch view and the LLM cache, as local-only
 data. A record may divide and label a name, never add to it: every part
 must occur in the label or an alias, folded, as whole words (a standard
-form and an organisation's places aside). An optional field the model
+form, an organisation's places and a place's containers aside). A
+place's container stands on its evidence instead, and one that fails
+(`no-evidence`, `evidence-not-in-source`, `evidence-does-not-name`) is
+dropped alone, its record standing; each drop is counted by reason,
+apart from the records set aside (ADR-0035 §5). An optional field the model
 writes as an empty string is read as absent, and a name part that is
 empty, or whose written form is, is dropped and counted (`dropped`); the
 record stands if what is left can. A record that fails that, or that
@@ -1258,7 +1265,8 @@ or NSFX beside the value's name: "Dr. Eugen Löbig") becomes an alias,
 counted; in a NAME with no value, a prefix or suffix with no given name
 or surname beside it is counted instead, so none is dropped silently. A
 NICK and a `_MARNM` are aliases too. A place's record takes its PLAC's
-first component as its name and the rest as the places it is within.
+first component as its name and the rest as the places it is within,
+each with the PLAC's value as its evidence.
 Each of those jurisdictions is a place of its own too, one per distinct
 tail of components in the export, and each place carries its own name
 as its label or an alias; each link of the chain is an undated

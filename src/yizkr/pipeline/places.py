@@ -468,7 +468,7 @@ def stated_links(
         qid = entity.qid or created.get(entity.id)
         if not isinstance(qid, str) or not qid:
             continue
-        chain = tuple(record.within)
+        chain = tuple(record.containers())
         documents = [sha1] if sha1 else batch_artifacts(batch, entity.id)
         for index, container in enumerate(chain):
             outer = part_keys(container)
