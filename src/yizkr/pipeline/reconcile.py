@@ -59,7 +59,7 @@ from yizkr.core import sparql
 from yizkr.core.config import Config
 from yizkr.core.dates import unsupported_in_graph
 from yizkr.core.wiki import WikiClient
-from yizkr.disagreement import OWL_SAME_AS, followed
+from yizkr.disagreement import followed
 from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.llm import CUT_OFF_AT_LIMIT, LlmClient, at_output_limit
 from yizkr.queries.publish import (
@@ -438,12 +438,11 @@ class PlaceContainment:
 def read_place_containment(rows: Iterable[dict]) -> PlaceContainment:
     """The containment query's rows (``place-containment.rq``, the one the
     inconsistency report reads) as the closure over the edges
-    ``yizkr.disagreement.followed`` keeps, by QID. A merge redirect is no
-    containment and is passed over."""
+    ``yizkr.disagreement.followed`` keeps, by QID. A merge redirect's row
+    is no statement and states no source, so it is passed over: it is no
+    containment."""
     up: dict[str, set[str]] = {}
     for row in rows:
-        if row["link"]["value"] == OWL_SAME_AS:
-            continue
         stated = row.get("stated", {}).get("value") == "true"
         if not followed(row.get("rank", {}).get("value", ""), stated):
             continue
