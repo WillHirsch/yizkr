@@ -2150,9 +2150,6 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             made.add(key)
             claims.append(new)
 
-    # the PLACs whose components without a word are counted, each once
-    counted: set[int] = set()
-
     def places(event: Record) -> list[Record]:
         """The PLACs of an event that name a place (_place_parts), the
         first of each value, in their order: a further PLAC is an
@@ -2161,10 +2158,8 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         first: dict[str, Record] = {}
         for place in event.all("PLAC"):
             parts, left_out = _place_parts(place.value)
-            if id(place) not in counted:
-                counted.add(id(place))
-                for _ in range(left_out):
-                    outcome("PLAC component without a word")
+            for _ in range(left_out):
+                outcome("PLAC component without a word")
             if parts:
                 first.setdefault(place.value, place)
         return list(first.values())
