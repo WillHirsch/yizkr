@@ -1172,7 +1172,8 @@ def _records(coverage: dict) -> dict[str, Any]:
     the report's fixed vocabulary, OTHER for one it does not know.
 
     The coverage's `set_aside` counts reasons, not records: a record that
-    does not parse counts once, as `schema`, one of the wrong kind once,
+    does not parse counts once, as `schema` (besides any `read as text`
+    or `dropped` reasons given before it), one of the wrong kind once,
     as `kind`, and any other once for each problem found in it; an
     entity's note set aside counts once, as `note`, which is told apart
     here as a note set aside.

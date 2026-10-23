@@ -1258,8 +1258,8 @@ empty, or whose written form is, is dropped and counted (`dropped`); an
 entry of a list of strings written as an object holding only its
 `written` text (a family's surname also its `type`) is read as that text
 and counted (`read as text`); the record stands if what is left can. A
-record that fails that, or that does not parse, is set aside and counted, and the entity keeps its
-label, aliases and kind. The GEDCOM adapter fills each person's record
+record that fails that, or that does not parse, is set aside and
+counted, and the entity keeps its label, aliases and kind. The GEDCOM adapter fills each person's record
 from the NAME's value and its GIVN, SURN, SPFX, NPFX, NSFX, NICK and
 `_MARNM` (ADR-0035 §6): a part the value does not restate reaches its
 field, and the name it completes (the name the parts give, or an NPFX

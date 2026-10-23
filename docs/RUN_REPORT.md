@@ -287,13 +287,15 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   `containers.json`); the reasons records were set aside by, by
   category (`schema`, `dropped`, `read as text`, `kind`, `addition`,
   `initial`, `no name part`, `no toponym`; `report.SET_ASIDE_REASONS`);
-  the notes by category (`kind`, `relation`, `date_reading`, `identity`, `other`, the
-  categories of `claims.JudgementNote`); and the notes set aside. Counts
-  only, never a label, a reason's text or a note's text.
+  the notes by category (`kind`, `relation`, `date_reading`,
+  `identity`, `other`, the categories of `claims.JudgementNote`); and
+  the notes set aside. Counts only, never a label, a reason's text or a
+  note's text.
   `coverage.json`'s `records.set_aside` counts reasons, not records: a
-  record that does not parse gives one `schema`, and one of the wrong
-  kind one `kind`, but any other record gives one for each problem found
-  in it (each part of a name that no form of the entity holds gives its
+  record that does not parse gives one `schema` (besides any
+  `read as text` or `dropped` reasons given before it), and one of the
+  wrong kind one `kind`, but any other record gives one for each problem
+  found in it (each part of a name that no form of the entity holds gives its
   own `addition`, and a place's name is checked as written and again by
   its toponym and its head), so the reasons can outnumber the records
   set aside, which `records.set_aside_records` counts, once each. A

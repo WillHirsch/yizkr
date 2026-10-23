@@ -1430,10 +1430,10 @@ def _read_written(part, kind: str) -> tuple[object, str | None]:
     object read as its text (ADR-0035 §5): an object holding only a
     string `written`, as a given name, a person's surname or a place's
     name is written, or, in a family's `surnames`, its only list, that
-    and a person's surname `type`. Returns the entry, as text where it
-    was read so, and what it was read from, None when it was left as it
-    is. Only the shape is read, never the wording; any other object is
-    left for validation."""
+    and a person's surname `type`, or one written as "". Returns the
+    entry, as text where it was read so, and what it was read from, None
+    when it was left as it is. Only the shape is read, never the
+    wording; any other object is left for validation."""
     if not isinstance(part, dict) or not isinstance(part.get("written"), str):
         return part, None
     if set(part) == {"written"}:
@@ -1441,7 +1441,7 @@ def _read_written(part, kind: str) -> tuple[object, str | None]:
     if (
         kind == "family"
         and set(part) == {"written", "type"}
-        and part["type"] in _SURNAME_TYPES
+        and part["type"] in (*_SURNAME_TYPES, "")
     ):
         return part["written"], "an object holding its written text and a type"
     return part, None

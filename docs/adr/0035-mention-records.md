@@ -117,14 +117,15 @@ name, is read as that text before the record is validated (§5), as
 a person's `patronymics`, `nicknames`, `titles`, `suffixes` and
 `unsplit`, an organisation's `names`, `kinds` and `places`, and a
 family's `surnames`, where the object may also carry a person's surname
-`type` (`birth`, `married` or `other`), which the reading leaves out: a
-family's surname has none. Each entry read gives the reason
+`type` (`birth`, `married` or `other`, or one written as "", which
+#497 reads as absent), which the reading leaves out: a family's surname
+has none. Each entry read gives the reason
 `read as text`, counted in `coverage.json` (`records.set_aside`) and the
 run report beside `dropped`; it sets nothing aside, and what is left
 stands or is set aside as any record does (a text read that no form of
 the entity holds is an `addition`). An object holding anything else, a
 `written` that is no string, and a place's container (an object of its
-own, §2.2) are left to validation. The entity-manifest prompt is
+own, §2.2) are not read so. The entity-manifest prompt is
 unchanged, so cached answers are reused.
 
 Amended by #499 (2026-10-16): every form a source uses to name or

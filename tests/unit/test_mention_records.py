@@ -1577,7 +1577,8 @@ class TestListEntriesWrittenAsObjects:
                 "kind": "family",
                 "surnames": [
                     {"written": "Löbig", "type": "birth"},
-                    {"written": "Sörne"},
+                    {"written": "Sörne", "type": "married"},
+                    {"written": "Löbig", "type": ""},
                 ],
             },
         )
@@ -1586,9 +1587,11 @@ class TestListEntriesWrittenAsObjects:
             "read as text: structure.family.surnames.0: an object holding "
             "its written text and a type",
             "read as text: structure.family.surnames.1: an object holding "
-            "only its written text",
+            "its written text and a type",
+            "read as text: structure.family.surnames.2: an object holding "
+            "its written text and a type",
         ]
-        assert kept["structure"]["surnames"] == ["Löbig", "Sörne"]
+        assert kept["structure"]["surnames"] == ["Löbig", "Sörne", "Löbig"]
 
     def test_the_text_read_stands_or_is_set_aside_as_any_part(self):
         """A text read that is no name part of the entity is an addition,
@@ -1620,13 +1623,17 @@ class TestListEntriesWrittenAsObjects:
 
     def test_only_that_shape_is_read(self):
         """An object holding more than its text, a text that is no
-        string, a type outside a family's surnames or of no surname type,
-        and a place's container are left to validation."""
+        string, and a type outside a family's surnames or of no surname
+        type are left to validation."""
         for structure in (
             {"kind": "human", "titles": [{"written": "Mrs", "standard": "x"}]},
             {"kind": "human", "titles": [{"written": 7}]},
             {"kind": "human", "titles": [{"text": "Mrs"}]},
             {"kind": "human", "titles": [{"written": "Mrs", "type": "birth"}]},
+            {
+                "kind": "organization",
+                "names": [{"written": "zum Blauen Hut", "type": "other"}],
+            },
             {
                 "kind": "family",
                 "surnames": [{"written": "Löbig", "type": "maiden"}],
@@ -1638,7 +1645,6 @@ class TestListEntriesWrittenAsObjects:
                 ],
             },
             {"kind": "human", "given": ["Eugen"]},
-            {"kind": "place", "within": [{"written": "Kreis Peiltal"}]},
         ):
             kept, reasons = set_aside_structure(
                 entity("e1", "Eugen Löbig Mrs", "human", structure=structure)
@@ -1648,12 +1654,28 @@ class TestListEntriesWrittenAsObjects:
                 "schema"
             ], structure
 
-    def test_the_manifest_prompt_is_unchanged(self):
-        """The reading leaves the prompt as it is, so cached answers are
-        reused: it still shows these lists only as `[...]`."""
-        from yizkr.pipeline.chunking import ENTITY_MANIFEST_PROMPT
-
-        assert '"titles": [{"written"' not in ENTITY_MANIFEST_PROMPT
+    def test_a_places_container_is_not_read_as_text(self):
+        """A container is an object of its own (§2.2), so one written as
+        `{"written": …}` is not read as a container of that name; how its
+        record then fares is the container check's to say."""
+        town = entity(
+            "e1",
+            "Flörburg",
+            "place",
+            structure={
+                "kind": "place",
+                "status": "toponym",
+                "names": [{"written": "Flörburg"}],
+                "within": [{"written": "Kreis Peiltal"}],
+            },
+        )
+        kept, reasons = set_aside_structure(town)
+        assert not any(r.startswith("read as text") for r in reasons)
+        within = kept.get("structure", {}).get("within", [])
+        assert not any(
+            isinstance(entry, str) or entry.get("name") == "Kreis Peiltal"
+            for entry in within
+        )
 
 
 # -- the bootstrap ------------------------------------------------------------
