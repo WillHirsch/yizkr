@@ -24,6 +24,23 @@
 
 Connection settings come from deploy/.env (or $YIZKR_ENV_FILE /
 --env-file); see deploy/README.md.
+
+Exit status, one scheme for every command (yizkr.core.exits):
+  0    finished, and nothing failed
+  1    something failed: a document of a run, or the command itself on an
+       error it does not anticipate, with a traceback
+  2    stopped short; run it again once the reason it printed is dealt
+       with: a paused engine or cache, a run's control file (`scratch
+       run`; for `ingest run`, a stage it held), or, for `ingest run`, a
+       document awaiting a review gate
+  3    refused, before doing what was asked, with the reason alone: a
+       usage error, an input it will not act on, or a run directory that
+       records other settings
+  130  interrupted (Ctrl-C)
+
+The scratch commands give every refusal but a usage error 1, as they
+do a failure; `scratch estimate` and `scratch import-transcriptions` give
+a pause 1 too.
 """
 
 from __future__ import annotations
@@ -376,6 +393,7 @@ def cmd_extract(args) -> int:
     from pydantic import ValidationError
 
     from yizkr.claims import ArtifactRef
+    from yizkr.core.exits import EXIT_FAILED
     from yizkr.pipeline.transcribe import Transcription
 
     try:
@@ -463,7 +481,7 @@ def cmd_extract(args) -> int:
             f"answered from the cache)",
             file=sys.stderr,
         )
-        return 3
+        return EXIT_FAILED
     return 0
 
 
@@ -660,23 +678,51 @@ def cmd_accept_all(args) -> int:
 
 
 def cmd_write(args) -> int:
+    from pydantic import ValidationError
+
     from yizkr.pipeline.clustering import UnmappedMention
     from yizkr.pipeline.review import unapproved_depicts
-    from yizkr.pipeline.writer import BatchWriter, mapped_clusters
+    from yizkr.pipeline.writer import (
+        BatchWriter,
+        OtherIdentityMap,
+        UnapprovedDepictsError,
+        UnregisteredArtifactError,
+        mapped_clusters,
+    )
 
     # a batch file that does not load, or a local entity the identity map
     # does not hold, is refused before the instance is contacted; an
     # unapproved depicts claim is refused first, by the writer
-    batch = _load_batch(args.batch)
+    try:
+        batch = _load_batch(args.batch)
+    except OSError as exc:
+        sys.exit(f"{args.batch}: {exc.strerror}")
+    except ValidationError as exc:
+        found = "; ".join(
+            f"{'.'.join(map(str, error['loc'])) or 'file'}: {error['msg']}"
+            for error in exc.errors()[:3]
+        )
+        sys.exit(
+            f"{args.batch.name} is not a claim batch this step writes "
+            f"({found}); nothing was written"
+        )
     identity = _identity_map(args)
     if not unapproved_depicts(batch):
         try:
             mapped_clusters(batch, identity)
         except UnmappedMention as exc:
             sys.exit(str(exc))
-    result = BatchWriter(_client(args), dry_run=args.dry_run).write_batch(
-        batch, identity=identity
-    )
+    # the writer's refusals, each before its first write
+    try:
+        result = BatchWriter(_client(args), dry_run=args.dry_run).write_batch(
+            batch, identity=identity
+        )
+    except (
+        UnapprovedDepictsError,
+        UnregisteredArtifactError,
+        OtherIdentityMap,
+    ) as exc:
+        sys.exit(str(exc))
     print(json.dumps(dataclasses.asdict(result), indent=2))
     if args.dry_run:
         print("(dry run: nothing written)")
@@ -1191,7 +1237,11 @@ def cmd_enroll_face(args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="yizkr", description=__doc__)
+    parser = argparse.ArgumentParser(
+        prog="yizkr",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument(
         "--env-file",
         type=Path,
@@ -2190,9 +2240,48 @@ def _scratch_plan_options(p, effort_choices, runs_help: str) -> None:
     )
 
 
-def main() -> int:
-    args = build_parser().parse_args()
-    return args.func(args)
+def main(argv: list[str] | None = None) -> int:
+    """Run the command `argv` names (by default the command line's), and
+    return its exit status (yizkr.core.exits). A refusal (`sys.exit` with
+    its reason, which a scratch command gives a failure's status, or a run
+    directory's RunSettingsConflict), a pause
+    (PassPaused) and Ctrl-C print their message alone, on stderr, and
+    return their own status; a usage error returns the refusal's, not
+    argparse's 2, which is a pause's."""
+    from yizkr.core.exits import (
+        EXIT_FAILED,
+        EXIT_INTERRUPTED,
+        EXIT_REFUSED,
+        EXIT_STOPPED,
+    )
+    from yizkr.pipeline.llm import PassPaused
+    from yizkr.pipeline.rundir import RunSettingsConflict
+
+    try:
+        # argparse prints the usage error before it exits
+        args = build_parser().parse_args(argv)
+    except SystemExit as exc:
+        if exc.code == 2:
+            return EXIT_REFUSED
+        raise
+    try:
+        return args.func(args)
+    except SystemExit as exc:
+        if not isinstance(exc.code, str):
+            raise
+        print(exc.code, file=sys.stderr)
+        # the scratch commands give a refusal a failure's status
+        return EXIT_FAILED if args.command == "scratch" else EXIT_REFUSED
+    except RunSettingsConflict as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_REFUSED
+    except PassPaused as exc:
+        # the engine's own account of the pause, and what to do
+        print(str(exc), file=sys.stderr)
+        return EXIT_STOPPED
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return EXIT_INTERRUPTED
 
 
 if __name__ == "__main__":
