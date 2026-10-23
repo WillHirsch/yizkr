@@ -56,7 +56,7 @@ from yizkr.pipeline.chunking import (
 from yizkr.pipeline.critique import Finding
 from yizkr.pipeline.language import resolve_language
 from yizkr.pipeline.orchestrate import Orchestrator
-from yizkr.pipeline.rundir import RunDir, fold_control
+from yizkr.pipeline.rundir import ALERTS, RunDir, fold_control
 from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.transcription_check import (
     TranscriptionCheckFailed,
@@ -435,13 +435,16 @@ class TestThresholds:
             "pause-timeout-s: .nan\n",
             "- a list\n",
             "checks: [\n",  # not YAML
+            "checks: " + "[" * 1000 + "]" * 1000 + "\n",  # too deep
+            "pause-timeout-s: 2001-02-30\n",  # no such date
         ],
     )
     def test_a_file_the_checks_cannot_use_is_refused(self, tmp_path, text):
         path = tmp_path / "thresholds.yaml"
         path.write_text(text)
-        with pytest.raises(AnomalyConfigError):
+        with pytest.raises(AnomalyConfigError) as refused:
             load_config(path)
+        assert "\n" not in str(refused.value)
 
     def test_a_run_with_unusable_thresholds_keeps_the_defaults_and_says_so(
         self, tmp_path, monkeypatch
@@ -3968,30 +3971,127 @@ class TestRecheck:
             ]
         )
 
-    def test_the_module_s_command(self, tmp_path, capsys):
+    def test_the_scratch_command(self, tmp_path, monkeypatch, capsys):
+        """`yizkr scratch recheck` re-checks the run it names, a directory
+        or a run id in --runs (var/scratch by default), the latest by
+        default, with the thresholds `$YIZKR_ANOMALIES` names or --config
+        in their place, and prints what it appended (#327)."""
+        from yizkr import cli
+
+        # a run id names a run in --runs, never a path from the working
+        # directory: nothing may land in the checkout
+        monkeypatch.chdir(tmp_path)
         folder = a_folder(tmp_path, brief_txt=MARRIAGE)
-        orchestrator = Run(folder, tmp_path / "state")
+        orchestrator = Run(folder, tmp_path / "var" / "scratch" / "run-1")
         orchestrator.run()
         thresholds = tmp_path / "thresholds.yaml"
         thresholds.write_text(
             "checks:\n  language-unexpected:\n    expected: [en]\n"
         )
-        state = str(orchestrator.state_dir)
-        command = ["recheck", state, "--config", str(thresholds)]
-        assert anomalies.main(command) == 0
+        state = orchestrator.state_dir
+
+        def recheck_of(*argv):
+            args = cli.build_parser().parse_args(["scratch", "recheck", *argv])
+            assert args.func is cli.cmd_scratch_recheck
+            return args.func(args)
+
+        def rechecks():
+            return {
+                alert["invocation"]
+                for alert in orchestrator.rundir.alerts()
+                if alert["invocation"].startswith("recheck-")
+            }
+
+        def refused(*argv):
+            events = len(orchestrator.rundir.events())
+            before = rechecks()
+            with pytest.raises(SystemExit) as exc:
+                recheck_of(*argv)
+            assert len(orchestrator.rundir.events()) == events
+            assert rechecks() == before
+            assert "\n" not in str(exc.value.code)
+            return str(exc.value.code)
+
+        assert recheck_of(str(state), "--config", str(thresholds)) == 0
         out = capsys.readouterr().out
-        assert out.startswith("2 alerts appended to ")
-        assert re.search(r"language-unexpected\s+1", out)
-        assert re.search(r"zero-claims\s+1", out)
+        assert out.startswith(f"2 alerts appended to {state / ALERTS} ")
+        digest = load_config(thresholds).digest()
+        assert out.splitlines()[0].endswith(f"(thresholds {digest})")
+        assert re.search(r"^  language-unexpected\s+1$", out, re.M)
+        assert re.search(r"^  zero-claims\s+1$", out, re.M)
         # the transcription's alert and the batch's, both carried
         assert {
             alert["status"]
             for alert in orchestrator.rundir.alerts()
             if alert["invocation"].startswith("recheck-")
         } == {"carried"}
-        assert anomalies.main(["recheck", str(tmp_path)]) == 2
-        thresholds.write_text("checks:\n  no-such-check: {}\n")
-        assert anomalies.main(command) == 2
+        assert len(rechecks()) == 1
+        # a run id in the default --runs, and the latest run there, under
+        # the defaults
+        assert recheck_of("run-1") == 0
+        assert not (tmp_path / "run-1").exists()
+        assert recheck_of() == 0
+        runs = str(tmp_path / "var" / "scratch")
+        assert recheck_of("run-1", "--runs", runs) == 0
+        out = capsys.readouterr().out
+        default = Path("var/scratch/run-1") / ALERTS
+        assert out.count(f"alert appended to {default} ") == 2
+        assert f"(thresholds {load_config().digest()})" in out
+        assert len(rechecks()) == 4
+        # the file $YIZKR_ANOMALIES names, and --config in its place
+        monkeypatch.setenv(anomalies.CONFIG_VARIABLE, str(thresholds))
+        assert recheck_of("run-1") == 0
+        first = capsys.readouterr().out.splitlines()[0]
+        assert first.endswith(f"(thresholds {digest})")
+        other = tmp_path / "other.yaml"
+        other.write_text("pause-timeout-s: 60\n")
+        assert recheck_of("run-1", "--config", str(other)) == 0
+        first = capsys.readouterr().out.splitlines()[0]
+        assert first.endswith(f"(thresholds {load_config(other).digest()})")
+        assert load_config(other).digest() != digest
+        assert len(rechecks()) == 6
+        # no run, and thresholds that cannot be used, are refused in one
+        # line, with nothing appended
+        assert "no scratch run in" in refused("--runs", "nowhere")
+        assert "no run there" in refused(str(tmp_path))
+        bad = tmp_path / "bad.yaml"
+        bad.write_text("checks:\n  no-such-check: {}\n")
+        assert "no-such-check" in refused("run-1", "--config", str(bad))
+        monkeypatch.setenv(anomalies.CONFIG_VARIABLE, str(bad))
+        assert "no-such-check" in refused("run-1")
+
+    def test_the_scratch_command_on_a_run_it_cannot_append_to(
+        self, tmp_path, capsys
+    ):
+        """A run whose events this user cannot append to is refused in one
+        line, and its logs are left as they were (#327)."""
+        from yizkr import cli
+
+        folder = a_folder(tmp_path, brief_txt=MARRIAGE)
+        orchestrator = Run(folder, tmp_path / "runs" / "run-1")
+        orchestrator.run()
+        state = orchestrator.state_dir
+        logs = [state / name for name in (rundir.EVENTS, ALERTS)]
+        for log in logs:
+            log.touch()
+        before = [log.read_bytes() for log in logs]
+        for log in logs:
+            log.chmod(0o400)
+        try:
+            if os.access(logs[0], os.W_OK):
+                pytest.skip("this user writes to any file")
+            args = cli.build_parser().parse_args(
+                ["scratch", "recheck", str(state)]
+            )
+            with pytest.raises(SystemExit) as refused:
+                args.func(args)
+        finally:
+            for log in logs:
+                log.chmod(0o600)
+        assert "Permission denied" in str(refused.value.code)
+        assert "\n" not in str(refused.value.code)
+        assert [log.read_bytes() for log in logs] == before
+        assert capsys.readouterr().out == ""
 
 
 # -- the unit tests' own default ----------------------------------------------

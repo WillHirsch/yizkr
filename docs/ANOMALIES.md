@@ -341,7 +341,12 @@ only: it pauses nothing.
 **`anomaly-config`**: the thresholds file `$YIZKR_ANOMALIES` names cannot
 be used (below). The run goes on under the defaults, and this alert, with
 a logged warning, says why (`problem`); its `config` is the defaults'
-digest.
+digest. `yizkr scratch run` refuses such a file at its preflight instead,
+in one line, before run.json, a document's directory or an event is
+written (#327), and `yizkr scratch estimate` refuses it as the run would;
+so a scratch run meets this alert only for a file changed after its
+preflight. `yizkr ingest run` has no such preflight, and goes on under
+the defaults with this alert.
 
 ### Registration
 
@@ -463,12 +468,18 @@ and `version`, the file's layout, which is 1. `pause-timeout-s` is a
 number of seconds up to the longest wait a thread can make
 (`threading.TIMEOUT_MAX`, about 292 years), or `null`; infinity is
 refused. To change some, write a YAML file with just those keys, nested
-as in `anomalies.yaml`, and name it in `$YIZKR_ANOMALIES`; the scratch
-driver may pass one of its own (`anomalies.load_config`,
-`anomalies.attach`). Its values replace the defaults, a list replacing
-the whole list. A key the defaults do not have is refused, and so is a
-value out of range (a `min-count` larger than its `window`, a share
-above one), so a misspelt key never passes silently.
+as in `anomalies.yaml`, and name it in `$YIZKR_ANOMALIES`, which every
+run's checks load (`anomalies.load_config`, through
+`anomalies.checks_for`), a scratch run's and an `ingest run`'s alike;
+`yizkr scratch recheck --config FILE` names a file in its place. Its
+values replace the defaults, a list replacing the whole list. A key the
+defaults do not have is refused, and so is a value out of range (a
+`min-count` larger than its `window`, a share above one), so a misspelt
+key never passes silently. A scratch run's preflight loads the
+thresholds, and refuses a file that cannot be read, a key the defaults
+do not have or a value out of range in one line, before anything is
+written; `yizkr ingest run` falls back to the defaults with an
+`anomaly-config` alert (The configuration itself, above).
 
 The thresholds decide only which alerts are raised and which slices are
 paused, never what a stage makes: no view and no LLM cache key depends on
@@ -600,14 +611,18 @@ and the next invocation takes the slice up where it stopped.
 ## Recheck
 
 ```
-uv run python -m yizkr.pipeline.anomalies recheck <run dir> [--config FILE]
+uv run yizkr scratch recheck [<run>] [--runs DIR] [--config FILE]
 ```
 
-checks the outputs stored in a run directory's document directories
-again, the excerpts' directories (`excerpts/<sha1>/`, ADR-0008)
-included, under the thresholds as they are now (`--config` names a file
-of thresholds in place of the one `$YIZKR_ANOMALIES` names), without
-dispatching anything or recomputing any stage (`anomalies.recheck`).
+takes the run as the other `scratch` commands do: a run directory (an
+`ingest run`'s state directory too), or a run's id in the runs directory
+(`--runs`, `var/scratch` by default), and the latest run there when none
+is named (#327). It checks the outputs stored in the run directory's
+document directories again, the excerpts' directories
+(`excerpts/<sha1>/`, ADR-0008) included, under the thresholds as they
+are now (`--config` names a file of thresholds in place of the one
+`$YIZKR_ANOMALIES` names), without dispatching anything or recomputing
+any stage (`anomalies.recheck`).
 Each stored vision or text-file transcription meets the transcription
 check as it is now, as a run's reuse of it would, and each stored
 transcription, a PDF read page by page's included, carries the flag the
@@ -624,8 +639,11 @@ distributions measure an excerpt within its class, or among the
 unclassified excerpts. A document whose stored outputs the checks cannot
 read (a `batch.json` that does not hold a batch's shape, say) is an
 `anomaly-error` event, and the others are checked. Nothing is written
-into a document's directory. It prints how many alerts it appended, by
-check.
+into a document's directory. It prints how many alerts it appended,
+where, and the thresholds' digest, then the count of each check. A file
+of thresholds that cannot be used (`--config`, or the one
+`$YIZKR_ANOMALIES` names) is refused in one line, with nothing appended,
+and so is a run whose events or alerts this user cannot append to.
 
 ## What the checks never do
 

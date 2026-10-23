@@ -366,6 +366,27 @@ def test_the_chunk_notes_an_implied_century():
 
 
 class TestContainmentInThePrompts:
+    def test_the_manifest_lists_containers_nearest_first(self):
+        # #555: the place stage links each container to the next, so the
+        # record gives them nearest first, whatever a form's field order.
+        assert (
+            "within: the places the source puts it in, as written, nearest "
+            "first, whatever order the source writes them in"
+        ) in MANIFEST
+        assert "source's order" not in MANIFEST
+
+    def test_the_manifest_gives_a_running_text_and_a_form_example(self):
+        assert (
+            '"Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân" is '
+            'Snylsjum within "gemeente Drakeradiel", "Fryslân" and '
+            '"Nederlân"'
+        ) in MANIFEST
+        assert (
+            "a form whose fields run oblast, district, village, giving "
+            "Chadsk Oblast, Kaldovsky District and Koshnovka, is Koshnovka "
+            'within "Kaldovsky District" and "Chadsk Oblast".'
+        ) in MANIFEST
+
     def test_the_chunk_gives_containment_only_where_stated(self):
         assert (
             "Give a place's containment (`part_of`, its country among them) "

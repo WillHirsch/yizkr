@@ -87,6 +87,27 @@ way, such as by SIGKILL, can leave a mutation in place. The progress
 lines name the file being mutated, and `git checkout -- FILE` recovers
 it.
 
+No stray writes. A test that writes into the checkout, the directory it
+runs in, leaves a file that a later commit can pick up. Before the
+baseline, and after each run (each baseline run and each mutant's, live
+or not), the harness lists what git shows in the checkout, with one
+`git status --porcelain -z --untracked-files=all --ignored=no --no-renames`
+call, plus each listed path's type, size and modification time. A path
+that is new to that list, whose entry or stat has changed since the
+first listing, or that has gone from it (a deleted untracked file, a
+reverted edit) is a stray write: the harness names the run and the
+paths, and stops with an error, even under --keep-going, as a stray
+file can change how later runs end. A listing that git cannot give
+after a run stops it too. The mutated file is left out, as its own
+check covers it. Nothing found is deleted, so that the person can look
+at it. Ignored paths are not listed: var/, import/, .venv/ and
+__pycache__/ are runtime state that no commit picks up, and another
+session may write under var/ while the harness runs. Uncommitted changes
+that were there before the baseline are fine, as long as no run changes
+them. Whatever else writes a path git lists while the harness runs, an
+editor or another session, is blamed on the run, so run the harness
+where nothing else writes.
+
 Live tests
 ----------
 A mutation with `live = true` runs its tests with `-m live`, as
@@ -146,7 +167,9 @@ interrupted  a signal stopped the run
 not run      the run stopped before this mutation
 
 The run stops at the first mutation that fails it: a survivor (unless
---allow-survivors) or an error. --keep-going runs every mutation.
+--allow-survivors) or an error. --keep-going runs every mutation, up
+to a file not restored or a stray write, which stop the run whatever
+the options.
 Progress goes to stderr (-q silences it, but not a wait for the
 live-stack lock). The results table goes to stdout as Markdown, ready to
 paste into a PR, and --json PATH also writes a report.
@@ -155,8 +178,8 @@ Exit status: 0 when every mutation that ran was killed, or survived
 under --allow-survivors; 1 when a mutant survived and nothing else went
 wrong; 2 after a refusal, a wait for the live-stack lock given up, a
 failing baseline, a mutation's error, a failed restore, a file git does
-not show clean after its restore, or an internal error; 128 + N after
-signal N.
+not show clean after its restore, a run's stray write, a checkout git
+cannot list, or an internal error; 128 + N after signal N.
 """
 
 from __future__ import annotations
@@ -180,7 +203,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from itertools import pairwise
 from pathlib import Path
-from stat import S_IMODE
+from stat import S_IFMT, S_IMODE
 from types import ModuleType
 
 DEFAULT_TIMEOUT = 300.0
@@ -262,6 +285,9 @@ class Result:
     detail: str = ""
     failed: list[str] = field(default_factory=list)
     output: str = ""
+    # the paths the run wrote into the checkout, outside the mutated file;
+    # None when git could not list the checkout after the run
+    stray: list[str] | None = field(default_factory=list)
 
     def as_json(self) -> dict:
         mutation = self.mutation
@@ -278,6 +304,7 @@ class Result:
             "returncode": self.returncode,
             "detail": self.detail,
             "failed": self.failed,
+            "stray": self.stray,
             "output_tail": tail(self.output) if self.result == ERROR else "",
         }
 
@@ -377,14 +404,18 @@ def _mutation(index: int, table: dict) -> tuple[Mutation | None, list[str]]:
 # -- the repository ---------------------------------------------------------
 
 
-def git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    """Run git in `root`, reading paths literally rather than as globs."""
+def git(
+    root: Path, *args: str, errors: str = "strict"
+) -> subprocess.CompletedProcess[str]:
+    """Run git in `root`, reading paths literally rather than as globs.
+    `errors` is how its output is decoded."""
     return subprocess.run(
         ["git", "--literal-pathspecs", "--no-optional-locks", *args],
         cwd=root,
         stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
+        errors=errors,
         check=False,
     )
 
@@ -443,6 +474,55 @@ def git_problem(root: Path, rel: str) -> str | None:
         if status != 0:
             return f"git diff failed on {rel}"
     return None
+
+
+def checkout_state(root: Path) -> tuple[dict | None, str | None]:
+    """What git shows in the checkout: each path it lists as changed or
+    untracked, ignored paths aside, with its status and the type, size and
+    modification time it has now (None for a path that is gone). Or why
+    git could not say. One git call.
+
+    git prints paths as raw bytes, which need not be UTF-8: they are read
+    with surrogateescape, so that lstat finds the real name, and keyed by a
+    printable form, with backslash escapes for the bytes that are not."""
+    listed = git(
+        root,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignored=no",
+        "--no-renames",
+        errors="surrogateescape",
+    )
+    if listed.returncode != 0:
+        return None, f"git status failed: {listed.stderr.strip()}"
+    state = {}
+    for entry in listed.stdout.split("\0"):
+        if not entry:
+            continue
+        status, rel = entry[:2], entry[3:]
+        try:
+            found = os.lstat(root / rel)
+            stat = (S_IFMT(found.st_mode), found.st_size, found.st_mtime_ns)
+        except OSError:
+            stat = None
+        shown = rel.encode("utf-8", "surrogateescape").decode(
+            "utf-8", "backslashreplace"
+        )
+        state[shown] = (status, stat)
+    return state, None
+
+
+def stray_writes(before: dict, after: dict, ignore: str = "") -> list[str]:
+    """The paths that are new since `before`, changed (their status or
+    stat differs) or gone from the listing, as a deleted untracked file or
+    a reverted edit is. `ignore` names a path to leave out."""
+    return sorted(
+        rel
+        for rel in before.keys() | after.keys()
+        if rel != ignore and before.get(rel) != after.get(rel)
+    )
 
 
 def occurrences(data: bytes, old: bytes) -> list[int]:
@@ -873,6 +953,8 @@ class Harness:
         self.baseline: list[dict] | None = None
         self.problems: list[str] = []
         self.unrestored: list[str] = []
+        # what git showed in the checkout before the first run
+        self.checkout: dict | None = None
         # the live-stack lock's module, and the descriptor through which the
         # harness holds the lock, while it does
         self.lock: ModuleType | None = None
@@ -918,6 +1000,10 @@ class Harness:
     def _runs(self, mutations: list[Mutation]) -> None:
         """The baseline, then each mutation in turn, until one fails the
         run."""
+        self.checkout, problem = checkout_state(self.root)
+        if problem is not None:
+            self._problem(f"cannot list the checkout: {problem}")
+            return
         if not self.args.no_baseline and not self._baseline(mutations):
             return
         total = len(self.results)
@@ -925,7 +1011,9 @@ class Harness:
             if self.signum is not None:
                 break
             self._mutate(result, f"[{position}/{total}]")
-            if self.unrestored or result.result == INTERRUPTED:
+            if self.unrestored or result.stray != []:
+                break
+            if result.result == INTERRUPTED:
                 break
             if self._fails(result) and not self.args.keep_going:
                 break
@@ -989,6 +1077,7 @@ class Harness:
     def _baseline_run(self, tests: list[str], live: bool) -> bool:
         self._say(f"baseline: running {describe(tests, live)} unmutated")
         run = self.run_tests(tests, live)
+        stray = self._strays(f"the baseline run of {describe(tests, live)}")
         result, detail, _ = classify(run, self.args.timeout)
         detail = self._relative(detail)
         # A run whose tests only skip or xfail passes, but proves nothing:
@@ -998,13 +1087,16 @@ class Harness:
             {
                 "tests": tests,
                 "live": live,
-                "result": "passed" if passed else "failed",
+                "result": "passed" if passed and stray == [] else "failed",
                 "seconds": _rounded(run.seconds),
                 "returncode": run.returncode,
                 "detail": detail,
+                "stray": stray,
                 "output_tail": "" if passed else tail(run.output),
             }
         )
+        if stray != []:
+            return False
         if passed:
             self._say(f"baseline: {detail} in {run.seconds:.1f} s")
         elif result == SURVIVED:
@@ -1082,6 +1174,7 @@ class Harness:
                 f"clean: {unclean}. Check it with: git status; "
                 f"git diff HEAD -- {mutation.rel}"
             )
+        result.stray = self._strays(mutation.label, ignore=mutation.rel)
         if failure is not None:
             result.result, result.detail = ERROR, failure
         elif run is None:
@@ -1094,6 +1187,11 @@ class Harness:
             result.detail = self._relative(detail)
             result.returncode = run.returncode
             result.output = run.output
+        if result.stray is None:
+            result.detail += "; the checkout could not be listed"
+        elif result.stray:
+            left = ", ".join(result.stray)
+            result.detail += f"; left in the checkout: {left}"
         self._say(
             f"{position} {mutation.name}: {result.result} in "
             f"{result.seconds:.1f} s ({result.detail})"
@@ -1103,6 +1201,26 @@ class Harness:
                 self._say(f"    failed: {test}")
         elif result.result == ERROR:
             self._tail(result.output)
+
+    def _strays(self, run: str, ignore: str = "") -> list[str] | None:
+        """The paths that `run`, which has just ended, wrote into the
+        checkout, outside `ignore`, each reported as a problem; None, also
+        a problem, when git could not list the checkout. Nothing is
+        deleted: the person looks at what the run left."""
+        after, problem = checkout_state(self.root)
+        if problem is not None:
+            self._problem(f"cannot list the checkout after {run}: {problem}")
+            return None
+        stray = stray_writes(self.checkout, after, ignore)
+        if stray:
+            shown = "".join(f"\n    {rel}" for rel in stray)
+            self._problem(
+                f"{run} wrote into the checkout, which tests must leave "
+                f"alone (write under tmp_path instead):{shown}\n"
+                "  They are left as they are: look at them with git status, "
+                "and delete what the run wrote"
+            )
+        return stray
 
     def run_tests(self, tests: list[str], live: bool = False) -> Run:
         """Run pytest on `tests` in a process group of its own. Stop the

@@ -729,21 +729,41 @@ artifact a new QID, changes neither.
   curator who types "19. century" into the wiki stores 1900):
   `format_time` shows a century-precision date stored as 1801 or 1900 as
   the 19th century, and the report gives it the span 1801–1900
-  ("Contradictions").
+  ("Contradictions"). `format_time` names a century or a millennium with
+  its English ordinal (the 1st, 2nd, 3rd, 11th, 21st, 101st century) and
+  shows a date at millennium precision as its millennium, counted from
+  year 1 as above, so one stored as 1001 or 2000 is the 2nd millennium. A
+  precision coarser than a millennium (ten thousand years up to a
+  billion) shows as the stored year with the span its precision allows
+  ("1900, to within 10,000 years"), never as a narrower century.
 - "The 1800s", meaning 1800–1899, is not a century in that count, and
   is stated as a range, earliest date 1800 and latest date 1899, never
   rounded to the 19th century.
 - Ranges and vagueness: earliest date / latest date qualifiers. On a
   statement dated as a period (a marriage, a residence), each end has its
   own pair: see "Marriages, residences and other periods". The static
-  site's timeline and inconsistencies pages show a stated range beside
-  its date, each bound under its qualifier's label and at its own
+  site's timeline, inconsistencies and artifact pages show a stated range
+  beside its date, each bound under its qualifier's label and at its own
   precision, so a range open at one end names its one bound: Rahel's
   death "after 1945" per the family tree shows as "1945 (earliest date:
-  1945)".
+  1945)". The person and artifact pages show every qualifier of a
+  statement so, a period's start time with its bounds and then its end
+  time with its own, and its circa; the artifact page shows each
+  statement that cites the artifact once, with each place its reference
+  blocks cite it at (page, printed page, image region, fragment) and the
+  excerpt there.
 - "circa": sourcing circumstances qualifier. A compilation's statement
   that its text was prepared with machine assistance is another
-  sourcing circumstance (planned: "Compound artifacts").
+  sourcing circumstance (planned: "Compound artifacts"). The static
+  site's timeline page and feed show a statement's sourcing
+  circumstances after the range beside each of its dates, as the person
+  page does: Cäcilie's birth "c. 1833" per the family tree shows as "1833
+  (sourcing circumstances: circa)", never as an exact year. A date coarser
+  than a year shows in the feed's display date and in the timeline page's
+  header over it as `format_time` shows it: its decade, century or
+  millennium, or, coarser than a millennium, its stored year with the span
+  its precision allows ("1900, to within 10,000 years"), never as a bare
+  stored year (a 19th century stored as 1801 is headed "19th century").
 - Redundant-but-asserted values (e.g. "Alter: 73 Jahre" alongside a death
   date) are kept verbatim as qualifiers (`age at death`), never derived or
   dropped: sources assert them, so the archive records them.
@@ -1090,8 +1110,11 @@ language:
 - **a place:** a status (`toponym`, `deictic` or `generic`); its names,
   each with its toponym and generic head where they can be told apart; an
   address, with its street and number; and the containers the source puts
-  it in, in the source's order (`within`: *Snylsjum, gemeente
-  Drakeradiel, Fryslân, Nederlân* is Snylsjum within the other three);
+  it in, nearest first, whatever order the source writes them in
+  (`within`: *Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân* is
+  Snylsjum within the other three; a form whose fields run oblast,
+  district, village puts Koshnovka within Kaldovsky District, then
+  Chadsk Oblast);
 - **an organisation:** its proper names, the words naming its kind, and
   its places (*Калдовское районное бюро ЗАГС* has a kind and a place, and
   no proper name);
@@ -1358,7 +1381,8 @@ dating below is the convention its readers still interpret:
 - **Circa** (`sourcing_circumstances`) qualifies the whole statement. On
   a spouse statement with a start and an end, it says that the source
   gives at least one of them approximately, and cannot say which, rather
-  than drop it (rule 5).
+  than drop it (rule 5). So the person timeline shows it beside the
+  statement's start and its end alike.
 
 The disagreement report compares a residence's or a spouse's start and
 end times, each through its own range ("Contradictions" below); the
@@ -1366,9 +1390,11 @@ person timeline (`src/yizkr/queries/person-timeline.rq`) lists each
 start, end and point in time with the range stated for it, which the
 static site's timeline page and feed show beside the date, each bound
 under its qualifier's label ("1946 (earliest date: 1946; latest start
-date: 1947)"); and the extraction prompts give the extractor this
-convention for residences and other periods, and date a marriage by its
-wedding and end events instead.
+date: 1947)"). An event's own start and end time are rows of their own
+there, each bounded by its earliest and latest date ("imprisonment
+(start time)", "imprisonment (end time)"); and the extraction prompts
+give the extractor this convention for residences and other periods,
+and date a marriage by its wedding and end events instead.
 
 ## Persecution and displacement as events (see ADR-0014)
 
@@ -1527,12 +1553,29 @@ not a signal to grow the schema on.
   badge call it, so they always agree.
 - **Death evidence** is any source-asserted signal that presupposes
   death: a `date of death`, `place of death`, or `cause of death`; a
-  `place of burial` (burial presupposes death); or participation in a
-  `death` event. None of these requires *both* a date and a place, so a
-  person can be recorded as **deceased without a time or place of
-  death** — a burial place, a cause of death, or an undated death event
-  each suffices. Death is an event like any other (ADR-0014), so "died,
-  nothing else known" is a death event with the person as participant.
+  `place of burial` (burial presupposes death); or a `death` event of
+  which they are the principal. None of these requires *both* a date and
+  a place, so a person can be recorded as **deceased without a time or
+  place of death** — a burial place, a cause of death, or an undated
+  death event each suffices. Death is an event like any other
+  (ADR-0014), so "died, nothing else known" is a death event with the
+  person as its principal participant.
+- **A birth or death event is its one principal's own** (ADR-0020, as
+  amended by #345; ADR-0035 §3.2). A death event releases only the
+  single participant its `participant` statements name in the role
+  `principal` (`object_has_role`, read from the statement's qualifier,
+  not the truthy triple), through a statement at the best rank that
+  states no other role; an informant or a witness at someone else's
+  death stays possibly living. A death with no principal, with several,
+  with one of unknown value, or with no role stated at all is nobody's
+  own and releases no one. A dated birth event's `point in time` is a
+  birth of its principal, read as a `date of birth` is: it may release a
+  principal born only by it, and an 1850 date of birth beside a 1990
+  birth event keeps the person possibly living. A birth event that is
+  nobody's own only adds its date to the births of participants who have
+  a birth already, so it can only keep them possibly living. The export
+  and the site read both through `yizkr.core.privacy.read_evidence`, so
+  they decide each person alike.
 - **No curation duty.** There is no `living` column in the review CSV
   and nothing the reviewer must decide. Privacy falls out of what
   sources already assert; a curator who knows a person is dead records

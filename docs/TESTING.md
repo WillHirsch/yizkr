@@ -304,12 +304,32 @@ tests = ["tests/unit/test_example.py::test_blank_names_are_dropped"]
 - **Run it from your own worktree**, with `uv run` there. The harness
   runs pytest under its own interpreter, and an environment made for
   another checkout imports that checkout's `src/`, where no mutation
-  lands: every mutant would falsely survive.
+  lands: every mutant would falsely survive. Run it where nothing else
+  writes while it runs: an editor or another session writing a file git
+  lists is blamed on the test (below).
 - **Commit first.** Before anything runs, it refuses a file that is
   dirty, untracked or a symlink, and `old` text that is missing, found a
   different number of times than `count`, or overlapping. It restores
   each file byte for byte, with its mode and modification time, even
   after a timeout or Ctrl-C, and git must show the file clean again.
+- **Tests leave the checkout alone** (#536). Before the baseline and
+  after each run (baseline, mutant and live runs alike), the harness
+  lists what `git status --porcelain -z --untracked-files=all
+  --ignored=no --no-renames` shows, one git call, with each path's type,
+  size and modification time. A path that a run made new, changed or
+  removed (a deleted untracked file, a reverted edit), outside the
+  mutated file, is a stray write: a test wrote into its working
+  directory, and a later commit could pick the file up. The harness
+  names the run and the paths, leaves the files for you to look at, and
+  stops with exit 2, even under `--keep-going`; the table's detail and
+  the JSON report's `stray` list name them too (`null` when git could
+  not list the checkout, which stops the run as well). A name that is
+  not UTF-8 is shown with backslash escapes, such as `\xff-run.txt`.
+  Ignored paths (`var/`, `import/`, `.venv/`, `__pycache__/`) are not
+  listed: they are runtime state that no commit picks up, and another
+  session may write under `var/` while the harness runs. Uncommitted
+  changes from before the run are fine as long as no run changes them.
+  A test writes under `tmp_path`.
 - **Write code in literal strings.** TOML's single-quoted strings
   (`'...'`, or three quotes around several lines) keep every character
   as written. In double-quoted ones a backslash starts an escape, and in

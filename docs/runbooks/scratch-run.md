@@ -71,35 +71,51 @@ and `yizkr.reset` for the reset.
   applying: docs/LLM_CACHE.md, Seeding.
 - **Preflight.** Before anything is written or called, the driver checks
   the claude CLI and its login, a full model id for every role, the
-  pacing settings, 2 GiB free on the run directory's and the cache's
-  filesystems (`--min-free`), and the PDF renderer when the corpus holds
-  a PDF. A stage that touches the wiki is checked for too: the stack must
-  answer and the instance must carry no kept-state marker. The write
-  side's stages are such stages (The write side, below), so a run to the
-  end needs the stack up; one that stops at clustering or before needs
-  none. A refusal lists every problem it found.
+  pacing settings, the anomaly thresholds (`anomalies.yaml`, with the
+  file `$YIZKR_ANOMALIES` names over it: one that cannot be read, a key
+  the defaults do not have, or a value out of range is refused in one
+  line; docs/ANOMALIES.md, Thresholds), 2 GiB free on the run
+  directory's and the cache's filesystems (`--min-free`), and the PDF
+  renderer when the corpus holds a PDF. A stage that touches the wiki is
+  checked for too: the stack must answer and the instance must carry no
+  kept-state marker. The write side's stages are such stages (The write
+  side, below), so a run to the end needs the stack up; one that stops
+  at clustering or before needs none. A refusal lists every problem it
+  found.
 
-  Once those checks pass, and once the settings are checked against
-  those a resumed run recorded (other settings are refused as
-  `RunSettingsConflict` before any call), and still before any document
-  is dispatched or anything written, the driver makes **one trivial
-  call per distinct (model, effort) pair** that the roles of the
-  invocation's range run, through the engine as the run calls it: the
-  same engine, model and effort as the first role that runs the pair,
-  and the claude CLI it would use, but not through the LLM cache, so
-  the call reaches the engine. The roles are those of the per-document
-  stages within `--until` (`transcribe` for transcription, `extract`
-  for extraction and GEDCOM, `critique`), and every role when a corpus
-  stage in range may call the engine. Two roles on one model at one
-  effort make one call; at two efforts, two. The preflight reads no run
-  state: **a resume makes these calls even when it will reuse every
-  view**, a few trivial calls accepted as the cost of a check that
-  never predicts what the run will reuse. An invocation past the
-  barrier only, whose corpus stages call no engine (clustering), makes
-  none. Every invocation whose range holds a per-document stage, or a
-  corpus stage that may call the engine, makes them, the driver's own
-  after a subscription limit included, unless the installed claude CLI
-  is not the run's (below).
+  Once those checks pass, the settings are checked against those a
+  resumed run recorded: other settings are refused as
+  `RunSettingsConflict` before any call. Then the LLM cache's folder is
+  checked, without making or changing anything, as its runs directory
+  is: a folder the cache would refuse to open (one a git work tree would
+  track, one open to other users, one this user cannot write in or make,
+  or a lock file in it this user cannot open) is refused in one line,
+  before the preflight's calls and before `run.json`, a document's
+  directory or an event is written, and the driver exits 1 (#327;
+  docs/LLM_CACHE.md, The cache folder). It is checked for every
+  invocation whose range holds a per-document stage, or a corpus stage
+  that may call the engine, a resume that reuses every view included;
+  an invocation past the barrier only, whose corpus stages call no
+  engine, opens no cache, and its folder is not checked.
+
+  Then, still before any document is dispatched or anything written, the
+  driver makes **one trivial call per distinct (model, effort) pair**
+  that the roles of the invocation's range run, through the engine as
+  the run calls it: the same engine, model and effort as the first role
+  that runs the pair, and the claude CLI it would use, but not through
+  the LLM cache, so the call reaches the engine. The roles are those of
+  the per-document stages within `--until` (`transcribe` for
+  transcription, `extract` for extraction and GEDCOM, `critique`), and
+  every role when a corpus stage in range may call the engine. Two roles
+  on one model at one effort make one call; at two efforts, two. The
+  preflight reads no run state: **a resume makes these calls even when
+  it will reuse every view**, a few trivial calls accepted as the cost
+  of a check that never predicts what the run will reuse. An invocation
+  past the barrier only, whose corpus stages call no engine
+  (clustering), makes none. Every invocation whose range holds a
+  per-document stage, or a corpus stage that may call the engine, makes
+  them, the driver's own after a subscription limit included, unless the
+  installed claude CLI is not the run's (below).
 
   When the installed claude CLI is not the one the run recorded, the
   preflight checks no model, refuses nothing, and says so in one line.
@@ -219,18 +235,19 @@ and `yizkr.reset` for the reset.
   first call: no never-ingest list, a runs directory the driver refuses
   (open to others, tracked by git, a file, one it cannot write), a model
   that is no full id, a pacing setting the engine refuses, a PDF without
-  the renderer, other settings or another claude CLI for a run invoked
-  again, and, once a stale stage needs the engine, a cache folder the
-  cache refuses (What stays local, below). It lists what the run's
-  preflight would still refuse (the login, disk space); a stage that
-  touches the wiki is left to the run's own preflight. A corpus with no
-  document is no call, whatever the settings, as it is to the run. Like
-  the driver, it starts a role's engine client when the role's first
-  stale stage needs it, which for the claude CLI runs `claude --version`,
-  for the version every key names: a client that cannot start, or pauses
-  as it starts, stops the estimate as it would stop the run, and nothing
-  stale starts none. How the LLM cache keys a call, and what a run's
-  events count: docs/LLM_CACHE.md.
+  the renderer, anomaly thresholds the checks cannot load, other
+  settings or another claude CLI for a run invoked again, and a cache
+  folder the cache refuses, where the run's preflight checks it (What
+  stays local, below). It lists what the run's preflight would still
+  refuse (the login, disk space); a stage that touches the wiki is left
+  to the run's own preflight. A corpus with no document is no call,
+  whatever the settings, as it is to the run. Like the driver, it starts
+  a role's engine client when the role's first stale stage needs it,
+  which for the claude CLI runs `claude --version`, for the version
+  every key names: a client that cannot start, or pauses as it starts,
+  stops the estimate as it would stop the run, and nothing stale starts
+  none. How the LLM cache keys a call, and what a run's events count:
+  docs/LLM_CACHE.md.
 
 ## Run
 
@@ -288,7 +305,8 @@ uv run yizkr scratch run
   0 when it finished and no document failed; 1 when a document or a
   corpus stage failed, or it refused to start; 2 when it stopped short
   (an abort, or a pause of the engine it could not wait out); 130 on
-  Ctrl-C.
+  Ctrl-C. A usage error (an unknown or malformed option) exits 3, as it
+  does for every `yizkr` command (`yizkr --help`).
 
 ## The write side
 
@@ -474,6 +492,12 @@ calls from the cache.
 - `yizkr scratch watch <run> --once`: the monitor's view, at any time,
   finished runs included.
 - `yizkr scratch report <run>`: the run report (docs/RUN_REPORT.md).
+- `yizkr scratch recheck [<run>] [--config FILE]`: the run's stored
+  outputs checked again with the anomaly thresholds as they are now (or
+  the file `--config` names), without recomputing any stage; it appends
+  the alerts they raise to the run's alerts, all carried, and prints how
+  many, by check (docs/ANOMALIES.md, Recheck). Thresholds that cannot be
+  used are refused in one line, with nothing appended.
 - `yizkr scratch diff [<baseline>] [<run>]`: what changed between a run
   and a baseline, by default the latest completed run on main, and why,
   with the reviewer checklist a scratch-diff is read by
@@ -633,7 +657,8 @@ is about to reset.
   compose file's `name`) and each volume's key;
   `docker compose config --volumes` lists the keys.
 - **Exit status**: 0 when it finished; 1 when it was refused or a step
-  failed, saying which; 130 on Ctrl-C.
+  failed, saying which; 3 on a usage error (an unknown or malformed
+  option), as for every `yizkr` command; 130 on Ctrl-C.
 
 **The record of the instance.** What a scratch run needs to know about
 the instance, outside it, is kept per user, apart from any checkout, so
@@ -685,9 +710,10 @@ Nothing from them goes into the repository, GitHub or a cloud session.
   repository ignores `var/`: `--runs .`, or any other path git would
   track, is refused before anything is written.
 - **So is the LLM cache's folder.** The cache makes its folders mode
-  700. As it opens, before any call, it refuses a `--cache` folder a git
-  work tree would track, one there already that is open to other users,
-  whose mode it leaves alone, and one this user cannot write in
+  700. The driver's preflight, before anything is written, and the cache
+  as it opens, before any call, refuse a `--cache` folder a git work
+  tree would track, one there already that is open to other users,
+  whose mode they leave alone, and one this user cannot write in
   (docs/LLM_CACHE.md, The cache folder).
 
 ## Not yet
