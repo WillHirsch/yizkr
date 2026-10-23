@@ -756,7 +756,7 @@ def batch_findings(
         )
         if rejected is not None:
             found.append(rejected)
-        quoted = coverage.get("excerpts")
+        quoted = coverage.get("quotes")
         if isinstance(quoted, Mapping):
             missing = share(
                 "excerpt-not-in-source",

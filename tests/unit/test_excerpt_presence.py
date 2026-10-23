@@ -5,10 +5,10 @@ A claim's `transcription_excerpt` is compared with the transcription it
 quotes by the shared comparison of core/verbatim.py (#569): folded, with
 whitespace and line breaks collapsed, a hyphen at a line's end joined,
 whole words only. A miss is never a reject: the claim stays in its
-batch, the miss is counted in the extraction's coverage (`excerpts`), the
+batch, the miss is counted in the extraction's coverage (`quotes`), the
 `excerpt-not-in-source` anomaly check raises it, the run report counts
 misses by property and the run diff compares them. The local
-`excerpts.json` keeps each miss's claim id and the transcription line
+`quotes.json` keeps each miss's claim id and the transcription line
 nearest to its excerpt.
 
 Every text is the fictional universe's (docs/EXAMPLES.md): Gustav
@@ -48,7 +48,8 @@ from yizkr.pipeline.transcribe import Transcription
 EXTRACT = "\n".join(
     [
         "Auszug aus dem Geburtsregister",  # 1
-        "Standesamt Flörburg, Nr. 12/1919",  # 2
+        # an editor's mark, where the reading of the place is unsure
+        "Standesamt Flörburg [?], Nr. 12/1919",  # 2
         "Gustav Löbig wurde am 7. Januar 1919",  # 3
         "in Flörburg, Brunnen-",  # 4
         "ring 35, geboren, Sohn des Hutmachers",  # 5
@@ -148,9 +149,11 @@ class TestTheComparison:
         assert (missed["nearest_line"], missed["nearest_text"]) == (None, None)
 
     def test_a_claim_with_no_excerpt_is_counted_apart(self):
-        assert audit(None, " ", VERBATIM)["counts"] == {
+        """An excerpt that holds no word is none, as a container's
+        evidence that holds none is."""
+        assert audit(None, " ", "…", ".", VERBATIM)["counts"] == {
             "checked": 1,
-            "without_excerpt": 2,
+            "without_excerpt": 4,
             "not_in_source": 0,
             "not_in_source_by_property": {},
         }
@@ -173,7 +176,7 @@ class TestTheComparison:
 
 # Forms a careful reader would accept as quoting the extract, each with
 # whether the comparison counts it a miss. The owner's question, whether a
-# miss should become a reject, reads these: 5 of the 8 are counted.
+# miss should become a reject, reads these: 9 of the 12 are counted.
 NEAR_MISSES = [
     # folded away: no miss
     ("case", "gustav löbig WURDE am 7. januar 1919", False),
@@ -185,6 +188,11 @@ NEAR_MISSES = [
     ("layout hyphen copied", "Brunnen- ring 35", True),
     ("umlaut transliterated", "in Floerburg, Brunnenring 35", True),
     ("abbreviation expanded", "Hildegard geboren Laudler", True),
+    ("wrapped in quotes", '"Gustav Löbig wurde am 7. Januar 1919"', True),
+    # the chunk prompts number the lines they show
+    ("line number copied", "3: Gustav Löbig wurde am 7. Januar 1919", True),
+    ("editorial mark dropped", "Standesamt Flörburg, Nr. 12/1919", True),
+    ("soft hyphen", "Brunnen\u00adring 35", True),
 ]
 
 
@@ -199,7 +207,7 @@ class TestLegitimateNearMisses:
 
     def test_the_expected_rate(self):
         counts = audit(*(excerpt for _, excerpt, _ in NEAR_MISSES))["counts"]
-        assert (counts["not_in_source"], counts["checked"]) == (5, 8)
+        assert (counts["not_in_source"], counts["checked"]) == (9, 12)
 
 
 class TestTheExtraction:
@@ -260,7 +268,7 @@ class TestTheExtraction:
     def test_the_coverage_counts_and_quotes_nothing(self, extracted):
         _, state = extracted
         coverage = json.loads((state / "coverage.json").read_text())
-        assert coverage["excerpts"] == {
+        assert coverage["quotes"] == {
             "checked": 4,
             "without_excerpt": 1,
             "not_in_source": 2,
@@ -271,17 +279,60 @@ class TestTheExtraction:
 
     def test_the_local_audit_keeps_each_miss(self, extracted):
         batch, state = extracted
-        kept = json.loads((state / "excerpts.json").read_text())
+        kept = json.loads((state / "quotes.json").read_text())
         assert [found["claim_id"] for found in kept] == [
             claim_id(batch.claims[2]),
             claim_id(batch.claims[3]),
         ]
         assert [found["nearest_line"] for found in kept] == [3, None]
 
+    def test_the_line_range_tier_is_checked_too(self, tmp_path):
+        """A refused manifest falls back to line ranges, whose claims are
+        compared as the manifest tier's are."""
+        segmentation = {
+            "units": [
+                {
+                    "id": "u1",
+                    "label": "Gustav Löbig entry",
+                    "kind": "person entry",
+                    "first_line": 1,
+                    "last_line": 7,
+                    "context": "",
+                    "extract": True,
+                }
+            ]
+        }
+        llm = ScriptedLlm(
+            [
+                "no manifest here",
+                json.dumps({"entities": [{"id": "x"}]}),
+                json.dumps(segmentation),
+                ndjson([claim(VERBATIM), claim(MISQUOTE)]),
+            ]
+        )
+        state = tmp_path / "state"
+        extractor = ChunkedClaimExtractor(llm, state_dir=state)
+        batch = extractor.extract(
+            Transcription(artifact=EXTRACT_REF, text=EXTRACT, engine="test"),
+            EXTRACT_REF,
+        )
+        assert extractor.used_fallback_manifest
+        assert len(batch.claims) == 2
+        coverage = json.loads((state / "coverage.json").read_text())
+        assert coverage["quotes"] == {
+            "checked": 2,
+            "without_excerpt": 0,
+            "not_in_source": 1,
+            "not_in_source_by_property": {"date_of_birth": 1},
+        }
+        (kept,) = json.loads((state / "quotes.json").read_text())
+        assert kept["claim_id"] == claim_id(batch.claims[1])
+        assert kept["nearest_line"] == 3
+
     def test_no_miss_leaves_no_audit(self, tmp_path):
         state = tmp_path / "state"
         (state).mkdir()
-        (state / "excerpts.json").write_text("[]")
+        (state / "quotes.json").write_text("[]")
         manifest = {
             "entities": [
                 {"id": "e1", "label": "Gustav Löbig", "kind": "human"}
@@ -292,20 +343,20 @@ class TestTheExtraction:
             Transcription(artifact=EXTRACT_REF, text=EXTRACT, engine="test"),
             EXTRACT_REF,
         )
-        assert not (state / "excerpts.json").exists()
+        assert not (state / "quotes.json").exists()
         coverage = json.loads((state / "coverage.json").read_text())
-        assert coverage["excerpts"]["not_in_source"] == 0
+        assert coverage["quotes"]["not_in_source"] == 0
 
 
-def coverage(missing: int, checked: int) -> dict:
+def coverage(missing: int, checked: int, without: int = 0) -> dict:
     return {
-        "claims": checked,
+        "claims": checked + without,
         "rejected_claims": 0,
         "unread_objects": 0,
         "fallback": {},
-        "excerpts": {
+        "quotes": {
             "checked": checked,
-            "without_excerpt": 0,
+            "without_excerpt": without,
             "not_in_source": missing,
             "not_in_source_by_property": {"date_of_birth": missing},
         },
@@ -350,9 +401,22 @@ class TestTheAnomalyCheck:
     def test_quiet(self, missing, checked):
         assert findings(default_config(), coverage(missing, checked)) == []
 
+    def test_the_share_is_of_the_claims_checked(self):
+        """Claims with no excerpt are in neither side of the share."""
+        (finding,) = findings(default_config(), coverage(1, 4, without=6))
+        assert (finding.value, finding.fields) == (0.25, {"count": 1, "of": 4})
+        # 3 checked is below min-count, however many have no excerpt
+        assert findings(default_config(), coverage(0, 3, without=5)) == []
+        assert findings(default_config(), coverage(1, 3, without=5)) == []
+
+    def test_a_malformed_count_is_quiet(self):
+        found = coverage(4, 4)
+        found["quotes"] = []
+        assert findings(default_config(), found) == []
+
     def test_a_coverage_that_predates_the_count_is_quiet(self):
         older = coverage(4, 4)
-        del older["excerpts"]
+        del older["quotes"]
         assert findings(default_config(), older) == []
 
     def test_an_operator_can_turn_it_off(self, tmp_path):
@@ -372,7 +436,7 @@ def with_excerpts(directory: Path, sha1: str, counts: dict) -> None:
         directory / slugify(Path(name).stem) / "extraction" / "coverage.json"
     )
     found = json.loads(path.read_text())
-    found["excerpts"] = counts
+    found["quotes"] = counts
     path.write_text(json.dumps(found))
 
 
@@ -405,12 +469,12 @@ class TestTheRunReport:
         return build(run, now=NOW)
 
     def test_the_aggregate_counts_misses_by_property(self, made):
-        assert made["aggregate"]["content"]["excerpts"] == {
+        assert made["aggregate"]["content"]["quotes"] == {
             "extractions": 2,
             "checked": 5,
             "without_excerpt": 1,
             "not_in_source": 2,
-            "documents": 1,
+            "documents_with_miss": 1,
             "rate": 0.4,
             # a property the vocabulary does not know is folded
             "not_in_source_by_property": {"date_of_birth": 1, OTHER: 1},
@@ -433,13 +497,13 @@ class TestTheRunReport:
         ) in render_markdown(made["aggregate"])
 
     def test_each_document_s_own_counts(self, made):
-        assert document(made, CERT)["coverage"]["excerpts"] == {
+        assert document(made, CERT)["coverage"]["quotes"] == {
             "checked": 3,
             "without_excerpt": 1,
             "not_in_source": 2,
             "by_property": {"date_of_birth": 1, "shoe_size": 1},
         }
-        assert document(made, POSTCARD)["coverage"]["excerpts"] == {
+        assert document(made, POSTCARD)["coverage"]["quotes"] == {
             "checked": 2,
             "without_excerpt": 0,
             "not_in_source": 0,
@@ -454,7 +518,7 @@ class TestTheRunReport:
     def test_a_coverage_that_predates_the_count_is_absent(self, made):
         from tests.unit.test_run_report import DECK
 
-        assert document(made, DECK)["coverage"]["excerpts"] is None
+        assert document(made, DECK)["coverage"]["quotes"] is None
         assert (
             "Excerpts not in the transcription: not counted (its coverage "
             "gives no count of them)"
@@ -462,37 +526,37 @@ class TestTheRunReport:
 
     def test_the_run_diff_compares_them(self, made):
         before = json.loads(json.dumps(made["aggregate"]))
-        before["content"]["excerpts"]["not_in_source"] = 5
-        before["content"]["excerpts"]["not_in_source_by_property"] = {
+        before["content"]["quotes"]["not_in_source"] = 5
+        before["content"]["quotes"]["not_in_source_by_property"] = {
             "date_of_birth": 5
         }
         rows = {
             row["figure"]: row
             for row in rundiff.figures(before, made["aggregate"])
         }
-        assert rows["content.excerpts.not_in_source"]["delta"] == -3
-        assert rows["content.excerpts.not_in_source_by_property.other"] == {
-            "figure": "content.excerpts.not_in_source_by_property.other",
+        assert rows["content.quotes.not_in_source"]["delta"] == -3
+        assert rows["content.quotes.not_in_source_by_property.other"] == {
+            "figure": "content.quotes.not_in_source_by_property.other",
             "baseline": 0,
             "run": 1,
             "delta": 1,
         }
         older = json.loads(json.dumps(made["aggregate"]))
-        del older["content"]["excerpts"]
+        del older["content"]["quotes"]
         rows = {
             row["figure"]: row
             for row in rundiff.figures(older, made["aggregate"])
         }
-        assert rows["content.excerpts.checked"]["delta"] is None
+        assert rows["content.quotes.checked"]["delta"] is None
 
 
 def test_a_count_that_is_no_count_reads_as_absent():
     """A coverage whose excerpt counts are no whole numbers of at least 0
     is not counted, never read as zero."""
-    assert report._excerpts({"excerpts": {"checked": -1}}) is None
+    assert report._quotes({"quotes": {"checked": -1}}) is None
     assert (
-        report._excerpts({"excerpts": {"checked": 2, "not_in_source": "1"}})
+        report._quotes({"quotes": {"checked": 2, "not_in_source": "1"}})
         is None
     )
-    assert report._excerpts({"excerpts": []}) is None
-    assert report._excerpts({}) is None
+    assert report._quotes({"quotes": []}) is None
+    assert report._quotes({}) is None

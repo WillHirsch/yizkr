@@ -43,7 +43,7 @@ from yizkr.claims import (
     load_vocabulary,
     set_aside_structure,
 )
-from yizkr.core.verbatim import Transcript
+from yizkr.core.verbatim import Transcript, words
 from yizkr.pipeline.extract import (
     cite_artifact,
     claim_schema_prompt_text,
@@ -1171,7 +1171,7 @@ SIDE_OUTPUTS = (
     "containers.json",
     # each claim whose excerpt its transcription does not hold, with the
     # line nearest to it (excerpt_audit): local, never in a report
-    "excerpts.json",
+    "quotes.json",
 )
 
 
@@ -1199,7 +1199,7 @@ class ChunkedClaimExtractor:
 
     `state_dir`, when given, receives the advisory side outputs of a
     complete extraction: `coverage.json`, and `rejects.json`,
-    `gaps.ndjson`, `containers.json` and `excerpts.json` when there are
+    `gaps.ndjson`, `containers.json` and `quotes.json` when there are
     any (a file the extraction no longer has anything for is removed).
 
     Matches LlmClaimExtractor's extract() signature so the CLI treats the
@@ -1263,7 +1263,7 @@ class ChunkedClaimExtractor:
         self._containers: list[dict] = []
         # each claim whose excerpt the transcription does not hold
         # (excerpt_audit)
-        self._excerpts: list[dict] = []
+        self._quotes: list[dict] = []
         # what settling the manifest's names counted (_settle_names)
         self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
         # how chunk calls saw the document: fork, inline or compressed
@@ -1728,7 +1728,7 @@ class ChunkedClaimExtractor:
         self._set_aside = {}
         self._set_aside_records = 0
         self._containers = []
-        self._excerpts = []
+        self._quotes = []
         self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
 
         entities, segmentation, handle = self._phase_one(
@@ -1992,7 +1992,7 @@ class ChunkedClaimExtractor:
         as side outputs: the coverage counts the rejects by reason
         (rejected_by_reason), and, when `text`, the transcription, is
         given, the claims whose excerpt it does not hold (excerpt_audit),
-        each kept in the side output `excerpts.json`. Such a claim stays
+        each kept in the side output `quotes.json`. Such a claim stays
         in the batch: the miss is counted, never a reject."""
         raw_claims: list[dict] = []
         transform_rejects: list[dict] = []
@@ -2045,12 +2045,12 @@ class ChunkedClaimExtractor:
         )
         rejects = transform_rejects + settled_rejects + rejects
         self._rejects = rejects
-        excerpts = (
+        quotes = (
             None
             if text is None
             else excerpt_audit(batch.claims, Transcript(text))
         )
-        self._excerpts = [] if excerpts is None else excerpts["missing"]
+        self._quotes = [] if quotes is None else quotes["missing"]
         extras: dict[str, str] = {}
         if rejects:
             extras["rejects.json"] = json.dumps(rejects, indent=2)
@@ -2060,9 +2060,9 @@ class ChunkedClaimExtractor:
             extras["containers.json"] = json.dumps(
                 self._containers, indent=2, ensure_ascii=False
             )
-        if self._excerpts:
-            extras["excerpts.json"] = json.dumps(
-                self._excerpts, indent=2, ensure_ascii=False
+        if self._quotes:
+            extras["quotes.json"] = json.dumps(
+                self._quotes, indent=2, ensure_ascii=False
             )
         if entities is not None:
             coverage = self._manifest_coverage(entities, batch)
@@ -2079,8 +2079,8 @@ class ChunkedClaimExtractor:
             "unread_objects": sum(len(found) for found in unread.values()),
             "fallback": dict(self.fallback),
         }
-        if excerpts is not None:
-            coverage["excerpts"] = excerpts["counts"]
+        if quotes is not None:
+            coverage["quotes"] = quotes["counts"]
         extras["coverage.json"] = json.dumps(coverage, indent=2)
         return batch, extras
 
@@ -2227,10 +2227,12 @@ def excerpt_audit(claims: Iterable[Claim], transcript: Transcript) -> dict:
     """Each claim's `transcription_excerpt` looked for in the
     transcription it quotes, read as core/verbatim.py reads both (folded,
     whitespace and line breaks collapsed, a hyphen at a line's end
-    joined, whole words only; ADR-0035 §5).
+    joined, or kept, for an excerpt that crosses it, whole words only;
+    ADR-0035 §5).
 
     `counts`, for coverage.json: the claims checked, those with no
-    excerpt (or an empty one), and those whose excerpt the transcription
+    excerpt (or one that holds no word, as a container's evidence that
+    holds none is none), and those whose excerpt the transcription
     does not hold, by property. `missing`, for the local audit: each of
     those last, by its claim id (review.claim_id), with its property, its
     excerpt, and the number and text of the transcription's line nearest
@@ -2241,7 +2243,7 @@ def excerpt_audit(claims: Iterable[Claim], transcript: Transcript) -> dict:
     missing: list[dict] = []
     for claim in claims:
         excerpt = claim.source.transcription_excerpt
-        if excerpt is None or not excerpt.text.strip():
+        if excerpt is None or not words(excerpt.text):
             without += 1
             continue
         checked += 1

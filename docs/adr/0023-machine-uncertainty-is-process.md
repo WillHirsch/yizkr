@@ -39,10 +39,10 @@ the critic, a deterministic check looks for each claim's
 container's evidence is (`core/verbatim.py`, ADR-0035 §5). A miss is
 process data, never graph data and never a reject: the claim is kept
 and written, the miss is counted in the extraction's coverage
-(`excerpts`), the run report (by property) and the run diff, raised by
+(`quotes`), the run report (by property) and the run diff, raised by
 the `excerpt-not-in-source` anomaly check (docs/ANOMALIES.md), and kept
 with the transcription line nearest to it in the extraction's local
-`excerpts.json`. Whether a miss becomes a reject is the owner's to
+`quotes.json`. Whether a miss becomes a reject is the owner's to
 decide once a scratch run shows how often a legitimate excerpt misses.
 Superseded in part by [ADR-0035](0035-mention-records.md) (owner
 decision 2026-09-29, #385): §2 and Ruling 1 no longer keep every machine

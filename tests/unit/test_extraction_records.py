@@ -1131,7 +1131,7 @@ class TestTheManifestsRecords:
             "unread_objects",
             "fallback",
             # each claim's excerpt looked for in the transcription (#580)
-            "excerpts",
+            "quotes",
         }
 
 

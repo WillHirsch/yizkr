@@ -1158,7 +1158,7 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
                 if isinstance(fallback, dict)
                 else [],
                 **_records(coverage),
-                "excerpts": _excerpts(coverage),
+                "quotes": _quotes(coverage),
             }
     if document.completed("critique"):
         findings = _view(
@@ -1168,25 +1168,25 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
             views["critique"] = _critique(findings)
 
 
-def _excerpts(coverage: dict) -> dict[str, Any] | None:
+def _quotes(coverage: dict) -> dict[str, Any] | None:
     """The claims' excerpts an extraction's coverage counts
     (chunking.excerpt_audit): those checked against the transcription,
     the claims with none, and those whose excerpt the transcription does
     not hold, by property as the coverage names it (folded in the
     aggregate). None for a coverage that gives no count of them, as one
     written before they were counted: absent, never zero."""
-    excerpts = coverage.get("excerpts")
-    if not isinstance(excerpts, dict):
+    quotes = coverage.get("quotes")
+    if not isinstance(quotes, dict):
         return None
-    checked = _counted(excerpts.get("checked"))
-    missing = _counted(excerpts.get("not_in_source"))
+    checked = _counted(quotes.get("checked"))
+    missing = _counted(quotes.get("not_in_source"))
     if checked is None or missing is None:
         return None
     return {
         "checked": checked,
-        "without_excerpt": _count(excerpts.get("without_excerpt")),
+        "without_excerpt": _count(quotes.get("without_excerpt")),
         "not_in_source": missing,
-        "by_property": _tally(excerpts.get("not_in_source_by_property")) or {},
+        "by_property": _tally(quotes.get("not_in_source_by_property")) or {},
     }
 
 
@@ -2558,9 +2558,9 @@ def _aggregate_content(
     # the claims whose excerpt their transcription does not hold, by
     # property (chunking.excerpt_audit), and the extractions that count
     # them, hold a miss, or give no count
-    excerpts_missing: Counter = Counter()
-    excerpt_extractions = excerpts_checked = excerpts_without = 0
-    excerpt_documents = excerpts_absent = 0
+    quotes_missing: Counter = Counter()
+    quote_extractions = quotes_checked = quotes_without = 0
+    quote_documents = quotes_absent = quotes_not_in_source = 0
     batches = not_extracted = zero_entities = 0
     extractions = chunks = rejected = unread = with_rejects = given = 0
     failed_rejecting = critiques = with_findings = findings = invalid = 0
@@ -2595,15 +2595,16 @@ def _aggregate_content(
             fallbacks.update(
                 _known(tier, FALLBACK_TIERS) for tier in coverage["fallback"]
             )
-            excerpts = coverage.get("excerpts")
-            if excerpts is None:
-                excerpts_absent += 1
+            quotes = coverage.get("quotes")
+            if quotes is None:
+                quotes_absent += 1
             else:
-                excerpt_extractions += 1
-                excerpts_checked += excerpts["checked"]
-                excerpts_without += excerpts["without_excerpt"]
-                excerpt_documents += bool(excerpts["not_in_source"])
-                excerpts_missing.update(excerpts["by_property"])
+                quote_extractions += 1
+                quotes_checked += quotes["checked"]
+                quotes_without += quotes["without_excerpt"]
+                quote_documents += bool(quotes["not_in_source"])
+                quotes_not_in_source += quotes["not_in_source"]
+                quotes_missing.update(quotes["by_property"])
             records, noted = coverage["records"], coverage["notes"]
             if records is None:
                 absent[_uncounted(coverage)] += 1
@@ -2680,18 +2681,18 @@ def _aggregate_content(
             ),
             "by_reason_absent": reasons_absent,
         },
-        "excerpts": {
-            "extractions": excerpt_extractions,
-            "checked": excerpts_checked,
-            "without_excerpt": excerpts_without,
-            "not_in_source": excerpts_missing.total(),
-            "documents": excerpt_documents,
-            "rate": _share(excerpts_missing.total(), excerpts_checked),
+        "quotes": {
+            "extractions": quote_extractions,
+            "checked": quotes_checked,
+            "without_excerpt": quotes_without,
+            "not_in_source": quotes_not_in_source,
+            "documents_with_miss": quote_documents,
+            "rate": _share(quotes_not_in_source, quotes_checked),
             "not_in_source_by_property": _folded(
-                excerpts_missing,
+                quotes_missing,
                 lambda value: _known(value, vocabulary.properties),
             ),
-            "absent": excerpts_absent,
+            "absent": quotes_absent,
         },
         "container_claims": _container_claims(claims, vocabulary),
         "zero_claims": {
@@ -3435,7 +3436,7 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
         ),
         _Section(
             "Excerpts not in their source",
-            _excerpt_blocks(content["excerpts"]),
+            _quote_blocks(content["quotes"]),
             3,
         ),
         _Section(
@@ -3615,26 +3616,27 @@ def _write_sections(content: Mapping[str, Any]) -> list[_Section]:
     return sections
 
 
-def _excerpt_blocks(excerpts: Mapping[str, Any]) -> list[Any]:
+def _quote_blocks(quotes: Mapping[str, Any]) -> list[Any]:
     blocks: list[Any] = [
         [
             "Claims whose excerpt was looked for in their transcription: "
-            f"{_n(excerpts['checked'])}, in "
-            f"{_n(excerpts['extractions'])} extractions; claims with no "
-            f"excerpt: {_n(excerpts['without_excerpt'])}",
+            f"{_n(quotes['checked'])}, in "
+            f"{_n(quotes['extractions'])} extractions; claims with no "
+            f"excerpt: {_n(quotes['without_excerpt'])}",
             "Excerpts the transcription does not hold: "
-            f"{_n(excerpts['not_in_source'])} "
-            f"({_pct(excerpts['rate'])} of those checked), in "
-            f"{_n(excerpts['documents'])} documents; the claims are kept",
+            f"{_n(quotes['not_in_source'])} "
+            f"({_pct(quotes['rate'])} of those checked), in "
+            f"{_n(quotes['documents_with_miss'])} documents; the claims "
+            "are kept",
             "Extractions whose coverage predates the count: "
-            f"{_n(excerpts['absent'])}",
+            f"{_n(quotes['absent'])}",
         ]
     ]
-    if excerpts["not_in_source_by_property"]:
+    if quotes["not_in_source_by_property"]:
         blocks.append(
             _table(
                 ("Property", "Excerpts not in source"),
-                excerpts["not_in_source_by_property"].items(),
+                quotes["not_in_source_by_property"].items(),
                 numbers=(1,),
             )
         )
@@ -4270,16 +4272,16 @@ def _html_document(document: Mapping[str, Any]) -> str:
             f"{coverage['unread_objects']}; fallback tiers: "
             f"{', '.join(coverage['fallback']) or 'none'}"
         )
-        excerpts = coverage.get("excerpts")
+        quotes = coverage.get("quotes")
         items.append(
             "Excerpts not in the transcription: "
             + (
                 "not counted (its coverage gives no count of them)"
-                if excerpts is None
-                else f"{excerpts['not_in_source']} of "
-                f"{excerpts['checked']} checked, by property: "
-                f"{_listed(_by_count(excerpts['by_property']))}; claims "
-                f"with no excerpt: {excerpts['without_excerpt']}"
+                if quotes is None
+                else f"{quotes['not_in_source']} of "
+                f"{quotes['checked']} checked, by property: "
+                f"{_listed(_by_count(quotes['by_property']))}; claims "
+                f"with no excerpt: {quotes['without_excerpt']}"
             )
         )
         records, notes = coverage.get("records"), coverage.get("notes")

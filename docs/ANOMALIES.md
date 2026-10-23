@@ -209,19 +209,19 @@ share of one. Value: the share; `count`, `of`.
 **`excerpt-not-in-source`**: more than `max-share` (0.1 by default) of
 the claims an extraction keeps whose `transcription_excerpt` the
 document's transcription does not hold, over at least `min-count` (4)
-claims checked, from its coverage side output (`excerpts.not_in_source`
-beside `excerpts.checked`). The excerpt is compared as a mention
+claims checked, from its coverage side output (`quotes.not_in_source`
+beside `quotes.checked`). The excerpt is compared as a mention
 record's container evidence is (core/verbatim.py, ADR-0035 §5): both
 folded (case, accents, typographic quotes and dashes), every run of
 whitespace and line breaks one space, a hyphen at a line's end joined,
-whole words only. An excerpt document (an image a PDF or a deck places,
+or kept, for an excerpt that crosses it, whole words only. An excerpt document (an image a PDF or a deck places,
 ADR-0008) is extracted from its own transcription, and its claims'
-excerpts are compared with that. A claim with no excerpt is not
-checked, and counted apart (`excerpts.without_excerpt`). Alert only: a
+excerpts are compared with that. A claim with no excerpt, or one that holds no word, is not
+checked, and counted apart (`quotes.without_excerpt`). Alert only: a
 claim whose excerpt misses is kept, and written as any other; the miss
 is a flag, counted in the run report by property, and each one is kept
 with the transcription line nearest to it in the extraction's local
-`excerpts.json`, for sampling. An extraction whose coverage predates
+`quotes.json`, for sampling. An extraction whose coverage predates
 the count is not judged. Value: the share; `count`, `of`.
 
 **`implausible-date`**: a batch's claims dated before the birth of the

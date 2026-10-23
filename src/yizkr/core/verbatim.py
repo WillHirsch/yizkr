@@ -17,7 +17,7 @@ only: it may not start or end inside a word of the transcription.
 Nothing else is
 forgiven: a word the transcription does not hold, or holds in another
 order, is no match. A mention record's container evidence is checked
-this way, and a claim's excerpt can be.
+this way, and so is each claim's excerpt (pipeline.chunking.excerpt_audit).
 """
 
 from __future__ import annotations
@@ -150,6 +150,8 @@ class Transcript:
         # the joined reading first, then the one that keeps a hyphen at a
         # line's end
         self._readings = [_flat(text), _flat(text, keep_hyphen=True)]
+        # each line's folded words, read once, on the first `nearest`
+        self._line_words: list[frozenset[str]] | None = None
 
     def line(self, number: int) -> str:
         """The transcription's line `number` (from 1) as written; "" for
@@ -186,9 +188,11 @@ class Transcript:
         line shares one. It names the line an excerpt that does not occur
         was most likely meant to quote, for a reader to compare."""
         wanted = set(words(excerpt))
+        if self._line_words is None:
+            self._line_words = [frozenset(words(line)) for line in self._lines]
         best, best_shared = None, 0
-        for number, line in enumerate(self._lines, start=1):
-            shared = len(wanted & set(words(line)))
+        for number, held in enumerate(self._line_words, start=1):
+            shared = len(wanted & held)
             if shared > best_shared:
                 best, best_shared = number, shared
         return best
