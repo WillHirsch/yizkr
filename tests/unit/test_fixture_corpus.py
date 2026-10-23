@@ -1326,15 +1326,17 @@ class TestTheTrapsInTheIdentityMap:
             assert values(
                 batches.said(name), "gustav-loebig", "date_of_death"
             ) == {u.Date(1996)}, name
-        # merging over the confident links alone would join 13 clusters,
-        # none conflicting; the whole-cluster rule merges 26 mentions
+        # merging over the confident links alone would join 15 clusters,
+        # none conflicting; the whole-cluster rule merges 30 mentions,
+        # among them the export's Hesse and Australia, jurisdictions of its
+        # PLACs, with the sources' own (#571)
         summary = identity.map["summary"]
         assert summary["confident_links_only"] == {
-            "clusters": 13,
-            "mentions": 39,
+            "clusters": 15,
+            "mentions": 43,
             "conflicting": 0,
         }
-        assert summary["merged_mentions"] == 26
+        assert summary["merged_mentions"] == 30
 
     def test_a_kin_edge_makes_the_cluster_conflict_hard(self, identity):
         """The death certificate's Florence and the mother it names by

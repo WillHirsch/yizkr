@@ -602,8 +602,20 @@ def studio_photo() -> Doc:
     )
 
 
+# where the jurisdictions of the export's PLACs are in the universe: each
+# is a place of its own (#571)
+GEDCOM_JURISDICTIONS = {
+    "Germany": "germany",
+    "Hesse, Germany": "hesse",
+    "Kreis Mockburg, Hesse, Germany": "kreis-mockburg",
+    "Australia": "australia",
+    "Victoria, Australia": "victoria",
+    "Stupfield, Victoria, Australia": "stupfield",
+    "Flörburg, Hesse, Germany": "floerburg",
+}
 # where the export's places and objects are in the universe
 GEDCOM_TRUTH = {
+    **GEDCOM_JURISDICTIONS,
     "Bad Flörburg, Hesse, Germany": "floerburg",
     "Flörburg, Hesse, Germany": "floerburg",
     "Friedhof Flörburg, Hesse, Germany": "floerburg-cemetery",
@@ -725,6 +737,7 @@ def export(records: str, truth: dict[str, str], key: str = "gedcom") -> Doc:
     text = "0 HEAD\n1 CHAR UTF-8\n" + records + "0 TRLR\n"
     artifact = ArtifactRef.from_bytes(text.encode())
     batch = adapt_gedcom(text, artifact).batch
+    truth = {**GEDCOM_JURISDICTIONS, **truth}
     return Doc(
         key,
         Manifest(artifact.sha1, batch, GEDCOM),
@@ -5051,6 +5064,9 @@ class TestAcrossSources:
                 {"hatter"},
                 {"hawthorn-road-8"},
                 {"hildegard-loebig"},
+                # a jurisdiction of the export's PLACs is a place of its
+                # own, and meets the certificate's (#571)
+                {"kreis-mockburg"},
                 {"sebastian-loebig"},
                 # the export's unions (ADR-0036 §5) meet the certificate's
                 # through their couples, once both spouses merged

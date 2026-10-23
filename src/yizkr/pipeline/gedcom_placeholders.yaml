@@ -1,0 +1,50 @@
+# Words a GEDCOM PLAC component may hold in place of a name it does not
+# know (yizkr.pipeline.gedcom; ADR-0035 §6).
+#
+# A PLAC component that is one of these, compared whole and folded (case
+# and accents ignored, runs of spaces one space), names no place. In a
+# jurisdiction's position it stays in the place's `within` as written,
+# record-only: it gets no place entity and no `part_of` claim, and no
+# claim links the components on either side of it, since the source
+# states no link between them. As a place's own name, it is left out and
+# the event is placed in the jurisdictions that follow. Each is counted
+# in the adapter's outcomes (`PLAC placeholder component`).
+#
+# A component with no letter or digit ('?', '-', '…') needs no entry: it
+# names nothing, and the adapter leaves it out and counts it apart.
+#
+# To extend the list, add the word or phrase as a genealogy program or a
+# tree's keeper writes it, one entry per spelling the folding does not
+# already cover (a different abbreviation is a different entry). A
+# component is matched only as a whole, so an entry never matches a word
+# inside a place name.
+
+version: 1
+
+placeholders:
+  # German
+  - unbekannt
+  - unbek.
+  - unbek
+  - unb.
+  - unbekannter Ort
+  - Ort unbekannt
+  - nicht bekannt
+  - n.n.
+  - N.N
+  - NN
+  # English
+  - unknown
+  - unk.
+  - unk
+  - not known
+  - not stated
+  - not recorded
+  - place unknown
+  - unknown place
+  - n/a
+  # Dutch
+  - onbekend
+  - onb.
+  - niet bekend
+  - plaats onbekend
