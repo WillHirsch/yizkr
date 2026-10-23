@@ -165,7 +165,15 @@ and shows only against a baseline run's calls: the run-to-run diff (#198)
 attributes a recompute to it (ADR-0025 §3, ADR-0032 §11).
 
 **Corpus stages.** Each corpus stage the run registered or ran, with its
-state and attention labels, or `not run`; a run with none says so.
+state and attention labels, or `not run`; a run with none says so. A
+corpus stage's attention reasons are listed by label alone, each once
+and with no count (#576): a corpus stage has one attempt, so a count
+would be 1 whatever the reason holds, and the reason's own details,
+which may quote a document, are never shown. The table points to the
+Clusters section, which gives the clustering stage's figures (ambiguous
+and conflicting clusters, ambiguous pairs, ...) from the identity map's
+summary. A per-document stage's Needs attention column still counts
+documents per label.
 
 **Write.** Once the run's write stage has run (#200;
 yizkr.pipeline.scratchwrite): the documents written, the statements
@@ -226,6 +234,19 @@ their own role, `places`, in the calls' lines by role, apart from the
 extraction's; the clustering stage's adjudication of ambiguous pairs
 counts under `adjudication`, apart from the critique's, whose engine,
 model and effort it uses.
+
+**Different-source contradictions.** Once the run's site stage has run
+(#575; yizkr.pipeline.scratchwrite), in `aggregate.content.contradictions`:
+the disagreements the site's inconsistencies page lists, as the stage
+counted them on the written graph and kept them in its record
+(`corpus/site/record.json`), since the next reset removes that graph:
+`different_source`, their total, and `by_property`, their count by
+property, keyed by manifest key (`other` for one the manifest does not
+hold), the most frequent first. Counts alone, never a QID, a label or a
+value. A run whose site stage has not run, one whose site record cannot
+be read, and one whose site record does not count them (made before the
+stage did, or holding a count that is no whole number) say they are not
+available, with why, never 0.
 
 **Anomalies.** The alerts by check and by stage, each finding (a
 document or the run, a stage and a check) counted once: new when any of
@@ -452,7 +473,8 @@ never counted as none:
 - depicts claims left out, and the write's counts: until the write stage
   has run (above);
 - the place stage's questions and links: until it has run (above);
-- different-source contradictions: they are read from a written graph;
+- different-source contradictions: until the site stage has run, or when
+  its record does not count them (a record made before it did, #575).
 - flags by tier and class: no stage makes flags yet. `_flags` in
   `yizkr.pipeline.report` is where the report reads them once the flags
   stage keeps them among its outputs (#112); until then it says they are
