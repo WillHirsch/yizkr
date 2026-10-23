@@ -692,10 +692,12 @@ class TestEventsAndDates:
 
     # each document the universe dates by its own making, with the
     # precision and circa it gives and the passage it gives it in; the
-    # portrait's decade comes from its mount, no passage (ADR-0039 §2.2,
-    # #553)
+    # portrait's decade comes from its mount, no passage, and Rahel's
+    # portrait's circa from its mount's "um 1895" (ADR-0039 §2.2, #553,
+    # #586)
     SELF_DATED = {
         "studio-photo-1890s": (u.Date(1890, decade=True), ""),
+        "studio-photo-1895": (u.Date(1895, qualifier="circa"), "um 1895"),
         "postcard-1938": (
             u.Date(1938, 8, 19, qualifier="before"),
             "[postmark] Flörburg 19.8.38",

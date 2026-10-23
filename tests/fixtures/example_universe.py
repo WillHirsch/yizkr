@@ -941,6 +941,15 @@ SOURCES = (
         note="Undated; the studio mount dates it only to the 1890s.",
     ),
     Source(
+        "studio-photo-1895",
+        "Studio portrait of Rahel Löbig",
+        None,
+        1895,
+        "photograph",
+        text="[mount] Photograph Brüsrich · Peiltal · um 1895",
+        note="Its mount gives the year it was made as circa: um 1895.",
+    ),
+    Source(
         "marriage-cert-1905",
         "Marriage certificate of Sebastian Löbig and Hildegard Laudler",
         "de",
@@ -1430,6 +1439,24 @@ ASSERTIONS = tuple(
             "felix-loebig",
             {"referred_to_as": "Felix"},
             "Felix",
+        ),
+    )
+    + _said(
+        "studio-photo-1895",
+        # a document that gives its own date of making as circa states it
+        # as its `inception` with circa as its sourcing circumstance
+        # (ADR-0039 §2.2): "um 1895" on the mount
+        (
+            "studio-photo-1895",
+            "inception",
+            Date(1895, qualifier="circa"),
+            "um 1895",
+        ),
+        (
+            "studio-photo-1895",
+            "author",
+            "studio-bruesrich",
+            "Photograph Brüsrich",
         ),
     )
     + _said(
