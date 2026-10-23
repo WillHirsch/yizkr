@@ -1383,8 +1383,8 @@ PLANNED_VOCABULARY = ("machine_assisted",)
 ASSERTIONS = tuple(
     _said(
         "studio-photo-1890s",
-        # every document dated by its own making states that date as its
-        # `inception` (ADR-0039 §2.2), at the precision it gives
+        # each document the universe dates by its own making states that
+        # date as its `inception` (ADR-0039 §2.2), at the precision it gives
         ("studio-photo-1890s", "inception", Date(1890, decade=True)),
         ("studio-bruesrich", "location", "peiltal", "Brüsrich · Peiltal"),
         # what the portrait states of itself (ADR-0039 §2.2): its mount
@@ -1689,13 +1689,13 @@ ASSERTIONS = tuple(
     )
     + _said(
         "postcard-1938",
-        # the postmark dates the card's posting, not its writing, which the
-        # card leaves undated: a point in time, never its `inception`
-        # (ADR-0039 §2.2, rule 5)
+        # the postmark dates the card's posting, and the card leaves its
+        # writing undated: made on or before the day it was posted, its
+        # `inception` with that day as its latest date (ADR-0039 §2.2)
         (
             "postcard-1938",
-            "point_in_time",
-            Date(1938, 8, 19),
+            "inception",
+            Date(1938, 8, 19, qualifier="before"),
             "[postmark] Flörburg 19.8.38",
         ),
         ("klara-loebig", "father", "sebastian-loebig", "Dein Vater"),
