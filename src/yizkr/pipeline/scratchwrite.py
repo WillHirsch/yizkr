@@ -80,7 +80,9 @@ and no other artifact (ADR-0039 §2.1, yizkr.pipeline.writer). The record
 counts, per document, the claims the writer refused, and of them those
 whose item value is their subject's item, as the map may make it
 (yizkr.pipeline.writer, self_references), apart from extraction's
-rejects. Depicts claims are
+rejects, and the claims refused by reason, every reason of
+yizkr.pipeline.writer.REFUSAL_REASONS in its order, summing to those
+refused. Depicts claims are
 left out of what the writer is given, and counted: no scratch run writes
 a depicts statement (ADR-0005). Each run item is marked an unratified
 scratch run's (the `scratch_run` statement, naming the run) and records
@@ -884,6 +886,7 @@ def run_write(context: Any) -> list[str]:
                     "skipped": result.skipped,
                     "refused": len(result.refused),
                     "self_references": len(result.self_references),
+                    "refused_by_reason": result.refused_by_reason(),
                     "depicts_left_out": left_out,
                     "items_minted": len(result.minted),
                     "notes_written": result.notes_written,

@@ -318,6 +318,14 @@ refused claim is counted for one reason. The check reads the items as
 the plan finds them, and is made again each time the plan is made again
 without the claims it refuses, until it refuses no other.
 
+Each refused claim is counted under the one reason that refused it, of
+REFUSAL_REASONS, in the order the writer looks for them: a retired or
+reference property, the subject rules, the claim's text, an entity the
+side rule blocks, and an item value that is its subject's item. The
+result's `refusal_reasons` gives each claim of `refused` its reason, and
+refused_by_reason counts them, every reason in that order, summing to
+the claims refused.
+
 Wikibase holds at most TEXT_LIMIT (400) characters in the text of a
 string, external-id or monolingual text value, whether the value is a
 statement's, a qualifier's or a reference's, and no text value that
@@ -468,6 +476,21 @@ if TYPE_CHECKING:
 # NFC and cleaned it up (CLEANED_UP), and refuses the whole edit when one
 # is longer.
 TEXT_LIMIT = 400
+
+# why the writer refuses a claim whole, in the order it looks for each
+# (the module docstring): its property, or a qualifier's, is retired or a
+# reference property (ADR-0036, ADR-0035 §4); its subject breaks the
+# subject rules (ADR-0035 §3.4, ADR-0039 §2); a text of it is one the
+# instance cannot hold as it is, its own, a locator's or a mentioned
+# entity's label; it names an entity the side rule blocks (ADR-0010); an
+# item value of it is its subject's item (ADR-0035 §3.5)
+REFUSAL_REASONS = (
+    "retired_or_reference_property",
+    "subject_rule",
+    "text",
+    "side_rule",
+    "self_reference",
+)
 # the most characters Wikibase holds in a term, a label, a description or
 # an alias (its `multilang` string limit), counted once it has trimmed the
 # term (stored_term)
@@ -765,6 +788,18 @@ class WriteResult:
     # (self_references), in batch order: counted apart from the other
     # refusals, and apart from extraction's rejects
     self_references: list[str] = field(default_factory=list)
+    # the reason, of REFUSAL_REASONS, each claim of `refused` was refused
+    # for, in the same order
+    refusal_reasons: list[str] = field(default_factory=list)
+
+    def refused_by_reason(self) -> dict[str, int]:
+        """The claims refused, counted by reason: every reason of
+        REFUSAL_REASONS, in its order, 0 for one no claim was refused for;
+        the counts sum to the claims refused."""
+        return {
+            reason: self.refusal_reasons.count(reason)
+            for reason in REFUSAL_REASONS
+        }
 
 
 def batch_fingerprint(batch: ClaimBatch) -> str:
@@ -1419,17 +1454,18 @@ def pre_plan_refusals(
     unnamed: Mapping[str, list[str]],
     placed: Mapping[str, Collection[str]] | None = None,
     resolved: Collection[str] = (),
-) -> dict[int, str]:
+) -> dict[int, tuple[str, str]]:
     """The claims of `batch` the writer refuses, by their place in the
-    batch, each with the warning that names it by its claim id and
-    property and says why (the module docstring):
+    batch, each with its reason (REFUSAL_REASONS) and the warning that
+    names it by its claim id and property and says why (the module
+    docstring):
 
     * a claim of a property the manifest marks retired (`spouse`,
       ADR-0036), which takes no new claim, or of a reference property
       (`stated_in`, the judgement note's), which is written only in a
       statement's references (ADR-0035 §4), as the claim's property or a
       qualifier's: validation refuses both, and `yizkr write` takes a
-      batch without validating it;
+      batch without validating it (`retired_or_reference_property`);
     * a subject the subject rules refuse (subject_refusal, with `placed`,
       the derived media registered for each source in this write, and
       `resolved`, the artifact SHA-1s an item carries): a document
@@ -1437,7 +1473,8 @@ def pre_plan_refusals(
       a property that takes none, a caption whose subject is no artifact
       its source places in this write, and a claim of a document-subject
       or placed-subject property with any other subject (ADR-0035 §3.4,
-      ADR-0039 §2): the statement would go on the wrong item;
+      ADR-0039 §2): the statement would go on the wrong item
+      (`subject_rule`);
     * a claim whose own text the instance cannot hold as it is: for
       each of its texts, its value or a qualifier's, what keeps the
       instance from holding it in the form the writer sends it in
@@ -1451,6 +1488,8 @@ def pre_plan_refusals(
       form, and a re-run would add it again beside the first;
     * a claim that mentions an entity whose label keeps the writer
       from finding or minting its item (`unnamed`, from unnamed_entities).
+
+    The last three are each a `text` refusal.
 
     The warning quotes none of the texts."""
     acceptance = load_acceptance()
@@ -1473,17 +1512,19 @@ def pre_plan_refusals(
         ]
         if misused:
             refusals[index] = (
+                "retired_or_reference_property",
                 f"claim {claim_id(claim)} ({claim.property}) is "
                 f"refused, and nothing of it is written: "
-                f"{'; '.join(misused)}"
+                f"{'; '.join(misused)}",
             )
             continue
         refusal = subject_refusal(claim, placed or {}, resolved)
         if refusal is not None:
             reason, rule = refusal
             refusals[index] = (
+                "subject_rule",
                 f"claim {claim_id(claim)} ({claim.property}) is "
-                f"refused, and nothing of it is written: {reason} ({rule})"
+                f"refused, and nothing of it is written: {reason} ({rule})",
             )
             continue
         texts = [("its value", claim.value)]
@@ -1528,10 +1569,11 @@ def pre_plan_refusals(
         )
         if faults:
             refusals[index] = (
+                "text",
                 f"claim {claim_id(claim)} ({claim.property}) is "
                 f"refused, and nothing of it is written: "
                 f"{'; '.join(faults)}. A cut or any other change would "
-                f"alter what the source says"
+                f"alter what the source says",
             )
     return refusals
 
@@ -3523,7 +3565,9 @@ class BatchWriter:
         # whose own text the instance cannot hold, which the loop below
         # leaves out whole
         unnamed = unnamed_entities(batch, self._entity_records)
-        refusals = pre_plan_refusals(batch, unnamed, placed, resolved)
+        planned = pre_plan_refusals(batch, unnamed, placed, resolved)
+        refusals = {index: warning for index, (_, warning) in planned.items()}
+        reasons = {index: reason for index, (reason, _) in planned.items()}
         # settled before the first write too: where each entity's item is
         # found or made, and the entities that may join neither the item
         # under their label nor the one under their tagged label, refused
@@ -3542,6 +3586,8 @@ class BatchWriter:
             loops.update(found)
             refusals.update(found)
         refused = {*refusals, *stopped}
+        reasons.update(dict.fromkeys(stopped, "side_rule"))
+        reasons.update(dict.fromkeys(loops, "self_reference"))
         # the manifest records that only refused claims name, of which
         # nothing is sent
         self._unsent = self._unsent_records(batch, refused)
@@ -3584,6 +3630,7 @@ class BatchWriter:
                 # before any of its refs resolves: an item only a refused
                 # claim mentions is never minted
                 result.refused.append(claim_id(claim))
+                result.refusal_reasons.append(reasons[index])
                 if index in loops:
                     result.self_references.append(claim_id(claim))
                 continue

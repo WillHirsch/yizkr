@@ -50,6 +50,7 @@ from yizkr.pipeline.rundiff import (
     keyed_calls,
 )
 from yizkr.pipeline.stages import canonical_json, sha256_text
+from yizkr.pipeline.writer import REFUSAL_REASONS
 
 LABEL = "Eugen Löbig"
 
@@ -424,6 +425,46 @@ class TestReports:
         rows = {r["figure"]: r for r in rundiff.figures(older, after)}
         assert rows[name]["baseline"] == ABSENT
         assert rows[name]["delta"] is None
+
+    def test_the_writers_refusals_are_compared_by_reason(self):
+        # each reason a figure of its own (#552): a run that refuses fewer
+        # claims for their text and more under the subject rules shows
+        # both, though the total holds; absent from a write that did not
+        # count them
+        def write(documents: dict) -> dict:
+            record = {"depicts_left_out": 0, "documents": documents}
+            content = report._aggregate_content(
+                {}, {}, {}, report._Vocabulary.of({}), record
+            )
+            return {"content": content}
+
+        def refused(**given: int) -> dict:
+            by_reason = {r: given.get(r, 0) for r in REFUSAL_REASONS}
+            return {
+                "a" * 40: {
+                    "written": 2,
+                    "refused": sum(by_reason.values()),
+                    "refused_by_reason": by_reason,
+                }
+            }
+
+        older = write({"a" * 40: {"written": 2, "refused": 3}})
+        before = write(refused(text=3))
+        after = write(refused(text=1, subject_rule=2))
+        name = "content.write.claims_refused_by_reason."
+        rows = {r["figure"]: r for r in rundiff.figures(before, after)}
+        assert rows["content.write.claims_refused"]["delta"] == 0
+        assert rows[name + "text"]["delta"] == -2
+        assert rows[name + "subject_rule"]["delta"] == 2
+        assert rows[name + "side_rule"]["delta"] == 0
+        assert {
+            row["figure"][len(name) :]
+            for row in rows.values()
+            if row["figure"].startswith(name)
+        } == set(REFUSAL_REASONS)
+        rows = {r["figure"]: r for r in rundiff.figures(older, after)}
+        assert rows[name + "subject_rule"]["baseline"] == ABSENT
+        assert rows[name + "subject_rule"]["delta"] is None
 
     def test_a_report_older_than_the_run_is_built_afresh(
         self, tmp_path, engine, monkeypatch

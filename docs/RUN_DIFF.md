@@ -164,7 +164,12 @@ fallback tiers) and the mention records and judgement notes
 among them, and so are the write's counts (`content.write`), the claims
 the writer refused for an item value that is their subject's item
 (`content.write.claims_self_referencing`, #491) apart from its other
-refusals and from extraction's rejects.
+refusals and from extraction's rejects, and the claims it refused by
+reason (`content.write.claims_refused_by_reason.<reason>`, #552), reason
+by reason, so a run that refuses fewer claims for their text and more
+under the subject rules shows both changes, not just the total's. A
+report made before the reasons were counted holds none: each is `absent`
+on its side.
 
 **Absent is not zero.** `report.json`'s `format` stays 1 as figures are
 added, so a report made by older code lacks the newer figures: one made
