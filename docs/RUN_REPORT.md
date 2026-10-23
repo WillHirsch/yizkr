@@ -286,8 +286,8 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   it was compared with, stays in the extraction's local
   `containers.json`); the reasons records were set aside by, by
   category (`schema`, `dropped`, `read as text`, `kind`, `addition`,
-  `initial`, `no name part`, `no toponym`; `report.SET_ASIDE_REASONS`); the notes by category
-  (`kind`, `relation`, `date_reading`, `identity`, `other`, the
+  `initial`, `no name part`, `no toponym`; `report.SET_ASIDE_REASONS`);
+  the notes by category (`kind`, `relation`, `date_reading`, `identity`, `other`, the
   categories of `claims.JudgementNote`); and the notes set aside. Counts
   only, never a label, a reason's text or a note's text.
   `coverage.json`'s `records.set_aside` counts reasons, not records: a
