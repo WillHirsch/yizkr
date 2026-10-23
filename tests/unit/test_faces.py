@@ -333,6 +333,8 @@ def test_portrait_text_passes_manifest_validation():
     text = portrait_text()
     date, *_ = text.claims
     assert (date.property, date.subject) == ("inception", PORTRAIT_SCAN)
+    # at the precision the universe gives it ("studio-photo-1890s")
+    assert date.value == TimeValue(year=1890, precision="decade")
     assert validate_against_manifest(text) == []
 
 
