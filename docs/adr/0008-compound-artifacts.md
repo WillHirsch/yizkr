@@ -39,6 +39,10 @@ Amended by #502 (2026-10-16): PDFs and decks take one paged-container
 path, a deck's embedded images become excerpts as a PDF's placed images
 are, a PDF is a kind of its own (`pdf`), and both containers take the
 `paged` route: see Amendments.
+Amended by #456 (2026-10-23): ADR-0039 answers questions 2 and 6 of the
+#289 amendment: the excerpt's extraction reads the excerpt alone, and a
+container's claim about an image it places is its verbatim `caption`
+only, for a PDF's images and a deck's alike: see Amendments.
 
 ## Context
 
@@ -247,7 +251,10 @@ media (MODELING.md, "Reference pattern"):
 - what the compilation says about an excerpt, such as a caption naming
   who wrote it, to whom and when, is the compilation's assertion, and a
   claim it gives cites the compilation. A claim whose subject is the
-  excerpt itself cannot be expressed yet (question 6 below).
+  excerpt itself cannot be expressed yet (question 6 below). Amended by
+  #456 (2026-10-23): it can now, under ADR-0039 §2: a container's claim
+  about an excerpt is its `caption` only, and what the excerpt is is the
+  excerpt's own claim about itself.
 
 Each witness has its own transcription and its own batch: the
 compilation's transcription holds its own text only, and an excerpt's
@@ -400,8 +407,10 @@ Still to do, each keeping the two witnesses separable:
    states it (CLAUDE.md rules 1 and 5). Only who a person is could come
    from the caption safely, since that is identity, which reconciliation
    decides (ADR-0007), not a value the excerpt is cited for.
-   Proposed (2026-10-16): ADR-0039 §5 answers no, and keeps the
-   caption verbatim on the excerpt's item instead (#456).
+   Answered by ADR-0039 §5 (#456, accepted 2026-10-23): no. The
+   excerpt's extraction reads the excerpt alone; what a container says
+   about it is kept, verbatim, as the container's `caption` on the
+   excerpt's item (ADR-0039 §2.1).
 3. An original that a compilation reproduces only as a whole page, or as
    part of a scanned page. An image that fills a page has bytes of its
    own, but so does each page of a scanned PDF, so telling an original
@@ -431,10 +440,12 @@ Still to do, each keeping the two witnesses separable:
    artifact by its SHA-1, resolved at write time as a source is, or do
    such statements wait? The people and places a caption names are
    claims about them, and can be made meanwhile.
-   Proposed (2026-10-16): ADR-0039 §2 answers: a container's claim
-   about an excerpt is its verbatim `caption` only, and what the excerpt
-   is (its author, date, place) is the excerpt's own claim about itself,
-   for a PDF's images and a deck's alike (#456).
+   Answered by ADR-0039 §2 (#456, accepted 2026-10-23): a container's
+   claim about an excerpt is its `caption` only, its subject named by
+   the excerpt's SHA-1 and resolved as a source is; what an excerpt is
+   (its author, date, place, subject) is the excerpt's own claim about
+   itself. The same holds for a deck's embedded images, which #502
+   marks by SHA-1.
 7. For follow-up A to settle: where an excerpt's views live, and how its
    status relates to the compilation's, given that content dedup seeds
    only from `written` documents (ADR-0010), that each document passes
@@ -822,8 +833,39 @@ only a PDF's image was read and extracted. Both now take one path
 - **Out of scope.** What a container's caption says about an image it
   places, a slide's caption about its image included, is ADR-0039's
   question (#456): this amendment makes no claim from a caption, and an
-  excerpt's extraction reads the excerpt alone.
+  excerpt's extraction reads the excerpt alone. Amended by #456
+  (2026-10-23): ADR-0039 gives a slide's caption about its image as the
+  deck's `caption` statement on the image's item.
 - **Stage change.** It changes the transcription stage of every deck
   (its pages, its image markers, its images' readings) and adds
   excerpts, which take the extraction and the critique; it is checked by
   a scratch diff (ADR-0025 §4).
+
+Amended by #456 (2026-10-23): **a container's words about an image it
+places are its verbatim `caption`, and what the image is is its own
+claim** (ADR-0039, accepted by the owner 2026-10-23).
+
+- **Question 2 of the #289 amendment** is answered by ADR-0039 §5: the
+  excerpt's extraction reads the excerpt alone, and is handed nothing a
+  container says about it, not even as identity hints; what a container
+  says about it is kept, verbatim, as the container's `caption` on the
+  excerpt's item (ADR-0039 §2.1).
+- **Question 6** is answered by ADR-0039 §2: a container's claim about
+  an excerpt is its `caption` only, its subject named by the excerpt's
+  SHA-1 (an `artifact` reference) and resolved as a source is; what an
+  excerpt is (its author, addressee, date, place, subject, whom it
+  shows) is the excerpt's own claim about itself, its subject the
+  excerpt as its own source. The #289 amendment's sentence "A claim
+  whose subject is the excerpt itself cannot be expressed yet" points
+  here.
+- **The same holds for a deck's embedded images**, which #502 marks by
+  SHA-1 in the deck's transcription (`[Slide 2, image 1: sha1:…]`): a
+  slide's text and notes that speak of one are the deck's `caption`s,
+  cited to the deck with the slide as `page number`.
+- **How it is checked.** A container's prompts list the images its text
+  places, by artifact reference and place, from the transcription's
+  record of its pages; validation is handed the SHA-1s of the images the
+  source places, and the writer the derived media registered for the
+  source in the same write. A `caption` whose subject is no artifact its
+  source places is a counted reject in validation and a refusal in the
+  writer.

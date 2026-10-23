@@ -49,7 +49,9 @@ document afresh.
 as `ingest run` registers a document at its write (the orchestrator's
 _step_register): its artifact item, a deck's slides and the images it
 embeds, and the images a PDF places, each by the SHA-1 of its bytes,
-with registration's flags raised as alerts of the write. A batch the
+with registration's flags raised as alerts of the write. Its record keeps
+the derived media registered for each container, by SHA-1 with their
+QIDs, for the write. A batch the
 writer would refuse whole is refused here first, before anything of its
 document is registered (check_batch): a mention the identity map does
 not hold, an unsupported date, a run item's term the instance may keep
@@ -62,10 +64,13 @@ extraction's batch, which holds only claims the claim schema and the
 manifest take, through the run's one identity map, at normal rank, with
 both references (stated in the artifact or fragment with its locator,
 inferred from the run item), and no approval file: the development stage
-has no human gate (ADR-0025 §1). The record counts, per document, the
-claims the writer refused, and of them those whose item value is their
-subject's item, as the map may make it (yizkr.pipeline.writer,
-self_references), apart from extraction's rejects. Depicts claims are
+has no human gate (ADR-0025 §1). A container's `caption` claims take as
+their subject the derived media the register stage registered for it,
+and no other artifact (ADR-0039 §2.1, yizkr.pipeline.writer). The record
+counts, per document, the claims the writer refused, and of them those
+whose item value is their subject's item, as the map may make it
+(yizkr.pipeline.writer, self_references), apart from extraction's
+rejects. Depicts claims are
 left out of what the writer is given, and counted: no scratch run writes
 a depicts statement (ADR-0005). Each run item is marked an unratified
 scratch run's (the `scratch_run` statement, naming the run) and records
@@ -612,6 +617,11 @@ def run_register(context: Any) -> list[str]:
                 )
             else:
                 record["documents"][doc.sha1] = qid
+                # the derived media registered for it, which its captions
+                # may take as their subject (ADR-0039 §2.1)
+                media = driver.registered_media().get(doc.sha1)
+                if media:
+                    record.setdefault("placed", {})[doc.sha1] = dict(media)
                 record["failed"].pop(doc.sha1, None)
             save_state(client_of(context), run_id, key, epoch)
             save_record(context.directory, record)
@@ -686,21 +696,24 @@ def run_write(context: Any) -> list[str]:
             MARK_MAP: identity.hash,
         }
         qids = registered.get("documents") or {}
+        placed = registered.get("placed") or {}
         for doc in context.documents:
             if doc.sha1 not in qids or doc.sha1 in record["documents"]:
                 continue
             extracted = extracted_batch(doc)
             batch, left_out = batch_to_write(extracted)
+            media = placed.get(doc.sha1) or {}
             try:
                 result = BatchWriter(
                     client_of(context),
-                    artifact_qids={doc.sha1: qids[doc.sha1]},
+                    artifact_qids={doc.sha1: qids[doc.sha1], **media},
                     run_marks=marks,
                 ).write_batch(
                     batch,
                     identity=identity,
                     mapped_from=extracted,
                     claim_summary=CLAIM_SUMMARY,
+                    placed={doc.sha1: set(media)},
                 )
             except Exception as exc:
                 record["failed"][doc.sha1] = type(exc).__name__

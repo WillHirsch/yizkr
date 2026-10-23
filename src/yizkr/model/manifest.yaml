@@ -724,6 +724,97 @@ properties:
     datatype: string
     offered: false
 
+  # --- a source's claims about itself, and a container's words about
+  # what it places (ADR-0039) ---
+
+  author:
+    label: author
+    description: >-
+      document -> who wrote, drew or made it, as the document itself
+      states (a signature, a studio's stamp on a mount); the subject is
+      the source document itself
+    datatype: wikibase-item
+    accepts: [human, organization, family, unclassified_entity]
+    wikidata: P50
+    document_subject: true
+
+  addressee:
+    label: addressee
+    description: >-
+      document -> whom it was addressed to, as the document itself states
+      (a letter's greeting or address); the subject is the source
+      document itself
+    datatype: wikibase-item
+    accepts: [human, organization, family, unclassified_entity]
+    wikidata: P1817
+    document_subject: true
+
+  inception:
+    label: inception
+    description: >-
+      document -> when it was made, as the document itself states (a
+      letter's dateline), at the precision it gives; the subject is the
+      source document itself
+    datatype: time
+    wikidata: P571
+    document_subject: true
+
+  location_of_creation:
+    label: location of creation
+    description: >-
+      document -> the place where it was made, as the document itself
+      states (a letter's heading); the subject is the source document
+      itself
+    datatype: wikibase-item
+    accepts: [place, unclassified_entity]
+    wikidata: P1071
+    document_subject: true
+
+  main_subject:
+    label: main subject
+    description: >-
+      document -> what it is about, as the document itself states: a
+      letter's topic, the district a map covers, the family a booklet is
+      about; never whom an image shows (shows); the subject is the source
+      document itself
+    datatype: wikibase-item
+    accepts: any
+    wikidata: P921
+    document_subject: true
+
+  shows:
+    label: shows
+    description: >-
+      image -> who or what it shows, as its own content names them (an
+      inscription on a print: one claim per name); a source's words,
+      never a confirmed depiction; the subject is the source document
+      itself
+    datatype: wikibase-item
+    accepts: any
+    document_subject: true
+
+  caption:
+    label: caption
+    description: >-
+      an artifact this document places (an image on its page or slide)
+      -> this document's own words about it, verbatim: a caption, a
+      heading over it, a sentence of commentary; the subject is that
+      artifact, never the document
+    datatype: monolingualtext
+    wikidata: P2096
+    placed_subject: true
+
+  determination_method:
+    label: determination method
+    description: >-
+      qualifier on a curator's statement: how its value was determined,
+      such as combined from sources, where its references together give
+      a value no one of them states (ADR-0039)
+    datatype: wikibase-item
+    accepts: [combined_from_sources]
+    wikidata: P459
+    offered: false
+
 # `entity_kind: true` marks an item the extractor may type a
 # document-mentioned entity as (ADR-0007 manifest pass). The extraction
 # prompt renders that set — and each kind's description — from here, so
@@ -1124,6 +1215,12 @@ items:
   judgement_other:
     label: "judgement: other"
     description: judgement note category; any other judgement call
+
+  # --- determination methods (determination_method values, ADR-0039 §4) ---
+
+  combined_from_sources:
+    label: combined from sources
+    description: determination method; a curator combined the values of the statement's references, none of which states the value alone
 
   # --- schema source (see schema_source_item above) ---
 

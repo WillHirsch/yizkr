@@ -205,7 +205,21 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   the claims given; and how many extractions failed with every claim
   rejected or unread. A failed extraction's reason can quote a model's
   answer, which can quote a document, so the number of claims it gives
-  stays with its document, in `report.html` and `report.json`;
+  stays with its document, in `report.html` and `report.json`. The
+  rejects are counted by reason too (#456), from each coverage's
+  `rejected_by_reason`: the codes of `claims.REJECT_REASONS`,
+  `document_subject` (a document-subject property whose subject is not
+  its own source), `placed_subject` (a caption whose subject is no
+  artifact its source places), `artifact_subject` (another property
+  with an artifact subject), `schema` (a claim that does not parse) and
+  `manifest` (any other manifest problem), with the extractions whose
+  coverage counts none (`aggregate.content.rejects.by_reason`,
+  `by_reason_absent`);
+- what sources say of the artifacts themselves (ADR-0039): the captions
+  given, a container's verbatim words about an image it places, and the
+  claims a document gives about itself, by property
+  (`aggregate.content.container_claims`: `captions`,
+  `document_subject_by_property`);
 - zero-claim documents, by kind, and batches with no entity; the chunks
   and the fallback tiers taken;
 - mention records and judgement notes, summed from each extraction's

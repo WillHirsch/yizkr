@@ -1,13 +1,13 @@
 # ADR-0039: Claims a container makes about the artifacts it places
 
-Status: **proposed** (drafted for #456, 2026-10-16). It answers ADR-0008's
-open questions 2 (context across witnesses) and 6 (claims about an
-excerpt itself), and amends ADR-0035 §3.4 and MODELING.md once the owner
-accepts it. Nothing else changes until then: the amendments below are
-proposed text, and ADR-0008 and ADR-0035 carry only a dated pointer here.
-It covers both kinds of container: a PDF whose pages place images
-(ADR-0008, as amended by #176 and #397) and a deck whose slides embed
-them, which #502 makes excerpts too.
+Status: **accepted** (accepted by the owner, 2026-10-23; drafted for
+#456, 2026-10-16). It answers ADR-0008's open questions 2 (context
+across witnesses) and 6 (claims about an excerpt itself), and amends
+ADR-0008, ADR-0035 §3.4 to §3.6 and MODELING.md, as §9 gives. The owner
+accepted it as written, each owner question settled by its
+recommendation (below). It covers both kinds of container: a PDF whose
+pages place images (ADR-0008, as amended by #176 and #397) and a deck
+whose slides embed them, which #502 makes excerpts too.
 
 Revised 2026-10-16 on the owner's direction on #517, quoted: "Wait, are
 these fields about a source's relevance to its container, or independent
@@ -377,7 +377,7 @@ and an image may show a building.
   document-subject claims by property, and the rejects by reason.
 - The deck half waits on #502's markers; the PDF half does not.
 
-### 9. Proposed amendments (applied on acceptance)
+### 9. Amendments (applied on acceptance, 2026-10-23)
 
 **ADR-0008.**
 
@@ -420,26 +420,34 @@ gains them, `determination_method` and `combined_from_sources`.
 
 ## Owner questions
 
+Each was settled by its recommendation when the owner accepted this ADR,
+2026-10-23 ("I accept both ADRs"); the questions' text is kept as it was
+asked.
+
 1. **`main_subject` is what a work is about; `shows` is who or what an
    image shows, as its own content states it.** Recommended: both are
    document-subject properties (§2.2). A group photograph's inscription
    gives one `shows` per name, `shows` maps to no Wikidata property
    since P180 is `depicts`, and `depicts` stays the faces flow's
    confirmed, region-bound statement (ADR-0005).
+   **Settled by its recommendation** (owner, 2026-10-23).
 2. **Promoting a caption's fact.** Recommended: never by the pipeline;
    from the keeper run on, a curator may write a caption's fact as a
    structured statement on the artifact item, `stated in` the container
    with the caption's page and the caption as its excerpt, with the
    curator's provenance, beside the caption (§4).
+   **Settled by its recommendation** (owner, 2026-10-23).
 3. **Captions and the non-privileged export.** Recommended: caption
    statements stay out of it, since they may name possibly living people
    as text the export cannot check (§7).
+   **Settled by its recommendation** (owner, 2026-10-23).
 4. **This minimal design over the structured one drafted first.**
    Recommended: confirm it. A container gives only its verbatim caption,
    and every structured attribute is the inner source's own. Its cost:
    a fact only the caption gives (the year a letter lacks, the writer of
    a letter whose top names none) stays text on the image's item, not
    queryable data, until a curator promotes it.
+   **Settled by its recommendation** (owner, 2026-10-23).
 
 **Accepted by the owner, 2026-10-16:**
 

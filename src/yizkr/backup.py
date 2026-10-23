@@ -72,9 +72,12 @@ closed:
   unknown; and the events that start and end a union it drops, a
   partner's own death aside.
 * It drops the extractor's judgement notes, its remarks on its own
-  reading, and any line it cannot read (``filter_nonprivileged_export``), and
-  refuses a dump that holds what it is not made to filter: a sitelink,
-  or a property of a type the model does not use (``UnfilterableDump``).
+  reading, every caption statement whole, a container's raw words about
+  an image it places, which may name possibly living people as text
+  (ADR-0039 §7), and any line it cannot read
+  (``filter_nonprivileged_export``), and refuses a dump that holds what
+  it is not made to filter: a sitelink, or a property of a type the
+  model does not use (``UnfilterableDump``).
 * The check runs on the query service, the dump comes from the database:
   the export waits for the query service to hold exactly the dump's
   revision of every item and property, and refuses to run when it does
@@ -1231,14 +1234,18 @@ def _statement_link(predicate: str) -> tuple[str, str] | None:
 
 
 def statements_left_out(
-    full_dump: Path, excluded: set[str]
+    full_dump: Path,
+    excluded: set[str],
+    left_out_pids: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[set[str], set[tuple[str, str, str, str]]]:
     """The statements of the dump that go whole, and the truthy triples
     that go with them.
 
     A statement goes whole when its value, or the value of any of its
-    qualifiers, is an item of `excluded`, at any rank: its node and every
-    triple that holds it (the returned node IRIs). A truthy triple goes
+    qualifiers, is an item of `excluded`, at any rank, or when it is a
+    statement of a property of `left_out_pids` (a caption's, ADR-0039
+    §7), whatever its value: its node and every triple that holds it (the
+    returned node IRIs). A truthy triple goes
     with it when it gave it, and no statement that stays gives it too:
     when the entity, the property and the value (the normalized value,
     for a normalized truthy triple; the "no value" class, for a statement
@@ -1283,6 +1290,8 @@ def statements_left_out(
             role, pid = link
             if role == "claim":
                 owners[value] = (subject, pid)
+                if pid in left_out_pids:
+                    left_out.add(value)
             elif role == "rank":
                 if value == _DEPRECATED:
                     deprecated.add(subject)
@@ -1372,18 +1381,29 @@ class _Blocks:
 # one the instance's vocabulary does not hold drops nothing.
 DROPPED_PROPERTIES = ("judgement", "judgement_note")
 
+# The properties whose statements the export leaves out whole, with their
+# references and the excerpts only they hold: a container's captions
+# (ADR-0039 §7), raw source quotations that may name possibly living
+# people as text the export cannot read, so they fail closed. Keys of the
+# model manifest; one the instance's vocabulary does not hold leaves out
+# nothing.
+LEFT_OUT_PROPERTIES = ("caption",)
+
 
 def filter_nonprivileged_export(
     full_dump: Path,
     nonprivileged_dump: Path,
     excluded: set[str],
     dropped_pids: frozenset[str] | set[str] = frozenset(),
+    left_out_pids: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[int, int]:
     """Produce the export's dump: five filters over N-triples. `excluded`
     holds every item to drop: for the export, every item with person
     evidence that the check did not release, and the rest
     ``nonprivileged_exclusions`` names. `dropped_pids` holds the properties
     whose snaks are dropped: for the export, those of ``DROPPED_PROPERTIES``.
+    `left_out_pids` holds the properties whose statements go whole: for
+    the export, those of ``LEFT_OUT_PROPERTIES``.
 
     1. Drop every line that is not a triple as dumpRdf.php writes one
        (``_TRIPLE``): what the filter cannot read, it does not pass on.
@@ -1399,7 +1419,8 @@ def filter_nonprivileged_export(
        statement about an excluded one would otherwise keep its rank,
        its qualifiers (a wedding's date, say) and its references. Every
        triple whose subject or object is such a node goes, and so does a
-       truthy triple that only such a statement gave.
+       truthy triple that only such a statement gave. So does every
+       statement of a property of `left_out_pids`, whatever its value.
     4. Drop every triple of a property of `dropped_pids`, in any form: a
        statement's value, a qualifier's, a reference's, or a truthy one.
     5. Sweep orphaned provenance nodes. Reference/value nodes are
@@ -1428,17 +1449,17 @@ def filter_nonprivileged_export(
 
     Returns (kept, dropped) line counts: a node's line written counts as
     kept, a repeat of one as dropped. Streams the gzipped dump five times
-    (four when `excluded` is empty). It holds in memory the nodes of the
-    statements that go, the truthy triples that go with them, the hashes
-    of the provenance nodes kept, the kept nodes' lines and the block
-    each is placed in; and, while it reads which statements go, each
-    statement's entity, property and value, and the statements
-    deprecated.
+    (four when `excluded` and `left_out_pids` are empty). It holds in
+    memory the nodes of the statements that go, the truthy triples that go
+    with them, the hashes of the provenance nodes kept, the kept nodes'
+    lines and the block each is placed in; and, while it reads which
+    statements go, each statement's entity, property and value, and the
+    statements deprecated.
     """
     dropped_predicates = tuple(f"/{pid}>" for pid in dropped_pids)
     left_out, truthy_left_out = (
-        statements_left_out(full_dump, excluded)
-        if excluded
+        statements_left_out(full_dump, excluded, left_out_pids)
+        if excluded or left_out_pids
         else (set(), set())
     )
     # what each predicate of a truthy triple gives, and whether each type
@@ -1682,7 +1703,8 @@ def export_nonprivileged(
     it has run: a graph that changed meanwhile raises QueryServiceLag.
     Either refusal writes nothing. Every item with person evidence that
     the check did not release is then dropped (``nonprivileged_exclusions``),
-    and so are the judgement notes and every statement whose value or a
+    and so are the judgement notes, every caption statement, whole
+    (``LEFT_OUT_PROPERTIES``), and every statement whose value or a
     qualifier's value is an item dropped, whole
     (``filter_nonprivileged_export``, ``statements_left_out``). The queries
     go to the instance's query service, with its vocabulary,
@@ -1751,6 +1773,11 @@ def export_nonprivileged(
             dropped_pids={
                 properties[key]
                 for key in DROPPED_PROPERTIES
+                if key in properties
+            },
+            left_out_pids={
+                properties[key]
+                for key in LEFT_OUT_PROPERTIES
                 if key in properties
             },
         )
