@@ -1395,6 +1395,18 @@ class TestApply:
             wiki, None, path, links, "curator-reviewed"
         )
         assert summary["written"] == 0 and summary["run_qid"] is None
+        assert summary["passed_over"] == 0
+
+    def test_approved_rows_of_no_question_asked_are_passed_over(
+        self, tmp_path, monkeypatch
+    ):
+        """Approved, but each run's links are gone (another --run): no
+        row decides a question, and both are counted as passed over."""
+        wiki, qids, links, path = self._setup(tmp_path, monkeypatch)
+        summary = hierarchy.apply_answers(
+            wiki, None, path, [], "curator-reviewed"
+        )
+        assert summary["written"] == 0 and summary["passed_over"] == 2
 
     def test_a_cycle_through_the_graph_is_refused(self, tmp_path, monkeypatch):
         wiki, qids, links, path = self._setup(tmp_path, monkeypatch)
