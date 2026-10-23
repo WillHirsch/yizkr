@@ -21,11 +21,17 @@ corpus's stages, how each came about, the clean corpus's anomalies (none)
 and the clusters, and report.md must say none of it by a universe name, a
 file name or a document's SHA-1. The clustering stage's identity map
 (TestTheTrapsInTheIdentityMap) must meet each trap TRAPS sets for it,
-read in the universe's terms; the merge clustering withholds, a
-conflicting cluster's confident component, is recorded as expected, with
-its reason, by a strict xfail that asserts the merge, so it turns when
-clustering makes it. The confident components of ambiguous clusters
-merge (#568), which turned the two other such xfails. The corpus's recorded
+read in the universe's terms; each merge clustering withholds (a
+conflicting cluster's confident component, and a `same` verdict a
+contradiction overrules) is recorded as expected, with its reason, by a
+strict xfail that asserts the merge, so it turns when clustering makes
+it. The confident components of ambiguous clusters
+merge (#568), which turned the two other such xfails. Clustering's
+adjudication asks the recorded engine of the corpus's ambiguous pairs,
+and it answers each by the verdict the corpus records for it
+(tests/fixtures/corpus/verdicts.py; #587), so the traps meet the stage
+as a run uses it: TestTheVerdicts holds each verdict to the universe,
+and the adjudicated map to no false merge. The corpus's recorded
 answers carry mention records (#407), and the export the records its
 adapter fills from its tags (#408), so clustering keys and links on the
 records (ADR-0035 §7; #409), and no person or place of the corpus is
@@ -35,6 +41,7 @@ recordless.
 from __future__ import annotations
 
 import csv
+import dataclasses
 import json
 import re
 from collections.abc import Iterable
@@ -45,8 +52,9 @@ import pytest
 
 from tests.fixtures import corpus as fc
 from tests.fixtures import example_universe as u
-from tests.fixtures.corpus import answers, build
+from tests.fixtures.corpus import answers, build, verdicts
 from tests.fixtures.corpus.engine import Calls, RecordedEngine
+from tests.unit.test_clustering import Doc, assert_no_false_merge
 from tests.unit.test_no_wiki_before_write import refusals  # noqa: F401
 from tests.unit.test_scratch import (
     MODEL,
@@ -1070,6 +1078,8 @@ class TestReuse:
 HELD_APART = {
     "kin-edge": "the family history's, the talk's and the export's "
     "mentions of Florence, whose links are confident, merge",
+    "merge-carrying-death": "the postcard's 'Gustl', which adjudication "
+    "says is the export's Gustav, merges with Gustav's other mentions",
 }
 
 
@@ -1112,14 +1122,18 @@ class Identity:
 
     def candidate(self, fingerprint: str) -> dict:
         """The review entry of the candidate cluster a mention is in: its
-        members, its pairs and what makes it conflict. Only an ambiguous
-        or a conflicting cluster is reviewed, since a confident one
-        merged."""
+        members, its pairs and what makes it conflict. Only an ambiguous,
+        an adjudicated or a conflicting cluster is reviewed, since a
+        confident one merged."""
         (found,) = [
             entry
             for entry in self.map["review"]
             if entry["status"]
-            in (clustering.AMBIGUOUS, clustering.CONFLICTING)
+            in (
+                clustering.AMBIGUOUS,
+                clustering.ADJUDICATED,
+                clustering.CONFLICTING,
+            )
             and fingerprint in entry["members"]
         ]
         return found
@@ -1134,6 +1148,15 @@ class Identity:
         ]
         return found["link"], found["evidence"]
 
+    def verdict(self, entry: dict, first: str, second: str) -> str | None:
+        """The verdict adjudication gave on a pair of a review entry."""
+        (found,) = [
+            pair
+            for pair in entry["pairs"]
+            if set(pair["mentions"]) == {first, second}
+        ]
+        return found["verdict"]
+
     def keys_of(self, fingerprints: Iterable[str]) -> set[tuple[str, str]]:
         return {self.who[fingerprint] for fingerprint in fingerprints}
 
@@ -1145,12 +1168,17 @@ class Identity:
 def identity(runs, first) -> Identity:
     """The run's identity map, as the clustering stage left it in its
     directory, with every mention in the universe's terms."""
-    stage = first / CORPUS_DIR / clustering.STAGE
+    return identity_of(runs, first)
+
+
+def identity_of(runs: Scratch, run: Path) -> Identity:
+    """A run's identity map, with every mention in the universe's
+    terms."""
+    stage = run / CORPUS_DIR / clustering.STAGE
     found = json.loads((stage / clustering.IDENTITY_MAP).read_text())
     documents = {sha1(name): name for name in fc.DOCUMENTS}
     known = {
-        sha1(name): truth(name, runs.batch(first, name))
-        for name in fc.DOCUMENTS
+        sha1(name): truth(name, runs.batch(run, name)) for name in fc.DOCUMENTS
     }
     who = {}
     for fingerprint, mention in found["mentions"].items():
@@ -1229,10 +1257,11 @@ class TestTheTrapsInTheIdentityMap:
         kinship (ADR-0035 §2.1): no name, so his mention keys on nothing,
         stays a singleton and lends her no kin. The postcard's own
         mention of her links to the export on her name alone, so her
-        candidate cluster is ambiguous; its confident component, the
-        export's, the family history's and the talk's mentions, merges
-        (#568), and the postcard's stays apart. Her parents, named by the
-        export, the family history and the talk, merge."""
+        candidate cluster is ambiguous, around its confident component,
+        the export's, the family history's and the talk's mentions.
+        Adjudication says the postcard's and the export's are the same
+        (#587), so the whole cluster merges, adjudicated. Her parents,
+        named by the export, the family history and the talk, merge."""
         klara = identity.of("klara-loebig")
         deck, export = batches.said(fc.DECK), batches.said(fc.EXPORT)
         assert values(deck, "sebastian-loebig", "child") >= {"klara-loebig"}
@@ -1259,25 +1288,25 @@ class TestTheTrapsInTheIdentityMap:
         father = identity.of("sebastian-loebig")[fc.LETTER]
         assert identity.method(father) == clustering.SINGLETON
         assert father not in entry["members"]
-        assert entry["status"] == clustering.AMBIGUOUS
+        assert entry["status"] == clustering.ADJUDICATED
         assert entry["conflict"] is None
+        assert entry["contradiction"] is None
         # its own mention of her links to the export on the name alone,
-        # so it stays apart, and the confident component of the rest
-        # merges
+        # the one pair adjudication is asked of her, and its `same` joins
+        # it to the confident component of the rest
         assert identity.pair(entry, klara[fc.LETTER], klara[fc.EXPORT]) == (
             clustering.AMBIGUOUS,
             "key/unknown/unknown",
         )
-        assert identity.method(klara[fc.LETTER]) == clustering.AMBIGUOUS
-        component = {fc.EXPORT, fc.NARRATIVE, fc.DECK}
-        assert set(klara) == component | {fc.LETTER}
-        assert {identity.method(klara[n]) for n in component} == {
-            clustering.CONFIDENT_COMPONENT
-        }
-        assert len({identity.cluster(klara[n]) for n in component}) == 1
-        assert identity.cluster(klara[fc.LETTER]) != identity.cluster(
-            klara[fc.EXPORT]
+        assert identity.verdict(entry, klara[fc.LETTER], klara[fc.EXPORT]) == (
+            verdicts.SAME
         )
+        assert [pair["link"] for pair in entry["pairs"]].count(
+            clustering.AMBIGUOUS
+        ) == 1
+        assert set(klara) == {fc.EXPORT, fc.NARRATIVE, fc.DECK, fc.LETTER}
+        assert identity.methods_of("klara-loebig") == {clustering.ADJUDICATED}
+        assert len(identity.clusters_of("klara-loebig")) == 1
         # and the parents, named from both ends, merge with the export's:
         # their kin agree through their children
         for parent in ("sebastian-loebig", "hildegard-loebig"):
@@ -1300,16 +1329,28 @@ class TestTheTrapsInTheIdentityMap:
         Gustav, whose record has the nickname Gustl, only as a lone name
         (`given`, ADR-0035 §7, rule 1): it pairs, but never links
         confidently. That one ambiguous link makes the candidate cluster
-        ambiguous, and its confident component merges (#568): the
-        certificate's mention with those that carry his death, which
-        reaches it by that merge alone. The postcard's 'Gustl' stays
-        apart."""
+        ambiguous. Adjudication says the two are the same (#587), but
+        'Gustl' matches no name of the certificate's Gustave Lobig, a
+        contradiction no verdict excuses, so the cluster falls back to
+        its confident component, which merges (#568): the certificate's
+        mention with those that carry his death, which reaches it by
+        that merge alone. The postcard's 'Gustl' stays apart."""
         gustav = identity.of("gustav-loebig")
         # every document names him but Florence's death certificate
         assert set(gustav) == set(fc.DOCUMENTS) - {fc.DEATH_CERTIFICATE}
         entry = identity.candidate(gustav[fc.EXPORT])
-        assert entry["status"] == clustering.AMBIGUOUS
+        assert entry["status"] == clustering.ADJUDICATED
         assert entry["conflict"] is None
+        assert identity.verdict(
+            entry, gustav[fc.LETTER], gustav[fc.EXPORT]
+        ) == (verdicts.SAME)
+        # 'Gustl' against the certificate's 'Gustave Lobig': no name
+        # match, never a pair of the cluster
+        assert identity.keys_of(entry["contradiction"]["mentions"]) == {
+            ("gustav-loebig", fc.LETTER),
+            ("gustav-loebig", fc.CERTIFICATE),
+        }
+        assert entry["contradiction"]["evidence"] == "none/unknown/unknown"
         # the export is the roster the other documents meet, so every
         # pair of the cluster is a mention with its GEDCOM anchor
         assert {
@@ -1344,22 +1385,26 @@ class TestTheTrapsInTheIdentityMap:
             assert values(
                 batches.said(name), "gustav-loebig", "date_of_death"
             ) == {u.Date(1996)}, name
-        # merging over the confident links alone would join 16 clusters,
-        # none conflicting (an event links confidently once the components
-        # holding its people merge); the rule merges 41 mentions, among
-        # them the export's Hesse and Australia, jurisdictions of its
-        # PLACs, with the sources' own (#571), and the confident
-        # components of ambiguous clusters, counted apart; it leaves the
+        # merging over the confident links alone would join 17 clusters,
+        # none conflicting (an event or a union links confidently once
+        # the clusters holding its people merge, adjudicated ones
+        # included); the rule merges 51 mentions, among them the export's
+        # Hesse and Australia, jurisdictions of its PLACs, with the
+        # sources' own (#571), the confident components of ambiguous
+        # clusters (Gustav's and Nicholas's) and the clusters
+        # adjudication merged, each counted apart; it leaves the
         # conflicting clusters' confident links unmerged
         summary = identity.map["summary"]
         assert summary["confident_links_only"] == {
-            "clusters": 16,
-            "mentions": 45,
+            "clusters": 17,
+            "mentions": 48,
             "conflicting": 0,
         }
-        assert summary["merged_mentions"] == 41
-        assert summary["clusters"][clustering.CONFIDENT_COMPONENT] == 3
-        assert summary["cluster_mentions"][clustering.CONFIDENT_COMPONENT] == 9
+        assert summary["merged_mentions"] == 51
+        assert summary["clusters"][clustering.CONFIDENT_COMPONENT] == 2
+        assert summary["cluster_mentions"][clustering.CONFIDENT_COMPONENT] == 6
+        assert summary["clusters"][clustering.ADJUDICATED] == 3
+        assert summary["cluster_mentions"][clustering.ADJUDICATED] == 10
 
     def test_a_kin_edge_makes_the_cluster_conflict_hard(self, identity):
         """The death certificate's Florence and the mother it names by
@@ -1435,13 +1480,14 @@ class TestTheTrapsInTheIdentityMap:
         assert {
             entry.name for entry in fc.TRAPS if "(#380)" in entry.expected
         } == set(HELD_APART)
-        assert "its confident component merges (#568)" in (
+        assert "its confident component, which merges (#568)" in (
             trap("merge-carrying-death").expected
         )
-        assert "its confident component merges (#568)" in (
+        assert "the whole cluster merges, adjudicated" in (
             trap("mirrored-kinship").expected
         )
         assert "stay apart" in trap("kin-edge").expected
+        assert "'Gustl' stays apart" in trap("merge-carrying-death").expected
         marks = [
             mark
             for name, member in vars(type(self)).items()
@@ -1495,6 +1541,42 @@ class TestTheTrapsInTheIdentityMap:
             == identity.cluster(florence[fc.EXPORT])
         )
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason=HELD_APART["merge-carrying-death"]
+        + ": its pair with the export's Gustav is the cluster's one "
+        "pending pair, and adjudication says `same` of it, but the part "
+        "that `same` joins holds 'Gustl' and the certificate's Gustave "
+        "Lobig, whose names do not match at all (no record of the "
+        "certificate's gives the nickname), and a verdict excuses only a "
+        "date conflict on its own pair (#587), so the part falls back to "
+        "its confident component. A contradiction check that read a lone "
+        "given name through the nickname of the anchor it met would "
+        "merge it.",
+    )
+    def test_gustl_merges_with_gustav(self, identity):
+        gustav = identity.of("gustav-loebig")
+        entry = identity.candidate(gustav[fc.EXPORT])
+        _premise(
+            identity.verdict(entry, gustav[fc.LETTER], gustav[fc.EXPORT])
+            == verdicts.SAME,
+            "adjudication says the postcard's Gustl is the export's Gustav",
+        )
+        _premise(
+            identity.keys_of(
+                (entry["contradiction"] or {}).get("mentions", ())
+            )
+            == {
+                ("gustav-loebig", fc.LETTER),
+                ("gustav-loebig", fc.CERTIFICATE),
+            },
+            "'Gustl' contradicts the certificate's Gustave Lobig",
+        )
+        assert identity.cluster(gustav[fc.LETTER]) == identity.cluster(
+            gustav[fc.EXPORT]
+        )
+
 
 def _premise(holds: bool, what: str) -> None:
     """A strict xfail's premise, as its reason states it: when it no
@@ -1502,6 +1584,217 @@ def _premise(holds: bool, what: str) -> None:
     other than its own."""
     if not holds:
         raise RuntimeError(f"the xfail's premise no longer holds: {what}")
+
+
+# -- adjudication's recorded verdicts -----------------------------------------
+
+
+UNIONS = ("marriage", "wedding")
+
+
+def universe_keys(runs: Scratch, run: Path) -> dict[str, dict[str, str]]:
+    """Each document's universe key of each of its entities, by local id.
+    The export's unions and weddings stand for themselves (export_truth),
+    so each is given the key of the corpus's own of one couple: a
+    marriage by its two spouses, a wedding by the marriage it starts."""
+    keys = {name: truth(name, runs.batch(run, name)) for name in fc.DOCUMENTS}
+    couples = {
+        (entity.kind, frozenset(entity.couple)): entity.truth
+        for recorded in answers.RECORDED.values()
+        for entity in recorded.entities
+        if entity.couple
+    }
+    batch = runs.batch(run, fc.EXPORT)
+    kinds = {entity.id: entity.kind for entity in batch.entities}
+    known = keys[fc.EXPORT]
+    spouses: dict[str, set[str]] = {}
+    started: dict[str, str] = {}
+    for claim in batch.claims:
+        subject = claim.subject.local_id
+        value = getattr(getattr(claim.value, "value", None), "local_id", None)
+        if claim.property == "participant" and kinds[subject] == "marriage":
+            spouses.setdefault(subject, set()).add(known[value])
+        if claim.property == "started_by":
+            started[value] = subject
+    for local_id, kind in kinds.items():
+        if kind in UNIONS:
+            union = started.get(local_id, local_id)
+            known[local_id] = couples[(kind, frozenset(spouses[union]))]
+    return keys
+
+
+class TestTheVerdicts:
+    """Clustering's adjudication asks the recorded engine of the corpus's
+    ambiguous pairs, and the engine answers each by the verdict the
+    corpus records for it (tests/fixtures/corpus/verdicts.py): each a
+    faithful model's, so `same` exactly when the two are one entity of
+    the universe. Every pair asked is one of the four that make a trap's
+    candidate cluster ambiguous (Klara's, Gustav's and Nicholas's people,
+    and Gustav and Florence's marriage) or of the events whose people
+    they hold, and the namesakes never are: the Ursulas' and Florence's
+    clusters conflict, and a conflicting cluster is never asked."""
+
+    def test_every_pair_asked_has_its_recorded_verdict(
+        self, runs, first, calls
+    ):
+        """Each recorded verdict is given once, in the run's one
+        invocation, and none is left unasked; the map counts them all,
+        and no other."""
+        assert sorted(calls.verdicts, key=lambda v: sorted(v.pair)) == sorted(
+            verdicts.VERDICTS, key=lambda v: sorted(v.pair)
+        )
+        assert calls.of("adjudication") == ["corpus"] * 3
+        summary = identity_of(runs, first).map["summary"]["adjudication"]
+        assert summary["asked_pairs"] == len(verdicts.VERDICTS)
+        assert summary["verdicts"] == {
+            verdicts.SAME: len(verdicts.VERDICTS),
+            verdicts.DIFFERENT: 0,
+            "uncertain": 0,
+        }
+        assert summary["unanswered_pairs"] == 0
+        assert summary["rejected_lines"] == 0
+
+    def test_each_verdict_is_the_universes(self, runs, first, identity):
+        """`same` exactly when the two mentions are one universe entity;
+        every review pair a verdict settles is a recorded one, by its
+        mentions' documents and labels."""
+        keys = universe_keys(runs, first)
+        mentions = identity.map["mentions"]
+
+        def named(fingerprint: str) -> verdicts.Mention:
+            _key, document = identity.who[fingerprint]
+            return document, mentions[fingerprint]["label"]
+
+        def key(fingerprint: str) -> str:
+            _key, document = identity.who[fingerprint]
+            return keys[document][mentions[fingerprint]["local_id"]]
+
+        settled = {}
+        for entry in identity.map["review"]:
+            for pair in entry["pairs"]:
+                if pair.get("verdict") is not None:
+                    first_, second = pair["mentions"]
+                    settled[frozenset((named(first_), named(second)))] = (
+                        pair["verdict"],
+                        key(first_) == key(second),
+                    )
+        assert set(settled) == set(verdicts.BY_PAIR)
+        for pair, (verdict, one) in settled.items():
+            assert verdict == verdicts.BY_PAIR[pair].verdict, sorted(pair)
+            assert (verdict == verdicts.SAME) == one, sorted(pair)
+
+    def test_no_cluster_of_the_adjudicated_map_holds_two_entities(
+        self, runs, first, identity
+    ):
+        """No cluster holds mentions of two universe entities, the export's
+        unions read as the corpus's own of one couple; the merges
+        adjudication made are among them."""
+        keys = universe_keys(runs, first)
+        docs = [
+            Doc(
+                name,
+                clustering.Manifest(sha1(name), runs.batch(first, name)),
+                keys[name],
+            )
+            for name in fc.DOCUMENTS
+        ]
+        assert_no_false_merge(docs, identity.map)
+        assert identity.map["summary"]["clusters"][clustering.ADJUDICATED] == 3
+
+    def test_the_namesakes_are_never_asked(self, identity):
+        """The traps whose mentions are of two people (the homonym
+        Ursulas, Florence and the mother named by her birth name) sit in
+        conflicting clusters, so adjudication asks none of their pairs."""
+        for key in (
+            "ursula-loebig",
+            "ursula-loebig-angerring",
+            "florence-lobig",
+            "sipkje-faxridge",
+        ):
+            for fingerprint in identity.of(key).values():
+                entry = identity.candidate(fingerprint)
+                assert entry["status"] == clustering.CONFLICTING, key
+                assert all(
+                    pair.get("verdict") is None for pair in entry["pairs"]
+                ), key
+
+    def test_nicholass_early_birth_keeps_his_mention_apart(self, identity):
+        """The family history's Nicholas, born 1850 by the recorded
+        model's misreading, and the export's: adjudication says `same`,
+        which excuses the dates of that pair alone. The talk's 1950
+        contradicts the early birth, so the family history's mention
+        stays apart, and the talk's and the export's merge."""
+        nicholas = identity.of("nicholas-lobig")
+        entry = identity.candidate(nicholas[fc.EXPORT])
+        assert entry["status"] == clustering.ADJUDICATED
+        assert identity.pair(
+            entry, nicholas[fc.NARRATIVE], nicholas[fc.EXPORT]
+        ) == (clustering.AMBIGUOUS, "key/conflict/agree")
+        assert identity.verdict(
+            entry, nicholas[fc.NARRATIVE], nicholas[fc.EXPORT]
+        ) == (verdicts.SAME)
+        assert identity.keys_of(entry["contradiction"]["mentions"]) == {
+            ("nicholas-lobig", fc.NARRATIVE),
+            ("nicholas-lobig", fc.DECK),
+        }
+        assert identity.method(nicholas[fc.NARRATIVE]) == clustering.AMBIGUOUS
+        assert identity.method(nicholas[fc.DECK]) == (
+            clustering.CONFIDENT_COMPONENT
+        )
+        assert identity.cluster(nicholas[fc.DECK]) == identity.cluster(
+            nicholas[fc.EXPORT]
+        )
+        assert identity.cluster(nicholas[fc.NARRATIVE]) != identity.cluster(
+            nicholas[fc.EXPORT]
+        )
+        assert "the family history's mention stays apart" in (
+            trap("early-birth").expected
+        )
+
+    def test_a_different_verdict_keeps_the_pair_apart(
+        self, runs, calls, monkeypatch
+    ):
+        """Were the postcard's Klara said to be another than the export's,
+        the `different` would cut the cluster's one pending pair: the
+        postcard's mention would be a cluster of its own, adjudicated
+        apart, and the confident component of the rest would merge, with
+        no false merge either way."""
+        pair = frozenset(
+            ((fc.LETTER, "Klara Löbig"), (fc.EXPORT, "Klara Löbig"))
+        )
+        recorded = verdicts.BY_PAIR[pair]
+        monkeypatch.setitem(
+            verdicts.BY_PAIR,
+            pair,
+            dataclasses.replace(recorded, verdict=verdicts.DIFFERENT),
+        )
+        run = runs.run("different")
+        identity = identity_of(runs, run)
+        klara = identity.of("klara-loebig")
+        entry = identity.candidate(klara[fc.EXPORT])
+        assert identity.verdict(entry, klara[fc.LETTER], klara[fc.EXPORT]) == (
+            verdicts.DIFFERENT
+        )
+        assert identity.method(klara[fc.LETTER]) == clustering.ADJUDICATED
+        rest = {fc.EXPORT, fc.NARRATIVE, fc.DECK}
+        assert {identity.method(klara[n]) for n in rest} == {
+            clustering.CONFIDENT_COMPONENT
+        }
+        assert len({identity.cluster(klara[n]) for n in rest}) == 1
+        assert identity.cluster(klara[fc.LETTER]) != identity.cluster(
+            klara[fc.EXPORT]
+        )
+        assert identity.map["summary"]["adjudicated_apart"] == 1
+        keys = universe_keys(runs, run)
+        docs = [
+            Doc(
+                name,
+                clustering.Manifest(sha1(name), runs.batch(run, name)),
+                keys[name],
+            )
+            for name in fc.DOCUMENTS
+        ]
+        assert_no_false_merge(docs, identity.map)
 
 
 # -- the run report -----------------------------------------------------------

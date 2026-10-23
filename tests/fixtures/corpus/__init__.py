@@ -160,9 +160,11 @@ TRAPS = (
         "Vater', a kinship term and no name (ADR-0035), so he never blocks "
         "with her. Klara's candidate cluster is ambiguous, since the "
         "postcard's own mention of her links to the export on the name "
-        "alone, and its confident component merges (#568): the talk's, "
-        "the family history's and the export's mentions of her, whose kin "
-        "agree. The postcard's own mention stays apart. The corpus's hard "
+        "alone, around its confident component: the talk's, the family "
+        "history's and the export's mentions of her, whose kin agree. "
+        "Adjudication says the postcard's mention and the export's are the "
+        "same (#587), so the whole cluster merges, adjudicated, the "
+        "postcard's mention with the rest. The corpus's hard "
         "(kin-edge) conflict is Florence's death certificate's instead "
         "(the kin-edge trap).",
     ),
@@ -190,7 +192,11 @@ TRAPS = (
         "the early one. Under a sharper extraction prompt the model reads "
         "1950. The early birth never releases him from privacy: every birth "
         "is read, the latest counts (#334), and an unconfirmed one counts "
-        "for nothing (#120).",
+        "for nothing (#120). Adjudication says the family history's "
+        "Nicholas and the export's are the same (#587), which excuses the "
+        "dates of that pair alone: the talk's 1950 still contradicts the "
+        "early birth, so the family history's mention stays apart from "
+        "the others, which merge.",
     ),
     Trap(
         "merge-carrying-death",
@@ -205,9 +211,13 @@ TRAPS = (
         "is no confirmed evidence (#120). The postcard's lone 'Gustl', "
         "which meets the export's Gustav only as a lone name (ADR-0035 §7) "
         "and which nothing corroborates, holds Gustav's candidate cluster "
-        "ambiguous, and its confident component merges (#568): the "
-        "certificate's mention with those that carry his death. The "
-        "postcard's 'Gustl' stays apart.",
+        "ambiguous. Adjudication says the two are the same (#587), but "
+        "'Gustl' matches no name of the certificate's Gustave Lobig, so "
+        "the cluster's one part holds two members that contradict each "
+        "other and falls back to its confident component, which merges "
+        "(#568): the certificate's mention with those that carry his "
+        "death. The postcard's 'Gustl' stays apart. That is expected "
+        "under the rule, not a split to mend here (#380).",
     ),
     Trap(
         "kin-edge",
