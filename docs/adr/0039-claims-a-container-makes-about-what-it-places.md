@@ -153,7 +153,11 @@ claim about itself, cited to the artifact.**
   that the container's record of derived media names. Validation is
   handed the SHA-1s of that record beside the source's own key; the
   writer checks the subject against the derived media it registers for
-  that source in the same write. A breach is a counted reject in
+  that source in the same write. From the command line (`yizkr ingest
+  write`, `yizkr claims --validate`, `claims.py --validate`), the
+  curator gives them with `--placed`: the container's record of derived
+  media, or the source's SHA-1 and theirs; without it every caption is
+  refused, with a message that says how to give them (#551). A breach is a counted reject in
   validation and a refusal in the writer (`pre_plan_refusals`), named
   with its reason; the claim is the unit of rejection. No page
   constraint applies: a commentary on page 8 may speak of the image on

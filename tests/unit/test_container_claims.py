@@ -689,14 +689,14 @@ class TestTheWriter:
                 caption(),
                 None,
                 (BOOKLET_REF, LETTER_REF),
-                "its subject is no artifact registered in this write as "
+                "its subject is no artifact given to this write as "
                 "placed by its source",
             ),
             (
                 caption(STRAY_REF.model_dump()),
                 PLACED,
                 (BOOKLET_REF, LETTER_REF, STRAY_REF),
-                "its subject is no artifact registered in this write as "
+                "its subject is no artifact given to this write as "
                 "placed by its source",
             ),
             (
@@ -710,7 +710,7 @@ class TestTheWriter:
                 caption(),
                 {DECK_REF.sha1: {LETTER_REF.sha1}},
                 (BOOKLET_REF, LETTER_REF),
-                "its subject is no artifact registered in this write as "
+                "its subject is no artifact given to this write as "
                 "placed by its source",
             ),
             (

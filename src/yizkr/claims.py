@@ -67,6 +67,8 @@ resolves either subject to the artifact item as it resolves the source.
 CLI:
     python3 claims.py --json-schema  # print JSON Schema (for LLM prompts)
     python3 claims.py --validate batch.json  # parse + manifest-check a file
+    python3 claims.py --validate batch.json --placed derived-media.json
+        # ... with the artifacts a container places, for its captions
 """
 
 from __future__ import annotations
@@ -1055,6 +1057,89 @@ def placed_artifacts(pages: Iterable[object] | None) -> frozenset[str]:
     )
 
 
+# How a command line gives the artifacts a source places (read_placed),
+# which a caption's refusal there names.
+PLACED_OPTION = (
+    "--placed <derived-media.json>, the record of the media a container "
+    "places that the pipeline keeps in the container's document directory "
+    "(or that directory), or --placed <source sha1>=<artifact sha1>"
+    "[,<artifact sha1>...]"
+)
+_PLACED_PAIR = re.compile(
+    r"([0-9a-f]{40})=([0-9a-f]{40}(?:,[0-9a-f]{40})*)", re.IGNORECASE
+)
+
+
+def read_placed(values: Iterable[str]) -> dict[str, frozenset[str]]:
+    """The artifacts each source places, by the SHA-1 of its media, as a
+    command line gives them (PLACED_OPTION), in the form
+    validate_against_manifest and the writer take as `placed`. Each value
+    is a source's SHA-1 and the SHA-1s of the artifacts it places, or a
+    record of a container's derived media (presentation.DerivedMediaRecord,
+    the file or the directory that holds it), which names its container
+    and every medium it places; values for one source add up. Only the
+    record is read, not the media's bytes: the writer resolves each
+    artifact by an item that carries its media SHA-1. Raises ValueError,
+    naming the value, for a record that cannot be read or is no such
+    record, and for a source said to place itself."""
+    from yizkr.pipeline.presentation import DERIVED_MEDIA, DerivedMediaRecord
+
+    placed: dict[str, set[str]] = {}
+    for value in values:
+        pair = _PLACED_PAIR.fullmatch(value)
+        if pair is not None:
+            source = pair[1].lower()
+            artifacts = {sha1.lower() for sha1 in pair[2].split(",")}
+        else:
+            path = Path(value)
+            if path.is_dir():
+                path = path / DERIVED_MEDIA
+            try:
+                record = DerivedMediaRecord.model_validate_json(
+                    path.read_bytes()
+                )
+            except OSError as exc:
+                raise ValueError(f"{path}: {exc.strerror}") from None
+            except ValidationError:
+                raise ValueError(
+                    f"{path} is not a record of a container's derived media "
+                    f"({DERIVED_MEDIA}); give {PLACED_OPTION}"
+                ) from None
+            source, artifacts = record.source_sha1, set(record.media)
+        if source in artifacts:
+            raise ValueError(
+                f"{value}: a source does not place itself (ADR-0039 §2.1)"
+            )
+        placed.setdefault(source, set()).update(artifacts)
+    return {source: frozenset(found) for source, found in placed.items()}
+
+
+def unplaced_captions(
+    batch: ClaimBatch,
+    placed: Mapping[str, Collection[str]] | None,
+    acceptance: Acceptance | None = None,
+) -> int:
+    """How many claims of `batch`, of a property the manifest marks
+    `placed_subject` (`caption`), cite a source `placed` gives no placed
+    media for: each is refused, by validation and the writer, until its
+    source's placed media are given."""
+    acceptance = acceptance if acceptance is not None else load_acceptance()
+    return sum(
+        claim.property in acceptance.placed_subjects
+        and claim.source.artifact.sha1 not in (placed or {})
+        for claim in batch.claims
+    )
+
+
+def unplaced_hint(count: int) -> str:
+    """What a command line says of `count` captions (unplaced_captions)
+    refused for want of their sources' placed media."""
+    return (
+        f"{count} caption claim(s) cite a source whose placed media were not "
+        f"given, so each is refused: give them with {PLACED_OPTION}"
+    )
+
+
 def subject_problems(
     claim: Claim,
     acceptance: Acceptance,
@@ -1399,6 +1484,15 @@ def main() -> int:
         help="parse FILE as a claim batch and check it against the manifest",
     )
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument(
+        "--placed",
+        action="append",
+        default=[],
+        metavar="RECORD|SOURCE=SHA1,...",
+        help="the artifacts a source places, which its captions may take "
+        "as their subject (ADR-0039 §2.1): a container's derived-media "
+        "record, or a source's SHA-1 and theirs; repeatable",
+    )
     args = parser.parse_args()
 
     if args.json_schema:
@@ -1406,13 +1500,27 @@ def main() -> int:
         return 0
 
     try:
+        placed = read_placed(args.placed)
+    except ValueError as exc:
+        print(f"--placed: {exc}", file=sys.stderr)
+        return 1
+    try:
         batch = ClaimBatch.model_validate_json(args.validate.read_text())
     except ValidationError as exc:
         print(f"Schema errors in {args.validate}:\n{exc}", file=sys.stderr)
         return 1
-    problems = validate_against_manifest(batch, manifest_path=args.manifest)
+    acceptance = load_acceptance(args.manifest)
+    problems = validate_against_manifest(
+        batch,
+        manifest_path=args.manifest,
+        acceptance=acceptance,
+        placed=placed,
+    )
     for problem in problems:
         print(f"manifest check: {problem}", file=sys.stderr)
+    unplaced = unplaced_captions(batch, placed, acceptance)
+    if unplaced:
+        print(unplaced_hint(unplaced), file=sys.stderr)
     if problems:
         return 1
     print(
