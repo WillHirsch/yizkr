@@ -331,7 +331,12 @@ accepts nothing, validation refuses every claim of it, and no prompt that
 the manifest renders offers it. `spouse` is retired (ADR-0036): the spouse
 link is derived from a marriage's participants. The GEDCOM adapter makes
 marriages and partnerships (ADR-0036 §5, "Marriages, residences and other
-periods" below), so no batch carries a spouse claim.
+periods" below), so no batch carries a spouse claim. The writer refuses
+one itself, since `yizkr write` takes a batch without validating it: a
+claim of a retired property, or of a reference property, as its own
+property or a qualifier's, is refused before the first write, named in
+the result's `refused` list with a warning, and the rest of the batch is
+written (#410).
 
 ## Reference pattern (see ADR-0003)
 
@@ -376,15 +381,51 @@ Every statement carries at least one reference with:
 
 Machine-written statements add a second reference:
 - inferred from extraction run → extraction-run item
+- with, where the claim carries a **judgement note** (ADR-0035 §4),
+  `judgement` (the item of its category) and `judgement_note` (its
+  sentence) beside it, in this run block alone: never in the `stated in`
+  block, never as a qualifier, never on the run item. An entity's note,
+  a kind or an identity call, goes in the run block of the `instance of`
+  statement the writer writes, or adds a reference to, for its item. A
+  note's sentence goes in NFC, on one line and cut at 400 characters as
+  a locator is (below), and never refuses its claim; one that holds
+  nothing the instance keeps, or a character Python's Unicode tables do
+  not know, is left out with a warning, and its claim written without
+  it, as every note is, with one warning, on an instance whose
+  vocabulary lacks a note term. A curated claim has no run block, so no
+  note. The write's result counts the noted run blocks it added
+  (`notes_written`, #410), which the scratch write stage records for each
+  document and the run report sums
 
 On the claims path, a value asserted more than once, by several
-artifacts or by one artifact in several places (two pages, two
-passages, two regions of a scan), is one statement for each set of
-qualifiers. It carries a `stated in` reference for each place, with that
-place's locators and excerpt, and, once, the run reference of each run
-that added one; writing a batch again adds no reference (#335). The
-exception is a statement with no run reference (a curator's own write,
-before any machine claim joins it) or whose rank a curator changed: the
+artifacts or by one artifact in several places (two pages, two passages,
+two regions of a scan), is one statement for each set of qualifiers. It
+carries a `stated in` reference for each place, with that place's
+locators and excerpt, and the run reference of each run that added one,
+one block for each of its notes (and one without a note, where a claim
+of the run gave none); writing a batch again adds no reference (#335).
+The run block is compared whole, with its note: a second claim of the
+same run on the statement adds its own run block where its note differs,
+so one statement can carry several blocks of one run, and a reader
+counts runs by run item, never by blocks. A claim from a place the
+statement already cited before the write adds its run block only when it
+carries a note, or when a noted claim of its run gave the statement a
+block of that run, in this write or an earlier one. A statement is
+compared as a curator's when it was one before the write and still is: a
+machine claim of the write that joins a curator's own write at normal
+rank makes it a machine one for every claim of the write, while one
+whose rank a curator changed stays a curator's. The artifacts it cites
+for that comparison (below) and the places it cites are read as it stood
+before the write, and a claim that adds nothing is looked at again once
+the batch's other claims are written and its kinds recorded, so a run's
+noted and note-less claims, and a curator's claims beside machine
+claims, from one place or several, give the same blocks in whatever
+order the batch gives them, for the run that wrote the statement and for
+a later one, and a later run's note-less claims alone add nothing there
+(#410). An entity's kind takes its run blocks by the same rule. No block
+is edited to add or remove a note. The exception is a statement with no
+run reference (a curator's own write, until a machine claim of this
+write or an earlier one joins it) or whose rank a curator changed: the
 writer adds nothing to it for another place of an artifact it already
 cites (the writer's module docstring, `src/yizkr/pipeline/writer.py`,
 gives the rule). The kinds and type hints the writer records after the

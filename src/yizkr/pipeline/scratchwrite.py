@@ -183,7 +183,7 @@ from yizkr.pipeline.stages import (
 # the version of what the write side writes for the same inputs: a change
 # that writes something else for them bumps it, as does a change to the
 # package's source, which the key hashes too (code_digest)
-WRITER_VERSION = 2
+WRITER_VERSION = 3
 # the package whose source the key hashes, and the modules it leaves out:
 # those that only read the run directory or the instance, and decide
 # nothing a write puts on it
@@ -886,6 +886,7 @@ def run_write(context: Any) -> list[str]:
                     "self_references": len(result.self_references),
                     "depicts_left_out": left_out,
                     "items_minted": len(result.minted),
+                    "notes_written": result.notes_written,
                     # local id -> QID, through which the place stage
                     # finds the places the batch's records put in a
                     # container
@@ -917,6 +918,8 @@ def run_write(context: Any) -> list[str]:
         f"{sum(d['refused'] for d in written)} claims refused, "
         f"{sum(d.get('self_references', 0) for d in written)} of them for "
         f"an item value that is their subject's item; "
+        f"{sum(d.get('notes_written', 0) for d in written)} judgement notes "
+        f"written; "
         f"{depicts} depicts claims left out"
         + ("" if complete else "; the instance-contents key is not recorded")
     )

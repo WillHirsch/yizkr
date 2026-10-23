@@ -174,7 +174,8 @@ those the writer refused, and of them those whose item value is their
 subject's item, as the identity map may make it
 (`aggregate.content.write.claims_self_referencing`, absent for a write
 that did not count them; #491), apart from extraction's rejects, the
-items minted, the batches refused whole
+items minted, the judgement notes written (the noted run blocks,
+ADR-0035 §4; #410), the batches refused whole
 before registration, the documents that failed, and whether the
 instance-contents key was recorded; or that the instance held what the
 run's write key makes, so nothing was reset or written. In both, the

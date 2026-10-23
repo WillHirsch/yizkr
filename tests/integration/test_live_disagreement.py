@@ -53,6 +53,7 @@ from yizkr.pipeline.writer import BatchWriter
 
 from .conftest import (
     fixture_mark,
+    legacy_spouse_writes,
     register_fictional,
     run_sparql,
     wait_for_query_service,
@@ -237,7 +238,10 @@ def write_fixture(
     the session finds its own items again. The curator ranks the test sets
     afterwards are not in the hash: the session's marker gives them items of
     their own. `artifact_qids` is handed to each batch's writer: the item of
-    each key no media carries (BatchWriter). Returns each batch's result."""
+    each key no media carries (BatchWriter). Its spouse claims go through
+    legacy_spouse_writes, as the statements an instance holds from before
+    ADR-0036, which the readers read until #520. Returns each batch's
+    result."""
     content = [
         [
             {
@@ -268,14 +272,17 @@ def write_fixture(
     written = [batch(marked(claims)) for claims in batches]
     # the map of the fixture, in which each label is one entity (#109)
     identity = by_label(*written)
-    return [
-        write_mapped(
-            BatchWriter(client, artifact_qids=artifact_qids),
-            each,
-            identity=identity,
-        )
-        for each in written
-    ]
+    # the fixture's spouse statements are those an instance holds from
+    # before ADR-0036, which the disagreement report reads until #520
+    with legacy_spouse_writes():
+        return [
+            write_mapped(
+                BatchWriter(client, artifact_qids=artifact_qids),
+                each,
+                identity=identity,
+            )
+            for each in written
+        ]
 
 
 @pytest.fixture(scope="module")

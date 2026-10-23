@@ -1682,6 +1682,7 @@ def _aggregate_write(written: Mapping[str, Any] | None) -> dict[str, Any]:
         "claims_skipped": total("skipped"),
         "claims_refused": total("refused"),
         "items_minted": total("items_minted"),
+        "notes_written": total("notes_written"),
         "batches_refused": len(written.get("refused") or {}),
         "documents_failed": len(written.get("failed") or {}),
         "contents_recorded": bool(written.get("recorded")),
@@ -3336,7 +3337,8 @@ def _write_sections(content: Mapping[str, Any]) -> list[_Section]:
                 if "claims_self_referencing" in write
                 else "; "
             )
-            + f"{_n(write['items_minted'])} items minted. "
+            + f"{_n(write['items_minted'])} items minted, "
+            f"{_n(write.get('notes_written', 0))} judgement notes written. "
             f"{_n(write['batches_refused'])} batches refused whole, "
             f"{_n(write['documents_failed'])} documents failed; the "
             "instance-contents key is "

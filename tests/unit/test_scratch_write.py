@@ -1261,6 +1261,28 @@ def test_the_record_counts_only_the_items_a_document_s_write_made(
     assert len(by_label(run.wiki, "Leopold Löbig")) == 1
 
 
+def test_the_record_counts_the_judgement_notes_written(run, monkeypatch):
+    """Each document's record gives the noted run blocks its write added
+    (WriteResult.notes_written, #410), and the stage's log line their
+    total."""
+    from yizkr.pipeline.writer import BatchWriter
+
+    original = BatchWriter.write_batch
+
+    def noted(self, *args, **options):
+        result = original(self, *args, **options)
+        result.notes_written = 2
+        return result
+
+    monkeypatch.setattr(BatchWriter, "write_batch", noted)
+    run.past_the_barrier()
+    documents = run.record("write")["documents"].values()
+    assert [d["notes_written"] for d in documents] == [2, 2]
+    assert any(
+        "item; 4 judgement notes written;" in line for line in run.lines
+    )
+
+
 def test_the_record_counts_the_claims_naming_their_own_subjects_item(
     run, monkeypatch
 ):
@@ -1338,4 +1360,4 @@ def test_a_record_that_does_not_count_self_references_holds_no_figure():
     assert "claims_self_referencing" not in content["write"]
     assert content["write"]["claims_refused"] == 1
     (section,) = report._write_sections(content)
-    assert "1 refused; 2 items minted." in section.blocks[0][0]
+    assert "1 refused; 2 items minted," in section.blocks[0][0]
