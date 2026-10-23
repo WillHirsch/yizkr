@@ -2,7 +2,10 @@
 
 `yizkr publish-site` renders the graph into a self-contained static
 site: person pages showing EVERY attributed value side by side with
-its source label (R6/ADR-0002 — never silently pick one), a timeline
+its source label (R6/ADR-0002 — never silently pick one), and the
+artifacts that name the person; artifact pages showing what the artifact
+asserts and what sources say about it, a container's captions and the
+artifact's own statements about itself (ADR-0039 §7); a timeline
 that shows beside each date the range its source states, a photo
 gallery (ADR-0008 derived media included), the disagreement report, and
 a places index that becomes a map once places carry coordinates.
@@ -47,6 +50,7 @@ import shutil
 import urllib.parse
 from collections import defaultdict
 from collections.abc import Iterable
+from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 
@@ -64,6 +68,7 @@ from yizkr.core.privacy import (
 )
 from yizkr.core.wiki import WikiClient
 from yizkr.disagreement import Disagreement, Side
+from yizkr.model.schema import Acceptance, load_acceptance
 from yizkr.queries.publish import load_templates, prefix_block, render
 
 # -- SPARQL ----------------------------------------------------------------
@@ -278,6 +283,84 @@ ORDER BY ?artifact ?subjectLabel ?propLabel ?st ?page ?printedPage ?region
          ?excerpt
 """
 )
+
+# what sources say about each artifact (ADR-0039 §7): every statement whose
+# subject is the artifact on a property the manifest marks
+# `placed_subject` (a container's `caption`, stated in the container with
+# its page) or `document_subject` (what the artifact states of itself:
+# `author`, `addressee`, `inception` and the rest), ``{source_properties}``.
+# A row for each statement and reference block that cites a source: the
+# statement keeps two same-value statements apart (ADR-0002), and the
+# block names its source and the page and printed page it cites. A time
+# value carries its stated precision, and each statement's qualifiers (its
+# sourcing circumstances, circa among them) come as QUALIFIER_CELL's cells.
+# The person page reads the same rows by their value: the document-subject
+# statements that name a person.
+SOURCES_SAY_QUERY = (
+    """\
+SELECT ?artifact ?artifactLabel ?prop ?propLabel ?st ?value ?valueLabel
+       ?precision ?reference ?source ?sourceLabel ?page ?printedNumber
+       ?qualifierCells
+WHERE {{
+  VALUES ?prop {{ {source_properties} }}
+  ?prop wikibase:claim ?p ;
+        wikibase:statementProperty ?ps ;
+        rdfs:label ?propLabel .
+  FILTER(LANG(?propLabel) = "en")
+  ?artifact ?p ?st .
+  ?st ?ps ?value .
+  OPTIONAL {{
+    ?artifact rdfs:label ?artifactLabel .
+    FILTER(LANG(?artifactLabel) = "en")
+  }}
+  OPTIONAL {{
+    ?value rdfs:label ?valueLabel .
+    FILTER(LANG(?valueLabel) = "en")
+  }}
+  OPTIONAL {{
+    ?prop wikibase:statementValue ?psv .
+    ?st ?psv ?valueNode .
+    ?valueNode wikibase:timePrecision ?precision .
+  }}
+  OPTIONAL {{
+    ?st prov:wasDerivedFrom ?reference .
+    ?reference pr:{stated_in} ?source .
+    OPTIONAL {{
+      ?source rdfs:label ?sourceLabel .
+      FILTER(LANG(?sourceLabel) = "en")
+    }}
+    OPTIONAL {{ ?reference pr:{page_number} ?page . }}
+    OPTIONAL {{ ?reference pr:{printed_page_number} ?printedNumber . }}
+  }}
+  OPTIONAL {{
+    SELECT ?st (GROUP_CONCAT(DISTINCT ?qualifierCell; separator="|")
+                AS ?qualifierCells)
+    WHERE {{
+      VALUES ?prop {{ {source_properties} }}
+      ?prop wikibase:claim ?p .
+      [] ?p ?st .
+"""
+    + QUALIFIER_CELL
+    + """\
+    }}
+    GROUP BY ?st
+  }}
+}}
+ORDER BY ?artifact ?propLabel ?st ?reference ?page ?printedNumber
+"""
+)
+
+# how a person page names a document-subject statement whose value is the
+# person, by the statement's property: "shown in" the portrait; a property
+# not named here is shown by its label
+NAMED_AS = {
+    "author": "author of",
+    "addressee": "addressee of",
+    "shows": "shown in",
+    "main_subject": "the subject of",
+    "issued_by": "issuer of",
+    "location_of_creation": "place of creation of",
+}
 
 # the scratch runs the instance holds, by their run items' marks
 SCRATCH_RUNS_QUERY = """\
@@ -498,6 +581,42 @@ def qualifier_span(text: str) -> str:
     return f' <span class="qualifiers">({esc(text)})</span>'
 
 
+@dataclass(frozen=True)
+class Citation:
+    """One reference block of a statement SOURCES_SAY_QUERY reads: the
+    source it is stated in, by QID and English label, and the pages and
+    printed pages it cites."""
+
+    source: str
+    label: str
+    pages: tuple[str, ...] = ()
+    printed: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Said:
+    """A statement a source makes about an artifact on a placed-subject
+    or document-subject property (SOURCES_SAY_QUERY): the artifact, the
+    property by its manifest key and label, the statement's first row
+    (its value, precision and qualifier cells) and each citation."""
+
+    artifact: str
+    artifact_label: str
+    key: str
+    property_label: str
+    row: dict
+    citations: tuple[Citation, ...]
+
+    @property
+    def value_qid(self) -> str:
+        """The value's QID when it is an item, else ""."""
+        value = self.row.get("value", {})
+        raw = value.get("value", "")
+        if value.get("type") == "uri" and "/entity/Q" in raw:
+            return raw.rsplit("/", 1)[-1]
+        return ""
+
+
 class SiteBuilder:
     def __init__(
         self, config: Config, out_dir: Path, run=None, vocabulary=None
@@ -515,6 +634,9 @@ class SiteBuilder:
         self._cutoff_year = (
             datetime.datetime.now(datetime.UTC).year - DEFAULT_CUTOFF_YEARS
         )
+        # the roster's rows by QID, so a page can link a value to the
+        # person's page and badge it as the person's own page does
+        self.people: dict[str, dict] = {}
 
     # -- helpers ------------------------------------------------------------
 
@@ -553,8 +675,33 @@ class SiteBuilder:
         return prefix_block(self.config.concept_uri) + template.format(
             people=people_selection(self.properties, self.items),
             family_type=family_type(self.properties, self.items),
+            source_properties=" ".join(
+                f"wd:{self.properties[key]}"
+                for key in sorted(self._placed | self._document)
+            ),
             **vocabulary,
         )
+
+    @cached_property
+    def _acceptance(self) -> Acceptance:
+        return load_acceptance()
+
+    @cached_property
+    def _placed(self) -> frozenset[str]:
+        """The manifest's `placed_subject` properties the instance has: a
+        container's words about an artifact it places (`caption`)."""
+        return self._acceptance.placed_subjects & self.properties.keys()
+
+    @cached_property
+    def _document(self) -> frozenset[str]:
+        """The manifest's `document_subject` properties the instance has:
+        what a source states of itself."""
+        return self._acceptance.document_subjects & self.properties.keys()
+
+    @cached_property
+    def _keys_by_id(self) -> dict[str, str]:
+        """Each manifest property's key, by its id on the instance."""
+        return {pid: key for key, pid in self.properties.items()}
 
     def _library_query(self, name: str) -> str:
         return prefix_block(self.config.concept_uri) + render(
@@ -692,6 +839,10 @@ class SiteBuilder:
         place_tree = self.run(self._instance_query(PLACE_TREE_QUERY))
         artifacts = self.run(self._instance_query(ARTIFACTS_QUERY))
         assertions = self.run(self._instance_query(ASSERTIONS_QUERY))
+        sources_say = self.sources_say(
+            self.run(self._instance_query(SOURCES_SAY_QUERY))
+        )
+        self.people = {qid_of(row, "person"): row for row in people}
 
         by_person: dict[str, list[dict]] = defaultdict(list)
         for row in statements:
@@ -699,18 +850,28 @@ class SiteBuilder:
         by_artifact: dict[str, list[dict]] = defaultdict(list)
         for row in assertions:
             by_artifact[qid_of(row, "artifact")].append(row)
+        said_of: dict[str, list[Said]] = defaultdict(list)
+        naming: dict[str, list[Said]] = defaultdict(list)
+        for said in sources_say:
+            said_of[said.artifact].append(said)
+            if said.key in self._document and said.value_qid in self.people:
+                naming[said.value_qid].append(said)
 
         for row in people:
             qid = qid_of(row, "person")
             self._write(
                 f"people/{qid}.html",
-                self.person_page(row, by_person.get(qid, [])),
+                self.person_page(
+                    row, by_person.get(qid, []), naming.get(qid, [])
+                ),
             )
         for row in artifacts:
             qid = qid_of(row, "artifact")
             self._write(
                 f"artifacts/{qid}.html",
-                self.artifact_page(row, by_artifact.get(qid, [])),
+                self.artifact_page(
+                    row, by_artifact.get(qid, []), said_of.get(qid, [])
+                ),
             )
         self._write("index.html", self.index_page(people, artifacts))
         self._write("timeline.html", self.timeline_page(timeline))
@@ -725,6 +886,7 @@ class SiteBuilder:
             "people": len(people),
             "statements": len(statements),
             "artifacts": len(artifacts),
+            "sources_say": len(sources_say),
             "timeline_rows": len(timeline),
             "gallery_items": len(gallery),
             "inconsistencies": len(inconsistencies),
@@ -753,7 +915,210 @@ class SiteBuilder:
                 links.append(esc(label or qid))
         return "; ".join(links)
 
-    def person_page(self, person: dict, statements: list[dict]) -> str:
+    def sources_say(self, rows: list[dict]) -> list[Said]:
+        """SOURCES_SAY_QUERY's rows as statements, in the order the query
+        gives them: each statement's first row and each reference block
+        that states it in a source, with the pages and printed pages the
+        block cites. Rows are a statement's blocks, and a block's rows its
+        locators' values, so the statements are counted here, never the
+        rows. A statement of a property the manifest does not know is
+        left out."""
+        first: dict[str, dict] = {}
+        blocks: dict[str, dict[str, dict]] = {}
+        for row in rows:
+            st = cell(row, "st")
+            first.setdefault(st, row)
+            by_block = blocks.setdefault(st, {})
+            reference = cell(row, "reference")
+            if not reference:
+                continue
+            block = by_block.setdefault(
+                reference,
+                {
+                    "source": qid_of(row, "source"),
+                    "label": cell(row, "sourceLabel"),
+                    "pages": [],
+                    "printed": [],
+                },
+            )
+            for name, held in (
+                ("page", "pages"),
+                ("printedNumber", "printed"),
+            ):
+                text = cell(row, name)
+                if text and text not in block[held]:
+                    block[held].append(text)
+        said = []
+        for st, row in first.items():
+            key = self._keys_by_id.get(qid_of(row, "prop"))
+            if key is None:
+                continue
+            said.append(
+                Said(
+                    artifact=qid_of(row, "artifact"),
+                    artifact_label=cell(row, "artifactLabel"),
+                    key=key,
+                    property_label=cell(row, "propLabel"),
+                    row=row,
+                    citations=tuple(
+                        Citation(
+                            block["source"],
+                            block["label"],
+                            tuple(sorted(block["pages"], key=natural_order)),
+                            tuple(sorted(block["printed"], key=natural_order)),
+                        )
+                        for block in blocks[st].values()
+                    ),
+                )
+            )
+        return said
+
+    def person_link(self, qid: str, label: str, root: str = "../") -> str:
+        """`label` linked to the page of the person `qid`, badged as the
+        index badges a person the non-privileged export would drop; the
+        label alone for an item the roster does not list."""
+        person = self.people.get(qid)
+        if person is None:
+            return esc(label)
+        badge = (
+            ' <span class="badge">possibly living</span>'
+            if self._possibly_living(person)
+            else ""
+        )
+        return (
+            f'<a href="{root}people/{esc(qid)}.html">{esc(label)}</a>{badge}'
+        )
+
+    def said_value(self, said: Said, root: str = "../") -> str:
+        """A statement's value as HTML, with its qualifiers: a time at its
+        stated precision (``format_time``), with its range and sourcing
+        circumstances (circa) beside it; an item by its label, linked to
+        its page when it is a person the roster lists; a monolingual text
+        (a caption) quoted, verbatim, in its language."""
+        row = said.row
+        value = row.get("value", {})
+        raw = value.get("value", "")
+        where = f"{said.artifact} statement {qid_of(row, 'st')}"
+        if value.get("datatype", "").endswith("dateTime"):
+            shown = esc(format_time(raw, cell(row, "precision"), where))
+        elif said.value_qid:
+            shown = self.person_link(
+                said.value_qid,
+                cell(row, "valueLabel") or said.value_qid,
+                root,
+            )
+        elif value.get("xml:lang"):
+            shown = f'<q lang="{esc(value["xml:lang"])}">{esc(raw)}</q>'
+        else:
+            shown = esc(raw)
+        return shown + qualifier_span(
+            self.qualifier_text(cell(row, "qualifierCells"), where)
+        )
+
+    def citations(self, said: Said, itself: str, root: str = "../") -> str:
+        """Where a statement is stated: each source linked to its page, or
+        `itself` where the source is the artifact the statement is about,
+        with the page and printed page it cites ("Our Family from Germany,
+        page 6 (printed 4)"), "; "-separated."""
+        parts = []
+        for citation in said.citations:
+            if citation.source == said.artifact:
+                text = esc(itself)
+            else:
+                text = self.artifact_links(
+                    [(citation.source, citation.label)], root
+                )
+            if citation.pages:
+                noun = "pages" if len(citation.pages) > 1 else "page"
+                text += f", {noun} {esc(', '.join(citation.pages))}"
+            if citation.printed:
+                text += f" (printed {esc(', '.join(citation.printed))})"
+            parts.append(text)
+        return "; ".join(sorted(parts, key=natural_order))
+
+    def sources_say_html(self, said: list[Said]) -> str:
+        """An artifact page's "What sources say about this artifact": its
+        captions, each with the container and page that give it, then
+        its own statements, each property's values with their sources,
+        values that disagree listed together and none preferred (CLAUDE.md
+        rule 6); "" when no source says anything of the artifact."""
+        if not said:
+            return ""
+        grouped: dict[tuple[bool, str], list[Said]] = defaultdict(list)
+        for each in said:
+            grouped[
+                (each.key not in self._placed, each.property_label)
+            ].append(each)
+        body = [
+            "<h2>What sources say about this artifact</h2>",
+            '<p class="sub">what each source says of this artifact, '
+            "labelled by the source that says it: a container's caption "
+            "with the page it stands on, and what the artifact states of "
+            "itself. Values that disagree are listed together; none is "
+            "preferred.</p>",
+            '<dl class="statements">',
+        ]
+        for group in sorted(grouped):
+            body.append(f"<dt>{esc(group[1])}</dt>")
+            entries = sorted(
+                (
+                    self.said_value(each)
+                    + self.source_span(self.citations(each, "this artifact"))
+                    for each in grouped[group]
+                ),
+                key=natural_order,
+            )
+            body += [f"<dd>{entry}</dd>" for entry in entries]
+        body.append("</dl>")
+        return "".join(body)
+
+    @staticmethod
+    def source_span(citations: str) -> str:
+        """Citations in the muted "— per" style; "no recorded source" for
+        a statement that cites none."""
+        return (
+            f'<span class="source">{citations or "no recorded source"}</span>'
+        )
+
+    def named_in_html(self, naming: list[Said]) -> str:
+        """A person page's "Named in artifacts": each document-subject
+        statement whose value is the person, as the artifact it is about
+        and what it names them as ("shown in" the portrait), with its
+        qualifiers and its sources; "" for none."""
+        if not naming:
+            return ""
+        entries = sorted(
+            (
+                f"{esc(NAMED_AS.get(each.key, each.property_label))} "
+                + self.artifact_links(
+                    [(each.artifact, each.artifact_label or each.artifact)]
+                )
+                + qualifier_span(
+                    self.qualifier_text(
+                        cell(each.row, "qualifierCells"),
+                        f"{each.artifact} statement {qid_of(each.row, 'st')}",
+                    )
+                )
+                + self.source_span(self.citations(each, "the artifact itself"))
+                for each in naming
+            ),
+            key=natural_order,
+        )
+        return (
+            "<h2>Named in artifacts</h2>"
+            '<p class="sub">what sources say of an artifact that names '
+            "this person, such as its author, its addressee or whom it "
+            "shows, each with its source</p><ul>"
+            + "".join(f"<li>{entry}</li>" for entry in entries)
+            + "</ul>"
+        )
+
+    def person_page(
+        self,
+        person: dict,
+        statements: list[dict],
+        naming: list[Said] | None = None,
+    ) -> str:
         qid = qid_of(person, "person")
         label = cell(person, "personLabel") or qid
         aliases = [a for a in cell(person, "aliases").split("|") if a]
@@ -790,6 +1155,7 @@ class SiteBuilder:
             for row in grouped[prop]:
                 body.append(f"<dd>{self.render_value(row)}</dd>")
         body.append("</dl>")
+        body.append(self.named_in_html(naming or []))
         body.append(
             f'<p class="sub">'
             f'<a href="{esc(self.config.wikibase_url)}/wiki/Item:{qid}">'
@@ -893,7 +1259,12 @@ class SiteBuilder:
             return f"{place}: {quoted}"
         return place or quoted or "the artifact as a whole"
 
-    def artifact_page(self, artifact: dict, assertions: list[dict]) -> str:
+    def artifact_page(
+        self,
+        artifact: dict,
+        assertions: list[dict],
+        said: list[Said] | None = None,
+    ) -> str:
         qid = qid_of(artifact, "artifact")
         label = cell(artifact, "artifactLabel") or qid
         body = [f"<h1>{esc(label)}</h1>"]
@@ -917,6 +1288,7 @@ class SiteBuilder:
                 f'<p><a href="{esc(href)}">⬇ download the original '
                 f"({esc(file_name.removeprefix('File:'))})</a></p>"
             )
+        body.append(self.sources_say_html(said or []))
         statements = self.asserted_statements(assertions)
         if statements:
             body.append(
