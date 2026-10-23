@@ -245,8 +245,9 @@ each trap, with no gold set. Past the driver it holds the run report
 (`yizkr scratch report`) and the clustering stage's identity map to the
 corpus too (#380): the report's aggregates for the corpus, with no
 universe name, file name or SHA-1 in report.md, and each trap's
-clustering outcome, the three the whole-cluster merge rule cannot meet
-(#361) included, each recorded as expected with its reason.
+clustering outcome, the one no merge rule meets (a conflicting
+cluster's confident component, #361, #568) recorded as expected with its
+reason.
 
 `TRAPS`, in `tests/fixtures/corpus/__init__.py`, names the seven traps the
 corpus sets, in #76's words and, for the hard (kin-edge) conflict the

@@ -281,14 +281,15 @@ uv run yizkr scratch run
   barrier, so a corpus stage keeps its outputs in `corpus/<stage>/` in
   the run directory and reuses them while their inputs stand, as the
   documents' views are reused. The first is clustering (#105): it
-  clusters the documents' batches, with no wiki, then asks the model
-  about the ambiguous pairs of each ambiguous cluster (#106), through
+  clusters the documents' batches, with no wiki, merging the confident
+  components of each ambiguous cluster (#568), then asks the model about
+  the ambiguous pairs between them (#106), through
   the LLM cache in the `critique` role's engine, model and effort, its
   calls named `adjudication` in the events, the report and the monitor
   (src/yizkr/pipeline/README.md, "Corpus clustering"). In a
   development-stage run the `same` verdicts merge unattended, with the
   method `adjudicated`; a conflicting cluster never merges, and one with
-  an `uncertain` pair stays apart. It writes the corpus's identity map to
+  an `uncertain` pair stays as it is, its components merged. It writes the corpus's identity map to
   `corpus/clustering/identity-map.json`, and the verdicts with their
   reasons, each call's pairs and raw answer, and the counts to
   `corpus/clustering/adjudication.json`, both local-only data, and

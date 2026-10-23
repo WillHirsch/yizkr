@@ -709,9 +709,18 @@ refuses). The module docstrings are the full account; in short:
   clusters: *conflicting* when one joins a cannot-link pair, else
   *ambiguous* when any of its links is, or when two members that were
   never a pair contradict each other (dates, kin of one name whose dates
-  conflict, names that do not match), else *confident*. Unattended, only
-  confident clusters merge; the members of the others stay apart, and are
-  counted.
+  conflict, names that do not match), else *confident*. A confident
+  cluster merges. An ambiguous one merges each of its *confident
+  components*, the closure over its confident links, with the method
+  `confident_component` (ADR-0007 as amended by #568): each is
+  re-checked as a cluster is (a cannot-link pair, a pair said
+  `different`, two members that contradict) and stays apart if the check
+  fails. Only the ambiguous links between components, and those inside a
+  component kept apart, are left for adjudication or cluster review; one
+  inside a merged component is settled by it (its review pair's
+  `inside_component`). This holds in keeper mode too. A conflicting
+  cluster merges nothing, its components included. Members left apart
+  are counted.
 - **Thresholds** live in `clustering.yaml` beside the module: GEDCOM
   anchoring, the hub limit,
   how far a circa date widens, the widest date range that corroborates,
@@ -720,9 +729,11 @@ refuses). The module docstrings are the full account; in short:
   estimate of the calls. The defaults come from the corpus clustering
   experiment (#71, `scripts/experiments/cluster_calibration.py`); #74
   settles them on scratch runs.
-- **Adjudication** (`adjudication.py`, ADR-0007 as amended by #106,
-  ADR-0025). The ambiguous pairs of each ambiguous candidate cluster,
-  and no other (never a conflicting cluster's, never a confident link),
+- **Adjudication** (`adjudication.py`, ADR-0007 as amended by #106 and
+  #568, ADR-0025). The ambiguous pairs of each ambiguous candidate
+  cluster that no merged confident component holds, and no other (never
+  a conflicting cluster's, never a confident link), each asked on its
+  own two mentions' evidence,
   go to the model in batches of `pairs-per-call`, a cluster's pairs
   together, through the run's LLM cache in the `critique` role's engine,
   model and effort, the calls named `adjudication` in the run's events.
@@ -736,9 +747,10 @@ refuses). The module docstrings are the full account; in short:
   one-sentence reason; a line outside that schema, a pair answered two
   ways and an answer cut off are refused and counted. In a
   development-stage run the verdicts merge unattended: clustering is
-  made again under them, and a cluster whose every ambiguous pair is
+  made again under them, and a cluster whose every pending pair is
   `same` or `different` is cut at its `different` pairs. Each part the
-  closure over its confident links and `same` pairs makes merges unless
+  closure over its confident links and `same` pairs makes (its confident
+  components joined by `same` pairs) merges unless
   it holds a pair contradicted: a `different` pair joined another way (a
   cannot-link), a `same` pair that differs by more than its own dates (a
   verdict excuses a date conflict on its own pair, never stated sexes,
@@ -746,14 +758,19 @@ refuses). The module docstrings are the full account; in short:
   organisation's places that differ, or event kinds that cannot be
   one), or any two members whose evidence says they differ. A cluster
   of two whose one pair no `same` could merge is not asked in a
-  development-stage run (no verdict changes a cluster), and is counted. A merged part's method is `adjudicated` when
-  a `same` pair is among its links, `confident` when its confident links
-  alone join it. A cluster with an `uncertain` pair or one without a
-  verdict stays apart whole. People are asked first, then unions, then
+  development-stage run (no verdict changes a cluster), and is counted.
+  A part that holds a pair contradicted falls back to its confident
+  components. A merged part's method is `adjudicated` when a `same` pair
+  is among its links (the components it joins included),
+  `confident_component` when its confident links alone join it. A
+  cluster with an `uncertain` pending pair or one without a verdict
+  stays as it is without verdicts: its components merged, the rest
+  apart. People are asked first, then unions, then
   events, each group after clustering again, so a union whose couple
   merged may need no call. In keeper mode every pending pair is asked
   once, the verdicts are recorded for the cluster review sheet (#108),
-  and nothing merges. Verdicts, reasons, each call's pairs and raw
+  and the verdicts merge nothing (the confident components merge, as in
+  clustering's own map). Verdicts, reasons, each call's pairs and raw
   answer, and the counts are kept in
   `<run>/corpus/clustering/adjudication.json`, local-only like the map;
   both are reused while the clustering's inputs, the prompt, the stage's
@@ -761,8 +778,9 @@ refuses). The module docstrings are the full account; in short:
   role, the batch size and the mode stand, and while no call was
   refused.
 - **The map.** Each mention's fingerprint maps to its cluster and the
-  method that put it there (`confident`, `adjudicated`, `ambiguous`,
-  `conflicting`, `singleton`, or `unclustered` for a mention its manifest
+  method that put it there (`confident`, `confident_component`,
+  `adjudicated`, `ambiguous`, `conflicting`, `singleton`, or
+  `unclustered` for a mention its manifest
   does not mark for extraction). The map's `hash` covers those decisions alone. It also
   lists each ambiguous or conflicting candidate cluster with its pairs,
   the evidence for each, and the pair that makes it conflict or the
@@ -774,11 +792,8 @@ refuses). The module docstrings are the full account; in short:
   and hash. What reaches the run's events is counts within fixed labels.
 - **Not yet.** Overrides with never-re-ask come with #107, and the
   cluster review sheet, which is to show keeper mode's verdicts, with
-  #108. Whether the confident links inside an ambiguous cluster still
-  unsettled merge is an open decision (#568): adjudication settles a
-  cluster only when all its ambiguous pairs are `same` or `different`,
-  so that rule would apply to the clusters it leaves. The owner reviews
-  ambiguous and conflicting clusters once, before the keeper run.
+  #108. The owner reviews ambiguous and conflicting clusters once,
+  before the keeper run.
 
 ## The scratch run's write side (`scratchwrite.py`, ADR-0025 §1, §2)
 

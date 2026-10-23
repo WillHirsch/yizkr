@@ -168,6 +168,7 @@ CLAIM_PARTS = ("value", "qualifiers", "locator")
 METHODS = frozenset(
     {
         "confident",
+        "confident_component",
         "adjudicated",
         "ambiguous",
         "conflicting",

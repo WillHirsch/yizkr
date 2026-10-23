@@ -158,12 +158,13 @@ TRAPS = (
         "child's end or the parents'; clustering reads the two ends as one "
         "(#105). The postcard's writer is labelled by its own words, 'Dein "
         "Vater', a kinship term and no name (ADR-0035), so he never blocks "
-        "with her. Under the whole-cluster merge rule (#361), Klara's "
-        "mentions stay unmerged, in an ambiguous cluster: the postcard's "
-        "own mention of her links to the export on the name alone. That is "
-        "expected under the rule, not a split to mend here (#380). The "
-        "corpus's hard (kin-edge) conflict is Florence's death "
-        "certificate's instead (the kin-edge trap).",
+        "with her. Klara's candidate cluster is ambiguous, since the "
+        "postcard's own mention of her links to the export on the name "
+        "alone, and its confident component merges (#568): the talk's, "
+        "the family history's and the export's mentions of her, whose kin "
+        "agree. The postcard's own mention stays apart. The corpus's hard "
+        "(kin-edge) conflict is Florence's death certificate's instead "
+        "(the kin-edge trap).",
     ),
     Trap(
         "death-date",
@@ -201,13 +202,12 @@ TRAPS = (
         "'96 and his burial in Stupfield, and so does the export's Gustav.",
         "The certificate's batch holds no death evidence for him: it reaches "
         "his mention there only through a merge of mentions (#105), which "
-        "is no confirmed evidence (#120). Under the whole-cluster merge "
-        "rule (#361) no such merge happens: the postcard's lone 'Gustl', "
+        "is no confirmed evidence (#120). The postcard's lone 'Gustl', "
         "which meets the export's Gustav only as a lone name (ADR-0035 §7) "
         "and which nothing corroborates, holds Gustav's candidate cluster "
-        "ambiguous. That is expected under the rule; the link rule "
-        "would merge the certificate's mention with those that carry his "
-        "death (#380).",
+        "ambiguous, and its confident component merges (#568): the "
+        "certificate's mention with those that carry his death. The "
+        "postcard's 'Gustl' stays apart.",
     ),
     Trap(
         "kin-edge",
@@ -225,11 +225,12 @@ TRAPS = (
         "export's Florence, though no pair of them was ever proposed, and "
         "the impossibility filter refuses the candidate cluster: a kin "
         "edge joins two of its members, so it conflicts hard (#425). The "
-        "mother never shares a cluster with any mention of Florence. Under "
-        "the whole-cluster merge rule (#361) Florence's own mentions, whose "
-        "links to the export are confident, stay apart with the rest of "
-        "the conflicting cluster. That is expected under the rule, not a "
-        "split to mend here (#380).",
+        "mother never shares a cluster with any mention of Florence. A "
+        "conflicting cluster never merges, its confident components "
+        "included (#361, #568), so Florence's own mentions, whose links to "
+        "the export are confident, stay apart with the rest of the "
+        "conflicting cluster. That is expected under the rule, not a split "
+        "to mend here (#380).",
     ),
 )
 

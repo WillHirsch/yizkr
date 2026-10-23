@@ -349,12 +349,17 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   doubts (subject, predicate, value or existence, ADR-0023) and its
   category from the critic's fixed list (`critique.CATEGORIES`), and the
   findings that failed their checks, counted apart as invalid;
-- clusters, from the clustering stage's identity map: confident merges,
-  adjudicated merges (those the adjudicator's `same` verdicts made in a
-  development-stage run, #106) and their mentions, the members a
-  `different` verdict left alone, ambiguous clusters left split (an
-  adjudicated cluster that left members apart for a contradiction among
-  them), conflicting clusters (and how many of
+- clusters, from the clustering stage's identity map: confident merges
+  (whole confident candidate clusters), confident component merges (the
+  confident components of ambiguous candidate clusters, #568) and their
+  mentions, adjudicated merges (those the adjudicator's `same` verdicts
+  made in a development-stage run, #106) and their mentions, the members
+  a `different` verdict left alone, ambiguous clusters left split (those
+  that end in more than one cluster for want of a settlement: a member
+  left apart, a pending pair unsettled between merged components, or a
+  contradiction an adjudicated cluster fell back from; counted with the
+  members left apart alone, the members of their merged components
+  not among them), conflicting clusters (and how many of
   them hard), singletons, the recordless mentions (those of a kind that
   takes a mention record and have none, which never link confidently,
   ADR-0035 §7), the mentions clustered by kind, the candidate
@@ -367,9 +372,9 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   stage, and the map's state when it is missing or of another format.
   The map's summary also holds `confident_links_only`, what merging over
   the confident links alone would give; the report leaves it out, since
-  a component of it may hold an ambiguous pair (two brothers who share a
-  nickname, and a plain "Gustl" linked to one of them), so it overstates
-  what merges.
+  it overstates what merges: it takes in the confident links of
+  conflicting clusters, and the components a re-check keeps apart for a
+  contradiction among their members.
 
 **Calls and the cache.** The calls that reached the engine and those the
 cache answered, in all and per role; hits and misses by reason; resumes,
