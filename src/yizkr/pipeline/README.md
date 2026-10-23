@@ -330,8 +330,9 @@ re-running one step in isolation — but for a normal ingest you only ever run
   number printed on it, a status (`transcribed`, `blank`, `illegible`,
   `not-a-document-page`), its text with the editorial marks
   (`[illegible]`, `[?]`, `[redacted]` where text is blacked out or
-  covered), the languages it is written in, and notes. The transcription
-  view keeps the record's fields on its `pages` (the page's physical
+  covered; a table, list in columns or form grid written one line per
+  row, its cells separated by ` | ` and its empty cells kept), the
+  languages it is written in, and notes. The transcription view keeps the record's fields on its `pages` (the page's physical
   index stays `page`, and the printed number is `printed_page`) and the
   class as `document_class`; its text opens each page with a `[Page N]`
   marker. The document's language hint is the language that holds most
