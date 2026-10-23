@@ -321,6 +321,39 @@ class TestStates:
         # a reset's steps differ too much in length to be rated
         assert stage_of(summary, "reset").rate is None
 
+    def test_the_rate_counts_what_this_attempt_did(self, tmp_path):
+        """A write that goes on where an earlier invocation stopped starts
+        at two of four documents: the rate counts the one it wrote in a
+        minute, not the two before it."""
+        entries = [
+            *through_register(),
+            corpus("started", 212, "write"),
+            written(212, 2),
+            written(272, 3),
+        ]
+        summary = summarise_run(make(tmp_path, entries), at_(280))
+        write = stage_of(summary, "write")
+        assert write.rate == pytest.approx(1.0)
+        assert write.to_go == pytest.approx(60.0)
+
+    def test_each_phase_is_rated_from_its_own_start(self, tmp_path):
+        """The place stage asks, then writes links: the links are rated
+        from the first event that counts them."""
+        entries = [
+            *mid_write(),
+            corpus("done", 333, "write"),
+            corpus("started", 334, "places"),
+            progress(340, "places", "asking", unit="batches", done=0, of=2),
+            progress(360, "places", "asking", unit="batches", done=2, of=2),
+            progress(370, "places", "writing", unit="links", done=0, of=4),
+            progress(430, "places", "writing", unit="links", done=2, of=4),
+        ]
+        summary = summarise_run(make(tmp_path, entries), at_(440))
+        places = stage_of(summary, "places")
+        assert (places.phase, places.unit) == ("writing", "links")
+        assert places.rate == pytest.approx(2.0)
+        assert places.to_go == pytest.approx(60.0)
+
     def test_a_stage_with_one_progress_event_has_no_rate_yet(self, tmp_path):
         entries = mid_write()[:-1]
         summary = summarise_run(make(tmp_path, entries), at_(215))
