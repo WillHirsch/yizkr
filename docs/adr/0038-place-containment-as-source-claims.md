@@ -1,15 +1,17 @@
 # ADR-0038: Place containment as time-scoped source claims
 
-Status: **proposed** (drafted 2026-10-16 for #515, on the owner's
-direction of that day). Supersedes in part
+Status: **accepted** (accepted by the owner, 2026-10-23; drafted
+2026-10-16 for #515, on the owner's direction of that day). Each owner
+question below is settled by its recommendation. Supersedes in part
 [ADR-0009](0009-place-hierarchy.md): its "Provenance" section and
 decision FA of #201's amendment (PR #513, parked), with the parts of its
 adjudication that follow from them (§9 below). The rest of ADR-0009
-stands. Until the owner accepts this ADR, ADR-0009, ADR-0017 and
-MODELING.md stay as they are; the consequences in §8 are applied with
-the code that implements it. Its implementation comes before #146, the
-first scratch run that writes, since the owner resolves every open issue
-that affects write structure first (2026-10-16).
+stands. ADR-0017 carries the amendment §8.2 gives it. The consequences in
+§8 are applied with the code that implements them: items 1 to 4 with
+#515's implementation, items 5 to 7 with the rebuild of #201's stage.
+Its implementation comes before #146, the first scratch run that writes,
+since the owner resolves every open issue that affects write structure
+first (2026-10-16).
 
 ## Context
 
@@ -193,7 +195,7 @@ account (#164), and coordinates and external ids come with it.
 
 ### 8. What follows from it
 
-Applied with the implementation, once the owner accepts this ADR:
+Applied with the implementation (accepted by the owner, 2026-10-23):
 
 1. **The inconsistency report** reads the containment path as §5
    says. `place-containment.rq` fetches, for each edge, its rank and
@@ -316,24 +318,37 @@ Applied with the implementation, once the owner accepts this ADR:
    writing), stated in itself like its registrar statements, with
    precision, ranges and circa as any date. It gets its own issue.
    Until then views label a container by its source alone.
+   *Settled (owner, 2026-10-23):* as recommended. An artifact's own
+   date gets an issue of its own; until it lands, views label a
+   container by its source alone.
 2. **The report's suppression in time.** *Recommendation:* a path at
    any time, through stated, non-deprecated claims (§5). Revisit "as of
    the claims' times" once question 1 is settled and dated containment
    exists in numbers.
+   *Settled (owner, 2026-10-23):* as recommended, a path at any time
+   through stated, non-deprecated claims (§5, §8.1).
 3. **A link a record states that no claim gives.** *Recommendation:*
    the place stage writes it, stated in the document's artifact, with no
    page and no time (a record has no locator and states no time, as PR
    #513 found). The run report counts such links, a measure of
    extraction's recall on containment. The alternative is to count them
    only, and fix extraction until claims carry every link.
+   *Settled (owner, 2026-10-23):* as recommended, the place stage
+   writes such a link and the run report counts it (§8.5).
 4. **A cycle across sources.** *Recommendation:* refuse and count, as
    now (§8.7). The alternative, letting it stand as two sources'
    coexisting claims, would need every reader of the closure to handle
    cycles.
+   *Settled (owner, 2026-10-23):* as recommended, refuse and count
+   (§8.7).
 5. **ADR-0017 §2's hand-off.** *Recommendation:* withdraw it (§8.2),
    since its container comes from the model's knowledge. A reviewer who
    knows a containment records it by citing a source.
+   *Settled (owner, 2026-10-23):* as recommended, the hand-off is
+   withdrawn (§8.2).
 6. **A curator's own containment.** *Recommendation:* a curator cites
    the source it rests on (§1), and never asserts geography on their own
    authority. The alternative is a curator-assertion reference, as
    ADR-0002 allows for resolutions.
+   *Settled (owner, 2026-10-23):* as recommended, a curator cites the
+   source a containment rests on (§1).

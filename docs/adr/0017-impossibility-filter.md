@@ -13,6 +13,16 @@ and pruning it would drop a live pair. A place without a QID is never
 pruned by containment. Clustering's conflict check reads a member's
 containers among the cluster's members the same way. Blocking keys on
 whole name forms (ADR-0007, as amended by #388), not name tokens.
+Amended by [ADR-0038](0038-place-containment-as-source-claims.md)
+(accepted 2026-10-23, #515; §8.2): §2's hand-off is withdrawn. Graph
+dedup's adjudicator no longer returns a container from its own knowledge
+on a `distinct` verdict, which would be a model asserting geography, and
+`reconcile-graph` writes no `-containment.csv`; the `distinct` verdict
+stands. A reviewer who knows a containment records it by citing the
+source it rests on. Rule 2 stands: a source's claim that one place lies
+within another is still a referenced fact that the two are distinct, and
+it reads the edges the inconsistency report reads (ADR-0038 §5), a
+`part_of` or `location` with a stated-in source that is not deprecated.
 
 ## Context
 

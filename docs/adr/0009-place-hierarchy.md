@@ -2,9 +2,10 @@
 
 Status: accepted
 Superseded in part by [ADR-0038](0038-place-containment-as-source-claims.md)
-(proposed, 2026-10-16, #515): its "Provenance" section and decision FA
-of #201's amendment (PR #513), with what follows from them (ADR-0038 §9);
-this ADR stands as written until the owner accepts ADR-0038.
+(accepted by the owner 2026-10-23, #515): its "Provenance" section and
+decision FA of #201's amendment (PR #513), with what follows from them
+(ADR-0038 §9). A containment is a source's claim, and no model answers
+whether one place lies within another; the rest stands.
 Amended by [ADR-0031](0031-the-relation-decides-the-kind.md) (#202,
 2026-09-29): a camp, prison or other site that a source names as where
 something happened is a place, inside its town or region, so it joins
