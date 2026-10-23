@@ -243,8 +243,9 @@ counted them on the written graph and kept them in its record
 `different_source`, their total, and `by_property`, their count by
 property, keyed by manifest key (`other` for one the manifest does not
 hold), the most frequent first. Counts alone, never a QID, a label or a
-value. A run whose site stage has not run, and one whose site record
-does not count them (made before the stage did), say they are not
+value. A run whose site stage has not run, one whose site record cannot
+be read, and one whose site record does not count them (made before the
+stage did, or holding a count that is no whole number) say they are not
 available, with why, never 0.
 
 **Anomalies.** The alerts by check and by stage, each finding (a

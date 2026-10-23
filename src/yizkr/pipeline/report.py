@@ -1759,31 +1759,44 @@ def _place_stage(path: Path) -> dict[str, Any] | None:
     return None
 
 
-def _site_stage(path: Path) -> dict[str, Any] | None:
-    """The site stage's record (yizkr.pipeline.scratchwrite), when the run
-    directory holds one."""
+def _site_stage(path: Path) -> dict[str, Any] | _Unreadable | None:
+    """The site stage's record (yizkr.pipeline.scratchwrite): None when the
+    run directory holds none, and an _Unreadable for one that cannot be
+    read or holds no JSON object."""
     found = _json(path / CORPUS_DIR / SITE_STAGE / WRITE_RECORD)
-    return found if isinstance(found, dict) else None
+    if found is None or isinstance(found, dict | _Unreadable):
+        return found
+    return _Unreadable("not a JSON object")
 
 
 def _aggregate_contradictions(
-    sited: Mapping[str, Any] | None, vocabulary: _Vocabulary
+    sited: Mapping[str, Any] | _Unreadable | None, vocabulary: _Vocabulary
 ) -> dict[str, Any]:
     """The different-source contradictions the site stage counted on the
     written graph: their total and their count by property (its manifest
     key, OTHER for one the manifest does not hold). NOT_AVAILABLE, with
-    why, when no site stage has run or its record does not count them."""
+    why, when no site stage has run, its record cannot be read, or it does
+    not count them, a count of every property included."""
     if sited is None:
         return {
             "status": NOT_AVAILABLE,
             "why": "no site stage of this run has run to its end, and the "
             "site stage counts them on the written graph",
         }
+    if isinstance(sited, _Unreadable):
+        return {
+            "status": NOT_AVAILABLE,
+            "why": "the site stage's record cannot be read",
+        }
     counted = sited.get("disagreements")
     if not isinstance(counted, dict):
         counted = {}
     total, by_property = counted.get("total"), counted.get("by_property")
-    if _counted(total) is None or not isinstance(by_property, dict):
+    if (
+        _counted(total) is None
+        or not isinstance(by_property, dict)
+        or any(_counted(count) is None for count in by_property.values())
+    ):
         return {
             "status": NOT_AVAILABLE,
             "why": "the run's site stage did not record them",
@@ -2085,7 +2098,7 @@ def _aggregate(
     now: datetime,
     written: Mapping[str, Any] | None = None,
     placed: Mapping[str, Any] | None = None,
-    sited: Mapping[str, Any] | None = None,
+    sited: Mapping[str, Any] | _Unreadable | None = None,
 ) -> dict[str, Any]:
     """The report's aggregates, which report.md shows all of but the
     documents per language: counts, rates and times, keyed by names of
@@ -2494,7 +2507,7 @@ def _aggregate_content(
     vocabulary: _Vocabulary,
     written: Mapping[str, Any] | None = None,
     placed: Mapping[str, Any] | None = None,
-    sited: Mapping[str, Any] | None = None,
+    sited: Mapping[str, Any] | _Unreadable | None = None,
 ) -> dict[str, Any]:
     entities: Counter = Counter()
     claims: Counter = Counter()

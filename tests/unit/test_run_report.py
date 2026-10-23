@@ -1819,6 +1819,38 @@ class TestCorpusStages:
         assert "no claims extracted 1" in text
         assert leaks(text) == []
 
+    def test_a_corpus_stage_s_unknown_reason_shows_as_other(self, tmp_path):
+        """A reason whose label the vocabulary does not hold shows as
+        OTHER: never its own words, which may quote a document."""
+        unknown = "Gustav Löbig turned up twice: in Flörburg and Klurnau"
+        entries = [
+            (name, entry | {"attention": [*CLUSTERED, unknown]})
+            if entry.get("stage") == "clustering"
+            and entry.get("event") == "done"
+            else (name, entry)
+            for name, entry in STREAM
+        ]
+        aggregate = build(record(tmp_path / "run", entries), now=NOW)[
+            "aggregate"
+        ]
+        (clustering,) = aggregate["corpus_stages"]
+        assert clustering["attention"] == sorted(
+            [
+                "ambiguous clusters not merged",
+                "conflicting clusters not merged",
+                OTHER,
+            ]
+        )
+        text = render_markdown(aggregate)
+        (row,) = [
+            line for line in text.splitlines() if "| clustering |" in line
+        ]
+        assert (
+            "| ambiguous clusters not merged, conflicting clusters not "
+            f"merged, {OTHER} |"
+        ) in row
+        assert "Löbig" not in text and "turned up" not in text
+
     def test_no_pointer_without_a_corpus_stage_s_reason(self, tmp_path):
         entries = [
             (name, {k: v for k, v in entry.items() if k != "attention"})
@@ -1915,6 +1947,8 @@ class TestContradictions:
             {"total": "6", "by_property": {}},
             {"total": 6},
             {"total": True, "by_property": {}},
+            {"total": 1, "by_property": {"mother": "1"}},
+            {"total": 1, "by_property": {"mother": -1}},
             "6",
         ],
     )
@@ -1924,6 +1958,21 @@ class TestContradictions:
             "contradictions"
         ]
         assert contradictions["status"] == NOT_AVAILABLE
+
+    @pytest.mark.parametrize("text", ["{not json", "[1, 2]"])
+    def test_a_site_record_it_cannot_read(self, run, text):
+        """A site stage ran, but its record cannot be read: not available,
+        saying so, rather than that no site stage ran."""
+        site_record(run)
+        (run / "corpus" / "site" / "record.json").write_text(text)
+        aggregate = build(run, now=NOW)["aggregate"]
+        assert aggregate["content"]["contradictions"] == {
+            "status": NOT_AVAILABLE,
+            "why": "the site stage's record cannot be read",
+        }
+        assert "site stage's record cannot be read" in render_markdown(
+            aggregate
+        )
 
     def test_a_run_with_no_site_stage(self, made):
         assert made["aggregate"]["content"]["contradictions"] == {
