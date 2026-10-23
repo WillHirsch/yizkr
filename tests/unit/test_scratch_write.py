@@ -1478,6 +1478,78 @@ class TestProgress:
             (2, 0),
         ]
 
+    def test_register_counts_the_refused_and_the_failed(
+        self, monkeypatch, run
+    ):
+        from tests.fixtures.identity import mapped
+
+        # the identity map holds none of the shop front's mentions, so its
+        # batch is refused whole; the letter's registration fails
+        identity = mapped(
+            *(scratchwrite.extracted_batch(doc) for doc in run.documents)
+        )
+        monkeypatch.setattr(scratchwrite, "identity_map", lambda _: identity)
+        run.add(
+            "brunnenring-35.png",
+            SHOP,
+            batch(born(SHOP, 1914, local_id="leopold-shop")),
+        )
+        letter = run.documents[1]
+        real = run.driver._step_register
+
+        def register(doc):
+            if doc.sha1 == letter.sha1:
+                raise ConnectionError("the wiki went away")
+            return real(doc)
+
+        monkeypatch.setattr(run.driver, "_step_register", register)
+        run.stage("reset")
+        run.stage("register")
+        events = progress_events(run, "register")
+        assert [(e["done"], e["of"], e["failed"]) for e in events] == [
+            (0, 2, 0),
+            (1, 2, 0),
+            (2, 2, 1),
+        ]
+        assert {e["refused"] for e in events} == {1}
+
+    def test_write_counts_the_claims_it_refuses_apart(self, run):
+        # a date of birth of the letter itself: the writer refuses it
+        letter = run.documents[1]
+        misplaced = claim(
+            LETTER,
+            {"kind": "artifact", "sha1": sha1(LETTER)},
+            "date_of_birth",
+            {"type": "time", "year": 1952},
+        )
+        letter.batch.write_text(
+            batch(
+                brothers(LETTER), born(LETTER, 1913), misplaced
+            ).model_dump_json(indent=2)
+        )
+        run.past_the_barrier(until="write")
+        last = progress_events(run, "write")[-1]
+        documents = run.record("write")["documents"].values()
+        refused = sum(d["refused"] for d in documents)
+        assert refused == 1
+        assert last["claims_refused"] == refused
+        assert last["skipped"] == sum(d["skipped"] for d in documents)
+        assert last["claims_refused"] != last["skipped"]
+
+    def test_the_reset_is_given_its_step_by_name(self, run, monkeypatch):
+        """A stand-in for the reset that takes the step callback by name
+        alone, as the live tests' stand-ins may, is given it."""
+        told = []
+
+        def reset(env_file, log, **options):
+            options["progress"](1, 1, "start the stack")
+            told.append(options)
+
+        monkeypatch.setattr(scratchwrite, "reset_instance", reset)
+        run.past_the_barrier(until="reset")
+        assert len(told) == 1
+        assert progress_events(run, "reset")[0]["step"] == "start the stack"
+
     def test_reset_tells_of_each_step_as_it_starts(self, run):
         run.past_the_barrier(until="reset")
         assert progress_events(run, "reset") == [

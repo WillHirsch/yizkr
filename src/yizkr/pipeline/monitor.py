@@ -164,6 +164,10 @@ OTHER = "other"
 # so does a replay of a conversation's opening turn
 _ENGINE_EVENTS = ("cache-miss", "cache-replay")
 
+# the event a scratch run emits as an invocation goes past the barrier
+# (yizkr.pipeline.scratch.BARRIER): its documents' stages have ended, and
+# its corpus stages come next
+BARRIER = "barrier"
 # a scratch run's corpus stages, whose stage events name no document: the
 # states the views give one in the latest invocation, besides pending,
 # running, interrupted, done and failed
@@ -173,6 +177,10 @@ SKIPPED = "skipped"
 # service, as SKIPPED is what one says when the stage skips
 # (yizkr.pipeline.scratchwrite)
 WAITING = "waiting"
+# how old a running corpus stage's latest progress event is before the
+# views say how long ago it came (seconds): its rate and time to go are
+# those of its events, and a stage that has stalled keeps them
+STALE_PROGRESS = 60.0
 # the unit of a reset's steps, which differ too much in length for a rate
 # of them to say when the reset ends
 STEPS = "steps"
@@ -606,6 +614,7 @@ class CorpusStageState:
     seconds: float | None = None
     phase: str | None = None
     phase_since: datetime | None = None
+    progress_at: datetime | None = None
     unit: str | None = None
     step: str | None = None
     done: int | None = None
@@ -734,6 +743,9 @@ class Summary:
     # run, and their states, unknown while events.jsonl cannot be read
     corpus_names: list[str] = field(default_factory=list)
     corpus: list[CorpusStageState] = field(default_factory=list)
+    # the latest invocation went past the barrier: the documents' stages
+    # still to go are the next invocation's
+    past_barrier: bool = False
     in_flight: list[InFlight] = field(default_factory=list)
     calls: CallCounts = field(default_factory=CallCounts)
     remaining_work: int = 0
@@ -856,9 +868,10 @@ class _Corpus:
     of: int | None = None
     counts: tuple[tuple[str, int], ...] = ()
     # (time, done) of the phase's first progress event that counts, and
-    # of its latest: the rate
+    # of its latest: the rate; and the time of its latest progress event
     first: tuple[datetime, int] | None = None
     last: tuple[datetime, int] | None = None
+    progress_at: datetime | None = None
     # its calls, as far as the cache's events show them
     engine: int = 0
     cached: int = 0
@@ -983,8 +996,10 @@ class RunMonitor:
         # events name the document and the role, not the stage
         self._current: dict[str, str] = {}
         self._stages_seen: dict[str, None] = {}
-        # each corpus stage's latest attempt, by its name
+        # each corpus stage's latest attempt, by its name, and the
+        # invocations that went past the barrier
         self._corpus: dict[str, _Corpus] = {}
+        self._past_barrier: set[str | None] = set()
         self._kinds: dict[str, str] = {}
         # SHA-1s the events name that the plan does not, and the sorted
         # list of every SHA-1 known, made again when either changes
@@ -1124,6 +1139,8 @@ class RunMonitor:
             self._fold_stage(event, name, at, invocation)
         elif name == PROGRESS:
             self._fold_progress(event, at, invocation)
+        elif name == BARRIER:
+            self._past_barrier.add(invocation)
         elif name in CACHE_EVENTS:
             self._fold_cache(event, name)
         elif name == CALL:
@@ -1245,6 +1262,7 @@ class RunMonitor:
             return
         phase = event.get("phase")
         phase = _token(phase) if isinstance(phase, str) and phase else None
+        corpus.progress_at = at
         if phase != corpus.phase or corpus.phase_since is None:
             corpus.phase, corpus.phase_since = phase, at
             corpus.first = corpus.last = None
@@ -1512,6 +1530,11 @@ class RunMonitor:
             summary.corpus = self._corpus_states(
                 summary.corpus_names, latest, ended
             )
+            summary.past_barrier = (
+                (latest is None and bool(self._past_barrier))
+                or latest in self._past_barrier
+                or any(stage.state != PENDING for stage in summary.corpus)
+            )
         summary.in_flight.sort(
             key=lambda item: (item.since or now, item.stage, item.sha1)
         )
@@ -1617,6 +1640,7 @@ class RunMonitor:
                     seconds=seconds,
                     phase=corpus.phase,
                     phase_since=corpus.phase_since,
+                    progress_at=corpus.progress_at,
                     unit=corpus.unit,
                     step=corpus.step,
                     done=corpus.done,
@@ -2105,10 +2129,22 @@ def _corpus_progress(stage: CorpusStageState, now: datetime) -> list[str]:
         if stage.rate is None:
             parts.append("rate unknown yet")
         else:
-            rate = f"{stage.rate:.3g} {stage.unit} a minute"
+            figure = (
+                _n(round(stage.rate))
+                if stage.rate >= 10
+                else f"{stage.rate:.3g}"
+            )
+            rate = f"{figure} {stage.unit} a minute"
             if stage.to_go is not None:
                 rate += f", ~{_duration(stage.to_go)} to go"
             parts.append(rate)
+    if (
+        running
+        and stage.phase != WAITING
+        and stage.progress_at is not None
+        and (age := (now - stage.progress_at).total_seconds()) > STALE_PROGRESS
+    ):
+        parts.append(f"last progress {_duration(age)} ago")
     if stage.engine or stage.cached:
         parts.append(
             f"{_n(stage.engine)} engine calls, {_n(stage.cached)} from the "
@@ -2204,8 +2240,19 @@ def _corpus_to_go(summary: Summary) -> str | None:
 
 def _to_go(summary: Summary) -> str | None:
     """What is left, as the calls rows say it: the documents' stages, then
-    a scratch run's corpus stages."""
+    a scratch run's corpus stages. Past the barrier the corpus stages come
+    first, and the documents' stages still to go (those that failed, and
+    those after them) are the next invocation's, which runs them again."""
     corpus = _corpus_to_go(summary)
+    if summary.past_barrier:
+        parts = [corpus] if corpus is not None else []
+        if summary.remaining_work:
+            parts.append(
+                ("besides " if parts else "")
+                + f"{_n(summary.remaining_work)} documents' stages for the "
+                "next invocation"
+            )
+        return "; ".join(parts) if parts else "nothing"
     if not summary.remaining_work:
         if corpus is not None:
             return corpus

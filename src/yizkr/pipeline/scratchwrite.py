@@ -158,10 +158,12 @@ step of a reset as it starts, or that it skipped or resumed; register
 and write give the documents done out of those they plan, once as they
 start and once per document, with the documents that failed, the
 batches refused whole and, for write, the statements written,
-referenced and skipped and the claims refused so far; places gives the
-question batches answered out of those it asks, once as it starts
-asking and once per batch, and then the links written out of those it
-plans, once per link; places and site say when they start waiting for
+referenced and skipped and the claims refused so far; places says
+that it reads the graph and the records once the query service shows
+the write, then gives the question batches answered out of those it
+asks, once as it starts asking and once per batch, and then the links
+written out of those it plans, once as it starts writing and once per
+link; places and site say when they start waiting for
 the query service, and site when it starts building. register, write and
 places say when they skip, as the instance holds what the key makes.
 """
@@ -240,12 +242,13 @@ STATE_FORMAT = 1
 SKIPPED, RESUMED, RESET_DONE = "skipped", "resumed", "reset"
 # what a stage's progress event says it is doing, besides SKIPPED and
 # RESUMED, and what its counts count
-RESETTING, REGISTERING, WRITING, ASKING, WAITING, BUILDING = (
+RESETTING, REGISTERING, WRITING, ASKING, WAITING, READING, BUILDING = (
     "resetting",
     "registering",
     "writing",
     "asking",
     "waiting",
+    "reading",
     "building",
 )
 STEPS, DOCUMENTS, BATCHES, LINKS = "steps", "documents", "batches", "links"
@@ -710,7 +713,7 @@ def run_reset(context: Any) -> list[str]:
     # no session that takes the lock writes between them, where the state
     # would take its write for this run's
     with live_stack():
-        reset_instance(context.env_file, context.log, step)
+        reset_instance(context.env_file, context.log, progress=step)
         _forget_client(context)
         epoch = uuid.uuid4().hex
         save_state(client_of(context), run_id, key, epoch)
@@ -1157,6 +1160,7 @@ def _propose(
             "no place was reconciled",
             lambda: progress(context, PLACES, WAITING),
         )
+        progress(context, PLACES, READING)
         places = place_graph(client)
         links = _stated_links(context, written)
         hierarchy.attach_chains(places, links)

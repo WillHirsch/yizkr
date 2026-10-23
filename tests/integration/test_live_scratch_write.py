@@ -194,8 +194,12 @@ class Run:
         self._resets = reset_with
         self._client = client
 
-    def reset(self, env_file, log):
+    def reset(self, env_file, log, progress=None):
         self.resets += 1
+        # the reset step the run's events tell of, as a real reset's
+        # are (#561)
+        if progress is not None:
+            progress(1, 1, "start the stack")
         self._resets(self._client)
 
     def context(self, stage: str) -> CorpusContext:

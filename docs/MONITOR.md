@@ -207,7 +207,8 @@ reads, below), shown with counts only:
   plans (registered or failed), and the documents failed, the batches
   refused whole, and the statements written, referenced and skipped and
   the claims refused so far.
-- **places:** "waiting for the query service", since when; then the
+- **places:** "waiting for the query service", since when; then
+  "reading" (the graph's places and the documents' records); then the
   question batches answered out of those it asks; then the links written
   out of those it plans; and the engine calls and the cache's answers its
   role (`places`) made in this attempt, from the cache's events.
@@ -215,7 +216,12 @@ reads, below), shown with counts only:
 
 A count at zero is left out. While a stage runs, its rate is the units
 it did between its phase's first progress event and its latest, by
-their times; the time to go is what is left of its phase at that rate.
+their times, shown as a whole number from 10 a minute up; the time to
+go is what is left of its phase at that rate. Since both come from the
+events alone, a running stage whose latest progress event is more than
+a minute old (other than while it waits for the query service) also
+says how long ago that event came: a stage that has stalled keeps its
+last rate.
 Neither is shown for a reset's steps, which differ too much in length,
 and the rate is "unknown yet" until a phase has two events at least a
 second apart that differ in count. A stage written before the progress
@@ -246,12 +252,18 @@ made no call and is left out of the rate, which it would only lower; a
 stage the cache answered counts, since the cache will answer others like
 it. Stages of kinds with no ended attempt yet are listed apart, and the
 calls are `unknown`, not `~0`, while nothing to go has a rate. The canary
-ordering (#194) gives every kind a rate early. Past them, a scratch
-run's corpus stages still to run (pending, held, running, interrupted or
-failed) follow: `corpus stages: write (412 of 1,200 documents, ~25m
-10s), places, site`, a running stage with its count and time to go where
-it has them, or that it waits for the query service. Only once none of
-either is left does `to go` say `nothing`.
+ordering (#194) gives every kind a rate early. A scratch run's corpus
+stages still to run (pending, held, running, interrupted or failed)
+follow, a running stage with its count and time to go where it has
+them, or that it waits for the query service: `...; then corpus stages:
+clustering, reset, ...` before the barrier. Once the latest invocation
+is past the barrier (its `barrier` event, or any corpus stage it has
+started), the corpus stages come first, and the documents' stages still
+to go, those that failed and those after them, are the next
+invocation's, which runs them again: `corpus stages: write (412 of
+1,200 documents, ~25m 10s), places, site; besides 3 documents' stages
+for the next invocation`, with no estimate of their calls. Only once
+neither is left does `to go` say `nothing`.
 
 **In flight.** Each document the running invocation is in the middle of:
 its SHA-1 prefix, kind and stage, and for how long.
@@ -391,9 +403,9 @@ before them still shows its corpus stages. The write side
 (`yizkr.pipeline.scratchwrite`, Progress) writes one while a corpus stage
 runs: as register and write start and after each document, as places
 starts asking and after each question batch, as it starts writing links
-and after each, at the start of each of a reset's steps, and when places
-and site start waiting for the query service, site starts building, or
-a stage skips. A progress event outside its stage's running attempt (of
+and after each, at the start of each of a reset's steps, when places and
+site start waiting for the query service, places starts reading the
+graph, site starts building, or a stage skips. A progress event outside its stage's running attempt (of
 another invocation, or before the stage's start) is ignored. Every field
 but `event`, `stage` and `phase` is there only when it has something to
 say:
@@ -401,7 +413,7 @@ say:
 | Field | What it holds |
 |---|---|
 | `stage` | the corpus stage |
-| `phase` | what it is doing: `resetting`, `resumed`, `registering`, `writing`, `waiting` (for the query service), `asking`, `building` or `skipped` |
+| `phase` | what it is doing: `resetting`, `resumed`, `registering`, `writing`, `waiting` (for the query service), `reading` (the place stage reads the graph and the records), `asking`, `building` or `skipped` |
 | `unit` | what `done` and `of` count: `steps`, `documents`, `batches` or `links` |
 | `done`, `of` | how many it has done (a reset's steps: before the one starting), out of how many |
 | `step` | a reset's step, by the reset's own name for it |

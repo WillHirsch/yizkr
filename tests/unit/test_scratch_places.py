@@ -1571,3 +1571,6 @@ class TestProgress:
         events = progress_events(run, "places")
         assert events[0] == {"stage": "places", "phase": "waiting"}
         assert [e["phase"] for e in events].count("waiting") == 1
+        # once the wait ends, it says it reads, then asks
+        assert events[1] == {"stage": "places", "phase": "reading"}
+        assert events[2]["phase"] == "asking"

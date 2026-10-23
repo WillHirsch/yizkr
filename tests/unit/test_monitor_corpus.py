@@ -318,8 +318,10 @@ class TestStates:
             "  reset       running for 1m 09s; resetting: step 6 of 9, "
             "start the stack"
         )
-        # a reset's steps differ too much in length to be rated
+        # a reset's steps differ too much in length to be rated, or to
+        # count in what is to go
         assert stage_of(summary, "reset").rate is None
+        assert to_go(summary).startswith("corpus stages: reset (running), ")
 
     def test_the_rate_counts_what_this_attempt_did(self, tmp_path):
         """A write that goes on where an earlier invocation stopped starts
@@ -720,6 +722,19 @@ class TestTheViews:
         )
         assert "<h2>Corpus stages</h2>" in render_html(summary)
 
+    def test_a_run_with_no_corpus_stages_says_nothing_of_them_unread(
+        self, tmp_path
+    ):
+        summary = Summary(
+            path=tmp_path,
+            now=at_(0),
+            found=True,
+            events_unreadable=True,
+            corpus_names=[],
+        )
+        assert not any(line.startswith("corpus ") for line in lines(summary))
+        assert "<h2>Corpus stages</h2>" not in render_html(summary)
+
     def test_the_monitor_follows_a_stage_as_its_events_arrive(self, tmp_path):
         entries = mid_write()
         run = make(tmp_path, entries[:-1])
@@ -747,3 +762,206 @@ def test_to_go_names_the_corpus_stages_after_the_documents_stages(tmp_path):
         "; then corpus stages: clustering, reset, register, write, places, "
         "site"
     )
+
+
+def with_a_failed_extraction() -> list:
+    """Every document's stages, but the certificate's extraction failed,
+    so its critique was never dispatched; and the barrier."""
+    entries = []
+    for name, entry in documents_done():
+        if entry.get("subject") == CERT and entry.get("stage") == "critique":
+            continue
+        if (
+            entry.get("subject") == CERT
+            and entry.get("stage") == "extraction"
+            and entry["event"] == "done"
+        ):
+            entry = {**entry, "event": "failed", "reason": FAILURE}
+        entries.append((name, entry))
+    return entries
+
+
+class TestToGoPastTheBarrier:
+    """Past the barrier the corpus stages come first: the documents'
+    stages still to go are the next invocation's."""
+
+    def test_a_failed_document_s_stages_come_after_the_corpus_stages(
+        self, tmp_path
+    ):
+        after_the_barrier = mid_write()[len(documents_done()) :]
+        entries = [*with_a_failed_extraction(), *after_the_barrier]
+        summary = summarise_run(make(tmp_path, entries), at_(280))
+        assert to_go(summary) == (
+            "corpus stages: write (1 of 4 documents, ~3m 00s), places, "
+            "site; besides 2 documents' stages for the next invocation"
+        )
+
+    def test_once_the_corpus_stages_are_done_the_rest_is_the_next_s(
+        self, tmp_path
+    ):
+        entries = [
+            *with_a_failed_extraction(),
+            *(
+                entry
+                for index, stage in enumerate(CORPUS)
+                for entry in ran(stage, 1 + 2 * index, 2 + 2 * index)
+            ),
+        ]
+        summary = summarise_run(make(tmp_path, entries), at_(20))
+        assert to_go(summary) == "2 documents' stages for the next invocation"
+
+    def test_the_barrier_alone_puts_the_corpus_stages_first(self, tmp_path):
+        summary = summarise_run(
+            make(tmp_path, with_a_failed_extraction()), at_(1)
+        )
+        assert to_go(summary) == (
+            "corpus stages: clustering, reset, register, write, places, "
+            "site; besides 2 documents' stages for the next invocation"
+        )
+
+    def test_before_the_barrier_the_documents_stages_come_first(
+        self, tmp_path
+    ):
+        summary = summarise_run(
+            make(tmp_path, with_a_failed_extraction()[:-1]), at_(0)
+        )
+        assert to_go(summary).startswith("2 stages")
+        assert to_go(summary).endswith(
+            "; then corpus stages: clustering, reset, register, write, "
+            "places, site"
+        )
+
+    def test_the_monitor_names_the_driver_s_barrier_event(self):
+        from yizkr.pipeline import monitor, scratch
+
+        assert monitor.BARRIER == scratch.BARRIER
+
+
+class TestInvocationsRatesAndQuoting:
+    def test_until_after_a_full_invocation_leaves_the_later_stages_out(
+        self, tmp_path
+    ):
+        entries = [
+            *documents_done(FIRST),
+            *(
+                event(BARRIER + 1 + 2 * index + step, name, FIRST, stage=stage)
+                for index, stage in enumerate(CORPUS)
+                for step, name in enumerate(("started", "done"))
+            ),
+            event(BARRIER + 20, "run-end", FIRST, outcome="finished"),
+            event(BARRIER + 30, "run-start", run_id=RUN_ID),
+        ]
+        run = make(
+            tmp_path,
+            entries,
+            until="write",
+            invocations=(
+                (FIRST, 0, BARRIER + 20),
+                (SECOND, BARRIER + 30, None),
+            ),
+        )
+        summary = summarise_run(run, at_(40))
+        assert [stage.name for stage in summary.corpus] == CORPUS[:4]
+        assert "places" not in to_go(summary)
+
+    def test_a_hold_in_a_new_invocation_on_a_stage_done_before(self, tmp_path):
+        entries = [
+            *documents_done(FIRST),
+            event(BARRIER + 1, "started", FIRST, stage="write"),
+            event(BARRIER + 2, "done", FIRST, stage="write"),
+            event(BARRIER + 3, "run-end", FIRST, outcome="finished"),
+            event(BARRIER + 10, "run-start", run_id=RUN_ID),
+            corpus("held", 11, "write", reason="stage:write paused"),
+        ]
+        run = make(
+            tmp_path,
+            entries,
+            invocations=(
+                (FIRST, 0, BARRIER + 3),
+                (SECOND, BARRIER + 10, None),
+            ),
+        )
+        summary = summarise_run(run, at_(20))
+        assert states(summary)["write"] == "held"
+
+    def test_a_count_that_does_not_move_gives_no_rate(self, tmp_path):
+        entries = [
+            *through_register(),
+            corpus("started", 212, "write"),
+            written(212, 1),
+            written(272, 1),
+        ]
+        summary = summarise_run(make(tmp_path, entries), at_(280))
+        write = stage_of(summary, "write")
+        assert (write.rate, write.to_go) == (None, None)
+        assert line_of(summary, "write").endswith("rate unknown yet")
+
+    def test_a_fast_rate_is_a_whole_number(self, tmp_path):
+        entries = [
+            *mid_write(),
+            corpus("done", 333, "write"),
+            corpus("started", 334, "places"),
+            progress(340, "places", "writing", unit="links", done=0, of=9000),
+            progress(
+                400, "places", "writing", unit="links", done=3000, of=9000
+            ),
+        ]
+        summary = summarise_run(make(tmp_path, entries), at_(410))
+        assert "3,000 links a minute, ~2m 00s to go" in line_of(
+            summary, "places"
+        )
+
+    def test_a_slow_rate_keeps_its_fraction(self, tmp_path):
+        entries = [
+            *through_register(),
+            corpus("started", 212, "write"),
+            written(212, 0),
+            written(332, 1),
+        ]
+        summary = summarise_run(make(tmp_path, entries), at_(335))
+        assert "0.5 documents a minute" in line_of(summary, "write")
+
+    def test_a_stalled_stage_says_how_old_its_latest_progress_is(
+        self, tmp_path
+    ):
+        run = make(tmp_path, mid_write())
+        assert line_of(summarise_run(run, at_(572)), "write").endswith(
+            "~3m 00s to go; last progress 5m 00s ago"
+        )
+        # a minute is not yet stale
+        assert "last progress" not in line_of(
+            summarise_run(run, at_(332)), "write"
+        )
+
+    def test_the_place_stage_s_reading_shows(self, tmp_path):
+        entries = [
+            *mid_write(),
+            corpus("done", 333, "write"),
+            corpus("started", 334, "places"),
+            progress(335, "places", "waiting"),
+            progress(395, "places", "reading"),
+        ]
+        summary = summarise_run(make(tmp_path, entries), at_(400))
+        assert line_of(summary, "places") == (
+            "  places      running for 1m 06s; reading"
+        )
+
+    def test_a_held_reason_and_attention_never_quote(self, tmp_path):
+        entries = [
+            *through_register()[:-1],
+            corpus(
+                "done",
+                211,
+                "register",
+                attention=[f"{LEAK} refused", f"1 documents failed: {LEAK}"],
+            ),
+            corpus("held", 212, "write", reason=f"stage:write paused {LEAK}"),
+        ]
+        summary = summarise_run(make(tmp_path, entries), at_(220))
+        assert stage_of(summary, "write").reason == "?"
+        assert stage_of(summary, "register").attention == (
+            "other",
+            "1 documents failed",
+        )
+        for view in ("\n".join(lines(summary)), render_html(summary)):
+            assert "Hutmacherei" not in view
