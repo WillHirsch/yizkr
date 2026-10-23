@@ -75,6 +75,7 @@ from yizkr.core.config import Config
 from yizkr.core.dates import UNSUPPORTED_QUERY, UnsupportedDate
 from yizkr.core.privacy import (
     BIRTHS_QUERY,
+    EVENT_DEATH_PROPERTIES,
     participants_query,
     people_selection,
 )
@@ -2379,6 +2380,142 @@ class TestReadDump:
             "Q428",
             "Q437",
         } <= found.people
+
+    @pytest.mark.parametrize("key", EVENT_DEATH_PROPERTIES)
+    @pytest.mark.parametrize("kind", ["death", "event", "migration"])
+    def test_an_event_is_no_person_on_the_death_it_states(
+        self, tmp_path, vocabulary, key, kind
+    ):
+        # #577: Eugen Löbig's death, typed a death, states his cause of
+        # death ("Wassersucht") and his age; it is no person for that, as
+        # the check's selection reads it, whatever the event's class
+        _, items = vocabulary
+
+        def build(dump):
+            dump.says("Q451", "instance_of", entity(items[kind]))
+            dump.says("Q451", key, evidence(vocabulary, key))
+            dump.says("Q451", "age_at_death", '"73 Jahre"')
+
+        for reverse in (False, True):
+            found = self.one(tmp_path, vocabulary, build, reverse)
+            assert "Q451" not in found.people
+
+    def test_an_event_typed_through_a_redirect_is_set_aside_too(
+        self, tmp_path, vocabulary
+    ):
+        _, items = vocabulary
+
+        def build(dump):
+            dump.entity("Q452", "a class merged into death")
+            dump.redirect("Q452", items["death"])
+            dump.says("Q451", "instance_of", entity("Q452"))
+            dump.says("Q451", "cause_of_death", '"Wassersucht"@de')
+
+        assert "Q451" not in self.one(tmp_path, vocabulary, build).people
+
+    @pytest.mark.parametrize(
+        "case",
+        [
+            "deprecated statement",
+            "no value",
+            "deprecated event type",
+            "human type at deprecated rank",
+            "a birth beside",
+            "no event type",
+            "a deprecated death of another property",
+            "a family too",
+        ],
+    )
+    def test_an_events_other_evidence_still_makes_it_a_person(
+        self, tmp_path, vocabulary, case
+    ):
+        # mixed signals fail closed: an event's death statements are set
+        # aside only beside a truthy value of their property, as the check
+        # reads death evidence, and an event type a curator has not
+        # deprecated; a deprecated statement, or one of no value, gives none.
+        # The rule is per property: a truthy cause of death sets aside no
+        # deprecated date of death. A family stays a person whatever else
+        # it is typed
+        _, items = vocabulary
+
+        def build(dump):
+            dump.says(
+                "Q451",
+                "instance_of",
+                entity(items["place" if case == "no event type" else "death"]),
+                rank="Deprecated"
+                if case == "deprecated event type"
+                else "Normal",
+            )
+            dump.says(
+                "Q451",
+                "cause_of_death",
+                None if case == "no value" else '"Wassersucht"@de',
+                rank="Deprecated"
+                if case == "deprecated statement"
+                else "Normal",
+            )
+            if case == "human type at deprecated rank":
+                dump.says(
+                    "Q451",
+                    "instance_of",
+                    entity(items["human"]),
+                    rank="Deprecated",
+                )
+            if case == "a birth beside":
+                dump.says("Q451", "date_of_birth", dated(1847))
+            if case == "a deprecated death of another property":
+                dump.says(
+                    "Q451", "date_of_death", dated(1909), rank="Deprecated"
+                )
+            if case == "a family too":
+                dump.says("Q451", "instance_of", entity(items["family"]))
+
+        for reverse in (False, True):
+            found = self.one(tmp_path, vocabulary, build, reverse)
+            assert "Q451" in found.people
+
+    @pytest.mark.parametrize(
+        "case", ["deprecated beside", "outranked event type", "unknown value"]
+    )
+    def test_a_truthy_death_sets_the_events_statements_aside(
+        self, tmp_path, vocabulary, case
+    ):
+        # a deprecated statement beside one that gives a truthy value is
+        # set aside with it; an event type outranked by another is still
+        # at normal rank; an unknown value is a truthy value all the same
+        _, items = vocabulary
+
+        def build(dump):
+            dump.says(
+                "Q451",
+                "instance_of",
+                entity(items["death"]),
+                best=False if case == "outranked event type" else None,
+            )
+            if case == "outranked event type":
+                dump.says(
+                    "Q451",
+                    "instance_of",
+                    entity(items["place"]),
+                    rank="Preferred",
+                )
+            dump.says(
+                "Q451",
+                "cause_of_death",
+                # an unknown value is a blank node, as dumpRdf.php writes it
+                "_:genid1" if case == "unknown value" else '"Wassersucht"@de',
+            )
+            if case == "deprecated beside":
+                dump.says(
+                    "Q451",
+                    "cause_of_death",
+                    '"Schwindsucht"@de',
+                    rank="Deprecated",
+                )
+
+        found = self.one(tmp_path, vocabulary, build)
+        assert "Q451" not in found.people
 
     def test_items_that_state_no_type(self, tmp_path, vocabulary):
         # a type a curator deprecated, or an unknown or no value, is none;
