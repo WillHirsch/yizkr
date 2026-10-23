@@ -359,9 +359,10 @@ class TestTheChunkPrompt:
         ) in self.prompt
         assert "an agent, never a place" not in flat(LINE_ASSIGNMENT_BLOCK)
 
-    def test_the_issuer_chunk_emits_issued_by(self):
+    def test_one_chunk_emits_issued_by(self):
+        # every claim about the document itself has one owner chunk (#456)
         assert (
-            "belongs to the chunk assigned the organization that issued it"
+            "Every claim whose subject is the document itself (`issued_by`,"
         ) in flat(ENTITY_ASSIGNMENT_BLOCK)
         assert "the `issued_by` claim of an issuer the unit names" in flat(
             LINE_ASSIGNMENT_BLOCK

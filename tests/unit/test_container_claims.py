@@ -47,6 +47,7 @@ from yizkr.pipeline.chunking import (
 )
 from yizkr.pipeline.extract import (
     DOCUMENT_ITSELF,
+    ClaimFileExtractor,
     LlmClaimExtractor,
     document_block,
     placed_by,
@@ -471,7 +472,9 @@ class TestThePrompts:
             "slide 2, image 1"
         ]
         # a slide's title over its one image is read with a note
-        assert "a `relation` note" in flat(document_block(deck, DECK_REF))
+        assert "a judgement note of category `relation`" in flat(
+            document_block(deck, DECK_REF)
+        )
 
     def test_a_document_that_places_nothing_gives_no_caption(self):
         block = flat(document_block(letter(), LETTER_REF))
@@ -497,9 +500,51 @@ class TestThePrompts:
             )
         )
         assert (
-            "An `inception` claim, and every `caption` claim, belongs to the "
-            "chunk assigned e1, the manifest's first entity"
+            "and every `caption` claim, belongs to the chunk assigned e1, "
+            "the first entity assigned for extraction, whatever its value"
         ) in entities
+
+    def test_the_owner_chunk_is_one_assigned_for_extraction(self, tmp_path):
+        """A registrar the manifest marks extract: false is assigned to no
+        chunk, so the claims about the document itself and its captions
+        go to the first entity that is: each chunk prompt names it."""
+        registrar = {
+            "id": "e1",
+            "label": "Standesamt Flörburg",
+            "kind": "organization",
+            "mention_lines": [2],
+            "extract": False,
+        }
+        wastl = {
+            "id": "e2",
+            "label": "Wastl",
+            "kind": "human",
+            "mention_lines": [4],
+        }
+        klara = {
+            "id": "e3",
+            "label": "Klara",
+            "kind": "human",
+            "mention_lines": [4],
+        }
+        llm = ScriptedLlm(
+            [
+                json.dumps({"entities": [registrar, wastl, klara]}),
+                ndjson([]),
+                ndjson([]),
+            ]
+        )
+        ChunkedClaimExtractor(llm, state_dir=tmp_path / "state").extract(
+            booklet(), BOOKLET_REF
+        )
+        prompts = [flat(prompt) for _method, prompt in llm.calls[1:]]
+        assert prompts
+        for prompt in prompts:
+            assert "belongs to the chunk assigned e2, the first entity" in (
+                prompt
+            )
+            assert "assigned e1," not in prompt
+            assert "assigned e3," not in prompt
 
     def test_a_container_s_extraction_keeps_its_captions(self, tmp_path):
         llm = ScriptedLlm(
@@ -516,6 +561,23 @@ class TestThePrompts:
         ]
         (reject,) = json.loads(rejects.read_text())
         assert reject["reasons"] == ["placed_subject"]
+
+    def test_a_claims_file_is_validated_with_what_is_placed(self, tmp_path):
+        """A prepared claims file read against the booklet's transcription
+        keeps its caption of the image the booklet places, and fails on one
+        of an image it does not place."""
+        kept = tmp_path / "kept.json"
+        kept.write_text(json.dumps({"claims": [caption()]}))
+        batch = ClaimFileExtractor(kept).extract(booklet(), BOOKLET_REF)
+        assert [(c.property, c.subject) for c in batch.claims] == [
+            ("caption", LETTER_REF)
+        ]
+        stray = tmp_path / "stray.json"
+        stray.write_text(
+            json.dumps({"claims": [caption(STRAY_REF.model_dump())]})
+        )
+        with pytest.raises(ValueError, match=r"\[placed_subject\]"):
+            ClaimFileExtractor(stray).extract(booklet(), BOOKLET_REF)
 
     def test_a_chunked_extraction_keeps_its_captions(self, tmp_path):
         """The chunked extractor lists the placed images in its chunk
@@ -642,6 +704,14 @@ class TestTheWriter:
                 PLACED,
                 (BOOKLET_REF,),
                 "no item carries its subject's media SHA-1",
+            ),
+            # an image another container placed is not this source's
+            (
+                caption(),
+                {DECK_REF.sha1: {LETTER_REF.sha1}},
+                (BOOKLET_REF, LETTER_REF),
+                "its subject is no artifact registered in this write as "
+                "placed by its source",
             ),
             (
                 caption(local("e1", "Wastl", "human")),

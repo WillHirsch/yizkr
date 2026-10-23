@@ -515,14 +515,12 @@ The full manifest (id = canonical label):
 Emit every claim whose SUBJECT is one of your ASSIGNED entities below —
 and only those. Relations to entities outside your assignment (their
 parents, unions, locations) still belong to you when your entity is
-the subject; refer to the other entity by its manifest id. The
-`issued_by` claim, whose subject is the document itself, belongs to the
-chunk assigned the organization that issued it, and so does every other
-claim about the document itself whose value is an entity of the manifest
-(its author, addressee, place of creation, subject, whom it shows) to
-the chunk assigned that entity. An `inception` claim, and every
-`caption` claim, belongs to the chunk assigned {first_entity}, the
-manifest's first entity. Do not emit claims whose
+the subject; refer to the other entity by its manifest id. Every claim
+whose subject is the document itself (`issued_by`, `author`,
+`addressee`, `inception`, `location_of_creation`, `main_subject`,
+`shows`), and every `caption` claim, belongs to the chunk assigned
+{first_entity}, the first entity assigned for extraction, whatever its
+value. Do not emit claims whose
 subject is not assigned to you, and do not emit instance_of claims (the
 manifest's kind already records it).
 
@@ -1558,7 +1556,7 @@ class ChunkedClaimExtractor:
             ENTITY_ASSIGNMENT_BLOCK.format(
                 roster_block=roster_block,
                 entities_block=entities_block,
-                first_entity=all_entities[0].id if all_entities else "none",
+                first_entity=first_assigned(all_entities),
             ),
             transcription,
             artifact,
@@ -2097,6 +2095,14 @@ class _Settled(NamedTuple):
     labels: int
     label_names: int
     parts: int
+
+
+def first_assigned(entities: list[EntityRecord]) -> str:
+    """The id of the first manifest entity a chunk is assigned
+    (pack_entities assigns those marked for extraction alone), whose
+    chunk owns the claims about the document itself and its captions;
+    "none" when no entity is assigned."""
+    return next((entity.id for entity in entities if entity.extract), "none")
 
 
 def rejected_by_reason(rejects: Iterable[dict]) -> dict[str, int]:

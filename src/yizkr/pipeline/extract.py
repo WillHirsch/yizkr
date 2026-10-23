@@ -196,16 +196,16 @@ PLACED_ARTIFACTS = """\
   Give each passage of THIS document's own text that speaks of one of
   them (a caption, a heading over it, a sentence of commentary) as ONE
   `caption` claim: its subject that image's artifact reference exactly
-  as listed, its value the passage exactly as written, in the language
-  it is written in, never cut, corrected or translated, its page number
-  the page the passage stands on. A passage that speaks of two images
-  gives one claim for each. Where the text does not say plainly that the
-  passage speaks of the image (a slide's title over its one image), add
-  a `relation` note. Give nothing else about an image: who made it, for
-  whom, when, where, what it is about or whom it shows is the image's
-  own claim, read from the image apart. The people a caption names are
-  entities of this document, with what it says of them, as anywhere
-  else."""
+  as listed, its value the passage exactly as written, in the
+  container's language, never cut, corrected or translated, its page
+  number the page the passage stands on. A passage that speaks of two
+  images gives one claim for each. Where the text does not say plainly
+  that the passage speaks of the image (a slide's title over its one
+  image), add a judgement note of category `relation`. Give nothing
+  else about an image: who made it, for whom, when, where, what it is
+  about or whom it shows is the image's own claim, read from the image
+  apart. The people a caption names are entities of this document, with
+  what it says of them, as anywhere else."""
 
 NO_PLACED_ARTIFACTS = """\
 - This document places no image read on its own: give no `caption`

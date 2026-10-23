@@ -1025,11 +1025,11 @@ document-subject properties (`issued_by`, `author`, `addressee`,
 `inception`, `location_of_creation`, `main_subject`, `shows`;
 ADR-0039)"; the subject is still the source artifact itself, and these
 properties take no other subject. `caption` is the one property the
-manifest marks `placed_subject`: its subject is an artifact the
-source's record of derived media names, named by the SHA-1 of its
-bytes, and it takes no other subject (ADR-0039 §2.1). Validation is
-handed the SHA-1s of the images the source places beside the source's
-own key, and the writer the derived media registered for the source in
+manifest marks `placed_subject`: its subject is an artifact the source
+places, named by the SHA-1 of its bytes, and it takes no other subject
+(ADR-0039 §2.1). Validation is handed the SHA-1s of the images the
+source places (the transcription's pages record them) beside the
+source's own key, and the writer the derived media registered for the source in
 the same write; a breach is a counted reject in validation and a
 refusal in the writer.
 
