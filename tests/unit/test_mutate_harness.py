@@ -45,7 +45,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.fixtures.exits import pid_exit_fd
+from tests.fixtures.exits import pid_exit_fd, running
 from tests.integration import live_lock
 from tests.integration.live_lock import LOCK_ENV, SHARED_ENV, TIMEOUT_ENV
 
@@ -518,21 +518,6 @@ def load(module):
     return loaded
 
 
-def running(pid):
-    """Whether `pid` is a live process; a zombie awaiting reaping is not."""
-    if Path("/proc/self/stat").exists():
-        try:
-            stat = Path(f"/proc/{pid}/stat").read_text()
-        except (FileNotFoundError, ProcessLookupError):
-            return False
-        return stat.rsplit(")", 1)[1].split()[0] != "Z"
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
 def pidfd(pid):
     """A pidfd of `pid`, which turns readable once the process ends, as a
     zombie awaiting reaping or reaped; None when it has ended already
@@ -542,7 +527,9 @@ def pidfd(pid):
 
 def until_ended(pids):
     """Wait for each of `pids` to end: the event, not a time, ends the
-    wait, which HANG_GUARD bounds."""
+    wait, which HANG_GUARD bounds. A readable pidfd is the proof: the
+    process may linger a while unreaped, an orphan awaiting init (#542),
+    and only the pidfd knows it from a process that takes over its pid."""
     for pid in pids:
         fd = pidfd(pid)
         if fd is None:
@@ -552,7 +539,6 @@ def until_ended(pids):
         finally:
             os.close(fd)
         assert ready, f"pid {pid} still runs"
-        assert not running(pid)
 
 
 def kill_leftovers(pids):
