@@ -5304,7 +5304,7 @@ def parents_of(batch, child: str) -> list[tuple[str, str]]:
     return sorted(
         (prop, value)
         for prop in ("father", "mother")
-        for prop, value, _ in on(batch, child, prop)
+        for _, value, _ in on(batch, child, prop)
     )
 
 
@@ -5427,6 +5427,57 @@ class TestTwoOfOneTag:
         assert couple_of(result.batch) == couple
         assert parents_of(result.batch, "i1") == parents
         assert result.unsupported_tags == counted
+
+    def test_a_wife_written_first_is_read_after_the_husband(self):
+        # a HUSB and a WIFE are read husband first, whatever their order:
+        # the union's label, its excerpts and the claims' order are those
+        # of a family that writes the HUSB first
+        result = adapt_gedcom(
+            same_tag_family(
+                "1 WIFE @I17@", "1 HUSB @I11@", "1 CHIL @I1@", "1 MARR Y"
+            ),
+            artifact=EXPORT,
+        )
+        (union,) = [e for e in result.batch.entities if e.id == "f9"]
+        assert union.label == "Marriage of Leopold Löbig and Agnes Löbig"
+        for participant in claims_for(result.batch, "f9", "participant"):
+            assert participant.source.transcription_excerpt.text.startswith(
+                "0 @F9@ FAM | 1 HUSB @I11@ | 1 WIFE @I17@"
+            )
+        assert [
+            c.property
+            for c in claims_for(result.batch, "i1")
+            if c.property in ("father", "mother")
+        ] == ["father", "mother"]
+
+    @pytest.mark.parametrize(
+        ("lines", "counted"),
+        [
+            (["1 HUSB @I11@", "1 HUSB @I11@", "1 WIFE @I17@"], "FAM.HUSB"),
+            (["1 WIFE @I17@", "1 WIFE @I17@", "1 HUSB @I11@"], "FAM.WIFE"),
+        ],
+        ids=["husband-restated", "wife-restated"],
+    )
+    def test_a_restated_line_gives_way_to_the_next(self, lines, counted):
+        result = adapt_gedcom(
+            same_tag_family(*lines, "1 CHIL @I1@"), artifact=EXPORT
+        )
+        assert couple_of(result.batch) == ["i11", "i17"]
+        assert parents_of(result.batch, "i1") == [
+            ("father", "i11"),
+            ("mother", "i17"),
+        ]
+        assert result.unsupported_tags == {counted: 1}
+
+    def test_partner_lines_that_name_no_one_are_no_one_person(self):
+        # a HUSB and a WIFE with no pointer name no person, so they are
+        # not one person as both
+        result = adapt_gedcom(
+            same_tag_family("1 HUSB", "1 WIFE", "1 CHIL @I1@"),
+            artifact=EXPORT,
+        )
+        assert "FAM one person as HUSB and WIFE" not in result.outcomes
+        assert parents_of(result.batch, "i1") == []
 
     def test_one_person_twice_is_no_couple(self):
         result = adapt_gedcom(

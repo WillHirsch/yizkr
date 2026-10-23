@@ -51,12 +51,13 @@ line above): **a family's first two partner lines are its couple, and
 each is a parent as its tag states.** GEDCOM 5.5.1 exports write a
 same-sex couple as two HUSBs or two WIFEs, so the adapter reads a
 family's first two HUSB and WIFE lines, in whatever combination and
-order, as its couple (still counted as `FAM two HUSB/WIFE` when they
+order, as its couple, a HUSB before a WIFE (still counted as `FAM two HUSB/WIFE` when they
 share a tag), and each is the children's parent as its tag states: a
 HUSB their `father`, a WIFE their `mother`, so two HUSBs give each child
 two fathers. A third partner line is counted (`FAM.HUSB`, `FAM.WIFE`),
-not read, even where it is the family's only WIFE (or HUSB); so is a
-second that names the person the first does under the same tag. "One
+not read, even where it is the family's only WIFE (or HUSB); a line
+that restates one before it (same tag, same person) is counted and
+passed over, so the next line takes its place. "One
 person as HUSB and WIFE" applies to the two partner lines.
 
 Amended by #408 (2026-10-02; decided by the orchestrator, the owner may

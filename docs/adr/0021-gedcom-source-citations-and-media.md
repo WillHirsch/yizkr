@@ -534,9 +534,11 @@ line that the second of two HUSBs or two WIFEs is never a parent are
 superseded: GEDCOM 5.5.1 exports write a same-sex couple as two HUSBs or
 two WIFEs, where a second father or a second mother is what the record
 means. The adapter reads a family's first two HUSB and WIFE lines, in
-whatever combination and order, as its couple (ADR-0036 §5), and each
+whatever combination and order, as its couple, a HUSB before a WIFE
+(ADR-0036 §5), and each
 gives the children a `father` (HUSB) or a `mother` (WIFE) claim. A third
-is counted as `FAM.HUSB` or `FAM.WIFE`, not read, and so is a second that
-names the person the first does under the same tag; a family whose two
+is counted as `FAM.HUSB` or `FAM.WIFE`, not read; a line that restates
+one before it (same tag, same person) is counted and passed over; a
+family whose two
 partner lines are a HUSB and a WIFE naming one person still gives no
 union and no parent claim, counted.

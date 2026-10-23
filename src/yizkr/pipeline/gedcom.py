@@ -158,15 +158,15 @@ it maps to no media item are counted as well (SOUR.OBJE for a scan
 beneath a citation, FILE.SOUR for a citation beneath an object's FILE).
 A family has two partners, so the adapter reads a family's first two
 HUSB and WIFE lines, in whatever combination (a HUSB and a WIFE, two
-HUSBs, two WIFEs), and a further one is counted with its parent's tag
-too (FAM.HUSB, FAM.WIFE), as is a second that names the person the first
-does under the same tag. The two are the family's couple, and each is
-its children's parent as its tag states: a HUSB their father, a WIFE
-their mother; a couple of two HUSBs or two WIFEs is counted (FAM two
-HUSB/WIFE). A family's MARR, DIV and ANUL are
-events of the union of its couple, so in a family with one partner or
-none (its HUSB or its WIFE is missing, or names no person the adapter
-maps) they are counted as MARR, DIV and ANUL: no claim names the other
+HUSBs, two WIFEs), a HUSB before a WIFE, and a further one is counted
+with its parent's tag too (FAM.HUSB, FAM.WIFE); a line that restates one
+before it (same tag, same person) is counted and passed over. The two
+are the family's couple, and each is its children's parent as its tag
+states: a HUSB their father, a WIFE their mother; a couple of two
+HUSBs or two WIFEs is counted (FAM two HUSB/WIFE). A family's MARR, DIV
+and ANUL are events of the union of its couple, so in a family with one
+partner or none (its HUSB or its WIFE is missing, or names no person the
+adapter maps) they are counted as MARR, DIV and ANUL: no claim names the other
 partner, and a claim has no unknown value to name them with. A MARR, a
 DIV or an ANUL states its event as a DEAT does (below); one that states
 none (a MARR N, a bare DIV) is counted as MARR, DIV or ANUL, and a
@@ -1757,13 +1757,19 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
 
     def partner_lines(fam: Record) -> list[Record]:
         """The HUSB and WIFE lines the adapter reads of a family: its
-        first two of either tag, in the record's order, save a second
-        that names the person the first does under the same tag, which
-        restates it and is left to the census."""
-        pair = [p for p in fam.children if p.tag in ("HUSB", "WIFE")][:2]
-        if len(pair) == 2 and pair[0].own_line() == pair[1].own_line():
-            return pair[:1]
-        return pair
+        first two of either tag, a HUSB before a WIFE. A line that
+        restates one before it (same tag, same person) is passed over,
+        and the census counts it."""
+        pair: list[Record] = []
+        for part in fam.children:
+            if (
+                part.tag in ("HUSB", "WIFE")
+                and len(pair) < 2
+                and all(part.own_line() != kept.own_line() for kept in pair)
+            ):
+                pair.append(part)
+        # a HUSB and a WIFE are read husband first, whatever their order
+        return sorted(pair, key=lambda part: part.tag == "WIFE")
 
     def partners(fam: Record) -> list[Record]:
         """The partner lines that give a family's union its couple

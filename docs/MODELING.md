@@ -1257,8 +1257,10 @@ are its first two `HUSB` and `WIFE` lines, in whatever combination (a
 `HUSB` and a `WIFE`, or two `HUSB`s or two `WIFE`s, as GEDCOM 5.5.1
 exports write a same-sex couple, counted), and each is the children's
 parent as its tag states: a `HUSB` their `father`, a `WIFE` their
-`mother`. A third is counted (`FAM.HUSB`, `FAM.WIFE`), not read. A
-family with two partners is a `marriage` when a `MARR` of it states a
+`mother`; a `HUSB` is read before a `WIFE`, whatever their order. A
+third is counted (`FAM.HUSB`, `FAM.WIFE`), not read, and a line that
+restates one before it (same tag, same person) is counted and passed
+over. A family with two partners is a `marriage` when a `MARR` of it states a
 wedding, or when a `DIV` or `ANUL` states its end with no such `MARR`
 (a marriage with no wedding, counted), otherwise a `partnership` (the
 export gives Felix and Ida no `MARR`, so theirs is a partnership); its
