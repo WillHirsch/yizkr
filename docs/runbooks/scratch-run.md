@@ -461,6 +461,13 @@ with `--until clustering` (or an earlier stage) needs none.
   `corpus/<stage>/record.json` in the run directory: local-only, like
   the rest of it. The run report counts the write's and the place
   stage's (docs/RUN_REPORT.md, Write and Place hierarchy).
+- **Progress.** While they run, the stages tell the run's events how far
+  they have got, with counts only (`progress` events): reset its steps,
+  register and write each document, places each question batch and each
+  link, and places and site when they wait for the query service. The
+  monitor shows each corpus stage's state and progress, with a rate and
+  a time to go (Watch, below), so a stage need not be followed by reading
+  its record.
 
 ## Watch
 
@@ -470,8 +477,10 @@ uv run yizkr scratch watch <run>      # a run id, or a run directory
 ```
 
 The live monitor ([docs/MONITOR.md](../MONITOR.md)): per stage, what is
-pending, running, done, reused (and why), needs attention or failed; the
-engine's calls and the cache's answers; what is in flight; the slices
+pending, running, done, reused (and why), needs attention or failed;
+past the barrier, each corpus stage's state and progress, with a rate
+and a time to go; the engine's calls and the cache's answers, and what is
+still to go, the corpus stages included; what is in flight; the slices
 and who stopped them; the latest alerts. It never quotes a document.
 `--once` prints one view; `--serve ADDRESS:PORT` serves the status page,
 and nothing else, to another device. Quitting the monitor never stops

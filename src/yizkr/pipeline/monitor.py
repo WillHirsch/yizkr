@@ -17,12 +17,16 @@ From them it builds a summary (RunMonitor.summary):
 * per stage, how many documents are pending, running, done (made in this
   run), reused (every call answered by the LLM cache, by the answers'
   reason, or the view current, so it stands), need attention or failed;
+* a scratch run's corpus stages, after the barrier: each one's state in
+  the latest invocation (pending, held, running, interrupted, done,
+  skipped or failed), and, from the `progress` events the write side
+  emits, what it is doing, its counts, and its rate and time to go;
 * the documents in flight: stages the running invocation has started and
   not finished;
 * engine calls and the cache's answers, what the engine reports of its
   calls (outcomes, waits and holds for the subscription), the run's
   elapsed time, and the engine calls the work still to go will take at
-  the run's rates so far;
+  the run's rates so far, then the corpus stages still to run;
 * the documents that failed in the latest invocation, by kind and reason;
 * the latest alerts, tagged new or carried;
 * the state of each slice (the run, each stage, each document kind):
@@ -107,10 +111,12 @@ from yizkr.pipeline.rundir import (
     DONE,
     EVENTS,
     FAILED,
+    INTERRUPTED,
     MANIFEST,
     NEEDS_ATTENTION,
     PAUSE,
     PENDING,
+    PROGRESS,
     RESUME,
     RUN_END,
     RUN_INTERRUPTED,
@@ -157,6 +163,37 @@ OTHER = "other"
 # the cache's events that are an engine call: a miss asks the engine, and
 # so does a replay of a conversation's opening turn
 _ENGINE_EVENTS = ("cache-miss", "cache-replay")
+
+# the event a scratch run emits as an invocation goes past the barrier
+# (yizkr.pipeline.scratch.BARRIER): its documents' stages have ended, and
+# its corpus stages come next
+BARRIER = "barrier"
+# a scratch run's corpus stages, whose stage events name no document: the
+# states the views give one in the latest invocation, besides pending,
+# running, interrupted, done and failed
+HELD = "held"
+SKIPPED = "skipped"
+# what a corpus stage's progress event says while it waits for the query
+# service, as SKIPPED is what one says when the stage skips
+# (yizkr.pipeline.scratchwrite)
+WAITING = "waiting"
+# how old a running corpus stage's latest progress event is before the
+# views say how long ago it came (seconds): its rate and time to go are
+# those of its events, and a stage that has stalled keeps them
+STALE_PROGRESS = 60.0
+# the unit of a reset's steps, which differ too much in length for a rate
+# of them to say when the reset ends
+STEPS = "steps"
+# the counts a progress event may give besides its `done` and `of`, in
+# the order the views list them, with their labels
+_PROGRESS_COUNTS = (
+    ("failed", "failed"),
+    ("refused", "refused whole"),
+    ("written", "written"),
+    ("referenced", "referenced"),
+    ("skipped", "skipped"),
+    ("claims_refused", "claims refused"),
+)
 
 # slice states: every slice's is unknown while the control file cannot be
 # read, by the driver either
@@ -562,6 +599,37 @@ class InFlight:
 
 
 @dataclass(frozen=True)
+class CorpusStageState:
+    """A corpus stage of a scratch run in its latest invocation, as the
+    views show it: its state (pending, held, running, interrupted, done,
+    skipped or failed), when it started and how long it took, and, from
+    its latest progress event, what it does (`phase`), its `done` out of
+    `of` in `unit`s, a reset's `step`, its other counts, labelled, and its
+    rate (units a minute) and time to go (seconds) while it runs, where
+    its events can tell them. Every name is as the views show it."""
+
+    name: str
+    state: str
+    started: datetime | None = None
+    seconds: float | None = None
+    phase: str | None = None
+    phase_since: datetime | None = None
+    progress_at: datetime | None = None
+    unit: str | None = None
+    step: str | None = None
+    done: int | None = None
+    of: int | None = None
+    counts: tuple[tuple[str, int], ...] = ()
+    rate: float | None = None
+    to_go: float | None = None
+    engine: int = 0
+    cached: int = 0
+    failure: str | None = None
+    attention: tuple[str, ...] = ()
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
 class AlertLine:
     at: datetime | None
     status: str
@@ -671,6 +739,13 @@ class Summary:
     documents: int = 0
     kinds: Counter = field(default_factory=Counter)
     stages: list[StageCounts] = field(default_factory=list)
+    # a scratch run's corpus stages: the names the latest invocation is to
+    # run, and their states, unknown while events.jsonl cannot be read
+    corpus_names: list[str] = field(default_factory=list)
+    corpus: list[CorpusStageState] = field(default_factory=list)
+    # the latest invocation went past the barrier: the documents' stages
+    # still to go are the next invocation's
+    past_barrier: bool = False
     in_flight: list[InFlight] = field(default_factory=list)
     calls: CallCounts = field(default_factory=CallCounts)
     remaining_work: int = 0
@@ -770,6 +845,43 @@ class _Rate:
     attempts: int = 0
     engine: int = 0
     calls: int = 0
+
+
+@dataclass
+class _Corpus:
+    """A corpus stage's latest attempt, as its events leave it: an
+    invocation past the barrier runs every corpus stage afresh."""
+
+    invocation: str | None = None
+    status: str = PENDING
+    started: datetime | None = None
+    ended: datetime | None = None
+    reason: str | None = None
+    failure: str | None = None
+    attention: tuple[str, ...] = ()
+    # its latest progress event, and since when it has been in its phase
+    phase: str | None = None
+    phase_since: datetime | None = None
+    unit: str | None = None
+    step: str | None = None
+    done: int | None = None
+    of: int | None = None
+    counts: tuple[tuple[str, int], ...] = ()
+    # (time, done) of the phase's first progress event that counts, and
+    # of its latest: the rate; and the time of its latest progress event
+    first: tuple[datetime, int] | None = None
+    last: tuple[datetime, int] | None = None
+    progress_at: datetime | None = None
+    # its calls, as far as the cache's events show them
+    engine: int = 0
+    cached: int = 0
+
+
+def _count(value: Any) -> int | None:
+    """A count from an event: a non-negative whole number, else None."""
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
 
 
 @dataclass
@@ -884,6 +996,10 @@ class RunMonitor:
         # events name the document and the role, not the stage
         self._current: dict[str, str] = {}
         self._stages_seen: dict[str, None] = {}
+        # each corpus stage's latest attempt, by its name, and the
+        # invocations that went past the barrier
+        self._corpus: dict[str, _Corpus] = {}
+        self._past_barrier: set[str | None] = set()
         self._kinds: dict[str, str] = {}
         # SHA-1s the events name that the plan does not, and the sorted
         # list of every SHA-1 known, made again when either changes
@@ -1017,8 +1133,14 @@ class RunMonitor:
                 self._last_at[invocation] = at
         if not isinstance(name, str):
             return
-        if name in STAGE_EVENTS:
+        if name in STAGE_EVENTS and event.get("subject") is None:
+            self._fold_corpus(event, name, at, invocation)
+        elif name in STAGE_EVENTS:
             self._fold_stage(event, name, at, invocation)
+        elif name == PROGRESS:
+            self._fold_progress(event, at, invocation)
+        elif name == BARRIER:
+            self._past_barrier.add(invocation)
         elif name in CACHE_EVENTS:
             self._fold_cache(event, name)
         elif name == CALL:
@@ -1087,6 +1209,78 @@ class RunMonitor:
         attempt.attention = tuple(reason_label(reason) for reason in reasons)
         attempt.status = NEEDS_ATTENTION if attempt.attention else DONE
 
+    def _fold_corpus(
+        self,
+        event: dict,
+        name: str,
+        at: datetime | None,
+        invocation: str | None,
+    ) -> None:
+        """A corpus stage's event, which names no document. A start, or an
+        event of another invocation than the stage's latest attempt, opens
+        a new attempt: every invocation past the barrier runs the stage
+        afresh."""
+        stage = event.get("stage")
+        if not (isinstance(stage, str) and stage):
+            return
+        corpus = self._corpus.get(stage)
+        if (
+            name == "started"
+            or corpus is None
+            or corpus.invocation != invocation
+        ):
+            corpus = self._corpus[stage] = _Corpus(invocation=invocation)
+        if name == "started":
+            corpus.status, corpus.started = RUNNING, at
+        elif name == "held":
+            corpus.status = HELD
+            corpus.reason = _token(event.get("reason"), 60)
+        elif name == "failed":
+            corpus.status, corpus.ended = FAILED, at
+            corpus.failure = failure_label(event.get("reason"))
+        else:
+            corpus.status, corpus.ended = DONE, at
+            reasons = event.get("attention") or []
+            if not isinstance(reasons, list):
+                reasons = [reasons]
+            corpus.attention = tuple(
+                reason_label(reason) for reason in reasons
+            )
+
+    def _fold_progress(
+        self, event: dict, at: datetime | None, invocation: str | None
+    ) -> None:
+        """A corpus stage's progress, while its attempt runs: what it does
+        and its counts. A new phase starts its rate afresh."""
+        stage = event.get("stage")
+        corpus = self._corpus.get(stage) if isinstance(stage, str) else None
+        if (
+            corpus is None
+            or corpus.status != RUNNING
+            or corpus.invocation != invocation
+        ):
+            return
+        phase = event.get("phase")
+        phase = _token(phase) if isinstance(phase, str) and phase else None
+        corpus.progress_at = at
+        if phase != corpus.phase or corpus.phase_since is None:
+            corpus.phase, corpus.phase_since = phase, at
+            corpus.first = corpus.last = None
+        unit, step = event.get("unit"), event.get("step")
+        corpus.unit = _token(unit) if unit else None
+        corpus.step = _token(step) if step else None
+        corpus.done = _count(event.get("done"))
+        corpus.of = _count(event.get("of"))
+        corpus.counts = tuple(
+            (label, count)
+            for key, label in _PROGRESS_COUNTS
+            if (count := _count(event.get(key))) is not None
+        )
+        if corpus.done is not None and at is not None:
+            if corpus.first is None:
+                corpus.first = (at, corpus.done)
+            corpus.last = (at, corpus.done)
+
     def _fold_cache(self, event: dict, name: str) -> None:
         calls = self._calls
         calls.cache_events += 1
@@ -1112,6 +1306,11 @@ class RunMonitor:
             calls.adopted += 1
         if name == "cache-replay":
             calls.replayed += 1
+        # a corpus stage's calls are made in a role of its own name
+        corpus = self._corpus.get(role)
+        if corpus is not None and corpus.status == RUNNING:
+            corpus.engine += name in _ENGINE_EVENTS
+            corpus.cached += name == "cache-hit"
         attempt, stage = self._in_flight(event)
         if attempt is None:
             return
@@ -1326,6 +1525,14 @@ class RunMonitor:
                 if stage not in planned_stages:
                     count(sha1, stage, attempt)
             summary.stages = list(stages.values())
+        summary.corpus_names = self._corpus_names()
+        if not summary.events_unreadable:
+            summary.corpus = self._corpus_states(
+                summary.corpus_names, latest, ended
+            )
+            summary.past_barrier = (
+                latest is None and bool(self._past_barrier)
+            ) or latest in self._past_barrier
         summary.in_flight.sort(
             key=lambda item: (item.since or now, item.stage, item.sha1)
         )
@@ -1350,6 +1557,103 @@ class RunMonitor:
         }
         summary.slices = self._slices(list(order), sorted(kinds))
         return summary
+
+    def _corpus_names(self) -> list[str]:
+        """The corpus stages the latest invocation of a scratch run is to
+        run, in order, as run.json records them: those registered, up to
+        the stage it was asked to stop after (`until`); none when it stops
+        before the barrier."""
+        scratch = self._manifest.get("scratch")
+        if not isinstance(scratch, dict):
+            return []
+        names = [
+            name
+            for name in _list(scratch.get("corpus_stages"))
+            if isinstance(name, str) and name
+        ]
+        until = scratch.get("until")
+        if isinstance(until, str) and until:
+            names = names[: names.index(until) + 1] if until in names else []
+        return names
+
+    def _corpus_states(
+        self, names: list[str], latest: str | None, ended: bool
+    ) -> list[CorpusStageState]:
+        """Each corpus stage the latest invocation is to run, and any other
+        its events name, in its state in that invocation (CorpusStageState):
+        one it has not started is pending, whatever an earlier invocation
+        did with it, since it runs it afresh; a hold lapses with its
+        invocation; one an invocation that has ended left started is
+        interrupted, by the rule rundir.run_state reads stages by."""
+        order = dict.fromkeys(names)
+        order.update(
+            (stage, None)
+            for stage, corpus in self._corpus.items()
+            if latest is None or corpus.invocation == latest
+        )
+        shown = []
+        for stage in order:
+            corpus = self._corpus.get(stage)
+            name = _token(stage)
+            if corpus is None or (
+                latest is not None and corpus.invocation != latest
+            ):
+                shown.append(CorpusStageState(name, PENDING))
+                continue
+            state = {
+                RUNNING: RUNNING,
+                HELD: HELD,
+                FAILED: FAILED,
+                DONE: SKIPPED if corpus.phase == SKIPPED else DONE,
+            }.get(corpus.status, PENDING)
+            if state == HELD and ended:
+                state = PENDING
+            if state == RUNNING and interrupted(
+                corpus.invocation, latest, ended
+            ):
+                state = INTERRUPTED
+            seconds = None
+            if corpus.started is not None and corpus.ended is not None:
+                seconds = max(
+                    0.0, (corpus.ended - corpus.started).total_seconds()
+                )
+            rate = to_go = None
+            if (
+                state == RUNNING
+                and corpus.unit != STEPS
+                and corpus.first is not None
+                and corpus.last is not None
+            ):
+                (first_at, first), (last_at, last) = corpus.first, corpus.last
+                minutes = (last_at - first_at).total_seconds() / 60
+                if minutes > 0 and last > first:
+                    rate = (last - first) / minutes
+                    if corpus.of is not None and corpus.done is not None:
+                        to_go = max(0, corpus.of - corpus.done) / rate * 60
+            shown.append(
+                CorpusStageState(
+                    name,
+                    state,
+                    started=corpus.started,
+                    seconds=seconds,
+                    phase=corpus.phase,
+                    phase_since=corpus.phase_since,
+                    progress_at=corpus.progress_at,
+                    unit=corpus.unit,
+                    step=corpus.step,
+                    done=corpus.done,
+                    of=corpus.of,
+                    counts=corpus.counts,
+                    rate=rate,
+                    to_go=to_go,
+                    engine=corpus.engine,
+                    cached=corpus.cached,
+                    failure=corpus.failure,
+                    attention=corpus.attention,
+                    reason=corpus.reason if state == HELD else None,
+                )
+            )
+        return shown
 
     def _invocation_state(
         self, summary: Summary, now: datetime
@@ -1779,21 +2083,192 @@ def _stage_notes(summary: Summary) -> list[tuple[str, str]]:
     return notes
 
 
+def _since(moment: datetime | None, now: datetime) -> str:
+    """'since 10:04:05 UTC, 2m 10s'; '' for no time."""
+    if moment is None:
+        return ""
+    age = _duration((now - moment).total_seconds())
+    return f" since {_stamp(moment, '%H:%M:%S UTC')}, {age}"
+
+
+def _corpus_progress(stage: CorpusStageState, now: datetime) -> list[str]:
+    """What a corpus stage's latest progress event says, as the views say
+    it: what it does, its counts but those at zero, its rate and time to
+    go, and its calls; and the reasons its output needs attention."""
+    parts: list[str] = []
+    running = stage.state == RUNNING
+    if stage.phase == WAITING:
+        parts.append(
+            "waiting for the query service" + _since(stage.phase_since, now)
+            if running
+            else "waiting for the query service"
+        )
+    elif stage.unit == STEPS:
+        # a reset's step is told as it starts, `done` steps before it; a
+        # reset that is done has gone through them all
+        if stage.state != DONE and stage.phase is not None:
+            line = stage.phase
+            if stage.done is not None and stage.of is not None:
+                line += f": step {_n(stage.done + 1)} of {_n(stage.of)}"
+                if stage.step and stage.step != "?":
+                    line += f", {stage.step}"
+            parts.append(line)
+    elif stage.phase is not None and stage.phase != SKIPPED:
+        line = stage.phase
+        if stage.done is not None and stage.of is not None:
+            line += f": {_n(stage.done)} of {_n(stage.of)} {stage.unit or ''}"
+        elif stage.done is not None:
+            line += f": {_n(stage.done)} {stage.unit or ''}"
+        parts.append(line.rstrip())
+    counts = [f"{_n(count)} {label}" for label, count in stage.counts if count]
+    if counts:
+        parts.append(", ".join(counts))
+    if running and stage.unit and stage.unit != STEPS:
+        if stage.rate is None:
+            parts.append("rate unknown yet")
+        else:
+            figure = (
+                _n(round(stage.rate))
+                if stage.rate >= 10
+                else f"{stage.rate:.3g}"
+            )
+            rate = f"{figure} {stage.unit} a minute"
+            if stage.to_go is not None:
+                rate += f", ~{_duration(stage.to_go)} to go"
+            parts.append(rate)
+    if (
+        running
+        and stage.phase != WAITING
+        and stage.progress_at is not None
+        and (age := (now - stage.progress_at).total_seconds()) > STALE_PROGRESS
+    ):
+        parts.append(f"last progress {_duration(age)} ago")
+    if stage.engine or stage.cached:
+        parts.append(
+            f"{_n(stage.engine)} engine calls, {_n(stage.cached)} from the "
+            "cache"
+        )
+    if stage.attention:
+        parts.append(f"attention: {', '.join(stage.attention)}")
+    return parts
+
+
+def _corpus_state(stage: CorpusStageState, now: datetime) -> tuple[str, str]:
+    """A corpus stage's state as the views say it, and its style."""
+    if stage.state == RUNNING:
+        age = (
+            f" for {_duration((now - stage.started).total_seconds())}"
+            if stage.started
+            else ""
+        )
+        return f"running{age}", "good"
+    took = (
+        f" in {_duration(stage.seconds)}" if stage.seconds is not None else ""
+    )
+    if stage.state == DONE:
+        return f"done{took}", "warn" if stage.attention else ""
+    if stage.state == SKIPPED:
+        return f"skipped{took} (the instance holds what the key makes)", ""
+    if stage.state == FAILED:
+        return f"failed{took}: {stage.failure or OTHER}", "bad"
+    if stage.state == HELD:
+        return f"held: {stage.reason or '?'}", "warn"
+    if stage.state == INTERRUPTED:
+        return "interrupted (the next invocation runs it again)", "warn"
+    return "pending", "dim"
+
+
+def _corpus_line(stage: CorpusStageState, now: datetime) -> tuple[str, str]:
+    """A corpus stage's state and progress, in one line, and its style."""
+    state, style = _corpus_state(stage, now)
+    return "; ".join([state, *_corpus_progress(stage, now)]), style
+
+
+def _corpus_rows(summary: Summary) -> list[tuple[str, str]]:
+    """A scratch run's corpus stages, one per line; or, while
+    events.jsonl cannot be read, one line that says their states are
+    unknown. Nothing for a run that has none."""
+    if summary.events_unreadable:
+        if summary.corpus_names:
+            return [(f"corpus     unknown: {EVENTS_UNREADABLE}", "warn")]
+        return []
+    if not summary.corpus:
+        return []
+    width = max(12, *(len(stage.name) + 1 for stage in summary.corpus))
+    rows = [("corpus stages", "head")]
+    for stage in summary.corpus:
+        line, style = _corpus_line(stage, summary.now)
+        rows.append((f"  {stage.name.ljust(width)}{line}", style))
+    return rows
+
+
+# the corpus stages' states still to run in the latest invocation, or in
+# the next one
+_CORPUS_TO_GO = (PENDING, HELD, RUNNING, INTERRUPTED, FAILED)
+
+
+def _corpus_to_go(summary: Summary) -> str | None:
+    """The corpus stages still to run, with how far a running one has got
+    and its time to go; None when none is left."""
+    left = []
+    for stage in summary.corpus:
+        if stage.state not in _CORPUS_TO_GO:
+            continue
+        text = stage.name
+        if stage.state == RUNNING and stage.phase == WAITING:
+            text += " (waiting for the query service)"
+        elif (
+            stage.state == RUNNING
+            and stage.done is not None
+            and stage.of is not None
+            and stage.unit != STEPS
+        ):
+            text += f" ({_n(stage.done)} of {_n(stage.of)} {stage.unit or ''}"
+            text = text.rstrip()
+            if stage.to_go is not None:
+                text += f", ~{_duration(stage.to_go)}"
+            text += ")"
+        elif stage.state == RUNNING:
+            text += " (running)"
+        left.append(text)
+    if not left:
+        return None
+    return "corpus stages: " + ", ".join(left)
+
+
 def _to_go(summary: Summary) -> str | None:
-    """What is left, as the calls rows say it."""
+    """What is left, as the calls rows say it: the documents' stages, then
+    a scratch run's corpus stages. Past the barrier the corpus stages come
+    first, and the documents' stages still to go (those that failed, and
+    those after them) are the next invocation's, which runs them again."""
+    corpus = _corpus_to_go(summary)
+    if summary.past_barrier:
+        parts = [corpus] if corpus is not None else []
+        if summary.remaining_work:
+            parts.append(
+                ("besides " if parts else "")
+                + f"{_n(summary.remaining_work)} documents' stages for the "
+                "next invocation"
+            )
+        return "; ".join(parts) if parts else "nothing"
     if not summary.remaining_work:
-        return "nothing" if summary.stages else None
+        if corpus is not None:
+            return corpus
+        return "nothing" if summary.stages or summary.corpus else None
     line = f"{_n(summary.remaining_work)} stages"
     if summary.remaining_calls is None:
         line += "; engine calls unknown"
         if summary.unrated:
             line += f" (no rate yet for {', '.join(summary.unrated)})"
-        return line
-    line += (
-        f", ~{_n(summary.remaining_calls)} engine calls at the rates so far"
-    )
-    if summary.unrated:
-        line += f", besides {', '.join(summary.unrated)}: no rate yet"
+    else:
+        line += (
+            f", ~{_n(summary.remaining_calls)} engine calls at the rates so "
+            "far"
+        )
+        if summary.unrated:
+            line += f", besides {', '.join(summary.unrated)}: no rate yet"
+    if corpus is not None:
+        line += f"; then {corpus}"
     return line
 
 
@@ -1959,6 +2434,9 @@ def _body(summary: Summary, full: bool) -> list[tuple[str, str]]:
     body = [*_header(summary), ("", ""), *_stage_rows(summary)]
     if full:
         body += [(f"  {text}", style) for text, style in _stage_notes(summary)]
+    corpus = _corpus_rows(summary)
+    if corpus:
+        body += [("", ""), *corpus]
     body += [
         ("", ""),
         *_call_rows(summary, full),
@@ -2168,6 +2646,26 @@ def render_html(summary: Summary, *, reload: int = PAGE_RELOAD) -> str:
         )
     if notes:
         parts.append(f"<ul>{''.join(notes)}</ul>")
+
+    if summary.corpus or (summary.corpus_names and summary.events_unreadable):
+        parts.append("<h2>Corpus stages</h2>")
+        if summary.events_unreadable:
+            parts.append(
+                f'<p class="warn">Unknown: {_e(EVENTS_UNREADABLE)}.</p>'
+            )
+        else:
+            rows = []
+            for stage in summary.corpus:
+                state, style = _corpus_state(stage, summary.now)
+                progress = _corpus_progress(stage, summary.now)
+                rows.append(
+                    [
+                        _e(stage.name),
+                        _span(style, state),
+                        _e("; ".join(progress)),
+                    ]
+                )
+            parts.append(_table(["stage", "state", "progress"], rows))
 
     parts.append("<h2>Calls</h2>")
     if summary.events_unreadable:
