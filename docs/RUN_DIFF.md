@@ -232,11 +232,18 @@ its subject's label.
 **Clusters**, by membership over the mentions both identity maps hold: a
 cluster of the run whose mentions come from several clusters of the
 baseline is a *merge*; one of the baseline whose mentions go to several
-of the run's, a *split*; with the mentions in each, by kind, and the
-mentions whose method changed (`confident → ambiguous`, ...). `Same
-decisions` says whether the two maps' decisions hash alike. Claim
+of the run's, a *split*; with the mentions in each, by kind, the merges
+by the method of the run's cluster (`confident`, or `adjudicated` for
+one the adjudicator's verdicts made, #106), and the mentions whose method
+changed (`confident → ambiguous`, `ambiguous → adjudicated`, ...).
+`Same decisions` says whether the two maps' decisions hash alike. Claim
 fingerprints never name a cluster, so a clustering that changes no claim
-shows here and nowhere among the claims.
+shows here and nowhere among the claims. Every merge and split is
+listed, with its method and its members (fingerprint, document, label
+and kind), in `diff.json` alone, which stays on the machine; `diff.md`
+gives the counts. The run report's figures, set side by side, add the
+adjudication's own counts: the pairs asked, the calls, the verdicts by
+kind and the answers refused.
 
 ## Known limits
 
@@ -333,7 +340,14 @@ expects it and why:
   (`content.records.set_aside_records`), recordless mentions up;
 - clusters: merges where the change should split, or the reverse; a rise
   in `conflicting` or hard conflicts; `methods_changed` toward
-  `ambiguous` in bulk;
+  `ambiguous` in bulk; adjudicated merges (`merges_by_method`) the
+  change does not explain, or verdicts that swing from one kind to
+  another with no change to the prompt, the model or the batches
+  (read the merges in `diff.json`: each adjudicated merge should be one
+  person, place or family by its members' labels and documents). A
+  union or an event whose people adjudication merged links confidently,
+  so its merge shows as `confident`: read a rise in confident merges of
+  unions and events beside the adjudicated merges of people;
 - calls to the engine far above what the change explains (a cache miss
   for every call of a stage the change does not touch).
 

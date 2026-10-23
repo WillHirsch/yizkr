@@ -26,13 +26,14 @@ stages registered with it (CORPUS_STAGES), in order, over the documents
 whose stages all completed, excerpts among them: every one, in each
 invocation that goes past the barrier, so a corpus stage reuses its own
 outputs while their inputs stand, as the views do. They are clustering,
-which makes the identity map, and then the write side
+which makes the identity map and adjudicates its ambiguous pairs
+(yizkr.pipeline.adjudication), and then the write side
 (yizkr.pipeline.scratchwrite): reset, register, write, places and site,
-which touch the wiki. Of them only places, the place-hierarchy
-reconciliation after the write, calls the engine, through the LLM cache
-like every stage, so its calls pause for a subscription limit as any
-call does. Face detection is never a stage of a scratch run, and no
-scratch run writes a depicts statement.
+which touch the wiki. Of them clustering's adjudication and places, the
+place-hierarchy reconciliation after the write, call the engine, through
+the LLM cache like every stage, so their calls pause for a subscription
+limit as any call does. Face detection is never a stage of a scratch
+run, and no scratch run writes a depicts statement.
 
 **Order.** One document of each kind, the first by name, goes through
 every per-document stage first: the canaries. The rest follow stage by
@@ -311,10 +312,11 @@ class CorpusStage:
 
 
 def _clustering(context: CorpusContext) -> Sequence[str]:
-    """Corpus clustering (yizkr.pipeline.clustering): the identity map of
-    the corpus, in the stage's directory. The module is imported as the
+    """Corpus clustering (yizkr.pipeline.clustering) and the adjudication
+    of its ambiguous pairs (yizkr.pipeline.adjudication): the identity map
+    of the corpus, in the stage's directory. The module is imported as the
     stage runs, since only a run past the barrier needs it."""
-    from yizkr.pipeline.clustering import run_stage
+    from yizkr.pipeline.adjudication import run_stage
 
     return run_stage(context)
 
@@ -334,10 +336,11 @@ def _write_side(name: str) -> Callable[[CorpusContext], Sequence[str]]:
 
 
 # the corpus stages, in the order they run after the barrier: clustering,
-# then the write side, which touches the wiki; of it only places, the
-# place-hierarchy reconciliation, calls the engine
+# which calls the engine to adjudicate its ambiguous pairs, then the write
+# side, which touches the wiki; of it only places, the place-hierarchy
+# reconciliation, calls the engine
 CORPUS_STAGES: tuple[CorpusStage, ...] = (
-    CorpusStage("clustering", _clustering, calls_engine=False),
+    CorpusStage("clustering", _clustering),
     *(
         CorpusStage(
             name,

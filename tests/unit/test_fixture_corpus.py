@@ -894,9 +894,10 @@ class TestTheTraps:
 
 
 def calls_by_stage(run: Path, invocation: int | None = None) -> set[tuple]:
-    """(document SHA-1, stage) of every call that reached the engine."""
+    """(document SHA-1, stage) of every call that reached the engine; a
+    corpus stage's names no document (None)."""
     return {
-        (e["subject"], e["stage"])
+        (e.get("subject"), e.get("stage"))
         for e in events(run, "call", invocation=invocation)
     }
 
@@ -946,9 +947,14 @@ class TestReuse:
         assert events(second, "cache-miss") == []
         hits = events(second, "cache-hit")
         assert {hit["reason"] for hit in hits} == {"key match"}
-        assert {hit["subject"] for hit in hits} == {
-            sha1(name) for name in EXTRACTED
-        }
+        # the documents' calls, and the clustering stage's adjudication
+        # (#106), which is the corpus's and names no document
+        adjudicated = [hit for hit in hits if hit["role"] == "adjudication"]
+        assert adjudicated
+        assert all("subject" not in hit for hit in adjudicated)
+        assert {
+            hit["subject"] for hit in hits if hit["role"] != "adjudication"
+        } == {sha1(name) for name in EXTRACTED}
         assert events(second, "reused") == []
         assert set(started(second)) == every_stage()
         assert statuses(second) == {DONE}
@@ -994,8 +1000,10 @@ class TestReuse:
         """A rule added to the chunk prompt changes every chunk call's key:
         the engine is asked again for every extraction, and, where the
         batch it makes differs (the family history, whose mistake the rule
-        mends), for the critique that follows it. The transcriptions, the
-        entity manifests and every other critique come from the cache."""
+        mends), for the critique that follows it, and for the clustering
+        stage's adjudication, whose prompts give that batch's claims as
+        evidence (#106). The transcriptions, the entity manifests and every
+        other critique come from the cache."""
         first = runs.run("first")
         before = len(runs.calls.asked)
         monkeypatch.setattr(
@@ -1005,7 +1013,11 @@ class TestReuse:
         )
         sharper = runs.run("sharper")
         asked = runs.calls.asked[before:]
-        assert {what for what, _name in asked} == {"chunk", "critique"}
+        assert {what for what, _name in asked} == {
+            "chunk",
+            "critique",
+            "adjudication",
+        }
         assert {name for what, name in asked if what == "chunk"} == set(
             EXTRACTED
         )
@@ -1014,7 +1026,7 @@ class TestReuse:
         ]
         assert calls_by_stage(sharper) == {
             (sha1(name), "extraction") for name in EXTRACTED
-        } | {(sha1(fc.NARRATIVE), "critique")}
+        } | {(sha1(fc.NARRATIVE), "critique"), (None, "clustering")}
         # each conversation the cache answered is resumed, without a call,
         # for the new chunk prompts to fork
         assert {e["subject"] for e in events(sharper, "cache-resume")} == {
@@ -1027,6 +1039,7 @@ class TestReuse:
         assert missed == {
             ("extract", "fork", "absent"),
             ("critique", "complete", "absent"),
+            ("adjudication", "complete", "absent"),
         }
         assert statuses(sharper) == {DONE}
         # the family history's batch is mended, and its critique has
@@ -1722,7 +1735,6 @@ class TestTheRunReport:
         assert clustering_row["state"] == NEEDS_ATTENTION
         assert clustering_row["attention"] == {
             "ambiguous clusters not merged": 1,
-            "ambiguous pairs to adjudicate": 1,
             "conflicting clusters not merged": 1,
         }
         assert clustering_row["failure"] is None
@@ -1772,6 +1784,11 @@ class TestTheRunReport:
             "identity clusters": summary["identity_clusters"],
             "confident merges": summary["clusters"]["confident"],
             "mentions merged": summary["cluster_mentions"]["confident"],
+            "adjudicated merges": summary["clusters"]["adjudicated"],
+            "mentions merged by adjudication": summary["cluster_mentions"][
+                "adjudicated"
+            ],
+            "members adjudicated apart": summary["adjudicated_apart"],
             "ambiguous, left split": summary["clusters"]["ambiguous"],
             "ambiguous mentions": summary["cluster_mentions"]["ambiguous"],
             "conflicting": summary["clusters"]["conflicting"],
@@ -1783,6 +1800,29 @@ class TestTheRunReport:
             "ambiguous pairs": summary["ambiguous_pairs"],
             "adjudication calls": summary["adjudication"][
                 "calls_ambiguous_pairs"
+            ],
+            "pairs adjudicated": summary["adjudication"]["asked_pairs"],
+            "pairs not asked, a same cannot merge": summary["adjudication"][
+                "unmergeable_pairs_not_asked"
+            ],
+            "adjudication calls made": summary["adjudication"]["calls"],
+            **{
+                f"verdicts {verdict}": count
+                for verdict, count in summary["adjudication"][
+                    "verdicts"
+                ].items()
+            },
+            "pairs without a verdict": summary["adjudication"][
+                "unanswered_pairs"
+            ],
+            "adjudication lines refused": summary["adjudication"][
+                "rejected_lines"
+            ],
+            "adjudication calls refused": summary["adjudication"][
+                "refused_calls"
+            ],
+            "adjudication answers in conflict": summary["adjudication"][
+                "conflicting_answers"
             ],
             "hub keys, not blocked on": summary["hub_keys"],
             "mentions holding them": summary["hub_mentions"],

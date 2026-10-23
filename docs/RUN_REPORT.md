@@ -223,7 +223,9 @@ named, by its two places' labels and the document that states it, in
 report.json (`place_cycles`) and report.html alone, which stay on the
 machine (ADR-0038 owner question 4). The place stage's calls count under
 their own role, `places`, in the calls' lines by role, apart from the
-extraction's.
+extraction's; the clustering stage's adjudication of ambiguous pairs
+counts under `adjudication`, apart from the critique's, whose engine,
+model and effort it uses.
 
 **Anomalies.** The alerts by check and by stage, each finding (a
 document or the run, a stage and a check) counted once: new when any of
@@ -348,11 +350,19 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   category from the critic's fixed list (`critique.CATEGORIES`), and the
   findings that failed their checks, counted apart as invalid;
 - clusters, from the clustering stage's identity map: confident merges,
-  ambiguous clusters left split, conflicting clusters (and how many of
+  adjudicated merges (those the adjudicator's `same` verdicts made in a
+  development-stage run, #106) and their mentions, the members a
+  `different` verdict left alone, ambiguous clusters left split (an
+  adjudicated cluster that left members apart for a contradiction among
+  them), conflicting clusters (and how many of
   them hard), singletons, the recordless mentions (those of a kind that
   takes a mention record and have none, which never link confidently,
   ADR-0035 §7), the mentions clustered by kind, the candidate
-  pairs, the adjudication estimate, and the hub keys not blocked on and
+  pairs, the adjudication estimate, the adjudication itself (the pairs
+  asked and the calls made, the verdicts `same`, `different` and
+  `uncertain`, the pairs left without a verdict, and the answer lines
+  refused by the schema, the calls refused whole and the pairs answered
+  two ways), and the hub keys not blocked on and
   the mentions holding them; `not run` when the run has no clustering
   stage, and the map's state when it is missing or of another format.
   The map's summary also holds `confident_links_only`, what merging over

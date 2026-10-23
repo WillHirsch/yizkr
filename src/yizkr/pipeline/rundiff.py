@@ -166,7 +166,14 @@ COMPLETED = frozenset({report.DONE, report.NEEDS_ATTENTION})
 CLAIM_PARTS = ("value", "qualifiers", "locator")
 # how a mention came to be where the identity map puts it
 METHODS = frozenset(
-    {"confident", "ambiguous", "conflicting", "singleton", "unclustered"}
+    {
+        "confident",
+        "adjudicated",
+        "ambiguous",
+        "conflicting",
+        "singleton",
+        "unclustered",
+    }
 )
 # the aggregates' sections whose figures the diff sets side by side;
 # times are left out, as they differ from run to run whatever changed
@@ -953,6 +960,9 @@ def compare_clusters(
     def kind_of(clusters: Mapping[str, Any], cid: str) -> str:
         return names.kind(field_of(clusters.get(cid), "kind"))
 
+    def method_of(clusters: Mapping[str, Any], cid: str) -> str:
+        return report._known(field_of(clusters.get(cid), "method"), METHODS)
+
     methods: Counter = Counter()
     for fingerprint in common:
         a = field_of(old[fingerprint], "method")
@@ -989,6 +999,11 @@ def compare_clusters(
         "mentions_merged": sum(
             len(members(run["clusters"], c)) for c in merges
         ),
+        # how each merge's cluster came about in the run: confident links,
+        # or an adjudicator's verdicts
+        "merges_by_method": report._by_count(
+            Counter(method_of(run["clusters"], cid) for cid in merges)
+        ),
         "splits": len(splits),
         "splits_by_kind": report._by_count(
             Counter(kind_of(baseline["clusters"], cid) for cid in splits)
@@ -1012,6 +1027,7 @@ def compare_clusters(
         "merges": [
             {
                 "cluster": cid,
+                "method": method_of(run["clusters"], cid),
                 "from": sorted(came[cid]),
                 "members": [
                     described(new, m) for m in members(run["clusters"], cid)
@@ -1832,7 +1848,8 @@ def render_markdown(aggregate: Mapping[str, Any]) -> str:
             "",
             f"Merges {clusters['merges']} "
             f"({_counts(clusters['merges_by_kind'])}; "
-            f"{clusters['mentions_merged']} mentions); splits "
+            f"{clusters['mentions_merged']} mentions; by method: "
+            f"{_counts(clusters.get('merges_by_method') or {})}); splits "
             f"{clusters['splits']} ({_counts(clusters['splits_by_kind'])}; "
             f"{clusters['mentions_split']} mentions).",
             "",

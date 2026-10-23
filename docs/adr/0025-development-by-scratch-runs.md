@@ -264,7 +264,14 @@ The owner replaced that plan on 2026-09-27, for four reasons.
   It has no human gate. There is no cluster review and no ratification:
   confident clusters merge, ambiguous ones stay split and are counted,
   and flags are computed and reported but gate nothing. One command, the
-  scratch driver (#194), runs it.
+  scratch driver (#194), runs it. Amended by #106 (2026-10-23): the
+  model adjudicates the ambiguous pairs of each ambiguous cluster, and
+  its `same` verdicts merge unattended, with the method `adjudicated`,
+  which the identity map, the run report and the run diff count apart
+  from confident merges; a conflicting cluster never merges, and a
+  cluster with an `uncertain` pair stays split (ADR-0007, as amended by
+  #106). In keeper mode the verdicts are only recorded, for cluster
+  review.
 - **It writes to the one existing instance, which one command resets and
   repopulates per run** (#199). The reset stops the stack, removes its
   graph volumes (the database, the search index, the query service and
@@ -394,8 +401,9 @@ a second store of assertions: the graph stays the system of record.
   a deck's slide text and derived media, the reconcile step, and the
   per-document adjudication (`reconcile.adjudicate`) given a roster ask
   nothing of it, and nor does corpus clustering (#105), over the batches
-  they make. Cluster adjudication and flags have no code yet; their
-  issues (#106, #112) require them to run under the same stub. Amended
+  they make, nor its adjudication of ambiguous pairs (amended by #106,
+  2026-10-23). Flags have no code yet; their issue (#112) requires them
+  to run under the same stub. Amended
   by #103 (2026-09-29): registration is part of the write in the
   per-document path too. The write registers the document's artifact, a
   deck's slides as page fragments and a deck's derived media from their

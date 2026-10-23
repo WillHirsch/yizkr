@@ -65,12 +65,16 @@ from yizkr.pipeline.scratch import (
     ScratchRefused,
 )
 
+# the clustering stage's adjudication prompt, and a pair it asks of
+ADJUDICATION_PROMPT = "You adjudicate IDENTITY for a family archive"
+ADJUDICATED_PAIR = re.compile(r"^(\d+)\. clustering's comparison", re.M)
 # what each of the fake engine's calls is made for
 STAGE_OF = {
     "vision": "transcription",
     "manifest": "extraction",
     "chunk": "extraction",
     "critique": "critique",
+    "adjudication": "clustering",
 }
 # the artifact's SHA-1, as the extraction prompts name it
 SHA1 = re.compile(r"sha1\W*([0-9a-f]{40})")
@@ -93,7 +97,9 @@ class Engine:
     refuses (a manifest of no entity it accepts), and a segmentation of the
     whole text as one unit; a claim per chunk, whose year the
     configuration and the document pick (the configuration alone while
-    `fakes.same_claims`); and a critic with one concern. While
+    `fakes.same_claims`); a critic with one concern; and an adjudicator
+    of the clustering stage's ambiguous pairs (#106), uncertain of each,
+    since the manifests' people have no mention records. While
     `fakes.fresh`, a reading, a manifest and a chunk are numbered in the
     order the engine is asked for them, so that one asked again comes back
     different, as a model's answer does."""
@@ -139,6 +145,23 @@ class Engine:
             return (
                 '{"target": "e1", "issue": "a concern"}\n'
                 '{"done": true, "findings_emitted": 1}'
+            )
+        if prompt.startswith(ADJUDICATION_PROMPT):
+            self._call("adjudication", None)
+            return "\n".join(
+                [
+                    *(
+                        json.dumps(
+                            {
+                                "pair": int(n),
+                                "verdict": "uncertain",
+                                "reason": "-",
+                            }
+                        )
+                        for n in ADJUDICATED_PAIR.findall(prompt)
+                    ),
+                    '{"done": true}',
+                ]
             )
         return self._chunk(prompt)
 
@@ -265,7 +288,18 @@ def run(tmp_path, corpus, fake, status=EXIT_OK, **kwargs) -> Counter:
 
 
 def calls_since(fake, before: int) -> Counter:
-    return Counter(STAGE_OF[what] for what, _name in fake.calls[before:])
+    """The engine calls of the per-document stages since `before`, per
+    stage: the clustering stage's adjudication is counted apart
+    (adjudication_calls)."""
+    return Counter(
+        STAGE_OF[what]
+        for what, _name in fake.calls[before:]
+        if what != "adjudication"
+    )
+
+
+def adjudication_calls(fake) -> int:
+    return sum(what == "adjudication" for what, _name in fake.calls)
 
 
 def per_stage(counted: estimate.Estimate, count: str) -> Counter:
@@ -359,16 +393,32 @@ class TestCounts:
         assert made == {"transcription": 2, "extraction": 8, "critique": 4}
         assert per_stage(counted, "engine_calls") == made
 
-    def test_the_clustering_stage_makes_no_call(self, tmp_path, engine):
-        """The registered corpus stage, clustering, calls no engine: the
-        estimate says so, rather than that it is not estimated."""
-        counted = estimate_of(tmp_path, small(tmp_path), engine)
+    def test_the_clustering_stage_s_adjudication_is_counted(
+        self, tmp_path, engine
+    ):
+        """The clustering stage calls the engine to adjudicate its
+        ambiguous pairs (#106). Before any run has an identity map, the
+        estimate says it is not estimated; once one has, it counts the
+        calls that map planned, as up to so many."""
+        corpus = small(tmp_path)
+        counted = estimate_of(tmp_path, corpus, engine)
         assert (counted.callless_stages, counted.corpus_stages) == (
-            ["clustering"],
             [],
+            ["clustering"],
         )
+        assert counted.adjudication is None
         text = "\n".join(estimate.describe(counted))
-        assert "- No call: the corpus stage clustering makes none." in text
+        assert "- Not estimated: the corpus stages clustering." in text
+        run(tmp_path, corpus, engine)
+        asked = adjudication_calls(engine)
+        assert asked >= 1
+        counted = estimate_of(tmp_path, corpus, engine, new=True)
+        assert counted.corpus_stages == []
+        calls, source = counted.adjudication
+        assert calls >= asked
+        text = "\n".join(estimate.describe(counted))
+        assert f"- Up to {calls} adjudication call" in text
+        assert f"identity map of run {source}" in text
         assert "Not estimated" not in text
 
     def test_a_run_the_cache_answers_asks_the_engine_nothing(
