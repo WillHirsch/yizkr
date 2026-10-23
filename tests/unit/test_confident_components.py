@@ -510,6 +510,12 @@ class TestTheCounts:
         assert counts["mentions merged by confident component"] == 3
         assert counts["confident merges"] == 1
         assert counts["mentions merged"] == 2
+        # a component alone: no confident merge to take it for
+        counts = counts_of(identity_of(three_with_one_undated())["summary"])
+        assert counts["confident component merges"] == 1
+        assert counts["mentions merged by confident component"] == 3
+        assert counts["confident merges"] == 0
+        assert counts["mentions merged"] == 0
 
     def test_the_diff_lists_every_merge_the_rule_adds(self):
         """Against a baseline that left every mention apart, each
