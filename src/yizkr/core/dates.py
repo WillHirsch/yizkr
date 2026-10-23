@@ -83,6 +83,25 @@ def check_time(value: str, calendar: str | None, where: str) -> None:
         raise UnsupportedDate(f"{where}: {problem}")
 
 
+# Wikibase's precisions that name a span ("the 2nd millennium", "the 19th
+# century", "the 1830s") rather than a date
+SPAN_PRECISIONS = (6, 7, 8)
+
+
+def time_text(value: str, precision: str | int, where: str) -> str:
+    """A time as the query service gives it, with its Wikibase precision,
+    at the precision its source states, as the site renders it
+    (``staticsite.format_time``): a span as "the 19th century" or "the
+    1830s", never its first year. An unsupported date raises
+    UnsupportedDate naming `where` (ADR-0034)."""
+    # imported here: the site's module imports this one
+    from yizkr.staticsite import format_time
+
+    text = format_time(value, str(precision), where)
+    span = str(precision) != "" and int(precision) in SPAN_PRECISIONS
+    return f"the {text}" if span else text
+
+
 # Every time value node the graph holds that is unsupported, with the
 # statement it belongs to (as a statement's value or qualifier, or in one
 # of its references) and that statement's entity. A value node is shared

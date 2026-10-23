@@ -1538,3 +1538,147 @@ class TestRosterKinds:
         assert [c.qid for c in block_candidates(found, graph)["e1"]] == [
             "Q101"
         ]
+
+
+def date_claim(prop: str, time: dict, subject: str = "e1") -> dict:
+    return {
+        "subject": {
+            "kind": "local",
+            "local_id": subject,
+            "label": "Hildegard Löbig",
+        },
+        "property": prop,
+        "value": {"type": "time", **time},
+        "source": {"artifact": SCAN.model_dump()},
+    }
+
+
+class TestDatesAtTheirPrecision:
+    """The adjudication prompts show a century or a decade as such, as the
+    site does, never as its first year (rule 5; #337): a batch's dates
+    (`entity_facts`) and the roster's (`fetch_roster`, which reads each
+    date's precision from its statement's value node)."""
+
+    @pytest.mark.parametrize(
+        "time, shown",
+        [
+            ({"year": 1801, "precision": "century"}, "the 19th century"),
+            ({"year": 1830, "precision": "decade"}, "the 1830s"),
+            ({"year": 1876}, "1876"),
+            ({"year": 1876, "month": 3}, "1876-03"),
+            ({"year": 1876, "month": 3, "day": 19}, "1876-03-19"),
+        ],
+        ids=["century", "decade", "year", "month", "day"],
+    )
+    def test_entity_facts_show_a_date_at_its_precision(self, time, shown):
+        facts = entity_facts(
+            batch(claims=[date_claim("date_of_birth", time)]), "e1"
+        )
+        assert facts == f"date_of_birth: {shown}"
+
+    @staticmethod
+    def fetch(monkeypatch, rows):
+        import io
+
+        from yizkr.core.config import Config
+        from yizkr.pipeline import reconcile
+
+        queries = []
+
+        def urlopen(url, timeout):
+            queries.append(urllib.parse.unquote_plus(url))
+            body = json.dumps({"results": {"bindings": rows}})
+            return io.BytesIO(body.encode())
+
+        monkeypatch.setattr(reconcile.urllib.request, "urlopen", urlopen)
+        monkeypatch.setattr(
+            reconcile, "unsupported_in_graph", lambda *args, **kwargs: None
+        )
+        config = Config(
+            wikibase_url="http://wikibase.example",
+            concept_uri="http://wikibase.example",
+            wdqs_url="http://query.example",
+            sparql_url="http://query.example/sparql",
+            admin_name="x",
+            admin_pass="x",
+            env_file=None,
+        )
+        roster = reconcile.fetch_roster(TestRosterKinds.Vocabulary(), config)
+        (query,) = queries
+        return roster, query
+
+    @staticmethod
+    def binding(qid, **dates):
+        row = {
+            "item": {"value": f"http://wikibase.example/entity/{qid}"},
+            "itemLabel": {"value": "Cäcilie Löbig"},
+            "kind": {"value": "http://wikibase.example/entity/Q5"},
+            "kindLabel": {"value": "human"},
+        }
+        for name, value in dates.items():
+            row[name] = {"value": value}
+        return row
+
+    def test_roster_dates_are_shown_at_their_precision(self, monkeypatch):
+        rows = [
+            self.binding(
+                "Q100",
+                birth="1801-01-01T00:00:00Z|7",
+                death="1830-01-01T00:00:00Z|8",
+            ),
+            self.binding(
+                "Q101",
+                birth="1876-03-19T00:00:00Z|11",
+                death="1941-03-01T00:00:00Z|10",
+            ),
+            self.binding("Q102", birth="1833-01-01T00:00:00Z|9"),
+        ]
+        roster, _ = self.fetch(monkeypatch, rows)
+        assert [(r.birth, r.death) for r in roster] == [
+            ("the 19th century", "the 1830s"),
+            ("1876-03-19", "1941-03"),
+            ("1833", ""),
+        ]
+        assert "born: the 19th century; died: the 1830s" in roster[0].facts()
+
+    def test_event_dates_fill_gaps_at_their_precision(self, monkeypatch):
+        rows = [
+            # a direct date wins over an event's
+            self.binding(
+                "Q100",
+                birth="1876-03-19T00:00:00Z|11",
+                eventBirth="1801-01-01T00:00:00Z|7",
+            ),
+            # an event's date stands in where there is no direct one
+            self.binding(
+                "Q101",
+                eventBirth="1801-01-01T00:00:00Z|7",
+                eventDeath="1890-01-01T00:00:00Z|8",
+            ),
+        ]
+        roster, _ = self.fetch(monkeypatch, rows)
+        assert [(r.birth, r.death) for r in roster] == [
+            ("1876-03-19", ""),
+            ("the 19th century", "the 1890s"),
+        ]
+
+    def test_roster_query_reads_each_dates_precision(self, monkeypatch):
+        _, query = self.fetch(monkeypatch, [])
+        # P2/P3 are date of birth/death and P10 point in time, as
+        # TestRosterKinds.Vocabulary numbers them
+        for statement, prop in [
+            ("birthStatement", "P2"),
+            ("deathStatement", "P3"),
+            ("birthEventStatement", "P10"),
+            ("deathEventStatement", "P10"),
+        ]:
+            assert f"p:{prop} ?{statement} ." in query
+            # the best-rank statements, as the truthy value is
+            assert f"?{statement} a wikibase:BestRank ." in query
+        for name in ("birth", "death", "birthEvent", "deathEvent"):
+            assert f"?{name}Node wikibase:timeValue ?{name}Time" in query
+            assert f"wikibase:timePrecision ?{name}Precision" in query
+            # time and precision sampled together, from one statement
+            assert f'CONCAT(STR(?{name}Time), "|",' in query
+        assert "(SAMPLE(?birthDate) AS ?birth)" in query
+        assert "(SAMPLE(?birthEventDate) AS ?eventBirth)" in query
