@@ -200,7 +200,7 @@ class TestDocumentDirectories:
         (run / "unreadable").mkdir()
         (run / "unreadable" / "state.json").write_text("{cut")
         (run / "listed").mkdir()
-        (run / "listed" / "state.json").write_text("[]")
+        (run / "listed" / "state.json").write_text('["state"]')
         (run / "events.jsonl").write_text("")
         assert gaps.document_directories(run) == [
             (NATURALISATION, run / "naturalisation")
@@ -308,6 +308,19 @@ class TestRollup:
             "founded",
             "arrived per",
         ]
+
+    def test_frequency_ranks_before_documents(self, run):
+        document(
+            run,
+            "interview",
+            INTERVIEW,
+            ndjson=[dict(FOUNDED, predicate="owned by")] * 3 + [FOUNDED],
+        )
+        document(run, "directory", DIRECTORY, ndjson=[FOUNDED])
+        assert [
+            (row["predicate"], row["frequency"], row["documents"])
+            for row in rollup(run).rows
+        ] == [("owned by", 3, 1), ("founded", 2, 2)]
 
     def test_an_empty_run_rolls_up_nothing(self, run):
         result = rollup(run)

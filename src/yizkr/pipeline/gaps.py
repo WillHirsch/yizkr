@@ -174,7 +174,8 @@ class _Row:
     first: dict[str, str]
     frequency: int = 0
     spellings: Counter = field(default_factory=Counter)
-    documents: set[str] = field(default_factory=set)
+    # the documents that logged the key, in the order they were read
+    documents: dict[str, None] = field(default_factory=dict)
 
     def record(self) -> dict[str, str | int]:
         variants = sorted(
@@ -219,7 +220,7 @@ def rollup(run: Path) -> Rollup:
             row = rows.setdefault(key, _Row(key, gap))
             row.frequency += 1
             row.spellings[" ".join(gap["predicate"].split())] += 1
-            row.documents.add(sha1)
+            row.documents[sha1] = None
             total += 1
     ordered = sorted(
         rows.values(),
