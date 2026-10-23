@@ -2592,3 +2592,27 @@ class TestWhatSourcesSay:
         ) in page
         assert "<td>Brunnenring 35</td>" in page
         assert f"people/{LETTER}.html" not in page
+
+    def test_people_sort_by_their_names_not_their_links(
+        self, tmp_path, vocabulary
+    ):
+        # Klara (Q12) and the placeholder person (Q8), both given here as
+        # the letter's addressee: by their links Q8 would come first
+        rows = [
+            said_of("c5"),
+            said_row(
+                LETTER,
+                "addressee",
+                uri("Q8"),
+                LETTER,
+                "c9",
+                value_label="Living Person",
+            ),
+        ]
+        page = self.page_of(
+            tmp_path, vocabulary, rows, f"artifacts/{LETTER}.html"
+        )
+        assert re.findall(r'<dd><a href="../people/(Q\d+).html">', page) == [
+            KLARA,
+            "Q8",
+        ]
