@@ -669,6 +669,40 @@ class TestEventsAndDates:
         assert value["year"] == when.year
         assert {q["property"] for q in quals} == qualifiers
 
+    # every document that dates its own making, with the precision and
+    # circa it gives (ADR-0039 §2.2, #553)
+    SELF_DATED = {
+        "studio-photo-1890s": u.Date(1890, decade=True),
+        "letter-excerpt-1939": u.Date(1939, 7, 28),
+        "death-certificate-1941": u.Date(1941, 3, 7),
+        "letter-to-sipkje-1952": u.Date(1952, 1, 24),
+        "letter-to-leopold-1958": u.Date(1958, 12, 25),
+        "family-history-2008": u.Date(2008),
+        "family-booklet-2011": u.Date(2011),
+        "library-talk-2018": u.Date(2018),
+    }
+
+    def test_a_document_dates_its_own_making_with_inception(self):
+        made = {
+            a.subject: a.value
+            for a in u.ASSERTIONS
+            if a.property == "inception"
+        }
+        assert made == self.SELF_DATED
+        for key in made:
+            (stated,) = u.about(key, "inception")
+            assert stated.source == key
+
+    def test_point_in_time_on_a_document_dates_something_else(self):
+        # only the postcard's postmark, which dates its posting: the card
+        # never says when it was written
+        dated = [
+            (a.subject, a.value)
+            for a in u.ASSERTIONS
+            if a.property == "point_in_time" and a.subject in SOURCES
+        ]
+        assert dated == [("postcard-1938", u.Date(1938, 8, 19))]
+
     def test_exactly_one_possibly_living_person(self):
         # born, and no source asserts a death: the privacy example
         living = [
@@ -884,9 +918,7 @@ class TestNamingPatterns:
     @staticmethod
     def written(source: str) -> u.Date:
         (when,) = [
-            a.value
-            for a in u.about(source, "point_in_time")
-            if a.source == source
+            a.value for a in u.about(source, "inception") if a.source == source
         ]
         return when
 
@@ -1233,7 +1265,7 @@ class TestGedcomFixture:
         assert media
         for obje in media:
             key = titles[obje.first("FILE").text("TITL")]
-            assert obje.text("DATE") in _gedcom_dates(key, "point_in_time")
+            assert obje.text("DATE") in _gedcom_dates(key, "inception")
 
     def test_the_possibly_living_person_has_no_death(self, records, by_xref):
         (nicholas,) = [

@@ -1383,7 +1383,9 @@ PLANNED_VOCABULARY = ("machine_assisted",)
 ASSERTIONS = tuple(
     _said(
         "studio-photo-1890s",
-        ("studio-photo-1890s", "point_in_time", Date(1890, decade=True)),
+        # every document dated by its own making states that date as its
+        # `inception` (ADR-0039 §2.2), at the precision it gives
+        ("studio-photo-1890s", "inception", Date(1890, decade=True)),
         ("studio-bruesrich", "location", "peiltal", "Brüsrich · Peiltal"),
         # what the portrait states of itself (ADR-0039 §2.2): its mount
         # names the studio, and its reverse whom it shows, one statement a
@@ -1687,6 +1689,9 @@ ASSERTIONS = tuple(
     )
     + _said(
         "postcard-1938",
+        # the postmark dates the card's posting, not its writing, which the
+        # card leaves undated: a point in time, never its `inception`
+        # (ADR-0039 §2.2, rule 5)
         (
             "postcard-1938",
             "point_in_time",
@@ -2468,7 +2473,7 @@ ASSERTIONS = tuple(
         "family-booklet-2011",
         (
             "family-booklet-2011",
-            "point_in_time",
+            "inception",
             Date(2011),
             "Stupfield, 2011",
         ),
@@ -2600,7 +2605,7 @@ ASSERTIONS = tuple(
         "family-history-2008",
         (
             "family-history-2008",
-            "point_in_time",
+            "inception",
             Date(2008),
             "Stupfield, 2008",
         ),
@@ -2717,7 +2722,7 @@ ASSERTIONS = tuple(
         "library-talk-2018",
         (
             "library-talk-2018",
-            "point_in_time",
+            "inception",
             Date(2018),
             "library talk, 2018",
         ),
@@ -2810,7 +2815,7 @@ ASSERTIONS = tuple(
         "death-certificate-1941",
         (
             "death-certificate-1941",
-            "point_in_time",
+            "inception",
             Date(1941, 3, 7),
             "Дата выдачи: 7 марта 1941 г.",
         ),
@@ -2874,7 +2879,7 @@ ASSERTIONS = tuple(
         "letter-to-leopold-1958",
         (
             "letter-to-leopold-1958",
-            "point_in_time",
+            "inception",
             Date(1958, 12, 25),
             "25 декабря 1958 г.",
         ),
@@ -3014,7 +3019,7 @@ ASSERTIONS = tuple(
         "letter-to-sipkje-1952",
         (
             "letter-to-sipkje-1952",
-            "point_in_time",
+            "inception",
             Date(1952, 1, 24),
             "Snylsjum, 24 jannewaris 1952",
         ),
