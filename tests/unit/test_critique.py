@@ -148,6 +148,31 @@ class TestCritique:
         assert ", ".join(sorted(items)) in prompt
         assert ", ".join(offered_properties()) in prompt
 
+    def test_the_prompt_names_the_kinds_author_and_addressee_take(self):
+        """`author` and `addressee` (ADR-0039) take a person, an
+        organization or a family, as the manifest says, and the critic's
+        relation/kind category names them with those kinds (#554)."""
+        from yizkr.model.schema import load_manifest
+
+        properties = load_manifest().properties
+        for key in ("author", "addressee"):
+            assert set(properties[key].accepts) == {
+                "human",
+                "organization",
+                "family",
+                "unclassified_entity",
+            }
+        llm = ScriptedLlm(response([]))
+        run_critique(llm, batch())
+        (line,) = [
+            line
+            for line in llm.prompts[0].splitlines()
+            if line.startswith("- relation_kind_mismatch: ")
+        ]
+        assert "(author, addressee: " in line
+        assert "takes a person, an organization or a family" in line
+        assert "an author or an addressee that is a place" in line
+
     def test_no_property_held_back_from_the_prompts_reaches_it(self):
         """A property the manifest marks `offered: false`, such as a
         scratch run's run-item marks, is never listed, so adding one

@@ -109,7 +109,10 @@ CATEGORIES: dict[str, str] = {
         "the relation decides the kind): a relation of place (place of "
         "birth, death or burial, residence, location) takes a place; a "
         "relation of agency (issued by, carried out by, employer, educated "
-        "at, member of) takes an organization"
+        "at, member of) takes an organization; a relation of authorship "
+        "(author, addressee: who wrote or made a document, and whom it was "
+        "addressed to, ADR-0039) takes a person, an organization or a "
+        "family, so an author or an addressee that is a place is a finding"
     ),
     "implausible_value": (
         "a value the source is unlikely to say as read, such as a birth "
