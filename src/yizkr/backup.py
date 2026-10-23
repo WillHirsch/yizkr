@@ -115,6 +115,7 @@ from yizkr.core.config import Config, read_env_file
 from yizkr.core.dates import UnsupportedDate, unsupported_in_graph
 from yizkr.core.privacy import (
     DEFAULT_CUTOFF_YEARS,
+    EVENT_DEATH_PROPERTIES,
     FAMILY_CLASS,
     NON_PERSON_CLASSES,
     PERSON_CLASS,
@@ -122,11 +123,11 @@ from yizkr.core.privacy import (
     PERSON_SUBJECT_PROPERTIES,
     PERSON_VALUE_PROPERTIES,
     SAME_AS,
+    event_kinds,
     is_possibly_living,
     people_selection,
     read_evidence,
 )
-from yizkr.model.schema import load_manifest
 from yizkr.queries.publish import prefix_block
 
 TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
@@ -362,6 +363,7 @@ _ENTITY = re.compile(r"<[^<>]*/entity/(Q[1-9]\d*)>")
 _CLAIM = re.compile(r"<[^<>]*/prop/(P[1-9]\d*)>")
 _CLAIM_VALUE = re.compile(r"<[^<>]*/prop/statement/(P[1-9]\d*)>")
 _QUALIFIER_VALUE = re.compile(r"<[^<>]*/prop/qualifier/(P[1-9]\d*)>")
+_DIRECT = re.compile(r"<[^<>]*/prop/direct/(P[1-9]\d*)>")
 _DATA_NODE = re.compile(r"<[^<>]*[/:]([QP][1-9]\d*)>")
 _VERSION = "<http://schema.org/version>"
 _RANK = "<http://wikiba.se/ontology#rank>"
@@ -379,33 +381,10 @@ _ENTITY_DATA = re.compile(r"<[^<>]*/Special:EntityData/[QP][1-9]\d*>")
 # vocabulary does not hold reads nothing.
 UNION_BOUNDS = ("started_by", "ended_by")
 
-# The class of every event, a key of the model manifest: an item typed with
-# it, or with a subclass of it, is linked to every item its statements name
-# (``read_dump``). The person kinds of event (``PERSON_EVENTS``) are events
-# too, and so is every item that has a `participant` statement; but never a
-# union (``UNION_CLASS``) or an item typed human.
-EVENT_CLASS = "event"
-
-
 # The class of every union, a partnership or a marriage (ADR-0036): an
 # entity, not an event. Its `started_by` and `ended_by` statements point to
 # its events, which go with it (``BOUND_LEFT_OUT``), never the other way.
 UNION_CLASS = "partnership"
-
-
-def event_kinds(root: str = EVENT_CLASS) -> set[str]:
-    """The keys of the model manifest's classes under `root`: `root` itself
-    and every item the manifest makes a subclass of it, directly or
-    through another; by default the event classes (``EVENT_CLASS``)."""
-    manifest = load_manifest()
-    kinds = {root}
-    while wider := {
-        key
-        for key, spec in manifest.items.items()
-        if spec.subclass_of in kinds and key not in kinds
-    }:
-        kinds |= wider
-    return kinds
 
 
 @dataclass
@@ -481,7 +460,11 @@ def read_dump(
     the value of a person-valued one in a statement or a qualifier, or a
     participant in a person event, each through its statement node at
     every rank. A participant typed as one of the non-person classes, at
-    normal or preferred rank, is a person only on other evidence. A value
+    normal or preferred rank, is a person only on other evidence, and so is
+    an item typed so as an event, and not as a family, on the death
+    evidence it states, of each
+    property it has a truthy value of (``privacy.EVENT_DEATH_PROPERTIES``),
+    read from the dump's truthy triples. A value
     that is not an item (an unknown value is a blank node) is no evidence.
 
     An item states no type when none of its `instance of` statements at
@@ -508,8 +491,9 @@ def read_dump(
     all of an unknown value or none, whatever its kind; an item of no
     person kind with no `participant` statement names no one, and is not.
 
-    An event is an item typed, at any rank, with `event` (``EVENT_CLASS``)
-    or a class the manifest makes a subclass of it (``event_kinds``), a
+    An event is an item typed, at any rank, with `event`
+    (``privacy.EVENT_CLASS``) or a class the manifest makes a subclass of
+    it (``event_kinds``), a
     person kind of event, or a class the dump makes a subclass of one, at
     any rank and through redirects; or an item with a `participant`
     statement; but never a union, an item typed, at normal or preferred
@@ -536,6 +520,7 @@ def read_dump(
         properties[key] for key in UNION_BOUNDS if key in properties
     }
     subject_links = {properties[key] for key in PERSON_SUBJECT_PROPERTIES}
+    death_links = {properties[key] for key in EVENT_DEATH_PROPERTIES}
     value_links = {properties[key] for key in PERSON_VALUE_PROPERTIES}
     human = items[PERSON_CLASS]
     person_kinds = {items[key] for key in PERSON_EVENTS}
@@ -558,6 +543,10 @@ def read_dump(
     # statement -> the group it makes its subject a member of
     memberships: dict[str, str] = {}
     unknown_parts: set[str] = set()  # participant statements of unknown value
+    # statement -> the item it states death evidence of, and its property
+    death_stated: dict[str, tuple[str, str]] = {}
+    # (item, property): the death evidence an item has a truthy value of
+    truthy_deaths: set[tuple[str, str]] = set()
     unions: dict[str, str] = {}  # statement -> the union it bounds
     bounds: dict[str, str] = {}  # statement -> the event it points to
     deprecated: set[str] = set()  # statements a curator deprecated
@@ -601,6 +590,7 @@ def read_dump(
                             ("claim", _CLAIM),
                             ("value", _CLAIM_VALUE),
                             ("qualifier", _QUALIFIER_VALUE),
+                            ("direct", _DIRECT),
                         )
                         if (match := pattern.fullmatch(predicate))
                     ),
@@ -610,6 +600,10 @@ def read_dump(
             if link is None:
                 continue
             role, pid = link
+            if role == "direct":
+                if pid in death_links and (item := _item(subject)):
+                    truthy_deaths.add((item, pid))
+                continue
             if role == "claim":
                 item = _item(subject)
                 if item is None:
@@ -623,7 +617,9 @@ def read_dump(
                     events[term] = item
                 if pid in bound_links:
                     unions[term] = item
-                if pid in subject_links:
+                if pid in death_links:
+                    death_stated[term] = (item, pid)
+                elif pid in subject_links:
                     reading.people.add(item)
                 continue
             item = _item(term)
@@ -676,6 +672,18 @@ def read_dump(
         }
 
     reading.people |= typed_as({human})
+    # an item typed as an event, at normal or preferred rank, is taken at
+    # its type on the death evidence it states, of each property it has a
+    # truthy value of (``privacy.EVENT_DEATH_PROPERTIES``)
+    # but never a family, which stays a person (``privacy.FAMILY_CLASS``)
+    events_typed = typed_as(
+        {items[key] for key in event_kinds() if key in items}, ranked=True
+    ) - typed_as({items[FAMILY_CLASS]}, ranked=True)
+    reading.people.update(
+        item
+        for item, pid in death_stated.values()
+        if item not in events_typed or (item, pid) not in truthy_deaths
+    )
     # the subclasses the dump declares, read through redirects
     subclasses = {
         (
