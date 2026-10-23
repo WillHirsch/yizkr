@@ -562,7 +562,12 @@ did so on 2026-09-29, in the review of its PR.
   1`), with the pages it is on. Its bytes are the JPEG file the PDF holds,
   or else a PNG of its pixels, written by a deterministic encoder that a
   test holds byte for byte. The never-ingest list is asked of its SHA-1
-  before it is read. It is read by a vision call of its own, once however
+  before it is read, and of its SHA-1 alone: its names are its places in
+  the PDF, no file's, so no glob is matched against them. Registration
+  asks of it the same way, so the image the reader reads is the image the
+  write registers, and a glob such as `page*` leaves out neither (#525).
+  A deck's image keeps matching the list's globs by its names in the
+  archive. It is read by a vision call of its own, once however
   many times the PDF places it, and its transcription, which names it by
   its SHA-1, is kept beside its bytes. An image on a page read by vision
   is read with that page, as the compilation's page. An image the
