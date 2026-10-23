@@ -129,19 +129,21 @@ short inside a write the wiki took finds the instance written since, and
 the next invocation resets. Each link is written with no review CSV, as
 a `part_of` statement at normal rank: the item the answer names, with
 the time the document's claim gives, `stated in` the document's artifact
-with no page, and `inferred from` the stage's run item, which records
-the asking model in its label and is marked as the write's run items
-are, each in a reference block of its own (places.write_link). A link
-written already, stated in the same artifact with the same time, is not
-written again; an equal statement another source states gains the link's
-references. An `uncertain` answer writes nothing. A link that would
-close a cycle, a question answered twice differently, and an answer line
-outside the answer's schema are refused and counted, never written; the
-record names each refused cycle by its places' labels, for the run
-report. Before its first write the stage clears the instance-contents
-record, and once it has written every link it records the place key. The
-stages before write never read this containment: they use only what the
-manifests assert.
+with the container's evidence as its excerpt, on its page where the
+transcription gives one, and `inferred from` the stage's run item, which
+records the asking model in its label and is marked as the write's run
+items are, each in a reference block of its own (places.write_link). A
+link written already, stated in the same artifact with the same time
+(and, for a link a record alone states, the same excerpt), is not
+written again; an equal statement another source or excerpt states gains
+the link's references beside its own. An `uncertain` answer writes
+nothing. A link that would close a cycle, a question answered twice
+differently, and an answer line outside the answer's schema are refused
+and counted, never written; the record names each refused cycle by its
+places' labels, for the run report. Before its first write the stage
+clears the instance-contents record, and once it has written every link
+it records the place key. The stages before write never read this
+containment: they use only what the manifests assert.
 
 **site** builds the LAN site (yizkr.staticsite) from the instance into
 the stage's directory of the run, once the query service shows the run
@@ -1122,8 +1124,9 @@ def _place_record(context: Any, key: str, epoch: str) -> dict:
 
 def _stated_links(context: Any, written: dict) -> list:
     """The links the mention records of the documents the write wrote
-    state (places.stated_links), each document stating its own."""
-    from yizkr.pipeline.places import stated_links
+    state (places.stated_links), each document stating its own, each
+    container's evidence on its page of the document's transcription."""
+    from yizkr.pipeline.places import read_transcription, stated_links
 
     documents = written.get("documents") or {}
     links = []
@@ -1136,7 +1139,10 @@ def _stated_links(context: Any, written: dict) -> list:
             continue
         created = done.get("created_items")
         links += stated_links(
-            extracted, created if isinstance(created, dict) else {}, doc.sha1
+            extracted,
+            created if isinstance(created, dict) else {},
+            doc.sha1,
+            read_transcription(doc.transcription),
         )
     return links
 

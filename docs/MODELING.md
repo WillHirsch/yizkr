@@ -868,9 +868,18 @@ artifact a new QID, changes neither.
   existing place the container means, among the places that bear its
   name; it answers with one of them, or none. The link is then written
   `part of` the place named, at normal rank, `stated in` the document's
-  artifact (with no page: a record has no locator) and `inferred from`
-  the pass's run item, with the time the document's claim gives and none
-  where the record alone states the link. A link that would close a
+  artifact and `inferred from` the pass's run item, with the time the
+  document's claim gives and none where the record alone states the
+  link. The `stated in` block carries the container's evidence, the
+  source's words that state the link, as its `transcription excerpt`,
+  with the `page number` (and `printed page number`) of the
+  transcription page the evidence's first line lies on, where the
+  transcription has pages; a container with no evidence gives the
+  artifact alone. An equal statement already citing the artifact keeps
+  its blocks as they are: for a link a claim of the document also gives,
+  its block records the link and nothing is added; for one the record
+  alone states, a block without the excerpt gains the excerpt's block
+  beside it, never a duplicate statement (ADR-0038 §8.5). A link that would close a
   cycle, at any time, is refused. A scratch run does this unattended in
   its `places` stage; `yizkr reconcile-places` asks the same for a
   curator, who approves the answers it writes. A GeoNames-imported edge

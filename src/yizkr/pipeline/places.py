@@ -27,13 +27,18 @@ which writes nothing.
 Each answered link is written as its source states it (links_to_write,
 write_link): `part of` the item the answer names, from the place, or from
 the item the link before it resolved to (its answer, or the one place its
-name names), stated in the stating document's artifact and inferred from
-the pass's run item. It carries the time the document's claim gives
-(the claim's qualifiers), and none where the record alone states the
-link, as a record states no time and no page. A link written already,
-with the same time and stated in the same artifact, is not written
-again; an equal statement another source states gains the link's
-references. A link that would close a cycle (`plan`), through the
+name names), stated in the stating document's artifact with the
+container's evidence as the excerpt, on the page of the document's
+transcription its first line lies on, where the transcription has pages
+(evidence_page), and inferred from the pass's run item. It carries the
+time the document's claim gives (the claim's qualifiers), and none where
+the record alone states the link, as a record states no time. A link
+written already, with the same time and stated in the same artifact, is
+not written again; one a record alone states, with its evidence, only
+where the statement carries its source block whole. An equal statement
+another source states, or the same artifact with another excerpt or
+none, gains the link's blocks beside its own, none of which is changed
+(write_link). A link that would close a cycle (`plan`), through the
 graph's containment or the links planned before it, at any time, is
 refused and counted, never written.
 
@@ -64,19 +69,24 @@ import json
 import sys
 import urllib.parse
 import urllib.request
+from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from yizkr.claims import (
+    ArtifactRef,
     ClaimBatch,
     ItemValue,
     LocalRef,
+    MonolingualText,
     PlaceStructure,
     QidRef,
     Qualifier,
+    SourceReference,
 )
+from yizkr.core import verbatim
 from yizkr.core.config import Config
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.extract import scan_json_objects
@@ -90,6 +100,8 @@ from yizkr.queries.publish import prefix_block
 
 # the answer that names no candidate
 UNCERTAIN = "uncertain"
+# the language of an excerpt whose document says none
+UNDETERMINED = "und"
 BATCH_QUESTIONS = 40
 
 # the review CSV (yizkr reconcile-places): A is the place whose record
@@ -161,7 +173,12 @@ class StatedLink:
     `chain[index]`. `qualifiers` is the time the claim of the document
     that gives the link carries, each qualifier as canonical JSON, and
     `claimed` whether such a claim exists; a link the record alone states
-    carries none."""
+    carries none. `evidence` is the container's evidence, the words of
+    the transcription that state the link (ADR-0035 §2.2), in `language`;
+    `page` the transcription's page its first line lies on, and
+    `printed_page` the number printed on that page, where the
+    transcription gives them (evidence_page); each None where none is
+    given."""
 
     sha1: str
     place: str
@@ -169,6 +186,10 @@ class StatedLink:
     index: int
     qualifiers: tuple[str, ...] = ()
     claimed: bool = False
+    evidence: str | None = None
+    language: str | None = None
+    page: str | None = None
+    printed_page: str | None = None
 
     @property
     def container(self) -> str:
@@ -191,6 +212,10 @@ class StatedLink:
             "index": self.index,
             "qualifiers": list(self.qualifiers),
             "claimed": self.claimed,
+            "evidence": self.evidence,
+            "language": self.language,
+            "page": self.page,
+            "printed_page": self.printed_page,
         }
 
     @classmethod
@@ -202,6 +227,25 @@ class StatedLink:
             index=data["index"],
             qualifiers=tuple(data.get("qualifiers") or ()),
             claimed=bool(data.get("claimed")),
+            evidence=data.get("evidence"),
+            language=data.get("language"),
+            page=data.get("page"),
+            printed_page=data.get("printed_page"),
+        )
+
+    def source(self) -> SourceReference | None:
+        """Where the document states the link, as a claim's source gives
+        it: its evidence as the excerpt, with its page and the number
+        printed on it; None for a link with no evidence."""
+        if not self.evidence:
+            return None
+        return SourceReference(
+            artifact=ArtifactRef(sha1=self.sha1),
+            page_number=self.page,
+            printed_page_number=self.printed_page if self.page else None,
+            transcription_excerpt=MonolingualText(
+                text=self.evidence, language=self.language or UNDETERMINED
+            ),
         )
 
 
@@ -343,8 +387,10 @@ def record_links(run_dir: Path) -> list[StatedLink]:
     from and the items its write used (`write.json`'s `created_items`).
     The stating document is the one whose state the directory holds
     (its state.json's content SHA-1), else each artifact the place's
-    claims cite (batch_artifacts). A directory set aside (a dot name), or
-    one whose write.json is missing or no object, is passed over."""
+    claims cite (batch_artifacts); its transcription view, where it holds
+    one, gives each container's evidence its page. A directory set aside
+    (a dot name), or one whose write.json is missing or no object, is
+    passed over."""
     found: list[StatedLink] = []
     for directory in _document_dirs(run_dir):
         try:
@@ -367,7 +413,12 @@ def record_links(run_dir: Path) -> list[StatedLink]:
             break
         if batch is None:
             continue
-        for link in stated_links(batch, created, _content_sha1(directory)):
+        for link in stated_links(
+            batch,
+            created,
+            _content_sha1(directory),
+            read_transcription(directory / "transcription.json"),
+        ):
             if link not in found:
                 found.append(link)
     return found
@@ -383,6 +434,56 @@ def _content_sha1(directory: Path) -> str | None:
         return DocumentState.load(directory / "state.json").content_sha1
     except (OSError, ValueError, TypeError):
         return None
+
+
+def read_transcription(path: Path):
+    """The transcription view (transcribe.Transcription) at `path`; None
+    when there is none, or it cannot be read."""
+    from yizkr.pipeline.transcribe import Transcription
+
+    try:
+        return Transcription.model_validate_json(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def evidence_page(
+    transcription, evidence: str
+) -> tuple[str | None, str | None]:
+    """The page of `transcription` the first line of `evidence` lies on,
+    found as the extraction checked it (core.verbatim), as its physical
+    number and the number printed on it (None where the page's record
+    gives none); (None, None) for a transcription with no pages, or one
+    the evidence does not occur in."""
+    pages = (transcription.pages or ()) if transcription is not None else ()
+    if not pages:
+        return None, None
+    number = verbatim.Transcript(transcription.text).locate(evidence)
+    if number is None:
+        return None, None
+    lines = transcription.text.splitlines(keepends=True)
+    start = sum(len(line) for line in lines[: number - 1])
+    for page in pages:
+        if page.start <= start <= page.end:
+            printed = page.printed_page
+            return str(page.page), (
+                printed if printed and printed.strip() else None
+            )
+    return None, None
+
+
+def excerpt_language(batch: ClaimBatch, transcription=None) -> str:
+    """The language of a document's container evidence: its
+    transcription's, else the one most of its claims' excerpts give (the
+    first given among equals), else UNDETERMINED."""
+    if transcription is not None:
+        return transcription.language
+    given = Counter(
+        claim.source.transcription_excerpt.language
+        for claim in batch.claims
+        if claim.source.transcription_excerpt is not None
+    )
+    return given.most_common(1)[0][0] if given else UNDETERMINED
 
 
 def batch_artifacts(batch: ClaimBatch, local_id: str) -> list[str]:
@@ -416,7 +517,10 @@ def _canonical(qualifier: Qualifier) -> str:
 
 
 def stated_links(
-    batch: ClaimBatch, created: dict, sha1: str | None = None
+    batch: ClaimBatch,
+    created: dict,
+    sha1: str | None = None,
+    transcription=None,
 ) -> list[StatedLink]:
     """The links the mention records of `batch`'s places state, each
     container of a chain within the next, and the place within the
@@ -434,7 +538,12 @@ def stated_links(
     .apply_equivalences), goes by the names of the batch's entity
     resolved to that item. Such a link carries each
     claim's qualifiers, the time its source gives, one link per distinct
-    set; a link no claim gives carries none."""
+    set; a link no claim gives carries none.
+
+    Each link carries its container's evidence, in the document's
+    language (excerpt_language), and the page of `transcription` (the
+    document's, when given) its first line lies on (evidence_page); a
+    container with no evidence gives its link none."""
     from yizkr.pipeline.clustering import part_keys
 
     records = {entity.id: entity for entity in batch.entities}
@@ -460,6 +569,7 @@ def stated_links(
         for claim in batch.claims
         if claim.property == "part_of" and isinstance(claim.value, ItemValue)
     ]
+    language = excerpt_language(batch, transcription)
     found: list[StatedLink] = []
     for entity in batch.entities:
         record = entity.structure
@@ -471,6 +581,12 @@ def stated_links(
         chain = tuple(record.containers())
         documents = [sha1] if sha1 else batch_artifacts(batch, entity.id)
         for index, container in enumerate(chain):
+            evidence = record.within[index].evidence
+            page, printed = (
+                evidence_page(transcription, evidence)
+                if evidence
+                else (None, None)
+            )
             outer = part_keys(container)
             inner = part_keys(chain[index - 1]) if index else frozenset()
             giving = [
@@ -498,6 +614,10 @@ def stated_links(
                         index=index,
                         qualifiers=time,
                         claimed=bool(times),
+                        evidence=evidence,
+                        language=language if evidence else None,
+                        page=page,
+                        printed_page=printed,
                     )
                     if link not in found:
                         found.append(link)
@@ -962,15 +1082,26 @@ def write_link(
     run_item: Callable[[], str],
 ) -> str:
     """Write `child part of parent` as `link` states it, with the time
-    its claim gives (none for a record's alone), stated in `artifact` and
-    inferred from the run item, each in a reference block of its own, at
-    normal rank, through `writer` (a writer.BatchWriter, whose statement
-    matching and reference comparison it uses). `run_item()` gives the
-    run item's QID, and is called only when something is to be written.
+    its claim gives (none for a record's alone), stated in `artifact`
+    with the container's evidence as its excerpt, on its page where the
+    transcription gives one (StatedLink.source), and inferred from the
+    run item, each in a reference block of its own, at normal rank,
+    through `writer` (a writer.BatchWriter, whose statement matching,
+    source block and reference comparison it uses). `run_item()` gives
+    the run item's QID, and is called only when something is to be
+    written.
+
     Returns PRESENT, writing nothing, when a statement of the same value
-    and qualifiers already cites the artifact; REFERENCED when such a
-    statement citing other sources gains the link's blocks; WRITTEN when
-    the link is a statement of its own."""
+    and qualifiers already records the link: for a link a claim gives,
+    or one with no evidence, any block of it citing the artifact (so the
+    claim's own reference is kept as the writer wrote it); for a link a
+    record alone states with its evidence, a block equal to the link's
+    source block whole. Otherwise REFERENCED when such a statement gains
+    the link's blocks it does not carry, each added beside those it
+    carries, none of which is changed (rule 3): one citing the artifact
+    with no excerpt, or another, keeps it, as the writer adds a claim's
+    block for another place in the same artifact. WRITTEN when the link
+    is a statement of its own."""
     from wikibaseintegrator.datatypes import Item
     from wikibaseintegrator.models import Reference, References
 
@@ -986,13 +1117,19 @@ def write_link(
             )
         )
     existing = writer._find_matching_statement(child, claim)
-    if existing is not None and writer._has_artifact_reference(
-        existing, artifact
+    source = link.source()
+    stated = writer._source_block(artifact, source)
+    if existing is not None and (
+        writer._reference_key(stated)
+        in {
+            writer._reference_key(block)
+            for block in existing.references.references
+        }
+        if source is not None and not link.claimed
+        else writer._has_artifact_reference(existing, artifact)
     ):
         return PRESENT
     references = References()
-    stated = Reference()
-    stated.add(Item(prop_nr=properties["stated_in"], value=artifact))
     references.add(stated)
     inferred = Reference()
     inferred.add(

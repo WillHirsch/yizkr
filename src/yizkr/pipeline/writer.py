@@ -454,6 +454,7 @@ from yizkr.claims import (
     MonolingualValue,
     QidRef,
     QuantityValue,
+    SourceReference,
     StringValue,
     TimeValue,
     VocabRef,
@@ -2719,10 +2720,38 @@ class BatchWriter:
         excerpt, and its run block, `inferred from extraction run` the run
         item with the judgement note `note`, if any (_note_snaks). A dry
         run's placeholder run item gives no run block."""
-        from wikibaseintegrator.datatypes import Item, MonolingualText, String
+        from wikibaseintegrator.datatypes import Item
         from wikibaseintegrator.models import Reference, References
 
         references = References()
+        references.add(
+            self._source_block(
+                artifact_qid, claim.source if claim is not None else None
+            )
+        )
+        # dry-run mints no run item; its placeholder cannot be referenced
+        if run_qid is not None and re.fullmatch(r"Q[1-9]\d*", run_qid):
+            run_ref = Reference()
+            run_ref.add(
+                Item(
+                    prop_nr=self.properties["inferred_from_extraction_run"],
+                    value=run_qid,
+                )
+            )
+            for snak in self._note_snaks(note):
+                run_ref.add(snak)
+            references.add(run_ref)
+        return references
+
+    def _source_block(
+        self, artifact_qid: str, source: SourceReference | None = None
+    ):
+        """A statement's source block (ADR-0003): `stated in` the artifact
+        with the page number, printed page number, region and excerpt
+        `source` gives, if any."""
+        from wikibaseintegrator.datatypes import Item, MonolingualText, String
+        from wikibaseintegrator.models import Reference
+
         source_ref = Reference()
         source_ref.add(
             Item(prop_nr=self.properties["stated_in"], value=artifact_qid)
@@ -2734,7 +2763,6 @@ class BatchWriter:
         # character Python's Unicode tables do not know has refused its
         # claim before: pre_plan_refusals), and one of whitespace alone is
         # left out (_locator_text)
-        source = claim.source if claim is not None else None
         page = _locator_text(source.page_number or "") if source else ""
         if page:
             source_ref.add(
@@ -2769,20 +2797,7 @@ class BatchWriter:
                     language=excerpt.language,
                 )
             )
-        references.add(source_ref)
-        # dry-run mints no run item; its placeholder cannot be referenced
-        if run_qid is not None and re.fullmatch(r"Q[1-9]\d*", run_qid):
-            run_ref = Reference()
-            run_ref.add(
-                Item(
-                    prop_nr=self.properties["inferred_from_extraction_run"],
-                    value=run_qid,
-                )
-            )
-            for snak in self._note_snaks(note):
-                run_ref.add(snak)
-            references.add(run_ref)
-        return references
+        return source_ref
 
     def _note_snaks(self, note: JudgementNote | None) -> list:
         """The snaks of a judgement note in its run block (ADR-0035 §4):

@@ -210,10 +210,10 @@ statements of their own (`links_written`), those an equal statement
 gained as references (`links_referenced`) and those already there; the
 links a record states that no claim of its document gives
 (`record_only_links`, a measure of extraction's recall on containment,
-ADR-0038 owner question 3) and of them those written, with no page and
-no time (`record_only_links_written`); the links an uncertain answer
-left with no inner place, or that followed a container left out and so
-were never asked (`links_unresolved`); the answer lines rejected by the
+ADR-0038 owner question 3) and of them those written, with no time,
+each citing its container's evidence (`record_only_links_written`); the
+links an uncertain answer left with no inner place, or that followed a
+container left out and so were never asked (`links_unresolved`); the answer lines rejected by the
 answer's schema; the links refused as each would close a cycle
 (`refused_cycles`) and the questions refused as conflicts (answered
 twice differently); and whether the instance-contents key was recorded;
