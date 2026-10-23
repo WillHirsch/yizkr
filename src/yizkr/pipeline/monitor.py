@@ -1531,10 +1531,8 @@ class RunMonitor:
                 summary.corpus_names, latest, ended
             )
             summary.past_barrier = (
-                (latest is None and bool(self._past_barrier))
-                or latest in self._past_barrier
-                or any(stage.state != PENDING for stage in summary.corpus)
-            )
+                latest is None and bool(self._past_barrier)
+            ) or latest in self._past_barrier
         summary.in_flight.sort(
             key=lambda item: (item.since or now, item.stage, item.sha1)
         )

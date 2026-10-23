@@ -257,8 +257,8 @@ stages still to run (pending, held, running, interrupted or failed)
 follow, a running stage with its count and time to go where it has
 them, or that it waits for the query service: `...; then corpus stages:
 clustering, reset, ...` before the barrier. Once the latest invocation
-is past the barrier (its `barrier` event, or any corpus stage it has
-started), the corpus stages come first, and the documents' stages still
+is past the barrier (its `barrier` event, which the driver emits before
+its first corpus stage), the corpus stages come first, and the documents' stages still
 to go, those that failed and those after them, are the next
 invocation's, which runs them again: `corpus stages: write (412 of
 1,200 documents, ~25m 10s), places, site; besides 3 documents' stages
