@@ -1130,6 +1130,8 @@ class TestTheManifestsRecords:
             "rejected_by_reason",
             "unread_objects",
             "fallback",
+            # each claim's excerpt looked for in the transcription (#580)
+            "excerpts",
         }
 
 

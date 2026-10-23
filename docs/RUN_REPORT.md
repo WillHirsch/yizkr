@@ -259,6 +259,23 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   `manifest` (any other manifest problem), with the extractions whose
   coverage counts none (`aggregate.content.rejects.by_reason`,
   `by_reason_absent`);
+- excerpts not in their source (#580): the claims each extraction kept
+  whose `transcription_excerpt` its transcription does not hold,
+  compared as core/verbatim.py compares a container's evidence (folded,
+  whitespace and line breaks collapsed, a hyphen at a line's end joined,
+  whole words only), from each coverage's `excerpts`. A miss is a flag,
+  never a reject: the claim is kept and written. The aggregate gives the
+  claims checked, those with no excerpt, the misses and their rate among
+  those checked, the documents with one, and the misses by property,
+  each property folded into the vocabulary (`other` for one it does not
+  know), with the extractions whose coverage predates the count counted
+  apart, never as zero (`aggregate.content.excerpts`: `extractions`,
+  `checked`, `without_excerpt`, `not_in_source`, `documents`, `rate`,
+  `not_in_source_by_property`, `absent`). A document's own counts are in
+  `report.json` and `report.html` (`coverage.excerpts`, null for a
+  coverage that predates them). Which claims missed, each with its
+  excerpt and the transcription line nearest to it, stays in the
+  extraction's local `excerpts.json`, never in a report;
 - what sources say of the artifacts themselves (ADR-0039): the captions
   given, a container's verbatim words about an image it places, and the
   claims a document gives about itself, by property

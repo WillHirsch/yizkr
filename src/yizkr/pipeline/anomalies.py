@@ -32,7 +32,8 @@ The checks, which docs/ANOMALIES.md describes one by one:
 * extraction: no entities or no claims from a non-trivial transcription,
   a fallback manifest or segmentation, and per document the shares of
   its chunk calls that failed, of its chunk answers cut off and of the
-  claims it was given that were rejected or unread, and claims dated
+  claims it was given that were rejected or unread, the share of its
+  claims whose excerpt its transcription does not hold, and claims dated
   before the birth the batch gives their subject or implausibly long
   after it;
 * distributions: entities and claims per page, and critic findings per
@@ -275,6 +276,7 @@ class Checks(_Settings):
     chunk_failures: Share
     truncations: Share
     schema_rejects: Share
+    excerpt_not_in_source: Share
     implausible_date: Lifespan
     entity_yield: Outlier
     claim_yield: Outlier
@@ -717,9 +719,11 @@ def batch_findings(
 ) -> list[Finding]:
     """Findings on one extraction's batch: no entities or no claims from a
     transcription of `letters` letters and digits, a fallback tier, the
-    share of the claims it was given that were rejected or unread (from
-    its coverage side output), and the share of its excerpts tagged with
-    another language than its transcription's `language`."""
+    share of the claims it was given that were rejected or unread and the
+    share of the claims checked whose excerpt the transcription does not
+    hold (both from its coverage side output), and the share of its
+    excerpts tagged with another language than its transcription's
+    `language`."""
     checks = config.checks
     found: list[Finding] = []
     if letters is not None:
@@ -752,6 +756,16 @@ def batch_findings(
         )
         if rejected is not None:
             found.append(rejected)
+        quoted = coverage.get("excerpts")
+        if isinstance(quoted, Mapping):
+            missing = share(
+                "excerpt-not-in-source",
+                checks.excerpt_not_in_source,
+                _count(quoted.get("not_in_source")),
+                _count(quoted.get("checked")),
+            )
+            if missing is not None:
+                found.append(missing)
     target = _primary(language)
     tagged = [code for code in map(_primary, excerpts) if code]
     if target is not None:
