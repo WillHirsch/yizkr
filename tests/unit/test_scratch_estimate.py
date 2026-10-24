@@ -1626,21 +1626,17 @@ class TestCheckedRoutes:
         assert set(self.ROUTES) == CHECKED_ROUTES | self.UNCHECKED
         assert not CHECKED_ROUTES & self.UNCHECKED
 
-    def test_each_route_dispatches_to_a_transcriber(self):
-        for route, name in TRANSCRIBERS.items():
-            assert callable(getattr(Orchestrator, name)), route
-
     def test_the_driver_dispatches_by_the_map(self, monkeypatch):
         """Orchestrator._transcribe calls the method its route names."""
         called = []
-        for route, name in TRANSCRIBERS.items():
+        for name in TRANSCRIBERS.values():
             monkeypatch.setattr(
-                Orchestrator, name, lambda self, doc, r=route: called.append(r)
+                Orchestrator, name, lambda self, doc, n=name: called.append(n)
             )
         driver = object.__new__(Orchestrator)
         for route in self.ROUTES:
             driver._transcribe(None, route)
-        assert called == list(self.ROUTES)
+        assert called == [TRANSCRIBERS[r] for r in self.ROUTES]
 
     @pytest.mark.parametrize("route", ROUTES)
     def test_the_estimate_rechecks_where_the_driver_does(
