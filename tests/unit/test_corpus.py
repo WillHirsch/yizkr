@@ -682,6 +682,24 @@ class TestSingleVisionStepRefusesADeck:
             read(deck)
         assert engine.sent == []
 
+    @pytest.mark.parametrize("name", [TALK, "LIBRARY-TALK-2018.PPTX"])
+    def test_the_transcriber_refuses_a_deck_by_its_suffix(
+        self, tmp_path, monkeypatch, name
+    ):
+        """A deck that is not an archive, as a damaged one is, is known by
+        its suffix, in any case."""
+        from yizkr.pipeline.transcribe import LlmVisionTranscriber
+
+        engine = Engine()
+        deck = tmp_path / name
+        deck.write_bytes(b"not an archive")
+        forbid_reading(monkeypatch)
+        transcriber = LlmVisionTranscriber(engine)
+        for read in (transcriber.transcribe, transcriber.transcribe_unchecked):
+            with pytest.raises(ValueError, match="ZIP archive"):
+                read(deck)
+        assert engine.sent == []
+
     def test_a_run_fails_a_renamed_deck_rather_than_send_it(self, tmp_path):
         """A run routes a deck called as an image to vision, and the
         transcriber's refusal fails that document closed."""
