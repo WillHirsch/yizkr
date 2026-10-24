@@ -171,6 +171,7 @@ can still generate P26 so qualified. #394 adds the new classes' ids.
 | a directory or a census listing a couple as married, with no start or end | an observation: a `point_in_time` on the union, never a wedding date. A union has no date of its own, so clustering never keys on it and the disagreement report never compares it |
 | "Löbig, Ursula, Wwe." (the 1912 directory) | no union, since no spouse is named: ADR-0035's `civil_status` |
 | a couple presented as a couple, with no word of a marriage | a partnership, which may be a marriage no source identifies. Two people named only as a child's parents are not thereby a couple |
+| a spouse entry in a list (a descendant list, a family register) with no marriage stated (amended by #627) | a partnership: the list presents a couple. A marriage the source states stays a marriage |
 
 ### 3. Identity across documents
 
