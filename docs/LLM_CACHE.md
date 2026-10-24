@@ -344,8 +344,9 @@ at the review effort (ADR-0016), and its events name the role
 `extract` role, its events naming both `places`. Each adjudication call
 is keyed by its prompt, which holds each pair's two mention
 fingerprints, clustering's comparison and each mention's evidence. A
-change that alters a mention's evidence (its label, record or claims)
-changes the call that asks of it; one that adds, removes or resizes an
+change that alters a mention's evidence (its label, record or claims,
+or the place its transcription view gives an image its claims are
+about, #667) changes the call that asks of it; one that adds, removes or resizes an
 ambiguous cluster re-packs the calls after it, since calls are filled
 in the review's order; so does one that changes which pairs are
 pending, as a confident component that now merges settles the ambiguous
