@@ -360,7 +360,8 @@ Amended by #626 (2026-10-24; ADR-0039 §10), carried out by the build
 that #626's draft names (until it lands, the rule above holds): a
 `document_subject` property takes three subjects, each only where the
 claim's passage, read where it stands, conveys the fact (ADR-0003's
-support test): the claim's own source; an artifact the source places
+support test, as #607 writes it; owner decision on #607, 2026-10-23,
+Q2): the claim's own source; an artifact the source places
 (checked as a caption's subject is); and a batch entity of an artifact
 kind, the artifact a source's own structured record makes, such as a
 GEDCOM object's un-held media item. The interim sentence above ("On a
@@ -369,7 +370,8 @@ replaced by this general rule: the rule keys on the subject's kind,
 and an extraction may not name an artifact kind, in a manifest record
 or a `LocalRef`'s `instance_of`, so only a structured record or a
 hand-written batch makes an artifact-kind entity (ADR-0039 §10.1(b),
-§10.6). `placed_subject` stays `caption`'s alone.
+§10.6). `placed_subject` stays `caption`'s alone. This and every other
+line dated #626 in this file describe the model from that build on.
 
 **A retired property** stays in the instance and takes no new claim: it
 accepts nothing, validation refuses every claim of it, and no prompt that
@@ -743,8 +745,8 @@ artifact a new QID, changes neither.
   Widened by #626, 2026-10-24 (ADR-0039 §10): each of them, `issued_by`
   included, may also take an artifact the source places, or the
   artifact the source's own structured record makes, where the passage
-  conveys the fact; a certificate's `issued_by` stays its own claim
-  about itself.
+  conveys the fact; a certificate's own `issued_by` still cites the
+  certificate.
   `author` and `addressee` take a person, an organization or a family,
   and the critic's `relation_kind_mismatch` category names them, as
   relations of authorship or address, with those kinds, as it names the
@@ -979,6 +981,8 @@ its own content states it, is `shows`; `depicts` is the faces flow's
 confirmed depiction (ADR-0005; ADR-0039 §2.2). Prefer an existing
 Wikidata-mirrored property, keep values structured (never strings),
 and reference the artifact itself or the producing run.
+Widened by #626, 2026-10-24: `shows` may also come from a source that
+places the image, where its passage conveys it (ADR-0039 §10.4).
 
 ## Compound artifacts (see ADR-0008)
 
@@ -1140,6 +1144,9 @@ and reference the artifact itself or the producing run.
   tied to a region or confirmed by a person, and neither maps to P180.
   The faces flow may read them as a hint for whom to propose, outside
   the graph until a person confirms a `depicts`.
+  Widened by #626, 2026-10-24: `shows` may also come from a source that
+  places the image, where its passage conveys it (ADR-0039 §10.4); it
+  is still a source's words, never a depiction.
 
 ## Names (see ADR-0011)
 

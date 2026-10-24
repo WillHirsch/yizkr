@@ -63,7 +63,8 @@ them, each claim labelled as the container's (§10).
   Widened by #626, 2026-10-24: the caption stays its own words, one
   verbatim statement. Beside it, where a passage of the container, read
   where it stands, conveys a fact of the artifact (who made it, for
-  whom, when, where, what it is about, whom it shows), the container
+  whom, when, where, what it is about, whom it shows, who issued it),
+  the container
   states that too, cited to itself with the passage as its excerpt
   (§10). The caption gives `author` → Wastl and `addressee` → Klara;
   the booklet's translation of the letter's dateline gives `inception`
@@ -85,9 +86,18 @@ them, each claim labelled as the container's (§10).
   image shows, as its own content says.** The studio portrait's reverse
   names five people: five `shows` statements, cited to the portrait.
   `depicts` stays the faces flow's (ADR-0005).
+
+  Widened by #626, 2026-10-24: `shows` may also come from a source that
+  places the image, where its passage conveys it: slide 2's title gives
+  `shows` → Wastl and `shows` → Hilde (§10.4, on its lean).
 - **The caption's people stay the container's entities**, with their
   appellations (#499), as today. The caption links them to the image only
   as text.
+
+  Reversed by #626, 2026-10-24: where the caption conveys it, its
+  people are also the image's `author` or `addressee`, item values:
+  "Wastl to Klara" gives `author` → Wastl and `addressee` → Klara
+  (§10.4, on its lean).
 - **A slide's caption is the same question** as a compilation's, and has
   the same answer.
 
@@ -260,6 +270,12 @@ where its passage, read where it stands, conveys the fact (§10.1).
 | `shows` | who or what the image shows, as its own content states it, such as an inscription on a print | any kind | none (below) |
 | `issued_by` (already) | the organisation that issued it | organization | P2378 |
 
+Widened by #626, 2026-10-24: each property in this table, `shows`
+included, may also be stated by a source that places the artifact or
+whose structured record makes it, where its passage conveys the fact
+(§10); `shows` is then who or what the image shows as that source's
+passage conveys it, not only as its own content states it.
+
 - Each accepts `unclassified_entity` too, wherever it accepts a real
   kind (ADR-0013). Dates take the qualifiers any date takes, at the
   precision the source gives (MODELING.md, "Uncertainty and time").
@@ -346,6 +362,10 @@ with their appellations and aliases (ADR-0018, #499): the caption's
 cited to the booklet, page 6. What the caption says about them as people
 is extracted as today. The caption links them to the image only as
 text.
+
+Reversed by #626, 2026-10-24: where the caption, read where it stands,
+conveys it, its people are also the image's `author` or `addressee`, as
+item values, beside the caption (§10.4, on its lean).
 
 **The subject's resolution.** The writer resolves an artifact subject as
 it resolves a source (writer step 0): to the item that carries that
@@ -500,9 +520,9 @@ and an image may show a building.
 
 Widened by #626, 2026-10-24: a document-subject statement about an
 artifact its source places may carry a caption's text as its excerpt,
-so it leaves the export whole, failing closed, on the lean of §10.5; a
-statement about an artifact a structured record makes leaves as any of
-that record's statements does.
+so it is left out of the export whole, failing closed, on the lean of
+§10.5; a statement about an artifact a structured record makes is
+exported or left out as any of that record's statements is.
 
 **The static site** (private; plural by default, CLAUDE.md rule 6):
 
@@ -666,7 +686,9 @@ artifact kind: an un-held media item (ADR-0021 §2).
 - **How (b) is keyed and enforced** (owner question; the text follows
   the lean). Keyed on the subject's kind alone, a model's batch could
   make an artifact-kind entity and state things about it: route (c2)
-  under another name. Nothing stops that today.
+  under another name. Today only the structured-batch flag keeps
+  document-subject claims off such an entity; nothing stops a model's
+  batch from making the entity itself.
   `claims.validate_against_manifest` refuses an entity's kind only when
   it is no manifest item, and checks a `LocalRef`'s `instance_of` the
   same way; `ChunkedClaimExtractor._parse_entity_manifest` checks a
@@ -691,6 +713,11 @@ artifact kind: an un-held media item (ADR-0021 §2).
 
   The alternative: refuse every kind the prompts do not offer, not only
   artifact kinds.
+  The two differ on `artifact_fragment`. It is no artifact kind
+  (`Acceptance.artifact_kinds`), so the lean lets a model's entity take
+  it, as `_parse_entity_manifest` does today, though
+  `writer.is_artifact_kind` treats it as artifact-side; the
+  alternative refuses it unless a prompt offers it.
 
 **(c) An artifact the source only writes about** (owner question), such
 as an enclosure held as a scan of its own. The 1958 letter says "Вы
@@ -759,6 +786,13 @@ routes:
     since the entity is of no artifact kind.
   - Readers see the claim on the mention item, not on the scan, until
     the two are linked.
+  - Its breadth: a `type_hint` is free text, so the subject rule would
+    accept any `unclassified_entity` (an aircraft, a regiment), with
+    only the advisory critic as a guard.
+  - The mention item is no artifact item, so it gets no artifact page.
+  - Like the rejected (c2), it puts artifact claims on a second item;
+    it differs in making no item beyond today's mention item and in
+    minting no artifact-kind entity.
 
 Lean: (c4) if the owner wants the letter's claim recorded now, since it
 is the closest to the owner's question and needs no curator record;
@@ -803,7 +837,7 @@ the rule admits forms (a) and (b) only.
     other sources state of it".
   - `named_in_html` labels values the same way.
   - An un-held media item gets an artifact page that shows its
-    `inception` with its other statements (lean; the build tests it).
+    `inception` with its other statements; the build tests it.
 
 #### 10.3 `caption` and §4
 
@@ -854,7 +888,7 @@ the rule admits forms (a) and (b) only.
   the critic cannot tell the image from the document. The row names the
   source itself as "this document" and a placed artifact by its place
   ("page 6, image 1"), as the prompt lists it; a finding that names a
-  claim this way still resolves to it (lean).
+  claim this way still resolves to it.
 - **Excerpt required** (owner question; the text follows the lean). A
   document-subject claim whose subject is not its own source must carry
   an excerpt, since without one no test can apply. Validation rejects
@@ -987,13 +1021,16 @@ Each gets a dated line; no earlier amendment line is rewritten.
   #583 line (the general rule replaces the interim exception).
 - **ADR-0008**: the status header's #456 line; the #289 bullet's inline
   #456 amendment; question 6's answer; the "Out of scope" bullet's #456
-  amendment.
+  amendment; the #456 Amendments block's question 6 and deck bullets.
 - **ADR-0021**: the OBJE DATE's subject, after the #583 amendment.
 - **MODELING.md**: the `document_subject` paragraph; the `issued_by`
   paragraph in "Organizations"; "Compound artifacts", the caption bullet
   and the static-site bullet; "Contradictions", a date of making; "Living
   persons and privacy", the export rule.
 - **docs/EXAMPLES.md**: the ADR-0039 row.
+- **This ADR, beyond #626's list**: "In brief" bullets 4 and 5, §2.2's
+  table, §3's "The caption's people", and the Consequences bullet on
+  ADR-0035 §3.4's rule.
 
 ## Owner questions
 
@@ -1066,10 +1103,14 @@ the leans, and the owner's merge with them answered accepts it:
    extraction may not name an artifact kind, in a manifest record or a
    `LocalRef`'s `instance_of`, checked where model output is first read;
    the subject rule then keys on the subject's kind. Alternative: refuse
-   every kind the prompts do not offer.
+   every kind the prompts do not offer. The two differ on
+   `artifact_fragment`, which the lean admits and the alternative
+   refuses unless a prompt offers it.
 6. **An enclosure: (c1), (c3) or (c4)** (§10.1(c)). Lean: (c4), the
    claim on the letter's own mention of the enclosure, if the letter's
-   claim should be recorded now; (c3), no claim, if not. (c1) needs a
+   claim should be recorded now (its subject rule accepts any
+   `unclassified_entity`, the mention item gets no artifact page, and,
+   like (c2), the claim sits on a second item until a link); (c3), no claim, if not. (c1) needs a
    curator's local record, a provenance form for the identification
    (a second reference naming the record, or a curator-cited link the
    claims depend on), a write order and a prompt paragraph of its own,
@@ -1116,6 +1157,10 @@ the leans, and the owner's merge with them answered accepts it:
 - The manifest gains `caption`, six document-subject properties, a
   qualifier and its value; ADR-0035 §3.4's rule stays "the source
   itself", and one property, `caption`, takes what the source places.
+  Widened by #626, 2026-10-24: the seven document-subject properties
+  also take an artifact the source places, and the artifact a source's
+  own structured record makes (§10.1); `caption` stays the one
+  `placed_subject` property.
 - A deck's images gain captions only with #502; until then its 17 images
   have none.
 - Captions beside images on scanned pages stay part of the page's text

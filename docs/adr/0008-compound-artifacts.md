@@ -44,10 +44,11 @@ Amended by #456 (2026-10-23): ADR-0039 answers questions 2 and 6 of the
 container's claim about an image it places is its verbatim `caption`
 only, for a PDF's images and a deck's alike: see Amendments.
 Amended by #626 (2026-10-24): ADR-0039 §10 widens the answer to
-question 6: beside its verbatim `caption`, a container states the
+question 6, from the build #626's draft names on (each line dated
+#626 below reads so): beside its verbatim `caption`, a container states the
 document-subject properties of an image it places where its passage,
 read where it stands, conveys them, cited to the container with the
-passage: see Amendments (#289's and #502's).
+passage: see Amendments (#289's, #456's and #502's).
 
 ## Context
 
@@ -262,7 +263,7 @@ media (MODELING.md, "Reference pattern"):
   excerpt's own claim about itself.
   Widened by #626, 2026-10-24 (ADR-0039 §10): beside its `caption`,
   the compilation states the excerpt's author, addressee, date, place,
-  subject or whom it shows where its passage, read where it stands,
+  subject, whom it shows or its issuer where its passage, read where it stands,
   conveys them, cited to the compilation with its page and the passage
   as its excerpt; the excerpt's own claims about itself stand beside
   them. The booklet's caption gives the letter's image `author` → Wastl
@@ -890,10 +891,17 @@ claim** (ADR-0039, accepted by the owner 2026-10-23).
   excerpt as its own source. The #289 amendment's sentence "A claim
   whose subject is the excerpt itself cannot be expressed yet" points
   here.
+  Widened by #626, 2026-10-24 (ADR-0039 §10): a container's claim
+  about an excerpt is its `caption` and, where its passage, read where
+  it stands, conveys them, the excerpt's document-subject properties,
+  cited to the container beside the excerpt's own claims about itself.
 - **The same holds for a deck's embedded images**, which #502 marks by
   SHA-1 in the deck's transcription (`[Slide 2, image 1: sha1:…]`): a
   slide's text and notes that speak of one are the deck's `caption`s,
   cited to the deck with the slide as `page number`.
+  Widened by #626, 2026-10-24 (ADR-0039 §10): a slide's text that, read
+  where it stands, conveys what its image is also gives the deck's
+  document-subject statements on the image's item, cited the same way.
 - **How it is checked.** A container's prompts list the images its text
   places, by artifact reference and place, from the transcription's
   record of its pages; validation is handed the SHA-1s of the images the

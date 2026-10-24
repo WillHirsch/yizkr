@@ -578,10 +578,9 @@ property about the artifact its own structured record makes, cited to
 itself, where its passage conveys the fact; an OBJE's DATE stands in the
 object's own record, so it conveys that object's date of making
 (ADR-0039 §10.4). The interim exception keyed on the adapter's model
-identifier (`STRUCTURED_ADAPTERS`) is replaced, once the build that #626's draft
-names lands: the subject rule keys on
-the subject's kind, an artifact kind, and an extraction may not name an
-artifact kind, so a model's batch still makes no artifact entity
+identifier (`STRUCTURED_ADAPTERS`) is replaced, once the build that
+#626's draft names lands: the subject rule keys on the subject's kind,
+an artifact kind, and an extraction may not name an artifact kind, so a model's batch still makes no artifact entity
 (ADR-0039 §10.1(b), §10.6). `ADAPTER_IDENTIFIER` stays the batch's
 model identifier, and the export's claims do not change. The un-held
 media item is not the held scan of the same photograph: the fixture's

@@ -1208,8 +1208,9 @@ the same write; a breach is a counted reject in validation and a
 refusal in the writer.
 
 Widened by #626, 2026-10-24 (ADR-0039 §10): "the subject is still the
-source artifact itself, and these properties take no other subject" no
-longer holds. The document-subject properties take the claim's own
+source artifact itself, and these properties take no other subject"
+holds until the build #626's draft names lands; from that build on it
+no longer holds. The document-subject properties take the claim's own
 source, an artifact the source places (checked against the same placed
 media as `caption`), or a batch entity of an artifact kind, each only
 where the passage, read where it stands, conveys the fact; `caption`
