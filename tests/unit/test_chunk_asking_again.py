@@ -26,6 +26,7 @@ from tests.unit.test_chunking import (
     Attempting,
     PlainLlm,
     Rejecting,
+    Reporting,
     ScriptedLlm,
     TestTheExtractionStage,
     claim,
@@ -41,9 +42,11 @@ from yizkr.pipeline.chunking import (
     missing_field,
 )
 from yizkr.pipeline.llm import (
+    CUT_OFF_AT_LIMIT,
     REFUSAL_STOP,
     SAFETY_MONITOR_BLOCKED,
     ClassifierRefused,
+    ConversationChanged,
     OutputLimitReached,
 )
 from yizkr.pipeline.orchestrate import FAILED
@@ -129,7 +132,41 @@ class TestMissingField:
         found["qualifiers"] = [
             {"property": "point_in_time", "value": {"type": "time"}}
         ]
-        assert missing_field([found]) == "qualifiers.value.time.year"
+        assert missing_field([found]) == "qualifiers.value.year"
+
+    @pytest.mark.parametrize(
+        ("change", "path"),
+        [
+            pytest.param(
+                lambda found: found["value"].pop("year"),
+                "value.year",
+                id="time",
+            ),
+            pytest.param(
+                lambda found: found["subject"].pop("local_id"),
+                "subject.local_id",
+                id="local-subject",
+            ),
+            pytest.param(
+                lambda found: found.update(
+                    property="name",
+                    value={
+                        "type": "monolingual",
+                        "value": {"text": "Hildegard Löbig"},
+                    },
+                ),
+                "value.value.language",
+                id="monolingual",
+            ),
+        ],
+    )
+    def test_a_tagged_unions_tag_is_left_out_of_the_path(self, change, path):
+        """The path is the claim's JSON's, never the schema's union tags
+        (`value.time.year`), which the note would ask the model to
+        write."""
+        found = claim(*HILDEGARD)
+        change(found)
+        assert missing_field([found]) == path
 
     def test_a_shape_validation_repairs_is_not_missing(self):
         """A time value nested under `value`, which validation flattens
@@ -488,6 +525,83 @@ class TestAChunkAskedAgain:
         assert [c.subject.label for c in batch.claims] == ["Sebastian Löbig"]
 
 
+class TestTheSecondAnswer:
+    """What the second ask gives is what the chunk keeps: its claims, its
+    gaps and unread objects, its stop reason, and a changed
+    conversation's restart."""
+
+    def test_a_changed_conversation_on_the_retry_restarts_the_pass(
+        self, tmp_path
+    ):
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                ndjson([without_language(*HILDEGARD)]),
+                ConversationChanged("answered differently"),  # the retry
+                entity_manifest_json(),  # the pass starts over
+                ndjson([claim(*HILDEGARD)]),
+                ndjson([claim(*SEBASTIAN)]),
+            ]
+        )
+        run = extractor(llm, tmp_path)
+        batch = run.extract(transcription(), DOC_REF)
+        assert [method for method, _ in llm.calls].count("open") == 2
+        assert llm.responses == []
+        assert len(batch.claims) == 2
+        assert run.retried_chunks == 0
+
+    def test_its_gaps_and_unread_objects_are_the_ones_kept(self, tmp_path):
+        gap = {
+            "gap": {
+                "subject": "e1",
+                "predicate": "godparent of",
+                "object": "e2",
+                "evidence": "stood godparent to",
+            }
+        }
+        unread = {"claims": [claim(*HILDEGARD)]}
+        first = "\n".join(
+            [json.dumps(without_language(*HILDEGARD)), json.dumps(unread)]
+        )
+        second = "\n".join([json.dumps(claim(*HILDEGARD)), json.dumps(gap)])
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                first + '\n{"done": true}',
+                second + '\n{"done": true}',
+                ndjson([claim(*SEBASTIAN)]),
+            ]
+        )
+        run = extractor(llm, tmp_path)
+        batch = run.extract(transcription(), DOC_REF)
+        assert len(batch.claims) == 2
+        assert [found["predicate"] for found in run.gaps] == ["godparent of"]
+        assert side_output(tmp_path, "coverage.json")["unread_objects"] == 0
+
+    def test_one_stopped_at_the_output_limit_is_rejected(self, tmp_path):
+        """A second answer the engine stopped at its output limit is cut
+        off whatever it holds, its sentinel included: it is rejected, and
+        the first answer stands."""
+        stopped = ndjson([claim(*HILDEGARD)])
+        llm = Reporting(
+            ScriptedLlm(
+                [
+                    entity_manifest_json(),
+                    ndjson([without_language(*HILDEGARD)]),
+                    stopped,
+                    ndjson([claim(*SEBASTIAN)]),
+                ]
+            ),
+            ["end_turn", "end_turn", "max_tokens", "end_turn"],
+        )
+        run = extractor(llm, tmp_path)
+        batch = run.extract(transcription(), DOC_REF)
+        ((response, reason),) = llm.rejected
+        assert response == stopped
+        assert reason == f"chunk: {CUT_OFF_AT_LIMIT}"
+        assert [c.subject.label for c in batch.claims] == ["Sebastian Löbig"]
+
+
 class TestEachExtractionCountsItsOwn:
     def test_the_counts_start_again(self, tmp_path):
         """An extractor counts the retries and refusals of its latest
@@ -736,7 +850,7 @@ class TestTheRunReportCountsRetries:
             "extractions": 0,
             "absent": extractions,
         }
-        assert extractions >= 2
+        assert extractions >= 3
         count(CARD, 2)
         count(CERT, 0)
         made = build(path, now=NOW)
@@ -750,7 +864,8 @@ class TestTheRunReportCountsRetries:
         text = render_markdown(made["aggregate"])
         assert (
             "Chunks asked again for a missing required field: 2, in 1 "
-            "extractions"
+            "extraction (extractions whose coverage predates the count: "
+            f"{extractions - 2})."
         ) in text
         assert "asked again for a missing required field: 2)" in drilled(
             made, CARD
@@ -758,3 +873,67 @@ class TestTheRunReportCountsRetries:
         assert "asked again for a missing required field: 0)" in drilled(
             made, CERT
         )
+        # a coverage that predates the count says so in its drill-down
+        predating = next(
+            found["sha1"]
+            for found in made["documents"]
+            if found["coverage"]
+            and found["coverage"]["retried_chunks"] is None
+        )
+        assert (
+            "asked again for a missing required field: not counted)"
+            in drilled(made, predating)
+        )
+        # every extraction counted: no note of predating ones, and the
+        # plural for several
+        for sha1 in FILES:
+            if document(made, sha1)["coverage"]:
+                count(sha1, 1)
+        text = render_markdown(build(path, now=NOW)["aggregate"])
+        assert (
+            "Chunks asked again for a missing required field: "
+            f"{extractions}, in {extractions} extractions."
+        ) in text
+
+
+class TestARefusedReplay:
+    """A fork that misses the cache, with no session to resume, replays
+    the conversation's opening turn (ADR-0032 §6). A replay the safety
+    classifier refuses is a failure of the session, not of the chunk:
+    every chunk drops to inline context, whichever reached the replay
+    first, and no chunk is counted as refused."""
+
+    def test_every_chunk_drops_to_inline(self, tmp_path):
+        from tests.unit.test_llmcache import (
+            Engine,
+            client,
+            extractor_answers,
+        )
+        from yizkr.pipeline.transcribe import Transcription
+
+        class BrokenForks(Engine):
+            def fork(self, handle, prompt):
+                raise RuntimeError("the CLI cannot fork")
+
+        class RefusedReplay(Engine):
+            def open_conversation(self, prompt):
+                raise refused()
+
+        def extract(engine):
+            run = ChunkedClaimExtractor(
+                client(tmp_path, engine), budget=10, retries=1, concurrency=2
+            )
+            text = "Klara Löbig b. 1917\nGustav Löbig b. 1919"
+            batch = run.extract(
+                Transcription(artifact=DOC_REF, text=text, engine="test"),
+                DOC_REF,
+            )
+            return run, batch
+
+        _, first = extract(BrokenForks(extractor_answers()))
+        assert len(first.claims) == 2
+        engine = RefusedReplay(extractor_answers())
+        run, batch = extract(engine)
+        assert run.failed_chunks == []
+        assert run.refused == {}
+        assert batch.claims == first.claims

@@ -148,7 +148,10 @@ cache the first answer is kept, not rejected, and the second is keyed
 apart, so a later run replays both without asking the engine. The second
 answer replaces the first and is validated as usual; when the second
 call gives nothing (it fails, is cut off, or is refused), the first
-answer stands. An answer with one claim that gives the field, or whose
+answer stands. A cut-off second answer is rejected, so the next run asks
+the engine again; a give-up at the output limit is kept under the
+attempt's key, so the next run gives up on it again without a call, and
+the first answer stands again. An answer with one claim that gives the field, or whose
 claims lack different fields, or fail for another reason, is not asked
 again. The extraction's `coverage.json` counts such chunks
 (`retried_chunks`), and the run report sums them.

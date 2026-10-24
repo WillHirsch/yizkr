@@ -1801,7 +1801,10 @@ class ChunkedClaimExtractor:
         safety classifier refuses it, which is counted and never asked
         again), the first answer stands. A cut-off second answer is
         rejected, and one the client kept from an earlier call is asked
-        for once more (llm.reject_response)."""
+        for once more (llm.reject_response), so a later run asks the
+        engine again; a give-up at the output limit is kept under the
+        attempt's key behind the LLM cache, so a later run gives up on it
+        again without a call, and the first answer stands again."""
         with self._state_lock:
             self.retried_chunks += 1
         note = MISSING_FIELD_NOTE.format(count=len(claims), field=field)
@@ -2426,8 +2429,8 @@ def excerpt_audit(claims: Iterable[Claim], transcript: Transcript) -> dict:
 
 def missing_field(claims: Iterable[Any]) -> str | None:
     """The required field every one of `claims` lacks, by its path in the
-    claim schema (`source.transcription_excerpt.language`, a list's
-    index left out), or None: for no claims, or when any claim lacks no
+    claim's JSON (`source.transcription_excerpt.language`, `value.year`;
+    _field_path), or None: for no claims, or when any claim lacks no
     required field, or when they lack none in common. When they lack
     several in common, the first path in sorted order. Each claim's shape
     is repaired as validation repairs it (salvage_valid_claims) before it
@@ -2440,16 +2443,37 @@ def missing_field(claims: Iterable[Any]) -> str | None:
     for claim in claims:
         lacking: set[str] = set()
         if isinstance(claim, dict):
+            shaped = _normalize_claim_shape(claim)
             try:
-                Claim.model_validate(_normalize_claim_shape(claim))
+                Claim.model_validate(shaped)
             except ValidationError as exc:
                 lacking = {
-                    ".".join(p for p in error["loc"] if isinstance(p, str))
+                    _field_path(shaped, error["loc"])
                     for error in exc.errors()
                     if error["type"] == "missing"
                 }
         common = lacking if common is None else common & lacking
     return min(common) if common else None
+
+
+def _field_path(claim: dict, loc: Iterable[Any]) -> str:
+    """The path of the field a validation error's `loc` names, as the
+    claim's JSON spells it: walked along `claim`, a list's index and a
+    tagged union's tag (`time` in `value.time.year`), which are no keys
+    of the claim, are left out, and the last part, the field missing, is
+    kept."""
+    parts = list(loc)
+    path: list[str] = []
+    node: Any = claim
+    for number, part in enumerate(parts):
+        if isinstance(node, list) and isinstance(part, int):
+            node = node[part] if 0 <= part < len(node) else None
+        elif isinstance(node, dict) and part in node:
+            path.append(str(part))
+            node = node[part]
+        elif number == len(parts) - 1:
+            path.append(str(part))
+    return ".".join(path)
 
 
 def rejected_by_reason(rejects: Iterable[dict]) -> dict[str, int]:

@@ -1177,10 +1177,11 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
 def _retried_line(retried: Mapping[str, int]) -> str:
     """The chunks asked again because every claim of their answer lacked
     the same required field, as the report's Content section gives them."""
+    extractions = retried["extractions"]
     line = (
         f"Chunks asked again for a missing required field: "
-        f"{_n(retried['chunks'])}, in {_n(retried['extractions'])} "
-        "extractions"
+        f"{_n(retried['chunks'])}, in {_n(extractions)} extraction"
+        + ("" if extractions == 1 else "s")
     )
     if retried["absent"]:
         line += (
