@@ -21,15 +21,20 @@
 # tell a start's latest start date from a latest date. An event's own
 # start or end time is a date value, bounded by its earliest and latest
 # date like a date of birth, never by a latest start date or an earliest
-# end date; its row names the time beside the event's type
-# ("imprisonment (start time)"), and its point in time's row the type
-# alone. ?circumstances holds the statement's sourcing circumstances
+# end date. An event's rows carry its types in ?eventTypes, each by its
+# English label (its id when it has none), URI-encoded and "|"-separated,
+# read at any rank but deprecated so that a preferred type hides no
+# other; a start or end time's ?what names the time ("start time"), and a
+# point in time's is unbound. The site shows the types, sorted, with the
+# time beside them ("imprisonment (start time)"). The event's
+# participants are read at any rank but deprecated too, so that a
+# preferred participant hides no other. ?circumstances holds the statement's sourcing circumstances
 # (circa), each by its English label (its id when it has none),
 # URI-encoded and "|"-separated: circa qualifies the whole statement, so
 # each of its rows carries it (docs/MODELING.md).
 # For a single person, append e.g.: FILTER(?person = wd:Q26)
 #defaultView:Timeline
-SELECT DISTINCT ?person ?personLabel ?what ?date ?precision
+SELECT DISTINCT ?person ?personLabel ?what ?eventTypes ?date ?precision
        ?low ?earliest ?earliestPrecision ?high ?latest ?latestPrecision
        ?circumstances ?source ?sourceLabel
 WHERE {
@@ -91,16 +96,35 @@ WHERE {
       (p:{P:end_time} wd:{P:end_time}
        wd:{P:earliest_date} wd:{P:latest_date})
     }
-    ?event wdt:{P:participant} ?person ;
-           wdt:{P:instance_of} ?eventType ;
-           ?eventClaim ?st .
-    ?eventType rdfs:label ?typeName .
-    FILTER(LANG(?typeName) = "en")
-    ?dated rdfs:label ?claimName .
-    FILTER(LANG(?claimName) = "en")
-    BIND(IF(?dated = wd:{P:point_in_time}, ?typeName,
-            CONCAT(?typeName, " (", ?claimName, ")"))
-         AS ?what)
+    # a participant at any rank but deprecated, so that a preferred
+    # participant leaves the event on every other one's timeline
+    ?event p:{P:participant} ?participation .
+    ?participation ps:{P:participant} ?person .
+    FILTER NOT EXISTS { ?participation wikibase:rank wikibase:DeprecatedRank }
+    ?event ?eventClaim ?st .
+    # the event's types at any rank but deprecated, each by its English
+    # label (its id when it has none), URI-encoded and "|"-separated:
+    # folded into one cell, a second type adds no row
+    {
+      SELECT ?event (GROUP_CONCAT(DISTINCT ?typeCell; separator="|")
+                     AS ?eventTypes)
+      WHERE {
+        ?event p:{P:participant} [] ;
+               p:{P:instance_of} ?typing .
+        ?typing ps:{P:instance_of} ?eventType .
+        FILTER NOT EXISTS { ?typing wikibase:rank wikibase:DeprecatedRank }
+        OPTIONAL { ?eventType rdfs:label ?typeName .
+                   FILTER(LANG(?typeName) = "en") }
+        BIND(ENCODE_FOR_URI(COALESCE(?typeName,
+                                     REPLACE(STR(?eventType), "^.*/", "")))
+             AS ?typeCell)
+      }
+      GROUP BY ?event
+    }
+    # a start or end time names the time ("start time"), a point in time
+    # nothing beside the types
+    OPTIONAL { ?dated rdfs:label ?what .
+               FILTER(LANG(?what) = "en" && ?dated != wd:{P:point_in_time}) }
   }
   # the date at its stated precision (display must never pad what a
   # source said): the value node of the statement's own date, or of its

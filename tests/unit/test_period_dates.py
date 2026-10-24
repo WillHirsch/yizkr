@@ -189,9 +189,9 @@ def values_rows(template: str, *variables: str) -> list[tuple[str, ...]]:
 
 def event_arm(q: str) -> str:
     """The person timeline's UNION arm for the events a person took part
-    in, from its VALUES block to the end of its ?what."""
+    in, from its VALUES block to the end of the UNION."""
     start = q.index("VALUES (?eventClaim")
-    return q[start : q.index("AS ?what)", start)]
+    return q[start : q.index("# the date at its stated precision", start)]
 
 
 class TestThePersonTimeline:
@@ -258,21 +258,63 @@ class TestThePersonTimeline:
         assert "?eventClaim ?st ." in event_arm(q)
 
     def test_an_events_start_and_end_name_the_time_beside_its_type(self, q):
-        # "imprisonment (start time)", and its point in time the bare type
+        # "imprisonment (start time)": the row names the time, and the site
+        # puts it beside the types; a point in time names nothing beside
+        # them
         arm = event_arm(q)
         assert (
-            "?eventType rdfs:label ?typeName .\n"
-            '    FILTER(LANG(?typeName) = "en")'
+            "OPTIONAL { ?dated rdfs:label ?what .\n"
+            '               FILTER(LANG(?what) = "en" && '
+            "?dated != wd:{P:point_in_time}) }"
         ) in arm
+        assert arm.count("?what") == 2
+
+    def test_an_events_types_are_folded_into_one_cell(self, q):
+        # an event typed twice (a military service that is also an
+        # `event`) gives each of its rows once, its types in one cell the
+        # site sorts and joins, each read at any rank but deprecated so
+        # that a preferred type hides no other (#540)
+        arm = event_arm(q)
         assert (
-            "?dated rdfs:label ?claimName .\n"
-            '    FILTER(LANG(?claimName) = "en")'
+            "    {\n"
+            "      SELECT ?event (GROUP_CONCAT(DISTINCT ?typeCell; "
+            'separator="|")\n'
+            "                     AS ?eventTypes)\n"
+            "      WHERE {\n"
+            "        ?event p:{P:participant} [] ;\n"
+            "               p:{P:instance_of} ?typing .\n"
+            "        ?typing ps:{P:instance_of} ?eventType .\n"
+            "        FILTER NOT EXISTS { ?typing wikibase:rank "
+            "wikibase:DeprecatedRank }\n"
+            "        OPTIONAL { ?eventType rdfs:label ?typeName .\n"
+            '                   FILTER(LANG(?typeName) = "en") }\n'
+            "        BIND(ENCODE_FOR_URI(COALESCE(?typeName,\n"
+            "                                     REPLACE(STR(?eventType), "
+            '"^.*/", "")))\n'
+            "             AS ?typeCell)\n"
+            "      }\n"
+            "      GROUP BY ?event\n"
+            "    }\n"
         ) in arm
+        # the subquery is the arm's only reading of a type, and no truthy
+        # triple, which a preferred type would leave the only one, is read
+        assert arm.count("{P:instance_of}") == 2
+        assert "wdt:" not in arm
+        assert q.count("AS ?eventTypes)") == 1
+
+    def test_an_events_participants_are_read_at_any_rank_but_deprecated(
+        self, q
+    ):
+        # a preferred participant hides no other's rows (CLAUDE.md rules 4
+        # and 6; #540)
+        arm = event_arm(q)
         assert (
-            "BIND(IF(?dated = wd:{P:point_in_time}, ?typeName,\n"
-            '            CONCAT(?typeName, " (", ?claimName, ")"))\n'
-            "         "
+            "    ?event p:{P:participant} ?participation .\n"
+            "    ?participation ps:{P:participant} ?person .\n"
+            "    FILTER NOT EXISTS { ?participation wikibase:rank "
+            "wikibase:DeprecatedRank }\n"
         ) in arm
+        assert "wdt:{P:participant}" not in q
 
     def test_circa_is_folded_into_one_cell_per_statement(self, q):
         # circa qualifies the whole statement (#315), so it is read after
@@ -334,6 +376,7 @@ class TestThePersonTimeline:
         projection = set(re.findall(r"\?(\w+)", q.split("WHERE", 1)[0]))
         assert {
             "what",
+            "eventTypes",
             "date",
             "precision",
             "earliest",
