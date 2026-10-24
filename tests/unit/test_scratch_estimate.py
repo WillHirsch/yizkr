@@ -493,11 +493,12 @@ class TestCounts:
         assert per_stage(counted, "engine_calls") == first
         assert run(tmp_path, corpus, engine, new=True) == first
 
-    def test_a_critique_the_documents_share_is_asked_once(
+    def test_alike_batches_of_two_transcriptions_ask_two_critiques(
         self, tmp_path, engine
     ):
-        """Two batches alike ask the critic the same: the run asks the
-        engine once, and its cache answers the other."""
+        """Two batches alike, of documents whose transcriptions differ:
+        each critique carries its own transcription (#607), so the run
+        asks the engine twice, and the estimate knows both calls."""
         engine.same_claims = True
         corpus = Corpus(tmp_path / "corpus")
         corpus.text(TEXT, "postcard-1938")
@@ -507,10 +508,59 @@ class TestCounts:
             tmp_path, corpus, engine, new=True, review_effort="max"
         )
         critique = counted.stages["critique"]
-        assert (critique.known, critique.hits) == (1, 1)
+        assert (critique.known, critique.hits) == (2, 0)
         assert run(
             tmp_path, corpus, engine, new=True, review_effort="max"
-        ) == {"critique": 1}
+        ) == {"critique": 2}
+
+    def test_a_critique_made_again_alone_is_the_driver_s_prompt(
+        self, tmp_path, engine
+    ):
+        """Every critique view gone, the cache holding the answers: the
+        estimate builds the driver's prompt, transcription and all, so
+        each is a hit, and the run asks nothing (#607)."""
+        corpus = small(tmp_path)
+        run(tmp_path, corpus, engine)
+        (run_dir,) = scratch.runs_in(runs_dir(tmp_path))
+        for view in run_dir.glob("*/critique.json"):
+            view.unlink()
+        counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
+        critique = counted.stages["critique"]
+        assert (critique.made, critique.hits, critique.known) == (4, 4, 0)
+        assert counted.total().engine_calls == 0
+        assert run(tmp_path, corpus, engine, resume=LATEST) == Counter()
+
+    def test_a_transcription_changed_under_an_alike_batch_is_critiqued(
+        self, tmp_path, engine
+    ):
+        """A curator's correction that leaves the batch alike: the
+        critique, which reads the transcription, does not stand (#607)."""
+        engine.fresh = False
+        engine.same_claims = True
+        corpus = small(tmp_path)
+        run(tmp_path, corpus, engine)
+        (run_dir,) = scratch.runs_in(runs_dir(tmp_path))
+        corrected = run_dir / "b-studio-photo-1890s"
+        (corrected / "transcription.corrected.txt").write_text(
+            u.SOURCES[0].text + "\nPeiltal"
+        )
+        counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
+        critique = counted.stages["critique"]
+        assert (critique.made, critique.reused) == (1, 3)
+        made = run(tmp_path, corpus, engine, resume=LATEST)
+        assert made == {"extraction": 2, "critique": 1}
+        assert per_stage(counted, "engine_calls") == made
+        # the correction taken back: the batch the cache answers is alike
+        # again, but the transcription changed, so the critique the cache
+        # kept for the first reading is asked for, a hit
+        (corrected / "transcription.corrected.txt").unlink()
+        counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
+        extraction = counted.stages["extraction"]
+        assert (extraction.made, extraction.hits) == (1, 2)
+        critique = counted.stages["critique"]
+        assert (critique.made, critique.reused, critique.hits) == (1, 3, 1)
+        assert counted.total().engine_calls == 0
+        assert run(tmp_path, corpus, engine, resume=LATEST) == Counter()
 
     def test_an_extraction_cut_short_is_known_to_its_last_chunk(
         self, tmp_path, engine

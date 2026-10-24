@@ -222,6 +222,8 @@ class TestCritique:
             # a container's evidence that names both places but does not
             # state the containment (#569)
             "evidence_does_not_state",
+            # any other claim whose excerpt fails the support test (#607)
+            "excerpt_does_not_state",
         ]
         assert "ADR-0031" in CATEGORIES["relation_kind_mismatch"]
 
