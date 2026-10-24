@@ -20,6 +20,12 @@ no claim, not even its cause, and is counted; a family with one partner
 or none has its MARR and DIV counted; a NAME without a value is read from
 its parts; and a nickname that several NAMEs give is a claim of each: see
 Amendments.
+Superseded by ADR-0040 (2026-10-24): a DEAT that states the death with
+no date, place or cause gives a `date_of_death` of unknown value citing
+that DEAT, not a `death` event; which DEATs state the death so is
+ADR-0040's Q4 (lean: a `Y`, with or without a DATE of `?`; a DATE that
+says the date is unknown, one the grammar cannot read, and a PLAC with
+no word give no claim, counted).
 Amended by #324 and #350 (2026-09-29): a SOUR beneath a MARR or DIV is
 folded into the spouse claims it dates or places; a SOUR that no claim
 folds, an OBJE that no image claim maps (within a folded citation, a
@@ -309,6 +315,17 @@ gave its cause of death all the same:
   and no place item, and under a DEAT it states no death. The person's
   summary (the item's description until #86, 2026-10-06) gives a death
   date only from a DEAT that states the death.
+
+  Superseded by ADR-0040, 2026-10-24: "one that states it and nothing
+  else is a `death` event" and "It now gives a `death` event with the
+  person as `participant`" no longer hold. `1 DEAT Y` gives a
+  `date_of_death` of unknown value on the person, cited to that DEAT
+  with its SOUR and PAGE and with the DEAT's lines as its excerpt, beside
+  what any other DEAT gives; there is no death event and no "Death of"
+  label. A DATE the grammar cannot parse, a DATE that says the date is
+  unknown, and a PLAC with no word are ADR-0040's Q4 (lean: no claim,
+  counted). The rest stands: a DEAT that states no death gives no claim,
+  its CAUS included.
 - **A family with one partner or none has its MARR and DIV counted.** A
   family whose HUSB or WIFE is missing, or names no person the adapter
   maps (no INDI record, or a person without a name, below), gives no
