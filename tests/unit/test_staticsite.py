@@ -2790,6 +2790,24 @@ class TestAnUndatedDeath:
         # and the informant statement's source is no source of the death
         assert CERTIFICATE not in self.page(site, RUDOLF)
 
+    def test_only_the_principals_own_statements_cite_it(
+        self, tmp_path, vocabulary
+    ):
+        # beside the principal, a participant who states no role: its
+        # source is no source of the death, and it is not shown to have
+        # died
+        rows = death_rows(
+            "Q720",
+            [
+                (RUDOLF, ["principal"], "NormalRank", []),
+                (NINA, [], "NormalRank", [(CERTIFICATE, CERTIFICATE_TITLE)]),
+            ],
+            kind_sources=[(NINAS_LETTER, LETTER_TITLE)],
+        )
+        site, _ = self.site(tmp_path, vocabulary, rows)
+        assert f"<dd>{DIED}</dd>" in self.page(site, RUDOLF)
+        assert "died (date not stated)" not in self.page(site, NINA)
+
     def test_the_timeline_lists_it_by_whom_it_happened_to(
         self, tmp_path, vocabulary
     ):
