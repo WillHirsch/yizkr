@@ -303,7 +303,9 @@ class TestRecordLinks:
             (TREE, "Kreis Peiltal"),
         ]
 
-    @pytest.mark.parametrize("written", ["[]", "null", "not json"])
+    @pytest.mark.parametrize(
+        "written", ["[]", "null", "not json", "[" * 100_000]
+    )
     def test_a_write_json_of_another_shape_is_passed_over(
         self, tmp_path, written
     ):

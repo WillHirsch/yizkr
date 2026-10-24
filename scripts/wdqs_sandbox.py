@@ -275,7 +275,7 @@ def read_state(path: Path) -> dict:
         state = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, RecursionError) as exc:
         raise SandboxError(
             f"unreadable state file {path} ({exc}); check it and remove it "
             f"by hand (docker ps -a --filter label={LABEL}={LABEL_VALUE} "

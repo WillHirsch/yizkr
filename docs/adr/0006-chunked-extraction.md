@@ -374,6 +374,16 @@ error's class (`ClassifierRefused`), and one that fails a chunk or the
 extraction is named in the document's failure reason, which keeps no
 coverage file.
 
+Amended by #654 (2026-10-24): the readers of the entity manifest and of
+the chunks' answers read a single trailing comma directly before a
+closing `]` or `}`, outside any string and with only whitespace
+between, as JSON syntax, and `coverage.json` counts each one so read
+(`trailing_commas`: the commas read in the manifest answer the
+extraction used and in each chunk's accepted answer). No value is added, changed or guessed; any other JSON
+defect (two commas, a comma before a value, a missing comma) still
+leaves its object unread, as before. A manifest refused only for such a
+comma no longer spends its second attempt.
+
 ### 7. Strategy selection and CLI surface
 
     yizkr ingest extract ... --strategy auto|single|chunked
@@ -407,6 +417,19 @@ if the move fails, the line says the batch still at `--out` is not this
 run's. A complete extraction writes its batch over an earlier one, as
 before, and a folder at `--out` is refused in one line before any engine
 is reached.
+
+Amended by #650 (2026-10-24): the single-call extractors raise
+`ExtractionFailed` too, which now lives in `pipeline/extract.py` (and
+`chunking.py` re-exports it), for the outcomes they expect. With
+`--strategy single`: an answer with no claim JSON, one that holds no
+claims, one whose every claim fails validation (the line gives the
+count and the path of `<out>.rejected.json`), and a call the engine
+gave no answer to (`OutputLimitReached`, `ClassifierRefused`). With
+`--engine file`: a claims file that is missing or unreadable, not JSON,
+not a JSON object, or fails the claim schema or manifest validation.
+`ingest extract` ends on one with its reason on one line and
+EXIT_FAILED, for either extractor. Any other exception, a bare
+`ValueError` included, is a bug and keeps its traceback.
 
 `auto` (the default) picks chunked when the transcription exceeds a
 conservative threshold (default 4,000 chars). Density — the real

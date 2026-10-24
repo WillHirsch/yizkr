@@ -408,7 +408,7 @@ def _read_plan(compose: Compose, runner: Callable[..., str]) -> Plan:
     )
     try:
         declared = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):
         declared = None
     if not isinstance(declared, dict) or not declared.get("name"):
         raise ResetRefused(
@@ -863,7 +863,7 @@ class InstanceReset:
                 raise ValueError("it holds no record")
         except FileNotFoundError:
             return
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, RecursionError) as exc:
             raise ResetRefused(
                 f"{path}, where the last reset recorded where the stack runs "
                 f"from, cannot be read ({exc}). Remove it by hand once you "

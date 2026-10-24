@@ -580,6 +580,22 @@ class TestRefusals:
             run.stage("write")
         assert run.wiki.writes == before
 
+    def test_a_state_nested_too_deep_reads_as_unknown(self, run):
+        """A write-phase state that cannot be decoded is no state, so the
+        write is refused as on an instance no run has reset (#615)."""
+        run.past_the_barrier(until="clustering")
+        run.stage("reset")
+        scratchwrite.state_path(CONFIG).write_text("[" * 100_000)
+        assert scratchwrite.read_state(CONFIG) is None
+        before = run.wiki.writes
+        with pytest.raises(ScratchWriteRefused, match="no scratch run has"):
+            run.stage("register")
+        assert run.wiki.writes == before
+
+    def test_a_stage_record_nested_too_deep_reads_as_none(self, tmp_path):
+        (tmp_path / scratchwrite.RECORD).write_text("[" * 100_000)
+        assert scratchwrite.read_record(tmp_path) == {}
+
     def test_a_write_to_the_instance_since_the_reset_is_refused(self, run):
         run.past_the_barrier(until="reset")
         # a live test, say, writes to the instance
