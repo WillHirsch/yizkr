@@ -2,7 +2,6 @@
 
 import json
 import re
-import urllib.parse
 
 import pytest
 
@@ -14,6 +13,7 @@ from yizkr.claims import (
     PlaceStructure,
     QidRef,
 )
+from yizkr.core import sparql
 from yizkr.pipeline.reconcile import (
     GRAPH_ADJUDICATION_PROMPT,
     PairFacts,
@@ -107,6 +107,29 @@ def spouse_claim() -> dict:
         },
         "source": {"artifact": SCAN.model_dump()},
     }
+
+
+def post_only(rows: list[dict], queries: list[str]):
+    """A stand-in for the query service that answers a POST with `rows`,
+    records the query its form body carries, and refuses a GET, whose
+    request line a roster query outgrows (ADR-0033)."""
+    import io
+    import urllib.error
+
+    def urlopen(request, timeout):
+        if not isinstance(request, urllib.request.Request) or (
+            request.get_method() != "POST"
+        ):
+            raise urllib.error.HTTPError(
+                str(request), 431, "Request Header Fields Too Large", {}, None
+            )
+        assert timeout == 120
+        (query,) = urllib.parse.parse_qs(request.data.decode())["query"]
+        queries.append(query)
+        body = json.dumps({"results": {"bindings": rows}})
+        return io.BytesIO(body.encode())
+
+    return urlopen
 
 
 class ScriptedLlm:
@@ -1447,6 +1470,7 @@ class TestRosterKinds:
                         "married_name",
                         "nickname",
                         "official_name",
+                        "referred_to_as",
                     ),
                     1,
                 )
@@ -1463,7 +1487,6 @@ class TestRosterKinds:
             return properties, items
 
     def test_kinds_map_by_qid(self, monkeypatch):
-        import io
 
         from yizkr.core.config import Config
         from yizkr.pipeline import reconcile
@@ -1484,12 +1507,9 @@ class TestRosterKinds:
         ]
         queries = []
 
-        def urlopen(url, timeout):
-            queries.append(urllib.parse.unquote_plus(url))
-            body = json.dumps({"results": {"bindings": rows}})
-            return io.BytesIO(body.encode())
-
-        monkeypatch.setattr(reconcile.urllib.request, "urlopen", urlopen)
+        monkeypatch.setattr(
+            sparql.urllib.request, "urlopen", post_only(rows, queries)
+        )
         # a graph check run before the roster where one is, read here as
         # finding nothing
         monkeypatch.setattr(
@@ -1579,19 +1599,15 @@ class TestDatesAtTheirPrecision:
 
     @staticmethod
     def fetch(monkeypatch, rows):
-        import io
 
         from yizkr.core.config import Config
         from yizkr.pipeline import reconcile
 
         queries = []
 
-        def urlopen(url, timeout):
-            queries.append(urllib.parse.unquote_plus(url))
-            body = json.dumps({"results": {"bindings": rows}})
-            return io.BytesIO(body.encode())
-
-        monkeypatch.setattr(reconcile.urllib.request, "urlopen", urlopen)
+        monkeypatch.setattr(
+            sparql.urllib.request, "urlopen", post_only(rows, queries)
+        )
         monkeypatch.setattr(
             reconcile, "unsupported_in_graph", lambda *args, **kwargs: None
         )
@@ -1706,3 +1722,279 @@ class TestDatesAtTheirPrecision:
             assert f'CONCAT(STR(?{name}Time), "|",' in query
         assert "(SAMPLE(?birthDate) AS ?birth)" in query
         assert "(SAMPLE(?birthEventDate) AS ?eventBirth)" in query
+
+
+class TestAppellationAliases:
+    """#523: a graph item's alias that one of its `referred_to_as`
+    statements gives as an appellation (ADR-0018) keys nothing in
+    reconcile's blocking; its name forms still do."""
+
+    @staticmethod
+    def grandmothers(**extra) -> list[RosterEntity]:
+        return [
+            RosterEntity(
+                qid="Q40",
+                label="Hildegard Löbig",
+                aliases=["Oma", "Hilde"],
+                appellations=["Oma"],
+                kind="human",
+                **extra,
+            ),
+            RosterEntity(
+                qid="Q41",
+                label="Sipkje Faxridge",
+                aliases=["oma"],
+                appellations=["Oma"],
+                kind="human",
+            ),
+        ]
+
+    def test_two_grandmothers_aliased_oma_are_no_candidate_pair(self):
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        assert propose_graph_pairs(llm, self.grandmothers()) == []
+        assert llm.prompts == []
+
+    def test_the_alias_keys_without_its_referred_to_as_statement(self):
+        """The rule reads the statements, never the alias's wording: an
+        "Oma" alias no statement gives as an appellation still keys."""
+        roster = [
+            entity.model_copy(update={"appellations": []})
+            for entity in self.grandmothers()
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        propose_graph_pairs(llm, roster)
+        assert len(llm.prompts) == 1
+
+    def test_one_items_appellation_never_hides_anothers_name(self):
+        """Each item's appellations leave out its own aliases only."""
+        roster = self.grandmothers()
+        roster[1] = roster[1].model_copy(update={"appellations": []})
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        propose_graph_pairs(llm, roster)
+        assert len(llm.prompts) == 0
+        roster[0] = roster[0].model_copy(update={"appellations": []})
+        propose_graph_pairs(llm, roster)
+        assert len(llm.prompts) == 1
+
+    def test_a_shared_real_name_still_pairs(self):
+        roster = [
+            *self.grandmothers(),
+            RosterEntity(
+                qid="Q42",
+                label="Hildegard Laudler",
+                aliases=["Oma", "Hildegard Löbig"],
+                appellations=["Oma"],
+                kind="human",
+            ),
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        propose_graph_pairs(llm, roster)
+        (prompt,) = llm.prompts
+        assert "Q40" in prompt and "Q42" in prompt
+        assert "Q41" not in prompt
+
+    @pytest.mark.parametrize(
+        ("statement", "value"),
+        [
+            ("nicknames", "Hilde"),
+            ("birth_names", "Hildegard Laudler"),
+            ("official_names", "Hilde Löbig"),
+        ],
+    )
+    def test_a_typed_name_statement_keys_though_it_is_an_appellation(
+        self, statement, value
+    ):
+        """A typed name statement keys whatever its value: a nickname, a
+        birth name or an official name that is also an appellation still
+        meets an alias of the same form."""
+        roster = [
+            RosterEntity(
+                qid="Q40",
+                label="Hildegard Löbig",
+                aliases=[value],
+                appellations=[value],
+                kind="human",
+                **{statement: [value]},
+            ),
+            RosterEntity(
+                qid="Q43", label="H. Löbig", aliases=[value], kind="human"
+            ),
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        propose_graph_pairs(llm, roster)
+        assert len(llm.prompts) == 1
+
+    def test_a_label_that_is_an_appellation_keys_nothing(self):
+        """A person the document never names is labelled by its own words
+        for them ("Oma"), which the writer leaves out of the aliases: the
+        label is filtered as an alias is."""
+        never_named = [
+            RosterEntity(
+                qid=qid, label="Oma", appellations=["Oma"], kind="human"
+            )
+            for qid in ("Q44", "Q45")
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        assert propose_graph_pairs(llm, never_named) == []
+        assert llm.prompts == []
+        found = [
+            EntityRecord(
+                id="e1", label="Hildegard Löbig", aliases=["Oma"], kind="human"
+            )
+        ]
+        assert block_candidates(found, never_named) == {}
+
+    def test_a_name_holding_an_appellation_as_a_word_still_keys(self):
+        """Only an alias equal to an appellation is left out: "Peppi Löbig"
+        keys though "Peppi" is one."""
+        roster = [
+            RosterEntity(
+                qid="Q46",
+                label="Ida Löbig",
+                aliases=["Peppi", "Peppi Löbig"],
+                appellations=["Peppi"],
+                kind="human",
+            ),
+            RosterEntity(
+                qid="Q47",
+                label="Ida Sörne",
+                aliases=["Peppi Löbig"],
+                kind="human",
+            ),
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        propose_graph_pairs(llm, roster)
+        assert len(llm.prompts) == 1
+
+    def test_an_alias_matches_its_appellation_as_names_compare(self):
+        """An alias and its appellation are compared by name_form_key:
+        doubled inner whitespace is collapsed, as well as case folded."""
+        roster = [
+            RosterEntity(
+                qid="Q48",
+                label="Rahel Löbig",
+                aliases=["Tante  Rahel"],
+                appellations=["Tante Rahel"],
+                kind="human",
+            ),
+            RosterEntity(
+                qid="Q49",
+                label="R. Löbig",
+                aliases=["Tante Rahel"],
+                kind="human",
+            ),
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        assert propose_graph_pairs(llm, roster) == []
+        assert llm.prompts == []
+
+    @pytest.mark.parametrize("kind", ["place", "organization", "family"])
+    def test_a_kind_never_a_person_keys_every_name(self, kind):
+        """Appellations are a person's only: a place's alias that its own
+        `referred_to_as` statement also gives still keys."""
+        roster = [
+            RosterEntity(
+                qid="Q90",
+                label="Snylsjum",
+                aliases=["Snylsjum village"],
+                appellations=["Snylsjum village"],
+                kind=kind,
+            ),
+            RosterEntity(qid="Q91", label="Snylsjum village", kind=kind),
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        propose_graph_pairs(llm, roster)
+        assert len(llm.prompts) == 1
+
+    def test_a_document_entity_never_meets_an_appellation_alias(self):
+        found = [EntityRecord(id="e1", label="Oma", kind="human")]
+        assert block_candidates(found, self.grandmothers()) == {}
+        graph = [
+            entity.model_copy(update={"appellations": []})
+            for entity in self.grandmothers()
+        ]
+        assert [c.qid for c in block_candidates(found, graph)["e1"]] == [
+            "Q40",
+            "Q41",
+        ]
+
+    def test_fetch_roster_reads_each_referred_to_as_value(self, monkeypatch):
+
+        from yizkr.core.config import Config
+        from yizkr.pipeline import reconcile
+
+        rows = [
+            {
+                "item": {"value": "http://wikibase.example/entity/Q40"},
+                "itemLabel": {"value": "Hildegard Löbig"},
+                "kind": {"value": "http://wikibase.example/entity/Q5"},
+                "aliases": {"value": "Oma|Omama|Hilde"},
+                "appellations": {"value": "Oma|Omama"},
+            }
+        ]
+        queries = []
+
+        monkeypatch.setattr(
+            sparql.urllib.request, "urlopen", post_only(rows, queries)
+        )
+        monkeypatch.setattr(
+            reconcile, "unsupported_in_graph", lambda *a, **k: None
+        )
+        config = Config(
+            wikibase_url="http://wikibase.example",
+            concept_uri="http://wikibase.example",
+            wdqs_url="http://query.example",
+            sparql_url="http://query.example/sparql",
+            admin_name="x",
+            admin_pass="x",
+            env_file=None,
+        )
+        (item,) = reconcile.fetch_roster(TestRosterKinds.Vocabulary(), config)
+        assert item.appellations == ["Oma", "Omama"]
+        assert item.aliases == ["Oma", "Omama", "Hilde"]
+        (query,) = queries
+        flat = " ".join(query.split())
+        # P15 is referred_to_as, as TestRosterKinds.Vocabulary numbers it:
+        # each statement's value at any rank but deprecated, not the
+        # truthy one alone
+        assert "?item p:P15 ?appellationStatement ." in flat
+        assert "?appellationStatement ps:P15 ?appellation ." in flat
+        assert (
+            "FILTER NOT EXISTS { ?appellationStatement wikibase:rank"
+            " wikibase:DeprecatedRank . }"
+        ) in flat
+        # grouped per item in a sub-select of their own
+        assert (
+            'SELECT ?item (GROUP_CONCAT(DISTINCT ?appellation; separator="|")'
+            " AS ?itemAppellations)"
+        ) in flat
+        assert "(SAMPLE(?itemAppellations) AS ?appellations)" in flat
+
+
+def test_fetch_roster_sends_its_query_in_a_post_body(monkeypatch):
+    """The roster query outgrows the request line a GET may have (the
+    live query service answered 431, #523): fetch_roster sends it in a
+    POST body, with its 120 s timeout. The stand-in refuses a GET."""
+    from yizkr.core.config import Config
+    from yizkr.pipeline import reconcile
+
+    queries: list[str] = []
+    monkeypatch.setattr(
+        sparql.urllib.request, "urlopen", post_only([], queries)
+    )
+    monkeypatch.setattr(
+        reconcile, "unsupported_in_graph", lambda *a, **k: None
+    )
+    config = Config(
+        wikibase_url="http://wikibase.example",
+        concept_uri="http://wikibase.example",
+        wdqs_url="http://query.example",
+        sparql_url="http://query.example/sparql",
+        admin_name="x",
+        admin_pass="x",
+        env_file=None,
+    )
+    assert reconcile.fetch_roster(TestRosterKinds.Vocabulary(), config) == []
+    (query,) = queries
+    assert query.startswith("PREFIX wd: <http://wikibase.example/entity/>")
+    assert "GROUP BY ?item ?itemLabel ?kind ?kindLabel" in query

@@ -550,9 +550,11 @@ whole transcription and produce a manifest of EVERY distinct entity it
 mentions — people, places, organizations, families, events (births,
 deaths, weddings, divorces, migrations, military service), marriages and
 partnerships, and occupations or professions it names for people (kind
-occupation_class, label in the source's exact wording). The document may
-be in any language: read it by its own conventions, never by a rule
-about a language.
+occupation_class, label in the source's exact wording). Prefer
+completeness: an entity mentioned once still gets an entry, and every
+place the document names, even once, gets a `place` entity. The
+document may be in any language: read it by its own conventions, never
+by a rule about a language.
 
 The relation decides the kind (ADR-0031). An entity's kind is the one
 the relations this source states of it call for:
@@ -605,7 +607,10 @@ Also:
 - a marriage is an entity, not an event (ADR-0036): a `marriage` for a
   couple the source says married, a `partnership` for a couple it
   presents as a couple without saying they married (two people named
-  only as a child's parents are not thereby a couple). Its wedding (a
+  only as a child's parents are not thereby a couple). A spouse entry in
+  a list (a descendant list, a family register) with no marriage stated
+  presents a couple, given a `partnership`; a stated marriage stays a
+  `marriage`. Its wedding (a
   `wedding`, or a `civil_wedding` or `religious_wedding` where the source
   states the kind) and a `divorce` or `annulment` that ended it are
   events of their own;
@@ -703,8 +708,12 @@ as an empty string ("").
 - A person: {{"kind": "human", "status": "<status>",
   "given": [{{"written": "...", "standard": "...", "initial": false}}],
   "surnames": [{{"written": "...", "type": "<birth, married or other>"}}],
-  "patronymics": [...], "nicknames": [...], "titles": [...],
-  "suffixes": [...], "unsplit": [...]}}.
+  "patronymics": ["..."], "nicknames": ["..."], "suffixes": ["..."],
+  "unsplit": ["..."], "titles": ["..."]}}.
+  * Titles are honorifics and ranks (Mrs, Dr., Frau, Fräulein, Mefrou,
+    Rabbi), never a kinship word. An office or an occupation beside a
+    name ("Standesbeamter", "Hutmachermeister") is no name part: it is a
+    claim at extraction.
   * status says what the label is: `name` where it names the person;
     `role`, a role or form-field label (INFORMANT) or an office the
     source names alone ("the consul"); `kinship`, a literal kinship term
@@ -749,12 +758,10 @@ as an empty string ("").
     neither a name part nor a `titles` entry. "Tante Rahel" gives the
     given name Rahel and nothing for "Tante".
   * A patronymic, a name formed from the father's given name, is a part
-    of its own, never a surname. Titles are honorifics and ranks (Mrs,
-    Dr., Frau, Fräulein, Mefrou, Rabbi), never a kinship word; titles and
-    suffixes (generational and status words, such as "Wwe.") never name
-    anyone. A word that states a fact (an occupation beside a name, a
-    widow's marker, "the late") is no name part: it becomes a claim at
-    extraction.
+    of its own, never a surname. Titles and suffixes (generational and
+    status words, such as "Wwe.") never name anyone. A word that states a
+    fact (a widow's marker, "the late") is no name part: it becomes a
+    claim at extraction.
 - A place: {{"kind": "place",
   "status": "<toponym, deictic, generic or adjective>",
   "names": [{{"written": "...", "toponym": "...", "head": "..."}}],
@@ -792,8 +799,8 @@ as an empty string ("").
     "Fläckfeld, Kreis Mockburg, Hesse" is Fläckfeld within "Kreis
     Mockburg" and "Hesse", Kreis Mockburg within "Hesse", and Hesse, three
     place entities, each with its own record.
-- An organization: {{"kind": "organization", "names": [...],
-  "kinds": [...], "places": [...]}}: its proper names, the words naming
+- An organization: {{"kind": "organization", "names": ["..."],
+  "kinds": ["..."], "places": ["..."]}}: its proper names, the words naming
   its kind of institution, and the places its names carry. "Hutmacherei
   zum Blauen Hut" has the name "zum Blauen Hut" and the kind Hutmacherei;
   "It tichelwurk fan Snylsjum" has no proper name, the kind tichelwurk
@@ -801,7 +808,7 @@ as an empty string ("").
   kind Standesamt and the place Flörburg. A generic word any
   organization carries (a word for a firm, a legal form) is neither a
   name nor a kind.
-- A family: {{"kind": "family", "surnames": [...]}}: "the Löbigs" has the
+- A family: {{"kind": "family", "surnames": ["..."]}}: "the Löbigs" has the
   surname Löbig.
 Other kinds take no structure.
 
@@ -849,7 +856,6 @@ Rules:
   letter's enclosed certificate of Rudolf's death is. A named aircraft
   is no `vessel` either: it is `unclassified_entity` with the type_hint
   "aircraft".
-- Prefer completeness: an entity mentioned once still gets an entry.
 - extract=false for entities that appear ONLY in non-assertive context:
   travel or event logistics (schedules, bookings, contact lists), people
   taking part in present-day travel or events, boilerplate.
@@ -1380,8 +1386,9 @@ class ChunkedClaimExtractor:
         records set aside (one record can give several reasons, and one
         whose only reasons are name parts dropped for an empty string or
         entries read as their text stands). A place's container that
-        cannot stand is dropped alone, its record standing
-        (claims.drop_containers): its evidence is looked for in `text`,
+        cannot stand, or that has the wrong shape (`malformed`), is
+        dropped alone, its record standing (claims.drop_containers): its
+        evidence is looked for in `text`,
         the transcription, when given, and each container checked is kept
         for the local audit."""
         _, item_keys = load_vocabulary()
@@ -1403,9 +1410,12 @@ class ChunkedClaimExtractor:
                     data = dict(raw)
                     data.pop("qid", None)  # resolution state, never model-set
                     data, reasons = _set_aside_note(data)
-                    data, more = set_aside_structure(data)
+                    malformed: list[dict] = []
+                    data, more = set_aside_structure(data, malformed)
                     set_aside_records += bool(more) and "structure" not in data
-                    data, checked = drop_containers(data, transcript)
+                    data, checked = drop_containers(
+                        data, transcript, malformed
+                    )
                     containers += checked
                     for reason in reasons + more:
                         category = reason.split(":", 1)[0]
@@ -2095,13 +2105,12 @@ class ChunkedClaimExtractor:
         the records given, by status, and the unsplit name forms they
         hold; the mentions recordless; the records set aside, and the
         reasons they and the notes were set aside by, by category; the
-        place containers checked, those dropped alone from records that
-        stand, by reason, and those kept whose evidence is their name
-        alone (claims.drop_containers); the
-        labels the appellation label rule replaced with a name
-        (names.appellation_label), the `name` claims dropped for
-        restating one, and the record name parts that are an
-        appellation; and the notes by category. A mention
+        place containers checked, and those dropped alone from records
+        that stand, by reason, `malformed` among them
+        (claims.drop_containers); the labels the appellation label rule
+        replaced with a name (names.appellation_label), the `name`
+        claims dropped for restating one, and the record name parts that
+        are an appellation; and the notes by category. A mention
         of a kind that takes a record but has none is recordless: its
         record was set aside, or never given. Nothing in it quotes a label."""
         subject_ids = {
@@ -2153,12 +2162,6 @@ class ChunkedClaimExtractor:
                             if found["reason"] is not None
                         ).items()
                     )
-                ),
-                # the containers kept whose evidence is their name alone,
-                # which names no place they are said to hold
-                "containers_name_only": sum(
-                    found["reason"] is None and found["name_only"]
-                    for found in self._containers
                 ),
                 "appellation_labels": self._appellations["labels"],
                 "appellation_label_names": self._appellations["label_names"],

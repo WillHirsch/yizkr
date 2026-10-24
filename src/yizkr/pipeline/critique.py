@@ -8,6 +8,9 @@ never rewrites: findings are surfaced to the human curator at the
 existing review gate. It is the reconciliation adjudicator's pattern
 applied to extraction, and it is what catches the "MOTHER as a name" and
 "hat shop as a place" errors without a human eyeballing raw output.
+It reads the batch beside the document's transcription, each line
+numbered, and every citation (a claim's excerpt, a container's evidence)
+where it stands, and judges each by one support test (ADR-0003, ADR-0023).
 
 Each finding is a record that names what it concerns by id: the entity
 (a manifest id), and optionally one claim (its subject id, property key
@@ -27,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -44,6 +48,7 @@ from yizkr.claims import (
     QuantityValue,
     load_vocabulary,
 )
+from yizkr.core.verbatim import Transcript, words
 from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.llm import (
     CUT_OFF_AT_LIMIT,
@@ -125,29 +130,26 @@ CATEGORIES: dict[str, str] = {
         "year a century before the parents married"
     ),
     "unsupported_containment": (
-        "a place's `part_of` claim (its container, or its country) that its "
-        "excerpt does not state, neither in the place's mention, nor in the "
-        "fields a form gives that place, nor as a link of a chain of "
-        "containers: inferred from what is known of the place, or carried "
-        "over from another place's container "
-        "(Fläckfeld put in Kreis Peiltal on an excerpt that reads only "
-        '"Fläckfeld"); containment the source does not state is never '
-        "written (ADR-0038): suggest drop. Also a time a `part_of` claim "
-        "carries (a point in time, a start or end time, a bound of one, or "
-        "circa) that its excerpt does not state for the containment, such "
-        "as the document's own date or the date of an event at the place: "
-        "suggest drop the qualifier"
+        "a place's `part_of` claim (its container, or its country) whose "
+        "citation fails the support test, its times included, or that "
+        "cites no excerpt, since then no passage conveys it: containment "
+        "the source does not convey is never written (ADR-0038); name the "
+        "claim"
     ),
     "evidence_does_not_state": (
-        "a place's `within` entry whose evidence does not state that the "
-        "place is within the container: one that names both places without "
-        "saying one is in the other (a list of towns), or one that gives "
-        "only the container's name, outside a field of a form about the "
-        "place: name the entry by its container as listed (`container`), "
-        "suggest drop; a form's field line that gives the container of the "
-        "place the form is about states it"
+        "a place's `within` entry whose evidence fails the support test: "
+        "name the entry by its container as listed (`container`)"
+    ),
+    "excerpt_does_not_state": (
+        "any other claim whose excerpt fails the support test, on its value "
+        "or on its times: name the claim. Such a claim that cites no "
+        "excerpt is not judged"
     ),
 }
+
+
+# the categories whose finding names the claim it concerns
+CLAIM_CATEGORIES = ("unsupported_containment", "excerpt_does_not_state")
 
 
 class ClaimRef(BaseModel):
@@ -224,6 +226,41 @@ courtesy name) among a person's aliases, or recorded as a
 `referred_to_as` claim, and a kinship term as `relative` +
 `kinship_type`, are right — do not flag them.
 
+The support test. Every citation is a passage of the source: a claim's
+excerpt, or the evidence of a container in a place's mention record,
+listed below with the lines (and the page) where it stands in the
+numbered transcription. Read where it stands in the source, does the
+passage convey the fact the claim or container states, its value and any
+time it carries? The passage itself must carry what the statement adds,
+such as the container's name or the value; its context says how to read
+it: which document or form, which field, whose entry. So a form's field
+line conveys the containment of the place the form gives it for, by its
+place in the form. It passes: on the 1941 death certificate's line
+"Место смерти: город, селение д. Кошновка; район Калдовский; область,
+край Чадская; республика РСФСР.", the evidence "район Калдовский" stands
+in the district slot of a place of death whose village is Koshnovka, and
+conveys that Koshnovka is in Kaldovsky District; so does "District:
+Kaldovsky District" in the district field of a form, one field a line,
+whose village field is Koshnovka. It fails: a passage that only names
+both places (a list of towns); a bare "Fläckfeld" beside "Flörburg, Kreis
+Peiltal", where "Kreis Peiltal" is about Flörburg, so Fläckfeld put in
+Kreis Peiltal on an excerpt that reads only "Fläckfeld" fails. A
+citation passes when any one of its occurrences conveys the fact; for a
+row that names a page, the occurrence must be on that page. You may
+read any occurrence in the numbered transcription, not only those
+listed. A citation not in the transcription is judged on its words
+alone.
+
+When a citation fails, the suggestion's note names, by its lines,
+another passage of the source that conveys the fact ("re-cite line 3"),
+and the claim or container stays; it says "drop" only when the source
+conveys the fact nowhere, and "drop the qualifier" when only a time
+fails. In the 1909 burial register, Eugen's place of death Flörburg cited
+by the heading "Friedhof Flörburg, Beerdigungsbuch 1909." (line 1) is
+conveyed by line 3, "Gestorben: 16. März 1909 in Flörburg.": re-cite
+line 3. Fläckfeld put in Kreis Peiltal on an excerpt that reads only
+"Fläckfeld": drop.
+
 Each finding doubts one part of a statement (its axis):
 - subject: which entity it is, or its kind;
 - predicate: the property a claim uses;
@@ -234,32 +271,29 @@ Kinds (manifest item keys): {kinds}
 
 Properties (manifest property keys): {properties}
 
+The source's transcription, each line numbered:
+{transcription_block}
+
 Entities (id | kind | label | aliases); a person's kind is followed by the
 status of its mention record: `name` when the document names the person,
 else what its label is instead (role, kinship, courtesy, placeholder or
 description):
 {entities_block}
 
-Claims (subject | property | value):
+Claims (subject | property | value | times | citation): the times a claim
+carries ("-" for none), and its citation, the excerpt it cites with where
+it occurs: a row that names a page lists only the occurrences on that
+page, and otherwise every occurrence is listed, nearest the subject's
+mentions first; at most three are shown ("and N more" for the rest);
+"not on page N" for an excerpt found only on other pages; "not in the
+transcription" for one found nowhere; "clipped" for one cut short
+(ending in "…"), located by its words before the "…"; "-" for none:
 {claims_block}
 
-Each `part_of` claim above, with the time it carries and the excerpt of
-the source it cites:
-{containment_block}
-Check each against its excerpt: a containment the excerpt does not state
-(in the place's mention, in the fields a form gives that place, or as a
-link of a chain of containers) is a concern (unsupported_containment), and
-so is a time the excerpt does not state for the containment.
-
 Each container a place's mention record puts it in, nearest first, with
-the excerpt of the source it gives as evidence:
+the evidence it gives and where it occurs, nearest the place's mentions
+first:
 {within_block}
-Check every one against its evidence, one whose evidence is the
-container's name alone included: evidence that does not state that the
-place is within the container is a concern (evidence_does_not_state),
-whether it names both places without saying one is in the other (a list
-of towns) or gives only the container's name, outside a field of a form
-about the place.
 
 Output NDJSON, one finding per line, no prose, no code fences:
 {{"entity": "<the entity id the finding concerns>",
@@ -272,12 +306,13 @@ listed>", "value": "<value as listed>"}} or null,
 "issue": "<one line>",
 "suggestion": {{"kind": "<kind key>" or null, "property": "<property key>" \
 or null, "note": "<one line, or 'drop'>"}}}}
-Name a claim when the finding concerns one: its entity is then the claim's
-subject or the entity its value names. Name an alias only when the finding
-concerns one of the entity's aliases, and a container only when it
-concerns one of the place's containers. Emit a line ONLY for a genuine
-concern; emit NONE if the extraction looks sound. After the last finding,
-end with exactly one final line:
+Name a claim when the finding concerns one, by its first three columns
+(subject, property, value) exactly as listed: its entity is then the
+claim's subject or the entity its value names. Name an alias only when
+the finding concerns one of the entity's aliases, and a container only
+when it concerns one of the place's containers. Emit a line ONLY for a
+genuine concern; emit NONE if the extraction looks sound. After the last
+finding, end with exactly one final line:
 {{"done": true}}
 """
 
@@ -377,13 +412,9 @@ def listings(batch: ClaimBatch) -> list[tuple[str, str, str]]:
     return found
 
 
-def _claims_block(batch: ClaimBatch) -> str:
-    return "\n".join(" | ".join(listing) for listing in listings(batch))
-
-
-# the qualifiers that date a containment, or say how its source dates it
-# (ADR-0038 §2): the containment block shows them, so the critic can check
-# each against the excerpt
+# the qualifiers that date a statement, or say how its source dates it
+# (ADR-0038 §2): a claim's row lists them, so the critic can check each
+# against the citation
 CONTAINMENT_TIMES = (
     "point_in_time",
     "start_time",
@@ -395,61 +426,186 @@ CONTAINMENT_TIMES = (
     "sourcing_circumstances",
 )
 
+# the most occurrences of a citation a row shows
+OCCURRENCES = 3
 
-def _containment_block(batch: ClaimBatch) -> str:
-    """Each `part_of` claim as the claims block lists it, with the time it
-    carries (CONTAINMENT_TIMES, after a comma, where it carries one, so the
-    claim's listing stays whole) and the excerpt its source cites ("-"
-    for none), so the critic can check that the source states the
-    containment and its time (ADR-0038 §2). Each
-    line opens with a dash and lists the claim without the claims block's
-    separators, so it is never taken for a claim or an entity row; the
-    excerpt is quoted as a JSON string, with the line breaks JSON leaves
-    raw escaped (_LINE_BREAKS), so it stays on its line."""
-    lines = []
-    for claim, (subject, prop, value) in zip(
-        batch.claims, listings(batch), strict=True
-    ):
-        if prop != "part_of":
-            continue
-        times = "; ".join(
-            f"{qualifier.property} {describe_value(qualifier.value)}"
-            for qualifier in claim.qualifiers
-            if qualifier.property in CONTAINMENT_TIMES
+# the mark the extraction ends an excerpt it clipped with
+# (extract.py's excerpt clipping)
+CLIPPED = "…"
+
+
+def _quoted(text: str) -> str:
+    """A citation's text quoted as a JSON string, with the line breaks
+    JSON leaves raw escaped (_LINE_BREAKS), so it stays on its row."""
+    return json.dumps(text, ensure_ascii=False).translate(_LINE_BREAKS)
+
+
+def _nearest_first(
+    found: list[tuple[int, int]], near: Iterable[int]
+) -> list[tuple[int, int]]:
+    """Occurrences (first and last line) ordered by how near they lie to
+    the nearest of the lines `near`, those as near in document order;
+    in document order when `near` is empty."""
+    near = list(near)
+    if not near:
+        return found
+
+    def distance(span: tuple[int, int]) -> int:
+        first, last = span
+        return min(
+            0
+            if first <= line <= last
+            else min(abs(first - line), abs(last - line))
+            for line in near
         )
-        if times:
-            value = f"{value}, carrying {times}"
+
+    return sorted(found, key=distance)
+
+
+def _lines(found: list[tuple[int, int]]) -> str:
+    """Occurrences as a row lists them: `line 4` for one on one line,
+    else `lines` and each occurrence's line or range (`4-5`), split by
+    `; `, at most OCCURRENCES of them and `and N more`."""
+    shown = [
+        str(first) if first == last else f"{first}-{last}"
+        for first, last in found[:OCCURRENCES]
+    ]
+    one = len(found) == 1 and found[0][0] == found[0][1]
+    text = f"{'line' if one else 'lines'} {'; '.join(shown)}"
+    if len(found) > OCCURRENCES:
+        text += f" and {len(found) - OCCURRENCES} more"
+    return text
+
+
+def _cited_page(page_number: str | None, transcription: Any) -> int | None:
+    """The physical page a claim cites, when its `page_number` names one
+    by its digits alone and the transcription has that page; else None,
+    and the claim is read wherever its excerpt occurs. An image excerpt's
+    claims cite the page of the container it was found on, which its own
+    transcription does not number so."""
+    if transcription is None:
+        return None
+    match = re.fullmatch(r"0*([0-9]{1,9})", (page_number or "").strip())
+    if match is None:
+        return None
+    page = int(match.group(1))
+    held = {given.page for given in transcription.pages or ()}
+    return page if page in held else None
+
+
+class _Located:
+    """A document's citations located in its transcription (ADR-0003):
+    each at every place it occurs (core.verbatim.Transcript.spans), with
+    the page each lies on."""
+
+    def __init__(self, transcription: Any) -> None:
+        self.transcription = transcription
+        self.transcript = Transcript(
+            transcription.text if transcription is not None else ""
+        )
+        self.pages = (
+            (transcription.pages or ()) if transcription is not None else ()
+        )
+
+    def citation(
+        self, text: str | None, near: Iterable[int], page: int | None = None
+    ) -> str:
+        """A citation as a row shows it: where it occurs, then its text
+        quoted. Its occurrences are those on `page` alone, when one is
+        cited and the excerpt occurs there (`not on page N` and the others
+        when it does not), else all of them, nearest `near` first. An
+        excerpt the extraction clipped (CLIPPED) is located by its words
+        before the mark when it does not occur whole; one that occurs
+        nowhere is `not in the transcription`; no excerpt is `-`."""
+        if not text or not words(text):
+            return "-"
+        quoted = _quoted(text)
+        found = self.transcript.spans(text)
+        mark = ""
+        if not found and text.endswith(CLIPPED):
+            found = self.transcript.spans(text[: -len(CLIPPED)])
+            mark = ", clipped" if found else ""
+        if not found:
+            return f"not in the transcription: {quoted}"
+        if page is None:
+            return f"{_lines(_nearest_first(found, near))}{mark}: {quoted}"
+        on = [
+            span
+            for span in found
+            if getattr(self.transcript.page(span[0], self.pages), "page", None)
+            == page
+        ]
+        if not on:
+            where = _lines(_nearest_first(found, near))
+            return f"not on page {page} ({where}){mark}: {quoted}"
+        return (
+            f"page {page}, {_lines(_nearest_first(on, near))}{mark}: {quoted}"
+        )
+
+
+def _times(claim: Claim) -> str:
+    """The time qualifiers a claim carries (CONTAINMENT_TIMES), split by
+    `; `, or "-" for none."""
+    times = "; ".join(
+        f"{qualifier.property} {describe_value(qualifier.value)}"
+        for qualifier in claim.qualifiers
+        if qualifier.property in CONTAINMENT_TIMES
+    )
+    if not times:
+        return "-"
+    return (
+        times.replace("\\", "\\\\")
+        .replace("\n", "\\n")
+        .translate(_LINE_BREAKS)
+    )
+
+
+def _claims_block(batch: ClaimBatch, located: _Located) -> str:
+    """One row per claim: its listing (`listings`), the times it carries
+    (`_times`) and its citation where it stands (`_Located.citation`),
+    nearest the subject's mention lines first."""
+    lines_of = {entity.id: entity.mention_lines for entity in batch.entities}
+    rows = []
+    for claim, listing in zip(batch.claims, listings(batch), strict=True):
         excerpt = claim.source.transcription_excerpt
-        quoted = (
-            json.dumps(excerpt.text, ensure_ascii=False).translate(
-                _LINE_BREAKS
-            )
-            if excerpt
-            else "-"
+        citation = located.citation(
+            excerpt.text if excerpt is not None else None,
+            lines_of.get(getattr(claim.subject, "local_id", None), ()),
+            _cited_page(claim.source.page_number, located.transcription),
         )
-        lines.append(f"- {subject} part_of {value}: {quoted}")
-    return "\n".join(lines)
+        rows.append(
+            " | ".join((*listing, f"times: {_times(claim)}", citation))
+        )
+    return "\n".join(rows)
 
 
-def _within_block(batch: ClaimBatch) -> str:
+def _within_block(batch: ClaimBatch, located: _Located) -> str:
     """Each container of each place's mention record, nearest first, with
-    its evidence quoted as the containment block quotes an excerpt ("-"
-    for none), so the critic can check that the evidence states the
-    containment (ADR-0035 §5); each line opens with a dash."""
+    its evidence where it stands (`_Located.citation`), nearest the
+    place's mention lines first, so the critic can check that the
+    evidence conveys the containment (ADR-0003, ADR-0035 §5); each row
+    opens with a dash, so it is never taken for a claim or an entity
+    row."""
     lines = []
     for entity in batch.entities:
         if not isinstance(entity.structure, PlaceStructure):
             continue
         for container in entity.structure.within:
-            quoted = (
-                json.dumps(container.evidence, ensure_ascii=False).translate(
-                    _LINE_BREAKS
-                )
-                if container.evidence
-                else "-"
+            citation = located.citation(
+                container.evidence, entity.mention_lines
             )
-            lines.append(f"- {entity.id} within {container.name}: {quoted}")
+            lines.append(f"- {entity.id} within {container.name} | {citation}")
     return "\n".join(lines)
+
+
+def _transcription_block(transcription: Any) -> str:
+    """The transcription each line numbered, as the extraction prompts
+    carry it (chunking.number_lines, Transcription.prompt_text)."""
+    from yizkr.pipeline.chunking import number_lines
+
+    if transcription is None:
+        return ""
+    return number_lines(transcription.prompt_text())
 
 
 def named(claim: Claim) -> list[str]:
@@ -533,6 +689,8 @@ def check(
         and finding.container is None
     ):
         why.append("an evidence_does_not_state finding names no container")
+    if finding.category in CLAIM_CATEGORIES and finding.claim is None:
+        why.append(f"an {finding.category} finding names no claim")
     suggested = finding.suggestion
     if suggested.kind is not None and suggested.kind not in set(items):
         why.append(f"suggested kind {suggested.kind!r} is not a manifest key")
@@ -561,15 +719,40 @@ def offered_properties() -> list[str]:
     )
 
 
+def critique_prompt(
+    batch: ClaimBatch,
+    transcription: Any,
+    properties: Iterable[str],
+    kinds: Iterable[str],
+) -> str:
+    """The critique prompt for `batch`, the document's `transcription`
+    (or None), the property keys it lists and the kind keys."""
+    located = _Located(transcription)
+    return CRITIQUE_PROMPT.format(
+        categories_block=_categories_block(),
+        kinds=", ".join(sorted(kinds)),
+        properties=", ".join(sorted(properties)),
+        transcription_block=_transcription_block(transcription) or "(none)",
+        entities_block=_entities_block(batch) or "(none)",
+        claims_block=_claims_block(batch, located) or "(none)",
+        within_block=_within_block(batch, located) or "(none)",
+    )
+
+
 def run_critique(
     client: LlmClient,
     batch: ClaimBatch,
+    transcription: Any = None,
     *,
     attention: list[str] | None = None,
     vocabulary: tuple[Mapping[str, str], Iterable[str]] | None = None,
 ) -> list[Finding | Invalid]:
     """Review the batch; return its findings (possibly none), each valid
     or kept verbatim as `Invalid`, in the order the critic gave them.
+    The prompt carries `transcription`, the document's (a
+    transcribe.Transcription), whole, each line numbered, and each
+    citation located in it (ADR-0003); with none, it carries no
+    transcription, and every citation is one not in it.
     `vocabulary` is the model manifest's (property key -> datatype, item
     keys), loaded when not given; the prompt then lists the properties
     the manifest offers (offered_properties), and the answer is checked
@@ -601,15 +784,7 @@ def run_critique(
         properties, items = vocabulary
         listed = list(properties)
     vocabulary = (properties, frozenset(items))
-    prompt = CRITIQUE_PROMPT.format(
-        categories_block=_categories_block(),
-        kinds=", ".join(sorted(vocabulary[1])),
-        properties=", ".join(sorted(listed)),
-        entities_block=_entities_block(batch) or "(none)",
-        claims_block=_claims_block(batch) or "(none)",
-        containment_block=_containment_block(batch) or "(none)",
-        within_block=_within_block(batch) or "(none)",
-    )
+    prompt = critique_prompt(batch, transcription, listed, vocabulary[1])
     try:
         response = client.complete(prompt)
         findings, unfinished = _read(client, response, batch, vocabulary)
