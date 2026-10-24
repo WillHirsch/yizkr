@@ -58,20 +58,19 @@ A claim's subject may also be an artifact, named as a source is, by an
 takes the document the claim comes from (what a register office issued,
 what a letter's writer dated), an artifact its source places by bytes
 (the letter's image a booklet's translation dates), a batch entity of an
-artifact kind (the un-held media item a GEDCOM object makes) or an
+artifact kind (the un-held media item a GEDCOM object makes), an
 unclassified entity of the batch (a letter's mention of the certificate
-it encloses), or the existing item a curator confirmed one of those
-last two as (the held scan of that certificate), and no other subject;
-one whose subject is not its own
-source carries the passage that conveys it as its excerpt. The one
-property the manifest marks `placed_subject` (`caption`, ADR-0039 §2.1)
-takes an artifact its source places, and no other subject: a
-container's words about an image on its page. No other property takes
-an artifact as its subject. An extraction never names an artifact kind
-for an entity (artifact_kind_problems, ADR-0039 §10.1(b)), so an entity
-of one is a structured record's or a hand-written batch's. The writer
-checks the same rules and resolves an artifact subject to the artifact
-item as it resolves the source.
+it encloses) or the existing item a curator confirmed one of those last
+two as (the held scan of that certificate), and no other subject; one
+whose subject is not its own source carries the passage that conveys it
+as its excerpt. The one property the manifest marks `placed_subject`
+(`caption`, ADR-0039 §2.1) takes an artifact its source places, and no
+other subject: a container's words about an image on its page. No
+other property takes an artifact as its subject. An extraction never
+names an artifact kind for an entity (artifact_kind_problems, ADR-0039
+§10.1(b)), so an entity of one is a structured record's or a
+hand-written batch's. The writer checks the same rules and resolves an
+artifact subject to the artifact item as it resolves the source.
 
 CLI:
     python3 claims.py --json-schema  # print JSON Schema (for LLM prompts)
@@ -872,15 +871,15 @@ def validate_against_manifest(
       an artifact its source places, a batch entity of an artifact kind,
       an unclassified entity of the batch or the existing item a curator
       confirmed one of those two as (an entity record's `qid`), and a
-      claim whose subject
-      is not its own source carries an excerpt (ADR-0035 §3.4, ADR-0039
-      §10); a claim of a property the manifest marks `placed_subject`
-      (`caption`) has an artifact its source places as its subject and
-      no other (ADR-0039 §2.1); and no other property takes an artifact
-      as its subject. `placed` gives, by the SHA-1 of a source's media,
-      the SHA-1s of the artifacts that source places
-      (`placed_artifacts`); a source it does not name places none, so
-      without it every claim about an artifact it places is refused;
+      claim whose subject is not its own source carries an excerpt
+      (ADR-0035 §3.4, ADR-0039 §10); a claim of a property the manifest
+      marks `placed_subject` (`caption`) has an artifact its source
+      places as its subject and no other (ADR-0039 §2.1); and no other
+      property takes an artifact as its subject. `placed` gives, by the
+      SHA-1 of a source's media, the SHA-1s of the artifacts that source
+      places (`placed_artifacts`); a source it does not name places
+      none, so without it every claim about an artifact it places is
+      refused;
     * a `name` claim, a name form of no stated type, is a person's or an
       unclassified entity's, never a vocabulary item's, and never
       restates its subject's label (ADR-0011): both are compared by
@@ -1316,9 +1315,8 @@ def subject_problems(
     of a local subject, `confirmed` the kinds of the batch's entities
     confirmed as a QID subject's item), and a claim whose subject is not
     its own source carries an excerpt, the passage that conveys the
-    fact. No other
-    property takes an artifact as its subject. `placed` is as
-    validate_against_manifest takes it."""
+    fact. No other property takes an artifact as its subject. `placed`
+    is as validate_against_manifest takes it."""
     prop, subject = claim.property, claim.subject
     source = claim.source.artifact
     if prop in acceptance.placed_subjects:
