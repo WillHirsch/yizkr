@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import unicodedata
+import zipfile
 
 import pytest
 
@@ -23,6 +24,7 @@ from yizkr.core.corpus import (
     ExclusionList,
     corpus_dir,
     file_sha1,
+    follow_decks,
     is_excluded,
     load_exclusions,
 )
@@ -293,3 +295,160 @@ class TestCli:
         with pytest.raises(SystemExit, match="never-ingest"):
             run_cli("ingest", "register", "--file", str(postcard),
                     "--type", "letter", "--title", "Postcard")  # fmt: skip
+
+
+# -- following a glob into the corpus's decks (#640) --------------------------
+
+# the photograph the 2018 library talk embeds, as the deck's archive names
+# it, and the same bytes kept as a file of their own under another name
+TALK = "library-talk-2018.pptx"
+TALK_IMAGE = b"\x89PNG fictional: the family album photograph in the talk"
+# a fixed member time, so no archive reads the real clock
+DECK_TIME = (2018, 5, 4, 12, 0, 0)
+
+
+def talk(folder, name: str = TALK, image: bytes = TALK_IMAGE):
+    """A deck in `folder` whose archive holds `image` as image2.png."""
+    folder.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(folder / name, "w") as archive:
+        for member, data in (
+            ("ppt/slides/slide1.xml", b"<p:sld/>"),
+            ("ppt/media/image2.png", image),
+        ):
+            archive.writestr(zipfile.ZipInfo(member, DECK_TIME), data)
+    return folder / name
+
+
+class TestFollowDecks:
+    LISTED = ExclusionList.parse("image2.png\n")
+
+    def test_the_decks_are_found_as_a_run_finds_them(self, tmp_path):
+        """The folder's own decks, any case of suffix; not a hidden one,
+        nor one in a subfolder, nor another kind of archive."""
+        folder = tmp_path / "corpus"
+        talk(folder, "TALK-COPY.PPTX", b"upper suffix")
+        talk(folder, ".~lock.pptx", b"hidden")
+        talk(folder / "older", TALK, b"in a subfolder")
+        talk(folder, "library-talk-2018.zip", b"not a deck")
+        followed = follow_decks(self.LISTED, folder)
+        assert followed.embedded == {hashlib.sha1(b"upper suffix").hexdigest()}
+
+    def test_the_run_reads_the_same_kinds_of_file_as_decks(self):
+        from yizkr.core.corpus import DECK_SUFFIXES
+        from yizkr.pipeline.orchestrate import PRESENTATION_SUFFIXES
+
+        assert DECK_SUFFIXES == PRESENTATION_SUFFIXES
+
+    def test_it_replaces_what_was_followed_before(self, tmp_path):
+        before = self.LISTED.with_embedded([sha1("from another corpus")])
+        followed = follow_decks(before, tmp_path)
+        assert followed.embedded == frozenset()
+        assert followed.patterns == self.LISTED.patterns
+
+    def test_a_list_with_no_glob_reads_no_folder(self, tmp_path):
+        listed = ExclusionList.parse(f"{sha1(POSTCARD)}\n")
+        followed = follow_decks(listed, tmp_path / "no such folder")
+        assert followed == listed
+
+    def test_a_folder_that_cannot_be_listed_fails_closed(self, tmp_path):
+        with pytest.raises(ExclusionConfigError, match="no such folder"):
+            follow_decks(self.LISTED, tmp_path / "no such folder")
+
+
+class TestSingleStepsFollowDecks:
+    """`ingest transcribe` and `ingest register` refuse a file whose bytes
+    a glob names inside one of the corpus's decks, as a run does, though
+    the file is called otherwise and lies outside the corpus."""
+
+    @pytest.fixture
+    def stand_alone(self, env, tmp_path, monkeypatch):
+        """The talk's photograph as a file of its own, the list naming
+        image2.png, and a registrar that must never be reached."""
+        import yizkr.pipeline.registrar as registrar
+
+        def never(*args, **kwargs):
+            raise AssertionError("an excluded file reached the registrar")
+
+        monkeypatch.setattr(registrar, "register_artifact", never)
+        listed_file = tmp_path / "exclude.txt"
+        listed_file.write_text("image2.png\n")
+        monkeypatch.setenv(EXCLUDE_FILE_VAR, str(listed_file))
+        scan = tmp_path / "album-photograph.png"
+        scan.write_bytes(TALK_IMAGE)
+        return scan
+
+    @staticmethod
+    def transcribe(tmp_path, scan):
+        text = tmp_path / "reading.txt"
+        text.write_text("fictional reading")
+        out = tmp_path / "transcription.json"
+        run_cli("ingest", "transcribe", "--file", str(scan),
+                "--text-file", str(text), "--out", str(out))  # fmt: skip
+        return out
+
+    @staticmethod
+    def register(scan):
+        run_cli("ingest", "register", "--file", str(scan),
+                "--type", "photograph", "--title", "Album")  # fmt: skip
+
+    def test_a_file_a_glob_names_in_a_deck_is_refused(
+        self, stand_alone, tmp_path, monkeypatch
+    ):
+        talk(tmp_path / "corpus")
+        monkeypatch.setenv(CORPUS_DIR_VAR, str(tmp_path / "corpus"))
+        with pytest.raises(SystemExit, match="never-ingest") as refused:
+            self.transcribe(tmp_path, stand_alone)
+        assert "album-photograph.png" in str(refused.value.code)
+        assert not (tmp_path / "transcription.json").exists()
+        with pytest.raises(SystemExit, match="never-ingest"):
+            self.register(stand_alone)
+
+    def test_other_bytes_in_the_deck_leave_the_file_in(
+        self, stand_alone, tmp_path, monkeypatch, capsys
+    ):
+        talk(tmp_path / "corpus", image=b"another photograph")
+        monkeypatch.setenv(CORPUS_DIR_VAR, str(tmp_path / "corpus"))
+        out = self.transcribe(tmp_path, stand_alone)
+        assert json.loads(out.read_text())["text"] == "fictional reading"
+        assert CORPUS_DIR_VAR not in capsys.readouterr().err
+
+    def test_an_unreadable_deck_refuses_the_step(
+        self, stand_alone, tmp_path, monkeypatch
+    ):
+        (tmp_path / "corpus").mkdir()
+        (tmp_path / "corpus" / TALK).write_bytes(b"not an archive")
+        monkeypatch.setenv(CORPUS_DIR_VAR, str(tmp_path / "corpus"))
+        with pytest.raises(ExclusionConfigError, match=TALK):
+            self.transcribe(tmp_path, stand_alone)
+        assert not (tmp_path / "transcription.json").exists()
+        with pytest.raises(ExclusionConfigError, match=TALK):
+            self.register(stand_alone)
+
+    def test_a_corpus_folder_that_cannot_be_listed_refuses_the_step(
+        self, stand_alone, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv(CORPUS_DIR_VAR, str(tmp_path / "moved away"))
+        with pytest.raises(ExclusionConfigError, match="moved away"):
+            self.transcribe(tmp_path, stand_alone)
+        assert not (tmp_path / "transcription.json").exists()
+
+    def test_without_a_corpus_folder_it_says_it_cannot_follow(
+        self, stand_alone, tmp_path, capsys
+    ):
+        """No folder to find the decks in: the step goes on, and says
+        plainly that a glob is not followed into decks."""
+        out = self.transcribe(tmp_path, stand_alone)
+        assert out.exists()
+        err = capsys.readouterr().err
+        assert CORPUS_DIR_VAR in err
+        assert "not followed into the corpus's decks" in err
+
+    def test_a_list_with_no_glob_neither_reads_the_corpus_nor_warns(
+        self, stand_alone, tmp_path, monkeypatch, capsys
+    ):
+        (tmp_path / "exclude.txt").write_text(f"{sha1(POSTCARD)}\n")
+        (tmp_path / "corpus").mkdir()
+        (tmp_path / "corpus" / TALK).write_bytes(b"not an archive")
+        monkeypatch.setenv(CORPUS_DIR_VAR, str(tmp_path / "corpus"))
+        assert self.transcribe(tmp_path, stand_alone).exists()
+        assert capsys.readouterr().err == ""

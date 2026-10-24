@@ -25,8 +25,9 @@ not only that deck: before any container's images are read, the run
 gathers the SHA-1s of the images the globs name in its decks
 (:func:`gather_embedded`) and adds them to the list it asks
 (:meth:`ExclusionList.with_embedded`), so a PDF that places the same
-bytes, or a file that is them, is excluded too. Only identical bytes
-are followed.
+bytes, or a file that is them, is excluded too. A step that reads one
+file asks the same of the corpus folder's decks (:func:`follow_decks`)
+when the folder is set. Only identical bytes are followed.
 
 The list fails closed. A configured file that is missing or unreadable
 is an error, never an empty list. So is a line that would silently
@@ -59,6 +60,9 @@ MISSING_LIST = (
     "an explicit, allowed list). See deploy/README.md, 'The corpus and "
     "the never-ingest list'."
 )
+
+# the files a run reads as decks (orchestrate.PRESENTATION_SUFFIXES)
+DECK_SUFFIXES = frozenset({".pptx"})
 
 _SHA1 = re.compile(r"[0-9a-f]{40}")
 # a first word this long and all hex digits was meant as a hash
@@ -221,6 +225,36 @@ def gather_embedded(
                 "run: repair the deck, or take it out of the corpus folder."
             ) from exc
     return frozenset(found)
+
+
+def follow_decks(exclusions: ExclusionList, folder: Path) -> ExclusionList:
+    """`exclusions`, naming also the bytes of the images its globs name in
+    the decks of the corpus `folder` (gather_embedded), in place of any it
+    named so before. The decks are found as a run over the folder finds
+    them: its own files, not its subfolders', whose suffix is a deck's,
+    leaving out a hidden file (a name starting with a dot). So a step that
+    reads one file asks the list a run would ask. A list with no glob
+    names nothing in a deck, and the folder is not read. A folder that
+    cannot be listed, like a deck that cannot be read, fails closed
+    (ExclusionConfigError)."""
+    listed = exclusions.with_embedded(())
+    if not listed.patterns:
+        return listed
+    try:
+        decks = [
+            path
+            for path in sorted(folder.iterdir())
+            if path.suffix.lower() in DECK_SUFFIXES
+            and not path.name.startswith(".")
+            and path.is_file()
+        ]
+    except OSError as exc:
+        raise ExclusionConfigError(
+            f"cannot list the corpus folder {folder} ({CORPUS_DIR_VAR}) to "
+            "find the images the never-ingest list's globs name in its "
+            f"decks: {exc}. Refusing to run."
+        ) from exc
+    return listed.with_embedded(gather_embedded(listed, decks))
 
 
 def read_exclusions(path: Path) -> ExclusionList:

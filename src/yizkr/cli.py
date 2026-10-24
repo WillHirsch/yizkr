@@ -112,14 +112,31 @@ def _refuse_if_excluded(
     source file too when it is given one. Without a file only the list's
     SHA-1 entries can be checked, so a list that names files by pattern
     fails closed. The extract-all command, `ingest run`, requires the
-    list (cmd_run)."""
-    from yizkr.core.corpus import is_excluded, load_exclusions
+    list (cmd_run).
+
+    A glob also names the bytes of an image it names inside one of the
+    corpus's decks, as in a run: with the corpus folder set
+    ($YIZKR_CORPUS_DIR), its decks are opened in memory to hash the
+    members the globs name (corpus.follow_decks), and a deck or a folder
+    that cannot be read refuses the step. With no corpus folder set, the
+    globs cannot be followed into decks, and the step says so on stderr
+    before it goes on."""
+    from yizkr.core.corpus import (
+        CORPUS_DIR_VAR,
+        corpus_dir,
+        follow_decks,
+        is_excluded,
+        load_exclusions,
+    )
 
     if path is None and sha1 is None:
         return
     exclusions = load_exclusions(required=False, env_file=args.env_file)
     if exclusions is None:
         return
+    folder = corpus_dir(args.env_file) if exclusions.patterns else None
+    if folder is not None:
+        exclusions = follow_decks(exclusions, folder)
     if is_excluded(exclusions, path, sha1=sha1):
         what = path.name if path is not None else f"SHA-1 {sha1[:12]}"
         sys.exit(f"{what} is on the never-ingest list; refusing")
@@ -128,6 +145,13 @@ def _refuse_if_excluded(
             "the never-ingest list names files by pattern, and no file was "
             "given to match them against: give the transcribed media file "
             "(--media); refusing"
+        )
+    if exclusions.patterns and folder is None:
+        print(
+            f"note: {CORPUS_DIR_VAR} is not set, so the never-ingest list's "
+            "globs are not followed into the corpus's decks: a file whose "
+            "bytes a glob names only inside a deck is not refused",
+            file=sys.stderr,
         )
 
 
