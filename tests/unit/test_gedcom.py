@@ -54,7 +54,7 @@ class TestParser:
     def test_nesting_and_xrefs(self):
         roots = parse_gedcom(FIXTURE.read_text())
         indi = [r for r in roots if r.tag == "INDI"]
-        assert [r.xref for r in indi] == [f"@I{n}@" for n in range(1, 18)]
+        assert [r.xref for r in indi] == [f"@I{n}@" for n in range(1, 19)]
         birth = indi[2].first("BIRT")
         assert birth.text("DATE") == "15 FEB 1862"
         assert birth.text("PLAC") == "Flörburg, Hesse, Germany"
@@ -636,8 +636,13 @@ class TestUnsupportedCensus:
 
     def test_the_fixture_counts_only_its_unmapped_tail(self):
         # its typed NAMEs, its MARR places and its dated DIV are all read:
-        # only the EDUC and the NOTE go unmapped
-        assert fixture_result().unsupported_tags == {"EDUC": 1, "NOTE": 1}
+        # only the EDUC, the NOTE and the adoption's PEDI go unmapped
+        # (ADR-0040 §4 defers PEDI, counted meanwhile)
+        assert fixture_result().unsupported_tags == {
+            "EDUC": 1,
+            "NOTE": 1,
+            "PEDI": 1,
+        }
 
     @pytest.mark.parametrize(
         ("lines", "expected"),
