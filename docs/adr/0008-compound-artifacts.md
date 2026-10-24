@@ -1005,7 +1005,10 @@ compilation's own text."
   block of its own, `stated in` the artifact beside the claim's own
   source block and its run block: the marker's evidence is in the graph,
   and the claim's own citation is unchanged (CLAUDE.md rule 1). Its
-  other qualifiers stand beside the marker.
+  other qualifiers stand beside the marker. Only the checked reading
+  sets it: a `circumstance_source` a model's answer gives is dropped as
+  the answer is cited to its document (extract.cite_artifact), so no
+  answer cites a passage of its own choosing as the marker's evidence.
   A claim whose excerpt stands both within and outside those lines
   (`straddling`), or that has no excerpt, or one the text does not hold
   (`unlocated`), is not marked, and the batch says how many. Each

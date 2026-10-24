@@ -522,6 +522,11 @@ def _parse_response(response: str) -> dict:
 # claim on its own review-sheet row). The JSON Schema the prompts carry
 # shows `curated` with the rest of a claim.
 REVIEW_STATE = ("curated", "row_approval")
+# The claim fields the pipeline sets from a document reading it has
+# checked, never the model: `circumstance_source`, where the document
+# states the circumstance of its making that a marked claim's qualifier
+# records (yizkr.pipeline.preparation, ADR-0008).
+PIPELINE_STATE = ("circumstance_source",)
 
 
 def cite_artifact(
@@ -537,7 +542,9 @@ def cite_artifact(
     Transcription.printed_pages), or absent (printed_page_number); the
     review-state fields (REVIEW_STATE) are dropped, so every claim is a
     machine claim, which the writer references to its extraction run
-    (ADR-0003); and claims that are then the same are kept once, in the
+    (ADR-0003); the fields the pipeline sets (PIPELINE_STATE) are
+    dropped, so no answer cites a passage of its own choosing as a
+    marker's evidence; and claims that are then the same are kept once, in the
     order first given.
 
     An extractor reads one document's transcription, so every claim it
@@ -554,7 +561,7 @@ def cite_artifact(
             claim = {
                 key: value
                 for key, value in claim.items()
-                if key not in REVIEW_STATE
+                if key not in REVIEW_STATE and key not in PIPELINE_STATE
             }
             if isinstance(claim.get("source"), dict):
                 source = {

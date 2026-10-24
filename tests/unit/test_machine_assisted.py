@@ -656,11 +656,13 @@ class TestTheRunReport:
         assert again["machine_assisted"]["statements"] == 0
 
 
-def paged(source: u.Source) -> Transcription:
+def paged(source: u.Source, printed: dict | None = None) -> Transcription:
     """The source's text read page by page, each `[page N]` the marker of
-    a page, its line the page's own; the booklet's page 6 prints 4."""
+    a page, its line the page's own; the booklet's page 6 prints 4, or
+    each page prints what `printed` gives it."""
     text, pages = "", []
-    printed = {6: "4"} if source is BOOKLET else {}
+    if printed is None:
+        printed = {6: "4"} if source is BOOKLET else {}
     for line in source.text.splitlines():
         if line.startswith("[page "):
             number = int(line[len("[page ") : line.index("]")])
@@ -959,3 +961,105 @@ class TestTheSamePointedLine:
             pointer=STATEMENT + "; any mistakes are mine.",
         )
         assert marked(batch) == [True]
+
+
+class TestOnlyTheReadingCites:
+    """A chunk answer never supplies a marker's evidence: only the checked
+    reading of the document's statement sets `circumstance_source`."""
+
+    def test_an_unsolicited_citation_is_dropped(self, tmp_path):
+        ref = transcription(BOOKLET).artifact
+        given = claim(ref, "Gustl was Ursula's younger brother", 1901) | {
+            "circumstance_source": {
+                "artifact": ref.model_dump(),
+                "page_number": "6",
+                "transcription_excerpt": {
+                    "text": "Hilde is sewing him shirts",
+                    "language": "en",
+                },
+            }
+        }
+        batch, extractor, _ = extract(
+            BOOKLET, {"statement": None}, [given], tmp_path
+        )
+        (kept,) = batch.claims
+        assert kept.circumstance_source is None
+        assert marked(batch) == [False]
+        assert extractor.attention == []
+
+    def test_a_reading_replaces_an_unsolicited_citation(self, tmp_path):
+        ref = transcription(BOOKLET).artifact
+        given = claim(ref, "Gustl finally has his visa", 1901) | {
+            "circumstance_source": {
+                "artifact": ref.model_dump(),
+                "transcription_excerpt": {
+                    "text": "Hilde is sewing him shirts",
+                    "language": "en",
+                },
+            }
+        }
+        batch, _, _ = extract(BOOKLET, THE_TRANSLATIONS, [given], tmp_path)
+        (kept,) = batch.claims
+        assert kept.circumstance_source.transcription_excerpt.text == (
+            STATEMENT
+        )
+
+
+class TestThePointerIsReadAsTheText:
+    def test_a_pointer_in_another_case_and_spacing_holds_the_statement(
+        self, tmp_path
+    ):
+        # compared as core/verbatim.py compares an excerpt, never
+        # character for character
+        ref = transcription(BOOKLET).artifact
+        claims = [claim(ref, "Rahel now lives at Angerring 71", 1901)]
+        batch, _, _ = extract(
+            BOOKLET,
+            THE_TRANSLATIONS,
+            claims,
+            tmp_path,
+            pointer="all translations  in this booklet\nwere done with "
+            "TRANSLATION software",
+        )
+        assert marked(batch) == [True]
+
+
+class TestTheStatementSPrintedPage:
+    def test_the_number_printed_on_the_statement_s_page_is_cited(self):
+        # a printing that numbers its note page too, as "ii"
+        made = paged(BOOKLET, printed={2: "ii", 6: "4"})
+        reading = preparation.Reading(statement=STATEMENT, covers="all")
+        stated = preparation.statement_source(reading, made, made.artifact)
+        assert (stated.page_number, stated.printed_page_number) == ("2", "ii")
+
+
+class TestTheWriterChecksTheCitation:
+    def test_a_statement_holding_an_unknown_character_refuses_its_claim(
+        self,
+    ):
+        from tests.unit.test_writer_unknown_characters import MARK
+        from yizkr.pipeline.review import claim_id
+
+        batch = written("Gustl finally has his visa", True)
+        (found,) = batch.claims
+        stated = found.circumstance_source
+        excerpt = stated.transcription_excerpt.model_copy(
+            update={"text": f"{STATEMENT}{MARK}"}
+        )
+        batch = batch.model_copy(
+            update={
+                "claims": [
+                    found.model_copy(
+                        update={
+                            "circumstance_source": stated.model_copy(
+                                update={"transcription_excerpt": excerpt}
+                            )
+                        }
+                    )
+                ]
+            }
+        )
+        result = write_mapped(BatchWriter(Wiki({MEDIA_SHA1: "Q23"})), batch)
+        assert result.refused == [claim_id(batch.claims[0])]
+        assert result.written == 0
+        assert any("its circumstance's excerpt" in w for w in result.warnings)
