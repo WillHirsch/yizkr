@@ -551,7 +551,8 @@ def salvage_valid_claims(
     (validate_against_manifest): a `caption` or document-subject claim
     whose subject is an artifact other than its source and none of its
     source's is a reject (ADR-0039 §2.1, §10.1). A claim whose local ref
-    is of an artifact kind is a reject too, and an entity manifest that
+    is of an artifact kind, or a claim of `instance_of` or `subclass_of`
+    whose value is one, is a reject too, and an entity manifest that
     gives one is refused: an extraction may not name an artifact kind
     (claims.artifact_kind_problems, ADR-0039 §10.1(b)).
 

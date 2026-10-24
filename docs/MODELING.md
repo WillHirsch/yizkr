@@ -379,7 +379,10 @@ validation and the writer apply; under (c4) the 1958 letter gives its
 enclosed death certificate's `main_subject` on the letter's own mention
 item. A claim whose subject is not its own source carries the passage
 that conveys it as its excerpt: validation rejects one without it
-(`excerpt_required`) and the writer refuses it (ADR-0039 §10.4). An
+(`excerpt_required`) and the writer refuses it (ADR-0039 §10.4). The
+extraction stage's kind check also rejects an extraction's
+`instance_of` or `subclass_of` claim whose value is an artifact kind
+(`artifact_kind`), beside a manifest record or a `LocalRef` of one. An
 approved equivalence turns a local subject into a QID reference, which
 no subject form takes, so a document-subject claim on a mention or
 media item a curator approves as an existing item is refused from then

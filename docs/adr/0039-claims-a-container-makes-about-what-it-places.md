@@ -1030,6 +1030,10 @@ the rule admits forms (a) and (b) only.
   `excerpt_required` and a `subject_rule` refusal whose message says it
   carries no excerpt (question 8); the writer reads the excerpt as the
   instance keeps text, so one the instance would keep blank is none.
+  Validation reads it as Python strips it, so an excerpt only the
+  instance keeps blank (U+180E alone) passes validation and is a
+  `subject_rule` refusal at write time, not an `excerpt_required`
+  reject.
 - **An approved equivalence today.** `reconcile.apply_equivalences`
   turns an approved local ref into a QID reference, which no form takes,
   so a document-subject claim on a (c4) mention or a GEDCOM media item
@@ -1080,7 +1084,10 @@ the rule admits forms (a) and (b) only.
   which the writer makes one statement with two references, goes whole,
   the image's own reference with it, failing closed. An un-held media
   item and a (c4) mention item carry no SHA-1, so their statements are
-  exported as any of their source's are, the (c4) excerpt included.
+  exported as any of their source's are, the (c4) excerpt included;
+  once a curator or artifact matching merges a mention into the held
+  scan's item, its statements stand on an item with a SHA-1, cited by
+  the letter, and are left out whole, failing closed.
 - **The site.** `named_in_html` names a (c4) mention item, which has no
   artifact page, by its label, unlinked.
 - **Chunk ownership.** Under entity assignment a (c4) claim belongs to
