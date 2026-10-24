@@ -370,6 +370,34 @@ class TestIngestExtract:
         )
         assert out.exists()
 
+    def test_another_error_of_the_extractor_is_not_caught(
+        self, tmp_path, monkeypatch
+    ):
+        """Only ExtractionFailed is reported in one line: a bare
+        ValueError is the type a bug raises too, and keeps its traceback
+        (#301)."""
+        from yizkr.pipeline import extract
+
+        def broken(self, transcription, artifact):
+            raise ValueError("an unanticipated error")
+
+        monkeypatch.setattr(extract.ClaimFileExtractor, "extract", broken)
+        with pytest.raises(ValueError, match="an unanticipated error"):
+            self.extract(tmp_path)
+        assert not (tmp_path / "batch.json").exists()
+
+    def test_an_extractor_without_attention_writes_its_empty_batch(
+        self, tmp_path, capsys
+    ):
+        """The claims-file extractor keeps no attention: an empty claims
+        file gives a batch without claims and nothing more to say."""
+        (tmp_path / "claims.json").write_text('{"claims": []}')
+        status, out = self.extract(tmp_path)
+        assert status == EXIT_OK
+        captured = capsys.readouterr()
+        assert captured.out == f"wrote {out} (0 claims)\n"
+        assert captured.err == ""
+
     def test_a_batch_with_claims_prints_no_attention(
         self, tmp_path, monkeypatch, capsys
     ):

@@ -475,6 +475,10 @@ def cmd_extract(args) -> int:
             None if args.media is None else ArtifactRef.from_path(args.media)
         )
     except OSError as exc:
+        # only the media's own read is the media's fault: the list's env
+        # file, say, keeps its own error
+        if exc.filename is None or Path(exc.filename) != args.media:
+            raise
         sys.exit(
             f"cannot read the media {args.media}: {exc.strerror or exc}; "
             f"refusing"

@@ -750,9 +750,17 @@ class TestIngestExtract:
             media=MEDIA,
         )
 
+    # a list naming the media by pattern, alone and beside a SHA-1 line,
+    # which makes the list hash a file its patterns do not match
+    BY_NAME = [
+        "*marriage-certificate*\n",
+        f"*marriage-certificate*\n{'1' * 40}\n",
+    ]
+
+    @pytest.mark.parametrize("listed", BY_NAME, ids=["pattern", "and-hash"])
     @pytest.mark.parametrize("engine", ["llm", "file"])
     def test_a_pattern_is_asked_before_the_media_is_read(
-        self, tmp_path, monkeypatch, engine
+        self, tmp_path, monkeypatch, engine, listed
     ):
         """A `--media` whose name a pattern matches is refused as listed,
         though it cannot be read: the list is asked by the name before the
@@ -761,10 +769,59 @@ class TestIngestExtract:
             tmp_path,
             f"{self.NAME} is on the never-ingest list",
             monkeypatch=monkeypatch,
-            listed="*marriage-certificate*\n",
+            listed=listed,
             unreadable=True,
             engine=engine,
         )
+
+    @pytest.mark.parametrize("listed", BY_NAME, ids=["pattern", "and-hash"])
+    def test_media_listed_by_its_name_is_never_read(
+        self, tmp_path, monkeypatch, listed
+    ):
+        """A readable `--media` whose name a pattern matches is refused
+        without its bytes being hashed, by the list or by the step."""
+        from yizkr import claims
+        from yizkr.core import corpus
+
+        read = []
+
+        def file_sha1(path):
+            read.append(path)
+            raise AssertionError(f"{path} hashed")
+
+        def from_path(cls, path):
+            read.append(path)
+            raise AssertionError(f"{path} hashed")
+
+        monkeypatch.setattr(corpus, "file_sha1", file_sha1)
+        monkeypatch.setattr(
+            claims.ArtifactRef, "from_path", classmethod(from_path)
+        )
+        self.refused(
+            tmp_path,
+            f"{self.NAME} is on the never-ingest list",
+            monkeypatch=monkeypatch,
+            listed=listed,
+            media=MEDIA,
+        )
+        assert read == []
+
+    @pytest.mark.parametrize("media", [None, MEDIA], ids=["key", "media"])
+    def test_an_unreadable_env_file_is_not_the_medias_fault(
+        self, tmp_path, monkeypatch, media
+    ):
+        """An env file the list's setting cannot be read from keeps its own
+        error, naming it, and is never reported as the media's."""
+        from yizkr.core import config
+
+        def read_env_file(path):
+            raise PermissionError(13, "Permission denied", str(path))
+
+        monkeypatch.setattr(config, "read_env_file", read_env_file)
+        with pytest.raises(PermissionError) as raised:
+            self.run(tmp_path, monkeypatch, listed=None, media=media)
+        assert raised.value.filename == str(tmp_path / "test.env")
+        assert self.engine.prompts == []
 
     @pytest.mark.parametrize(
         "listed",
