@@ -371,13 +371,14 @@ def _decode_past_trailing_commas(
     decoder: json.JSONDecoder, text: str, start: int
 ) -> tuple[Any, int, str, int]:
     """(value, end, text, commas read): the value decoded at `start`, with
-    each trailing comma the decoder stops at blanked to a space, so every
-    position stands, and the text it was decoded from. The decoder stops
-    either at the comma or at the bracket after it, depending on the
-    Python version; either way the stop is outside any string, the comma
-    must have only whitespace before the closing bracket or brace and a
-    value before it (not a comma, `[`, `{` or `:`), and the value must
-    then decode whole. Raises json.JSONDecodeError otherwise."""
+    each trailing comma the decoder stops at blanked to a space, and the
+    text it was decoded from. The decoder stops either at the comma or at
+    the bracket after it, depending on the Python version; either way the
+    stop is outside any string. The comma must have only whitespace
+    before the closing bracket or brace, and no comma, `[` or `{` before
+    it, and the value must then decode whole: a comma after a key or its
+    colon leaves that key without a value, which the decoder refuses.
+    Raises json.JSONDecodeError otherwise, and nothing it read counts."""
     read = 0
     while True:
         try:
@@ -409,7 +410,7 @@ def _trailing_comma(text: str, stop: int) -> int | None:
     else:
         return None
     before = _skip_space(text, comma - 1, -1)
-    if before is None or text[before] in ",[{:":
+    if before is None or text[before] in ",[{":
         return None
     return comma
 

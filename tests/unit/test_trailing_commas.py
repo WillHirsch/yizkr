@@ -18,6 +18,7 @@ from tests.unit.test_chunking import (
     claim,
     entity_manifest_json,
     ndjson,
+    segmentation_json,
     side_output,
     transcription,
 )
@@ -97,6 +98,9 @@ class TestTheScan:
             '{"label",}',  # a comma after a key with no value
             '{"aliases": ["Hilde" "Hildegard"]}',  # a missing comma
             '{"aliases": ["Hilde",}}',  # the wrong closer
+            # the wrong closer, with no comma before it: blanking the
+            # string's quote would decode, as another value
+            '{"aliases": ["Hilde"}"]}',
             '{"aliases": ["Hilde",',  # cut off
         ],
     )
@@ -238,6 +242,30 @@ class TestTheExtraction:
                 ndjson([claim("e2", "Sebastian Löbig", 1862)]),
             ],
         )
+        assert side_output(tmp_path, "coverage.json")["trailing_commas"] == 0
+
+    def test_each_extraction_counts_its_own(self, tmp_path):
+        """An extractor that falls back to line ranges after an extraction
+        whose manifest it read past commas counts none of them again."""
+        llm = ScriptedLlm(
+            [
+                MANIFEST_WITH_COMMAS,
+                ndjson([claim("e1", "Hildegard Löbig", 1876)]),
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),
+                "no manifest here",
+                "no manifest here either",
+                segmentation_json(),
+                ndjson([claim("p1", "Hildegard Löbig", 1876)]),
+            ]
+        )
+        extractor = ChunkedClaimExtractor(
+            llm, state_dir=tmp_path / "state", budget=LINE_LENGTH
+        )
+        extractor.extract(transcription(), DOC_REF)
+        assert side_output(tmp_path, "coverage.json")["trailing_commas"] == 2
+        extractor.budget = 10_000
+        extractor.extract(transcription(), DOC_REF)
+        assert extractor.used_fallback_manifest
         assert side_output(tmp_path, "coverage.json")["trailing_commas"] == 0
 
     def test_a_refused_attempt_counts_nothing(self, tmp_path):
