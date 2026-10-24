@@ -203,7 +203,8 @@ class TestTheCount:
 
     def test_a_started_by_to_no_wedding_gives_none(self):
         """`started_by` to an entity of another kind, to an entity the
-        batch does not list, or to an item outside it gives no wedding."""
+        batch does not list, or to an item outside it gives no wedding,
+        and nor does a wedding linked by another property."""
         view = tree_batch()
         entities = view["entities"] + [
             _entity("e13", "Gustav's emigration", "migration")
@@ -214,6 +215,8 @@ class TestTheCount:
         claims += [
             _link("e1", "started_by", "e13", "Gustl 1919"),
             _link("e1", "started_by", "e99", "Gustl 1919"),
+            # a wedding linked by any other property starts nothing
+            _link("e1", "ended_by", "e2", "Gustl 1919"),
             {
                 **_link("e1", "started_by", "e2", "Gustl 1919"),
                 "value": {
