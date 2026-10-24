@@ -104,7 +104,9 @@ def on_source(
 
 
 class TestThePrompts:
-    @pytest.mark.parametrize("prompt", [CHUNK_PROMPT, EXTRACTION_PROMPT])
+    @pytest.mark.parametrize(
+        "prompt", [CHUNK_PROMPT, EXTRACTION_PROMPT], ids=["chunk", "single"]
+    )
     def test_the_source_rule_shows_the_excerpt_and_its_language(self, prompt):
         """The JSON stays literal under str.format, and the language is
         the transcription's."""
