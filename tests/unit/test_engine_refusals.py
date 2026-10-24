@@ -491,6 +491,92 @@ class TestRecorded:
         assert len(cli.calls) == 2
 
 
+# -- a refused turn the CLI asked again --------------------------------------
+
+
+# the answer the model gives when the CLI asks the refused turn again
+RETRIED_ANSWER = '{"people": ["Gustav Löbig"], "place": "Flörburg"}'
+
+
+def retried_events(
+    session: str,
+    *,
+    marks: tuple[str, ...] = ("error", "is_api_error_message"),
+) -> list[dict]:
+    """A refused turn the CLI asked again, and the model answered (#622):
+    the refusal frame, still in the stream, then the model's answer and
+    a result that reports no error. `marks` names which of the frame's
+    API-error marks it keeps."""
+    frame = refusal_events(session, no_fallback=False)[0]
+    for mark in ("error", "is_api_error_message"):
+        if mark not in marks:
+            del frame[mark]
+    return [
+        frame,
+        {
+            "type": "assistant",
+            "message": {
+                "model": "claude-opus-5-5",
+                "role": "assistant",
+                "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": RETRIED_ANSWER}],
+            },
+            "parent_tool_use_id": None,
+            "session_id": session,
+        },
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "num_turns": 2,
+            "result": RETRIED_ANSWER,
+            "stop_reason": "end_turn",
+            "session_id": session,
+        },
+    ]
+
+
+class TestRetried:
+    """A stream that still carries a refusal frame before the answer: the
+    frame's notice is never joined into the answer, nor cached (#622)."""
+
+    @pytest.mark.parametrize(
+        "marks",
+        [("error", "is_api_error_message"), ("is_api_error_message",),
+         ("error",)],
+        ids=["both marks", "is_api_error_message alone", "error alone"],
+    )  # fmt: skip
+    def test_the_frame_is_no_part_of_the_answer(self, marks):
+        events = [INIT, *retried_events("s1", marks=marks)]
+        assert ClaudeCodeClient._assemble_stream(stream(events)) == (
+            RETRIED_ANSWER
+        )
+
+    def test_a_frame_alone_is_no_answer_text(self):
+        """A stream whose only assistant text is the frame's falls back to
+        its result, never to the notice."""
+        events = [INIT, *retried_events("s1")]
+        del events[2]  # the answer
+        events[-1]["result"] = "answer"
+        assert ClaudeCodeClient._assemble_stream(stream(events)) == "answer"
+
+    def test_the_answer_and_its_cache_entry_hold_no_notice(
+        self, cli, clock, tmp_path
+    ):
+        cache = open_cache(tmp_path / "cache")
+        cli.script = [{"events": retried_events, "exit": 0}]
+        client = cached_client(ClaudeCodeClient(), cache, role="transcribe")
+        assert client.complete("Read the letter.") == RETRIED_ANSWER
+        (entry,) = (tmp_path / "cache").glob("*/*.json")
+        kept = entry.read_text(encoding="utf-8")
+        assert "Gustav Löbig" in kept
+        assert "API Error" not in kept and "aup" not in kept
+        # the cached answer is served without asking again
+        again = cached_client(ClaudeCodeClient(), cache, role="transcribe")
+        assert again.complete("Read the letter.") == RETRIED_ANSWER
+        assert len(cli.calls) == 1
+
+
 class TestReport:
     """The run report and the monitor name the error by its class, as
     they do any exception whose name ends in a known ending."""

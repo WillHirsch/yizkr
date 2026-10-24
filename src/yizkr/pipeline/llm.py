@@ -2863,6 +2863,10 @@ class ClaudeCodeClient:
         several assistant turns with no tool call between them; each
         turn's text is part of it, so they are joined in order. A model
         that wrote text only before its last tool result gave no answer.
+        An assistant event that stands for an API error (one with an
+        `error` or marked is_api_error_message, such as a refusal frame
+        the CLI prints before it asks again) carries the CLI's notice,
+        not the model's words, so its text is never part of the answer.
         Falls back to the terminal result event (or raw stdout) if no
         assistant event holds any text.
         """
@@ -2876,6 +2880,11 @@ class ClaudeCodeClient:
             )
             blocks = content if isinstance(content, list) else []
             if event.get("type") == "assistant":
+                if (
+                    isinstance(event.get("error"), str)
+                    or event.get("is_api_error_message") is True
+                ):
+                    continue
                 for block in blocks:
                     if (
                         isinstance(block, dict)
