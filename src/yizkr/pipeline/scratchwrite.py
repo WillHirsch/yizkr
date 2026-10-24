@@ -22,11 +22,14 @@ time alone.
 **The place key.** What the place stage adds is named by the write key,
 the version of what it writes (PLACE_VERSION), the adjudication prompt's
 template, the batch size it asks in, and the engine, model and effort of
-the role it calls (PLACE_ROLE): never a QID. The instance holds what a
-run makes once its place stage has written its links, so the key the
-instance-contents record takes, and that the reset stage looks for
-(contents_key), is the place key when the driver runs a place stage, and
-the write key otherwise.
+the role it calls (PLACE_ROLE): never a QID. The documents'
+transcription views the stage reads (each container's evidence's page
+and language) are covered through their batches, which the write key
+names: a view whose content changes is extracted again. The instance
+holds what a run makes once its place stage has written its links, so
+the key the instance-contents record takes, and that the reset stage
+looks for (contents_key), is the place key when the driver runs a place
+stage, and the write key otherwise.
 
 **reset.** When the instance-contents record (yizkr.core.instance) still
 stands and records the contents key, the instance holds what the key
@@ -129,19 +132,21 @@ short inside a write the wiki took finds the instance written since, and
 the next invocation resets. Each link is written with no review CSV, as
 a `part_of` statement at normal rank: the item the answer names, with
 the time the document's claim gives, `stated in` the document's artifact
-with no page, and `inferred from` the stage's run item, which records
-the asking model in its label and is marked as the write's run items
-are, each in a reference block of its own (places.write_link). A link
-written already, stated in the same artifact with the same time, is not
-written again; an equal statement another source states gains the link's
-references. An `uncertain` answer writes nothing. A link that would
-close a cycle, a question answered twice differently, and an answer line
-outside the answer's schema are refused and counted, never written; the
-record names each refused cycle by its places' labels, for the run
-report. Before its first write the stage clears the instance-contents
-record, and once it has written every link it records the place key. The
-stages before write never read this containment: they use only what the
-manifests assert.
+with the container's evidence as its excerpt, on its page where the
+transcription gives one, and `inferred from` the stage's run item, which
+records the asking model in its label and is marked as the write's run
+items are, each in a reference block of its own (places.write_link). A
+link written already, stated in the same artifact with the same time
+(and, for a link a record alone states, the same excerpt), is not
+written again; an equal statement another source or excerpt states gains
+the link's references beside its own. An `uncertain` answer writes
+nothing. A link that would close a cycle, a question answered twice
+differently, and an answer line outside the answer's schema are refused
+and counted, never written; the record names each refused cycle by its
+places' labels, for the run report. Before its first write the stage
+clears the instance-contents record, and once it has written every link
+it records the place key. The stages before write never read this
+containment: they use only what the manifests assert.
 
 **site** builds the LAN site (yizkr.staticsite) from the instance into
 the stage's directory of the run, once the query service shows the run
@@ -236,7 +241,7 @@ RESET, REGISTER, WRITE, PLACES, SITE = (
 # the role whose engine, model and effort the place stage calls, and the
 # version of what it writes for the same inputs and answers
 PLACE_ROLE = "extract"
-PLACE_VERSION = 1
+PLACE_VERSION = 2
 # the raw answers the place stage was given, in its directory of the run
 RESPONSES = "responses.json"
 # each stage's record of what it did, in its directory of the run
@@ -1131,8 +1136,9 @@ def _place_record(context: Any, key: str, epoch: str) -> dict:
 
 def _stated_links(context: Any, written: dict) -> list:
     """The links the mention records of the documents the write wrote
-    state (places.stated_links), each document stating its own."""
-    from yizkr.pipeline.places import stated_links
+    state (places.stated_links), each document stating its own, each
+    container's evidence on its page of the document's transcription."""
+    from yizkr.pipeline.places import read_transcription, stated_links
 
     documents = written.get("documents") or {}
     links = []
@@ -1145,7 +1151,10 @@ def _stated_links(context: Any, written: dict) -> list:
             continue
         created = done.get("created_items")
         links += stated_links(
-            extracted, created if isinstance(created, dict) else {}, doc.sha1
+            extracted,
+            created if isinstance(created, dict) else {},
+            doc.sha1,
+            read_transcription(doc.transcription),
         )
     return links
 

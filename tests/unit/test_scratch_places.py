@@ -84,6 +84,7 @@ class PlaceWiki(Wiki):
         "point_in_time": "P77",
         "start_time": "P78",
         "place_of_death": "P79",
+        "printed_page_number": "P80",
     }
     ITEMS = {**Wiki.ITEMS, "place": "Q10"}
 
@@ -557,7 +558,13 @@ class TestWritten:
         assert stage_written(wiki, florburg) == []
         assert item_values(wiki, germany, "part_of") == []
 
-    def test_a_record_s_link_is_stated_in_its_document_with_no_page(self, run):
+    def test_a_link_with_no_evidence_is_stated_in_its_document_alone(
+        self, run
+    ):
+        """The fixtures' containers are bare names, which extraction
+        drops since #569 but a stored batch still reads: their links cite
+        the artifact alone (a container's evidence: #593,
+        test_place_link_evidence.py)."""
         run.past_the_barrier()
         wiki = run.wiki
         (run_item,) = place_run_items(wiki)
@@ -569,7 +576,7 @@ class TestWritten:
             (statement,) = containment(wiki, run.qid(name))
             assert statement.get("rank", "normal") == "normal"
             # stated in the document, inferred from the stage's run item,
-            # each a block of its own, with no page and no time
+            # each a block of its own, with no page, no excerpt and no time
             assert cited(statement, "stated_in") == [run.artifact(data)]
             assert cited(statement, "inferred_from_extraction_run") == [
                 run_item
@@ -854,7 +861,10 @@ class TestRefusedAndCounted:
         ]  # fmt: skip
         text = "\n".join(section.blocks[0])
         assert "Links a record states and no claim of its document " in text
-        assert "gives: 3, of them 3 written, with no page" in text
+        assert (
+            "gives: 3, of them 3 written, with no time, each citing its "
+            "container's evidence." in text
+        )
         # the diff sets them side by side, as figures, and diff.md shows
         # them in a section of their own
         before = {"content": {"place_hierarchy": dict(shown, links_written=1)}}

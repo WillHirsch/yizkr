@@ -408,12 +408,16 @@ with `--until clustering` (or an earlier stage) needs none.
   both. Each answered link is written with no review CSV, as a
   `part_of` statement at normal rank, to the item the answer names,
   with the time the document's claim gives (none for a link a record
-  alone states), `stated in` the document's artifact with no page, and
-  `inferred from` the stage's run item, `place-hierarchy run <model>
-  <key>`, marked as the write's run items are. A link already written,
-  stated in the same artifact with the same time, is not written again;
-  an equal statement another source states gains the link's
-  references. A link that would close a cycle (through the graph's
+  alone states), `stated in` the document's artifact with the
+  container's evidence as its excerpt, with its page (and printed page)
+  where the transcription has pages, and `inferred from` the stage's
+  run item, `place-hierarchy run <model> <key>`, marked as the write's
+  run items are. A link already written, stated in the same artifact
+  with the same time (and, for a link a record alone states, the same
+  excerpt), is not written again; an equal statement another source
+  states gains the link's references, and a record-only link's earlier
+  bare block gains the excerpt's block beside it, never changed
+  (ADR-0038 §8.5). A link that would close a cycle (through the graph's
   containment, another link, or both, at any time), a question answered
   twice differently (a conflict) and an answer line outside the
   answer's schema are refused and counted, never written; the local

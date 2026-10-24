@@ -10,14 +10,17 @@ than one place or no claim of the document gives the link. It checks:
 * the records' containers carry their evidence (#569), and the stage
   reads them by name, nearest first, each link from the next;
 * a link a record alone states (the 1905 marriage certificate's Kreis
-  Mockburg within Hesse) is written with no page and no time: `part of`
-  the place named, stated in the certificate's artifact and inferred
-  from the stage's run item, which names the asking model and is marked
-  an unratified scratch run's;
+  Mockburg within Hesse) is written with no time: `part of` the place
+  named, stated in the certificate's artifact with the container's
+  evidence as the excerpt, in the transcription's language, on the
+  transcription page its line lies on, with the number printed on that
+  page (#593), and inferred from the stage's run item, which names the
+  asking model and is marked an unratified scratch run's;
 * a link a claim gives (the 1941 death certificate's Koshnovka within
   Kaldovsky District, in 1941), whose container names two places the
   certificate's manifest kept apart, is written to the one the answer
-  names with the claim's time;
+  names with the claim's time, citing its container's evidence with no
+  page, as the certificate has no transcription view (#593);
 * an `uncertain` answer (the court prison "in Peiltal", which names the
   town and the district) writes nothing;
 * a link that would close a cycle (the 1957 judgment's "Rekau, Rekau"
@@ -49,13 +52,19 @@ from pathlib import Path
 
 import pytest
 
-from yizkr.claims import ClaimBatch
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.core.corpus import ExclusionList
 from yizkr.core.instance import clear_contents, read_record, recorded_contents
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline import places, registrar, scratchwrite, writer
 from yizkr.pipeline.orchestrate import DocumentRun
 from yizkr.pipeline.scratch import CORPUS_DIR, CorpusContext, ScratchDriver
+from yizkr.pipeline.transcribe import Transcription
+from yizkr.pipeline.transcription_record import (
+    UNCLASSIFIED,
+    RecordPage,
+    TranscriptionRecord,
+)
 
 from . import test_live_scratch_reset
 from .conftest import LIVE_TESTS, fictional_png, fixture_mark
@@ -186,6 +195,32 @@ def part_of(sha1: str, child: dict, parent: dict, *dated) -> dict:
             "page_number": "1",
         },
     }
+
+
+def marriage_transcription(data: bytes) -> Transcription:
+    """The marriage certificate's transcription view: its second page,
+    printed "3", holds the place of birth with its chain, the evidence
+    of its record's containers."""
+    record = TranscriptionRecord(
+        document_class=UNCLASSIFIED,
+        pages=[
+            RecordPage(
+                page=1, status="transcribed", text=f"Heiratsurkunde {MARK}"
+            ),
+            RecordPage(
+                page=2,
+                printed_page="3",
+                status="transcribed",
+                text=f"geboren in {', '.join([FLÄCKFELD, MOCKBURG, HESSE])}",
+            ),
+        ],
+    )
+    return Transcription.from_record(
+        record,
+        artifact=ArtifactRef(sha1=hashlib.sha1(data).hexdigest()),
+        language="de",
+        engine="fake-vision",
+    )
 
 
 def batch(entities, claims) -> ClaimBatch:
@@ -323,6 +358,10 @@ class Run:
             doc = DocumentRun(path, self.run_dir)
             doc.dir.mkdir(parents=True, exist_ok=True)
             doc.batch.write_text(found.model_dump_json(indent=2))
+            if name.startswith("marriage-"):
+                doc.transcription.write_text(
+                    marriage_transcription(data).model_dump_json()
+                )
             self.documents.append(doc)
         self._resets = reset_with
         self._client = client
@@ -383,6 +422,15 @@ def cited(client: WikiClient, statement: dict, key: str) -> list[str]:
     return [
         snak["datavalue"]["value"]["id"]
         for reference in statement.get("references", [])
+        for snak in reference["snaks"].get(properties[key], [])
+    ]
+
+
+def values(client: WikiClient, reference: dict, key: str) -> list:
+    """The values a reference block gives the property `key`."""
+    properties, _ = client.vocabulary()
+    return [
+        snak["datavalue"]["value"]
         for snak in reference["snaks"].get(properties[key], [])
     ]
 
@@ -457,7 +505,8 @@ def test_a_scratch_run_asks_and_writes_its_places_after_a_reset(
         for prompt in first.engine.prompts:
             assert not re.search(r"\bQ\d+\b", prompt)
 
-        # a link the record alone states: no page and no time
+        # a link the record alone states: no time, its evidence on its
+        # page (#593)
         mockburg, hesse = first.created(0, "m"), first.created(0, "h")
         (statement,) = statements(fresh, mockburg, "part_of")
         assert target(statement) == hesse
@@ -467,14 +516,25 @@ def test_a_scratch_run_asks_and_writes_its_places_after_a_reset(
             run_item
         ]
         properties, _ = fresh.vocabulary()
-        assert all(
-            set(reference["snaks"])
-            <= {
-                properties["stated_in"],
-                properties["inferred_from_extraction_run"],
-            }
-            for reference in statement["references"]
-        )
+        stated, inferred = statement["references"]
+        assert set(stated["snaks"]) == {
+            properties[key]
+            for key in (
+                "stated_in",
+                "transcription_excerpt",
+                "page_number",
+                "printed_page_number",
+            )
+        }
+        assert set(inferred["snaks"]) == {
+            properties["inferred_from_extraction_run"]
+        }
+        evidence = ", ".join([FLÄCKFELD, MOCKBURG, HESSE])
+        assert values(fresh, stated, "transcription_excerpt") == [
+            {"text": evidence, "language": "de"}
+        ]
+        assert values(fresh, stated, "page_number") == ["2"]
+        assert values(fresh, stated, "printed_page_number") == ["3"]
         assert years(fresh, statement) == {}
 
         # a link a claim gives, to the namesake the answer names, with the
@@ -484,6 +544,15 @@ def test_a_scratch_run_asks_and_writes_its_places_after_a_reset(
         assert target(statement) == namesake
         assert years(fresh, statement) == {"point_in_time": 1941}
         assert cited(fresh, statement, "stated_in") == [first.artifact(1)]
+        # its container's evidence, with no page and no language to give
+        (stated, _) = statement["references"]
+        assert values(fresh, stated, "transcription_excerpt") == [
+            {
+                "text": ", ".join([KOSHNOVKA, KALDOVSKY, CHADSK]),
+                "language": "und",
+            }
+        ]
+        assert values(fresh, stated, "page_number") == []
         assert sorted(
             target(found) for found in statements(fresh, koshnovka, "part_of")
         ) == sorted([first.created(1, "d"), namesake])
