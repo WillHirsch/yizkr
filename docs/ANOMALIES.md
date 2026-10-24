@@ -33,6 +33,12 @@ comment on each. The run directory's files are described in
   calls the checks when a stage fails too, so a run in which every
   document fails is watched as closely as one in which none does. (A
   pause's timer, below, reads the control file, not the events.)
+- **As a scratch run's write writes each document** (the write stage,
+  `yizkr.pipeline.scratchwrite`, through `anomalies.written`): the write
+  stage's one check, `self-reference` (The write, below), on what the
+  writer refused of the document's batch. Registration's flags are
+  alerts of the write too, raised outside the thresholds (Registration,
+  below).
 
 An output made from answers the LLM cache adopted (an archived
 transcription, say) is an output the run stored whose calls the cache
@@ -69,7 +75,7 @@ Each alert is a line of `alerts.jsonl` in the run directory
 | Field | What it holds |
 |---|---|
 | `at`, `invocation` | when, and which invocation raised it |
-| `stage` | `transcription`, `extraction`, `critique` or `gedcom`; `run` for `anomaly-config`; `write` for registration's flags |
+| `stage` | `transcription`, `extraction`, `critique` or `gedcom`; `run` for `anomaly-config`; `write` for registration's flags and `self-reference` |
 | `check` | the check's name (below) |
 | `subject` | the document: the first 12 hex digits of its SHA-1 (empty for `anomaly-config`) |
 | `value` | the measured value: a number, a language code (`language-unexpected`), a model id (`model-mismatch`), or `true` for a check that measures a presence |
@@ -353,6 +359,43 @@ and is always new: the call was made in the run. Its
 stage is the call's. Value: the model the call ran on; `limit`, the
 role's model; `role`, and `against` (`manifest`, or `first call`). Alert
 only: it pauses nothing.
+
+### The write
+
+**`self-reference`**: claims a scratch run's write refused because their
+item value, the claim's own or a qualifier's, is their subject's item
+(yizkr.pipeline.writer, self_references; ADR-0035 §3.5). Validation
+refuses a claim that names its own subject before the identity map is
+read, so a self-loop the writer meets is one the map made: it put a
+claim's subject and its value, two mentions, in one cluster, as a false
+merge of a father and a son of one name with a `father` claim between
+them does (#491). The writer refuses the claim and writes the rest, and
+the merge stands: both people's births land on one item. The run report
+and the run diff count these refusals
+(`content.write.claims_self_referencing`, docs/RUN_REPORT.md,
+docs/RUN_DIFF.md); this check points the operator at the clusters to
+look at in the identity map (`identity-map.json` of the clustering
+stage) or the cluster review.
+
+It is the write stage's first check of the thresholds, a hook of the
+scratch write (#524): as each document is written, the write record
+counts its refused self-loops by the cluster that put the two refs on
+one item, the subject's or else the first item value's the map holds,
+and by the claim's property (`self_reference_clusters` in the stage's
+`record.json`, beside `self_references`), and the check raises one
+alert for each cluster and property. Any refusal raises it: there is no
+threshold, as one false merge is worth a look, and its only key is
+`enabled`. Stage `write`; subject, the document written; always new,
+since the write makes no model call; no `limit`. Value: the number of
+claims of the document refused for the cluster and the property;
+`cluster`, the cluster's id in the identity map (the SHA-256 of its
+members' fingerprints), left out for a self-loop no cluster makes (one
+QID named twice); `property`, the claim's property, by its key. Ids
+and counts alone: no label, no claim's text. Alert only: it pauses
+nothing, and nothing written changes.
+
+`yizkr ingest run`'s write refuses self-loops as the scratch write does
+and names them in its write step's record, but raises no alert.
 
 ### The configuration itself
 
@@ -647,7 +690,8 @@ transcription, a PDF read page by page's included, carries the flag the
 check raises now, not the one stored with it; and every output meets the
 per-output checks and the distributions over the whole run. The rate
 checks, which read a run's dispatches and calls rather than its outputs,
-are not checked again. Its alerts, all carried, are appended to the
+are not checked again, nor is `self-reference`, which reads what the
+write refused as it writes. Its alerts, all carried, are appended to the
 run's alerts under an invocation of their own, `recheck-<hex>`, which an
 `anomaly-recheck` event opens with the thresholds' digest and the number
 of documents it read, excerpts included. An excerpt's transcription,
@@ -693,5 +737,9 @@ and so is a run whose events or alerts this user cannot append to.
   with the whole run.
 - **Every invocation starts afresh**: the rolling windows, the first
   documents of each kind and the distributions do not carry over.
+- **`self-reference` is raised by the write that refuses**: a document
+  written by an earlier invocation of the run keeps the alert that
+  invocation raised, and an invocation whose reset finds the instance
+  holding what its write key makes writes nothing and raises none.
 - **The monitor counts every invocation's alerts**, a recheck's included;
   each alert names its invocation for a reader that wants the latest.

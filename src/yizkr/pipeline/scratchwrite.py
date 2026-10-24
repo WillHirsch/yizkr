@@ -85,7 +85,12 @@ whose item value is their subject's item, as the map may make it
 (yizkr.pipeline.writer, self_references), apart from extraction's
 rejects, and the claims refused by reason, every reason of
 yizkr.pipeline.writer.REFUSAL_REASONS in its order, summing to those
-refused. Depicts claims are
+refused. The self-loops are counted again by the identity map's cluster
+that put the two refs on one item and by the property
+(self_reference_clusters), and as each document is written the
+`self-reference` anomaly check raises an alert of the write for each
+cluster and property (yizkr.pipeline.anomalies.written): a self-loop
+points to a false merge in the map. Depicts claims are
 left out of what the writer is given, and counted: no scratch run writes
 a depicts statement (ADR-0005). Each run item is marked an unratified
 scratch run's (the `scratch_run` statement, naming the run) and records
@@ -193,7 +198,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from yizkr.claims import ClaimBatch
+from yizkr.claims import ClaimBatch, ItemValue
 from yizkr.core.instance import (
     clear_contents,
     private_dir,
@@ -202,6 +207,7 @@ from yizkr.core.instance import (
     watermark,
     write_state_dir,
 )
+from yizkr.pipeline import anomalies
 from yizkr.pipeline.rundir import PROGRESS
 from yizkr.pipeline.stages import (
     atomic_write_text,
@@ -900,6 +906,59 @@ def _depicts(documents: Sequence[Any]) -> int:
     return count
 
 
+def self_reference_clusters(
+    batch: ClaimBatch,
+    extracted: ClaimBatch,
+    identity: Any,
+    refused: Sequence[str],
+) -> list[dict]:
+    """The claims of `batch` the writer refused as naming their subject's
+    item, `refused` by their claim ids, counted by the identity map's
+    cluster that put two refs on one item and by the claim's property:
+    `{"cluster", "property", "claims"}` for each, in the order of their
+    clusters and properties. The cluster is the subject's, or else that of
+    the first item value, the claim's own or a qualifier's, the map puts
+    a mention of in a cluster; None for a self-loop no cluster makes (one
+    QID named twice). The mentions are mapped as the writer maps them
+    (yizkr.pipeline.writer.mapped_clusters, from the extraction's batch
+    `extracted`): ids and counts alone, for the `self-reference` anomaly
+    check (yizkr.pipeline.anomalies)."""
+    from yizkr.pipeline.review import claim_id
+    from yizkr.pipeline.writer import mapped_clusters
+
+    if not refused:
+        return []
+    wanted = set(refused)
+    clusters = mapped_clusters(batch, identity, extracted)[0]
+    counts: dict[tuple[str | None, str], int] = {}
+    for claim in batch.claims:
+        if claim_id(claim) not in wanted:
+            continue
+        refs = [claim.subject]
+        refs.extend(
+            value.value
+            for value in (claim.value, *(q.value for q in claim.qualifiers))
+            if isinstance(value, ItemValue)
+        )
+        found = next(
+            (
+                clusters[ref.local_id]
+                for ref in refs
+                if getattr(ref, "local_id", None) in clusters
+            ),
+            None,
+        )
+        counts[found, claim.property] = (
+            counts.get((found, claim.property), 0) + 1
+        )
+    return [
+        {"cluster": cluster, "property": prop, "claims": count}
+        for (cluster, prop), count in sorted(
+            counts.items(), key=lambda item: (item[0][0] or "", item[0][1])
+        )
+    ]
+
+
 def run_write(context: Any) -> list[str]:
     """The write stage (the module docstring)."""
     from yizkr.pipeline.writer import BatchWriter
@@ -999,6 +1058,9 @@ def run_write(context: Any) -> list[str]:
                     "skipped": result.skipped,
                     "refused": len(result.refused),
                     "self_references": len(result.self_references),
+                    "self_reference_clusters": self_reference_clusters(
+                        batch, extracted, identity, result.self_references
+                    ),
                     "refused_by_reason": result.refused_by_reason(),
                     "depicts_left_out": left_out,
                     "items_minted": len(result.minted),
@@ -1010,6 +1072,11 @@ def run_write(context: Any) -> list[str]:
                 }
                 record["failed"].pop(doc.sha1, None)
                 context.driver._raise_flags(doc, result.flags)
+                anomalies.written(
+                    context.run,
+                    doc,
+                    record["documents"][doc.sha1]["self_reference_clusters"],
+                )
             state = save_state(client_of(context), run_id, key, epoch)
             record["revision"] = state["watermark"]["revision"]
             save_record(context.directory, record)

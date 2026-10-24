@@ -43,7 +43,9 @@ The checks, which docs/ANOMALIES.md describes one by one:
   failures among the first documents of a kind, and the failures among
   its recent engine calls;
 * the engine's model: a call whose stream reports running on another
-  model than its role's.
+  model than its role's;
+* the write: claims a scratch run's write refused as self-loops, by the
+  identity map's cluster and the property, a sign of a false merge.
 
 They reuse the pipeline's own signals rather than judge again: the
 transcription check (yizkr.pipeline.transcription_check) and the reasons
@@ -154,6 +156,14 @@ TRANSCRIPTION = "transcription"
 EXTRACTION = "extraction"
 CRITIQUE = "critique"
 GEDCOM = "gedcom"
+WRITE = "write"
+
+# what a refusal of the write names its cluster by: the identity map's
+# cluster id, the SHA-256 of its members' fingerprints
+# (yizkr.pipeline.fingerprints.cluster_id); and the claim schema's
+# property keys
+_CLUSTER_ID = re.compile(r"[0-9a-f]{64}")
+_PROPERTY_KEY = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 # the `error` of a call event whose answer the claude CLI gave up on at the
 # output token limit: the engine read the give-up from the call's stream
@@ -285,6 +295,7 @@ class Checks(_Settings):
     kind_failures: FirstOfKind
     call_failures: Rolling
     model_mismatch: Check
+    self_reference: Check
 
     def outlier(self, name: str) -> Outlier:
         """The settings of a distribution check, by its name."""
@@ -664,6 +675,42 @@ _CHECK_FAILED = re.compile(
     r"\((?P<failure>[a-z-]+)\)"
 )
 _SIGNATURE = re.compile(r"\(signature (?P<signature>[a-z0-9-]+):")
+
+
+def self_reference_findings(refusals: Sequence[Mapping]) -> list[Finding]:
+    """The `self-reference` findings of one document's write: one per
+    entry of `refusals`, the write record's count of the claims it
+    refused as naming their subject's item, by the identity map's
+    cluster and the property (yizkr.pipeline.scratchwrite). Value, the
+    count; `cluster`, the cluster's id, or None, which leaves it out of
+    the alert, for a self-loop no cluster of the map makes (one QID named
+    twice); `property`, the property's key. Ids and counts alone: no
+    label, no claim's text. An entry whose fields are not of those forms
+    is read as None (the cluster) or "?" (the property), and one that
+    counts no claim is left out."""
+    findings = []
+    for entry in refusals:
+        count = _get(entry, "claims")
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            continue
+        cluster = _get(entry, "cluster")
+        prop = _get(entry, "property")
+        findings.append(
+            Finding(
+                "self-reference",
+                count,
+                fields={
+                    "cluster": cluster
+                    if isinstance(cluster, str)
+                    and _CLUSTER_ID.fullmatch(cluster)
+                    else None,
+                    "property": prop
+                    if isinstance(prop, str) and _PROPERTY_KEY.fullmatch(prop)
+                    else "?",
+                },
+            )
+        )
+    return findings
 
 
 def check_failure(reason: Any) -> Finding | None:
@@ -1542,6 +1589,28 @@ class AnomalyChecks:
         with self._lock:
             self._poll()
 
+    def written(self, doc: Any, refusals: Sequence[Mapping]) -> None:
+        """Check what the write refused of `doc`'s batch as naming the
+        claim's subject's item (self_reference_findings)."""
+        if not self.config.checks.self_reference.enabled:
+            return
+        with self._lock:
+            for finding in self_reference_findings(refusals):
+                self._raise(
+                    finding,
+                    stage=WRITE,
+                    subject=doc.sha1,
+                    kind=doc.kind,
+                    carried=False,
+                    once=(
+                        doc.sha1,
+                        WRITE,
+                        finding.check,
+                        finding.fields["cluster"],
+                        finding.fields["property"],
+                    ),
+                )
+
     def poll(self) -> None:
         """Read the invocation's new events, and look at the slices: one
         these checks paused that has been resumed starts its check
@@ -2239,6 +2308,13 @@ def reused(run: RunDir, doc: Any, stage: str, output: Any) -> None:
 def failed(run: RunDir, doc: Any, stage: str) -> None:
     """The orchestrator's `stage` failed for `doc`. Never raises."""
     _hook(run, "failed", doc, stage)
+
+
+def written(run: RunDir, doc: Any, refusals: Sequence[Mapping]) -> None:
+    """A scratch run's write wrote `doc`'s batch, refusing as
+    self-loops the claims `refusals` counts by cluster and property
+    (AnomalyChecks.written). Never raises."""
+    _hook(run, "written", doc, refusals)
 
 
 # -- checking a run's stored outputs again ----------------------------------
