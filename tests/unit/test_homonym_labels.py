@@ -19,6 +19,8 @@ import pytest
 import yaml
 
 from tests.fixtures.identity import mapped
+from tests.unit.test_bounded_vocabulary import ITEM_IDS
+from tests.unit.test_bounded_vocabulary import FakeWiki as BoundedWiki
 from tests.unit.test_mention_records import FakeBootstrapWiki
 from tests.unit.test_pipeline import MEDIA_SHA1, RUN
 from tests.unit.test_pipeline import FakeWiki as WriterWiki
@@ -82,6 +84,8 @@ def with_homonyms(snapshot: dict[str, dict]) -> dict[str, dict]:
 def a_client(snapshot: dict[str, dict]) -> WikiClient:
     client = WikiClient(config())
     client.snapshot = lambda: dict(snapshot)
+    # an instance with no mapping page: the vocabulary reads every label
+    client.page_text = lambda title: None
     return client
 
 
@@ -184,6 +188,8 @@ class TestTheVocabulary:
 
     @pytest.mark.parametrize("labels_read_first", [False, True])
     def test_a_vocabulary_label_two_items_hold_fails(self, labels_read_first):
+        """On a whole read: these clients have no mapping page, so the
+        vocabulary reads every label (#507)."""
         snapshot = manifest_snapshot()
         human = snapshot["Q1"]["label"]
         snapshot["Q950"] = {"label": human, "datatype": None}
@@ -193,6 +199,25 @@ class TestTheVocabulary:
 
         with pytest.raises(RuntimeError, match=f"{human!r}"):
             client.vocabulary()
+
+    def test_read_bounded_a_vocabulary_labels_homonym_goes_unseen(self):
+        """With the mapping page standing, the vocabulary reads the ids it
+        names alone (#507): another item under a manifest item's label is
+        not among them, so the vocabulary answers with the page's item,
+        where a whole read refuses the label. The bootstrap, which reads
+        whole, still refuses it (TestTheBootstrap)."""
+        wiki = BoundedWiki()
+        human = wiki.labels[ITEM_IDS["human"]]
+        wiki.labels["Q950"] = human
+
+        properties, items = wiki.vocabulary()
+
+        assert items["human"] == ITEM_IDS["human"]
+        assert wiki.whole_reads == 0
+        wiki.forget_vocabulary()
+        wiki.label_index()
+        with pytest.raises(RuntimeError, match=f"{human!r}"):
+            wiki.vocabulary()
 
 
 # -- the bootstrap ------------------------------------------------------------
@@ -395,6 +420,7 @@ class TestBackupAndTheSite:
     def homonyms(self, monkeypatch):
         snapshot = with_homonyms(manifest_snapshot())
         monkeypatch.setattr(WikiClient, "snapshot", lambda self: snapshot)
+        monkeypatch.setattr(WikiClient, "page_text", lambda self, title: None)
 
     def test_the_backups_exclusion_report_reads_the_vocabulary(self, homonyms):
         from yizkr.backup import exclusion_report
