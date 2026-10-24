@@ -889,6 +889,32 @@ def test_a_record_of_an_ended_process_is_read_again_before_it_is_named(
     assert f"pid {ended} has ended" in message
 
 
+def test_a_record_nested_too_deep_is_read_as_none(lock, clock):
+    """A held lock whose record cannot be decoded is waited on, and given
+    up on as held by a process with no record, rather than raising out of
+    the first refusal (#615)."""
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.write(fd, b"[" * 100_000)
+        with (
+            pytest.raises(LiveStackBusy) as gave_up,
+            hold(
+                lock,
+                timeout=0,
+                announce=lambda message: pytest.fail(message),
+                monotonic=clock.monotonic,
+                sleep=clock.sleep,
+            ),
+        ):
+            pytest.fail("took a lock that this process holds")
+    finally:
+        os.close(fd)
+    assert clock.sleeps == [RECORD_INTERVAL] * (RECORD_READS - 1)
+    assert "a process with no record in the lock file" in str(gave_up.value)
+
+
 def test_a_hold_waits_on_the_real_clocks_by_default():
     defaults = {
         name: parameter.default

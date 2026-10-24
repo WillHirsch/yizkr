@@ -2055,13 +2055,17 @@ class TestCallersOfAnAnswerTheCliGaveUpOn:
         )
 
     def test_a_single_call_extraction_fails_as_cut_off(self, cli, tmp_path):
-        """No answer came, so there is no claim to keep."""
+        """No answer came, so there is no claim to keep: the extraction
+        fails with the engine's reason (#650)."""
         client = caching(
             ClaudeCodeClient(model=MODEL), open_cache(tmp_path / "cache")
         )
         cli.edit = gave_up
-        with pytest.raises(OutputLimitReached, match="cut off at max_tokens"):
+        with pytest.raises(
+            ExtractionFailed, match="no answer: cut off at max_tokens"
+        ) as raised:
             LlmClaimExtractor(client).extract(transcription(), DOC_REF)
+        assert isinstance(raised.value.__cause__, OutputLimitReached)
         assert not list((tmp_path / "cache").glob("*/*.json"))
 
     def test_a_place_adjudication_raises_as_cut_off(self, cli):

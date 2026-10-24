@@ -35,6 +35,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from pydantic import ValidationError
+
 import yizkr
 from yizkr.claims import (
     SCHEMA_REASON,
@@ -49,7 +51,9 @@ from yizkr.claims import (
 from yizkr.model.schema import load_acceptance, load_manifest
 from yizkr.pipeline.llm import (
     CUT_OFF_AT_LIMIT,
+    ClassifierRefused,
     LlmClient,
+    OutputLimitReached,
     at_output_limit,
     reject_response,
 )
@@ -424,6 +428,28 @@ def _skip_space(text: str, index: int, step: int) -> int | None:
     return None
 
 
+class ExtractionFailed(RuntimeError):
+    """The extraction ended with no claims for want of a usable answer.
+    The message is the reason the extraction stage records and
+    `ingest extract` reports in one line; any other exception, a bare
+    ValueError included, is a bug.
+
+    The single-call extractors raise it for an answer with no claim JSON,
+    one that holds no claims, one whose every claim failed validation, or
+    a call the engine gave no answer to (llm.OutputLimitReached,
+    llm.ClassifierRefused); and for a claims file that cannot be read, is
+    not JSON or not a JSON object, or fails schema or manifest validation.
+
+    The chunked extractor (chunking.ChunkedClaimExtractor) raises it when
+    a chunk failed, the chunks' answers held objects the parser could not
+    read as claims, or validation rejected every claim. The message leads
+    with that outcome and its causes, then names any fallback tier taken,
+    with the reason each attempt at the refused turn gave. An extraction
+    that ends with no claims because the answers it accepted say the
+    document holds none, on whichever tier, is not a failure: its batch
+    is returned, and the extractor's `attention` says why it is empty."""
+
+
 def _parse_response(response: str) -> dict:
     """Extract claim JSON from model output.
 
@@ -445,7 +471,7 @@ def _parse_response(response: str) -> dict:
         elif "subject" in obj and "property" in obj:
             salvaged.append(obj)
     if not found and not salvaged:
-        raise ValueError(
+        raise ExtractionFailed(
             f"no claim JSON in extractor response (neither a 'claims' "
             f"object nor loose claim objects): {response.strip()[:200]!r}"
         )
@@ -750,15 +776,17 @@ class LlmClaimExtractor:
     An answer the extractor cannot fully use is rejected through the
     client (llm.reject_response), so that a client that keeps answers
     asks the engine again next time rather than serving it: one with no
-    claim JSON or no valid claim (the extraction then fails), and one cut
-    off, which the engine stopped at its output limit
-    (llm.at_output_limit) or which has no terminal sentinel (the claims it
-    holds are still returned). An answer the client kept from an earlier
-    call is asked for once more when it is rejected, and the engine's
-    answer is used in its place, as it would be without the cache. A call
-    the engine gave up on at its output limit (llm.OutputLimitReached)
-    gave no answer and so no claim: the extraction fails with it, and the
-    cache keeps nothing for it, so the next run asks again."""
+    claim JSON or no valid claim (the extraction then fails, with
+    ExtractionFailed), and one cut off, which the engine stopped at its
+    output limit (llm.at_output_limit) or which has no terminal sentinel
+    (the claims it holds are still returned). An answer the client kept
+    from an earlier call is asked for once more when it is rejected, and
+    the engine's answer is used in its place, as it would be without the
+    cache. A call the engine gave up on at its output limit
+    (llm.OutputLimitReached), or one the safety classifier refused
+    (llm.ClassifierRefused), gave no answer and so no claim: the
+    extraction fails, with ExtractionFailed, and the cache keeps nothing
+    for it, so the next run asks again."""
 
     def __init__(
         self,
@@ -818,7 +846,12 @@ class LlmClaimExtractor:
             if reject_response(self.client, response, reason) and not again:
                 raise _KeptAnswerRejected(reason)
 
-        response = self.client.complete(prompt)
+        try:
+            response = self.client.complete(prompt)
+        except (OutputLimitReached, ClassifierRefused) as exc:
+            raise ExtractionFailed(
+                f"the engine gave no answer: {exc}"
+            ) from exc
         cut_off = at_output_limit(self.client, response)
         if self.raw_dump is not None:
             # Engine output is expensive; persist it before anything that
@@ -828,7 +861,7 @@ class LlmClaimExtractor:
             self.raw_dump.write_text(response)
         try:
             payload = _parse_response(response)
-        except ValueError:
+        except ExtractionFailed:
             reject_answer(response, "extraction: no claim JSON")
             raise
         finished = any(
@@ -847,14 +880,16 @@ class LlmClaimExtractor:
                 self.rejects_dump.unlink(missing_ok=True)  # no stale rejects
         if not batch.claims:
             reject_answer(response, "extraction: no valid claim")
-            detail = "\n  ".join(
-                problem
-                for reject in rejects[:20]
-                for problem in reject["problems"]
+            if not rejects:
+                raise ExtractionFailed("the answer holds no claims")
+            where = (
+                f"; reasons in {self.rejects_dump}"
+                if self.rejects_dump is not None
+                else ""
             )
-            raise ValueError(
+            raise ExtractionFailed(
                 f"every extracted claim failed validation "
-                f"({len(rejects)} rejects):\n  {detail}"
+                f"({len(rejects)} rejects{where})"
             )
         if cut_off:
             reject_answer(response, f"extraction: {CUT_OFF_AT_LIMIT}")
@@ -876,7 +911,9 @@ class ClaimFileExtractor:
     cite their artifacts themselves, by content key, and are validated as
     they are, with the artifacts the transcription's pages place taken as
     placed by the transcription's artifact (placed_by): `extract` takes
-    the same arguments as the other extractors and uses only that.
+    the same arguments as the other extractors and uses only that. A
+    file that cannot be read, is not JSON or not a JSON object, or fails
+    schema or manifest validation raises ExtractionFailed.
     """
 
     def __init__(
@@ -888,7 +925,21 @@ class ClaimFileExtractor:
     def extract(
         self, transcription: Transcription, artifact: ArtifactRef
     ) -> ClaimBatch:
-        payload = json.loads(self.claims_file.read_text())
+        try:
+            payload = json.loads(self.claims_file.read_text())
+        except OSError as exc:
+            raise ExtractionFailed(
+                f"cannot read the claims file {self.claims_file}: "
+                f"{exc.strerror or exc}"
+            ) from exc
+        except ValueError as exc:  # not UTF-8, or not JSON
+            raise ExtractionFailed(
+                f"the claims file {self.claims_file} is not JSON: {exc}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ExtractionFailed(
+                f"the claims file {self.claims_file} is not a JSON object"
+            )
         if "extraction_run" not in payload:
             payload = {
                 "extraction_run": run_metadata(
@@ -896,12 +947,17 @@ class ClaimFileExtractor:
                 ).model_dump(mode="json"),
                 "claims": payload.get("claims", payload),
             }
-        batch = ClaimBatch.model_validate(payload)
+        try:
+            batch = ClaimBatch.model_validate(payload)
+        except ValidationError as exc:
+            raise ExtractionFailed(
+                f"claims file failed schema validation: {exc}"
+            ) from exc
         problems = validate_against_manifest(
             batch, placed=placed_by(transcription, transcription.artifact)
         )
         if problems:
-            raise ValueError(
+            raise ExtractionFailed(
                 "claims file failed manifest validation:\n  "
                 + "\n  ".join(problems)
             )

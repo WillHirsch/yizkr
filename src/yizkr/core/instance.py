@@ -168,7 +168,8 @@ def clear_contents(
 def read_record(config: Config, root: Path | None = None) -> Any:
     """The instance-contents record as it stands in its file, or None when
     there is none. Raises OSError or ValueError when the file cannot be
-    read as JSON."""
+    read as JSON, and RecursionError when it is nested too deep to
+    decode."""
     try:
         return json.loads(contents_path(config, root).read_text())
     except FileNotFoundError:
@@ -217,7 +218,7 @@ def recorded_contents(client, *, root: Path | None = None) -> RecordedContents:
     path = contents_path(config, root)
     try:
         record = read_record(config, root)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         return RecordedContents(None, why=f"{path} cannot be read ({exc})")
     if record is None:
         return RecordedContents(None, why="no key is recorded")
@@ -321,14 +322,14 @@ def host_kept_marker(config: Config, root: Path | None = None) -> str | None:
     """What the host-side kept-state marker of the instance `config` names
     says, when there is one; None when there is none. Whatever the file
     holds, its being there marks the instance kept, so one that cannot be
-    read marks it kept too."""
+    read, nested too deep to decode included, marks it kept too."""
     path = kept_path(config, root)
     if not os.path.lexists(path):
         return None
     try:
         kept = json.loads(path.read_text())["kept"]
         said = f"marked kept by {kept['by']} at {kept['at']}"
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, RecursionError):
         said = "a marker that cannot be read, which marks it kept all the same"
     return f"{path}: {said}"
 

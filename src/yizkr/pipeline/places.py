@@ -394,7 +394,7 @@ def record_links(run_dir: Path) -> list[StatedLink]:
     for directory in _document_dirs(run_dir):
         try:
             written = json.loads((directory / "write.json").read_text())
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             continue
         if not isinstance(written, dict):
             continue

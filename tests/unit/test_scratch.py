@@ -1985,6 +1985,18 @@ class TestPreflight:
             (config / ".claude.json").write_text('{"oauthAccount": {"x": 1}}')
         assert scratch.claude_logged_in()
 
+    def test_a_global_config_nested_too_deep_is_no_login(
+        self, tmp_path, monkeypatch
+    ):
+        """A config the check cannot decode names no account, rather than
+        raising out of the estimate or the preflight (#615)."""
+        config = tmp_path / "other-config"
+        config.mkdir()
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+        (config / ".claude.json").write_text("[" * 100_000)
+        assert not scratch.claude_logged_in()
+
     def test_a_pdf_needs_the_renderer(self, tmp_path, fakes, monkeypatch):
         from yizkr.pipeline import transcribe
 
