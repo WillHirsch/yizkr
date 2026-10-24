@@ -919,8 +919,16 @@ class TestStringListsAreShownAsStrings:
             '"titles": ["..."]}. * Titles are honorifics and ranks (Mrs, '
             "Dr., Frau, Fräulein, Mefrou, Rabbi), never a kinship word. An "
             'office or an occupation beside a name ("Standesbeamter", '
-            '"Hutmachermeister") is no title and no name part: it is a '
-            "claim at extraction. * status says what the label is"
+            '"Hutmachermeister") is no name part: it is a claim at '
+            "extraction. * status says what the label is"
+        ) in _PERSON
+
+    def test_the_patronymic_bullet_keeps_its_markers(self):
+        assert (
+            "of its own, never a surname. Titles and suffixes (generational "
+            'and status words, such as "Wwe.") never name anyone. A word '
+            'that states a fact (a widow\'s marker, "the late") is no name '
+            "part: it becomes a claim at extraction."
         ) in _PERSON
 
     def test_the_line_is_said_once(self):

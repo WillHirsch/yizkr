@@ -136,10 +136,11 @@ Amended by #625 (2026-10-24, the owner's option (b), batched with
 #627): the entity-manifest prompt shows each of those lists as a list
 of strings (`"titles": ["..."]`), never as a bare `[...]` beside the
 `written` objects of a given name, a surname and a place's name, and
-the line that says an office or an occupation beside a name is a
-claim, not a name part or a title, sits next to `titles`. #514's
-reading stays as the safety net, and its `read as text` count shows
-whether the prompt is followed. The change re-asks every manifest call.
+the line that says an occupation beside a name is a claim, not a name
+part, sits next to `titles`, and now names an office beside a name as
+well as an occupation. #514's reading stays as the safety net, and its
+`read as text` count shows whether the prompt is followed. The change
+re-asks every manifest call and every chunk call that forks from it.
 
 Amended by #499 (2026-10-16): every form a source uses to name or
 address a person is an alias, and each that is no plain name form is

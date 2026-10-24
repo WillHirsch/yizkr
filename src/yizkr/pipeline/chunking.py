@@ -712,8 +712,8 @@ as an empty string ("").
   "unsplit": ["..."], "titles": ["..."]}}.
   * Titles are honorifics and ranks (Mrs, Dr., Frau, Fräulein, Mefrou,
     Rabbi), never a kinship word. An office or an occupation beside a
-    name ("Standesbeamter", "Hutmachermeister") is no title and no name
-    part: it is a claim at extraction.
+    name ("Standesbeamter", "Hutmachermeister") is no name part: it is a
+    claim at extraction.
   * status says what the label is: `name` where it names the person;
     `role`, a role or form-field label (INFORMANT) or an office the
     source names alone ("the consul"); `kinship`, a literal kinship term
