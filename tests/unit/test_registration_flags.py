@@ -3866,7 +3866,7 @@ class TestTheClientsBoundedReads:
         from yizkr.core.config import Config
         from yizkr.core.wiki import WikiClient
 
-        return WikiClient(
+        client = WikiClient(
             Config(
                 wikibase_url="http://wiki.invalid",
                 concept_uri="http://wiki.invalid/entity/",
@@ -3877,6 +3877,17 @@ class TestTheClientsBoundedReads:
                 env_file=None,
             )
         )
+
+        def no_mapping_page(params):
+            """An instance with no mapping page, so the vocabulary reads
+            every label (snapshot), as the unit tests read no wiki (#618).
+            The page read is all a test that gives no api_get of its own
+            asks for."""
+            assert params.get("prop") == "revisions", params
+            return {"query": {"pages": [{"missing": True}]}}
+
+        client.api_get = no_mapping_page
+        return client
 
     def test_fetch_claims_asks_for_the_ids_named_fifty_a_request(self):
         client = self.client()

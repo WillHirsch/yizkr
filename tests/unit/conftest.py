@@ -64,14 +64,35 @@ changing what they check:
   gives the stages the fake wiki and stand-ins they use
   (test_scratch_write.py, test_scratch_places.py).
 
-test_conftest.py tests the first two and the last three, and
+- **No network.** No unit test reaches past this machine (the
+  `_no_network` fixture). A name lookup (`socket.getaddrinfo`,
+  `gethostbyname`, `gethostbyname_ex`) of any host but a loopback one,
+  and a socket connect to any address but a loopback one, raise
+  NetworkRefused, naming the test and what it asked for. Unix sockets,
+  loopback servers (the status page's, the live-stack lock's) and
+  lookups of no host or `localhost` go through. NetworkRefused is no
+  OSError, so a client that falls back when a connection fails does not
+  take it for one; and as code can still catch it, every refusal is
+  recorded, and the test fails at its teardown if it made any. A unit
+  test that reads the wiki gives its client a stand-in `api_get` (or
+  `page_text`, `snapshot`) instead. A proxy listening on loopback would let
+  a request out past the guard, so the proxy variables
+  (PROXY_VARIABLES) are removed from the environment too, and a client
+  connects, or looks its host up, itself. Child processes a test starts,
+  and fixtures of a module or of the session, which set up before the
+  test's, are not guarded; the processes inherit the environment
+  without the proxy variables.
+
+test_conftest.py tests the first two and the last four, and
 test_anomalies.py the third.
 """
 
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import os
+import socket
 import sys
 import warnings
 from collections.abc import Container, Iterable, MutableMapping
@@ -290,3 +311,123 @@ def _no_anomaly_timers(monkeypatch):
         anomalies._WATCHES.clear()
     with anomalies._REGISTRY_LOCK:
         anomalies._REGISTRY.clear()
+
+
+class NetworkRefused(Exception):
+    """A unit test asked for a name lookup or a connection off this
+    machine."""
+
+
+def is_local_host(host) -> bool:
+    """Whether a lookup of `host` stays on this machine: no host (None or
+    empty, which getaddrinfo reads as the local one), `localhost` or a
+    name under it, or a loopback or unspecified address."""
+    if host is None:
+        return True
+    if isinstance(host, (bytes, bytearray)):
+        host = bytes(host).decode("ascii", "replace")
+    host = str(host).strip("[]").split("%", 1)[0].rstrip(".").lower()
+    if host in ("", "localhost") or host.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_unspecified
+
+
+def is_local_address(family, address) -> bool:
+    """Whether a connect to `address`, on a socket of `family`, stays on
+    this machine: any socket but an internet one (a Unix socket, say), or
+    an internet socket's loopback or unspecified address."""
+    if family not in (socket.AF_INET, socket.AF_INET6):
+        return True
+    host = address[0] if isinstance(address, tuple) and address else address
+    try:
+        found = ipaddress.ip_address(str(host).split("%", 1)[0])
+    except ValueError:
+        return False
+    return found.is_loopback or found.is_unspecified
+
+
+# The variables that send a request through a proxy, read by requests and
+# urllib (urllib.request.getproxies) in either case.
+PROXY_VARIABLES = tuple(
+    name
+    for scheme in ("http", "https", "all")
+    for name in (f"{scheme}_proxy", f"{scheme.upper()}_PROXY")
+)
+
+
+class NetworkGuard:
+    """Refuses lookups and connects off this machine for the test `test`,
+    and records each refusal. Installed, it also removes the proxy
+    variables."""
+
+    LOOKUPS = ("getaddrinfo", "gethostbyname", "gethostbyname_ex")
+    CONNECTS = ("connect", "connect_ex")
+
+    def __init__(self, test: str) -> None:
+        self.test = test
+        self.refused: list[str] = []
+
+    def refuse(self, request: str):
+        self.refused.append(request)
+        raise NetworkRefused(
+            f"{self.test} asked for {request}, off this machine: unit "
+            "tests are offline (tests/unit/conftest.py); give the client "
+            "a stand-in api_get instead"
+        )
+
+    def lookup(self, name: str, real):
+        def guarded(host, *args, **kwargs):
+            if not is_local_host(host):
+                self.refuse(f"socket.{name}({host!r})")
+            return real(host, *args, **kwargs)
+
+        return guarded
+
+    def connect(self, name: str, real):
+        guard = self
+
+        def guarded(sock, address):
+            if not is_local_address(sock.family, address):
+                guard.refuse(f"socket.{name}({address!r})")
+            return real(sock, address)
+
+        return guarded
+
+    def install(self, monkeypatch) -> None:
+        for name in PROXY_VARIABLES:
+            monkeypatch.delenv(name, raising=False)
+        for name in self.LOOKUPS:
+            monkeypatch.setattr(
+                socket, name, self.lookup(name, getattr(socket, name))
+            )
+        for name in self.CONNECTS:
+            monkeypatch.setattr(
+                socket.socket,
+                name,
+                self.connect(name, getattr(socket.socket, name)),
+            )
+
+    def check(self) -> None:
+        """Fail if the test asked for anything off this machine, even if
+        it caught the refusal."""
+        if self.refused:
+            pytest.fail(
+                f"{self.test} asked for the network: "
+                + "; ".join(self.refused),
+                pytrace=False,
+            )
+
+
+@pytest.fixture(autouse=True)
+def _no_network(request, monkeypatch):
+    """Refuse every name lookup and connect off this machine for the test,
+    with no proxy to send a request through, and fail it at teardown if it
+    asked for one; yield the guard."""
+    guard = NetworkGuard(request.node.nodeid)
+    guard.install(monkeypatch)
+    yield guard
+    guard.check()

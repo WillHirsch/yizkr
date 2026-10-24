@@ -1,16 +1,18 @@
 """Offline tests for the unit tests' own defaults (tests/unit/conftest.py,
 #254): one BLAS thread unless the environment gives a thread count, sync
 calls that flush nothing unless a test is marked `real_fsync`, a
-record of the instance of each test's own (#199), and no settings from
-the host (#422).
+record of the instance of each test's own (#199), no settings from the
+host (#422), and no network (#618).
 """
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import hashlib
 import os
 import posix
+import socket
 import subprocess
 import sys
 import warnings
@@ -335,3 +337,139 @@ class TestHostSettings:
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert "3 passed" in result.stdout
+
+
+class TestNoNetwork:
+    @pytest.mark.parametrize(
+        "host",
+        [None, "", "localhost", "LOCALHOST.", "status.localhost", b"localhost"]
+        + ["127.0.0.1", "127.8.0.1", "::1", "[::1]", "0.0.0.0", "::"],
+    )
+    def test_a_lookup_of_this_machine_is_local(self, host):
+        assert conftest.is_local_host(host)
+
+    @pytest.mark.parametrize(
+        "host",
+        ["wiki.invalid", "wiki.example", "localhost.example", "192.0.2.1"]
+        + ["2001:db8::1", "[2001:db8::1]", b"query.invalid"],
+    )
+    def test_a_lookup_of_another_host_is_not(self, host):
+        assert not conftest.is_local_host(host)
+
+    @pytest.mark.parametrize(
+        "family, address, local",
+        [
+            (socket.AF_UNIX, "/tmp/cue.sock", True),
+            (socket.AF_UNIX, b"\0abstract", True),
+            (socket.AF_INET, ("127.0.0.1", 8080), True),
+            (socket.AF_INET, ("0.0.0.0", 8080), True),
+            (socket.AF_INET6, ("::1", 8080, 0, 0), True),
+            (socket.AF_INET6, ("fe80::1%lo", 8080, 0, 0), False),
+            (socket.AF_INET, ("192.0.2.1", 80), False),
+            (socket.AF_INET6, ("2001:db8::1", 80, 0, 0), False),
+            # connect resolves a name itself, past the guarded lookups
+            (socket.AF_INET, ("localhost", 80), False),
+            (socket.AF_INET, ("wiki.invalid", 80), False),
+        ],
+    )
+    def test_a_connect_is_local_on_loopback_alone(
+        self, family, address, local
+    ):
+        assert conftest.is_local_address(family, address) is local
+
+    def test_a_request_off_this_machine_is_refused_naming_the_test(
+        self, request, _no_network
+    ):
+        """Refused at the lookup, as NetworkRefused, which is no OSError,
+        so requests does not take it for a failed connection."""
+        import requests
+
+        with pytest.raises(conftest.NetworkRefused) as refused:
+            requests.get("http://wiki.invalid/w/api.php", timeout=5)
+        assert not isinstance(refused.value, OSError)
+        assert request.node.nodeid in str(refused.value)
+        assert "getaddrinfo('wiki.invalid'" in str(refused.value)
+        assert "stand-in api_get" in str(refused.value)
+        assert _no_network.refused == ["socket.getaddrinfo('wiki.invalid')"]
+        _no_network.refused.clear()
+
+    @pytest.mark.parametrize("call", ["connect", "connect_ex"])
+    def test_a_connect_off_this_machine_is_refused(self, _no_network, call):
+        with (
+            socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock,
+            pytest.raises(conftest.NetworkRefused, match="192.0.2.1"),
+        ):
+            getattr(sock, call)(("192.0.2.1", 80))
+        with pytest.raises(conftest.NetworkRefused, match="gethostbyname"):
+            socket.gethostbyname("wiki.invalid")
+        with pytest.raises(conftest.NetworkRefused, match="hostbyname_ex"):
+            socket.gethostbyname_ex("wiki.invalid")
+        assert len(_no_network.refused) == 3
+        _no_network.refused.clear()
+
+    def test_a_wiki_client_s_read_is_refused(self, _no_network):
+        """A WikiClient's api_get, as a unit fake that gives none makes
+        it, reaches no wiki."""
+        from yizkr.core.config import Config
+        from yizkr.core.wiki import WikiClient
+
+        client = WikiClient(
+            Config(
+                wikibase_url="https://wiki.invalid",
+                concept_uri="https://wiki.invalid/entity/",
+                admin_name="",
+                admin_pass="",
+                wdqs_url=None,
+                sparql_url=None,
+                env_file=None,
+            )
+        )
+        with pytest.raises(conftest.NetworkRefused, match="wiki.invalid"):
+            client.page_text("Yizkr:Vocabulary")
+        assert _no_network.refused
+        _no_network.refused.clear()
+
+    def test_loopback_and_unix_sockets_go_through(self, tmp_path):
+        with socket.create_server(("127.0.0.1", 0)) as server:
+            host, port = server.getsockname()[:2]
+            with socket.create_connection(("localhost", port), timeout=5):
+                pass
+            with socket.socket() as sock:
+                assert sock.connect_ex((host, port)) == 0
+        path = str(tmp_path / "cue.sock")
+        with socket.socket(socket.AF_UNIX) as listener:
+            listener.bind(path)
+            listener.listen()
+            with socket.socket(socket.AF_UNIX) as sock:
+                sock.connect(path)
+
+    def test_a_caught_refusal_still_fails_the_test(self):
+        """Code under test can catch the refusal (a fallback that catches
+        every exception, say), so the guard fails the test at teardown
+        for any refusal it recorded."""
+        guard = conftest.NetworkGuard("tests/unit/test_a.py::test_b")
+        guard.check()
+        with contextlib.suppress(conftest.NetworkRefused):
+            guard.refuse("socket.getaddrinfo('wiki.invalid')")
+        with pytest.raises(
+            pytest.fail.Exception,
+            match=r"test_a.py::test_b asked for the network: "
+            r"socket.getaddrinfo\('wiki.invalid'\)",
+        ):
+            guard.check()
+
+    def test_no_proxy_is_left_to_send_a_request_through(self):
+        """A proxy on loopback would pass the guard and reach the
+        network, so the guard removes every proxy variable."""
+        import urllib.request
+
+        assert not set(conftest.PROXY_VARIABLES) & set(os.environ)
+        with pytest.MonkeyPatch.context() as patch:
+            for name in conftest.PROXY_VARIABLES:
+                patch.setenv(name, "http://127.0.0.1:3128")
+            conftest.NetworkGuard("tests/unit/test_a.py::test_b").install(
+                patch
+            )
+            assert not set(conftest.PROXY_VARIABLES) & set(os.environ)
+        # what requests and urllib look up for a request's scheme
+        assert not {"http", "https", "all"} & set(urllib.request.getproxies())
