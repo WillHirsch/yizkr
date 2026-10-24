@@ -1028,7 +1028,14 @@ the rule admits forms (a) and (b) only.
   `placed` subject in the writer must also have an item. A claim of any
   form but `source` with no excerpt is a reject under
   `excerpt_required` and a `subject_rule` refusal whose message says it
-  carries no excerpt (question 8).
+  carries no excerpt (question 8); the writer reads the excerpt as the
+  instance keeps text, so one the instance would keep blank is none.
+- **An approved equivalence today.** `reconcile.apply_equivalences`
+  turns an approved local ref into a QID reference, which no form takes,
+  so a document-subject claim on a (c4) mention or a GEDCOM media item
+  whose entity a curator approves as an existing item is refused by
+  validation and the writer from then on. Whether an approval should be
+  read as the link §10.1(c) names is an owner question (#661).
 - **The interim exception is gone**: `claims.STRUCTURED_ADAPTERS`,
   `GEDCOM_ADAPTER`, `structured_batch` and the `structured` argument;
   `gedcom.ADAPTER_IDENTIFIER` keeps its value, "gedcom-adapter".
@@ -1038,14 +1045,16 @@ the rule admits forms (a) and (b) only.
   `unplaced_hint` says "claim(s) about an artifact other than their
   source".
 - **The kind check.** `claims.artifact_kind_problems` names an entity
-  record or a local ref of an artifact kind, each problem ending in
+  record or a local ref of an artifact kind, and a claim of `instance_of`
+  or `subclass_of` whose value is one, each problem ending in
   `[artifact_kind]`. `extract.salvage_valid_claims` rejects such a
   claim under that reason, counted in `rejected_by_reason`, and refuses
   an entity manifest that holds such a record, as it refuses one that
   fails validation. `ChunkedClaimExtractor._parse_entity_manifest`
   gives such a record as a problem, as it does an unknown kind, so the
-  answer is unusable and, after its attempts, the manifest falls back,
-  which the run report counts as the `manifest` fallback tier.
+  answer is unusable: each such answer is counted in the coverage's
+  `manifest_artifact_kind`, whether a later attempt mends the turn or the
+  manifest falls back, and the run report sums it.
   `artifact_fragment` is no artifact kind, and passes. Validation
   itself does not apply the check, so a hand-written batch or a
   structured record keeps an artifact-kind entity.
@@ -1053,17 +1062,30 @@ the rule admits forms (a) and (b) only.
   document places by its first place ("page 6, image 1",
   `critique.artifact_places`), as the extraction prompts list it; a
   finding that names a claim so resolves to it at the critique and on
-  the review sheet, which reads the transcription view for the places.
+  the review sheet, which reads the transcription view for the places,
+  and a place is matched whatever its case.
   A (c4) mention is named by its manifest id, as every entity is, which
   the entities block labels with its type hint.
 - **The report** counts the document-subject claims by subject form
   (`container_claims.document_subject_by_form`: `source`, `placed`,
   `record`, `mention`, and `other` for a subject validation refuses).
-- **The export** (question 9) leaves out whole a document-subject
-  statement whose subject is `part of`, at any rank, an item one of its
-  references is `stated in` (`backup.placed_subject_rule`).
+- **The export** (question 9) leaves out whole, at any rank, a
+  document-subject statement whose subject carries a `media SHA-1` and
+  one of whose references is `stated in` another item, or whose subject
+  is `part of`, at any rank, an item one of its references is `stated
+  in` (`backup.placed_subject_rule`). It so keys on what form (a) is in
+  the graph: an artifact registered by its bytes that another source
+  states, whether a record of derived media or a curator's `--placed`
+  pair placed it. A container's claim that agrees with the image's own,
+  which the writer makes one statement with two references, goes whole,
+  the image's own reference with it, failing closed. An un-held media
+  item and a (c4) mention item carry no SHA-1, so their statements are
+  exported as any of their source's are, the (c4) excerpt included.
 - **The site.** `named_in_html` names a (c4) mention item, which has no
   artifact page, by its label, unlinked.
+- **Chunk ownership.** Under entity assignment a (c4) claim belongs to
+  the chunk its mention entity is assigned to, so a mention the manifest
+  marks `extract: false` is in no chunk and gets no (c4) claim.
 - **What is not built.** The manifest has no `machine_assisted` item yet
   (ADR-0008's follow-up B), so the booklet's translation claims carry
   no such qualifier in the pipeline; the fixture universe gives them
