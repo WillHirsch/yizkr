@@ -1140,6 +1140,25 @@ class TestTheOtherGuards:
             stack_.reset().run()
         assert stack_.events == ["context show", "info", "config"]
 
+    @pytest.mark.parametrize(
+        "output", ["not json", "[" * 100_000], ids=["not json", "too deep"]
+    )
+    def test_a_compose_config_that_cannot_be_read_is_refused(
+        self, stack_, output
+    ):
+        """Refused as naming no project, rather than raising out of the
+        reset (#615 review)."""
+        docker = stack_.docker
+
+        def runner(argv, **options):
+            if "config" in argv:
+                return output
+            return docker(argv, **options)
+
+        stack_.docker = runner
+        with pytest.raises(ResetRefused, match="names no project"):
+            stack_.reset().run()
+
     def test_a_wiki_with_no_config_directory_is_refused(self, stack_):
         config = stack_.docker._config()
         config["services"]["wikibase"]["volumes"] = []
@@ -1380,10 +1399,15 @@ class TestTheOtherGuards:
         record = json.loads((stack_.records / HOST / ORIGIN_FILE).read_text())
         assert record["deploy_dir"] == str(stack_.deploy.resolve())
 
-    def test_an_origin_record_that_cannot_be_read_is_refused(self, stack_):
+    @pytest.mark.parametrize(
+        "text", ["{not json", "[" * 100_000], ids=["not json", "too deep"]
+    )
+    def test_an_origin_record_that_cannot_be_read_is_refused(
+        self, stack_, text
+    ):
         record = stack_.records / HOST / ORIGIN_FILE
         record.parent.mkdir(parents=True)
-        record.write_text("{not json")
+        record.write_text(text)
         stack_.docker.containers.clear()
         with pytest.raises(ResetRefused, match="cannot be read") as refused:
             stack_.reset().run()

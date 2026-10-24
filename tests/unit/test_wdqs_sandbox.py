@@ -1042,6 +1042,18 @@ class TestWork:
         assert fake.calls() == []
 
 
+@pytest.mark.parametrize(
+    "text", ["{cut", "[" * 100_000], ids=["not json", "too deep"]
+)
+def test_an_unreadable_state_file_is_a_sandbox_error(tmp_path, text):
+    """A state file that cannot be decoded, nested too deep included, is
+    refused with the hint to check it by hand (#615 review)."""
+    state = tmp_path / "state.json"
+    state.write_text(text)
+    with pytest.raises(ws.SandboxError, match="unreadable state file"):
+        ws.read_state(state)
+
+
 class TestWaitsOnTheClock:
     """The waits poll on the module's clock: on a fake one they end by
     how far its sleeps have moved it, never by real time."""
