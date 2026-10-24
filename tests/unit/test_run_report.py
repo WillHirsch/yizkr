@@ -2661,18 +2661,18 @@ class TestContent:
             notes={"relation": 1},
         )
         target.write_text(json.dumps(value))
-        # the certificate's readings, in the other order: the aggregate
-        # lists them the most frequent first, whichever document gave
-        # them first
+        # the certificate, read first, gives the less frequent reading:
+        # the aggregate lists them the most frequent first, whichever
+        # document gave them first
         name = slugify(Path(FILES[CERT][0]).stem)
         target = path / name / "extraction" / "coverage.json"
         value = json.loads(target.read_text())
-        value["records"]["set_aside"]["dropped"] = 3
+        value["records"]["set_aside"]["dropped"] = 1
         target.write_text(json.dumps(value))
         made = build(path, now=NOW)
         counted = made["aggregate"]["content"]["records"]
         # the certificate's initial 2 and addition 1, and the postcard's
-        # no toponym 1 and schema 1: never the nine readings
+        # no toponym 1 and schema 1: never the seven readings
         assert counted["set_aside_reasons"] == 5
         assert counted["set_aside_by_reason"] == {
             "initial": 2,
@@ -2680,14 +2680,14 @@ class TestContent:
             "no toponym": 1,
             "schema": 1,
         }
-        assert counted["readings"] == 9
+        assert counted["readings"] == 7
         assert list(counted["readings_by_reason"].items()) == [
-            ("dropped", 5),
             ("read as text", 4),
+            ("dropped", 3),
         ]
         assert document(made, CERT)["coverage"]["records"][
             "readings_by_reason"
-        ] == {"dropped": 3}
+        ] == {"dropped": 1}
         assert counted["containers_dropped"] == 4
         assert counted["containers_dropped_by_reason"] == {
             "evidence-not-in-source": 2,
@@ -2711,7 +2711,7 @@ class TestContent:
             "- Fields read so their record could stand (a name part "
             "dropped for an empty string, an entry read as its text), "
             "setting nothing aside, so counted apart from the reasons "
-            "records were set aside: 9\n"
+            "records were set aside: 7\n"
             "- Place containers checked: 6; dropped alone, their records "
             "standing, so counted apart from records set aside: 4\n"
         ) in markdown
@@ -2724,8 +2724,8 @@ class TestContent:
             "| schema | 1 |\n\n"
             "| Reading (nothing set aside) | Fields |\n"
             "|---|---:|\n"
-            "| dropped | 5 |\n"
-            "| read as text | 4 |\n\n"
+            "| read as text | 4 |\n"
+            "| dropped | 3 |\n\n"
             "| Container dropped reason | Containers |\n"
             "|---|---:|\n"
             "| evidence-not-in-source | 2 |\n"
