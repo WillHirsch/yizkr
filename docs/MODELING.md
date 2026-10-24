@@ -1668,11 +1668,19 @@ part in the marriage (or partnership) with the role `spouse` (or
 `partner`), the union is `started_by` its wedding and `ended_by` a
 divorce, an annulment, a partner's death, or an event of unstated kind
 where the source does not say how it ended, and each of those events
-carries its own date and place. Until the rest of the pipeline moves to
-marriages, the readers of spouse statements (among them the disagreement
-report, the timeline, the kinship query, reconciliation, clustering and
-the static site) still read them; extraction refuses and counts any
-spouse claim.
+carries its own date and place. A marriage whose start the source dates
+or places, at any precision, gets its wedding, as a stated divorce gets
+its divorce; a marriage the source only names, a partnership, and an
+observation (a directory or census that lists the couple as married,
+with no start) get no wedding (#656). In the 1984 tree, "= (1942)
+Florence Faxridge" gives a marriage and its 1942 wedding, and the
+undated "= Hildegard" gives the marriage alone. The run report counts
+each extraction's marriages by their weddings: started by a dated
+wedding, by an undated one, or by none. Until the rest of the pipeline
+moves to marriages, the readers of spouse statements (among them the
+disagreement report, the timeline, the kinship query, reconciliation,
+clustering and the static site) still read them; extraction refuses and
+counts any spouse claim.
 
 Amended by ADR-0040 (2026-10-24), carried out by its build:
 - "`ended_by` a divorce, an annulment, a partner's death" reads
@@ -2227,9 +2235,14 @@ not a signal to grow the schema on.
   statement whose subject carries a media SHA-1 and that is stated in
   another item, or whose subject is `part of` an item it is stated in,
   at any rank, goes whole, so a placement a curator gave with
-  `--placed` is covered too; a container's agreeing value, which the
-  writer folds into the image's own statement, takes that statement
-  with it. A (c4) statement on a mention item, which carries no SHA-1,
+  `--placed` is covered too. As amended by #669 (2026-10-24), the export
+  removes only the container's references (and the excerpts they hold)
+  from such a statement: one that keeps a reference stated in another
+  item, as the image's own statement does when the writer folds the
+  container's agreeing value into it, stays with that reference, and
+  one that keeps none, an extraction run's reference aside, or that has
+  a qualifier of text (a string or a monolingual text, which may be the
+  container's words), goes whole. A (c4) statement on a mention item, which carries no SHA-1,
   leaves with its excerpt as any of its source's statements do. A line
   the export cannot read as a triple is dropped, and a dump that holds a
   sitelink,

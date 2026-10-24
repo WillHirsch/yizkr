@@ -802,14 +802,16 @@ class TestCompilation:
 
     @staticmethod
     def embedded() -> list[u.Assertion]:
-        """Each part-of link from a source to a source that embeds it;
-        the universe has at least one."""
+        """Each part-of link from an excerpt to a source that embeds it;
+        the universe has at least one. An embedded source with no text
+        of its own, such as the talk's photograph, is no excerpt."""
         links = [
             a
             for a in u.ASSERTIONS
             if a.property == "part_of"
             and a.subject in SOURCES
             and a.value in SOURCES
+            and SOURCES[a.subject].text
         ]
         assert links
         return links
@@ -899,6 +901,39 @@ class TestCompilation:
                 if self.MARKED not in a.qualifiers and a.subject in PEOPLE
             }
             assert own - {claim[:2] for claim in read}
+
+    def test_the_talk_says_whom_the_photograph_on_its_slide_2_shows(self):
+        # a placed image with no writing of its own is no excerpt: it
+        # states nothing of itself, and the talk's slide 2 gives it two
+        # captions, and its title one `shows` per person it names
+        # (ADR-0039 §10.4, #665)
+        photograph = SOURCES["album-photo-1906"]
+        assert (photograph.artifact_class, photograph.text) == (
+            "photograph",
+            "",
+        )
+        assert self.said_by(photograph.key) == []
+        talk = [
+            (a.property, a.value, a.excerpt, dict(a.qualifiers))
+            for a in self.said_by("library-talk-2018")
+            if a.subject == photograph.key
+        ]
+        slide = {"page_number": "2"}
+        assert sorted(talk, key=str) == sorted(
+            [
+                ("part_of", "library-talk-2018", "", slide),
+                ("caption", "Wastl and Hilde", "Wastl and Hilde", slide),
+                (
+                    "caption",
+                    "Photograph from the family album",
+                    "Photograph from the family album",
+                    slide,
+                ),
+                ("shows", "sebastian-loebig", "Wastl and Hilde", slide),
+                ("shows", "hildegard-loebig", "Wastl and Hilde", slide),
+            ],
+            key=str,
+        )
 
 
 class TestLanguages:

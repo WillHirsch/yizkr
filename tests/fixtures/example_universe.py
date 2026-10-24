@@ -1257,6 +1257,19 @@ SOURCES = (
             "the deck's slide text, as the pipeline reads it."
         ),
     ),
+    Source(
+        "album-photo-1906",
+        "Where the Lobigs came from — image1.png",
+        None,
+        1906,
+        "photograph",
+        note=(
+            "The photograph from the family album that the talk places on "
+            "its second slide: Wastl and Hilde, the year after their "
+            "wedding, with no writing on it, so it states nothing of "
+            "itself. The talk's slide 2 says whom it shows."
+        ),
+    ),
     # English gloss: "Death certificate. Citizen Löbig Rudolf Feliksovich
     # died on 6 March 1941, aged 24, and the entry was made in the civil
     # register of deaths on 7 March 1941 as no. 113. Cause of death: heart
@@ -2879,6 +2892,42 @@ ASSERTIONS = tuple(
             for parent in ("gustav-loebig", "florence-lobig")
         ),
         ("nicholas-lobig", "date_of_birth", Date(1950), "Nicholas 1950"),
+        # the talk asserts its own composition (ADR-0008): the photograph
+        # is on its slide 2
+        (
+            "album-photo-1906",
+            "part_of",
+            "library-talk-2018",
+            {"page_number": "2"},
+        ),
+        # slide 2's title over its one photograph, and its speaker notes,
+        # are the talk's words about it, each a caption; the title, read
+        # where it stands, also conveys whom the photograph shows, one
+        # statement a name (ADR-0039 §10.4)
+        (
+            "album-photo-1906",
+            "caption",
+            "Wastl and Hilde",
+            {"page_number": "2"},
+            "Wastl and Hilde",
+        ),
+        (
+            "album-photo-1906",
+            "caption",
+            "Photograph from the family album",
+            {"page_number": "2"},
+            "Photograph from the family album",
+        ),
+        *(
+            (
+                "album-photo-1906",
+                "shows",
+                person,
+                {"page_number": "2"},
+                "Wastl and Hilde",
+            )
+            for person in ("sebastian-loebig", "hildegard-loebig")
+        ),
     )
     + _said(
         "death-certificate-1941",

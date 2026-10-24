@@ -361,7 +361,9 @@ re-running one step in isolation — but for a normal ingest you only ever run
   PDFium is started afresh for each PDF and draws fonts a PDF does not
   embed with its own, never the host's, so a page reads and renders alike
   on every host and in every run. The standalone `ingest transcribe
-  --engine llm` reads a PDF whole.
+  --engine llm` reads a PDF whole, and refuses a deck, or any ZIP
+  archive whatever it is called, which only a run reads, slide by
+  slide; the vision engine is never given an archive whole.
 - **transcription record** — the vision engine answers the transcription
   prompt with a record (ADR-0037,
   `yizkr.pipeline.transcription_record`): the document's class, from the
@@ -649,8 +651,9 @@ stage, `clustering`, clusters the mentions of every document whose
 stages completed, asks the model about the pairs it could not decide
 (`adjudication.py`, #106, below), and keeps the result in
 `<run>/corpus/clustering/identity-map.json`. It reads the documents'
-batch views and, for adjudication alone, the run's engine through the
-LLM cache: no wiki, no query service
+batch views and, for adjudication alone, the places of the images
+their transcription views place and the run's engine through the LLM
+cache: no wiki, no query service
 (`tests/unit/test_no_wiki_before_write.py` runs it under a wiki that
 refuses). The module docstrings are the full account; in short:
 
@@ -795,7 +798,10 @@ refuses). The module docstrings are the full account; in short:
   mention's evidence (kind, label, aliases, its mention record, and its
   document's claims about it and naming it, each value by its label and
   kind, dates at their own precision as the site shows them, "the
-  1830s", "the 19th century"), and names documents by SHA-1 and no item
+  1830s", "the 19th century", an artifact a claim is about as "this
+  document" when it is the mention's own and an image the document
+  places by its place, "page 6, image 1", as the critic's rows name
+  it), and names documents by SHA-1 and no item
   by its QID. Each pair gets `same`, `different` or `uncertain` with a
   one-sentence reason; a line outside that schema, a pair answered two
   ways and an answer cut off are refused and counted. In a
@@ -829,7 +835,8 @@ refuses). The module docstrings are the full account; in short:
   clustering's own map). Verdicts, reasons, each call's pairs and raw
   answer, and the counts are kept in
   `<run>/corpus/clustering/adjudication.json`, local-only like the map;
-  both are reused while the clustering's inputs, the prompt, the stage's
+  both are reused while the clustering's inputs, the places of the
+  images each transcription view places, the prompt, the stage's
   code, the role's engine, model, effort and epoch, a refresh of the
   role, the batch size and the mode stand, and while no call was
   refused.

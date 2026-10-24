@@ -33,8 +33,12 @@ as one, never by its QID.
 manifest: its kind, label and aliases, its mention record (its name
 parts, ADR-0035 §2), and every claim of its document about it, or that
 names it as a value (its kin, the events it takes part in with its role,
-its places), each value named by its label and kind; with clustering's
-own evidence for the pair (how names, dates and kin compare, and what
+its places), each value named by its label and kind, an artifact a
+claim is about named plainly: its own document as "this document", an
+image the document places by its place, as the critic names it
+(critique.artifact_places: "page 6, image 1"), from the document's
+transcription view where the stage has one; with clustering's own
+evidence for the pair (how names, dates and kin compare, and what
 keeps the pair apart). A date is rendered at its own precision, as the
 site renders it (core.dates.time_text): "the 1830s", "the 19th
 century", never a first year; with the bounds and circa the source
@@ -100,11 +104,13 @@ answer, and the counts. Both hold corpus words, so they stay in the run
 directory, which is local-only data. The stage reuses both while the
 clustering's inputs (clustering.inputs_key), VERSION, the prompt, this
 module's source and the date formatter it renders with (code_digest),
+the places of the images each document's transcription places,
 the role's engine, model, effort and epoch, whether the run refreshes
 the role, the pairs per call and whether verdicts merge all stand, and
 while no call was refused; it makes them again otherwise, and the calls
 it makes again are answered from the LLM cache while what they send
-stands. The stage reads no wiki and no query service. What reaches the
+stands. The stage reads each document's transcription view, never makes
+one, and reads no wiki and no query service. What reaches the
 run's events is counts within labels of its own.
 """
 
@@ -122,6 +128,7 @@ from pathlib import Path
 from typing import Any
 
 from yizkr.claims import (
+    ArtifactRef,
     ClaimBatch,
     CoordinateValue,
     EntityRecord,
@@ -154,6 +161,7 @@ from yizkr.pipeline.clustering import (
     read_identity_map,
     read_manifests,
 )
+from yizkr.pipeline.critique import THIS_DOCUMENT, artifact_places
 from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.llm import (
     CUT_OFF_AT_LIMIT,
@@ -253,11 +261,16 @@ class _Document:
     label and kind, and the claims about each, as subject and as value.
     An entity a mention's claims name is given one level deep: an event
     or a union with its own claims (its date, its place, its other
-    participants with their roles), anything else with its own dates."""
+    participants with their roles), anything else with its own dates.
+    `places` are the places of the images the document places, by their
+    SHA-1 (critique.artifact_places)."""
 
-    def __init__(self, manifest: Manifest) -> None:
+    def __init__(
+        self, manifest: Manifest, places: Mapping[str, str] | None = None
+    ) -> None:
         batch: ClaimBatch = manifest.batch
         self.sha1 = manifest.sha1.lower()
+        self.places = dict(places or {})
         self.gedcom = manifest.source == GEDCOM
         self.entities = {entity.id: entity for entity in batch.entities}
         self.names: dict[str, tuple[str, str]] = {
@@ -290,7 +303,14 @@ class _Document:
     def named(self, ref: Any) -> str:
         """An entity a claim names: a local id by its label and kind, a
         vocabulary item by its key, an item already in the graph as one,
-        never by its QID."""
+        never by its QID; an artifact as THIS_DOCUMENT when it is the
+        document's own, by its place ("page 6, image 1") when it is an
+        image the document places, else by the SHA-1 of its media."""
+        if isinstance(ref, ArtifactRef):
+            if ref.sha1 == self.sha1:
+                return THIS_DOCUMENT
+            place = self.places.get(ref.sha1)
+            return place or f"the artifact of media SHA-1 {ref.sha1}"
         if isinstance(ref, LocalRef):
             label, kind = self.names.get(ref.local_id, (ref.label or "", ""))
             return f"{label!r} ({kind})" if kind else repr(label)
@@ -403,15 +423,20 @@ class _Document:
 class Evidence:
     """Each mention's evidence, as the prompt gives it, from the manifests
     and the identity map's record of each mention (its document and
-    local id)."""
+    local id), with `places` the places of the images each document
+    places, by the document's SHA-1 (document_places)."""
 
     def __init__(
-        self, manifests: Sequence[Manifest], mentions: Mapping[str, Any]
+        self,
+        manifests: Sequence[Manifest],
+        mentions: Mapping[str, Any],
+        places: Mapping[str, Mapping[str, str]] | None = None,
     ) -> None:
         self._documents: dict[str, _Document] = {}
         for manifest in manifests:
+            sha1 = manifest.sha1.lower()
             self._documents.setdefault(
-                manifest.sha1.lower(), _Document(manifest)
+                sha1, _Document(manifest, (places or {}).get(sha1))
             )
         self._mentions = mentions
 
@@ -555,16 +580,18 @@ def adjudicate(
     merge: bool,
     config: ClusteringConfig | None = None,
     log: Callable[..., None] = lambda *args, **kwargs: None,
+    places: Mapping[str, Mapping[str, str]] | None = None,
 ) -> Adjudicated:
     """Cluster the manifests, ask the pending pairs (the module docstring
     says which, in what order, and what merges), and cluster again under
     the verdicts when they `merge`. `client` gives the client the calls go
-    through, and is called only when a pair is to be asked."""
+    through, and is called only when a pair is to be asked; `places` the
+    places of the images each document places (document_places)."""
     config = config or load_config()
     per_call = config.adjudication.pairs_per_call
     identity = clustering.cluster_corpus(manifests, config)
     planned = identity["summary"]["adjudication"]["calls_ambiguous_clusters"]
-    evidence = Evidence(manifests, identity["mentions"])
+    evidence = Evidence(manifests, identity["mentions"], places)
     verdicts: dict[Pair, tuple[str, str]] = {}
     asked: set[Pair] = set()
     calls: list[dict[str, Any]] = []
@@ -735,6 +762,7 @@ def stage_key(
     config: ClusteringConfig,
     model: Mapping[str, Any],
     merge: bool,
+    places: Mapping[str, Mapping[str, str]] | None = None,
 ) -> str:
     """The key the stage's outputs are reused under (the module
     docstring). The pairs per call are among the thresholds, which
@@ -745,6 +773,7 @@ def stage_key(
                 "stage": NAME,
                 "version": VERSION,
                 "clustering": clustering.inputs_key(manifests, config),
+                "places": sha256_text(canonical_json(places or {})),
                 "prompt": sha256_text(PROMPT),
                 "code": code_digest(),
                 "model": dict(model),
@@ -756,9 +785,11 @@ def stage_key(
 
 def code_digest() -> str:
     """The SHA-256 of what renders and reads the calls: this module's
-    source, and the date formatters it renders dates with (the claim
-    date's stamp, precision and span rule, and the site's formatter)."""
+    source, the date formatters it renders dates with (the claim date's
+    stamp, precision and span rule, and the site's formatter), and how it
+    names an artifact (critique.artifact_places and THIS_DOCUMENT)."""
     from yizkr import claims, staticsite
+    from yizkr.pipeline import critique
 
     return sha256_text(
         canonical_json(
@@ -774,6 +805,10 @@ def code_digest() -> str:
                     + inspect.getsource(dates.time_text)
                     + repr(dates.SPAN_PRECISIONS)
                     + repr(sorted(claims.WIKIBASE_PRECISION.items()))
+                ),
+                "artifacts": sha256_text(
+                    inspect.getsource(critique.artifact_places)
+                    + repr(critique.THIS_DOCUMENT)
                 ),
             }
         )
@@ -813,6 +848,31 @@ def client_of(context: Any) -> Any:
     return context.driver.role_client(ROLE, events=emit)
 
 
+def document_places(documents: Iterable[Any]) -> dict[str, dict[str, str]]:
+    """The places of the images each document's transcription view
+    places (critique.artifact_places), by the document's SHA-1: none for a
+    document without a view (`transcription`, its path), or whose view is
+    missing or cannot be read, or places no image. Read only, never
+    made."""
+    from yizkr.pipeline.transcribe import Transcription
+
+    found: dict[str, dict[str, str]] = {}
+    for doc in documents:
+        path = getattr(doc, "transcription", None)
+        if path is None:
+            continue
+        try:
+            transcription = Transcription.model_validate_json(
+                Path(path).read_text()
+            )
+        except (OSError, ValueError):
+            continue
+        places = artifact_places(transcription)
+        if places:
+            found[doc.sha1.lower()] = places
+    return found
+
+
 @dataclass(frozen=True)
 class StageOutput:
     """The identity map the stage holds, its record, and whether both were
@@ -831,8 +891,9 @@ def ensure_adjudicated(
     made now and written there whole, the map first."""
     config = config or load_config()
     manifests = read_manifests(context.documents)
+    places = document_places(context.documents)
     merge = merges_on_verdicts(context.run)
-    key = stage_key(manifests, config, model_of(context.driver), merge)
+    key = stage_key(manifests, config, model_of(context.driver), merge, places)
     directory: Path = context.directory
     path = directory / IDENTITY_MAP
     record = read_record(directory)
@@ -851,6 +912,7 @@ def ensure_adjudicated(
         merge=merge,
         config=config,
         log=context.log,
+        places=places,
     )
     record = {
         "format": FORMAT,

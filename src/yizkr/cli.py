@@ -416,7 +416,37 @@ def cmd_register(args) -> int:
     return 0
 
 
+def _refuse_archive_for_vision(path: Path) -> None:
+    """Refuse, in one line naming the run's route, a file the vision step
+    would send whole that is a deck or any other ZIP archive, by its
+    suffix or its own leading bytes (transcribe.is_archive): its members
+    may be ones the never-ingest list names, and a run reads a deck slide
+    by slide, leaving them out (ADR-0008). It runs before the list is
+    followed into the corpus's decks, so nothing of the file but those
+    bytes is read, and before any client is made."""
+    from yizkr.pipeline.transcribe import is_archive
+
+    route = (
+        "a run reads a deck slide by slide, leaving out what the "
+        "never-ingest list names (yizkr scratch run); refusing"
+    )
+    try:
+        archive = is_archive(path)
+    except OSError as exc:
+        sys.exit(
+            f"cannot read {path.name} ({exc.strerror or exc}) to tell "
+            f"whether it is a deck, which this step never sends whole: {route}"
+        )
+    if archive:
+        sys.exit(
+            f"{path.name} is a deck or another ZIP archive, which this step "
+            f"would send whole: {route}"
+        )
+
+
 def cmd_transcribe(args) -> int:
+    if args.engine == "llm":
+        _refuse_archive_for_vision(args.file)
     _refuse_if_excluded(args, args.file)
     if args.engine == "textfile":
         if not args.text_file:

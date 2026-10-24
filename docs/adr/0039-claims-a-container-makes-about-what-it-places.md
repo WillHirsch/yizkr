@@ -972,6 +972,14 @@ to the held scan. The rule admits forms (a), (b) and (c4).
   entity", and keeps doing so in the build, so no clustering-stage
   template changes; better wording is a `stage:clustering` change of its
   own. The scratch diff states the adjudication misses.
+  Amended by #667: `_Document.named` now names an artifact subject
+  plainly, its own document as "this document" and an image the
+  document places by its place ("page 6, image 1", as the critic's
+  rows do, `critique.artifact_places`), read from the document's
+  transcription view; an artifact without a place is named by the
+  SHA-1 of its media. The stage key covers those places and the code
+  digest the naming, so the pairs whose evidence names an artifact
+  subject are asked again.
 - **Report.** `report._container_claims` receives a per-property count.
   The claims fold that builds it also counts document-subject claims by
   subject form: the source itself, an artifact it places, an artifact
@@ -1107,6 +1115,31 @@ to the held scan. The rule admits forms (a), (b) and (c4).
   once a curator or artifact matching merges a mention into the held
   scan's item, its statements stand on an item with a SHA-1, cited by
   the letter, and are left out whole, failing closed.
+  - *Amended by #669 (owner, 2026-10-24, on #661's question 2):* the
+    export removes the container's references, not the statements they
+    are on. A reference is the container's when it is on a
+    document-subject statement whose subject carries a `media SHA-1` and
+    is `stated in` another item, or whose subject is `part of`, at any
+    rank, an item it is `stated in`. The export drops that reference's
+    link from the statement, and with it the reference and its excerpt,
+    unless a statement that stays names the same reference node. A
+    statement that keeps no reference `stated in` an item once those go,
+    the container's own claim, goes whole as before, its truthy triple
+    with it: an extraction run's reference names no source, so it does
+    not keep the statement. So the container's agreeing value, which the
+    writer folds into the image's own statement, leaves the statement
+    with the image's own reference and excerpt (the letter's own *den 28.
+    Juli 1939*), and the booklet's reference and translation stay out.
+    The run references stay on a statement that stays, the container's
+    run's included, as they hold no source text
+    (`backup._placed_subject_statements`). A statement with a qualifier
+    of text (a string or a monolingual text, such as a `caption` or a
+    `transcription_excerpt` qualifier) still goes whole: the writer
+    merges only claims whose qualifiers match, so the qualifier is the
+    container's as much as the image's, and its text may be the
+    container's own words, which the export cannot tell apart (review of
+    PR #695). A qualifier of an item, a time or a quantity stays with the
+    statement, as its value does.
 - **The site.** `named_in_html` names a (c4) mention item, which has no
   artifact page, by its label, unlinked.
 - **Chunk ownership.** Under entity assignment a (c4) claim belongs to
@@ -1122,6 +1155,14 @@ to the held scan. The rule admits forms (a), (b) and (c4).
   and its deck's photograph is a decoration-sized stand-in that the
   deck's transcription does not mark, so no corpus document places an
   image and the corpus gives no claim about one.
+
+  Amended by #665, 2026-10-24: the deck's photograph is now a stand-in
+  large enough to be read on its own, with a recorded reading (a
+  photograph with no writing, so no excerpt), so the deck's
+  transcription marks it and a corpus run gives slide 2's two captions
+  and its `shows` → Wastl and `shows` → Hilde, each with its judgement
+  note of category `relation` (§10.4). The corpus still holds no
+  booklet.
 
 #### 10.7 Amendments to other records (#626, 2026-10-24)
 

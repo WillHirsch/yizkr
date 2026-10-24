@@ -103,8 +103,10 @@ the batch keys every alias. The adjudication prompts (reconcile's and
 reconcile-graph's) show a graph item's appellation as "called: Oma",
 never among its aliases; a document entity's appellation is left out of
 its aliases, and its facts show it as its `referred_to_as` claim.
-The serial sequencer's overlap signal (ADR-0019) still keys every
-alias.
+Amended by #681 (2026-10-24): the serial sequencer's overlap signal
+(ADR-0019) keys the same way, given each document's batch, so two
+documents that share only an appellation no longer count as sharing a
+name.
 
 ## Context
 
