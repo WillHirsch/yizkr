@@ -290,6 +290,162 @@ class TestIngestExtract:
         assert "batch is PARTIAL" in capsys.readouterr().err
         assert out.exists()
 
+    @staticmethod
+    def extract(tmp_path, *argv: str, transcription: bytes | None = None):
+        """`ingest extract` from a claims file, on a transcription of
+        MEDIA (or on `transcription`'s bytes), with `argv` after it; its
+        status and its batch's path."""
+        from yizkr.pipeline.transcribe import Transcription
+
+        path = tmp_path / "transcription.json"
+        path.write_bytes(
+            transcription
+            or Transcription(artifact=MEDIA_REF, text="a page", engine="test")
+            .model_dump_json()
+            .encode()
+        )
+        out = tmp_path / "batch.json"
+        status = cli.main(
+            [
+                *("ingest", "extract", "--transcription", str(path)),
+                *("--claims-file", str(tmp_path / "claims.json")),
+                *("--out", str(out)),
+                *argv,
+            ]
+        )
+        return status, out
+
+    def test_an_extraction_failure_is_one_line_and_writes_no_batch(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """An ExtractionFailed ends the step with its reason on one line
+        and a failure's status, not a traceback, and no batch that would
+        read as a claim-free document's (#301)."""
+        from yizkr.pipeline import extract
+        from yizkr.pipeline.chunking import ExtractionFailed
+
+        def failed(self, transcription, artifact):
+            raise ExtractionFailed(
+                "no claims extracted: 2 of 2 chunks failed (c001: the\n"
+                "engine stopped)"
+            )
+
+        monkeypatch.setattr(extract.ClaimFileExtractor, "extract", failed)
+        status, out = self.extract(tmp_path)
+
+        assert status == EXIT_FAILED
+        captured = capsys.readouterr()
+        _no_traceback(captured.err)
+        assert captured.err == (
+            "extraction failed: no claims extracted: 2 of 2 chunks failed "
+            f"(c001: the engine stopped); {out} not written\n"
+        )
+        assert captured.out == ""
+        assert not out.exists()
+
+    def test_a_claim_free_batch_says_why_it_is_empty(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A batch without claims is written, and the extractor's
+        attention reasons follow it, one line each (#301)."""
+        from yizkr.pipeline import extract
+
+        reasons = [
+            "entity manifest fell back to line-range segmentation: no JSON",
+            "no claims extracted: 2 chunks answered with none",
+        ]
+
+        def empty(self, transcription, artifact):
+            self.attention = reasons
+            return _citing()
+
+        monkeypatch.setattr(extract.ClaimFileExtractor, "extract", empty)
+        status, out = self.extract(tmp_path)
+
+        assert status == EXIT_OK
+        captured = capsys.readouterr()
+        assert captured.out == f"wrote {out} (0 claims)\n"
+        assert captured.err == "".join(
+            f"attention: {reason}\n" for reason in reasons
+        )
+        assert out.exists()
+
+    def test_a_batch_with_claims_prints_no_attention(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        from yizkr.pipeline import extract
+
+        def fell_back(self, transcription, artifact):
+            self.attention = ["segmentation fell back to line windows"]
+            return _citing(MEDIA_SHA1)
+
+        monkeypatch.setattr(extract.ClaimFileExtractor, "extract", fell_back)
+        status, out = self.extract(tmp_path)
+
+        assert status == EXIT_OK
+        captured = capsys.readouterr()
+        assert captured.out == f"wrote {out} (1 claims)\n"
+        assert captured.err == ""
+
+    def test_a_missing_transcription_is_refused_in_one_line(
+        self, tmp_path, capsys
+    ):
+        missing = tmp_path / "no-such-transcription.json"
+        status = cli.main(
+            ["ingest", "extract", "--transcription", str(missing)]
+        )
+        assert status == EXIT_REFUSED
+        err = capsys.readouterr().err
+        _no_traceback(err)
+        assert err == (
+            f"cannot read the transcription {missing}: No such file or "
+            "directory; refusing\n"
+        )
+
+    def test_a_transcription_that_cannot_be_read_is_refused(
+        self, tmp_path, capsys
+    ):
+        """A directory where the file should be: unreadable as root too."""
+        folder = tmp_path / "transcription.json"
+        folder.mkdir()
+        status = cli.main(
+            ["ingest", "extract", "--transcription", str(folder)]
+        )
+        assert status == EXIT_REFUSED
+        err = capsys.readouterr().err
+        _no_traceback(err)
+        assert err == (
+            f"cannot read the transcription {folder}: Is a directory; "
+            "refusing\n"
+        )
+
+    def test_a_transcription_that_is_not_utf8_is_refused(
+        self, tmp_path, capsys
+    ):
+        status, out = self.extract(
+            tmp_path, transcription="Flörburg".encode("latin-1")
+        )
+        assert status == EXIT_REFUSED
+        err = capsys.readouterr().err
+        _no_traceback(err)
+        assert err == (
+            "transcription.json is not UTF-8 text, so not a transcription "
+            "this step reads; refusing\n"
+        )
+        assert not out.exists()
+
+    def test_missing_media_is_refused_in_one_line(self, tmp_path, capsys):
+        missing = tmp_path / "example-marriage-certificate.png"
+        status, out = self.extract(tmp_path, "--media", str(missing))
+        assert status == EXIT_REFUSED
+        err = capsys.readouterr().err
+        _no_traceback(err)
+        assert err == (
+            f"cannot read the media {missing}: No such file or directory; "
+            "refusing\n"
+        )
+        assert not out.exists()
+
 
 class TestIngestRun:
     @staticmethod

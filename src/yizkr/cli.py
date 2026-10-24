@@ -438,10 +438,22 @@ def cmd_extract(args) -> int:
     from yizkr.core.exits import EXIT_FAILED
     from yizkr.pipeline.transcribe import Transcription
 
+    # an input that cannot be read is refused in one line, before any
+    # engine is reached
     try:
-        transcription = Transcription.model_validate_json(
-            args.transcription.read_text()
+        text = args.transcription.read_text(encoding="utf-8")
+    except OSError as exc:
+        sys.exit(
+            f"cannot read the transcription {args.transcription}: "
+            f"{exc.strerror or exc}; refusing"
         )
+    except UnicodeDecodeError:
+        sys.exit(
+            f"{args.transcription.name} is not UTF-8 text, so not a "
+            f"transcription this step reads; refusing"
+        )
+    try:
+        transcription = Transcription.model_validate_json(text)
     except ValidationError as exc:
         found = "; ".join(
             f"{'.'.join(map(str, error['loc'])) or 'file'}: {error['msg']}"
@@ -454,11 +466,20 @@ def cmd_extract(args) -> int:
         )
     # the transcription names the artifact it transcribes by the SHA-1 of
     # its media, the key its claims cite: the list is asked for that key,
-    # and for the media file by name and hash when one is given
-    _refuse_if_excluded(args, args.media, sha1=transcription.artifact.sha1)
-    if args.media is not None and (
-        ArtifactRef.from_path(args.media) != transcription.artifact
-    ):
+    # and for the media file by name and hash when one is given. A name
+    # the list's patterns match is refused before the file is read, so a
+    # listed file is refused as listed even when it cannot be read.
+    try:
+        _refuse_if_excluded(args, args.media, sha1=transcription.artifact.sha1)
+        media = (
+            None if args.media is None else ArtifactRef.from_path(args.media)
+        )
+    except OSError as exc:
+        sys.exit(
+            f"cannot read the media {args.media}: {exc.strerror or exc}; "
+            f"refusing"
+        )
+    if media is not None and media != transcription.artifact:
         sys.exit(
             f"{args.media.name} is not the media {args.transcription.name} "
             f"transcribes (its SHA-1 differs); refusing"
@@ -502,10 +523,28 @@ def cmd_extract(args) -> int:
                 raw_dump=raw_dump,
                 rejects_dump=rejects_dump,
             )
-    batch = extractor.extract(transcription, transcription.artifact)
+    from yizkr.pipeline.chunking import ExtractionFailed
+
+    try:
+        batch = extractor.extract(transcription, transcription.artifact)
+    except ExtractionFailed as exc:
+        # a failure, as a partial batch is, not a refusal: the same input
+        # may extract on another run, from the LLM cache at no engine cost
+        # for the calls that completed. No batch is written, so none reads
+        # as a claim-free document's.
+        print(
+            f"extraction failed: {' '.join(str(exc).split())}; "
+            f"{args.out} not written",
+            file=sys.stderr,
+        )
+        return EXIT_FAILED
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(batch.model_dump_json(indent=2))
     print(f"wrote {args.out} ({len(batch.claims)} claims)")
+    if not batch.claims:
+        # why a batch without claims is empty, as the extractor accepted it
+        for reason in getattr(extractor, "attention", None) or ():
+            print(f"attention: {reason}", file=sys.stderr)
     rejects_path = getattr(extractor, "rejects_dump", None)
     if rejects_path is not None and rejects_path.exists():
         rejected = len(json.loads(rejects_path.read_text()))

@@ -353,6 +353,16 @@ Amended by #225 (2026-09-27): `--cache DIR` replaces `--resume`. The calls
 a previous run completed are answered from that LLM cache (ADR-0032);
 without it every call goes to the engine.
 
+Amended by #301 and #320 (2026-10-24): an extraction that fails
+(`ExtractionFailed`, §5) ends `ingest extract` with its reason on one
+line and EXIT_FAILED, as a partial batch does, and writes no `--out`, so
+no empty batch reads as a claim-free document's. A batch without claims
+is written, and the extractor's attention reasons follow it, one line
+each. A `--transcription` that is missing, unreadable or not UTF-8, and a
+`--media` that cannot be read, are refused in one line before any engine
+is reached; a `--media` whose name a never-ingest pattern matches is
+refused as listed before its bytes are read.
+
 `auto` (the default) picks chunked when the transcription exceeds a
 conservative threshold (default 4,000 chars). Density — the real
 driver — is unknowable upfront, and chunking a document that would

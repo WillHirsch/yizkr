@@ -626,12 +626,14 @@ class TestIngestExtract:
         media: bytes | None = None,
         engine: str = "llm",
         transcription: str | None = None,
+        unreadable: bool = False,
     ):
         """The step on a transcription of MEDIA (or on `transcription`'s
         text), with the llm engine or a claims file. `listed` is the
         never-ingest list's text; with None, no list is configured here.
         `media`, when given, is written to a file named NAME, and passed
-        as `--media`."""
+        as `--media`; with `unreadable`, NAME is a directory, which no
+        one can read as a file, root included, and is passed instead."""
         from yizkr import cli
         from yizkr.pipeline import llm
 
@@ -658,6 +660,9 @@ class TestIngestExtract:
         argv = ["ingest", "extract", "--transcription", str(path)]
         if media is not None:
             (tmp_path / self.NAME).write_bytes(media)
+            argv += ["--media", str(tmp_path / self.NAME)]
+        elif unreadable:
+            (tmp_path / self.NAME).mkdir()
             argv += ["--media", str(tmp_path / self.NAME)]
         if engine == "file":
             claims = tmp_path / "claims.json"
@@ -743,6 +748,45 @@ class TestIngestExtract:
             monkeypatch=monkeypatch,
             listed="*marriage-certificate*\n",
             media=MEDIA,
+        )
+
+    @pytest.mark.parametrize("engine", ["llm", "file"])
+    def test_a_pattern_is_asked_before_the_media_is_read(
+        self, tmp_path, monkeypatch, engine
+    ):
+        """A `--media` whose name a pattern matches is refused as listed,
+        though it cannot be read: the list is asked by the name before the
+        file is hashed (#320)."""
+        self.refused(
+            tmp_path,
+            f"{self.NAME} is on the never-ingest list",
+            monkeypatch=monkeypatch,
+            listed="*marriage-certificate*\n",
+            unreadable=True,
+            engine=engine,
+        )
+
+    @pytest.mark.parametrize(
+        "listed",
+        [None, "*divorce-judgment*\n", f"{'1' * 40}\n"],
+        ids=["no-list", "other-pattern", "other-hash"],
+    )
+    def test_media_that_cannot_be_read_is_refused_in_one_line(
+        self, tmp_path, monkeypatch, listed
+    ):
+        """Whether the list hashes the media or the step does, a `--media`
+        that cannot be read is refused in one line (#320)."""
+        self.refused(
+            tmp_path,
+            "^"
+            + re.escape(
+                f"cannot read the media {tmp_path / self.NAME}: Is a "
+                "directory; refusing"
+            )
+            + "$",
+            monkeypatch=monkeypatch,
+            listed=listed,
+            unreadable=True,
         )
 
     def test_media_a_pattern_does_not_match_runs(self, tmp_path, monkeypatch):
