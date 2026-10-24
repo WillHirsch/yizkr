@@ -446,6 +446,27 @@ class TestAConfirmedMention:
         assert validate_against_manifest(again) == []
         assert pre_plan_refusals(again, {}) == {}
 
+    def test_the_record_takes_the_entity_s_kind_from_its_record(self):
+        """A ref that gives no kind of its own is recorded with its
+        manifest record's, so the record says what the subject was even
+        once the batch is read without its manifest."""
+        bare = {
+            **enclosure(),
+            "subject": {"kind": "local", "local_id": "u1"},
+        }
+        confirmed = self.confirmed(
+            bare, entities=[CERTIFICATE, DEATH], approved={"u1": "Q41"}
+        )
+        assert confirmed.claims[0].confirmed_from.instance_of == (
+            "unclassified_entity"
+        )
+        manifest_free = confirmed.model_copy(
+            update={
+                "entities": [e for e in confirmed.entities if e.id != "u1"]
+            }
+        )
+        assert pre_plan_refusals(manifest_free, {}) == {}
+
     def test_a_manifest_free_mention_keeps_its_claim(self):
         """A batch with no entity manifest names its mention by the ref's
         own `instance_of`, which the record keeps."""
