@@ -2661,3 +2661,335 @@ class TestWhatSourcesSay:
             KLARA,
             "Q8",
         ]
+
+
+# -- a death no source dates (#354) -----------------------------------------
+
+WIKIBASE_RANK = "http://wikiba.se/ontology#"
+
+
+def death_rows(event: str, parts, kind_sources=()) -> list[dict]:
+    """UNDATED_DEATHS_QUERY's rows for one undated death event: `parts`
+    holds each participant statement as (its value's QID, "" for none or
+    "?" for an unknown one; its roles; its rank; the (QID, label) of each
+    source it is stated in, the label "" for none), and `kind_sources`
+    the sources its `death` type is stated in."""
+    rows = []
+    for n, (value, roles, rank, sources) in enumerate(parts):
+        base = {
+            "event": uri(event),
+            "part": {
+                "type": "uri",
+                "value": f"http://wikibase.example/entity/statement/{event}-{n}",
+            },
+            "partRank": {"type": "uri", "value": f"{WIKIBASE_RANK}{rank}"},
+        }
+        if value == "?":
+            base["value"] = {"type": "bnode", "value": f"b{event}{n}"}
+        elif value:
+            base["value"] = uri(value)
+        for role in roles or [None]:
+            with_role = dict(base)
+            if role is not None:
+                with_role["role"] = uri(f"role-{role}")
+                with_role["principal"] = literal(
+                    "true" if role == "principal" else "false"
+                )
+            for source, source_label in sources or [(None, None)]:
+                for kind, kind_label in kind_sources or [(None, None)]:
+                    row = dict(with_role)
+                    for name, qid, named in (
+                        ("source", source, source_label),
+                        ("kindSource", kind, kind_label),
+                    ):
+                        if qid:
+                            row[name] = uri(qid)
+                            if named:
+                                row[f"{name}Label"] = literal(named)
+                    rows.append(row)
+    return rows
+
+
+# The universe's Rudolf, whose death Nina's 1958 letter states with no
+# date ("the widow of your late brother Rudolf"), with Nina beside him as
+# the one who reports it: content-marked by QIDs in the Q70x range
+UNIVERSE = u.by_key()
+RUDOLF, NINA, LEOPOLD = "Q701", "Q702", "Q703"
+NINAS_LETTER, CERTIFICATE = "Q704", "Q705"
+RUDOLFS_DEATH = "Q710"
+LETTER_TITLE = UNIVERSE["letter-to-leopold-1958"].title
+CERTIFICATE_TITLE = UNIVERSE["death-certificate-1941"].title
+ROSTER = [
+    {
+        "person": uri(qid),
+        "personLabel": literal(UNIVERSE[key].label),
+        "deceased": literal("false"),
+        "aliases": literal(""),
+    }
+    for qid, key in (
+        (RUDOLF, "rudolf-loebig"),
+        (NINA, "nina-sartina"),
+        (LEOPOLD, "leopold-loebig"),
+    )
+]
+UNDATED = death_rows(
+    RUDOLFS_DEATH,
+    [
+        (RUDOLF, ["principal"], "NormalRank", [(NINAS_LETTER, LETTER_TITLE)]),
+        # the informant's statement cites the certificate, which is no
+        # source of the death the letter states
+        (
+            NINA,
+            ["informant"],
+            "NormalRank",
+            [(CERTIFICATE, CERTIFICATE_TITLE)],
+        ),
+    ],
+    kind_sources=[(NINAS_LETTER, LETTER_TITLE)],
+)
+DIED = (
+    "died (date not stated)"
+    f'<span class="source"><a href="../artifacts/{NINAS_LETTER}.html">'
+    f"{html.escape(LETTER_TITLE)}</a></span>"
+)
+
+
+class TestAnUndatedDeath:
+    """A death event that states no date shows on its principal's page,
+    and at the foot of the timeline, as "died (date not stated)" with its
+    source (CLAUDE.md rule 6, #354); never as the death of an informant or
+    a witness who takes part in it."""
+
+    def responses(self, rows) -> dict:
+        return {
+            **RESPONSES,
+            "GROUP_CONCAT(DISTINCT ?alias": ROSTER,
+            "?kindSource": rows,
+        }
+
+    def site(self, tmp_path, vocabulary, rows=UNDATED):
+        site, summary = build(tmp_path, vocabulary, self.responses(rows))
+        return site, summary
+
+    def page(self, site, qid: str) -> str:
+        return (site / f"people/{qid}.html").read_text()
+
+    def test_the_principal_is_shown_to_have_died_with_its_source(
+        self, tmp_path, vocabulary
+    ):
+        site, summary = self.site(tmp_path, vocabulary)
+        assert f"<dt>death</dt><dd>{DIED}</dd>" in self.page(site, RUDOLF)
+        assert summary["undated_deaths"] == 1
+
+    def test_an_informant_is_never_shown_to_have_died(
+        self, tmp_path, vocabulary
+    ):
+        site, _ = self.site(tmp_path, vocabulary)
+        for qid in (NINA, LEOPOLD):
+            assert "died (date not stated)" not in self.page(site, qid)
+        # and the informant statement's source is no source of the death
+        assert CERTIFICATE not in self.page(site, RUDOLF)
+
+    def test_the_timeline_lists_it_by_whom_it_happened_to(
+        self, tmp_path, vocabulary
+    ):
+        site, _ = self.site(tmp_path, vocabulary)
+        timeline = (site / "timeline.html").read_text()
+        assert (
+            "<h2>No date stated</h2>" in timeline
+            and '<div class="entry">'
+            f'<a href="people/{RUDOLF}.html">Rudolf Löbig</a>, '
+            "died (date not stated)"
+            f'<span class="source"><a href="artifacts/{NINAS_LETTER}.html">'
+            f"{html.escape(LETTER_TITLE)}</a></span></div>"
+            in timeline
+        )
+        assert f"people/{NINA}.html" not in timeline
+
+    def test_with_none_the_timeline_has_no_undated_section(
+        self, tmp_path, vocabulary
+    ):
+        site, _ = self.site(tmp_path, vocabulary, rows=[])
+        assert "No date stated" not in (site / "timeline.html").read_text()
+        assert "died (date not stated)" not in self.page(site, RUDOLF)
+
+    def test_a_death_that_is_nobodys_own_is_shown_on_no_page(
+        self, tmp_path, vocabulary
+    ):
+        # no role stated; two principals; a principal beside an unknown one
+        rows = (
+            death_rows("Q711", [(RUDOLF, [], "NormalRank", [])])
+            + death_rows(
+                "Q712",
+                [
+                    (RUDOLF, ["principal"], "NormalRank", []),
+                    (NINA, ["principal"], "NormalRank", []),
+                ],
+            )
+            + death_rows(
+                "Q713",
+                [
+                    (RUDOLF, ["principal"], "NormalRank", []),
+                    ("?", ["principal"], "NormalRank", []),
+                ],
+            )
+        )
+        site, summary = self.site(tmp_path, vocabulary, rows)
+        for qid in (RUDOLF, NINA):
+            assert "died (date not stated)" not in self.page(site, qid)
+        assert summary["undated_deaths"] == 0
+
+    def test_its_principal_is_read_at_any_rank_but_deprecated(
+        self, tmp_path, vocabulary
+    ):
+        # the principal's statement at normal rank beside a preferred one
+        # of the informant's still names whose death it is; a deprecated
+        # one names no one
+        outranked = death_rows(
+            "Q714",
+            [
+                (RUDOLF, ["principal"], "NormalRank", []),
+                (NINA, ["informant"], "PreferredRank", []),
+            ],
+        )
+        deprecated = death_rows(
+            "Q715", [(NINA, ["principal"], "DeprecatedRank", [])]
+        )
+        site, _ = self.site(tmp_path, vocabulary, outranked + deprecated)
+        assert "died (date not stated)" in self.page(site, RUDOLF)
+        assert "died (date not stated)" not in self.page(site, NINA)
+
+    def test_a_deprecated_statement_of_the_principal_cites_nothing(
+        self, tmp_path, vocabulary
+    ):
+        rows = death_rows(
+            "Q716",
+            [
+                (RUDOLF, ["principal"], "NormalRank", []),
+                (
+                    RUDOLF,
+                    ["principal"],
+                    "DeprecatedRank",
+                    [(CERTIFICATE, CERTIFICATE_TITLE)],
+                ),
+            ],
+            kind_sources=[(NINAS_LETTER, LETTER_TITLE)],
+        )
+        site, _ = self.site(tmp_path, vocabulary, rows)
+        assert f"<dd>{DIED}</dd>" in self.page(site, RUDOLF)
+
+    def test_each_undated_death_is_shown_with_its_own_sources(
+        self, tmp_path, vocabulary
+    ):
+        # a second event, the certificate's: its type cites it, and its
+        # principal's statement cites a source with no English label,
+        # shown by its id
+        second = death_rows(
+            "Q717",
+            [(RUDOLF, ["principal"], "NormalRank", [("Q706", "")])],
+            kind_sources=[(CERTIFICATE, CERTIFICATE_TITLE)],
+        )
+        site, summary = self.site(tmp_path, vocabulary, UNDATED + second)
+        text = self.page(site, RUDOLF)
+        assert f"<dd>{DIED}</dd>" in text
+        assert (
+            "<dd>died (date not stated)"
+            f'<span class="source"><a href="../artifacts/{CERTIFICATE}.html">'
+            f"{html.escape(CERTIFICATE_TITLE)}</a>; Q706</span></dd>" in text
+        )
+        assert summary["undated_deaths"] == 2
+
+    def test_it_stands_beside_a_dated_death_of_the_same_person(
+        self, tmp_path, vocabulary
+    ):
+        # Q7's date of death and an undated death event, both shown under
+        # their own headings
+        rows = death_rows(
+            "Q718",
+            [
+                (
+                    "Q7",
+                    ["principal"],
+                    "NormalRank",
+                    [("Q23", "burial register")],
+                )
+            ],
+        )
+        site, _ = build(
+            tmp_path, vocabulary, {**RESPONSES, "?kindSource": rows}
+        )
+        text = self.page(site, "Q7")
+        assert "<dt>date of death</dt>" in text
+        assert (
+            "<dt>death</dt><dd>died (date not stated)"
+            '<span class="source"><a href="../artifacts/Q23.html">'
+            "burial register</a></span></dd>" in text
+        )
+        # the timeline names them as the person page does, escaped
+        timeline = (site / "timeline.html").read_text()
+        assert (
+            '<a href="people/Q7.html">'
+            "Eugen &quot;Muckel&quot; &amp; Co &lt;Löbig&gt;</a>, died"
+            in timeline
+        )
+
+    def test_no_page_and_no_entry_for_anyone_the_site_does_not_list(
+        self, tmp_path, vocabulary
+    ):
+        # the privacy module's selection decides who has a page: a death
+        # of someone it does not list adds no page and no timeline entry
+        rows = death_rows("Q719", [("Q799", ["principal"], "NormalRank", [])])
+        site, summary = self.site(tmp_path, vocabulary, UNDATED + rows)
+        pages = {path.stem for path in (site / "people").iterdir()}
+        assert pages == {RUDOLF, NINA, LEOPOLD}
+        assert "Q799" not in (site / "timeline.html").read_text()
+        assert summary["undated_deaths"] == 1
+
+    def test_the_badge_is_decided_as_before(self, tmp_path, vocabulary):
+        # the undated deaths are shown, never weighed: the badge reads the
+        # privacy module's evidence alone
+        site, _ = self.site(tmp_path, vocabulary)
+        assert "possibly living — never in the non-privileged export" in (
+            self.page(site, RUDOLF)
+        )
+
+    def test_the_query_reads_statements_at_any_rank_but_deprecated(
+        self, tmp_path, vocabulary
+    ):
+        from yizkr.staticsite import UNDATED_DEATHS_QUERY
+
+        calls = []
+
+        def run(query: str) -> list[dict]:
+            calls.append(query)
+            return []
+
+        SiteBuilder(
+            config(), tmp_path / "site", run=run, vocabulary=vocabulary
+        ).build()
+        properties, items = vocabulary
+        (query,) = [q for q in calls if "?kindSource" in q]
+        assert "wdt:" not in UNDATED_DEATHS_QUERY
+        typing = properties["instance_of"]
+        compact = " ".join(query.split())
+        assert (
+            f"?event p:{typing} ?typing . ?typing ps:{typing}/"
+            f"<http://www.w3.org/2002/07/owl#sameAs>* wd:{items['death']} ; "
+            "wikibase:rank ?typingRank . "
+            "FILTER(?typingRank != wikibase:DeprecatedRank)" in compact
+        )
+        dated = " ".join(
+            f"wd:{properties[key]}"
+            for key in ("point_in_time", "start_time", "end_time")
+        )
+        assert f"VALUES ?dated {{ {dated} }}" in compact
+        assert "FILTER(?datingRank != wikibase:DeprecatedRank)" in compact
+        # the participants are read as the privacy module reads them
+        assert (
+            f"?event p:{properties['participant']} ?part . "
+            "?part wikibase:rank ?partRank ." in compact
+        )
+        assert (
+            f"BIND(EXISTS {{ ?role <http://www.w3.org/2002/07/owl#sameAs>* "
+            f"wd:{items['principal']} . }} AS ?principal)" in compact
+        )

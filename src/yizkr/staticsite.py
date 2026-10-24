@@ -2,11 +2,13 @@
 
 `yizkr publish-site` renders the graph into a self-contained static
 site: person pages showing EVERY attributed value side by side with
-its source label (R6/ADR-0002 — never silently pick one), and the
-artifacts that name the person; artifact pages showing what the artifact
-asserts and what sources say about it, a container's captions and the
-artifact's own statements about itself (ADR-0039 §7); a timeline
-that shows beside each date the range its source states, a photo
+its source label (R6/ADR-0002 — never silently pick one), each death
+event of theirs that states no date, as "died (date not stated)" with
+its sources, and the artifacts that name the person; artifact pages
+showing what the artifact asserts and what sources say about it, a
+container's captions and the artifact's own statements about itself
+(ADR-0039 §7); a timeline that shows beside each date the range its
+source states, and at its foot the deaths no source dates; a photo
 gallery (ADR-0008 derived media included), the disagreement report, and
 a places index that becomes a map once places carry coordinates.
 
@@ -60,7 +62,11 @@ from yizkr.core.config import Config
 from yizkr.core.dates import check_time, unsupported_in_graph
 from yizkr.core.privacy import (
     DEFAULT_CUTOFF_YEARS,
+    SAME_AS,
+    UNKNOWN,
     LifeEvidence,
+    Participation,
+    event_principal,
     family_type,
     is_possibly_living,
     people_selection,
@@ -364,6 +370,61 @@ NAMED_AS = {
     "location_of_creation": "place of creation of",
 }
 
+# every death event that states no date, for the person page and the
+# timeline of the one who died: an item with a `death` type at any rank but
+# deprecated (through redirects) and no `point in time`, `start time` or
+# `end time` with a time value at any rank but deprecated. A row for each
+# role each of its participant statements states (one row with no role when
+# it states none), read through the statement node at every rank, as the
+# privacy module's participants query reads them, so that ``event_principal``
+# can say whose death it is; and beside it each source the participant
+# statement and the type statement are stated in, the label optional, so a
+# source with no English label is still shown, by its id.
+UNDATED_DEATHS_QUERY = """\
+SELECT ?event ?part ?partRank ?value ?role ?principal
+       ?source ?sourceLabel ?kindSource ?kindSourceLabel
+WHERE {{
+  ?event p:{instance_of} ?typing .
+  ?typing ps:{instance_of}/{same_as}* wd:{death} ;
+          wikibase:rank ?typingRank .
+  FILTER(?typingRank != wikibase:DeprecatedRank)
+  FILTER NOT EXISTS {{
+    VALUES ?dated {{ wd:{point_in_time} wd:{start_time} wd:{end_time} }}
+    ?dated wikibase:claim ?datedClaim ;
+           wikibase:statementValue ?datedValue .
+    ?event ?datedClaim ?dating .
+    ?dating ?datedValue/wikibase:timeValue [] ;
+            wikibase:rank ?datingRank .
+    FILTER(?datingRank != wikibase:DeprecatedRank)
+  }}
+  ?event p:{participant} ?part .
+  ?part wikibase:rank ?partRank .
+  OPTIONAL {{ ?part ps:{participant} ?value . }}
+  OPTIONAL {{
+    ?part pq:{object_has_role} ?role .
+    BIND(EXISTS {{ ?role {same_as}* wd:{principal} . }} AS ?principal)
+  }}
+  OPTIONAL {{
+    ?part prov:wasDerivedFrom/pr:{stated_in} ?source .
+    OPTIONAL {{
+      ?source rdfs:label ?sourceLabel .
+      FILTER(LANG(?sourceLabel) = "en")
+    }}
+  }}
+  OPTIONAL {{
+    ?typing prov:wasDerivedFrom/pr:{stated_in} ?kindSource .
+    OPTIONAL {{
+      ?kindSource rdfs:label ?kindSourceLabel .
+      FILTER(LANG(?kindSourceLabel) = "en")
+    }}
+  }}
+}}
+"""
+
+# how the person page and the timeline show a death its source gives no
+# date for
+UNDATED_DEATH = "died (date not stated)"
+
 # the scratch runs the instance holds, by their run items' marks
 SCRATCH_RUNS_QUERY = """\
 SELECT DISTINCT ?run WHERE {{ ?item wdt:{scratch_run} ?run . }}
@@ -608,6 +669,21 @@ def qualifier_span(text: str) -> str:
     return f' <span class="qualifiers">({esc(text)})</span>'
 
 
+def participation(row: dict, roles: set[tuple[str, bool]]) -> Participation:
+    """A participant statement of UNDATED_DEATHS_QUERY's rows, as the
+    privacy module reads one: its value's QID (``UNKNOWN`` for an unknown
+    value or one that is no item, "" for none), its rank by its local
+    name, and `roles`, each role it states and whether it is
+    `principal`."""
+    value = cell(row, "value")
+    item = re.search(r"/entity/(Q[1-9][0-9]*)$", value)
+    return Participation(
+        value=item.group(1) if item else UNKNOWN if value else "",
+        rank=cell(row, "partRank").rsplit("#", 1)[-1],
+        roles=frozenset(roles),
+    )
+
+
 @dataclass(frozen=True)
 class Citation:
     """One reference block of a statement SOURCES_SAY_QUERY reads: the
@@ -699,11 +775,13 @@ class SiteBuilder:
     def _instance_query(self, template: str) -> str:
         """`template` with this instance's ids, its ``{people}`` and
         ``{family_type}`` (where it has them) the privacy module's
-        selection of people and its test for a family."""
+        selection of people and its test for a family, and its
+        ``{same_as}`` the link a redirect is read through."""
         vocabulary = {**self.items, **self.properties}
         return prefix_block(self.config.concept_uri) + template.format(
             people=people_selection(self.properties, self.items),
             family_type=family_type(self.properties, self.items),
+            same_as=SAME_AS,
             source_properties=" ".join(
                 f"wd:{self.properties[key]}"
                 for key in sorted(self._placed | self._document)
@@ -871,6 +949,9 @@ class SiteBuilder:
         sources_say = self.sources_say(
             self.run(self._instance_query(SOURCES_SAY_QUERY))
         )
+        undated = self.undated_deaths(
+            self.run(self._instance_query(UNDATED_DEATHS_QUERY))
+        )
         self.people = {qid_of(row, "person"): row for row in people}
         self.artifact_qids = {qid_of(row, "artifact") for row in artifacts}
 
@@ -887,12 +968,22 @@ class SiteBuilder:
             if said.key in self._document and said.value_qid in self.people:
                 naming[said.value_qid].append(said)
 
+        # a death is shown only on the page of someone the roster lists
+        undated = {
+            qid: deaths
+            for qid, deaths in undated.items()
+            if qid in self.people
+        }
+
         for row in people:
             qid = qid_of(row, "person")
             self._write(
                 f"people/{qid}.html",
                 self.person_page(
-                    row, by_person.get(qid, []), naming.get(qid, [])
+                    row,
+                    by_person.get(qid, []),
+                    naming.get(qid, []),
+                    undated.get(qid, []),
                 ),
             )
         for row in artifacts:
@@ -904,7 +995,7 @@ class SiteBuilder:
                 ),
             )
         self._write("index.html", self.index_page(people, artifacts))
-        self._write("timeline.html", self.timeline_page(timeline))
+        self._write("timeline.html", self.timeline_page(timeline, undated))
         self._write("timeline.json", self.timeline_feed(timeline))
         self._write("gallery.html", self.gallery_page(gallery))
         self._write("places.html", self.places_page(places, place_tree))
@@ -917,6 +1008,7 @@ class SiteBuilder:
             "statements": len(statements),
             "artifacts": len(artifacts),
             "sources_say": len(sources_say),
+            "undated_deaths": sum(len(each) for each in undated.values()),
             "timeline_rows": len(timeline),
             "gallery_items": len(gallery),
             "inconsistencies": len(inconsistencies),
@@ -1006,6 +1098,78 @@ class SiteBuilder:
                 )
             )
         return said
+
+    def undated_deaths(
+        self, rows: list[dict]
+    ) -> dict[str, list[tuple[tuple[str, str], ...]]]:
+        """UNDATED_DEATHS_QUERY's rows as the deaths each person is shown
+        to have died, by their QID: for each death event that states no
+        date, its sources as (QID, label) pairs, under its principal alone
+        (``event_principal``, ADR-0035 §3.2), the one its participant
+        statements name in the role `principal`, at any rank but
+        deprecated; an informant or a witness who takes part is never shown
+        to have died, and an event that is nobody's own is shown on no
+        one's page. The sources are those its type statements and its
+        principal's own participant statements are stated in, in the order
+        of their QIDs; the events come in the order of theirs."""
+        events: dict[str, dict] = {}
+        for row in rows:
+            event = events.setdefault(
+                qid_of(row, "event"), {"parts": {}, "kind": {}}
+            )
+            part = event["parts"].setdefault(
+                cell(row, "part"), {"row": row, "roles": set(), "sources": {}}
+            )
+            if "role" in row:
+                part["roles"].add(
+                    (cell(row, "role"), cell(row, "principal") == "true")
+                )
+            for name, held in (
+                ("source", part["sources"]),
+                ("kindSource", event["kind"]),
+            ):
+                if cell(row, name):
+                    held[qid_of(row, name)] = cell(row, f"{name}Label")
+        deaths: dict[str, list[tuple[tuple[str, str], ...]]] = defaultdict(
+            list
+        )
+        for qid in sorted(events, key=natural_order):
+            parts = [
+                (participation(part["row"], part["roles"]), part["sources"])
+                for part in events[qid]["parts"].values()
+            ]
+            principal = event_principal(
+                (each for each, _ in parts), best_rank_only=False
+            )
+            if principal is None:
+                continue
+            sources = dict(events[qid]["kind"])
+            for each, cited in parts:
+                if (
+                    each.value == principal
+                    and each.rank != "DeprecatedRank"
+                    and all(is_principal for _, is_principal in each.roles)
+                ):
+                    sources.update(cited)
+            deaths[principal].append(
+                tuple(
+                    sorted(
+                        sources.items(),
+                        key=lambda pair: natural_order(pair[0]),
+                    )
+                )
+            )
+        return dict(deaths)
+
+    def undated_death_html(
+        self, sources: Iterable[tuple[str, str]], root: str = "../"
+    ) -> str:
+        """An undated death, "died (date not stated)", with the links to
+        its sources as ``render_value`` gives a statement's."""
+        links = self.artifact_links(sources, root)
+        return esc(UNDATED_DEATH) + (
+            f'<span class="source">{links}</span>' if links else ""
+        )
 
     def person_link(self, qid: str, label: str, root: str = "../") -> str:
         """`label` linked to the page of the person `qid`, badged as the
@@ -1150,7 +1314,14 @@ class SiteBuilder:
         person: dict,
         statements: list[dict],
         naming: list[Said] | None = None,
+        undated: list[tuple[tuple[str, str], ...]] | None = None,
     ) -> str:
+        """A person's page: every statement about them, each value with
+        its sources, under its property, and each death event of theirs
+        that states no date (``undated``, its sources as
+        ``undated_deaths`` gives them) under "death", where a statement of
+        a property labelled "death" would stand too; then the artifacts
+        that name them."""
         qid = qid_of(person, "person")
         label = cell(person, "personLabel") or qid
         aliases = [a for a in cell(person, "aliases").split("|") if a]
@@ -1173,19 +1344,20 @@ class SiteBuilder:
         if subtitle:
             body.append(f'<p class="sub">{subtitle}</p>')
 
-        grouped: dict[str, list[dict]] = defaultdict(list)
+        grouped: dict[str, list[str]] = defaultdict(list)
         for row in statements:
             prop = cell(row, "propLabel")
             # `instance of` is the subtitle, known by its id on the
             # instance
             if qid_of(row, "prop") == self.properties.get("instance_of"):
                 continue
-            grouped[prop].append(row)
+            grouped[prop].append(self.render_value(row))
+        for sources in undated or []:
+            grouped["death"].append(self.undated_death_html(sources))
         body.append('<dl class="statements">')
         for prop in sorted(grouped):
             body.append(f"<dt>{esc(prop)}</dt>")
-            for row in grouped[prop]:
-                body.append(f"<dd>{self.render_value(row)}</dd>")
+            body += [f"<dd>{entry}</dd>" for entry in grouped[prop]]
         body.append("</dl>")
         body.append(self.named_in_html(naming or []))
         body.append(
@@ -1416,7 +1588,16 @@ class SiteBuilder:
         body.append("</table>")
         return self._page("Family archive", "".join(body))
 
-    def timeline_page(self, rows: list[dict]) -> str:
+    def timeline_page(
+        self,
+        rows: list[dict],
+        undated: dict[str, list[tuple[tuple[str, str], ...]]] | None = None,
+    ) -> str:
+        """The timeline: every dated row of the person-timeline query,
+        under its year, each with its source; then, under "No date
+        stated", each death a source gives no date for (``undated``, by
+        the QID of the one who died, its sources as ``undated_deaths``
+        gives them), by the name of the one who died."""
         body = [
             "<h1>Timeline</h1>",
             '<p class="sub">every dated assertion, labeled by its source — '
@@ -1464,6 +1645,26 @@ class SiteBuilder:
                 f"{esc(cell(row, 'what'))}" + source + "</div>"
             )
         body.append("</div>")
+        entries = reading_order(
+            (
+                f'<a href="people/{esc(qid)}.html">'
+                f"{esc(cell(self.people.get(qid, {}), 'personLabel') or qid)}"
+                "</a>, ",
+                self.undated_death_html(sources, root=""),
+            )
+            for qid, deaths in (undated or {}).items()
+            for sources in deaths
+        )
+        if entries:
+            body.append(
+                '<h2>No date stated</h2><p class="sub">what a source '
+                "asserts with no date, so that it has no place above, each "
+                'with its source</p><div class="timeline">'
+                + "".join(
+                    f'<div class="entry">{entry}</div>' for entry in entries
+                )
+                + "</div>"
+            )
         return self._page("Timeline", "".join(body))
 
     def timeline_feed(self, rows: list[dict]) -> str:

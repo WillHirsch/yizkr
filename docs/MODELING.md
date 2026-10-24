@@ -1932,3 +1932,13 @@ not a signal to grow the schema on.
   selects them; the export also drops what the site lists as no person,
   an untyped item without person evidence, a family without person
   evidence, a redirect and an event that one it drops took part in.
+- The site shows a death event that states no date (no `point in time`,
+  `start time` or `end time` at any rank but deprecated) as "died (date
+  not stated)", with the sources its type and its principal's
+  participant statements are stated in: under "death" on the page of
+  its principal alone, read at any rank but deprecated as
+  `event_principal` reads it, and under "No date stated" at the foot of
+  the timeline. An informant or a witness who takes part is never shown
+  to have died, a death that is nobody's own is shown on no page, and
+  nothing is shown of anyone the site does not list (CLAUDE.md rule 6,
+  #354).
