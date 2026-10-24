@@ -894,6 +894,27 @@ class TestTheWriter:
         (statement,) = person.claims.get(PROPERTIES["nickname"])
         assert len(statement.references.references) == 3
 
+    def test_a_statement_that_lacks_the_block_gains_it(self):
+        # the statement carries the claim's own source block already, and
+        # not yet the block of the statement its marker stands on
+        wiki = Wiki({MEDIA_SHA1: "Q23"})
+        batch = written("Gustl finally has his visa", True)
+        bare = batch.model_copy(
+            update={
+                "claims": [
+                    batch.claims[0].model_copy(
+                        update={"circumstance_source": None}
+                    )
+                ]
+            }
+        )
+        first = write_mapped(BatchWriter(wiki), bare)
+        again = write_mapped(BatchWriter(wiki), batch)
+        assert again.referenced == 1
+        person = wiki.wbi.item.get(first.created_items["e1"])
+        (statement,) = person.claims.get(PROPERTIES["nickname"])
+        assert ("Q23", "2", STATEMENT) in blocks(statement)
+
     def test_identical_values_are_kept_apart_by_the_marker(self):
         wiki = Wiki({MEDIA_SHA1: "Q23"})
         marked_ = written("Gustl finally has his visa", True)
