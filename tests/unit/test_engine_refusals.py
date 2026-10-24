@@ -1,14 +1,15 @@
 """Offline tests for a call the platform's safety classifier refuses
 (#614): the claude-code engine reads it from the call's stream-json
-structure and raises ClassifierRefusal, naming the refusal and its
+structure and raises ClassifierRefused, naming the refusal and its
 category where the CLI gives one, with no hint at the login. It is not
 asked again as a limit is, and the LLM cache keeps nothing for it. A
 call a subscription limit refuses, and a call that fails because the
 CLI is not logged in, are each still reported as themselves.
 
 The fake claude CLI of test_engine_limits stands in for the real one.
-Here it also prints what CLI 2.1.310 prints for a classifier refusal (its
-SDK schema and its refusal frame, read from the installed CLI): an
+Here it also prints what the pinned CLI 2.1.309 prints for a classifier
+refusal (read statically from its SDK schema and the code that builds its
+refusal frame; no real refused stream has been captured): an
 assistant event that stands for an API error, whose message has the stop
 reason refusal and the refusal's stop_details, a model_refusal_no_fallback
 system event, and an error result with the stop reason refusal, with exit
@@ -22,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit import test_run_report as rr
 from tests.unit.test_claude_code_pinning import Completed, install_fake_cli
 from tests.unit.test_engine_limits import (
     API_ERROR,
@@ -37,7 +39,7 @@ from tests.unit.test_engine_limits import (
     stream,
     usage_window,
 )
-from yizkr.pipeline import llm
+from yizkr.pipeline import llm, monitor, report
 from yizkr.pipeline.llm import (
     BACKOFF,
     MAX_WAIT_ENV,
@@ -45,7 +47,7 @@ from yizkr.pipeline.llm import (
     REFUSAL_STOP,
     RESERVE_ENV,
     SAFETY_MONITOR_BLOCKED,
-    ClassifierRefusal,
+    ClassifierRefused,
     ClaudeCodeClient,
     UsageLimitReached,
     cached_client,
@@ -71,10 +73,10 @@ def refusal_events(
     no_fallback: bool = True,
     result_stop: str | None = REFUSAL_STOP,
 ) -> list[dict]:
-    """A classifier refusal's events after the init event, as CLI 2.1.310
-    prints them: the refusal frame (an API-error assistant event with the
-    stop reason refusal and stop_details), the model_refusal_no_fallback
-    system event, and the error result."""
+    """A classifier refusal's events after the init event, as the pinned
+    CLI 2.1.309 prints them: the refusal frame (an API-error assistant
+    event with the stop reason refusal and stop_details), the
+    model_refusal_no_fallback system event, and the error result."""
     message = {
         "model": "claude-opus-5-5",
         "role": "assistant",
@@ -167,8 +169,9 @@ LOGIN_FAILURE = {
 class RefusingCli(LimitedCli):
     """The fake claude CLI of test_engine_limits, whose `script` may also
     hold a classifier refusal: {"events": f(session)}, the events it
-    prints after the init event, exiting with 1; or {"stderr": text}, a
-    process that prints nothing on stdout and exits with 1."""
+    prints after the init event, exiting with the step's "exit" (1 by
+    default); or {"stderr": text}, a process that prints nothing on stdout
+    and exits with 1."""
 
     def __call__(self, command, **kwargs):
         if command[0] == "claude" and command[1:] != ["--version"]:
@@ -183,7 +186,7 @@ class RefusingCli(LimitedCli):
                 init = json.loads(completed.stdout.splitlines()[0])
                 return Completed(
                     stdout=stream([init, *step["events"](init["session_id"])]),
-                    returncode=1,
+                    returncode=step.get("exit", 1),
                 )
         return super().__call__(command, **kwargs)
 
@@ -217,7 +220,7 @@ class TestReading:
 
     def test_a_refusal_with_its_category(self):
         refused = classifier_refusal([INIT, *refusal_events("s1")], 1)
-        assert isinstance(refused, ClassifierRefusal)
+        assert isinstance(refused, ClassifierRefused)
         assert (refused.blocked_by, refused.category) == (
             REFUSAL_STOP,
             "cyber",
@@ -270,6 +273,37 @@ class TestReading:
         assert (refused.blocked_by, refused.category) == (
             SAFETY_MONITOR_BLOCKED,
             None,
+        )
+
+    def test_the_frames_category_comes_first(self):
+        events = [INIT, *refusal_events("s1")]
+        events[2]["api_refusal_category"] = "bio"  # the system event
+        assert classifier_refusal(events, 1).category == "cyber"
+
+    def test_a_safety_monitor_block_ahead_of_a_refusal_stop(self):
+        """A block whose result also gives the stop reason refusal is the
+        safety monitor's."""
+        events = [INIT, *safety_monitor_events("s1")]
+        events[-1]["stop_reason"] = REFUSAL_STOP
+        assert classifier_refusal(events, 1).blocked_by == (
+            SAFETY_MONITOR_BLOCKED
+        )
+
+    @pytest.mark.parametrize(
+        "result",
+        [None, {"type": "result", "subtype": "success"}],
+        ids=["no result event", "a result silent on is_error"],
+    )
+    def test_a_zero_exit_alone_is_no_answer(self, result):
+        """A stream cut off before an explicit non-error result is read
+        like any other exit: its refusal frame is still a refusal."""
+        events = [INIT, refusal_events("s1", no_fallback=False)[0]]
+        if result is not None:
+            events.append(result)
+        refused = classifier_refusal(events, 0)
+        assert (refused.blocked_by, refused.category) == (
+            REFUSAL_STOP,
+            "cyber",
         )
 
     def test_a_refusal_a_fallback_model_answered_is_none(self):
@@ -331,7 +365,7 @@ class TestReported:
     def test_a_refusal_is_its_own_error(self, cli, clock):
         cli.script = [{"events": refusal_events}]
         client = ClaudeCodeClient()
-        with pytest.raises(ClassifierRefusal) as raised:
+        with pytest.raises(ClassifierRefused) as raised:
             client.complete("Read the letter.")
         message = str(raised.value)
         assert "refused" in message and REFUSAL_STOP in message
@@ -343,7 +377,7 @@ class TestReported:
 
     def test_a_safety_monitor_block_is_its_own_error(self, cli, clock):
         cli.script = [{"events": safety_monitor_events}]
-        with pytest.raises(ClassifierRefusal) as raised:
+        with pytest.raises(ClassifierRefused) as raised:
             ClaudeCodeClient().complete("Read the letter.")
         assert "safety monitor" in str(raised.value)
         assert LOGIN_HINT not in str(raised.value)
@@ -351,7 +385,7 @@ class TestReported:
     def test_a_refusal_is_not_asked_again(self, cli, clock):
         cli.script = [{"events": refusal_events}]
         client = ClaudeCodeClient()
-        with pytest.raises(ClassifierRefusal):
+        with pytest.raises(ClassifierRefused):
             client.complete("Read the letter.")
         assert len(cli.calls) == 1
         assert clock.slept == []
@@ -359,6 +393,35 @@ class TestReported:
         # the next call is asked, and answered
         assert client.complete("Read the letter.") == "answer"
         assert len(cli.calls) == 2
+
+    def test_a_cut_off_refusal_with_a_zero_exit_is_one(
+        self, cli, clock, tmp_path
+    ):
+        """The refusal frame with a zero exit and no result event is never
+        assembled and cached as the answer."""
+
+        def cut_off(session):
+            return refusal_events(session, no_fallback=False)[:1]
+
+        cache = open_cache(tmp_path / "cache")
+        cli.script = [{"events": cut_off, "exit": 0}]
+        client = cached_client(ClaudeCodeClient(), cache, role="transcribe")
+        with pytest.raises(ClassifierRefused):
+            client.complete("Read the letter.")
+        assert not list((tmp_path / "cache").glob("*/*.json"))
+
+    def test_a_limit_beside_a_refusal_is_a_limit(self, cli, clock):
+        """A stream with both a refusal sign and a used-up window is read
+        as the limit: the call waits for the window, or pauses the pass."""
+        window = usage_window(START + 10 * 3600)
+
+        def both(session):
+            limit = refused_events(window, session)[0]
+            return [limit, *refusal_events(session)]
+
+        cli.script = [{"events": both}]
+        with pytest.raises(UsageLimitReached):
+            ClaudeCodeClient().complete("Read the letter.")
 
     def test_a_limit_is_still_a_limit(self, cli, clock):
         cli.script = [RATE_LIMITED]
@@ -387,7 +450,7 @@ class TestReported:
         cli.script = [step]
         with pytest.raises(RuntimeError) as raised:
             ClaudeCodeClient().complete("Read the letter.")
-        assert not isinstance(raised.value, ClassifierRefusal)
+        assert not isinstance(raised.value, ClassifierRefused)
         assert LOGIN_HINT in str(raised.value)
         assert "Please run /login" in str(raised.value)
         assert len(cli.calls) == 1
@@ -403,12 +466,12 @@ class TestRecorded:
         client = observed_client(
             ClaudeCodeClient(), role="transcribe", events=emit
         )
-        with pytest.raises(ClassifierRefusal):
+        with pytest.raises(ClassifierRefused):
             client.complete("Read the letter.")
         (event,) = seen
         assert (event["outcome"], event["error"], event["stop_reason"]) == (
             "error",
-            "ClassifierRefusal",
+            "ClassifierRefused",
             REFUSAL_STOP,
         )
         assert not {"wait_s", "refused", "held"} & event.keys()
@@ -417,7 +480,7 @@ class TestRecorded:
         cache = open_cache(tmp_path / "cache")
         engine = ClaudeCodeClient()
         cli.script = [{"events": refusal_events}]
-        with pytest.raises(ClassifierRefusal):
+        with pytest.raises(ClassifierRefused):
             cached_client(engine, cache, role="transcribe").complete(
                 "Read the letter."
             )
@@ -428,11 +491,41 @@ class TestRecorded:
         assert len(cli.calls) == 2
 
 
+class TestReport:
+    """The run report and the monitor name the error by its class, as
+    they do any exception whose name ends in a known ending."""
+
+    def test_its_name_is_a_failure_label(self):
+        reason = str(ClassifierRefused(REFUSAL_STOP, "cyber"))
+        why = f"ClassifierRefused: {reason}"
+        assert monitor.failure_label(why) == "ClassifierRefused"
+        assert report._failure_label(why) == "ClassifierRefused"
+        assert (
+            monitor.failure_label("ClassifierRefused") == "ClassifierRefused"
+        )
+
+    def test_the_run_reports_call_errors_count_it(self, tmp_path):
+        made = rr.build(
+            rr.record(
+                tmp_path / "run",
+                [
+                    *rr.STREAM,
+                    rr.call(7299, rr.CERT, "transcribe", rr.THIRD, 1.0,
+                            outcome="error", error="ClassifierRefused"),
+                ],
+            ),
+            now=rr.NOW,
+        )  # fmt: skip
+        errors = made["aggregate"]["calls"]["engine_calls"]["errors"]
+        assert errors["ClassifierRefused"] == 1
+        assert "ClassifierRefused" in rr.render_markdown(made["aggregate"])
+
+
 class TestDocs:
     def test_the_engine_section_says_so(self):
         readme = (ROOT / "src/yizkr/pipeline/README.md").read_text()
         engine = readme.split("## LLM providers")[1].split("\n## ")[0]
         flat = " ".join(engine.split())
-        assert "`ClassifierRefusal`" in flat
+        assert "`ClassifierRefused`" in flat
         assert "does not ask it again" in flat
         assert "keeps nothing" in flat

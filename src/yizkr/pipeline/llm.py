@@ -1667,8 +1667,9 @@ def unsupported_model(
 # event that stands for an API error (marked is_api_error_message, its
 # error invalid_request) whose message gives the stop reason refusal and,
 # in stop_details, the refusal's category ("cyber", "bio", ...; an open
-# set) and an explanation; a server-side safety monitor's block is an API
-# error of class safety_monitor_blocked instead (api_error). When the CLI
+# set) and an explanation; a server-side safety monitor's block is an
+# API-error assistant event whose api_error field (the CLI's typed kind of
+# the error, beside its error class) is safety_monitor_blocked. When the CLI
 # does not ask a fallback model, a system event of subtype
 # model_refusal_no_fallback follows, which names the category too
 # (api_refusal_category), and the result reports is_error, with the stop
@@ -1685,7 +1686,7 @@ REFUSAL_NO_FALLBACK = "model_refusal_no_fallback"
 _CATEGORY = re.compile(r"[a-z0-9_]{1,64}")
 
 
-class ClassifierRefusal(RuntimeError):
+class ClassifierRefused(RuntimeError):
     """A call the platform's safety classifier refused (classifier_refusal):
     an error of the call, never a login fault or a subscription limit, and
     never an answer. `blocked_by` says what refused it (REFUSAL_STOP, the
@@ -1707,23 +1708,24 @@ class ClassifierRefusal(RuntimeError):
             f"claude CLI: {what}"
             + (f", category {category}" if category else "")
             + ". It is an error of this call, not a login or subscription "
-            "limit fault, and it was not asked again."
+            "limit fault, and the engine did not ask it again."
         )
 
 
 def classifier_refusal(
     events: Sequence[Mapping[str, Any]], returncode: int
-) -> ClassifierRefusal | None:
+) -> ClassifierRefused | None:
     """The refusal of a call by the platform's safety classifier, read
     from the call's stream-json events and exit status, or None when none
     refused it. A call that ended with an explicit non-error result was
     not refused (as for `refusal`). One that was carries an assistant
     event that stands for an API error (one with an `error` or marked
-    is_api_error_message) whose message's stop reason is refusal, or whose
-    api_error is safety_monitor_blocked; or a model_refusal_no_fallback
-    system event; or a result whose stop reason is refusal. The category
-    is the refusal frame's stop_details category, else the system event's
-    api_refusal_category, when either is a plain token."""
+    is_api_error_message) whose message's stop reason is refusal, or
+    whose api_error field is safety_monitor_blocked; or a
+    model_refusal_no_fallback system event; or a result whose stop reason
+    is refusal. The category is the refusal frame's stop_details
+    category, else the system event's api_refusal_category, when either
+    is a plain token."""
     result = _last_event(events, "result")
     if returncode == 0 and result.get("is_error") is False:
         return None
@@ -1762,7 +1764,7 @@ def classifier_refusal(
         ),
         None,
     )
-    return ClassifierRefusal(blocked_by, category)
+    return ClassifierRefused(blocked_by, category)
 
 
 class _Refused(Exception):
@@ -2266,9 +2268,9 @@ class ClaudeCodeClient:
     limits" above).
 
     **Refusals.** A call the platform's safety classifier refuses is no
-    limit: it raises ``ClassifierRefusal``, naming the refusal and its
-    category where the CLI gives one, and is not asked again. It is an
-    error like any other, so the LLM cache keeps nothing for it.
+    limit: it raises ``ClassifierRefused``, naming the refusal and its
+    category where the CLI gives one; the engine does not ask it again.
+    It is an error like any other, so the LLM cache keeps nothing for it.
 
     **Isolated.** Calls load none of the owner's Claude Code settings
     files, MCP servers or skills, inherit only the environment variables
@@ -2738,7 +2740,7 @@ class ClaudeCodeClient:
         the CLI does not support its model (unsupported_model) pauses the
         pass next (ModelUnsupported), latched as a version mismatch is, so
         no later call of the process is made. A call the platform's safety
-        classifier refused raises ClassifierRefusal next
+        classifier refused raises ClassifierRefused next
         (classifier_refusal), whatever the exit status, and is not asked
         again. A call whose stream says the CLI gave up on its answer at
         the output token limit raises OutputLimitReached next

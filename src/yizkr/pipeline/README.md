@@ -940,17 +940,24 @@ Two Anthropic-backed providers, differing in how usage is billed:
   event whose message has the stop reason `refusal` (with the refusal's
   `stop_details`), a `model_refusal_no_fallback` system event, or an
   error result with the stop reason `refusal`; a server-side safety
-  monitor's block is an API error of class `safety_monitor_blocked`.
-  Such a call raises `ClassifierRefusal`, which names the refusal and
+  monitor's block is an API-error assistant event whose `api_error`
+  field (the CLI's typed kind, not its `error` class) is
+  `safety_monitor_blocked`. A stream cut off before an explicit
+  non-error result is read like any other exit, so a refusal it carries
+  is never cached as the answer.
+  Such a call raises `ClassifierRefused`, which names the refusal and
   its category (`cyber`, `bio`, ...) where the CLI gives one as a plain
   token, and carries neither the CLI's notice nor its explanation. The
   engine does not ask it again, as it does a limit, and the LLM cache
   keeps nothing for it, so the next run asks again. Its stage records
   it as any failed call: a `call` event with outcome `error`, error
-  `ClassifierRefusal` and stop reason `refusal`, and the stage's own
+  `ClassifierRefused` and stop reason `refusal`, and the stage's own
   handling of a failed call (the extractor's chunk retries ask a chunk
-  again, and a fork's failure drops the chunk to inline context; a
-  failed document's reason names `ClassifierRefusal`). A refusal a
+  again, a fork's failure drops the chunk to inline context, and the
+  entity manifest's or segmentation's second attempt asks again too; a
+  failed document's reason names `ClassifierRefused`). The run report
+  and the monitor count it under its own name, in the call errors and
+  the failure labels. A refusal a
   fallback model then answered ends on a result that reports no error,
   and is the answer. A call that exits with any other failure keeps the
   hint that the CLI may not be logged in.
