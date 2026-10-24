@@ -1661,6 +1661,112 @@ def unsupported_model(
     return None
 
 
+# A call the platform's safety classifier refused, as the claude CLI's own
+# stream-json schema describes it (no refused call is on record here, so
+# each sign below is enough alone). Its stream ends on an assistant
+# event that stands for an API error (marked is_api_error_message, its
+# error invalid_request) whose message gives the stop reason refusal and,
+# in stop_details, the refusal's category ("cyber", "bio", ...; an open
+# set) and an explanation; a server-side safety monitor's block is an
+# API-error assistant event whose api_error field (the CLI's typed kind of
+# the error, beside its error class) is safety_monitor_blocked. When the CLI
+# does not ask a fallback model, a system event of subtype
+# model_refusal_no_fallback follows, which names the category too
+# (api_refusal_category), and the result reports is_error, with the stop
+# reason refusal; the process exits with 1. A refusal that a fallback
+# model then answered ends in a result that does not report is_error, so
+# it is no refusal of the call. The structure decides, never the notice's
+# text, which the CLI words afresh in each version; the explanation is
+# prose the CLI shows and is never read either.
+REFUSAL_STOP = "refusal"
+SAFETY_MONITOR_BLOCKED = "safety_monitor_blocked"
+REFUSAL_NO_FALLBACK = "model_refusal_no_fallback"
+# a refusal's category, as a plain token, since it flows into messages,
+# call events and a failed document's reason
+_CATEGORY = re.compile(r"[a-z0-9_]{1,64}")
+
+
+class ClassifierRefused(RuntimeError):
+    """A call the platform's safety classifier refused (classifier_refusal):
+    an error of the call, never a login fault or a subscription limit, and
+    never an answer. `blocked_by` says what refused it (REFUSAL_STOP, the
+    model's response ending on the stop reason refusal, or
+    SAFETY_MONITOR_BLOCKED) and `category` the refusal's category, when
+    the CLI gives one. The engine does not ask it again, and the LLM cache
+    keeps nothing for it, so the next run's call asks again."""
+
+    def __init__(self, blocked_by: str, category: str | None = None) -> None:
+        self.blocked_by = blocked_by
+        self.category = category
+        what = (
+            "a server-side safety monitor blocked the call"
+            if blocked_by == SAFETY_MONITOR_BLOCKED
+            else "the safety classifier refused the call (stop reason "
+            f"{REFUSAL_STOP})"
+        )
+        super().__init__(
+            f"claude CLI: {what}"
+            + (f", category {category}" if category else "")
+            + ". It is an error of this call, not a login or subscription "
+            "limit fault, and the engine did not ask it again."
+        )
+
+
+def classifier_refusal(
+    events: Sequence[Mapping[str, Any]], returncode: int
+) -> ClassifierRefused | None:
+    """The refusal of a call by the platform's safety classifier, read
+    from the call's stream-json events and exit status, or None when none
+    refused it. A call that ended with an explicit non-error result was
+    not refused (as for `refusal`). One that was carries an assistant
+    event that stands for an API error (one with an `error` or marked
+    is_api_error_message) whose message's stop reason is refusal, or
+    whose api_error field is safety_monitor_blocked; or a
+    model_refusal_no_fallback system event; or a result whose stop reason
+    is refusal. The category is the refusal frame's stop_details
+    category, else the system event's api_refusal_category, when either
+    is a plain token."""
+    result = _last_event(events, "result")
+    if returncode == 0 and result.get("is_error") is False:
+        return None
+    blocked_by = None
+    categories: list[Any] = []
+    for event in events:
+        kind = event.get("type")
+        message = event.get("message")
+        if (
+            kind == "assistant"
+            and isinstance(message, dict)
+            and (
+                isinstance(event.get("error"), str)
+                or event.get("is_api_error_message") is True
+            )
+        ):
+            if message.get("stop_reason") == REFUSAL_STOP:
+                blocked_by = blocked_by or REFUSAL_STOP
+                details = message.get("stop_details")
+                if isinstance(details, dict):
+                    categories.append(details.get("category"))
+            elif event.get("api_error") == SAFETY_MONITOR_BLOCKED:
+                blocked_by = blocked_by or SAFETY_MONITOR_BLOCKED
+        elif kind == "system" and event.get("subtype") == REFUSAL_NO_FALLBACK:
+            blocked_by = blocked_by or REFUSAL_STOP
+            categories.append(event.get("api_refusal_category"))
+    if blocked_by is None and result.get("stop_reason") == REFUSAL_STOP:
+        blocked_by = REFUSAL_STOP
+    if blocked_by is None:
+        return None
+    category = next(
+        (
+            token
+            for value in categories
+            if (token := _token(value, _CATEGORY)) is not None
+        ),
+        None,
+    )
+    return ClassifierRefused(blocked_by, category)
+
+
 class _Refused(Exception):
     """An attempt at a call that the subscription refused for a limit;
     ClaudeCodeClient asks again, or pauses the pass."""
@@ -2161,6 +2267,11 @@ class ClaudeCodeClient:
     the calling thread's last call waited, and why (see "Subscription
     limits" above).
 
+    **Refusals.** A call the platform's safety classifier refuses is no
+    limit: it raises ``ClassifierRefused``, naming the refusal and its
+    category where the CLI gives one; the engine does not ask it again.
+    It is an error like any other, so the LLM cache keeps nothing for it.
+
     **Isolated.** Calls load none of the owner's Claude Code settings
     files, MCP servers or skills, inherit only the environment variables
     on an allowlist (``_PASSED_VARIABLES``: what runs the CLI, locates its
@@ -2628,12 +2739,16 @@ class ClaudeCodeClient:
         _Refused, before any other check. A call the API refused because
         the CLI does not support its model (unsupported_model) pauses the
         pass next (ModelUnsupported), latched as a version mismatch is, so
-        no later call of the process is made. A call whose stream says the CLI
-        gave up on its answer at the output token limit raises
-        OutputLimitReached next (output_limit_reached), whatever the exit
-        status. A call whose terminal result reports another error that is
-        not a limit raises RuntimeError, whatever the exit status: it is
-        never assembled and returned as the answer. A call whose stream
+        no later call of the process is made. A call the platform's safety
+        classifier refused raises ClassifierRefused next
+        (classifier_refusal), whatever the exit status, and is not asked
+        again. A call whose stream says the CLI gave up on its answer at
+        the output token limit raises OutputLimitReached next
+        (output_limit_reached), whatever the exit status. A call that
+        exits with another failure raises RuntimeError with a hint at the
+        login, and one whose terminal result reports another error that is
+        not a limit raises RuntimeError, whatever the exit status: neither
+        is assembled and returned as the answer. A call whose stream
         reports the Read tool failing on one of its ``inputs`` raises
         EngineToolError, after the version and tool checks."""
         stdout = ""
@@ -2678,6 +2793,9 @@ class ClaudeCodeClient:
                         reason=unsupported,
                     )
                 )
+            classified = classifier_refusal(events, result.returncode)
+            if classified is not None:
+                raise classified
             if output_limit_reached(events):
                 raise OutputLimitReached()
             if result.returncode != 0:
