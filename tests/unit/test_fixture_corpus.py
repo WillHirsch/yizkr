@@ -80,6 +80,7 @@ from yizkr.pipeline.orchestrate import (
     document_kind,
 )
 from yizkr.pipeline.presentation import (
+    derived_transcription,
     slide_transcript,
     unpack_pptx,
     unread_reason,
@@ -109,6 +110,8 @@ from yizkr.pipeline.scratch import (
     CorpusStage,
 )
 from yizkr.pipeline.stages import content_hash, read_jsonl, sha1_file
+from yizkr.pipeline.transcribe import Transcription
+from yizkr.pipeline.transcription_record import BLANK
 
 SOURCES = {source.key: source for source in u.SOURCES}
 # the documents the engine is asked about, and the images it reads
@@ -733,7 +736,15 @@ class TestTheRun:
             ("shows", "sebastian-loebig", "Wastl and Hilde", "relation"),
             ("shows", "hildegard-loebig", "Wastl and Hilde", "relation"),
         }
+        # slide 2 is each claim's source page, never a qualifier
         assert {c.source.page_number for c in about} == {"2"}
+        assert [c.qualifiers for c in about] == [[]] * len(about)
+        # the photograph's own reading: a photograph, its one page blank
+        reading = Transcription.model_validate_json(
+            derived_transcription(deck.dir, placed.sha1()).read_text()
+        ).record()
+        assert reading.document_class == "photograph"
+        assert reading.statuses() == [BLANK]
         assert {c.source.artifact.sha1 for c in about} == {sha1(fc.DECK)}
         assert placed.sha1() not in {
             doc.sha1 for doc in runs.views(run).values()
