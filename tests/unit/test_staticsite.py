@@ -2793,9 +2793,10 @@ class TestAnUndatedDeath:
     def test_only_the_principals_own_statements_cite_it(
         self, tmp_path, vocabulary
     ):
-        # beside the principal, a participant who states no role: its
-        # source is no source of the death, and it is not shown to have
-        # died
+        # beside the principal, a participant who states no role, and a
+        # second statement of the principal's own that states another
+        # role: neither one's source is a source of the death, and the
+        # role-less participant is not shown to have died
         rows = death_rows(
             "Q720",
             [
@@ -2803,9 +2804,28 @@ class TestAnUndatedDeath:
                 (NINA, [], "NormalRank", [(CERTIFICATE, CERTIFICATE_TITLE)]),
             ],
             kind_sources=[(NINAS_LETTER, LETTER_TITLE)],
+        ) + death_rows(
+            "Q721",
+            [
+                (
+                    RUDOLF,
+                    ["principal"],
+                    "NormalRank",
+                    [(NINAS_LETTER, LETTER_TITLE)],
+                ),
+                (
+                    RUDOLF,
+                    ["informant"],
+                    "NormalRank",
+                    [(CERTIFICATE, CERTIFICATE_TITLE)],
+                ),
+            ],
         )
-        site, _ = self.site(tmp_path, vocabulary, rows)
-        assert f"<dd>{DIED}</dd>" in self.page(site, RUDOLF)
+        site, summary = self.site(tmp_path, vocabulary, rows)
+        text = self.page(site, RUDOLF)
+        assert text.count(f"<dd>{DIED}</dd>") == 2
+        assert CERTIFICATE not in text
+        assert summary["undated_deaths"] == 2
         assert "died (date not stated)" not in self.page(site, NINA)
 
     def test_the_timeline_lists_it_by_whom_it_happened_to(
@@ -2877,6 +2897,32 @@ class TestAnUndatedDeath:
         assert "died (date not stated)" in self.page(site, RUDOLF)
         assert "died (date not stated)" not in self.page(site, NINA)
 
+    def test_a_deprecated_second_principal_hides_no_death(
+        self, tmp_path, vocabulary
+    ):
+        # a deprecated statement naming Nina as a second principal is set
+        # aside: the death is still Rudolf's, by the letter, and never hers
+        rows = death_rows(
+            "Q722",
+            [
+                (
+                    RUDOLF,
+                    ["principal"],
+                    "NormalRank",
+                    [(NINAS_LETTER, LETTER_TITLE)],
+                ),
+                (
+                    NINA,
+                    ["principal"],
+                    "DeprecatedRank",
+                    [(CERTIFICATE, CERTIFICATE_TITLE)],
+                ),
+            ],
+        )
+        site, _ = self.site(tmp_path, vocabulary, rows)
+        assert f"<dd>{DIED}</dd>" in self.page(site, RUDOLF)
+        assert "died (date not stated)" not in self.page(site, NINA)
+
     def test_a_deprecated_statement_of_the_principal_cites_nothing(
         self, tmp_path, vocabulary
     ):
@@ -2916,6 +2962,24 @@ class TestAnUndatedDeath:
             f"{html.escape(CERTIFICATE_TITLE)}</a>; Q706</span></dd>" in text
         )
         assert summary["undated_deaths"] == 2
+        # the timeline lists both, each with its own sources
+        timeline = (site / "timeline.html").read_text()
+        person = f'<a href="people/{RUDOLF}.html">Rudolf Löbig</a>, '
+        assert sorted(
+            re.findall(
+                rf'<div class="entry">{re.escape(person)}(.*?)</div>',
+                timeline,
+            )
+        ) == sorted(
+            [
+                "died (date not stated)"
+                f'<span class="source"><a href="artifacts/{NINAS_LETTER}'
+                f'.html">{html.escape(LETTER_TITLE)}</a></span>',
+                "died (date not stated)"
+                f'<span class="source"><a href="artifacts/{CERTIFICATE}'
+                f'.html">{html.escape(CERTIFICATE_TITLE)}</a>; Q706</span>',
+            ]
+        )
 
     def test_it_stands_beside_a_dated_death_of_the_same_person(
         self, tmp_path, vocabulary
@@ -3011,3 +3075,20 @@ class TestAnUndatedDeath:
             f"BIND(EXISTS {{ ?role <http://www.w3.org/2002/07/owl#sameAs>* "
             f"wd:{items['principal']} . }} AS ?principal)" in compact
         )
+        # the sources: the participant statement's, and the type
+        # statement's, never the event's own
+        stated_in = properties["stated_in"]
+        assert f"?part prov:wasDerivedFrom/pr:{stated_in} ?source ." in compact
+        assert (
+            f"?typing prov:wasDerivedFrom/pr:{stated_in} ?kindSource ."
+            in compact
+        )
+
+    def test_no_property_path_holds_a_variable(self):
+        # SPARQL 1.1 allows no variable in a property path: the query
+        # service refuses the query, and the whole build with it
+        from yizkr.staticsite import UNDATED_DEATHS_QUERY
+
+        paths = re.findall(r"\S+/\S+", UNDATED_DEATHS_QUERY)
+        assert paths
+        assert [path for path in paths if "?" in path] == []

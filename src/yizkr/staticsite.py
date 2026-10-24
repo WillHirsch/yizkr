@@ -393,8 +393,9 @@ WHERE {{
     ?dated wikibase:claim ?datedClaim ;
            wikibase:statementValue ?datedValue .
     ?event ?datedClaim ?dating .
-    ?dating ?datedValue/wikibase:timeValue [] ;
+    ?dating ?datedValue ?datedNode ;
             wikibase:rank ?datingRank .
+    ?datedNode wikibase:timeValue [] .
     FILTER(?datingRank != wikibase:DeprecatedRank)
   }}
   ?event p:{participant} ?part .
@@ -1106,12 +1107,13 @@ class SiteBuilder:
         to have died, by their QID: for each death event that states no
         date, its sources as (QID, label) pairs, under its principal alone
         (``event_principal``, ADR-0035 §3.2), the one its participant
-        statements name in the role `principal`, at any rank but
-        deprecated; an informant or a witness who takes part is never shown
-        to have died, and an event that is nobody's own is shown on no
-        one's page. The sources are those its type statements and its
-        principal's own participant statements are stated in, in the order
-        of their QIDs; the events come in the order of theirs."""
+        statements name in the role `principal`, read with every
+        deprecated participant statement set aside; an informant or a
+        witness who takes part is never shown to have died, and an event
+        that is nobody's own is shown on no one's page. The sources are
+        those its type statements and its principal's own participant
+        statements are stated in, in the order of their QIDs; the events
+        come in the order of theirs."""
         events: dict[str, dict] = {}
         for row in rows:
             event = events.setdefault(
@@ -1138,8 +1140,11 @@ class SiteBuilder:
                 (participation(part["row"], part["roles"]), part["sources"])
                 for part in events[qid]["parts"].values()
             ]
+            # a deprecated statement is set aside first, so that it can
+            # name no second principal and hide the death
             principal = event_principal(
-                (each for each, _ in parts), best_rank_only=False
+                (each for each, _ in parts if each.rank != "DeprecatedRank"),
+                best_rank_only=False,
             )
             if principal is None:
                 continue
@@ -1657,9 +1662,9 @@ class SiteBuilder:
         )
         if entries:
             body.append(
-                '<h2>No date stated</h2><p class="sub">what a source '
-                "asserts with no date, so that it has no place above, each "
-                'with its source</p><div class="timeline">'
+                '<h2>No date stated</h2><p class="sub">each death a source '
+                "states with no date, so that it has no place above, with "
+                'its source</p><div class="timeline">'
                 + "".join(
                     f'<div class="entry">{entry}</div>' for entry in entries
                 )

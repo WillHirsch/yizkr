@@ -1936,9 +1936,13 @@ not a signal to grow the schema on.
   `start time` or `end time` at any rank but deprecated) as "died (date
   not stated)", with the sources its type and its principal's
   participant statements are stated in: under "death" on the page of
-  its principal alone, read at any rank but deprecated as
-  `event_principal` reads it, and under "No date stated" at the foot of
-  the timeline. An informant or a witness who takes part is never shown
-  to have died, a death that is nobody's own is shown on no page, and
-  nothing is shown of anyone the site does not list (CLAUDE.md rule 6,
-  #354).
+  its principal alone, as `event_principal` reads it once every
+  deprecated participant statement is set aside, and under "No date
+  stated" at the foot of the timeline. An informant or a witness who
+  takes part is never shown to have died, a death that is nobody's own
+  is shown on no page, and nothing is shown of anyone the site does not
+  list (CLAUDE.md rule 6, #354). The display reads more widely than the
+  possibly-living call (its principal at any rank but deprecated, and
+  its type at any rank but deprecated and through redirects), so a page
+  can show the death beside the "possibly living" badge: the death is
+  shown, never weighed, and the badge alone decides the export.
