@@ -965,6 +965,14 @@ to the held scan. The rule admits forms (a), (b) and (c4).
   entity", and keeps doing so in the build, so no clustering-stage
   template changes; better wording is a `stage:clustering` change of its
   own. The scratch diff states the adjudication misses.
+  Amended by #667: `_Document.named` now names an artifact subject
+  plainly, its own document as "this document" and an image the
+  document places by its place ("page 6, image 1", as the critic's
+  rows do, `critique.artifact_places`), read from the document's
+  transcription view; an artifact without a place is named by the
+  SHA-1 of its media. The stage key covers those places and the code
+  digest the naming, so the pairs whose evidence names an artifact
+  subject are asked again.
 - **Report.** `report._container_claims` receives a per-property count.
   The claims fold that builds it also counts document-subject claims by
   subject form: the source itself, an artifact it places, an artifact
