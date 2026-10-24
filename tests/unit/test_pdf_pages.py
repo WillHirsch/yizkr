@@ -1419,20 +1419,23 @@ class TestTheCallEstimateCountsExcerpts:
     ):
         """Of the album's two gray images, one has its critique left to
         make and the other its extraction: the estimate starts the
-        extract and the critique roles' clients (#494)."""
+        extract and the critique roles' clients (#494). The letter's
+        excerpt, which the booklet places too, has its critique left, so
+        that each container has a stage left to make."""
         corpus = compilations(tmp_path)
         run_scratch(tmp_path, corpus, engine)
         held = runs_dir(tmp_path).glob("*/excerpts/*")
         excerpts = {path.name: path for path in held}
-        for path in excerpts[gray_sha1(1)].glob("critique*"):
-            path.unlink()
+        for sha1 in (gray_sha1(1), LETTER_SHA1):
+            for path in excerpts[sha1].glob("critique*"):
+                path.unlink()
         (excerpts[gray_sha1(2)] / "batch.json").unlink()
         closed = engine.closed
         counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
         assert counted.excerpts.stale == {
             "transcription": 0,
             "extraction": 1,
-            "critique": 2,
+            "critique": 3,
         }
         assert engine.closed - closed == 2
 
