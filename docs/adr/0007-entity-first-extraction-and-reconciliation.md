@@ -78,6 +78,9 @@ stage that unit makes possible.
 Amended by #523 (2026-10-24), see ADR-0018: a person's label or alias
 that the item's own `referred_to_as` statements give as an appellation
 keys nothing.
+Amended by #638 (2026-10-24), see ADR-0018: so does a document person's
+label or alias that its batch gives as an appellation, and the
+adjudicator reads an appellation as what an entity is called.
 
 ## Context
 

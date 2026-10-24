@@ -92,6 +92,17 @@ is. A place, an organisation or a family has no appellations, so every
 name it has keys. The item's typed name statements (birth name,
 nickname, official name) key whatever their value: a nickname that is
 also an appellation keys as a nickname.
+Amended by #638 (2026-10-24): the document side keys the same way. A
+person's (or a kind that may be a person's) label or alias equal to a
+form its batch gives as an appellation of it (`names.appellations_of`,
+compared as alias hygiene compares names) keys nothing in reconcile's
+blocking, so a document's "Hildegard Löbig", aliased "Oma", never meets
+another grandmother by "Oma"; a record's nicknames still key, and a
+place, an organisation or a family keys on every name. Blocking without
+the batch keys every alias. The adjudication prompt shows an
+appellation, on either side, as "called: Oma", never among the aliases.
+The serial sequencer's overlap signal (ADR-0019) still keys every
+alias.
 
 ## Context
 

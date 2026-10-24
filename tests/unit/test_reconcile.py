@@ -26,6 +26,7 @@ from yizkr.pipeline.reconcile import (
     apply_equivalences,
     block_candidates,
     entity_facts,
+    entity_name_keys,
     export_equivalences_csv,
     fetch_place_containment,
     impossible_pair,
@@ -1998,3 +1999,186 @@ def test_fetch_roster_sends_its_query_in_a_post_body(monkeypatch):
     (query,) = queries
     assert query.startswith("PREFIX wd: <http://wikibase.example/entity/>")
     assert "GROUP BY ?item ?itemLabel ?kind ?kindLabel" in query
+
+
+class TestDocumentAppellations:
+    """#638: a form the batch gives as an appellation of a person
+    (`appellations_of`) keys nothing in reconcile's blocking, and the
+    adjudicator reads an appellation as what an entity is called."""
+
+    @staticmethod
+    def hildegard(**extra) -> EntityRecord:
+        from yizkr.claims import GivenName, PersonStructure, Surname
+
+        return EntityRecord(
+            id="e1",
+            label="Hildegard Löbig",
+            aliases=["Oma", "Hilde"],
+            kind="human",
+            structure=PersonStructure(
+                given=[GivenName(written="Hildegard", standard="Hildegard")],
+                surnames=[Surname(written="Löbig")],
+            ),
+            **extra,
+        )
+
+    @staticmethod
+    def sipkje() -> list[RosterEntity]:
+        # a different grandmother, whose "Oma" alias no statement gives
+        # as an appellation, so it keys on the graph side
+        return [
+            RosterEntity(
+                qid="Q41",
+                label="Sipkje Faxridge",
+                aliases=["Oma"],
+                kind="human",
+            )
+        ]
+
+    def test_an_appellation_alias_keys_nothing(self):
+        appellated = batch(
+            [name_claim("referred_to_as", "Oma")], [self.hildegard()]
+        )
+        assert (
+            block_candidates(
+                appellated.entities, self.sipkje(), batch=appellated
+            )
+            == {}
+        )
+        assert "oma" not in entity_name_keys(self.hildegard(), ["Oma"])
+        assert "hilde" in entity_name_keys(self.hildegard(), ["Oma"])
+
+    def test_the_alias_keys_without_its_referred_to_as_claim(self):
+        """The rule reads the claims, never the alias's wording, and keys
+        every alias for a caller that gives no batch."""
+        plain = batch([], [self.hildegard()])
+        assert [
+            c.qid
+            for c in block_candidates(
+                plain.entities, self.sipkje(), batch=plain
+            )["e1"]
+        ] == ["Q41"]
+        assert "e1" in block_candidates(plain.entities, self.sipkje())
+
+    def test_another_entitys_appellation_hides_no_alias(self):
+        other = batch(
+            [name_claim("referred_to_as", "Oma", subject="e2")],
+            [self.hildegard()],
+        )
+        assert "e1" in block_candidates(
+            other.entities, self.sipkje(), batch=other
+        )
+
+    def test_a_recordless_person_never_keys_on_an_appellation_label(self):
+        """As label or alias, compared by name_form_key."""
+        oma = EntityRecord(
+            id="e1", label="OMA", aliases=["Oma  "], kind="human"
+        )
+        assert entity_name_keys(oma, ["Oma"]) == set()
+        assert entity_name_keys(oma) == {"oma"}
+
+    def test_a_record_nickname_keys_though_it_is_an_appellation(self):
+        hildegard = self.hildegard()
+        record = hildegard.structure.model_copy(update={"nicknames": ["Oma"]})
+        assert "oma" in entity_name_keys(
+            hildegard.model_copy(update={"structure": record}), ["Oma"]
+        )
+
+    @pytest.mark.parametrize("kind", ["place", "organization", "family"])
+    def test_a_kind_never_a_person_keys_on_its_appellation(self, kind):
+        village = EntityRecord(
+            id="e2", label="Snylsjum", aliases=["Snylsjum village"], kind=kind
+        )
+        assert entity_name_keys(village, ["Snylsjum village"]) == {
+            "snylsjum",
+            "snylsjum village",
+        }
+
+    def test_a_kind_that_may_be_a_person_never_keys_on_it(self):
+        unclassified = EntityRecord(
+            id="e3", label="Rahel Löbig", aliases=["Tante Rahel"], kind="other"
+        )
+        keys = entity_name_keys(unclassified, ["Tante Rahel"])
+        assert "tante rahel" not in keys
+        assert "rahel lobig" in keys
+        assert "tante rahel" in entity_name_keys(unclassified)
+
+    def test_roster_facts_show_an_appellation_as_called(self):
+        facts = RosterEntity(
+            qid="Q40",
+            label="Hildegard Löbig",
+            aliases=["oma", "Hilde"],
+            appellations=["Oma"],
+            kind="human",
+        ).facts()
+        assert "aliases: Hilde;" in facts
+        assert "called: Oma;" in facts
+        assert "oma" not in facts.replace("called: Oma", "")
+
+    def test_roster_facts_without_appellations_list_every_alias(self):
+        facts = RosterEntity(
+            qid="Q40", label="Hildegard Löbig", aliases=["Oma"], kind="human"
+        ).facts()
+        assert "aliases: Oma" in facts
+        assert "called:" not in facts
+
+    def test_the_adjudication_prompt_shows_appellations_as_called(self):
+        hildegard = self.hildegard()
+        appellated = batch([name_claim("referred_to_as", "Oma")], [hildegard])
+        roster = [
+            RosterEntity(
+                qid="Q40",
+                label="Hildegard Löbig",
+                aliases=["Oma"],
+                appellations=["Oma"],
+                kind="human",
+            )
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        adjudicate(llm, [hildegard], {"e1": roster}, appellated)
+        (prompt,) = llm.prompts
+        assert "- e1: Hildegard Löbig (aliases: Hilde); called: Oma;" in prompt
+        assert "- for e1: Q40 'Hildegard Löbig'; called: Oma;" in prompt
+
+    def test_the_adjudication_prompt_lists_an_unmarked_alias(self):
+        hildegard = self.hildegard()
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        adjudicate(
+            llm, [hildegard], {"e1": self.sipkje()}, batch([], [hildegard])
+        )
+        (prompt,) = llm.prompts
+        assert "- e1: Hildegard Löbig (aliases: Oma, Hilde); kind:" in prompt
+
+    def test_the_reconcile_command_blocks_with_its_batch(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """`yizkr reconcile` hands block_candidates its batch, so the
+        document's appellations reach the blocking."""
+        import argparse
+
+        from yizkr import cli
+        from yizkr.pipeline import llm, reconcile
+
+        path = tmp_path / "batch.json"
+        path.write_text(
+            batch(
+                [name_claim("referred_to_as", "Oma")], [self.hildegard()]
+            ).model_dump_json()
+        )
+        monkeypatch.setattr(cli.Config, "load", lambda env_file: None)
+        monkeypatch.setattr(cli, "WikiClient", lambda config: None)
+        monkeypatch.setattr(
+            reconcile, "fetch_roster", lambda client, config: self.sipkje()
+        )
+        monkeypatch.setattr(
+            llm,
+            "make_client",
+            lambda name: ScriptedLlm(json.dumps({"done": True})),
+        )
+        args = argparse.Namespace(
+            batch=path, env_file=None, llm="fake", out=tmp_path / "eq.csv"
+        )
+        assert cli.cmd_reconcile(args) == 0
+        assert "candidates for 0 of 1 document entities" in (
+            capsys.readouterr().out
+        )
