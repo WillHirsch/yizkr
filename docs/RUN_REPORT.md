@@ -261,7 +261,9 @@ alone: the findings count flagged writes (a document's write and a
 check, once each), the alerts each flag raised; the QIDs of the items flagged and of those
 they are flagged against appear only in a document's own alert rows in
 report.json and report.html, which are local-only (docs/ANOMALIES.md,
-"Registration").
+"Registration"). The write's `self-reference` alerts, a self-loop the
+writer refused, count here too, under their check and the stage
+`write`, as counts alone (docs/ANOMALIES.md, "The write").
 
 **Content**, from the views of the stages that completed:
 
@@ -308,13 +310,24 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   `document_subject_by_property`);
 - zero-claim documents, by kind, and batches with no entity; the chunks
   and the fallback tiers taken;
+- the chunks asked again because every claim of their answer lacked the
+  same required field (#501), summed from each extraction's
+  `coverage.json` (`retried_chunks`), with the extractions that asked
+  one, and those whose coverage predates the count counted apart, never
+  as zero (`aggregate.content.retried_chunks`: `chunks`, `extractions`,
+  `absent`). A document's own count is in `report.json` and
+  `report.html` (`coverage.retried_chunks`, null for a coverage that
+  predates it). A call the safety classifier refused (#621) is not
+  counted in coverage: it is counted with the call errors, by its
+  error's class (`ClassifierRefused`), and a refusal that fails a chunk
+  or the extraction is named in the document's failure reason;
 - trailing commas read as JSON syntax (#654): a single trailing comma
   before a closing `]` or `}` in an entity manifest or a chunk's answer,
   which the extraction reads past and counts (`coverage.json`'s
   `trailing_commas`), summed over the extractions, with the extractions
-  that read one and, counted apart, never as zero, those whose coverage
-  predates the count (`aggregate.content.trailing_commas`: `read`,
-  `documents`, `absent`). A document's own count is in `report.json`
+  that read one, and those whose coverage predates the count counted
+  apart, never as zero (`aggregate.content.trailing_commas`: `read`,
+  `extractions`, `absent`). A document's own count is in `report.json`
   and its drill-down in `report.html` (`coverage.trailing_commas`, null,
   and "not counted", for a coverage that predates it);
 - mention records and judgement notes, summed from each extraction's

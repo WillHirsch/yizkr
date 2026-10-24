@@ -1149,6 +1149,10 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
             fallback = coverage.get("fallback")
             views["coverage"] = {
                 "chunks": _count(coverage.get("chunks")),
+                # the chunks asked again for a required field every claim
+                # of their answer lacked; None for a coverage that predates
+                # the count
+                "retried_chunks": _counted(coverage.get("retried_chunks")),
                 "rejected_claims": _count(coverage.get("rejected_claims")),
                 "rejected_by_reason": _tally(
                     coverage.get("rejected_by_reason")
@@ -1171,17 +1175,39 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
             views["critique"] = _critique(findings)
 
 
-def _trailing_commas_line(counts: dict[str, int]) -> str:
-    """The run's trailing commas read as JSON syntax, a single one before
-    a closing bracket or brace in a manifest or chunk answer
-    (extract.scan_json_answer), and the extractions with one."""
+def _retried_line(retried: Mapping[str, int]) -> str:
+    """The chunks asked again because every claim of their answer lacked
+    the same required field, as the report's Content section gives them."""
+    extractions = retried["extractions"]
     line = (
-        f"Trailing commas read as JSON syntax: {_n(counts['read'])}; "
-        f"extractions with one: {_n(counts['documents'])}"
+        f"Chunks asked again for a missing required field: "
+        f"{_n(retried['chunks'])}, in {_n(extractions)} extraction"
+        + ("" if extractions == 1 else "s")
+    )
+    if retried["absent"]:
+        line += (
+            f" (extractions whose coverage predates the count: "
+            f"{_n(retried['absent'])})"
+        )
+    return line + "."
+
+
+def _trailing_commas_line(counts: Mapping[str, int]) -> str:
+    """The trailing commas read as JSON syntax, a single one before a
+    closing bracket or brace in a manifest or chunk answer
+    (extract.scan_json_answer), as the report's Content section gives
+    them."""
+    extractions = counts["extractions"]
+    line = (
+        f"Trailing commas read as JSON syntax: {_n(counts['read'])}, in "
+        f"{_n(extractions)} extraction" + ("" if extractions == 1 else "s")
     )
     if counts["absent"]:
-        line += f" (extractions that count none: {_n(counts['absent'])})"
-    return line
+        line += (
+            f" (extractions whose coverage predates the count: "
+            f"{_n(counts['absent'])})"
+        )
+    return line + "."
 
 
 def _quotes(coverage: dict) -> dict[str, Any] | None:
@@ -2578,9 +2604,12 @@ def _aggregate_content(
     # the trailing commas the extractions' answers were read past
     # (extract.scan_json_answer), the extractions with one, and those
     # whose coverage gives no count
-    trailing_commas = trailing_documents = trailing_absent = 0
+    trailing_commas = trailing_extractions = trailing_absent = 0
     batches = not_extracted = zero_entities = 0
     extractions = chunks = rejected = unread = with_rejects = given = 0
+    # the chunks asked again for a missing required field, the extractions
+    # that asked one, and those whose coverage predates the count
+    retried = retried_extractions = retried_absent = 0
     failed_rejecting = critiques = with_findings = findings = invalid = 0
     for document in documents.values():
         if not document.planned:
@@ -2600,6 +2629,11 @@ def _aggregate_content(
         if coverage is not None and batch is not None:
             extractions += 1
             chunks += coverage["chunks"]
+            if coverage.get("retried_chunks") is None:
+                retried_absent += 1
+            else:
+                retried += coverage["retried_chunks"]
+                retried_extractions += bool(coverage["retried_chunks"])
             rejected += coverage["rejected_claims"]
             unread += coverage["unread_objects"]
             given += batch["claims"].total()
@@ -2618,7 +2652,7 @@ def _aggregate_content(
                 trailing_absent += 1
             else:
                 trailing_commas += commas
-                trailing_documents += bool(commas)
+                trailing_extractions += bool(commas)
             quotes = coverage.get("quotes")
             if quotes is None:
                 quotes_absent += 1
@@ -2723,10 +2757,15 @@ def _aggregate_content(
         },
         "zero_entities": zero_entities,
         "chunks": chunks,
+        "retried_chunks": {
+            "chunks": retried,
+            "extractions": retried_extractions,
+            "absent": retried_absent,
+        },
         "fallbacks": _by_count(fallbacks),
         "trailing_commas": {
             "read": trailing_commas,
-            "documents": trailing_documents,
+            "extractions": trailing_extractions,
             "absent": trailing_absent,
         },
         "records": {
@@ -3403,7 +3442,9 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
             [
                 f"{_n(content['batches'])} batches read, from completed "
                 f"extractions and GEDCOM adapters; {_n(content['chunks'])} "
-                "chunks."
+                "chunks.",
+                _retried_line(content["retried_chunks"]),
+                _trailing_commas_line(content["trailing_commas"]),
             ],
         ),
         _Section(
@@ -3455,7 +3496,6 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
                         else ""
                     ),
                     f"Fallback tiers taken: {_listed(content['fallbacks'])}",
-                    _trailing_commas_line(content["trailing_commas"]),
                 ]
             ],
             3,
@@ -4290,8 +4330,12 @@ def _html_document(document: Mapping[str, Any]) -> str:
         items.append(f"Claims: {_listed(_by_count(batch['claims']))}")
     coverage = document["coverage"]
     if coverage:
+        retried = coverage.get("retried_chunks")
         items.append(
-            f"Chunks: {coverage['chunks']}; rejected claims: "
+            f"Chunks: {coverage['chunks']} (asked again for a missing "
+            "required field: "
+            + ("not counted" if retried is None else str(retried))
+            + "); rejected claims: "
             f"{coverage['rejected_claims']}; unread objects: "
             f"{coverage['unread_objects']}; fallback tiers: "
             f"{', '.join(coverage['fallback']) or 'none'}"

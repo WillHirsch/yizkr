@@ -8,9 +8,10 @@ the same RunDir. Then the thresholds, new and carried alerts, the
 fail-fast pauses and their timeout into an abort, however a driver's
 carry of a pause falls (#196's review), the orchestrator's hooks (a
 carried alert on a reused output, a paused kind while another goes on,
-outputs no alert alters), a recheck of stored outputs under new
-thresholds, which recomputes nothing, and the unit tests' own default
-for the checks' timers (tests/unit/conftest.py).
+outputs no alert alters), the write's self-loop refusals (#524), a
+recheck of stored outputs under new thresholds, which recomputes
+nothing, and the unit tests' own default for the checks' timers
+(tests/unit/conftest.py).
 """
 
 from __future__ import annotations
@@ -54,6 +55,7 @@ from yizkr.pipeline.chunking import (
     parse_chunk_response,
 )
 from yizkr.pipeline.critique import Finding
+from yizkr.pipeline.fingerprints import cluster_id
 from yizkr.pipeline.language import resolve_language
 from yizkr.pipeline.orchestrate import Orchestrator
 from yizkr.pipeline.rundir import ALERTS, RunDir, fold_control
@@ -2385,6 +2387,137 @@ class TestModel:
         a_call(run, a_doc(tmp_path, "brief.txt"), "claude-opus-5-5")
         checks.poll()
         assert run.alerts() == []
+
+
+# -- the write ----------------------------------------------------------------
+
+# the identity map's cluster of the 2008 family history's two Eugen
+# Löbigs, the master hatter and his son of the same name, merged into one
+# (the false merge the check points to), and of his wife Cäcilie
+EUGENS = cluster_id(["eugen-the-master-hatter", "eugen-his-son"])
+CILLI = cluster_id(["cacilie-tarle"])
+
+
+def refusal(cluster, prop: str = "father", claims: int = 1) -> dict:
+    """An entry of a document's write record (scratchwrite's
+    self_reference_clusters)."""
+    return {"cluster": cluster, "property": prop, "claims": claims}
+
+
+class TestSelfReference:
+    """A claim the scratch write refused as a self-loop points to a false
+    merge in the identity map (#524): any refusal raises an alert of the
+    write naming the cluster by its id and the property, with the count
+    alone."""
+
+    def test_a_refused_self_loop_raises_an_alert_of_the_write(self, tmp_path):
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "family-history-2008.pdf", kind="pdf")
+        checks.written(doc, [refusal(EUGENS)])
+        alert = only(run, "self-reference")
+        assert (alert["stage"], alert["subject"], alert["kind"]) == (
+            "write",
+            doc.sha1[:12],
+            "pdf",
+        )
+        assert (alert["cluster"], alert["property"], alert["value"]) == (
+            EUGENS,
+            "father",
+            1,
+        )
+        assert alert["status"] == "new"
+        assert alert["config"] == checks.digest
+        assert "limit" not in alert
+
+    def test_one_alert_per_cluster_and_property(self, tmp_path):
+        """The father's own `father` claim and his pet name from his son's
+        side, two properties of one cluster, and another cluster's
+        `father` claim, one property of two clusters: three alerts, each
+        with its count."""
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "family-history-2008.pdf", kind="pdf")
+        checks.written(
+            doc,
+            [
+                refusal(CILLI, "father"),
+                refusal(EUGENS, "father", 2),
+                refusal(EUGENS, "referred_to_as"),
+            ],
+        )
+        raised = [
+            (a["cluster"], a["property"], a["value"]) for a in run.alerts()
+        ]
+        assert raised == [
+            (CILLI, "father", 1),
+            (EUGENS, "father", 2),
+            (EUGENS, "referred_to_as", 1),
+        ]
+
+    def test_each_document_s_write_raises_its_own(self, tmp_path):
+        run, checks = make_checks(tmp_path)
+        history = a_doc(tmp_path, "family-history-2008.pdf", kind="pdf")
+        tree = a_doc(tmp_path, "family-tree-1984.png", kind="media")
+        checks.written(history, [refusal(EUGENS)])
+        checks.written(tree, [refusal(EUGENS)])
+        # the same write told twice in an invocation raises once
+        checks.written(history, [refusal(EUGENS)])
+        assert [a["subject"] for a in run.alerts()] == [
+            history.sha1[:12],
+            tree.sha1[:12],
+        ]
+
+    def test_a_write_with_no_self_loop_is_quiet(self, tmp_path):
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "family-history-2008.pdf", kind="pdf")
+        checks.written(doc, [])
+        checks.written(doc, [refusal(EUGENS, claims=0)])
+        assert run.alerts() == []
+
+    def test_a_self_loop_no_cluster_makes_names_none(self, tmp_path):
+        """A vocabulary item named once by its key and once by its QID:
+        still a self-loop, with no cluster."""
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "family-history-2008.pdf", kind="pdf")
+        checks.written(doc, [refusal(None)])
+        alert = only(run, "self-reference")
+        assert "cluster" not in alert
+        assert (alert["property"], alert["value"]) == ("father", 1)
+
+    def test_the_alert_holds_ids_and_counts_alone(self, tmp_path):
+        """A field not of its form, a label say, is never copied into the
+        alert."""
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "family-history-2008.pdf", kind="pdf")
+        checks.written(
+            doc, [refusal("Eugen Löbig", "Eugen Löbig, master hatter")]
+        )
+        alert = only(run, "self-reference")
+        assert "cluster" not in alert
+        assert alert["property"] == "?"
+        assert "Eugen" not in (run.path / ALERTS).read_text()
+
+    def test_it_can_be_turned_off(self, tmp_path):
+        run, checks = make_checks(
+            tmp_path, {"checks": {"self-reference": {"enabled": False}}}
+        )
+        doc = a_doc(tmp_path, "family-history-2008.pdf", kind="pdf")
+        checks.written(doc, [refusal(EUGENS)])
+        assert run.alerts() == []
+
+    def test_the_hook_never_raises(self, tmp_path, monkeypatch):
+        run = RunDir(tmp_path / "run")
+        doc = a_doc(tmp_path, "family-history-2008.pdf", kind="pdf")
+
+        def failing(self, *args):
+            raise RuntimeError("Eugen Löbig")
+
+        monkeypatch.setattr(AnomalyChecks, "written", failing)
+        anomalies.written(run, doc, [refusal(EUGENS)])
+        assert run.alerts() == []
+        (error,) = [
+            e for e in run.events() if e["event"] == anomalies.ERROR_EVENT
+        ]
+        assert (error["hook"], error["error"]) == ("written", "RuntimeError")
 
 
 # -- fail-fast pauses ---------------------------------------------------------

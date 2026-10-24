@@ -27,12 +27,13 @@ for it are unchanged, and made again when they change, or when
 again in place. A changed prompt, model or piece of code does not by
 itself make a view stale; a scratch run starts from fresh state
 directories instead. The one check a view must still pass is the
-transcription check: a vision or text-file transcription is checked
-again whenever it is reused, and one that now fails is moved aside and
-made again in the run. The model calls a view is made with go through the
-LLM cache when the run has one (ADR-0032): an accelerator, which the
-pipeline runs the same without. The client factory (yizkr.pipeline.llm)
-wraps the run's engine clients in it; the orchestrator only names the
+transcription check: a transcription made by a route whose transcriber
+checks its output (CHECKED_ROUTES) is checked again whenever it is
+reused, and one that now fails is moved aside and made again in the
+run. The model calls a view is made with go through the LLM cache when
+the run has one (ADR-0032): an accelerator, which the pipeline runs the
+same without. The client factory (yizkr.pipeline.llm) wraps the run's
+engine clients in it; the orchestrator only names the
 cache folder, the refreshed roles and the epochs, and records the cache's
 events in the run directory. The transcription is routed per document
 (vision, paged, text file); a curator's
@@ -164,6 +165,7 @@ from yizkr.core.corpus import (
     MISSING_LIST,
     ExclusionConfigError,
     ExclusionList,
+    gather_embedded,
     is_excluded,
 )
 from yizkr.core.wiki import WikiClient
@@ -228,6 +230,11 @@ EXCERPTS_DIR = "excerpts"
 # the transcription route of a paged container, a PDF or a deck, read by
 # its format's reader (yizkr.pipeline.containers)
 PAGED = "paged"
+# the transcription routes whose transcribers check their output: a view
+# made by one of them is checked again when it is reused, by the driver
+# and the estimate alike; route names, not the engine prefixes
+# yizkr.pipeline.anomalies.CHECKED_ROUTES judges
+CHECKED_ROUTES = frozenset(("vision", PAGED, "text-file", EXCERPT))
 
 # the stages each kind of document runs before the gates, in order
 _EXTRACTED = ("transcription", "extraction", "critique")
@@ -1082,12 +1089,19 @@ class Orchestrator:
         its own (directory_names) and its source read for its SHA-1. A
         document whose source or state.json cannot be read is `unreadable`
         (DocumentRun), and so is one whose bytes the never-ingest list's
-        hashes cannot be checked against: it is not ingested."""
+        hashes cannot be checked against: it is not ingested. The list is
+        first given the SHA-1s of the images its globs name in the
+        folder's decks (`_gather_embedded`), so a file that is such an
+        image's bytes is excluded too."""
         files = []
         unread: dict[Path, str] = {}
-        for path in sorted(self.folder.iterdir()):
-            if not path.is_file() or path.name.startswith("."):
-                continue
+        paths = [
+            path
+            for path in sorted(self.folder.iterdir())
+            if path.is_file() and not path.name.startswith(".")
+        ]
+        self._gather_embedded(paths)
+        for path in paths:
             # the never-ingest list is asked first, before any step
             # reads the document, and whatever the file's type: an excluded
             # file gets no state, no artifact and no transcription
@@ -1120,6 +1134,29 @@ class Orchestrator:
                 doc.read_source()
             docs.append(doc)
         return docs
+
+    def _gather_embedded(self, paths: Sequence[Path]) -> None:
+        """Give the never-ingest list the SHA-1s of the images its globs
+        name, by their names in the archive, in the decks among `paths`
+        (corpus.gather_embedded), in place of any it was given before.
+        This comes before any container's images are read, so the reader
+        (`_excluded_image`) and the write's registrar, which both ask this
+        list, keep those bytes out of every deck and PDF that holds them
+        as they are, and out of the run as a file of their own (ADR-0008).
+        A deck the list excludes is asked too: its members are hashed in
+        memory and nothing of it is kept, so listing a deck never frees
+        the bytes a glob names in it. A deck that cannot be read as an
+        archive refuses the run (ExclusionConfigError), since the bytes
+        its globs would name cannot be known."""
+        if self.exclusions is None:
+            return
+        listed = self.exclusions.with_embedded(())
+        decks = [
+            path
+            for path in paths
+            if path.suffix.lower() in PRESENTATION_SUFFIXES
+        ]
+        self.exclusions = listed.with_embedded(gather_embedded(listed, decks))
 
     # -- stages ---------------------------------------------------------------
 
@@ -1487,9 +1524,9 @@ class Orchestrator:
     def _transcription(self, doc: DocumentRun):
         """The document's transcription view, reused when it stands
         (`_reused_view`) and made otherwise, then recorded with its
-        canonical content hash; once per run. A vision or text-file
-        transcription, the routes whose transcribers check their output,
-        is checked again when it is reused: the check may have become
+        canonical content hash; once per run. A transcription made by a
+        route whose transcriber checks its output (CHECKED_ROUTES) is
+        checked again when it is reused: the check may have become
         stricter since the view was made, and one it now fails is made
         again (`_transcription_failure`)."""
         from yizkr.pipeline.transcribe import Transcription
@@ -1497,7 +1534,7 @@ class Orchestrator:
         memo = (doc.sha1, doc.transcription.name)
         if memo in self._views:
             return self._views[memo]
-        checked = self._route(doc) in ("vision", PAGED, "text-file", EXCERPT)
+        checked = self._route(doc) in CHECKED_ROUTES
         transcription = self._reused_view(
             doc,
             doc.transcription,
@@ -1845,9 +1882,11 @@ class Orchestrator:
         """Does the never-ingest list name an image a paged container
         places on a page, by the SHA-1 of its bytes or by any of its
         `names` (a deck's image's names in the archive, which its globs
-        match, as registration matches them)? Such an image is never read
-        on its own, kept as the container's reading of it, or
-        extracted."""
+        match, as registration matches them)? Its SHA-1 is named too when
+        a glob names those bytes in any deck of the folder
+        (`_gather_embedded`), so a PDF's image is asked of a deck's names
+        for its bytes. Such an image is never read on its own, kept as the
+        container's reading of it, or extracted."""
         return self.exclusions is not None and any(
             is_excluded(self.exclusions, name=name, sha1=sha1)
             for name in names or [None]
@@ -1858,7 +1897,8 @@ class Orchestrator:
         """The names the never-ingest list's globs are matched against for
         an image of the container's record: a deck's image's names in the
         archive; none for a PDF's, whose names are its places ("page 6,
-        image 1"), not files, so it is asked by its SHA-1 alone."""
+        image 1"), not files, so it is asked by its SHA-1 alone, which the
+        list names when a glob names the same bytes in a deck."""
         if doc.kind != "presentation" or record is None:
             return []
         medium = record.media.get(sha1)

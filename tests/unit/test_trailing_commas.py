@@ -300,7 +300,7 @@ class TestTheRunReport:
         extractions = before["rejects"]["extractions"]
         assert before["trailing_commas"] == {
             "read": 0,
-            "documents": 0,
+            "extractions": 0,
             "absent": extractions,
         }
         for sha1, commas in ((CERT, 3), (DIRECTORY, 0)):
@@ -317,12 +317,13 @@ class TestTheRunReport:
         made = build(path, now=NOW)
         assert made["aggregate"]["content"]["trailing_commas"] == {
             "read": 3,
-            "documents": 1,
+            "extractions": 1,
             "absent": extractions - 2,
         }
         assert (
-            "Trailing commas read as JSON syntax: 3; extractions with one: 1 "
-            f"(extractions that count none: {extractions - 2})"
+            "Trailing commas read as JSON syntax: 3, in 1 extraction "
+            "(extractions whose coverage predates the count: "
+            f"{extractions - 2})."
         ) in render_markdown(made["aggregate"])
         assert "Trailing commas read as JSON syntax: 3" in drilled(made, CERT)
         assert "Trailing commas read as JSON syntax: 0" in drilled(
