@@ -72,6 +72,7 @@ MERGED = {
     "Q9001": "floerburg",
     "Q9002": "sebastian-loebig",
     "Q9003": "rudolf-loebig",
+    "Q9005": "leopold-loebig",
 }
 
 
@@ -824,6 +825,86 @@ class TestStatedTogether:
         merged = placed(redirects=[("Q9003", "rudolf-loebig")])
         assert listed(*statements, containment=merged) == []
         assert len(listed(*statements)) == 2
+
+    def test_a_redirect_on_the_lower_side_is_stated_together(self):
+        # the interview's father is a duplicate of Leopold, whom the tree
+        # names beside Rudolf
+        statements = (
+            said("eugen-loebig", "father", "Q9005", INTERVIEW),
+            said("eugen-loebig", "father", "leopold-loebig", TREE),
+            said("eugen-loebig", "father", "rudolf-loebig", TREE),
+        )
+        merged = placed(redirects=[("Q9005", "leopold-loebig")])
+        assert listed(*statements, containment=merged) == []
+
+    def test_a_deprecated_reading_is_not_stated(self):
+        # a curator corrected the tree's Rudolf to Leopold and deprecated
+        # the reading: the tree names Leopold only, against the interview
+        statements = (
+            said("eugen-loebig", "father", "leopold-loebig", TREE),
+            said(
+                "eugen-loebig",
+                "father",
+                "rudolf-loebig",
+                TREE,
+                rank=DEPRECATED,
+            ),
+            said("eugen-loebig", "father", "rudolf-loebig", INTERVIEW),
+        )
+        (row,) = compare(statements, NOTHING)
+        assert {shown(row.a), shown(row.b)} == {
+            QIDS["leopold-loebig"],
+            QIDS["rudolf-loebig"],
+        }
+        assert {
+            source.artifact
+            for side in (row.a, row.b)
+            for source in side.sources
+        } == {iri(TREE), iri(INTERVIEW)}
+
+    def test_a_statement_citing_two_artifacts_is_compared_through_either(
+        self,
+    ):
+        # the interview's Leopold statement also cites the tree, which
+        # names Rudolf too; the interview still disagrees with the
+        # gravestone's Rudolf
+        statements = (
+            said("eugen-loebig", "father", "leopold-loebig", TREE, INTERVIEW),
+            said("eugen-loebig", "father", "rudolf-loebig", TREE),
+            said("eugen-loebig", "father", "rudolf-loebig", GRAVESTONE),
+        )
+        (row,) = compare(statements, NOTHING)
+        assert {shown(row.a), shown(row.b)} == {
+            QIDS["leopold-loebig"],
+            QIDS["rudolf-loebig"],
+        }
+
+    def test_two_pages_of_one_artifact_state_its_parents_together(self):
+        statements = (
+            said(
+                "eugen-loebig",
+                "father",
+                "leopold-loebig",
+                source(TREE, "Q9101"),
+            ),
+            said(
+                "eugen-loebig",
+                "father",
+                "rudolf-loebig",
+                source(TREE, "Q9102"),
+            ),
+            said("eugen-loebig", "father", "leopold-loebig", INTERVIEW),
+        )
+        assert listed(*statements) == []
+
+    def test_what_an_artifact_states_is_read_per_child(self):
+        # the tree names Rudolf as Felix's father, not Eugen's
+        statements = (
+            said("eugen-loebig", "father", "leopold-loebig", TREE),
+            said("felix-loebig", "father", "rudolf-loebig", TREE),
+            said("eugen-loebig", "father", "rudolf-loebig", INTERVIEW),
+        )
+        assert len(listed(*statements)) == 1
 
     @pytest.mark.parametrize(
         ("prop", "first", "second"),

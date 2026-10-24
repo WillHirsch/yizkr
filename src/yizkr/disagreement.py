@@ -18,8 +18,8 @@ Each rule of MODELING.md "Contradictions" is one function here:
   one is compared like any other, so nothing needs a preference;
 * ``attributed``: a statement with no stated-in source takes no part;
 * ``compared_values``: what a statement puts up for comparison, its own
-  value for a property that holds one true value per subject, or for a
-  residence or a spouse the times ``dated_times`` names;
+  value for a property that holds one true value per subject or for a
+  parent, or for a residence or a spouse the times ``dated_times`` names;
 * ``dated_times``: a residence's or a marriage's start and end times,
   each with the range its statement states for that end: a start runs
   from its earliest date to its latest start date, an end from its
@@ -77,10 +77,12 @@ XSD_DATETIME = "http://www.w3.org/2001/XMLSchema#dateTime"
 OWL_SAME_AS = "http://www.w3.org/2002/07/owl#sameAs"
 DEPRECATED = "http://wikiba.se/ontology#DeprecatedRank"
 
-# Properties that hold at most one true value per subject: two values
-# from different sources disagree. The dates are an entity's own (a birth,
-# an event's point in time, start or end, or a document's date of making,
-# its inception: ADR-0039); the last three identify a place.
+# Properties compared by their own values: all but the parents hold at most
+# one true value per subject, so two values from different sources
+# disagree; a child may have two fathers or two mothers, which one source
+# states together (``stated_together``). The dates are an entity's own (a
+# birth, an event's point in time, start or end, or a document's date of
+# making, its inception: ADR-0039); the last three identify a place.
 SINGLE_VALUED = frozenset(
     {
         "date_of_birth",
@@ -458,7 +460,8 @@ def compared_values(
     statement: Statement, containment: Containment
 ) -> Iterator[Reading]:
     """What a statement puts up for comparison. A property that holds one
-    true value per subject compares the statement's own value. Residence
+    true value per subject, or a parent, compares the statement's own
+    value. Residence
     and spouse accumulate values over a life, so their values never
     conflict; the same place or spouse dated differently by another source
     does, so they compare the times ``dated_times`` names, per place or
@@ -645,8 +648,11 @@ def stated_together(
     the other: the pair is set aside unless some artifact of `x`'s
     statement does not state `y`'s value and some artifact of `y`'s does
     not state `x`'s. `stated` holds, for each artifact, the comparison
-    keys of every value it states of the pair's aspect. Other properties
-    are never set aside here."""
+    keys of every value it states of the pair's aspect. A statement a
+    curator deprecated is not in it (``in_contention``), so a curator who
+    corrects a parent deprecates the reading corrected; left at normal
+    rank, the artifact reads as naming both. Other properties are never
+    set aside here."""
     if x.aspect.property not in PARENTS:
         return False
     return not any(
@@ -786,8 +792,7 @@ def compare(
     """The report's rows: each pair of values that different artifacts
     attribute to one aspect, listed once, with differences of resolution,
     a statement's ``one_claim`` and parents ``stated_together`` set aside.
-    Sources that state one
-    value alike are listed together."""
+    Sources that state one value alike are listed together."""
     aspects: defaultdict[Aspect, list[Reading]] = defaultdict(list)
     for statement in statements:
         if in_contention(statement) and attributed(statement):

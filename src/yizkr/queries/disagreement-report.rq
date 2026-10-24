@@ -6,9 +6,11 @@
 # the evidence, never to pick a value or "fix" one.
 #
 # The compared properties are the ones that hold at most one true value
-# per subject (dates and places of birth and death, parents, birth name,
-# an entity's own point in time, start and end, a document's inception, a
-# place's identity), and residence and spouse, whose dates are compared.
+# per subject (dates and places of birth and death, birth name, an
+# entity's own point in time, start and end, a document's inception, a
+# place's identity), the parents (a child may have two of one gender,
+# which one source states together), and residence and spouse, whose
+# dates are compared.
 # Each row gives the statement's rank, its value as the source states it
 # (a time with its precision; an item with the label of the item a merge
 # redirect resolves to), the earliest and latest dates the source gives
@@ -37,9 +39,9 @@ SELECT ?entity ?entityLabel ?property ?propertyLabel ?statement ?rank
        ?pointInTime ?pointInTimePrecision ?pointInTimeCalendar
        ?source ?sourceLabel ?artifact
 WHERE {
-  # the properties that hold at most one true value per subject, and the
-  # two that accumulate values over a life but are dated (residence and
-  # spouse)
+  # the properties that hold at most one true value per subject, the
+  # parents, and the two that accumulate values over a life but are dated
+  # (residence and spouse)
   VALUES ?property {
     wd:{P:date_of_birth} wd:{P:date_of_death}
     wd:{P:place_of_birth} wd:{P:place_of_death}

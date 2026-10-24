@@ -1638,12 +1638,17 @@ not a signal to grow the schema on.
   that names two parents of one gender states them together: its two
   values never disagree with each other, nor with a source that names
   one of them. Two sources disagree on a parent only when each names one
-  the other does not: a source naming, say, Leopold and Rudolf as Eugen's
-  fathers disagrees with no source naming one of them, but a source
-  naming only Leopold still disagrees with one naming only Rudolf, and a
-  source naming Felix with each. A document's
-  date of making can come from more than one source: the document itself
-  and, read as a curator's claim, a container's caption (ADR-0039), so
+  the other does not: a source naming, say, Leopold and Rudolf as
+  Eugen's fathers disagrees with no source naming one of them, but a
+  source naming only Leopold still disagrees with one naming only
+  Rudolf, and a source naming Felix with each. A curator who corrects a
+  parent deprecates the reading corrected, which is then left out; a
+  correction left at normal rank beside the reading it corrects reads as
+  that artifact naming both, so it hides the corrected value's
+  disagreement with another source that names the reading's parent. A
+  document's date of making can come from more than one source: the
+  document itself and, read as a curator's claim, a container's
+  caption (ADR-0039), so
   two sources that date one document differently are listed side by
   side, each with its source; as for any other date, one whose span lies
   inside the other's differs only in resolution (below). A name

@@ -107,7 +107,7 @@ tests on the fictional universe (`tests/unit/test_disagreement.py`):
 | two dates stored alike are compared through their stated ranges | `stored_alike_order`, `paired` |
 | a place recorded inside the other differs in resolution | `place_within` |
 | two readings of one artifact are not two sources, nor are two readings of one statement's value, however many artifacts it cites | `from_different_artifacts`, `one_claim` |
-| a father or a mother is compared only between two artifacts that each state one of the two values and not the other, so one source's two fathers or two mothers never disagree with themselves, nor with a source naming one of them (amended by #547) | `stated_together` |
+| a father or a mother is compared only between two artifacts that each state one of the two values and not the other, so one source's two fathers or two mothers never disagree with themselves, nor with a source naming one of them; a curator who corrects a parent deprecates the reading corrected, which `in_contention` leaves out, since a correction left at normal rank reads as the artifact naming both (amended by #547) | `stated_together` |
 
 The two open questions each touch one function, and neither is decided
 here. #241 (which century a century-precision date names) is `century`,
