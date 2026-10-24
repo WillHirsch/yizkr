@@ -102,6 +102,34 @@ def time_text(value: str, precision: str | int, where: str) -> str:
     return f"the {text}" if span else text
 
 
+def time_stamp(value) -> tuple[str, int]:
+    """A claim's date (``yizkr.claims.TimeValue``) as Wikibase stores it:
+    its xsd:dateTime, with a month or a day it does not give as 01, and
+    its Wikibase precision, the finest field it gives when it states
+    none."""
+    # imported here: the claim schema imports this module
+    from yizkr.claims import WIKIBASE_PRECISION
+
+    precision = value.precision or (
+        "day" if value.day else "month" if value.month else "year"
+    )
+    stamp = (
+        f"+{value.year:04d}-{value.month or 1:02d}-{value.day or 1:02d}"
+        "T00:00:00Z"
+    )
+    return stamp, WIKIBASE_PRECISION[precision]
+
+
+def claim_time_text(value, where: str) -> str:
+    """A claim's date (``yizkr.claims.TimeValue``) at the precision its
+    source states, as ``time_text`` renders its stamp: a decade as "the
+    1830s", a century as "the 19th century", a year, a month or a day;
+    never a first year. An unsupported date raises UnsupportedDate naming
+    `where` (ADR-0034)."""
+    stamp, precision = time_stamp(value)
+    return time_text(stamp, precision, where)
+
+
 # Every time value node the graph holds that is unsupported, with the
 # statement it belongs to (as a statement's value or qualifier, or in one
 # of its references) and that statement's entity. A value node is shared
