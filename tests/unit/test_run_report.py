@@ -3067,6 +3067,9 @@ class TestContent:
         )
         reasons |= {reason.split(":", 1)[0] for reason in found}
         assert reasons == report.SET_ASIDE_REASONS | report.READING_REASONS
+        # a reading sets nothing aside, so it is never a reason that does
+        # (#611)
+        assert not report.SET_ASIDE_REASONS & report.READING_REASONS
         _, found = _set_aside_note({**person, "note": {"category": "?"}})
         assert [r.split(":", 1)[0] for r in found] == [report.NOTE_SET_ASIDE]
         # every reason label the checks' source writes, so a new one fails
