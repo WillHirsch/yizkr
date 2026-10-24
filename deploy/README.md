@@ -140,8 +140,17 @@ The list is a UTF-8 text file, one entry per line:
 An image a document embeds is matched too: a deck's image by its SHA-1
 and by its names in the archive (`image2.png`), a PDF's placed image by
 its SHA-1 alone, since its names are its places in the PDF, not files.
-A glob does not follow an image's bytes into other documents: to keep
-an image out of every document that holds it, list its SHA-1.
+A glob that names a deck's image follows its bytes: before any
+document's images are read, a run gathers the SHA-1s of the images the
+globs name in the corpus's decks, and keeps those bytes out of every
+deck and PDF that holds them, under whatever name or place, and out of
+the run as a file of their own. With `image2.png` listed, a booklet that
+places the same image is read without it. A deck the list excludes
+itself is never opened; a deck that cannot be read as an archive stops
+the run before anything is read, while the list holds a glob, since what
+its globs would name cannot be known: repair it, or list it. A glob does
+not reach a file's bytes otherwise: to keep a file's content out under
+any name, list its SHA-1.
 
 **It fails closed.**
 
@@ -152,7 +161,8 @@ an image out of every document that holds it, list its SHA-1.
   is not a SHA-1 (a pasted SHA-256), or a glob followed by an inline
   comment.
 - A listed document is dropped before any step reads it: no artifact, no
-  transcription, no state under `var/runs/`.
+  transcription, no state under `var/runs/`. So is an image a glob names
+  in a deck, wherever its bytes are (above).
 - The single-file steps (`ingest register`, `transcribe`, `extract`,
   `gedcom`, `detect-faces`) are debugging tools and run without a list, but
   once one is configured they refuse a listed file. For `extract`, that is

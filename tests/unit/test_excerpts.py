@@ -26,7 +26,7 @@ import pytest
 
 from tests.fixtures import pdfs
 from tests.fixtures.records import page_text, record_answer, record_page
-from tests.unit.test_deck_excerpts import talk_folder
+from tests.unit.test_deck_excerpts import RULE, talk_folder
 from tests.unit.test_orchestrate import this_run
 from tests.unit.test_pdf_pages import (
     CAPTION,
@@ -663,6 +663,79 @@ class TestRegistration:
             for qid in wiki.entities
             if strings(wiki, qid, "media_sha1") == [LETTER_SHA1]
         ]
+
+    @staticmethod
+    def talk_and_booklet(tmp_path, listed: str):
+        """The talk and the booklet, which place the same bytes of the
+        letter's top (the deck's `image2.png`), run under a list holding
+        `listed`, and their containers registered on the in-memory wiki:
+        (orchestrator, wiki, reader, the booklet, the deck)."""
+        corpus = talk_folder(tmp_path, **{"booklet.pdf": booklet()})
+        reader = Reader({LETTER_SHA1: EXCERPT})
+        orchestrator = run(
+            tmp_path,
+            corpus,
+            reader,
+            exclusions=ExclusionList.parse(f"{listed}\n"),
+        )
+        wiki = FakeWiki()
+        orchestrator._client = wiki
+        pdf = document(orchestrator, "booklet.pdf")
+        talk = document(orchestrator, "library-talk-2018.pptx")
+        for doc in (pdf, talk):
+            assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+            Orchestrator._step_register(orchestrator, doc)
+        return orchestrator, wiki, reader, pdf, talk
+
+    def test_a_glob_on_a_deck_s_image_keeps_its_bytes_out_of_a_pdf(
+        self, tmp_path
+    ):
+        """An `image2.png` glob names the letter's top in the deck, by its
+        name in the archive, and its bytes stay out of the booklet too,
+        which places them as "page 6, image 1" and is read first (#620):
+        neither reads it, neither marks it, no excerpt is made of it, and
+        neither registers or uploads it. The rule the deck embeds, which
+        the glob does not name, is registered with the deck as ever."""
+        orchestrator, wiki, reader, pdf, talk = self.talk_and_booklet(
+            tmp_path, "image2.png"
+        )
+        assert reader.read == []
+        assert orchestrator._excerpts == {}
+        assert LETTER_SHA1 not in planned(orchestrator)
+        for doc in (pdf, talk):
+            assert not any(page.images for page in transcription_of(doc).pages)
+            assert not derived_transcription(doc.dir, LETTER_SHA1).exists()
+        assert LETTER_SHA1 not in (read_derived_media(pdf.dir) or {}).media
+        registered = orchestrator.registered_media()
+        assert LETTER_SHA1 not in registered.get(pdf.sha1, {})
+        assert sorted(registered[talk.sha1]) == [
+            hashlib.sha1(RULE).hexdigest()
+        ]
+        assert LETTER_SHA1 not in wiki.files.values()
+        assert not [
+            qid
+            for qid in wiki.entities
+            if strings(wiki, qid, "media_sha1") == [LETTER_SHA1]
+        ]
+
+    def test_a_glob_on_another_deck_image_leaves_the_booklet_s_in(
+        self, tmp_path
+    ):
+        """An `image1.png` glob names the deck's rule alone: the letter's
+        top is read, an excerpt placed by both, and registered with both,
+        and only the rule is left out."""
+        orchestrator, wiki, reader, pdf, talk = self.talk_and_booklet(
+            tmp_path, "image1.png"
+        )
+        assert {sha1 for _name, sha1 in reader.read} == {LETTER_SHA1}
+        excerpt = excerpt_of(orchestrator, LETTER_SHA1)
+        assert sorted(c.source.name for c in excerpt.containers) == [
+            "booklet.pdf",
+            "library-talk-2018.pptx",
+        ]
+        registered = orchestrator.registered_media()
+        assert list(registered[pdf.sha1]) == [LETTER_SHA1]
+        assert list(registered[talk.sha1]) == [LETTER_SHA1]
 
     def test_an_excerpt_the_list_names_now_is_refused(self, tmp_path):
         orchestrator, wiki = self.made(tmp_path, booklet=booklet())

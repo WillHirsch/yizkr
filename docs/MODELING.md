@@ -688,8 +688,9 @@ artifact a new QID, changes neither.
   neither is a medium a container embeds that the list names: a deck's
   medium by any of its names in the archive or by SHA-1, a PDF's image
   by SHA-1 alone, since its names are its places in the PDF ("page 6,
-  image 1"), not files (ADR-0008). The container's own file is uploaded
-  as it is, with whatever it embeds.
+  image 1"), not files (ADR-0008). A glob that names a deck's image
+  names its SHA-1 in every container that holds those bytes (#620). The
+  container's own file is uploaded as it is, with whatever it embeds.
 - **Every `media file` holds the bytes its item's `media SHA-1` names.**
   A wiki file is never overwritten: bytes whose file name already holds
   different bytes are uploaded under a content-tagged file name,

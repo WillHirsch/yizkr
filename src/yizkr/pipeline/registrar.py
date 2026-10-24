@@ -1205,7 +1205,10 @@ class Registrar:
         uploaded. A deck's medium is asked of by its SHA-1 and by each of
         its names in the archive, which the list's globs match; a PDF's
         image by its SHA-1 alone, as the reader asks of it, since its
-        names are its places in the PDF, no file's (ADR-0008).
+        names are its places in the PDF, no file's (ADR-0008). The run's
+        list names the SHA-1 of every image a glob names in any of its
+        decks (corpus.gather_embedded), so those bytes are left out of
+        every container that holds them, whatever they are called there.
         """
         if not record.media:
             return {}

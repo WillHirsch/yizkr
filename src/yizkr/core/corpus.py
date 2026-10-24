@@ -19,6 +19,14 @@ The list is a local UTF-8 text file with one entry per line:
 - any other line is a filename glob (``*``, ``?``, ``[...]``), matched
   against the file's name (never its folder), ignoring case.
 
+A glob also matches an image a deck embeds, by its name in the archive.
+Such an image's bytes are kept out of every document that holds them,
+not only that deck: before any container's images are read, the run
+gathers the SHA-1s of the images the globs name in its decks
+(:func:`gather_embedded`) and adds them to the list it asks
+(:meth:`ExclusionList.with_embedded`), so a PDF that places the same
+bytes, or a file that is them, is excluded too.
+
 The list fails closed. A configured file that is missing or unreadable
 is an error, never an empty list. So is a line that would silently
 match nothing: a hash that is not a SHA-1 (a pasted SHA-256, a
@@ -33,8 +41,11 @@ import fnmatch
 import hashlib
 import re
 import unicodedata
-from dataclasses import dataclass
-from pathlib import Path
+import zipfile
+import zlib
+from collections.abc import Iterable
+from dataclasses import dataclass, replace
+from pathlib import Path, PurePosixPath
 
 from yizkr.core.config import ConfigError, env_setting
 
@@ -82,6 +93,11 @@ class ExclusionList:
     sha1s: frozenset[str] = frozenset()
     patterns: tuple[str, ...] = ()
     source: Path | None = None
+    # the SHA-1s of the images the globs name in the corpus's decks
+    # (gather_embedded): excluded wherever their bytes are, as `sha1s`
+    # are, but no entry of the file, so the list a run records is the
+    # file's alone
+    embedded: frozenset[str] = frozenset()
 
     @classmethod
     def parse(cls, text: str, source: Path | None = None) -> ExclusionList:
@@ -123,7 +139,15 @@ class ExclusionList:
                     return f"pattern {pattern!r}"
         if sha1 is not None and sha1.lower() in self.sha1s:
             return f"SHA-1 {sha1.lower()[:12]}"
+        if sha1 is not None and sha1.lower() in self.embedded:
+            return f"SHA-1 {sha1.lower()[:12]} (a deck's image a glob names)"
         return None
+
+    def with_embedded(self, sha1s: Iterable[str]) -> ExclusionList:
+        """This list, excluding also the bytes of the images the globs
+        name in the corpus's decks (`gather_embedded`), in place of any
+        it excluded so before."""
+        return replace(self, embedded=frozenset(s.lower() for s in sha1s))
 
 
 def is_excluded(
@@ -148,9 +172,50 @@ def is_excluded(
         return True
     if sha1 is not None and exclusions.match(sha1=sha1):
         return True
-    if path is not None and exclusions.sha1s:
+    if path is not None and (exclusions.sha1s or exclusions.embedded):
         return exclusions.match(sha1=file_sha1(path)) is not None
     return False
+
+
+def gather_embedded(
+    exclusions: ExclusionList, decks: Iterable[Path]
+) -> frozenset[str]:
+    """The SHA-1s of the files the `decks` (.pptx archives) hold under a
+    name the list's globs match: each member's name in the archive, never
+    its folder, as a deck's image is matched where it is read. Every
+    member is asked, not only the images the slides place, so nothing a
+    glob names is missed. A deck that cannot be read as an archive fails
+    closed: the bytes its globs would name cannot be known, so nothing is
+    to be read until it is repaired or listed itself."""
+    if not exclusions.patterns:
+        return frozenset()
+    found: set[str] = set()
+    for deck in decks:
+        try:
+            with zipfile.ZipFile(deck) as archive:
+                for member in archive.infolist():
+                    name = PurePosixPath(member.filename).name
+                    if member.is_dir() or not exclusions.match(name=name):
+                        continue
+                    digest = hashlib.sha1()
+                    with archive.open(member) as f:
+                        for block in iter(lambda: f.read(1 << 20), b""):
+                            digest.update(block)
+                    found.add(digest.hexdigest())
+        except (
+            OSError,
+            EOFError,
+            RuntimeError,
+            NotImplementedError,
+            zipfile.BadZipFile,
+            zlib.error,
+        ) as exc:
+            raise ExclusionConfigError(
+                f"cannot read the deck {deck} to find the images the "
+                f"never-ingest list's globs name in it: {exc}. Refusing to "
+                "run: repair the deck, or list it itself."
+            ) from exc
+    return frozenset(found)
 
 
 def read_exclusions(path: Path) -> ExclusionList:

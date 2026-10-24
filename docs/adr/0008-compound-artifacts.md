@@ -567,7 +567,17 @@ did so on 2026-09-29, in the review of its PR.
   asks of it the same way, so the image the reader reads is the image the
   write registers, and a glob such as `page*` leaves out neither (#525).
   A deck's image keeps matching the list's globs by its names in the
-  archive. It is read by a vision call of its own, once however
+  archive, and a glob that names it there names its bytes everywhere
+  (#620, the owner's decision of 2026-10-24): before any container's
+  images are read, the run gathers the SHA-1s of the images the globs
+  name in the folder's decks (`corpus.gather_embedded`, never opening a
+  deck the list excludes itself), and the list both the reader and the
+  registrar ask names those SHA-1s too. So a PDF that places the bytes,
+  a deck that embeds them under another name, and a file that is them
+  all leave them out, and the run's record of the list is still the
+  file's. A deck that cannot be read as an archive, while the list holds
+  a glob, refuses the run: the bytes its globs would name cannot be
+  known, and the list fails closed. It is read by a vision call of its own, once however
   many times the PDF places it, and its transcription, which names it by
   its SHA-1, is kept beside its bytes. An image on a page read by vision
   is read with that page, as the compilation's page. An image the

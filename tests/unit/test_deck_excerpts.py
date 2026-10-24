@@ -58,7 +58,11 @@ from tests.unit.test_scratch_estimate import (  # noqa: F401
 )
 from tests.unit.test_scratch_estimate import run as run_scratch
 from yizkr.claims import ClaimBatch
-from yizkr.core.corpus import ExclusionList
+from yizkr.core.corpus import (
+    ExclusionConfigError,
+    ExclusionList,
+    gather_embedded,
+)
 from yizkr.pipeline import presentation, report
 from yizkr.pipeline.containers import (
     MIN_IMAGE_PIXELS,
@@ -87,6 +91,7 @@ from yizkr.pipeline.presentation import (
     unpack_pptx,
 )
 from yizkr.pipeline.report import build
+from yizkr.pipeline.rundir import exclusions_record
 from yizkr.pipeline.scratch import EXIT_OK
 from yizkr.pipeline.textlayer import png
 from yizkr.pipeline.transcribe import Transcription
@@ -750,6 +755,94 @@ class TestADeckSImages:
         )
         assert transcription_of(doc).language == "en"
         assert doc.state.detail["language"]["source"] == "fallback"
+
+
+class TestAGlobFollowsTheBytes:
+    """A glob that names a deck's image by its name in the archive keeps
+    its bytes out of every document of the folder (#620, ADR-0008): the
+    run gathers their SHA-1s before any container's images are read."""
+
+    LISTED = ExclusionList.parse("image2.png\n")
+
+    def test_the_gathered_sha1s_are_the_named_images(self, tmp_path):
+        """Only the members a glob names, by their names in the archive,
+        and none for a list with no glob."""
+        talk = library_talk(tmp_path / "talk.pptx")
+        assert gather_embedded(self.LISTED, [talk]) == {LETTER_SHA1}
+        assert gather_embedded(
+            ExclusionList.parse("IMAGE1.PNG\n"), [talk]
+        ) == {sha1(RULE)}
+        assert gather_embedded(ExclusionList(), [talk]) == frozenset()
+        assert (
+            gather_embedded(ExclusionList.parse(f"{sha1(RULE)}\n"), [talk])
+            == frozenset()
+        )
+
+    def test_the_gathered_sha1s_are_no_entry_of_the_file(self, tmp_path):
+        """The list asks of the gathered bytes as of its own SHA-1s, while
+        the record of the list a run honours stays the file's."""
+        gathered = self.LISTED.with_embedded([LETTER_SHA1.upper()])
+        assert gathered.match(sha1=LETTER_SHA1) is not None
+        assert self.LISTED.match(sha1=LETTER_SHA1) is None
+        assert exclusions_record(gathered) == exclusions_record(self.LISTED)
+
+    def test_another_deck_s_copy_under_another_name_is_left_out(
+        self, tmp_path
+    ):
+        """A second deck embeds the same bytes as `image7.png`, a name the
+        glob does not match: they are not read from it either."""
+        corpus = talk_folder(tmp_path)
+        deck(
+            corpus / "library-talk-2019.pptx",
+            [(LETTER_SLIDE, ["image7.png"], "")],
+            {"image7.png": LETTER_PNG},
+        )
+        orchestrator = run(
+            tmp_path, corpus, reader := Reader({}), exclusions=self.LISTED
+        )
+        assert reader.read == []
+        assert orchestrator._excerpts == {}
+        doc = document(orchestrator, "library-talk-2019.pptx")
+        assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+        assert transcription_of(doc).pages[0].images == []
+
+    def test_a_file_that_is_the_bytes_is_excluded(self, tmp_path):
+        """A file of the folder whose bytes are the named image is
+        excluded whole, as a file the list names by its SHA-1 is."""
+        corpus = talk_folder(tmp_path, **{"letter-top.png": LETTER_PNG})
+        orchestrator = run(
+            tmp_path, corpus, RefusingReader({}), exclusions=self.LISTED
+        )
+        assert [doc.source.name for doc in orchestrator.documents()] == [
+            "library-talk-2018.pptx"
+        ]
+        assert LETTER_SHA1 not in {
+            entry["sha1"]
+            for entry in orchestrator.rundir.manifest()["documents"]
+        }
+
+    def test_a_deck_that_cannot_be_read_refuses_the_run(self, tmp_path):
+        """A deck that is no archive hides what its globs would name, so a
+        list with a glob refuses the run before anything is read; a list
+        with none, or one that excludes that deck itself, does not."""
+        corpus = talk_folder(tmp_path, **{"broken.pptx": b"PK not a zip"})
+        with pytest.raises(ExclusionConfigError, match="broken.pptx"):
+            run(tmp_path, corpus, RefusingReader({}), exclusions=self.LISTED)
+        assert not (tmp_path / "state").exists() or not any(
+            (tmp_path / "state").rglob("transcription.json")
+        )
+        run(
+            tmp_path,
+            corpus,
+            Reader({}),
+            exclusions=ExclusionList.parse("image2.png\nbroken.*\n"),
+        )
+        run(
+            tmp_path,
+            corpus,
+            Reader({LETTER_SHA1: EXCERPT}),
+            exclusions=ExclusionList.parse(f"{sha1(RULE)}\n"),
+        )
 
 
 class TestTheRunReport:

@@ -164,6 +164,7 @@ from yizkr.core.corpus import (
     MISSING_LIST,
     ExclusionConfigError,
     ExclusionList,
+    gather_embedded,
     is_excluded,
 )
 from yizkr.core.wiki import WikiClient
@@ -1080,12 +1081,19 @@ class Orchestrator:
         its own (directory_names) and its source read for its SHA-1. A
         document whose source or state.json cannot be read is `unreadable`
         (DocumentRun), and so is one whose bytes the never-ingest list's
-        hashes cannot be checked against: it is not ingested."""
+        hashes cannot be checked against: it is not ingested. The list is
+        first given the SHA-1s of the images its globs name in the
+        folder's decks (`_gather_embedded`), so a file that is such an
+        image's bytes is excluded too."""
         files = []
         unread: dict[Path, str] = {}
-        for path in sorted(self.folder.iterdir()):
-            if not path.is_file() or path.name.startswith("."):
-                continue
+        paths = [
+            path
+            for path in sorted(self.folder.iterdir())
+            if path.is_file() and not path.name.startswith(".")
+        ]
+        self._gather_embedded(paths)
+        for path in paths:
             # the never-ingest list is asked first, before any step
             # reads the document, and whatever the file's type: an excluded
             # file gets no state, no artifact and no transcription
@@ -1118,6 +1126,34 @@ class Orchestrator:
                 doc.read_source()
             docs.append(doc)
         return docs
+
+    def _gather_embedded(self, paths: Sequence[Path]) -> None:
+        """Give the never-ingest list the SHA-1s of the images its globs
+        name, by their names in the archive, in the decks among `paths`
+        that it does not exclude itself (corpus.gather_embedded), in place
+        of any it was given before. This comes before any container's
+        images are read, so the reader (`_excluded_image`) and the write's
+        registrar, which both ask this list, keep those bytes out of every
+        deck and PDF that holds them, and out of the run as a file of
+        their own (ADR-0008). A deck the list excludes is never opened; one
+        that cannot be read as an archive refuses the run
+        (ExclusionConfigError), since the bytes its globs would name cannot
+        be known."""
+        if self.exclusions is None:
+            return
+        listed = self.exclusions.with_embedded(())
+        decks = []
+        for path in paths:
+            if path.suffix.lower() not in PRESENTATION_SUFFIXES:
+                continue
+            try:
+                if is_excluded(listed, path):
+                    continue
+            except OSError:
+                # gather_embedded fails closed on a deck it cannot read
+                pass
+            decks.append(path)
+        self.exclusions = listed.with_embedded(gather_embedded(listed, decks))
 
     # -- stages ---------------------------------------------------------------
 
@@ -1843,9 +1879,11 @@ class Orchestrator:
         """Does the never-ingest list name an image a paged container
         places on a page, by the SHA-1 of its bytes or by any of its
         `names` (a deck's image's names in the archive, which its globs
-        match, as registration matches them)? Such an image is never read
-        on its own, kept as the container's reading of it, or
-        extracted."""
+        match, as registration matches them)? Its SHA-1 is named too when
+        a glob names those bytes in any deck of the folder
+        (`_gather_embedded`), so a PDF's image is asked of a deck's names
+        for its bytes. Such an image is never read on its own, kept as the
+        container's reading of it, or extracted."""
         return self.exclusions is not None and any(
             is_excluded(self.exclusions, name=name, sha1=sha1)
             for name in names or [None]
@@ -1856,7 +1894,8 @@ class Orchestrator:
         """The names the never-ingest list's globs are matched against for
         an image of the container's record: a deck's image's names in the
         archive; none for a PDF's, whose names are its places ("page 6,
-        image 1"), not files, so it is asked by its SHA-1 alone."""
+        image 1"), not files, so it is asked by its SHA-1 alone, which the
+        list names when a glob names the same bytes in a deck."""
         if doc.kind != "presentation" or record is None:
             return []
         medium = record.media.get(sha1)
