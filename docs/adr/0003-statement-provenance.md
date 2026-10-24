@@ -35,11 +35,12 @@ certificate's issuing heading fails too: on the 1963 death certificate,
 it, not a field of the place of death, so it does not by itself convey
 that the place of death, "Place of death: Stupfield.", lies in Victoria
 (the owner's decision, 2026-10-24, #645, on PR #637's probe, in which
-the critic read the heading so and asked for both citations to be
-dropped). The
-location the reference names counts: a claim that gives a page is read
-at its occurrences on that page, where the transcription numbers it (an
-image excerpt's claims cite the page of the container it was found on).
+the critic read the heading as naming the issuing state and asked for
+both citations of it, a `part_of` Stupfield → Victoria claim and a
+`within` Victoria entry, to be dropped). The location the reference
+names counts: a claim that gives a page is read at its occurrences on
+that page, where the transcription numbers it (an image excerpt's claims
+cite the page of the container it was found on).
 Presence comes first: an excerpt the transcription does not hold stands
 nowhere (the excerpt check of #580, ADR-0023). The page the place stage writes on a link is that of the
 evidence's first occurrence (`places.evidence_page`), an approximation

@@ -34,6 +34,11 @@ conveys the fact (ADR-0003's support test, as #607 writes it). It
 reverses owner questions 2 and 4 and widens the 2026-10-16 subject
 ruling: see §10. Each passage it reverses or widens keeps its text,
 marked with a dated line.
+Amended by #645 (2026-10-24; the owner's answers): questions 5 to 10
+settled by their leans; §10.1(c) adopts (c4): a source may also state a
+document-subject property about an artifact it only writes about, on its
+own mention item of it (an `unclassified_entity`), linked to the held
+scan later.
 
 Revised 2026-10-16 on the owner's direction on #517, quoted: "Wait, are
 these fields about a source's relevance to its container, or independent
@@ -520,8 +525,8 @@ and an image may show a building.
 
 Widened by #626, 2026-10-24: a document-subject statement about an
 artifact its source places may carry a caption's text as its excerpt,
-so it is left out of the export whole, failing closed, on the lean of
-§10.5; a statement about an artifact a structured record makes is
+so it is left out of the export whole, failing closed, as owner
+question 9 settled it (§10.5); a statement about an artifact a structured record makes is
 exported or left out as any of that record's statements is.
 
 **The static site** (private; plural by default, CLAUDE.md rule 6):
@@ -635,11 +640,10 @@ about the photo? Shouldn't GEDCOM be the same?" The owner then decided
   call is asked again in the next run, which also takes #625 and any
   manifest fix from #574 (§10.5).
 
-So two subject forms are decided, (a) and (b) below. Where this section
-follows a lean rather than a decision, the owner question that names it
-is listed under Owner questions ("Raised by #626"); the owner accepts
-this amendment by merging it, with those questions answered (AGENT_PROTOCOL
-§8, §9). The build is a follow-up issue of its own (`stage:extraction`,
+So three subject forms are decided: (a), (b) and (c4) below. Where this
+section followed a lean, the owner question that names it is listed
+under Owner questions ("Raised by #626"); each was settled by its lean
+(owner, 2026-10-24, #645). The build is a follow-up issue of its own (`stage:extraction`,
 `needs:scratch-diff`), after #607's located citations; until it lands,
 the prompts, validation and the writer keep §2.2's rule and #583's
 interim exception.
@@ -683,8 +687,8 @@ artifact kind: an un-held media item (ADR-0021 §2).
   own only after that link.
 - This widens the 2026-10-16 ruling ("never one it only writes about"),
   since the export holds no bytes of the object.
-- **How (b) is keyed and enforced** (owner question; the text follows
-  the lean). Keyed on the subject's kind alone, a model's batch could
+- **How (b) is keyed and enforced** (owner question 5, settled by its
+  lean, owner, 2026-10-24). Keyed on the subject's kind alone, a model's batch could
   make an artifact-kind entity and state things about it: route (c2)
   under another name. Today only the structured-batch flag keeps
   document-subject claims off such an entity; nothing stops a model's
@@ -800,9 +804,9 @@ is the closest to the owner's question and needs no curator record;
 (c3) if not. Either way, (c1) and its needs above are the route a later
 amendment may take, in an issue of its own. The owner adopted (c4)
 (2026-10-24, #645, question 6): the enclosing source's claim goes on its
-own mention item of the enclosure, cited to the source with its passage,
-and is linked to the held scan later. The rule admits forms (a), (b) and
-(c4).
+own mention item of the enclosure, cited to the source with its passage;
+a curator, or later artifact matching (#162), links that mention item
+to the held scan. The rule admits forms (a), (b) and (c4).
 
 #### 10.2 Coexistence, disagreement and display
 
@@ -866,8 +870,8 @@ and is linked to the held scan later. The rule admits forms (a), (b) and
   statement records. For a claim about another artifact, the fact
   includes the subject: the passage, read where it stands, must convey
   the fact of that artifact.
-- **Calibration** (owner question, three readings; the examples follow
-  the leans):
+- **Calibration** (owner question 7, three readings, each settled by
+  its lean, owner, 2026-10-24):
   - "Wastl to Klara" under the letter's image gives `author` → Wastl and
     `addressee` → Klara. Lean: yes. Under a letter, "X to Y" names its
     writer and its recipient.
@@ -893,7 +897,8 @@ and is linked to the held scan later. The rule admits forms (a), (b) and
   source itself as "this document" and a placed artifact by its place
   ("page 6, image 1"), as the prompt lists it; a finding that names a
   claim this way still resolves to it.
-- **Excerpt required** (owner question; the text follows the lean). A
+- **Excerpt required** (owner question 8, settled by its lean, owner,
+  2026-10-24). A
   document-subject claim whose subject is not its own source must carry
   an excerpt, since without one no test can apply. Validation rejects
   it under a new `claims.SUBJECT_REASONS` code, counted in
@@ -932,8 +937,9 @@ and is linked to the held scan later. The rule admits forms (a), (b) and
   `claims.subject_problems` and `writer.subject_refusal` accept three
   subjects: the claim's own source; an artifact its source places
   (`placed`, plus `resolved` in the writer); a batch entity of an
-  artifact kind (`subject_kind` in `Acceptance.artifact_kinds`). Beside
-  them:
+  artifact kind (`subject_kind` in `Acceptance.artifact_kinds`); and,
+  under (c4), an `unclassified_entity` of the claim's own batch
+  (§10.1(c)). Beside them:
   - the extraction-stage kind check of §10.1(b);
   - `claims.unplaced_captions` (renamed if need be) and
     `claims.unplaced_hint` count every claim whose subject is an
@@ -957,10 +963,12 @@ and is linked to the held scan later. The rule admits forms (a), (b) and
   own. The scratch diff states the adjudication misses.
 - **Report.** `report._container_claims` receives a per-property count.
   The claims fold that builds it also counts document-subject claims by
-  subject form: the source itself, an artifact it places, or an artifact
-  its record makes. Aggregates only. docs/RUN_REPORT.md documents the
+  subject form: the source itself, an artifact it places, an artifact
+  its record makes, or, under (c4), the source's mention item of an
+  artifact it only writes about. Aggregates only. docs/RUN_REPORT.md documents the
   split and any new reject reason.
-- **Privacy** (owner question; the text follows the lean).
+- **Privacy** (owner question 9, settled by its lean, owner,
+  2026-10-24).
   - Captions stay out of the non-privileged export (§7,
     `backup.LEFT_OUT_PROPERTIES`).
   - A form-(a) statement's excerpt may be a caption's own text ("Wastl
@@ -1083,9 +1091,10 @@ asked.
   them;
   Widened by #626, 2026-10-24: also the artifact a source's own
   structured record makes, though the source holds no bytes of it
-  (§10.1(b)); an artifact a source only writes about is a subject as
-  the source's own mention item of it, (c4), as the owner settled
-  question 6 on 2026-10-24 (§10.1(c));
+  (§10.1(b)); whether an artifact a source only writes about may be a
+  subject is an owner question (§10.1(c));
+  Settled by #645, 2026-10-24: (c4); an artifact a source only writes
+  about is a subject as the source's own mention item of it (§10.1(c));
 - combined values only by a curator, with two references and
   `determination_method` → `combined_from_sources` (§4).
 
@@ -1126,8 +1135,9 @@ kept as it was asked.
    claims depend on), a write order and a prompt paragraph of its own,
    and would be a later amendment in an issue of its own.
    **Settled by its lean** (owner, 2026-10-24): (c4), the enclosing
-   source's claim on its own mention item of the enclosure, linked to
-   the held scan later (§10.1(c)).
+   source's claim on its own mention item of the enclosure; a curator,
+   or later artifact matching, links that mention item to the held scan
+   (§10.1(c)).
 7. **Calibration** (§10.4). Lean: "Wastl to Klara" gives `author` and
    `addressee`, yes; the caption's "July 1939" gives `inception`, no
    (alternative: yes, at month precision); slide 2's title gives `shows`
@@ -1170,8 +1180,8 @@ kept as it was asked.
   Reversed by #626, 2026-10-24: a fact a caption conveys is given as
   a structured statement by the pipeline, so "letters whose writer, per
   the compilation, is Sebastian" is a join; a fact the caption gives
-  but does not convey of the artifact (its "July 1939", on the lean of
-  §10.4) stays text.
+  but does not convey of the artifact (its "July 1939", as owner
+  question 7 settled it, §10.4) stays text.
 - The manifest gains `caption`, six document-subject properties, a
   qualifier and its value; ADR-0035 §3.4's rule stays "the source
   itself", and one property, `caption`, takes what the source places.
@@ -1179,6 +1189,8 @@ kept as it was asked.
   also take an artifact the source places, and the artifact a source's
   own structured record makes (§10.1); `caption` stays the one
   `placed_subject` property.
+  Widened by #645, 2026-10-24: they also take, under (c4), the source's
+  own mention item of an artifact it only writes about (§10.1(c)).
 - A deck's images gain captions only with #502; until then its 17 images
   have none.
 - Captions beside images on scanned pages stay part of the page's text
