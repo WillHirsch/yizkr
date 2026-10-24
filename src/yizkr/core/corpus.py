@@ -61,7 +61,7 @@ MISSING_LIST = (
     "the never-ingest list'."
 )
 
-# the files a run reads as decks (orchestrate.PRESENTATION_SUFFIXES)
+# the files a run reads as decks
 DECK_SUFFIXES = frozenset({".pptx"})
 
 _SHA1 = re.compile(r"[0-9a-f]{40}")

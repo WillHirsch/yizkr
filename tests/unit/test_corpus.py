@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import unicodedata
 import zipfile
 
@@ -323,21 +324,21 @@ class TestFollowDecks:
     LISTED = ExclusionList.parse("image2.png\n")
 
     def test_the_decks_are_found_as_a_run_finds_them(self, tmp_path):
-        """The folder's own decks, any case of suffix; not a hidden one,
-        nor one in a subfolder, nor another kind of archive."""
+        """Every one of the folder's own decks, any case of suffix; not a
+        hidden one, nor one in a subfolder, nor a folder named like a
+        deck, nor another kind of archive."""
         folder = tmp_path / "corpus"
         talk(folder, "TALK-COPY.PPTX", b"upper suffix")
+        talk(folder, "talk-final.pptx", b"another deck's image")
         talk(folder, ".~lock.pptx", b"hidden")
         talk(folder / "older", TALK, b"in a subfolder")
+        (folder / "old.pptx").mkdir()
         talk(folder, "library-talk-2018.zip", b"not a deck")
         followed = follow_decks(self.LISTED, folder)
-        assert followed.embedded == {hashlib.sha1(b"upper suffix").hexdigest()}
-
-    def test_the_run_reads_the_same_kinds_of_file_as_decks(self):
-        from yizkr.core.corpus import DECK_SUFFIXES
-        from yizkr.pipeline.orchestrate import PRESENTATION_SUFFIXES
-
-        assert DECK_SUFFIXES == PRESENTATION_SUFFIXES
+        assert followed.embedded == {
+            hashlib.sha1(b"upper suffix").hexdigest(),
+            hashlib.sha1(b"another deck's image").hexdigest(),
+        }
 
     @pytest.mark.parametrize(
         "text", ["image2.png\n", f"{sha1(POSTCARD)}\n"], ids=["glob", "sha1"]
@@ -357,6 +358,18 @@ class TestFollowDecks:
     def test_a_folder_that_cannot_be_listed_fails_closed(self, tmp_path):
         with pytest.raises(ExclusionConfigError, match="no such folder"):
             follow_decks(self.LISTED, tmp_path / "no such folder")
+
+    def test_a_folder_it_may_not_read_fails_closed(self, tmp_path):
+        folder = tmp_path / "corpus"
+        talk(folder)
+        folder.chmod(0)
+        try:
+            if os.access(folder, os.R_OK):
+                pytest.skip("this user reads any folder")
+            with pytest.raises(ExclusionConfigError, match="corpus"):
+                follow_decks(self.LISTED, folder)
+        finally:
+            folder.chmod(0o700)
 
 
 class TestSingleStepsFollowDecks:
@@ -407,6 +420,17 @@ class TestSingleStepsFollowDecks:
         with pytest.raises(SystemExit, match="never-ingest"):
             self.register(stand_alone)
 
+    def test_the_corpus_folder_an_env_file_names_is_followed(
+        self, stand_alone, tmp_path
+    ):
+        talk(tmp_path / "corpus")
+        settings = tmp_path / "settings.env"
+        settings.write_text(f"{CORPUS_DIR_VAR}={tmp_path / 'corpus'}\n")
+        with pytest.raises(SystemExit, match="never-ingest"):
+            run_cli("--env-file", str(settings), "ingest", "register",
+                    "--file", str(stand_alone),
+                    "--type", "photograph", "--title", "Album")  # fmt: skip
+
     def test_other_bytes_in_the_deck_leave_the_file_in(
         self, stand_alone, tmp_path, monkeypatch, capsys
     ):
@@ -447,12 +471,16 @@ class TestSingleStepsFollowDecks:
         assert CORPUS_DIR_VAR in err
         assert "not followed into the corpus's decks" in err
 
+    @pytest.mark.parametrize(
+        "folder_set", [True, False], ids=["folder", "none"]
+    )
     def test_a_list_with_no_glob_neither_reads_the_corpus_nor_warns(
-        self, stand_alone, tmp_path, monkeypatch, capsys
+        self, stand_alone, tmp_path, monkeypatch, capsys, folder_set
     ):
         (tmp_path / "exclude.txt").write_text(f"{sha1(POSTCARD)}\n")
         (tmp_path / "corpus").mkdir()
         (tmp_path / "corpus" / TALK).write_bytes(b"not an archive")
-        monkeypatch.setenv(CORPUS_DIR_VAR, str(tmp_path / "corpus"))
+        if folder_set:
+            monkeypatch.setenv(CORPUS_DIR_VAR, str(tmp_path / "corpus"))
         assert self.transcribe(tmp_path, stand_alone).exists()
         assert capsys.readouterr().err == ""

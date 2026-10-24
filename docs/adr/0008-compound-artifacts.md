@@ -611,12 +611,12 @@ did so on 2026-09-29, in the review of its PR.
   run, a single-file step and the import alike: the bytes its globs
   would name cannot be known, and the list fails closed. A PDF's image
   is read by a vision call of its own, once however many times the PDF
-  places it, and its transcription, which
-  names it by its SHA-1, is kept beside its bytes. An image on a page
-  read by vision is read with that page, as the compilation's page. An
-  image the never-ingest list names on such a page, or in a PDF read
-  whole, reaches the engine with the page: the owner decided that the
-  case will never arise and is not worth handling.
+  places it, and its transcription, which names it by its SHA-1, is kept
+  beside its bytes. An image on a page read by vision is read with that
+  page, as the compilation's page. An image the never-ingest list names
+  on such a page, or in a PDF read whole, reaches the engine with the
+  page: the owner decided that the case will never arise and is not
+  worth handling.
 - **Determinism.** PDFium is started afresh for each PDF and draws a font
   the PDF does not embed with a built-in one, never the host's, so
   a page's text layer, its rendering and an image's bytes, and so the keys

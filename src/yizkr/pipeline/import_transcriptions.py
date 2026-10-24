@@ -816,10 +816,9 @@ def import_transcriptions(
     glob (ExclusionConfigError); for a malformed, unmatched or ambiguous
     prefix, no model or an alias, an archive or a corpus that is not a
     folder, a scan in PDF without the renderer the check counts its pages
-    with, or an engine client that
-    cannot start (ImportRefused); and when the cache refuses its folder,
-    or another process holds it, or the engine cannot serve the pass
-    (llm.PassPaused). `log` takes the
+    with, or an engine client that cannot start (ImportRefused); and when
+    the cache refuses its folder, or another process holds it, or the
+    engine cannot serve the pass (llm.PassPaused). `log` takes the
     corpus's discovery lines, which name its files. Returns what became of
     each media's transcriptions."""
     from yizkr.pipeline.orchestrate import Orchestrator
