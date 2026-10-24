@@ -1108,7 +1108,10 @@ to the held scan. The rule admits forms (a), (b) and (c4).
 - **What is not built.** The manifest has no `machine_assisted` item yet
   (ADR-0008's follow-up B), so the booklet's translation claims carry
   no such qualifier in the pipeline; the fixture universe gives them
-  with it, as planned vocabulary. The fixture corpus holds no booklet,
+  with it, as planned vocabulary.
+  Built by #666, 2026-10-24 (ADR-0008, the #666 amendment): the
+  booklet's translation claims carry the marker in the pipeline, the
+  translation's claims about the letter's image among them. The fixture corpus holds no booklet,
   and its deck's photograph is a decoration-sized stand-in that the
   deck's transcription does not mark, so no corpus document places an
   image and the corpus gives no claim about one.

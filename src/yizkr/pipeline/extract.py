@@ -763,7 +763,8 @@ def vocabulary_prompt_lines() -> tuple[str, str]:
     leave the model to guess both, and the manifest already holds the
     words. A property no claim may use, a retired or a reference
     property, is left out, as is one the manifest holds back from prompts
-    (`ManifestProperty.in_prompts`).
+    (`ManifestProperty.in_prompts`), and so is an item it holds back
+    (`ManifestItem.offered`).
     """
     manifest = load_manifest()
     property_lines = "\n".join(
@@ -771,7 +772,9 @@ def vocabulary_prompt_lines() -> tuple[str, str]:
         for key, spec in sorted(manifest.properties.items())
         if spec.in_prompts
     )
-    item_lines = "  " + ", ".join(sorted(manifest.items))
+    item_lines = "  " + ", ".join(
+        sorted(key for key, spec in manifest.items.items() if spec.offered)
+    )
     return property_lines, item_lines
 
 

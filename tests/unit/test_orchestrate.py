@@ -1906,8 +1906,11 @@ class TestViews:
         assert derived["transcription.json"] == {
             "transcription.corrected.txt": None
         }
+        # and a curator's pointer to the statement about its preparation,
+        # absent here (#666)
         assert derived["batch.json"] == {
-            "transcription.json": content["transcription.json"]
+            "transcription.json": content["transcription.json"],
+            "preparation.pointer.txt": None,
         }
         # the critic reads each citation where it stands (#607)
         assert derived["critique.json"] == {

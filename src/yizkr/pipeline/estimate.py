@@ -489,10 +489,16 @@ class _Extractor(ChunkedClaimExtractor):
     known calls, since the chunks are made from its answer; a chunk it
     cannot answer is answered empty (_Keyed)."""
 
-    def __init__(self, client: Any, keyed: _Keyed, tally: _Tally) -> None:
+    def __init__(
+        self,
+        client: Any,
+        keyed: _Keyed,
+        tally: _Tally,
+        pointer: str | None = None,
+    ) -> None:
         # as the driver makes it (Orchestrator._step_extract), one chunk
         # at a time: how many run at once changes no key
-        super().__init__(client)
+        super().__init__(client, read_preparation=True, pointer=pointer)
         self._keyed = keyed
         self._tally = tally
 
@@ -852,7 +858,12 @@ class Estimator(ScratchDriver):
             return _Made(estimated=WHOLE)
         made = _Made(tally=self._tally)
         keyed = self._keyed["extract"]
-        extractor = _Extractor(self._llm("extract", doc), keyed, made.tally)
+        extractor = _Extractor(
+            self._llm("extract", doc),
+            keyed,
+            made.tally,
+            pointer=doc.pointed(),
+        )
         try:
             batch = extractor.extract(before.view, ArtifactRef(sha1=doc.sha1))
         except _Unanswered:

@@ -1179,6 +1179,7 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
                 else [],
                 **_records(coverage),
                 "quotes": _quotes(coverage),
+                "machine_assisted": _machine_assisted(coverage),
             }
     if document.completed("critique"):
         findings = _view(
@@ -1243,6 +1244,54 @@ def _quotes(coverage: dict) -> dict[str, Any] | None:
         "not_in_source": missing,
         "by_property": _tally(quotes.get("not_in_source_by_property")) or {},
     }
+
+
+def _machine_assisted(coverage: dict) -> dict[str, Any] | None:
+    """The reading of the document's statement about its preparation, as
+    an extraction's coverage counts it (yizkr.pipeline.preparation):
+    whether it was read, whether a curator pointed to the statement,
+    whether there was one and what it covers, with the claims marked
+    machine-assisted, those not placed within or outside its passages,
+    and the markers chunk answers gave that were dropped. None for a
+    coverage that gives no such count, as one written before the marker
+    was set: absent, never zero."""
+    found = coverage.get("machine_assisted")
+    if not isinstance(found, dict):
+        return None
+    covers = found.get("covers")
+    return {
+        "read": found.get("read") is True,
+        "pointed": found.get("pointed") is True,
+        "statement": found.get("statement") is True,
+        "covers": covers if covers in ("all", "passages") else None,
+        "marked": _count(found.get("marked")),
+        "straddling": _count(found.get("straddling")),
+        "unlocated": _count(found.get("unlocated")),
+        "dropped": _count(found.get("dropped")),
+    }
+
+
+def _machine_assisted_line(counts: Mapping[str, int]) -> str:
+    """The statements in which documents say their text was prepared with
+    machine assistance, and the claims they marked, as the report's
+    Content section gives them."""
+    statements = counts["statements"]
+    line = (
+        f"Statements of machine-assisted preparation: {_n(statements)} "
+        f"(covering all the text: {_n(counts['all'])}; pointed to by a "
+        f"curator: {_n(counts['pointed'])}), marking "
+        f"{_n(counts['marked'])} claim"
+        + ("" if counts["marked"] == 1 else "s")
+        + f"; not placed: {_n(counts['straddling'] + counts['unlocated'])}"
+        f"; markers given by chunks and dropped: {_n(counts['dropped'])}"
+        f"; extractions unread: {_n(counts['unread'])}"
+    )
+    if counts["absent"]:
+        line += (
+            f" (extractions whose coverage predates the count: "
+            f"{_n(counts['absent'])})"
+        )
+    return line + "."
 
 
 def _records(coverage: dict) -> dict[str, Any]:
@@ -2637,6 +2686,10 @@ def _aggregate_content(
     # (extract.scan_json_answer), the extractions with one, and those
     # whose coverage gives no count
     trailing_commas = trailing_extractions = trailing_absent = 0
+    # the readings of what documents say of their preparation
+    # (yizkr.pipeline.preparation), counted by what they found and
+    # marked, and the extractions whose coverage gives no count
+    assisted: Counter = Counter()
     batches = not_extracted = zero_entities = 0
     extractions = chunks = rejected = unread = with_rejects = given = 0
     # the chunks asked again for a missing required field, the extractions
@@ -2690,6 +2743,17 @@ def _aggregate_content(
             else:
                 trailing_commas += commas
                 trailing_extractions += bool(commas)
+            reading = coverage.get("machine_assisted")
+            if reading is None:
+                assisted["absent"] += 1
+            else:
+                assisted["extractions"] += 1
+                assisted["unread"] += not reading["read"]
+                assisted["statements"] += reading["statement"]
+                assisted["pointed"] += reading["pointed"]
+                assisted["all"] += reading["covers"] == "all"
+                for count in ("marked", "straddling", "unlocated", "dropped"):
+                    assisted[count] += reading[count]
             quotes = coverage.get("quotes")
             if quotes is None:
                 quotes_absent += 1
@@ -2809,6 +2873,21 @@ def _aggregate_content(
             "read": trailing_commas,
             "extractions": trailing_extractions,
             "absent": trailing_absent,
+        },
+        "machine_assisted": {
+            key: assisted[key]
+            for key in (
+                "extractions",
+                "unread",
+                "statements",
+                "pointed",
+                "all",
+                "marked",
+                "straddling",
+                "unlocated",
+                "dropped",
+                "absent",
+            )
         },
         "records": {
             "extractions": record_extractions,
@@ -3563,6 +3642,7 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
                 "chunks.",
                 _retried_line(content["retried_chunks"]),
                 _trailing_commas_line(content["trailing_commas"]),
+                _machine_assisted_line(content["machine_assisted"]),
             ],
         ),
         _Section(
@@ -4487,6 +4567,27 @@ def _html_document(document: Mapping[str, Any]) -> str:
         items.append(
             "Trailing commas read as JSON syntax: "
             + ("not counted" if commas is None else str(commas))
+        )
+        reading = coverage.get("machine_assisted")
+        items.append(
+            "Machine-assisted preparation: "
+            + (
+                "not counted (its coverage gives no count of it)"
+                if reading is None
+                else "unread"
+                if not reading["read"]
+                else "no statement"
+                if not reading["statement"]
+                else f"a statement covering {reading['covers']}"
+                + (", pointed to by a curator" if reading["pointed"] else "")
+                + f"; claims marked: {reading['marked']}, not placed: "
+                f"{reading['straddling'] + reading['unlocated']}"
+            )
+            + (
+                f"; markers given by chunks and dropped: {reading['dropped']}"
+                if reading is not None and reading["dropped"]
+                else ""
+            )
         )
         quotes = coverage.get("quotes")
         items.append(

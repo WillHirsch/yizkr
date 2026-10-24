@@ -580,6 +580,7 @@ def cmd_extract(args) -> int:
                 budget=args.chunk_budget,
                 retries=args.chunk_retries,
                 concurrency=args.chunk_concurrency,
+                read_preparation=True,
             )
         else:
             raw_dump = args.out.with_name(args.out.name + ".raw.txt")

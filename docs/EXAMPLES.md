@@ -201,9 +201,10 @@ People, places, entities (organisations, occupations, a vessel,
 events) and sources are ground truth, so tests can check identity and
 containment decisions against it. Everything said *about* them is a
 source-attributed `Assertion` in the archive's own vocabulary: manifest
-property ids, entity kinds and artifact classes. One value is planned
-rather than in the manifest yet: `machine_assisted`, which ADR-0008's
-follow-up B adds and `PLANNED_VOCABULARY` names. `CONTRADICTIONS` and
+property ids, entity kinds and artifact classes. `PLANNED_VOCABULARY`
+names any value planned rather than in the manifest yet, and is empty:
+`machine_assisted`, which ADR-0008's follow-up B adds, joined the
+manifest with #666. `CONTRADICTIONS` and
 `REFINEMENTS` name the deliberate cases, and `NAMING_PATTERNS` names the
 passages that show each naming pattern mention records must handle
 (#385). Each person's `gedcom_xref` points into

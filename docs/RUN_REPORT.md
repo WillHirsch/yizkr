@@ -353,6 +353,24 @@ writer refused, count here too, under their check and the stage
   `extractions`, `absent`). A document's own count is in `report.json`
   and its drill-down in `report.html` (`coverage.trailing_commas`, null,
   and "not counted", for a coverage that predates it);
+- machine-assisted preparation (#666, ADR-0008): each extraction's
+  reading of the document's statement that its own text was prepared
+  with machine assistance, from its `coverage.json`'s
+  `machine_assisted`, summed over the extractions: those that read
+  one, those left unread (a manifest answer without the reading, one
+  whose reading could not be used, or a fallback from the manifest),
+  the statements found, those a curator pointed to and those that cover
+  all of the text, the claims marked, those not placed within or
+  outside the passages a statement covers (`straddling`, `unlocated`),
+  and the markers chunk answers gave that were dropped, with the
+  extractions whose coverage predates the count counted apart, never
+  as zero (`aggregate.content.machine_assisted`: `extractions`,
+  `unread`, `statements`, `pointed`, `all`, `marked`, `straddling`,
+  `unlocated`, `dropped`, `absent`). A document's own reading is in
+  `report.json` and its drill-down in `report.html`
+  (`coverage.machine_assisted`, null, and "not counted", for a coverage
+  that predates it). The statement quoted stays in the extraction's
+  local `preparation.json`, never in a report;
 - mention records and judgement notes, summed from each extraction's
   `coverage.json` (ADR-0035 §4, §5, #420): the mention records given,
   and those by label status (`name`, `role`, `kinship`, `courtesy`,

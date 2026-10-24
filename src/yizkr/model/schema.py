@@ -122,6 +122,11 @@ class ManifestItem(BaseModel):
     # (`circa`): each may be the one item a property accepts. The mark is
     # what tells them apart, so the loader cannot check it there.
     entity_class: bool = False
+    # Whether the prompts rendered from the manifest offer the item. An
+    # item the pipeline sets from what a source says of itself, and no
+    # extractor sets claim by claim (`machine_assisted`, ADR-0008), is
+    # held back.
+    offered: bool = True
 
 
 class Manifest(BaseModel):

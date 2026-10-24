@@ -47,6 +47,7 @@ from yizkr.claims import (
 )
 from yizkr.core.verbatim import Transcript, words
 from yizkr.model.schema import load_acceptance
+from yizkr.pipeline import preparation
 from yizkr.pipeline.extract import (
     ExtractionFailed,
     _normalize_claim_shape,
@@ -1191,7 +1192,18 @@ SIDE_OUTPUTS = (
     # each claim whose excerpt its transcription does not hold, with the
     # line nearest to it (excerpt_audit): local, never in a report
     "quotes.json",
+    # the statement about the document's preparation that the reading
+    # quoted (yizkr.pipeline.preparation): local, never in a report
+    "preparation.json",
 )
+
+
+# the reading an extractor that reads no statement about the document's
+# preparation hands the merge (ChunkedClaimExtractor._merge)
+_UNREAD = object()
+# the `preparation` value of a manifest answer that gives none, and of an
+# extraction that took no manifest
+_ABSENT = object()
 
 
 class ChunkedClaimExtractor:
@@ -1226,8 +1238,16 @@ class ChunkedClaimExtractor:
 
     `state_dir`, when given, receives the advisory side outputs of a
     complete extraction: `coverage.json`, and `rejects.json`,
-    `gaps.ndjson`, `containers.json` and `quotes.json` when there are
-    any (a file the extraction no longer has anything for is removed).
+    `gaps.ndjson`, `containers.json`, `quotes.json` and
+    `preparation.json` when there are any (a file the extraction no
+    longer has anything for is removed).
+
+    With `read_preparation`, the entity manifest also reads the
+    document's statement about how its own text was prepared, the one a
+    curator pointed to (`pointer`) when one did
+    (yizkr.pipeline.preparation), and the merge puts the machine-assisted
+    marker on every claim read from the text it covers, after dropping
+    any marker a chunk answer gave (ADR-0008).
 
     Matches LlmClaimExtractor's extract() signature so the CLI treats the
     strategies interchangeably. After extract(), `failed_chunks` lists
@@ -1250,8 +1270,12 @@ class ChunkedClaimExtractor:
         retries: int = 2,
         concurrency: int = 1,
         log: Callable[[str], None] | None = None,
+        read_preparation: bool = False,
+        pointer: str | None = None,
     ) -> None:
         self.client = client
+        self.read_preparation = read_preparation
+        self.pointer = pointer
         self.state_dir = state_dir
         self.budget = budget
         self.retries = retries
@@ -1302,6 +1326,9 @@ class ChunkedClaimExtractor:
         self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
         # how chunk calls saw the document: fork, inline or compressed
         self.context_mode: str | None = None
+        # the claims the merge marked machine-assisted, and those it could
+        # not place within or outside the passages the statement covers
+        self._marked = {"marked": 0, "straddling": 0, "unlocated": 0}
         self.attention: list[str] = []
         self._rejects: list[dict] = []
 
@@ -1399,6 +1426,8 @@ class ChunkedClaimExtractor:
             language=transcription.language,
             numbered_text=number_lines(transcription.prompt_text()),
         )
+        if self.read_preparation:
+            prompt += preparation.manifest_block(self.pointer)
         return self._first_turn(
             prompt,
             lambda response: self._parse_entity_manifest(
@@ -1515,6 +1544,7 @@ class ChunkedClaimExtractor:
                     set_aside_records,
                     containers,
                     scan.trailing_commas,
+                    obj.get(preparation.KEY, _ABSENT),
                 ),
                 problems,
             )
@@ -1609,6 +1639,7 @@ class ChunkedClaimExtractor:
             self._set_aside_records = manifest.set_aside_records
             self._containers = manifest.containers
             self._trailing_commas = manifest.trailing_commas
+            self._preparation_answer = manifest.preparation
             return manifest.entities, None, handle
         if not answered:
             raise RuntimeError(
@@ -1910,6 +1941,14 @@ class ChunkedClaimExtractor:
         self._quotes = []
         self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
 
+        self._preparation_answer = _ABSENT
+        if self.read_preparation:
+            # a pointer names the document's words, or the extraction
+            # fails before anything is asked
+            preparation.pointed_lines(
+                self.pointer, Transcript(transcription.text)
+            )
+
         entities, segmentation, handle = self._phase_one(
             transcription, artifact
         )
@@ -2007,6 +2046,7 @@ class ChunkedClaimExtractor:
             self._close_conversation(handle)
         self.failed_chunks.sort()
 
+        reading, read_reasons = self._reading(transcription)
         batch, extras = self._merge(
             chunk_ids,
             outcomes,
@@ -2018,12 +2058,40 @@ class ChunkedClaimExtractor:
             transcription.printed_pages(),
             placed_by(transcription, artifact),
             transcription.text,
+            reading,
         )
         self._refuse_empty(batch, chunks=total)
         self.attention = self._attention(batch, chunks=total)
+        if self.read_preparation:
+            self.attention += preparation.attention(
+                reading, read_reasons, self._marked
+            )
         if not self.failed_chunks:
             self._write_side_outputs(extras)
         return batch
+
+    def _reading(self, transcription: Transcription) -> tuple[Any, list[str]]:
+        """(reading, why it is unread) of the document's statement about
+        its preparation, from the `preparation` value of the manifest
+        answer the extraction used (preparation.parse): `_UNREAD` for an
+        extractor that reads none; None, unread, for an answer without
+        the value, or an extraction that fell back from the manifest,
+        with a reason only where a curator pointed to the statement."""
+        if not self.read_preparation:
+            return _UNREAD, []
+        answer = self._preparation_answer
+        if answer is _ABSENT:
+            if self.pointer is None:
+                return None, []
+            return None, [
+                "the entity manifest gave no reading of the statement"
+            ]
+        return preparation.parse(
+            answer,
+            Transcript(transcription.text),
+            len(transcription.text.splitlines()),
+            self.pointer,
+        )
 
     def _close_conversation(self, handle: Any) -> None:
         """Let the client release a conversation no chunk forks any more
@@ -2170,6 +2238,7 @@ class ChunkedClaimExtractor:
         printed_pages: dict[int, str],
         placed: Mapping[str, Collection[str]] | None = None,
         text: str | None = None,
+        reading: Any = _UNREAD,
     ) -> tuple[ClaimBatch, dict[str, str]]:
         """Merge chunk claims into one validated batch, each claim citing
         `artifact`, the page number printed on its page where
@@ -2180,7 +2249,16 @@ class ChunkedClaimExtractor:
         (rejected_by_reason), and, when `text`, the transcription, is
         given, the claims whose excerpt it does not hold (excerpt_audit),
         each kept in the side output `quotes.json`. Such a claim stays
-        in the batch: the miss is counted, never a reject."""
+        in the batch: the miss is counted, never a reject.
+
+        `reading`, the document's statement about its preparation as the
+        manifest read it (preparation.parse; None when unread), marks
+        the claims read from the text it covers, located in `text`, once
+        every marker the chunk answers gave is dropped, and is counted in
+        the coverage (`machine_assisted`) and, when it
+        quoted a statement, kept in the side output `preparation.json`.
+        `_UNREAD`, for an extractor that reads none, leaves the claims as
+        the chunks gave them."""
         raw_claims: list[dict] = []
         transform_rejects: list[dict] = []
         gaps: list[dict] = []
@@ -2209,6 +2287,9 @@ class ChunkedClaimExtractor:
         self.gaps = gaps
         self._unread = unread
 
+        dropped = 0
+        if reading is not _UNREAD:
+            raw_claims, dropped = preparation.drop_markers(raw_claims)
         deduped = cite_artifact(raw_claims, artifact, printed_pages)
         run = run_metadata(self.client.model_identifier).model_dump(
             mode="json"
@@ -2232,6 +2313,12 @@ class ChunkedClaimExtractor:
         )
         rejects = transform_rejects + settled_rejects + rejects
         self._rejects = rejects
+        self._marked = {"marked": 0, "straddling": 0, "unlocated": 0}
+        if reading is not _UNREAD:
+            claims, self._marked = preparation.mark(
+                batch.claims, reading, Transcript(text or "")
+            )
+            batch = batch.model_copy(update={"claims": claims})
         quotes = (
             None
             if text is None
@@ -2274,6 +2361,15 @@ class ChunkedClaimExtractor:
         }
         if quotes is not None:
             coverage["quotes"] = quotes["counts"]
+        if reading is not _UNREAD:
+            coverage["machine_assisted"] = preparation.coverage(
+                reading, self._marked, dropped
+            )
+            stated = preparation.side_output(reading)
+            if stated is not None:
+                extras["preparation.json"] = json.dumps(
+                    stated, indent=2, ensure_ascii=False
+                )
         extras["coverage.json"] = json.dumps(coverage, indent=2)
         return batch, extras
 
@@ -2628,6 +2724,9 @@ class _Manifest(NamedTuple):
     containers: list[dict]
     # the trailing commas read as JSON syntax (scan_json_answer)
     trailing_commas: int
+    # the answer's reading of the document's statement about its
+    # preparation, as it gives it (preparation.parse); _ABSENT for none
+    preparation: Any = _ABSENT
 
 
 def _set_aside_note(entity: dict) -> tuple[dict, list[str]]:

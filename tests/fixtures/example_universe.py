@@ -1383,11 +1383,11 @@ SOURCES = (
     ),
 )
 
-# Values the assertions use that the manifest does not hold yet.
-# ADR-0008 (as amended by #289) adds `machine_assisted`, the sourcing
-# circumstance of a text that its source says was prepared with machine
-# assistance, with the extraction change that sets it (its follow-up B).
-PLANNED_VOCABULARY = ("machine_assisted",)
+# Values the assertions use that the manifest does not hold yet: none.
+# `machine_assisted`, the sourcing circumstance of a text that its source
+# says was prepared with machine assistance, joined the manifest with the
+# reading that sets it (ADR-0008's follow-up B, #666).
+PLANNED_VOCABULARY: tuple[str, ...] = ()
 
 ASSERTIONS = tuple(
     _said(
