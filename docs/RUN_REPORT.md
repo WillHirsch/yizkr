@@ -355,7 +355,8 @@ writer refused, count here too, under their check and the stage
   no longer reads); the reasons records were set aside by, by
   category (`schema`, `kind`, `addition`, `initial`, `no name part`,
   `no toponym`; `report.SET_ASIDE_REASONS`); the readings that set
-  nothing aside, by category (`dropped`, `read as text`;
+  nothing aside, by category (`dropped`, `read as text`,
+  `label and container`;
   `report.READING_REASONS`), counted apart from those reasons (#611);
   the notes by category (`kind`, `relation`, `date_reading`,
   `identity`, `other`, the categories of `claims.JudgementNote`); and
@@ -372,10 +373,16 @@ writer refused, count here too, under their check and the stage
   `dropped` reason counts a name part dropped for an empty string
   (ADR-0035 §5, #497), and the record it leaves often stands. A
   `read as text` reason counts an entry of a list of strings written as
-  an object holding its text, read as that text (ADR-0035 §5, #514).
-  Neither sets anything aside: the record then stands or is set aside on
-  its other reasons. `coverage.json` counts both among `set_aside`, but
-  the report counts them apart, as readings (#611): the headline
+  an object holding its text, read as that text (ADR-0035 §5, #514). A
+  `label and container` reason counts a place's written name that is its
+  label and then one of its own `within` containers ("Snylsjum,
+  Fryslân" beside the label "Snylsjum", within Fryslân), which the
+  no-addition check lets stand (ADR-0035 §5, #655); its record stands
+  unless another reason sets it aside, or the container it holds is
+  dropped, which sets it aside by `addition`. None of them sets
+  anything aside: the record then stands or is set aside on its other
+  reasons. `coverage.json` counts them among `set_aside`, but the
+  report counts them apart, as readings (#611): the headline
   "reasons records were set aside" (`set_aside_reasons`,
   `set_aside_by_reason`) counts only the reasons that set a record
   aside, and the readings have a line ("Fields read so their record

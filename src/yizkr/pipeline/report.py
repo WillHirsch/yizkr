@@ -328,10 +328,12 @@ SET_ASIDE_REASONS = frozenset(
 # the leading labels of the readings coverage.json counts among the same
 # reasons, which set nothing aside (ADR-0035 §5): `dropped` (a name part
 # dropped for an empty string, which leaves the record standing when what
-# is left can stand) and `read as text` (an entry of a list of strings
-# written as an object holding its text, read as that text); the report
-# counts them apart from the reasons records were set aside by
-READING_REASONS = frozenset({"dropped", "read as text"})
+# is left can stand), `read as text` (an entry of a list of strings
+# written as an object holding its text, read as that text) and
+# `label and container` (a place's written name that is its label and one
+# of its containers, which adds only that container); the report counts
+# them apart from the reasons records were set aside by
+READING_REASONS = frozenset({"dropped", "read as text", "label and container"})
 # the reason an entity's judgement note is set aside by (ADR-0035 §5),
 # which coverage.json counts among the records' reasons, once a note
 NOTE_SET_ASIDE = "note"
@@ -1250,11 +1252,12 @@ def _records(coverage: dict) -> dict[str, Any]:
     or `dropped` readings given before it), one of the wrong kind once,
     as `kind`, and any other once for each problem found in it; an
     entity's note set aside counts once, as `note`, which is told apart
-    here as a note set aside. Its `dropped` and `read as text` set
-    nothing aside, whether or not the record then stands, so they are
-    told apart here as readings, never among the reasons records were
-    set aside by; a container dropped alone is counted by its own
-    reasons, apart from both.
+    here as a note set aside. Its readings (READING_REASONS: `dropped`,
+    `read as text` and `label and container`) set nothing aside, whether
+    or not the record then stands, so they are told apart here as
+    readings, never among the reasons records were set aside by; a
+    container dropped alone is counted by its own reasons, apart from
+    both.
     The extraction writes its records and its notes together, so both
     are None unless the coverage holds both, as the line-range tier's and
     one written before these counts do not: absent, never zero. The
@@ -3766,7 +3769,8 @@ def _records_blocks(
             f"{_n(records['set_aside_reasons'])} (a record can give "
             "several)",
             "Fields read so their record could stand (a name part "
-            "dropped for an empty string, an entry read as its text), "
+            "dropped for an empty string, an entry read as its text, a "
+            "place's name that is its label and one of its containers), "
             "setting nothing aside, so counted apart from the reasons "
             f"records were set aside: {_n(records['readings'])}",
             "Place containers checked: "

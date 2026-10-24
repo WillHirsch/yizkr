@@ -1333,8 +1333,10 @@ a name, not something a source asserts, so ADR-0022's Ruling 1 holds for
 the graph. Records live in the batch view and the LLM cache, as local-only
 data. A record may divide and label a name, never add to it: every part
 must occur in the label or an alias, folded, as whole words (a standard
-form, an organisation's places and a place's containers aside). A
-place's container stands on its evidence instead, and one that fails
+form, an organisation's places and a place's containers aside); a
+place's written name that is its label and then one of its own
+containers stands, counted as `label and container`, while that
+container stands (ADR-0035 §5). A place's container stands on its evidence instead, and one that fails
 (`no-evidence`, `evidence-not-in-source`, `evidence-does-not-name`), or
 that cannot become a container at all (`malformed`: its evidence a list,
 a key a container has not, no name), is dropped alone, its record

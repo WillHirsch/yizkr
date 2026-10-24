@@ -16,10 +16,13 @@ from tests.fixtures.identity import write_mapped
 from tests.unit.test_manifest import minimal_raw
 from yizkr.claims import (
     ClaimBatch,
+    Container,
     EntityRecord,
     PersonStructure,
+    label_container,
     set_aside_structure,
     structure_problems,
+    structure_readings,
     validate_against_manifest,
 )
 from yizkr.core.wiki import WikiClient
@@ -1284,6 +1287,159 @@ class TestSettingAside:
     def test_an_entity_without_a_record_is_untouched(self):
         plain = entity("e1", "Ida Löbig", "human")
         assert set_aside_structure(plain) == (plain, [])
+
+
+# the 1952 letter's sender, written with its province (docs/EXAMPLES.md)
+FRYSLAN = {"name": "Fryslân", "evidence": "Snylsjum, Fryslân"}
+DRAKERADIEL = {"name": "Drakeradiel", "evidence": "gemeente Drakeradiel"}
+LABEL_AND_CONTAINER = (
+    "label and container: structure.place.names.0.written: the label and "
+    "one of its containers"
+)
+
+
+def snylsjum(written: str, *within: dict, label: str = "Snylsjum", **name):
+    return entity(
+        "e1",
+        label,
+        "place",
+        structure={
+            "kind": "place",
+            "names": [{"written": written, **name}],
+            "within": list(within),
+        },
+    )
+
+
+class TestLabelAndContainer:
+    """A place's written name that is its label and then one of its own
+    containers adds only that container: the record stands, the reading
+    counted, never a reason it is set aside by (ADR-0035 §5, #655)."""
+
+    def test_the_label_and_a_container_stands_and_is_counted(self):
+        place = snylsjum("Snylsjum, Fryslân", FRYSLAN, toponym="Snylsjum")
+        parsed = EntityRecord.model_validate(place)
+        assert structure_problems(parsed) == []
+        assert structure_readings(parsed) == [LABEL_AND_CONTAINER]
+        kept, reasons = set_aside_structure(place)
+        assert kept == place
+        assert reasons == [LABEL_AND_CONTAINER]
+
+    def test_any_container_of_the_record_matches(self):
+        """The container need not be the nearest; and only the words are
+        read, folded, never what stands between them."""
+        for written in (
+            "Snylsjum, Fryslân",
+            "Snylsjum Fryslân",
+            "Snylsjum (Fryslan)",
+            "SNYLSJUM, FRYSLÂN",
+        ):
+            place = snylsjum(written, DRAKERADIEL, FRYSLAN)
+            assert set_aside_structure(place) == (
+                place,
+                [LABEL_AND_CONTAINER],
+            ), written
+
+    def test_each_name_that_matches_is_a_reading(self):
+        place = entity(
+            "e1",
+            "Snylsjum",
+            "place",
+            aliases=["Snylsjum yn Fryslân"],
+            structure={
+                "kind": "place",
+                "names": [
+                    {"written": "Snylsjum yn Fryslân"},
+                    {"written": "Snylsjum, Drakeradiel"},
+                ],
+                "within": [DRAKERADIEL, FRYSLAN],
+            },
+        )
+        # the first name holds a word between the label and the
+        # container ("yn"), so it is no label and container; it stands as
+        # an alias writes it
+        assert set_aside_structure(place) == (
+            place,
+            [LABEL_AND_CONTAINER.replace("names.0", "names.1")],
+        )
+
+    @pytest.mark.parametrize(
+        "written, within",
+        [
+            # a trailing part that is no container of the record
+            ("Snylsjum, Fryslân", [DRAKERADIEL]),
+            ("Snylsjum, Fryslân", []),
+            # the container first, then the label
+            ("Fryslân, Snylsjum", [FRYSLAN]),
+            # two containers after the label
+            ("Snylsjum, Drakeradiel, Fryslân", [DRAKERADIEL, FRYSLAN]),
+            # a word between the label and the container
+            ("Snylsjum yn Fryslân", [FRYSLAN]),
+            # a container that adds to its own name
+            ("Snylsjum, Provinsje Fryslân", [FRYSLAN]),
+            # the label's words, but not the label's alone
+            ("Snylsjum Doarp, Fryslân", [FRYSLAN]),
+        ],
+    )
+    def test_any_other_addition_still_sets_the_record_aside(
+        self, written, within
+    ):
+        place = snylsjum(written, *within)
+        parsed = EntityRecord.model_validate(place)
+        assert structure_readings(parsed) == []
+        kept, reasons = set_aside_structure(place)
+        assert "structure" not in kept
+        assert reasons == [
+            f"addition: {written!r} occurs in neither the label nor an alias"
+        ]
+
+    def test_the_label_not_an_alias_gives_the_head(self):
+        """Only the label is read so: an alias that is the toponym alone
+        does not make its form and a container stand."""
+        place = snylsjum(
+            "Snylsjum, Fryslân", FRYSLAN, label="it doarp", toponym="Snylsjum"
+        )
+        place["aliases"] = ["Snylsjum"]
+        kept, reasons = set_aside_structure(place)
+        assert "structure" not in kept
+        assert reasons == [
+            "addition: 'Snylsjum, Fryslân' occurs in neither the label nor "
+            "an alias"
+        ]
+
+    def test_the_toponym_and_head_are_still_checked(self):
+        place = snylsjum("Snylsjum, Fryslân", FRYSLAN, toponym="Stupfield")
+        kept, reasons = set_aside_structure(place)
+        assert "structure" not in kept
+        assert reasons == [
+            LABEL_AND_CONTAINER,
+            "addition: 'Stupfield' occurs in neither the label nor an alias",
+        ]
+
+    def test_a_record_of_another_kind_gives_no_reading(self):
+        place = snylsjum("Snylsjum, Fryslân", FRYSLAN)
+        place["kind"] = "organization"
+        kept, reasons = set_aside_structure(place)
+        assert "structure" not in kept
+        assert reasons == ["kind: a 'place' record on a 'organization' entity"]
+
+    def test_label_container_reads_the_shape_only(self):
+        fryslan = Container(name="Fryslân")
+        assert label_container("Snylsjum, Fryslân", "Snylsjum", [fryslan])
+        assert not label_container("Snylsjum", "Snylsjum", [fryslan])
+        assert not label_container("Fryslân", "Snylsjum", [fryslan])
+        # a label of no words is no head
+        assert not label_container("Fryslân", "—", [fryslan])
+        assert not label_container(
+            "Snylsjum, —", "Snylsjum", [Container(name="—")]
+        )
+
+    def test_a_name_a_form_already_holds_gives_no_reading(self):
+        """Only a name the plain test would refuse is counted: one that is
+        also an alias stands without the reading."""
+        place = snylsjum("Snylsjum, Fryslân", FRYSLAN)
+        place["aliases"] = ["Snylsjum, Fryslân"]
+        assert set_aside_structure(place) == (place, [])
 
 
 class TestEmptyStrings:

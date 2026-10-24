@@ -1337,6 +1337,40 @@ def _occurs(part: str, forms: list[list[str]], open_end: bool = False) -> bool:
     return False
 
 
+def label_container(
+    written: str, label: str, containers: Iterable[Container]
+) -> bool:
+    """Whether a place's written name is its label and then one of the
+    record's own containers, written as the record writes it, each
+    folded, as whole words ("Snylsjum, Fryslân" of the label "Snylsjum",
+    within Fryslân). Only the words are compared, never what stands
+    between them."""
+    name, head = _words(written), _words(label)
+    return bool(head) and any(
+        (tail := _words(container.name)) and name == head + tail
+        for container in containers
+    )
+
+
+def structure_readings(entity: EntityRecord) -> list[str]:
+    """The readings of an entity's mention record that set nothing aside
+    (ADR-0035 §5), each its label first: for a place record of a place,
+    one `label and container` for each written name that is its label
+    and one of its containers (`label_container`) and that no form of
+    the entity holds, which the no-addition check lets stand."""
+    structure = entity.structure
+    if not isinstance(structure, PlaceStructure) or entity.kind != "place":
+        return []
+    forms = [_words(form) for form in (entity.label, *entity.aliases)]
+    return [
+        f"label and container: structure.place.names.{index}.written: "
+        f"the label and one of its containers"
+        for index, name in enumerate(structure.names)
+        if label_container(name.written, entity.label, structure.within)
+        and not _occurs(name.written, forms)
+    ]
+
+
 def structure_problems(entity: EntityRecord) -> list[str]:
     """Why an entity's mention record cannot stand (ADR-0035 §5), each
     reason first: empty when it can, or when it has none.
@@ -1347,7 +1381,11 @@ def structure_problems(entity: EntityRecord) -> list[str]:
       to it. A given name's standard form is exempt, as are an
       organisation's places, which its `location` claims may name, and a
       place's containers, which carry their own evidence and are checked
-      one by one (`container_problem`);
+      one by one (`container_problem`). A place's written name that is
+      its label and then one of its own containers (`label_container`)
+      adds only that container, and stands, counted as a reading
+      (`structure_readings`); any other addition still sets the record
+      aside;
     * `initial`: an initial gives a standard form;
     * `no name part`: a person whose status is `name` has no name part;
     * `no toponym`: a place whose status is `toponym` has no name and no
@@ -1386,7 +1424,10 @@ def structure_problems(entity: EntityRecord) -> list[str]:
             problems.append("no name part: a name status with no name part")
     elif isinstance(structure, PlaceStructure):
         for name in structure.names:
-            parts += [name.written]
+            if not label_container(
+                name.written, entity.label, structure.within
+            ):
+                parts += [name.written]
             parts += [part for part in (name.toponym, name.head) if part]
         if structure.address is not None:
             address = structure.address
@@ -1580,7 +1621,9 @@ def set_aside_structure(
     list of strings written as an object holding its text is that text,
     giving the reason `read as text`; an optional field written as "" is
     absent, and a name part that is "", or whose required field is, is
-    dropped, each giving the reason `dropped`. Then each of a place's
+    dropped, each giving the reason `dropped`. A place's written name
+    that is its label and one of its containers gives the reading
+    `label and container` (`structure_readings`). Then each of a place's
     containers of the wrong shape is taken out (`_take_malformed`), so
     that it is dropped alone rather than setting the record aside; when
     `malformed` is given, it receives each one's audit entry
@@ -1617,6 +1660,7 @@ def set_aside_structure(
         first = exc.errors()[0]
         location = ".".join(str(step) for step in first["loc"])
         return rest, [*dropped, f"schema: {location}: {first['msg']}"]
+    dropped += structure_readings(record)
     problems = structure_problems(record)
     return (rest, dropped + problems) if problems else (entity, dropped)
 

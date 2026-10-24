@@ -346,6 +346,52 @@ class TestNormalizeEntityDict:
         assert cleaned["structure"] == record
         assert normalize_entity_dict(cleaned) == cleaned
 
+    def test_a_place_name_with_its_container_is_read_as_the_label(self):
+        """A place's written name that is its label and one of its
+        containers stands (ADR-0035 §5, #655), and its part is the label:
+        an alias that holds the label is kept, as it was while the record
+        was set aside, and one that holds only the container gives no
+        part and is dropped."""
+        entity = {
+            "id": "e1",
+            "kind": "place",
+            "label": "Snylsjum",
+            "aliases": ["it doarp Snylsjum", "Fryslân", "Snylsjum, Fryslân"],
+            "structure": {
+                "kind": "place",
+                "names": [{"written": "Snylsjum, Fryslân"}],
+                "within": [
+                    {"name": "Fryslân", "evidence": "Snylsjum, Fryslân"}
+                ],
+            },
+        }
+        cleaned = normalize_entity_dict(entity)
+        assert cleaned["aliases"] == ["it doarp Snylsjum", "Snylsjum, Fryslân"]
+        assert cleaned["structure"] == entity["structure"]
+        assert normalize_entity_dict(cleaned) == cleaned
+
+    def test_only_a_name_with_its_container_is_read_as_the_label(self):
+        """A second written name, no label and container, keeps its own
+        part: the alias that alone spells it, a variant of the label, is
+        kept."""
+        entity = {
+            "id": "e1",
+            "kind": "place",
+            "label": "Snylsjum",
+            "aliases": ["Snylsum"],
+            "structure": {
+                "kind": "place",
+                "names": [
+                    {"written": "Snylsjum, Fryslân"},
+                    {"written": "Snylsum"},
+                ],
+                "within": [
+                    {"name": "Fryslân", "evidence": "Snylsjum, Fryslân"}
+                ],
+            },
+        }
+        assert normalize_entity_dict(entity)["aliases"] == ["Snylsum"]
+
     def test_missing_fields_do_not_raise(self):
         assert normalize_entity_dict({"kind": "human"}) == {
             "kind": "human",
