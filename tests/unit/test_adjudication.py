@@ -59,6 +59,7 @@ from yizkr.pipeline.clustering import (
     IDENTITY_MAP,
     PRINCIPALS_APART,
     SAME,
+    SINGLETON,
     UNCERTAIN,
     adjudication_calls,
     cluster_corpus,
@@ -1463,12 +1464,19 @@ def test_a_same_verdict_overrides_a_date_contradiction():
 # -- events whose principals ended held apart (#610) -------------------------
 
 
-def emigrated(name: str, *, dated: bool, witness: bool = False) -> Doc:
+def emigrated(
+    name: str,
+    *,
+    dated: bool,
+    witness: bool = False,
+    father: int | None = None,
+) -> Doc:
     """A register of Klara Löbig's emigration, with Klara its principal:
     dated, her birth 1917 and the emigration 22 June 1938, or undated, as
     the postcard gives it. With `witness`, Gustav Löbig, undated, takes
     part too, as a witness, a placeholder pattern no source of the
-    universe shows."""
+    universe shows; with `father`, it names her father, Sebastian Löbig,
+    born in that year as it reads it (1862, or 1882 a misreading)."""
     entities = [
         human("e1", "Klara Löbig"),
         entity("v1", "Emigration of Klara Löbig", "migration"),
@@ -1484,6 +1492,13 @@ def emigrated(name: str, *, dated: bool, witness: bool = False) -> Doc:
         entities.append(human("e2", "Gustav Löbig"))
         claims.append(("v1", "participant", item("e2"), role("witness")))
         truth["e2"] = "gustav-loebig"
+    if father:
+        entities.append(human("e3", "Sebastian Löbig"))
+        claims += [
+            ("e1", "father", item("e3")),
+            ("e3", "date_of_birth", day(father)),
+        ]
+        truth["e3"] = "sebastian-loebig"
     return register(name, entities, claims, truth)
 
 
@@ -1719,6 +1734,41 @@ class TestPrincipalsHeldApart:
         (entry,) = [e for e in settled["review"] if e["kind"] == "migration"]
         assert entry["contradiction"]["evidence"] == PRINCIPALS_APART
 
+    def test_a_principal_kept_apart_by_the_kin_rule(self):
+        """Every pair `same` (#663): the postcard gives Klara's father
+        Sebastian born 1882, a misreading, the registers 1862. The
+        Sebastians merge, but the kin rule, reading their own births,
+        contradicts the postcard's Klara's `same` and keeps her apart
+        from the registers'. One emigration cannot happen to two Klaras
+        the identity map keeps apart, so the part `same` joins falls back
+        to its confident components: the registers' emigrations merge,
+        the postcard's stays apart."""
+        docs = [
+            emigrated("postcard", dated=False, father=1882),
+            emigrated("register", dated=True, father=1862),
+            emigrated("extract", dated=True, father=1862),
+        ]
+        settled = verdicts_by_name(docs, lambda pair: SAME)
+
+        def cluster(doc: Doc, local_id: str) -> str:
+            fingerprint = doc.fingerprint(local_id, settled)
+            return settled["mentions"][fingerprint]["cluster"]
+
+        postcard, register_, extract = docs
+        assert len({cluster(doc, "e3") for doc in docs}) == 1
+        assert cluster(register_, "e1") == cluster(extract, "e1")
+        assert cluster(postcard, "e1") != cluster(register_, "e1")
+        found = emigration_of(settled, docs)
+        assert found["postcard"]["method"] == AMBIGUOUS
+        assert found["register"]["method"] == CONFIDENT_COMPONENT
+        assert found["register"]["cluster"] == found["extract"]["cluster"]
+        assert found["postcard"]["cluster"] != found["register"]["cluster"]
+        (entry,) = [e for e in settled["review"] if e["kind"] == "migration"]
+        assert entry["contradiction"]["evidence"] == PRINCIPALS_APART
+        assert {
+            p["same_merges"] for p in entry["pairs"] if p["link"] == AMBIGUOUS
+        } == {False}
+
     def test_two_principals_one_held_apart(self):
         """One emigration with two principals, Klara and Gustav: the
         postcard's Gustav is `same` as the registers', but its Klara is
@@ -1819,6 +1869,9 @@ def wed(
     witness: int | None = None,
     wedding: int | None = None,
     extracted: bool = True,
+    agnes_extracted: bool = True,
+    spouse: str = "Agnes Nertler",
+    agnes_born: int | None = None,
 ) -> Doc:
     """A register of Leopold Löbig and Agnes Nertler's union, a marriage
     with the two its spouses or a partnership with the two its partners,
@@ -1826,10 +1879,19 @@ def wed(
     placeholder pattern). With `witness`, Gustav Löbig witnesses it, born
     in that year, or undated for 0, a placeholder pattern no source of the
     universe shows; with `wedding`, the wedding's year as it reads it.
-    Without `extracted`, Leopold's mention is not extracted."""
+    Without `extracted`, Leopold's mention is not extracted, and without
+    `agnes_extracted` Agnes's; `spouse` is the name it gives her, her
+    given name then her birth surname, and `agnes_born` her birth year
+    as it reads it."""
     entities = [
         human("e1", "Leopold Löbig", extract=extracted),
-        human("e2", "Agnes Nertler", givens=["Agnes"], birth=["Nertler"]),
+        human(
+            "e2",
+            spouse,
+            givens=spouse.split()[:1],
+            birth=spouse.split()[1:],
+            extract=agnes_extracted,
+        ),
         entity("m1", "Leopold and Agnes", union),
     ]
     couple = "spouse" if union == "marriage" else "partner"
@@ -1837,6 +1899,8 @@ def wed(
         ("e1", "date_of_birth", day(born)),
         *union_of("m1", "e1", "e2", couple),
     ]
+    if agnes_born:
+        claims.append(("e2", "date_of_birth", day(agnes_born)))
     truth = {
         "e1": "leopold-loebig",
         "e2": "agnes-loebig",
@@ -1910,10 +1974,32 @@ class TestCoupleHeldApart:
             p["same_merges"] for p in entry["pairs"] if p["link"] == AMBIGUOUS
         } == {False}
 
+    def test_a_different_alone_keeps_the_marriages_apart(self):
+        """The postcard's Leopold `different`, its Agnes not extracted, so
+        no contradiction keeps an Agnes apart: the `different` alone keeps
+        the postcard's marriage apart, the registers' merging."""
+        docs = [
+            wed("postcard", 1930, agnes_extracted=False),
+            wed("register", 1910),
+            wed("extract", 1910),
+        ]
+        settled = verdicts_by_name(docs, leopold_apart)
+        found = union_of_each(settled, docs)
+        assert found["register"]["cluster"] == found["extract"]["cluster"]
+        assert found["postcard"]["cluster"] != found["register"]["cluster"]
+        (entry,) = [e for e in settled["review"] if e["kind"] == "marriage"]
+        assert entry["contradiction"]["evidence"] == COUPLE_APART
+
     def test_a_same_spouse_lets_the_marriages_merge(self):
-        """Every pair `same`, the postcard's Leopold's included: the
-        three marriages merge, adjudicated, as without the rule."""
-        docs = marriages()
+        """Every pair `same`, the postcard's Leopold's included, and the
+        postcard's Agnes not extracted, so nothing reads the Leopolds'
+        births as her kin's: the three marriages merge, adjudicated, as
+        without the rule."""
+        docs = [
+            wed("postcard", 1930, agnes_extracted=False),
+            wed("register", 1910),
+            wed("extract", 1910),
+        ]
         settled = verdicts_by_name(docs, lambda pair: SAME)
         found = union_of_each(settled, docs)
         assert {m["method"] for m in found.values()} == {ADJUDICATED}
@@ -1921,11 +2007,110 @@ class TestCoupleHeldApart:
         (entry,) = [e for e in settled["review"] if e["kind"] == "marriage"]
         assert entry["contradiction"] is None
 
+    @pytest.mark.parametrize("union", ["marriage", "partnership"])
+    def test_a_spouse_kept_apart_by_the_kin_rule(self, union):
+        """Every pair `same` (#663): the three Leopolds merge, but the
+        kin rule, reading the Leopolds' own births (1930 on the postcard,
+        1910 in the registers), contradicts the postcard's Agnes's `same`
+        and keeps her apart from the registers'. One union cannot have
+        two Agneses the identity map keeps apart, so the part `same`
+        joins does not merge and falls back to its confident components:
+        the registers' unions merge, the postcard's stays apart."""
+        docs = marriages(union)
+        settled = verdicts_by_name(docs, lambda pair: SAME)
+
+        def cluster(doc: Doc, local_id: str) -> str:
+            fingerprint = doc.fingerprint(local_id, settled)
+            return settled["mentions"][fingerprint]["cluster"]
+
+        postcard, register_, extract = docs
+        assert len({cluster(doc, "e1") for doc in docs}) == 1
+        assert cluster(register_, "e2") == cluster(extract, "e2")
+        assert cluster(postcard, "e2") != cluster(register_, "e2")
+        (agnes,) = [
+            e
+            for e in settled["review"]
+            if e["kind"] == "human"
+            and postcard.fingerprint("e2", settled) in e["members"]
+        ]
+        assert agnes["contradiction"] is not None
+        found = union_of_each(settled, docs)
+        assert found["postcard"]["method"] == AMBIGUOUS
+        assert found["register"]["method"] == CONFIDENT_COMPONENT
+        assert found["register"]["cluster"] == found["extract"]["cluster"]
+        assert found["postcard"]["cluster"] != found["register"]["cluster"]
+        (entry,) = [e for e in settled["review"] if e["kind"] == union]
+        assert entry["status"] == ADJUDICATED
+        assert entry["contradiction"]["evidence"] == COUPLE_APART
+        assert {
+            p["same_merges"] for p in entry["pairs"] if p["link"] == AMBIGUOUS
+        } == {False}
+
+    @pytest.mark.parametrize("side", ["register", "postcard"])
+    def test_one_member_of_a_spouse_cluster_contradicts(self, side):
+        """One side's Agnes, born 1912, merges confidently with a
+        letter's Agnes Nertler, born 1912 and named with no kin. Only
+        that side's own Agnes kin-conflicts with the other side's (their
+        Leopolds born 1930 on the postcard and 1910 in the register); the
+        letter's does not. One member's contradiction is enough: with
+        every pair `same`, the postcard's marriage stays apart from the
+        register's, whichever side holds the letter's Agnes."""
+        letter = register(
+            "letter",
+            [
+                human(
+                    "e2", "Agnes Nertler", givens=["Agnes"], birth=["Nertler"]
+                )
+            ],
+            [("e2", "date_of_birth", day(1912))],
+            {"e2": "agnes-loebig"},
+        )
+        born = {side: 1912}
+        postcard = wed("postcard", 1930, agnes_born=born.get("postcard"))
+        register_ = wed("register", 1910, agnes_born=born.get("register"))
+        docs = [postcard, register_, letter]
+        settled = verdicts_by_name(docs, lambda pair: SAME)
+
+        def cluster(doc: Doc, local_id: str) -> str:
+            fingerprint = doc.fingerprint(local_id, settled)
+            return settled["mentions"][fingerprint]["cluster"]
+
+        joined = postcard if side == "postcard" else register_
+        assert cluster(joined, "e2") == cluster(letter, "e2")
+        assert cluster(postcard, "e2") != cluster(register_, "e2")
+        assert cluster(postcard, "e1") == cluster(register_, "e1")
+        assert cluster(postcard, "m1") != cluster(register_, "m1")
+        (entry,) = [e for e in settled["review"] if e["kind"] == "marriage"]
+        assert entry["contradiction"]["evidence"] == COUPLE_APART
+
+    def test_a_spouse_of_another_candidate_cluster_is_not_kept_apart(self):
+        """The postcard names Leopold's wife Hildegard Laudler, a name no
+        Agnes of the registers blocks with: she is a cluster of her own,
+        never set against theirs, so nothing keeps her apart from them,
+        and with every pair `same` the three marriages merge."""
+        docs = [
+            wed("postcard", 1910, spouse="Hildegard Laudler"),
+            wed("register", 1910),
+            wed("extract", 1910),
+        ]
+        settled = verdicts_by_name(docs, lambda pair: SAME)
+        hildegard = settled["mentions"][docs[0].fingerprint("e2", settled)]
+        assert hildegard["method"] == SINGLETON
+        found = union_of_each(settled, docs)
+        assert {m["method"] for m in found.values()} == {ADJUDICATED}
+        assert len({m["cluster"] for m in found.values()}) == 1
+
     def test_a_spouse_left_apart_unsettled_is_not_held_apart(self):
         """The postcard's Leopold is `uncertain`: he stays apart from the
-        registers', but no adjudicator held him apart, so a `same` on the
-        marriages still merges all three."""
-        docs = marriages()
+        registers', but no adjudicator held him apart, nor does his
+        evidence say he differs by more than his birth, which a `same`
+        would excuse; the postcard's Agnes is not extracted. So a `same`
+        on the marriages still merges all three."""
+        docs = [
+            wed("postcard", 1930, agnes_extracted=False),
+            wed("register", 1910),
+            wed("extract", 1910),
+        ]
         settled = verdicts_by_name(
             docs,
             lambda pair: UNCERTAIN if ("postcard", "e1") in pair else SAME,
@@ -1996,9 +2181,10 @@ class TestCoupleHeldApart:
     def test_a_couple_member_without_a_cluster_is_not_held_apart(self):
         """The postcard's Leopold is not extracted, so no cluster holds
         him: he is held apart from nobody, and with every pair `same` the
-        three marriages merge."""
+        three marriages merge. His birth agrees with the registers', so
+        the kin rule keeps no Agnes apart."""
         docs = [
-            wed("postcard", 1930, extracted=False),
+            wed("postcard", 1910, extracted=False),
             wed("register", 1910),
             wed("extract", 1910),
         ]
@@ -2014,14 +2200,16 @@ class TestCoupleHeldApart:
         `different` from the letter's only, `same` as the extract's. The
         `different` holds the two clusters apart, so the postcard's and
         the extract's marriages, whose spouses were never said
-        `different` of each other, do not merge."""
+        `different` of each other, do not merge. The postcard's Agnes is
+        not extracted, so the kin rule keeps no Agnes apart."""
         letter = register(
             "letter",
             [human("e1", "Leopold Löbig")],
             [("e1", "date_of_birth", day(1910))],
             {"e1": "leopold-loebig"},
         )
-        postcard, extract = wed("postcard", 1930), wed("extract", 1910)
+        postcard = wed("postcard", 1930, agnes_extracted=False)
+        extract = wed("extract", 1910)
         docs = [postcard, letter, extract]
 
         def verdict_of(pair: frozenset) -> str:
@@ -2084,6 +2272,33 @@ class TestCoupleHeldApart:
         found = union_of_each(made.identity, docs)
         assert found["postcard"]["cluster"] != found["register"]["cluster"]
         assert found["postcard"]["method"] == AMBIGUOUS
+
+    def test_a_spouse_no_same_could_merge_keeps_the_marriages_unasked(self):
+        """The postcard and one register, the engine told the truth: the
+        Leopolds are one, and so are the Agneses. The kin rule
+        contradicts the two Agneses, so no `same` could merge them, and
+        the stage does not ask them; no `same` could merge the marriages
+        either, since one union cannot have two Agneses the identity map
+        keeps apart, so it does not ask them, and counts both. The
+        Leopolds merge; the marriages stay apart."""
+        docs = marriages()[:2]
+        engine = Engine(truths(docs))
+        made, _ = run(docs, engine)
+        (people,) = engine.prompts
+        assert not any(kind in people for kind in UNION_KINDS)
+        assert made.counts["asked_pairs"] == 1
+        assert made.counts["unmergeable_pairs_not_asked"] == 2
+        identity = made.identity
+        leopolds = {
+            identity["mentions"][doc.fingerprint("e1", identity)]["cluster"]
+            for doc in docs
+        }
+        assert len(leopolds) == 1
+        (entry,) = [e for e in identity["review"] if e["kind"] == "marriage"]
+        assert [p["same_merges"] for p in entry["pairs"]] == [False]
+        assert [p["verdict"] for p in entry["pairs"]] == [None]
+        found = union_of_each(identity, docs)
+        assert found["postcard"]["cluster"] != found["register"]["cluster"]
 
 
 def test_no_qid_reaches_the_evidence_or_the_prompt():
