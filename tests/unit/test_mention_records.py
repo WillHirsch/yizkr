@@ -1355,7 +1355,9 @@ class TestLabelAndContainer:
                 "within": [DRAKERADIEL, FRYSLAN],
             },
         )
-        # the first name is an alias as written, no reading
+        # the first name holds a word between the label and the
+        # container ("yn"), so it is no label and container; it stands as
+        # an alias writes it
         assert set_aside_structure(place) == (
             place,
             [LABEL_AND_CONTAINER.replace("names.0", "names.1")],
@@ -1423,17 +1425,21 @@ class TestLabelAndContainer:
 
     def test_label_container_reads_the_shape_only(self):
         fryslan = Container(name="Fryslân")
-        assert label_container("Snylsjum, Fryslân", "Snylsjum", [fryslan]) == (
-            "Fryslân"
-        )
-        assert label_container("Snylsjum", "Snylsjum", [fryslan]) is None
-        assert label_container("Fryslân", "Snylsjum", [fryslan]) is None
+        assert label_container("Snylsjum, Fryslân", "Snylsjum", [fryslan])
+        assert not label_container("Snylsjum", "Snylsjum", [fryslan])
+        assert not label_container("Fryslân", "Snylsjum", [fryslan])
         # a label of no words is no head
-        assert label_container("Fryslân", "—", [fryslan]) is None
-        assert (
-            label_container("Snylsjum, —", "Snylsjum", [Container(name="—")])
-            is None
+        assert not label_container("Fryslân", "—", [fryslan])
+        assert not label_container(
+            "Snylsjum, —", "Snylsjum", [Container(name="—")]
         )
+
+    def test_a_name_a_form_already_holds_gives_no_reading(self):
+        """Only a name the plain test would refuse is counted: one that is
+        also an alias stands without the reading."""
+        place = snylsjum("Snylsjum, Fryslân", FRYSLAN)
+        place["aliases"] = ["Snylsjum, Fryslân"]
+        assert set_aside_structure(place) == (place, [])
 
 
 class TestEmptyStrings:

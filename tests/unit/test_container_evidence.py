@@ -840,6 +840,59 @@ class TestTheParser:
         assert parsed.set_aside == {} and parsed.set_aside_records == 0
 
 
+def with_container(*within) -> dict:
+    """The sender's village, its name written with its province."""
+    place = snylsjum(*within)
+    place["structure"]["names"] = [
+        {"written": "Snylsjum, Fryslân", "toponym": "Snylsjum"}
+    ]
+    return place
+
+
+class TestALabelAndContainerName:
+    """A written name that is the label and one of the record's
+    containers stands only while that container stands on its evidence
+    (ADR-0035 §5, #655): one dropped leaves the name adding to every
+    form, and the record is set aside."""
+
+    def test_a_container_that_stands_keeps_the_record(self):
+        answer = json.dumps(
+            {
+                "entities": [
+                    with_container(entry("Fryslân", "Fryslân, Nederlân"))
+                ]
+            }
+        )
+        parsed, problems = ChunkedClaimExtractor._parse_entity_manifest(
+            answer, 4, LETTER
+        )
+        assert problems == []
+        (place,) = parsed.entities
+        assert place.structure.containers() == ["Fryslân"]
+        assert parsed.set_aside == {"label and container": 1}
+        assert parsed.set_aside_records == 0
+        assert len(parsed.containers) == 1
+
+    @pytest.mark.parametrize(
+        "container",
+        [entry("Fryslân", "Snylsjum, Fryslân"), "Fryslân"],
+        ids=["evidence-not-in-source", "a bare string"],
+    )
+    def test_a_container_dropped_sets_the_record_aside(self, container):
+        answer = json.dumps({"entities": [with_container(container)]})
+        parsed, problems = ChunkedClaimExtractor._parse_entity_manifest(
+            answer, 4, LETTER
+        )
+        assert problems == []
+        (place,) = parsed.entities
+        assert place.structure is None
+        assert place.label == "Snylsjum" and place.kind == "place"
+        assert parsed.set_aside == {"label and container": 1, "addition": 1}
+        assert parsed.set_aside_records == 1
+        # the record set aside leaves no container to audit
+        assert parsed.containers == []
+
+
 class TestTheReport:
     def test_a_reason_the_report_does_not_know_is_other(self):
         from yizkr.pipeline.report import OTHER, _records

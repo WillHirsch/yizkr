@@ -1339,36 +1339,35 @@ def _occurs(part: str, forms: list[list[str]], open_end: bool = False) -> bool:
 
 def label_container(
     written: str, label: str, containers: Iterable[Container]
-) -> str | None:
-    """The container a place's written name adds to its label, or None:
-    the name is the label and then one of the record's own containers,
-    written as the record writes it, each folded, as whole words
-    ("Snylsjum, Fryslân" of the label "Snylsjum", within Fryslân). Only
-    the words are compared, never what stands between them."""
+) -> bool:
+    """Whether a place's written name is its label and then one of the
+    record's own containers, written as the record writes it, each
+    folded, as whole words ("Snylsjum, Fryslân" of the label "Snylsjum",
+    within Fryslân). Only the words are compared, never what stands
+    between them."""
     name, head = _words(written), _words(label)
-    if not head:
-        return None
-    for container in containers:
-        tail = _words(container.name)
-        if tail and name == head + tail:
-            return container.name
-    return None
+    return bool(head) and any(
+        (tail := _words(container.name)) and name == head + tail
+        for container in containers
+    )
 
 
 def structure_readings(entity: EntityRecord) -> list[str]:
     """The readings of an entity's mention record that set nothing aside
     (ADR-0035 §5), each its label first: for a place record of a place,
     one `label and container` for each written name that is its label
-    and one of its containers (`label_container`), which the no-addition
-    check lets stand."""
+    and one of its containers (`label_container`) and that no form of
+    the entity holds, which the no-addition check lets stand."""
     structure = entity.structure
     if not isinstance(structure, PlaceStructure) or entity.kind != "place":
         return []
+    forms = [_words(form) for form in (entity.label, *entity.aliases)]
     return [
         f"label and container: structure.place.names.{index}.written: "
         f"the label and one of its containers"
         for index, name in enumerate(structure.names)
         if label_container(name.written, entity.label, structure.within)
+        and not _occurs(name.written, forms)
     ]
 
 

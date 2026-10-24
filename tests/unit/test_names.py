@@ -370,6 +370,28 @@ class TestNormalizeEntityDict:
         assert cleaned["structure"] == entity["structure"]
         assert normalize_entity_dict(cleaned) == cleaned
 
+    def test_only_a_name_with_its_container_is_read_as_the_label(self):
+        """A second written name, no label and container, keeps its own
+        part: the alias that alone spells it, a variant of the label, is
+        kept."""
+        entity = {
+            "id": "e1",
+            "kind": "place",
+            "label": "Snylsjum",
+            "aliases": ["Snylsum"],
+            "structure": {
+                "kind": "place",
+                "names": [
+                    {"written": "Snylsjum, Fryslân"},
+                    {"written": "Snylsum"},
+                ],
+                "within": [
+                    {"name": "Fryslân", "evidence": "Snylsjum, Fryslân"}
+                ],
+            },
+        }
+        assert normalize_entity_dict(entity)["aliases"] == ["Snylsum"]
+
     def test_missing_fields_do_not_raise(self):
         assert normalize_entity_dict({"kind": "human"}) == {
             "kind": "human",

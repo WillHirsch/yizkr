@@ -378,9 +378,11 @@ writer refused, count here too, under their check and the stage
   label and then one of its own `within` containers ("Snylsjum,
   Fryslân" beside the label "Snylsjum", within Fryslân), which the
   no-addition check lets stand (ADR-0035 §5, #655); its record stands
-  unless another reason sets it aside. None of them sets anything
-  aside: the record then stands or is set aside on its other reasons. `coverage.json` counts them among `set_aside`, but
-  the report counts them apart, as readings (#611): the headline
+  unless another reason sets it aside, or the container it holds is
+  dropped, which sets it aside by `addition`. None of them sets
+  anything aside: the record then stands or is set aside on its other
+  reasons. `coverage.json` counts them among `set_aside`, but the
+  report counts them apart, as readings (#611): the headline
   "reasons records were set aside" (`set_aside_reasons`,
   `set_aside_by_reason`) counts only the reasons that set a record
   aside, and the readings have a line ("Fields read so their record

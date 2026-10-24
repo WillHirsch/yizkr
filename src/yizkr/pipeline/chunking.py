@@ -42,6 +42,7 @@ from yizkr.claims import (
     drop_containers,
     load_vocabulary,
     set_aside_structure,
+    structure_problems,
 )
 from yizkr.core.verbatim import Transcript, words
 from yizkr.pipeline.extract import (
@@ -1419,9 +1420,13 @@ class ChunkedClaimExtractor:
         dropped alone, its record standing (claims.drop_containers): its
         evidence is looked for in `text`,
         the transcription, when given, and each container checked is kept
-        for the local audit. A trailing comma before a closing bracket or
-        brace is read as JSON syntax, and the manifest counts each one
-        (scan_json_answer)."""
+        for the local audit. A record that stood only by a name read as
+        its label and a container (claims.label_container) is checked
+        again once its containers are, and set aside, its containers left
+        out of the audit, when that container was dropped: the container
+        must stand on its evidence. A trailing comma before a closing
+        bracket or brace is read as JSON syntax, and the manifest counts
+        each one (scan_json_answer)."""
         _, item_keys = load_vocabulary()
         scan = scan_json_answer(response)
         for obj in scan.objects:
@@ -1448,6 +1453,19 @@ class ChunkedClaimExtractor:
                     data, checked = drop_containers(
                         data, transcript, malformed
                     )
+                    if "structure" in data and (
+                        late := structure_problems(
+                            EntityRecord.model_validate(data)
+                        )
+                    ):
+                        # a name read as its label and a container that
+                        # was then dropped
+                        data = {
+                            k: v for k, v in data.items() if k != "structure"
+                        }
+                        more += late
+                        set_aside_records += 1
+                        checked = []
                     containers += checked
                     for reason in reasons + more:
                         category = reason.split(":", 1)[0]

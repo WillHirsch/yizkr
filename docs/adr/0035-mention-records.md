@@ -173,8 +173,11 @@ label followed by those of a container, never what stands between them
 or any other word. Each such name gives the reading
 `label and container`, counted in `coverage.json` (`records.set_aside`)
 and, apart from the reasons records were set aside by, among the run
-report's readings, beside `dropped` and `read as text`. Any other
-addition still sets the record aside. §8's alias hygiene reads such a
+report's readings, beside `dropped` and `read as text`, when no form
+of the entity already holds the name. The container must stand on its
+evidence: a record whose matched container is then dropped is checked
+again and set aside by `addition`, its containers left out of the
+audit. Any other addition still sets the record aside. §8's alias hygiene reads such a
 name as the label. No prompt changes, so cached answers are reused and
 only the records' reading changes.
 
@@ -1529,7 +1532,8 @@ surname types, roles, classes and note categories. Beyond the schema:
   ("Snylsjum, Fryslân" beside the label "Snylsjum", within Fryslân),
   adds only that container: it stands, giving the reading
   `label and container`, counted beside `dropped` and `read as text`,
-  never a reason the record is set aside by (amended by #655). A record
+  never a reason the record is set aside by, so long as that container
+  stands on its evidence (amended by #655). A record
   that gives the naturalisation's Gustave the surname Sörne, which no
   form of his holds, is set aside;
 - **a container stands on its evidence** (amended by #569, the owner's
