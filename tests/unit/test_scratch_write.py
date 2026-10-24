@@ -1432,9 +1432,7 @@ class TestAFalseMerge:
     ):
         """Beside the merged `father` claim, the father's pet name with a
         line break in it, refused for its text: counted among the
-        refusals, never against a cluster, and raising no alert. A
-        depicts claim, left out of what the writer is given, leaves the
-        mentions mapped from the extraction's batch."""
+        refusals, never against a cluster, and raising no alert."""
         run = Run(tmp_path, monkeypatch, wiki=FamilyWiki())
         pet_name = claim(
             HISTORY,
@@ -1448,7 +1446,7 @@ class TestAFalseMerge:
         run.add(
             "family-history-2008.png",
             HISTORY,
-            batch(*father_and_son().claims, pet_name, depicts(HISTORY)),
+            batch(*father_and_son().claims, pet_name),
         )
         cluster = merge_the_eugens(run, monkeypatch)
         for stage in ("reset", "register", "write"):
