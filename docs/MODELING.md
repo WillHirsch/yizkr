@@ -1571,8 +1571,8 @@ primitive network and the *same* term set describes any pair:
     another role (kin of someone it is about, or a party to it). A
     wedding's registrar and non-kin witnesses are left out; a kin
     witness or officiant stays, with that role.
-  - Lean-only: the rule covers a record's apparatus (certificates,
-    registers, forms) and persons only, so organizations stay
+  - Persons only, as decided; its scope over a record's apparatus
+    (certificates, registers, forms) is lean-only, so organizations stay
     `issued_by` or `carried_out_by`, and a doctor whom a letter names
     stays. Also lean-only: a person given only by the role in which they
     report or certify, with no name, is not made. Its case, "Informant:
@@ -1651,7 +1651,8 @@ Amended by ADR-0040 (2026-10-24), carried out by its build:
 - The link is death evidence for the partner it names (ADR-0040's Q9).
 - A widow's or widower's marker that names the late spouse gives the
   survivor's `civil_status` `widowed` and the union end, and no death
-  statement for the late spouse. The late spouse's "died by" date is derived (ADR-0040's Q5).
+  statement for the late spouse. The late spouse's "died by" date is
+  derived (ADR-0040's Q5).
 
 **The GEDCOM adapter makes unions (ADR-0036 §5).** A family's couple
 are its first two `HUSB` and `WIFE` lines, in whatever combination (a

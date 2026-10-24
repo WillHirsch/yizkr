@@ -35,8 +35,8 @@ make no death or birth event items. A death is a set of sourced
 statements on the person, and a birth is its `date of birth` and
 `place of birth` (ADR-0040 §2, §3). "Died, nothing else known", and any
 death a source states without a date, is a `date of death` of unknown
-value, save a widow marker's late spouse (ADR-0040 §2.5). A death or a dated birth event that a curator makes still counts
-as this line says (ADR-0040's Q5): a death event releases its principal,
+value, save a widow marker's late spouse (ADR-0040 §2.5). A death or a
+dated birth event that a curator makes still counts as this line says (ADR-0040's Q5): a death event releases its principal,
 and a dated birth event dates its principal's birth, for the badge and
 the export alike. The display exception of ADR-0040 §6 stands.
 Amended by #577 (2026-10-23): an event is no person on the death it
@@ -343,8 +343,8 @@ Superseded by ADR-0040, 2026-10-24:
   document included, beside any place, cause or age the source gives.
   The one exception: a widow marker that names the late spouse gives
   no death statement for them (ADR-0040 §2.2, §2.5). A blank field,
-  "d. ?" or "date unknown" is never one. An unknown value is a truthy value, so it is death evidence as
-  the four properties above read it, because the source stated the
+  "d. ?" or "date unknown" is never one. An unknown value is a truthy
+  value, so it is death evidence as the four properties above read it, because the source stated the
   death. A deprecated one, or a "no value", releases no one.
 - The list of death evidence gains `age at death`, as a statement on the
   person (ADR-0040's Q1). It also gains, on the object's side, being the

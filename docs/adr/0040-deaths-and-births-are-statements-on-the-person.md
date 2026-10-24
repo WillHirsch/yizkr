@@ -242,9 +242,8 @@ each carries its own citation: `1 DEAT Y` beside a dated DEAT gives
 both. In a document, the document. GEDCOM DEATs that state the death
 without a claim of their own are covered by Q4.
 
-**A burial alone is not such a statement.** It gives its
-`burial_place` (Q3) and no `date_of_death`, so a burial record gets no
-"died by" (§2.4).
+**A burial alone gives no `date_of_death`.** It gives its
+`burial_place` (Q3), so a burial gives no "died by" (§2.4).
 
 #### 2.3 "The late", and a source's own date for the death
 
@@ -295,7 +294,9 @@ from. An undated or open-ended document gives no bound.
   does state her death, and gives its own statements.) They died no
   later than the latest date at which the batch presents the survivor
   as widowed (the survivor's `civil_status` `widowed`, Q7), or, where it
-  gives none, the document's own date.
+  gives none, the document's own date. From the graph, "the batch" is
+  the statements that cite the same artifact as the union end, which is
+  why the rows the derivation reads carry their references.
   - The burial register gives Cäcilie "by 16 March 1909", at Eugen's
     widowhood.
   - The 1958 letter's "вдова Вашего покойного брата Рудольфа" gives
@@ -408,8 +409,8 @@ It gives no death statement for the spouse: the end is the evidence
 partner's death statements and their sources.
 
 **Each partner's death span** is the hull of all their non-deprecated
-dated `date_of_death` statements (derived "died by" bounds included), each at its
-stated bounds. It is never narrower than the statements it comes from,
+dated `date_of_death` statements (derived "died by" bounds included),
+each at its stated bounds. It is never narrower than the statements it comes from,
 and no one statement is picked (rule 6). From the spans:
 
 - Where one partner's span lies wholly before the other's, the union
@@ -456,8 +457,8 @@ same record gives them another role: kin of someone the record is
 about, or a party to it. A rank, a job, an address or a signature is
 not another role.
 
-**What it covers** (lean-only). The rule covers a record's apparatus
-(certificates, registers, forms), and persons only.
+**What it covers.** Persons only, as decided. Its scope over a record's
+apparatus (certificates, registers, forms) is lean-only.
 
 - Organizations are untouched. The issuing office stays `issued_by`,
   and a court stays `carried_out_by`, as today's boilerplate rule's
@@ -768,7 +769,8 @@ Build B (the PR's follow-up) carries these changes. In brief:
     both markers, it gives the union end and the survivor's
     `civil_status` `widowed`, and no death statement (§2.5);
   - "the late", and any death stated without its date, gives the unknown
-    value, beside any place, cause or age (§2.2);
+    value, beside any place, cause or age, save §2.5's widow markers
+    (§2.2);
   - each says that a marriage plus a partner's death gives no end of any
     kind, and offers `ended_by_death_of` only for §2.5's stated forms,
     listing their words;
@@ -796,9 +798,10 @@ Build B (the PR's follow-up) carries these changes. In brief:
   - Rudolf by 25 December 1958;
   - an undated "the late" with no bound;
   - two widowhoods in one source: a hypothetical batch that presents
-    Eugen as widowed on 15 December 1905 and on 16 March 1909 bounds his
-    late wife by 16 March 1909, the latest of the two, since the batch
-    cannot tell which widowhood each statement belongs to (rule 5);
+    Eugen as widowed on 15 December 1905 and on 16 March 1909 bounds
+    each of his two late wives (two unions, each `ended_by_death_of`
+    her) by 16 March 1909, the latest of the two, since the batch cannot
+    tell which widowhood each statement belongs to (rule 5);
   - a union's derived end, both when the spans lie apart and when they
     overlap.
 - **Clustering** (`pipeline/clustering.py`):
