@@ -48,7 +48,7 @@ FIXTURE = (
     "of a country, in one letter; #337: the elder born in the 19th century "
     "and dead in the 1890s, the younger's birth an event of the 1850s and his "
     "death an event of 1938; #523: two grandmothers each aliased 'Oma' "
-    "with a referred_to_as statement giving it"
+    "with a referred_to_as statement giving it, and a name form each"
 )
 MARK = fixture_mark(FIXTURE, reconcile, writer)
 ELDER = f"Yizkr Reconcile-Test Elder {MARK}"
@@ -60,6 +60,9 @@ DEATH = f"Yizkr Reconcile-Test Death {MARK}"
 GRANDMOTHER_A = f"Yizkr Reconcile-Test Grandmother A {MARK}"
 GRANDMOTHER_B = f"Yizkr Reconcile-Test Grandmother B {MARK}"
 APPELLATION = "Oma"
+# each grandmother's name form among her aliases, beside the appellation
+NAME_A = f"Hilde {MARK}"
+NAME_B = f"Sipkje {MARK}"
 
 
 def _local(local_id: str, label: str, kind: str) -> dict:
@@ -97,13 +100,13 @@ def _relations_batch(artifact: ArtifactRef) -> ClaimBatch:
                 {
                     "id": "e_grandmother_a",
                     "label": GRANDMOTHER_A,
-                    "aliases": [APPELLATION],
+                    "aliases": [APPELLATION, NAME_A],
                     "kind": "human",
                 },
                 {
                     "id": "e_grandmother_b",
                     "label": GRANDMOTHER_B,
-                    "aliases": [APPELLATION],
+                    "aliases": [APPELLATION, NAME_B],
                     "kind": "human",
                 },
             ],
@@ -312,8 +315,8 @@ def test_appellation_aliases_make_no_candidate_pair(client, config, written):
         _by_label(roster, GRANDMOTHER_A),
         _by_label(roster, GRANDMOTHER_B),
     ]
-    for grandmother in grandmothers:
-        assert APPELLATION in grandmother.aliases
+    for grandmother, name in zip(grandmothers, (NAME_A, NAME_B), strict=True):
+        assert set(grandmother.aliases) == {APPELLATION, name}
         assert grandmother.appellations == [APPELLATION]
     llm = _NoCall()
     assert propose_graph_pairs(llm, grandmothers) == []
