@@ -20,6 +20,7 @@ from tests.unit.test_clustering import RUN, Doc, day, human, register
 from tests.unit.test_container_claims import (
     BOOKLET_REF,
     CAPTION,
+    DECK_REF,
     LETTER_REF,
     STRAY_REF,
     booklet,
@@ -33,6 +34,7 @@ from yizkr.pipeline.adjudication import (
     ensure_adjudicated,
 )
 from yizkr.pipeline.clustering import Manifest, cluster_corpus
+from yizkr.pipeline.transcribe import DECK_ENGINE
 
 SEBASTIAN = "sebastian-loebig"
 
@@ -234,3 +236,87 @@ class TestStage:
 
         monkeypatch.setattr(critique, "artifact_places", artifact_places)
         assert adjudication.code_digest() != digest
+
+
+# a second image, the shop front, set on page 6 after the letter's
+PHOTO_REF = STRAY_REF
+
+
+class TestEdges:
+    def test_own_document_is_this_document_with_places_given(self):
+        doc = the_booklet(about(BOOKLET_REF, "author", "e1"))
+        places = {BOOKLET_REF.sha1: "page 1, image 1"}
+        assert "named as the author of this document" in lines_of(doc, places)
+
+    def test_an_uppercase_document_sha1_is_its_own(self, tmp_path):
+        """The manifest's and a view's document SHA-1 in capitals name
+        the same bytes as the claim's lowercase one."""
+        doc = the_booklet(about(BOOKLET_REF, "author", "e1"))
+        upper = Manifest(BOOKLET_REF.sha1.upper(), doc.manifest.batch)
+        lines = adjudication._Document(upper).lines("e1")
+        assert "named as the author of this document" in lines
+        view = write_view(tmp_path, booklet())
+        documents = [
+            type(
+                "D",
+                (),
+                {"sha1": BOOKLET_REF.sha1.upper(), "transcription": view},
+            )
+        ]
+        assert set(document_places(documents)) == {BOOKLET_REF.sha1}
+
+    def test_each_image_and_each_view_keeps_its_own_place(self, tmp_path):
+        two = paged(
+            BOOKLET_REF,
+            [(6, [LETTER_REF.sha1, PHOTO_REF.sha1], CAPTION)],
+        )
+        deck = paged(DECK_REF, [(2, [PHOTO_REF.sha1], "x")], DECK_ENGINE)
+        documents = [
+            type(
+                "D",
+                (),
+                {
+                    "sha1": BOOKLET_REF.sha1,
+                    "transcription": write_view(tmp_path / "b", two),
+                },
+            ),
+            type(
+                "D",
+                (),
+                {
+                    "sha1": DECK_REF.sha1,
+                    "transcription": write_view(tmp_path / "d", deck),
+                },
+            ),
+        ]
+        places = document_places(documents)
+        assert places == {
+            BOOKLET_REF.sha1: {
+                LETTER_REF.sha1: "page 6, image 1",
+                PHOTO_REF.sha1: "page 6, image 2",
+            },
+            DECK_REF.sha1: {PHOTO_REF.sha1: "slide 2, image 1"},
+        }
+        doc = the_booklet(
+            about(LETTER_REF, "author", "e1"),
+            about(PHOTO_REF, "shows", "e1"),
+        )
+        found = lines_of(doc, places[BOOKLET_REF.sha1])
+        assert "named as the author of page 6, image 1" in found
+        assert "named as the shows of page 6, image 2" in found
+
+    def test_a_mention_of_an_artifact_is_named_by_its_label(self):
+        """A claim on the document's own mention of an artifact it only
+        writes about (ADR-0039 §10.1(c), route (c4)) names that mention
+        by its label and kind, as any local entity."""
+        claim = about(LETTER_REF, "author", "e1")
+        claim["subject"] = {
+            "kind": "local",
+            "local_id": "u1",
+            "label": "death certificate",
+            "instance_of": "unclassified_entity",
+        }
+        found = lines_of(the_booklet(claim))
+        assert (
+            "named as the author of 'death certificate' (unclassified_entity)"
+        ) in found
