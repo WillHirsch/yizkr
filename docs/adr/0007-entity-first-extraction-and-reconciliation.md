@@ -75,6 +75,9 @@ conversations, NDJSON emission with sentinel, per-chunk state with
 resume, salvage validation — is unchanged; this ADR changes the *unit
 of chunking* from line ranges to entities, and adds the reconciliation
 stage that unit makes possible.
+Amended by #523 (2026-10-24), see ADR-0018: a person's label or alias
+that the item's own `referred_to_as` statements give as an appellation
+keys nothing.
 
 ## Context
 
