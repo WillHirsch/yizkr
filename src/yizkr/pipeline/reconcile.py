@@ -53,6 +53,7 @@ from yizkr.claims import (
     PlaceStructure,
     QidRef,
     name_form_key,
+    takes_confirmed,
 )
 from yizkr.core import sparql
 from yizkr.core.config import Config
@@ -63,6 +64,7 @@ from yizkr.core.dates import (
 )
 from yizkr.core.wiki import WikiClient
 from yizkr.disagreement import followed
+from yizkr.model.schema import load_acceptance
 from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.llm import CUT_OFF_AT_LIMIT, LlmClient, at_output_limit
 from yizkr.pipeline.names import NOT_PERSONS, appellations_of
@@ -1048,11 +1050,39 @@ def read_reviewed_aliases(path: Path) -> dict[str, list[str]]:
     return reviewed
 
 
-def collapse_key(claim: Claim) -> str:
-    """What two resolved claims share when apply_equivalences keeps them
-    once: all of their content but the local subject each records it
-    replaced (`Claim.confirmed_from`)."""
-    return claim.model_copy(update={"confirmed_from": None}).model_dump_json()
+def collapse(claims: Iterable[Claim]) -> tuple[list[Claim], list[int]]:
+    """`claims`, resolved, with each claim that is the same as an earlier
+    one but for the local subject each records it replaced
+    (`Claim.confirmed_from`) kept once, at the earlier one's place, and
+    for each claim the index of the claim it is kept as. Of claims so
+    kept once, the one kept is the first whose record makes its subject a
+    document subject (claims.takes_confirmed: a mention or a record's
+    artifact), else the first: a claim that named its QID outright, or
+    whose subject was a person, never displaces a confirmed mention's
+    claim, in either order."""
+    acceptance = load_acceptance()
+
+    def eligible(claim: Claim) -> bool:
+        former = claim.confirmed_from
+        return former is not None and takes_confirmed(
+            former.instance_of, acceptance
+        )
+
+    kept: list[Claim] = []
+    places: dict[str, int] = {}
+    found: list[int] = []
+    for claim in claims:
+        key = claim.model_copy(
+            update={"confirmed_from": None}
+        ).model_dump_json()
+        place = places.get(key)
+        if place is None:
+            places[key] = place = len(kept)
+            kept.append(claim)
+        elif eligible(claim) and not eligible(kept[place]):
+            kept[place] = claim
+        found.append(place)
+    return kept, found
 
 
 def apply_equivalences(
@@ -1111,15 +1141,11 @@ def apply_equivalences(
     # two document entities approved to the SAME item (a source with
     # internally duplicated records) can leave byte-identical claims;
     # collapse them here, where identity collapses (the ADR-0006 merge
-    # invariant, applied post-equivalence), keeping the first one's
-    # record of its local subject
-    resolved_claims = []
-    seen: set[str] = set()
-    for claim in (resolve_claim(claim) for claim in batch.claims):
-        key = collapse_key(claim)
-        if key not in seen:
-            seen.add(key)
-            resolved_claims.append(claim)
+    # invariant, applied post-equivalence), keeping a confirmed
+    # mention's record of its local subject over another's (collapse)
+    resolved_claims, _ = collapse(
+        resolve_claim(claim) for claim in batch.claims
+    )
 
     def updated_entity(entity):
         if entity.id not in approved:

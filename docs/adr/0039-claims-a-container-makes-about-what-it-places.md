@@ -846,9 +846,13 @@ scan's item.
   keeps its kind. The record is kept through serialization and on later
   equivalence passes. It is resolution state, never extraction output:
   the prompts' JSON Schema leaves it out, `extract.cite_artifact` drops
-  it, and a claim without one serialises as before. Where two
-  confirmations collapse two claims into one, the first one's record is
-  kept.
+  it, and a claim without one serialises as before. Where resolution leaves
+  claims the same but for their records, they are kept once
+  (`reconcile.collapse`, which `critique.counterparts` replays): the
+  claim kept is the first whose record makes its subject a document
+  subject, else the first, so a claim that named the QID outright, or
+  whose subject was a person, never displaces a confirmed mention's
+  claim, in either order.
 - The subject form is `confirmed` (`claims.CONFIRMED_FORM`): a QID
   subject whose claim records a local subject of an artifact kind or an
   `unclassified_entity` (`claims.confirmed_kind`). Where the batch holds

@@ -577,6 +577,71 @@ class TestAConfirmedMention:
         assert reason == "subject_rule"
         assert "carries no excerpt" in warning
 
+    @staticmethod
+    def outright() -> dict:
+        """The enclosure's claim, naming the held scan by its QID."""
+        return {**enclosure(), "subject": {"kind": "qid", "qid": "Q41"}}
+
+    @staticmethod
+    def of_a_person() -> dict:
+        """The enclosure's claim, on a person a curator confirms as the
+        held scan's item too."""
+        return {
+            **enclosure(),
+            "subject": local("p1", "Rudolf Löbig", "human"),
+        }
+
+    @pytest.mark.parametrize("other", ["outright", "of_a_person"])
+    @pytest.mark.parametrize("first", [True, False])
+    def test_a_collapse_keeps_the_confirmed_mention_s_claim(
+        self, other, first
+    ):
+        """A claim the same but for an ineligible subject, before or after
+        the confirmed mention's, never displaces it, through a round trip
+        and a second pass; the critique's replay of the collapse finds
+        both claims on the row kept."""
+        rival = getattr(self, other)()
+        pair = [rival, enclosure()] if first else [enclosure(), rival]
+        person = {"id": "p1", "label": "Rudolf Löbig", "kind": "human"}
+        extracted = batch(*pair, entities=[CERTIFICATE, DEATH, person])
+        approved = {"u1": "Q41", "p1": "Q41"}
+        confirmed = apply_equivalences(extracted, approved)
+        again = apply_equivalences(
+            ClaimBatch.model_validate_json(confirmed.model_dump_json()),
+            approved,
+        )
+        for resolved in (confirmed, again):
+            (kept,) = resolved.claims
+            assert kept.confirmed_from.local_id == "u1"
+            assert validate_against_manifest(resolved) == []
+            assert pre_plan_refusals(resolved, {}) == {}
+        assert critique.counterparts(extracted, confirmed) == [0, 0]
+
+    def test_the_entity_s_record_governs_its_recorded_kind(self):
+        """Where the batch holds the entity's record, its kind is what the
+        subject was, whatever the claim's record says."""
+        person = {"id": "p1", "label": "Rudolf Löbig", "kind": "human"}
+        confirmed = self.confirmed(
+            self.of_a_person(),
+            entities=[person, DEATH],
+            approved={"p1": "Q41"},
+        )
+        (made,) = confirmed.claims
+        said = made.model_copy(
+            update={
+                "confirmed_from": made.confirmed_from.model_copy(
+                    update={"instance_of": "unclassified_entity"}
+                )
+            }
+        )
+        relabelled = confirmed.model_copy(update={"claims": [said]})
+        assert any(
+            p.endswith("[document_subject]")
+            for p in validate_against_manifest(relabelled)
+        )
+        (refusal,) = pre_plan_refusals(relabelled, {}).values()
+        assert refusal[0] == "subject_rule"
+
     def test_the_writer_puts_it_on_the_held_scan(self):
         wiki = ArtifactWiki()
         qids = registered(wiki, LETTER_1958_REF, CERTIFICATE_1941_REF)
@@ -593,6 +658,14 @@ class TestAConfirmedMention:
             == (result.created_items["d1"])
         )
         assert stated(about) == [(qids[LETTER_1958_REF.sha1], [])]
+        # the reference carries the letter's passage, in its language
+        excerpts = [
+            snak.datavalue["value"]
+            for block in about.references.references
+            for snak in block.snaks.get(PROPERTIES["transcription_excerpt"])
+            or []
+        ]
+        assert excerpts == [{"text": ENCLOSING, "language": "ru"}]
         # the machine's claim also cites its extraction run (ADR-0003)
         runs = [
             snak.datavalue["value"]["id"]

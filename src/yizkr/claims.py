@@ -1287,11 +1287,16 @@ def document_subject_form(
             return RECORD_FORM
         if subject_kind == MENTION_KIND:
             return MENTION_FORM
-    if isinstance(subject, QidRef) and (
-        confirmed in acceptance.artifact_kinds or confirmed == MENTION_KIND
-    ):
+    if isinstance(subject, QidRef) and takes_confirmed(confirmed, acceptance):
         return CONFIRMED_FORM
     return None
+
+
+def takes_confirmed(kind: str | None, acceptance: Acceptance) -> bool:
+    """Is `kind`, that of a local subject a curator's confirmation
+    replaced, one whose confirmed item a document-subject property takes
+    (ADR-0039 §10.1(c)): an artifact kind or MENTION_KIND?"""
+    return kind in acceptance.artifact_kinds or kind == MENTION_KIND
 
 
 def has_excerpt(claim: Claim) -> bool:
