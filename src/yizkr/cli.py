@@ -47,8 +47,10 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import itertools
 import json
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -433,6 +435,38 @@ def cmd_transcribe(args) -> int:
     return 0
 
 
+def _move_aside_earlier_batch(out: Path) -> str:
+    """Move a batch an earlier run left at `out` to the first free
+    `<out>.stale`, `<out>.stale.1`, ..., never over another; the clause
+    that says what became of it, or "" when there was none."""
+    for n in itertools.count():
+        stale = out.with_name(out.name + ".stale" + (f".{n}" if n else ""))
+        try:
+            # claimed with O_EXCL, so no earlier stale batch is replaced
+            os.close(os.open(stale, os.O_WRONLY | os.O_CREAT | os.O_EXCL))
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            failed = exc
+            break
+        try:
+            out.replace(stale)
+        except FileNotFoundError:
+            stale.unlink(missing_ok=True)
+            return ""
+        except OSError as exc:
+            stale.unlink(missing_ok=True)
+            failed = exc
+            break
+        return f"; the earlier batch there moved to {stale}"
+    if not os.path.lexists(out):
+        return ""
+    return (
+        f"; an earlier batch is still at {out} and could not be moved "
+        f"aside ({failed.strerror or failed}): it is not this run's"
+    )
+
+
 def cmd_extract(args) -> int:
     from pydantic import ValidationError
 
@@ -490,6 +524,8 @@ def cmd_extract(args) -> int:
             f"{args.media.name} is not the media {args.transcription.name} "
             f"transcribes (its SHA-1 differs); refusing"
         )
+    if args.out.is_dir():
+        sys.exit(f"--out {args.out} is a folder, not a batch file; refusing")
     if args.engine == "file":
         if not args.claims_file:
             sys.exit("--engine file requires --claims-file")
@@ -533,14 +569,25 @@ def cmd_extract(args) -> int:
 
     try:
         batch = extractor.extract(transcription, transcription.artifact)
-    except ExtractionFailed as exc:
+    except BaseException as exc:
+        # whatever ends the extraction (a failure, a pause, Ctrl-C, a bug),
+        # an earlier run's batch at --out is moved aside to a free
+        # <out>.stale name, so no later step reads it as this run's. Moved,
+        # not deleted: it may be the one copy of an earlier extraction.
+        moved = _move_aside_earlier_batch(args.out)
+        if not isinstance(exc, ExtractionFailed):
+            # the exception keeps its own handling, after one line on what
+            # became of the earlier batch
+            if moved:
+                print(f"{args.out} not written{moved}", file=sys.stderr)
+            raise
         # a failure, as a partial batch is, not a refusal: the same input
         # may extract on another run, from the LLM cache at no engine cost
         # for the calls that completed. No batch is written, so none reads
         # as a claim-free document's.
         print(
             f"extraction failed: {' '.join(str(exc).split())}; "
-            f"{args.out} not written",
+            f"{args.out} not written{moved}",
             file=sys.stderr,
         )
         return EXIT_FAILED
@@ -1598,7 +1645,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--llm", default="anthropic", choices=["anthropic", "claude-code"]
     )
-    p.add_argument("--out", type=Path, default=Path("batch.json"))
+    p.add_argument(
+        "--out",
+        type=Path,
+        default=Path("batch.json"),
+        help="the claim batch file; when the extraction does not complete, "
+        "an earlier batch here is moved to the first free <out>.stale "
+        "(or <out>.stale.N). Beside it go <out>.chunks/ (chunked) or "
+        "<out>.raw.txt and <out>.rejected.json (single call)",
+    )
     p.add_argument(
         "--strategy",
         choices=["auto", "single", "chunked"],

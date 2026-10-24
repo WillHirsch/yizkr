@@ -123,6 +123,7 @@ from yizkr.pipeline.containers import VISION_SUFFIXES
 from yizkr.pipeline.critique import run_critique
 from yizkr.pipeline.orchestrate import (
     BATCH_VOLATILE,
+    CHECKED_ROUTES,
     DOCUMENT_STAGES,
     EXCERPT,
     PAGED,
@@ -563,12 +564,13 @@ class Estimator(ScratchDriver):
     def estimate(self) -> Estimate:
         """The calls of the invocation `yizkr scratch run` would make now.
         Refuses as the driver would, before any call: without a
-        never-ingest list (ExclusionConfigError); with a role whose model
-        is no full id, a pacing setting the engine refuses, anomaly
-        thresholds the checks cannot load, a PDF and no renderer, or a
-        cache folder the cache refuses, for an invocation that calls the
-        engine (PreflightFailed); with other settings, or another
-        claude CLI, than the run it would invoke again recorded
+        never-ingest list, or with a deck that cannot be read as an
+        archive while the list holds a glob (ExclusionConfigError); with a
+        role whose model is no full id, a pacing setting the engine
+        refuses, anomaly thresholds the checks cannot load, a PDF and no
+        renderer, or a cache folder the cache refuses, for an invocation
+        that calls the engine (PreflightFailed); with other settings, or
+        another claude CLI, than the run it would invoke again recorded
         (RunSettingsConflict); with an engine client that cannot start
         (ScratchRefused), or a pause as one starts (llm.PassPaused). A
         corpus with no document is no call, as it is to the driver."""
@@ -789,7 +791,7 @@ class Estimator(ScratchDriver):
         if not fresh:
             recheck = (
                 functools.partial(self._transcription_failure, doc)
-                if method in ("vision", PAGED, "text-file")
+                if method in CHECKED_ROUTES
                 else None
             )
             view = self._stands(
@@ -1134,7 +1136,7 @@ class Estimator(ScratchDriver):
         excerpt fails there), it is the first stage made, and every one
         after it is made too."""
         route = self._route(excerpt)
-        checked = route in ("vision", PAGED, "text-file", EXCERPT)
+        checked = route in CHECKED_ROUTES
         views = {
             "transcription": (
                 excerpt.transcription,

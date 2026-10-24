@@ -268,6 +268,30 @@ that the whole stays within a `failed` event. A failure keeps no view,
 so each run makes the extraction again, from the cache at no engine
 cost, and a parser fix reaches it; the same answers fail the same way
 until `--refresh extract` or a new epoch asks afresh.
+
+Amended by #501, #621 (2026-10-24):
+- A call the safety classifier refused (`llm.ClassifierRefused`) is
+  never asked again, and takes no fallback tier: the refusal is the
+  platform's decision about the call's content, which asking again sends
+  unchanged. A refused entity manifest or segmentation takes no second
+  attempt and no fallback tier, whatever an earlier attempt gave, so the
+  extraction fails, its error naming `ClassifierRefused`. A refused
+  chunk, forked or inline, fails at once, with no chunk retry and no
+  drop to inline context, and its reason names `ClassifierRefused`. A
+  refused replay of the conversation a fork needs is a failure of the
+  session, not of the chunk: every chunk drops to inline context
+  (ADR-0032 §6). Other failures keep their retries and fallback.
+- A chunk whose answer gives no claim with a field the claim schema
+  requires, the same field for every claim (checked after validation's
+  shape repairs, with the artifact cited), is asked again once, as
+  attempt 1 (ADR-0032 §5), its prompt the chunk's own with a note naming
+  the field, forked from the same conversation, or inline when the first
+  answer came inline. The second answer replaces the first and is
+  validated as usual; when the second call gives nothing (it fails, the
+  engine gives up on it at its output limit, it is cut off, or it is
+  refused), the first answer stands. An answer in which any claim gives
+  the field, or whose claims lack different fields or fail for another
+  reason, is not asked again.
 Otherwise the empty batch is claim-free, on the word of the answers the
 extractor accepted, on either tier: a manifest that names no entity is
 accepted at once, with no chunk asked and no fallback (ADR-0007, amended
@@ -342,6 +366,14 @@ reason (`rejected_by_reason`: each code of `claims.REJECT_REASONS` that
 a reject gives, such as `placed_subject` for a caption whose subject is
 no artifact its source places; ADR-0039), for the run report.
 
+Amended by #501, #621 (2026-10-24): `coverage.json` also counts the
+chunks asked again for a missing required field (`retried_chunks`, §5),
+which the run report sums. It counts no refused call: a call the safety
+classifier refused is counted with the run report's call errors, by its
+error's class (`ClassifierRefused`), and one that fails a chunk or the
+extraction is named in the document's failure reason, which keeps no
+coverage file.
+
 ### 7. Strategy selection and CLI surface
 
     yizkr ingest extract ... --strategy auto|single|chunked
@@ -362,6 +394,19 @@ each. A `--transcription` that is missing, unreadable or not UTF-8, and a
 `--media` that cannot be read, are refused in one line before any engine
 is reached; a `--media` whose name a never-ingest pattern matches is
 refused as listed before its bytes are read.
+
+Amended by #639 (2026-10-24): when the extraction does not complete,
+whatever ends it (an `ExtractionFailed`, another extractor error, a
+pause, Ctrl-C or a bug), a batch an earlier run wrote at `--out` is moved
+aside to the first free `<out>.stale` (or `<out>.stale.N`), never over an
+older one, and a line says where, so no later step reads it as this
+run's. An `ExtractionFailed` still ends the step in its one line; any
+other exception keeps its own handling after that line. The batch is
+moved, not deleted, as it may be the one copy of an earlier extraction;
+if the move fails, the line says the batch still at `--out` is not this
+run's. A complete extraction writes its batch over an earlier one, as
+before, and a folder at `--out` is refused in one line before any engine
+is reached.
 
 `auto` (the default) picks chunked when the transcription exceeds a
 conservative threshold (default 4,000 chars). Density — the real

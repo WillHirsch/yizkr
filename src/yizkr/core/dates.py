@@ -19,6 +19,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from yizkr.claims import TimeValue
 
 # the one supported calendar model, as Wikibase stores it
 GREGORIAN = "http://www.wikidata.org/entity/Q1985727"
@@ -100,6 +104,39 @@ def time_text(value: str, precision: str | int, where: str) -> str:
     text = format_time(value, str(precision), where)
     span = str(precision) != "" and int(precision) in SPAN_PRECISIONS
     return f"the {text}" if span else text
+
+
+def time_stamp(value: TimeValue) -> tuple[str, int]:
+    """A claim's date (``yizkr.claims.TimeValue``) as Wikibase stores it:
+    its xsd:dateTime, with a month or a day it does not give as 01, and
+    its Wikibase precision, the finest field it gives when it states
+    none."""
+    # imported here: the claim schema imports this module
+    from yizkr.claims import WIKIBASE_PRECISION
+
+    precision = value.precision or (
+        "day" if value.day else "month" if value.month else "year"
+    )
+    stamp = (
+        f"+{value.year:04d}-{value.month or 1:02d}-{value.day or 1:02d}"
+        "T00:00:00Z"
+    )
+    return stamp, WIKIBASE_PRECISION[precision]
+
+
+def claim_time_text(value: TimeValue, where: str) -> str:
+    """A claim's date (``yizkr.claims.TimeValue``) at the precision its
+    source states, as ``time_text`` renders its stamp: a decade as "the
+    1830s", a century as "the 19th century", a year, a month or a day;
+    never a first year. An unsupported date, a year before the common era
+    or a calendar other than the Gregorian, raises UnsupportedDate naming
+    `where` (ADR-0034). Validation refuses one, so only a value built
+    without it (a ``model_construct``) can have one: this is a backstop."""
+    problem = value.problem()
+    if problem is not None:
+        raise UnsupportedDate(f"{where}: {problem}")
+    stamp, precision = time_stamp(value)
+    return time_text(stamp, precision, where)
 
 
 # Every time value node the graph holds that is unsupported, with the

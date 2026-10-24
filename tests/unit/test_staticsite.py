@@ -1478,10 +1478,11 @@ END_BOUNDS = ("earliest_end_date", "latest_date")
 
 def on_timeline(
     person: str,
-    what: str,
+    what: str | None,
     date: u.Date,
     source: str,
     *,
+    types: tuple[str, ...] = (),
     bounds: tuple[str, str] = DATE_BOUNDS,
     earliest: u.Date | None = None,
     latest: u.Date | None = None,
@@ -1494,13 +1495,14 @@ def on_timeline(
     `earliest` and `latest` when given; its precision is `date`'s, or
     `precision` when given. A circa date's statement carries circa as its
     sourcing circumstance (?circumstances, #315), as the GEDCOM adapter
-    writes it."""
+    writes it. An event's row carries its `types` in ?eventTypes, each
+    label URI-encoded and "|"-separated, and `what` names its start or
+    end time, or is None for its point in time (#540)."""
     _, stated_precision, ranges = stated(date)
     precision = precision or stated_precision
     row = {
         "person": uri(QIDS[person]),
         "personLabel": literal(label(person)),
-        "what": literal(what),
         "date": time_literal(stamp(date)),
         "precision": literal(str(precision)),
         "low": uri(PROPERTIES[bounds[0]]),
@@ -1508,6 +1510,12 @@ def on_timeline(
         "source": uri(QIDS[source]),
         "sourceLabel": literal(label(source)),
     }
+    if what is not None:
+        row["what"] = literal(what)
+    if types:
+        row["eventTypes"] = literal(
+            "|".join(urllib.parse.quote(each, safe="") for each in types)
+        )
     if date.qualifier == "circa":
         row["circumstances"] = literal("circa")
     for name, given in (("earliest", earliest), ("latest", latest)):
@@ -1530,13 +1538,18 @@ EUGEN_DIED = on_timeline(
     "eugen-loebig", "date of death", u.Date(1909, 3, 16), REGISTER
 )
 KLARA_LEFT = on_timeline(
-    "klara-loebig", "migration", u.Date(1938, 6, 22), POSTCARD
+    "klara-loebig",
+    None,
+    u.Date(1938, 6, 22),
+    POSTCARD,
+    types=("migration",),
 )
 KLARA_LEFT_IN_38_OR_39 = on_timeline(
     "klara-loebig",
-    "migration",
+    None,
     u.Date(1938, qualifier="between", until=u.Date(1939)),
     INTERVIEW,
+    types=("migration",),
 )
 RAHEL_DIED_AFTER = on_timeline(
     "rahel-loebig", "date of death", u.Date(1945, qualifier="after"), TREE
@@ -1563,9 +1576,10 @@ DIVORCED = on_timeline(
 )
 HELD = on_timeline(
     "leopold-loebig",
-    "imprisonment",
+    None,
     u.Date(1939, 9),
     INTERVIEW,
+    types=("imprisonment",),
     earliest=u.Date(1939, 9, 3),
     latest=u.Date(1939, 10, 1),
 )
@@ -1588,15 +1602,17 @@ CAECILIE_BORN_IN_THE_19TH_CENTURY = on_timeline(
 )
 HELD_FROM = on_timeline(
     "leopold-loebig",
-    "imprisonment (start time)",
+    "start time",
     u.Date(1939, 9, 3),
     CARD,
+    types=("imprisonment",),
 )
 HELD_UNTIL = on_timeline(
     "leopold-loebig",
-    "imprisonment (end time)",
+    "end time",
     u.Date(1939, 10, 1),
     CARD,
+    types=("imprisonment",),
 )
 # (here) dates coarser than a year: the interview gives Eugen's birth as
 # the 1830s and Klara's to within 100,000 years (stored as 1801), and the
@@ -1666,7 +1682,7 @@ class TestTimeline:
             found
             for found in re.findall(r'<div class="entry">(.*?)</div>', page)
             if f'<a href="people/{qid(row, "person")}.html">' in found
-            and f", {html.escape(row['what']['value'])}<" in found
+            and f", {html.escape(SiteBuilder.timeline_what(row))}<" in found
             and f'<a href="artifacts/{qid(row, "source")}.html">' in found
         ]
         return entry.split(" — ", 1)[0]
@@ -1820,6 +1836,53 @@ class TestTimeline:
         assert self.dated(site, HELD_FROM) == "1939-09-03"
         assert self.dated(site, HELD_UNTIL) == "1939-10-01"
 
+    def test_an_events_types_name_one_row(self, tmp_path, vocabulary):
+        # (here) the card types Leopold's imprisonment as an imprisonment
+        # and an event: the query folds both into one cell, in no set
+        # order, and the row names them sorted, once (#540)
+        row = {**HELD_FROM, "eventTypes": literal("imprisonment|event")}
+        site, _ = build(
+            tmp_path, vocabulary, {**RESPONSES, 'date of birth"@en': [row]}
+        )
+        page = (site / "timeline.html").read_text()
+        assert page.count('<div class="entry">') == 1
+        assert ", event, imprisonment (start time)<" in page
+        (event,) = json.loads((site / "timeline.json").read_text())["events"]
+        assert event["text"]["headline"] == (
+            f"{label('leopold-loebig')}: event, imprisonment (start time)"
+        )
+
+    def test_a_type_label_is_escaped_on_the_page(self, tmp_path, vocabulary):
+        # a type's label comes from the graph, so the page escapes it
+        row = {
+            **HELD_FROM,
+            "eventTypes": literal(
+                urllib.parse.quote("prison <Peiltal> & yard", safe="")
+            ),
+        }
+        site, _ = build(
+            tmp_path, vocabulary, {**RESPONSES, 'date of birth"@en': [row]}
+        )
+        page = (site / "timeline.html").read_text()
+        assert ", prison &lt;Peiltal&gt; &amp; yard (start time)<" in page
+        assert "<Peiltal>" not in page
+
+    def test_a_type_label_is_read_whole(self):
+        # each label is URI-encoded, so a "|" or a "%" in one splits nothing
+        # (#540); the labels are sorted ignoring case, and a point in time
+        # names the types alone
+        row = on_timeline(
+            "leopold-loebig",
+            None,
+            u.Date(1939, 9),
+            INTERVIEW,
+            types=("imprisonment", "Peiltal court prison | 100% held"),
+        )
+        assert SiteBuilder.timeline_what(row) == (
+            "imprisonment, Peiltal court prison | 100% held"
+        )
+        assert SiteBuilder.timeline_what(EUGEN_DIED) == "date of death"
+
     def test_the_feed_gives_each_range_beside_its_date(self, site):
         # TimelineJS places an event by its year, month and day, and shows
         # a date's display_date in place of the date
@@ -1833,11 +1896,10 @@ class TestTimeline:
         assert len(starts) == len(events) == len(DATED)
 
         def start(row: dict) -> dict:
-            person, what = row["personLabel"], row["what"]
+            person = row["personLabel"]["value"]
+            what = SiteBuilder.timeline_what(row)
             source = row["sourceLabel"]["value"]
-            return starts[
-                (f"{person['value']}: {what['value']}", f"per {source}")
-            ]
+            return starts[(f"{person}: {what}", f"per {source}")]
 
         # a date with no stated range, which TimelineJS shows by default
         assert start(EUGEN_DIED) == {
@@ -1987,6 +2049,7 @@ class TestTimeline:
             "person",
             "personLabel",
             "what",
+            "eventTypes",
             "date",
             "precision",
             "low",

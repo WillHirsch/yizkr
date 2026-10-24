@@ -372,6 +372,11 @@ or a `LocalRef`'s `instance_of`, so only a structured record or a
 hand-written batch makes an artifact-kind entity (ADR-0039 §10.1(b),
 §10.6). `placed_subject` stays `caption`'s alone. This and every other
 line dated #626 in this file describe the model from that build on.
+Widened by #645, 2026-10-24 (ADR-0039 §10.1(c), (c4)): a fourth subject,
+the source's own mention item (an `unclassified_entity` of the claim's
+batch) of an artifact it only writes about, such as an enclosure held
+as a scan of its own; a curator, or later artifact matching, links that
+mention item to the held scan.
 
 Built by #646 (2026-10-24), with the owner's answers to ADR-0039's
 questions 5 to 10: the #626 rule and #645's (c4) subject above are what
@@ -720,8 +725,9 @@ artifact a new QID, changes neither.
   neither is a medium a container embeds that the list names: a deck's
   medium by any of its names in the archive or by SHA-1, a PDF's image
   by SHA-1 alone, since its names are its places in the PDF ("page 6,
-  image 1"), not files (ADR-0008). The container's own file is uploaded
-  as it is, with whatever it embeds.
+  image 1"), not files (ADR-0008). A glob that names a deck's image
+  names its SHA-1 in every container that holds those bytes (#620). The
+  container's own file is uploaded as it is, with whatever it embeds.
 - **Every `media file` holds the bytes its item's `media SHA-1` names.**
   A wiki file is never overwritten: bytes whose file name already holds
   different bytes are uploaded under a content-tagged file name,
@@ -1633,9 +1639,12 @@ static site's timeline page and feed show beside the date, each bound
 under its qualifier's label ("1946 (earliest date: 1946; latest start
 date: 1947)"). An event's own start and end time are rows of their own
 there, each bounded by its earliest and latest date ("imprisonment
-(start time)", "imprisonment (end time)"); and the extraction prompts
-give the extractor this convention for residences and other periods,
-and date a marriage by its wedding and end events instead.
+(start time)", "imprisonment (end time)"), each once under all the
+event's types, and on the timeline of each participant whose
+participant statement is not deprecated (a preferred participant or
+type hides no other); and the extraction prompts give the extractor
+this convention for residences and other periods, and date a marriage
+by its wedding and end events instead.
 
 ## Persecution and displacement as events (see ADR-0014)
 
