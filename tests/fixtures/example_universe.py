@@ -1561,13 +1561,13 @@ SOURCES = (
 )
 
 # Values the assertions use that the manifest does not hold yet.
-# ADR-0008 (as amended by #289) adds `machine_assisted`, the sourcing
-# circumstance of a text that its source says was prepared with machine
-# assistance, with the extraction change that sets it (its follow-up B).
+# `machine_assisted`, the sourcing circumstance of a text that its source
+# says was prepared with machine assistance, joined the manifest with the
+# reading that sets it (ADR-0008's follow-up B, #666).
 # ADR-0040 adds the qualifier `parentage` with its value
 # `parentage_adoptive`, and the property `ended_by_death_of`, with its
 # build (follow-up B, #687).
-PLANNED_VOCABULARY = ("machine_assisted", "parentage_adoptive")
+PLANNED_VOCABULARY = ("parentage_adoptive",)
 PLANNED_PROPERTIES = {
     "ended_by_death_of": "wikibase-item",
     "parentage": "wikibase-item",

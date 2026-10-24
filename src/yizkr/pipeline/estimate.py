@@ -491,8 +491,9 @@ class _Extractor(ChunkedClaimExtractor):
 
     def __init__(self, client: Any, keyed: _Keyed, tally: _Tally) -> None:
         # as the driver makes it (Orchestrator._step_extract), one chunk
-        # at a time: how many run at once changes no key
-        super().__init__(client)
+        # at a time, reading the statement about the document's
+        # preparation: how many run at once changes no key
+        super().__init__(client, read_preparation=True)
         self._keyed = keyed
         self._tally = tally
 
@@ -854,6 +855,8 @@ class Estimator(ScratchDriver):
         keyed = self._keyed["extract"]
         extractor = _Extractor(self._llm("extract", doc), keyed, made.tally)
         try:
+            # read as the driver reads it, within the stage
+            extractor.pointer = doc.pointed()
             batch = extractor.extract(before.view, ArtifactRef(sha1=doc.sha1))
         except _Unanswered:
             made.estimated = CHUNKS

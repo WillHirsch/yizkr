@@ -446,7 +446,7 @@ properties:
     label: sourcing circumstances
     description: qualifier for how a source states the value, e.g. circa; never narrow what a source says
     datatype: wikibase-item
-    accepts: [circa]
+    accepts: [circa, machine_assisted]
     wikidata: P1480
 
   latest_start_date:
@@ -1103,6 +1103,15 @@ items:
     label: circa
     description: sourcing circumstances value; the source gives the value as approximate
     wikidata: Q5727902
+
+  machine_assisted:
+    label: machine-assisted
+    description: >-
+      sourcing circumstances value; the source states that the text the
+      value is read from was prepared with machine assistance, such as a
+      machine translation (ADR-0008). Set by the pipeline from that
+      statement, never offered to the extractor
+    offered: false
 
   male:
     label: male

@@ -79,7 +79,9 @@ ACCEPTS = {
     "time_period": {"time_period_class"},
     "image": {"artifact"},
     "sex_or_gender": {"male", "female"},
-    "sourcing_circumstances": {"circa"},
+    # circa, and the marker the pipeline sets from what a source says of
+    # its own preparation (ADR-0008, #666)
+    "sourcing_circumstances": {"circa", "machine_assisted"},
     "object_has_role": {
         "principal",
         "parent",

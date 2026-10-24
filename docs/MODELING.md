@@ -504,6 +504,13 @@ Machine-written statements add a second reference:
   (`notes_written`, #410), which the scratch write stage records for each
   document and the run report sums
 
+A statement whose `sourcing circumstances` records what its source says
+of its own making (`machine-assisted`, ADR-0008, #666) adds a third
+reference: `stated in` the same artifact, with the page number, printed
+page number and transcription excerpt of the source's statement about
+how its text was prepared. It is the marker's evidence; the claim's own
+source block is unchanged.
+
 On the claims path, a value asserted more than once, by several
 artifacts or by one artifact in several places (two pages, two passages,
 two regions of a scan), is one statement for each set of qualifiers. It
@@ -1224,6 +1231,18 @@ places the image, where its passage conveys it (ADR-0039 §10.4).
   never a rank. The pipeline's own machine work stays process provenance
   (ADR-0003, ADR-0023). Like circa, it makes the compilation's claim a
   statement of its own beside the same value from a source without it.
+  Built by #666, 2026-10-24 (ADR-0008, the #666 amendment): the manifest
+  holds `machine_assisted`, which no prompt offers; the entity manifest
+  reads the document's statement once, quoted verbatim with the lines it
+  covers ("all", or the passages it names), or the passage a curator
+  points to (`preparation.pointer.txt`), and the pipeline marks every
+  claim whose excerpt stands within those lines, dropping any marker a
+  chunk gave. A claim it cannot place within or outside them is not
+  marked, and the batch says so. Each marked statement cites the
+  statement too, in a reference block of its own: `stated in` the same
+  artifact, with the statement's page and the statement as its
+  transcription excerpt, beside the claim's own source block (rule 1:
+  the marker's evidence is referenced).
 
 ## Faces and depiction (see ADR-0005)
 

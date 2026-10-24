@@ -1618,6 +1618,21 @@ def pre_plan_refusals(
                 else None,
             ),
         ]
+        stated = claim.circumstance_source
+        if stated is not None:
+            locators += [
+                ("its circumstance's page number", stated.page_number),
+                (
+                    "its circumstance's printed page number",
+                    stated.printed_page_number,
+                ),
+                (
+                    "its circumstance's excerpt",
+                    stated.transcription_excerpt.text
+                    if stated.transcription_excerpt
+                    else None,
+                ),
+            ]
         faults.extend(
             f"{where} {_unknown_fault(unknown)}"
             for where, text in locators
@@ -2777,11 +2792,14 @@ class BatchWriter:
         claim: Claim | None = None,
         note: JudgementNote | None = None,
     ):
-        """A statement's two reference blocks (ADR-0003): its source
-        block, `stated in` the artifact with the claim's locators and
-        excerpt, and its run block, `inferred from extraction run` the run
-        item with the judgement note `note`, if any (_note_snaks). A dry
-        run's placeholder run item gives no run block."""
+        """A statement's reference blocks (ADR-0003): its source block,
+        `stated in` the artifact with the claim's locators and excerpt; its
+        run block, `inferred from extraction run` the run item with the
+        judgement note `note`, if any (_note_snaks); and, for a claim whose
+        sourcing circumstance its source states of its own making
+        (`Claim.circumstance_source`, ADR-0008), a second source block,
+        `stated in` the same artifact with the locators and excerpt of that
+        statement. A dry run's placeholder run item gives no run block."""
         from wikibaseintegrator.datatypes import Item
         from wikibaseintegrator.models import Reference, References
 
@@ -2803,6 +2821,10 @@ class BatchWriter:
             for snak in self._note_snaks(note):
                 run_ref.add(snak)
             references.add(run_ref)
+        if claim is not None and claim.circumstance_source is not None:
+            references.add(
+                self._source_block(artifact_qid, claim.circumstance_source)
+            )
         return references
 
     def _source_block(
@@ -3042,7 +3064,8 @@ class BatchWriter:
         claim is already recorded there.
 
         `references` are the claim's blocks as `_references` builds them,
-        its source block first, then its run block, if any. Each is
+        its source block first, then its run block, if any, then the block
+        of the statement its sourcing circumstance stands on, if any. Each is
         compared whole with the statement's blocks: the source block's
         `stated in` with the page number, printed page number, region and
         excerpt, and the run block's `inferred from extraction run` with
@@ -3081,11 +3104,16 @@ class BatchWriter:
             if artifact_qid in cited:
                 return []
         elif self._reference_key(source) in carried:
+            run = self.properties["inferred_from_extraction_run"]
             return [
-                run
-                for run in runs
-                if self._reference_key(run) not in present
-                and (self._noted(run) or self._cites_run(statement, run))
+                block
+                for block in runs
+                if self._reference_key(block) not in present
+                and (
+                    not block.snaks.get(run)
+                    or self._noted(block)
+                    or self._cites_run(statement, block)
+                )
             ]
         return [
             block
