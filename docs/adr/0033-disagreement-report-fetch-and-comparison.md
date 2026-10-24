@@ -23,6 +23,15 @@ Amended by #547 (2026-10-23): a child may have two fathers or two
 mothers, so two parents that one artifact states both of are compared
 only between artifacts that each state one and not the other
 (`stated_together`, §2).
+Amended by ADR-0040 (2026-10-24): parents are compared within one kind.
+A `parentage` qualifier (birth, adoptive or foster), set only where a
+source states the kind, keeps a birth father and an adoptive father from
+disagreeing: a pair of parent values is set aside when any
+non-deprecated statement gives either value a kind other than birth,
+and a parent with no kind stated is compared as a birth parent. A
+`date_of_death` of unknown value states no date: it is set aside and
+never listed. A derived "died by" date is compared through ADR-0040's
+shared derivation, labelled as derived (§2).
 
 ## Context
 
@@ -108,6 +117,7 @@ tests on the fictional universe (`tests/unit/test_disagreement.py`):
 | a place recorded inside the other differs in resolution | `place_within` |
 | two readings of one artifact are not two sources, nor are two readings of one statement's value, however many artifacts it cites | `from_different_artifacts`, `one_claim` |
 | a father or a mother is compared only between two artifacts that each state one of the two values and not the other, so one source's two fathers or two mothers never disagree with themselves, nor with a source naming one of them; a curator who corrects a parent deprecates the reading corrected, which `in_contention` leaves out, since a correction left at normal rank reads as the artifact naming both (amended by #547) | `stated_together` |
+| amended by ADR-0040 (2026-10-24): parents are compared within one kind, a pair set aside when any non-deprecated statement gives either value a `parentage` other than birth; an unknown value is set aside; derived "died by" dates are compared through the shared derivation | `stated_together`, and the functions the build adds for an unknown value and derived dates |
 
 The two open questions each touch one function, and neither is decided
 here. #241 (which century a century-precision date names) is `century`,
