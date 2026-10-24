@@ -758,6 +758,44 @@ class TestTheSite:
         assert run.sites == [run.run_dir / CORPUS_DIR / "site" / "site"]
         assert run.record("site")["run_id"] == "run-1"
 
+    def test_the_site_records_its_disagreement_counts(self, run, monkeypatch):
+        """The site's record keeps the disagreements its build counted on
+        the written graph, as counts alone (#575), and the run report
+        reads them from it."""
+        from yizkr.pipeline import report
+
+        def site(config, out):
+            run.sites.append(out)
+            return {
+                "people": 2,
+                "artifacts": 3,
+                "inconsistencies": 3,
+                "inconsistencies_by_property": {
+                    "date_of_birth": 1,
+                    "place_of_birth": 2,
+                },
+            }
+
+        monkeypatch.setattr(scratchwrite, "build_site", site)
+        run.past_the_barrier()
+        counted = {
+            "total": 3,
+            "by_property": {"date_of_birth": 1, "place_of_birth": 2},
+        }
+        assert run.record("site")["disagreements"] == counted
+        vocabulary = report._Vocabulary.of({})
+        sited = report._site_stage(run.run_dir)
+        assert report._aggregate_contradictions(sited, vocabulary) == {
+            "different_source": 3,
+            "by_property": {"place_of_birth": 2, "date_of_birth": 1},
+        }
+
+    def test_a_build_that_does_not_count_them_records_none(self, run):
+        """A build whose summary has no counts leaves them out of the
+        record, rather than record 0."""
+        run.past_the_barrier()
+        assert "disagreements" not in run.record("site")
+
     def test_a_query_service_that_never_shows_the_run_fails_it(
         self, run, monkeypatch
     ):
