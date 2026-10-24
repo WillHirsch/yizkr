@@ -307,6 +307,7 @@ class TestTheChunkPrompt:
         rendered = flat(
             CHUNK_PROMPT.format(
                 artifact_sha1=DOC_REF.sha1,
+                language="en",
                 property_keys="",
                 item_keys="",
                 assignment_block="",
@@ -1173,6 +1174,8 @@ class TestTheManifestsRecords:
             "quotes",
             # chunks asked again for a missing required field (#501)
             "retried_chunks",
+            # excerpt languages moved in from source (#668)
+            "excerpt_language_moved",
         }
 
 

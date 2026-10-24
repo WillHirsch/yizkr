@@ -384,6 +384,18 @@ defect (two commas, a comma before a value, a missing comma) still
 leaves its object unread, as before. A manifest refused only for such a
 comma no longer spends its second attempt.
 
+Amended by #668 (2026-10-24): the source rule of the chunk prompt and of
+the single-call prompt shows the excerpt's shape,
+`"transcription_excerpt": {"text": "<verbatim>", "language": "<code>"}`,
+asks for it on every claim with the language inside the excerpt and
+never on `source`, and names the transcription's language as the
+excerpt's unless its own words are in another. A `language` a claim
+gives on `source`, beside an excerpt object that gives none, is moved
+into the excerpt before validation, a shape repair like the flattening
+of nested time values, and `coverage.json` counts the claims so repaired
+(`excerpt_language_moved`). A claim that gives no language anywhere is
+a `schema` reject as before: no language is defaulted.
+
 ### 7. Strategy selection and CLI surface
 
     yizkr ingest extract ... --strategy auto|single|chunked
