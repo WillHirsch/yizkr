@@ -1201,8 +1201,11 @@ class Registrar:
         referenced ``stated in -> the container``. A statement another
         container (or the artifact itself) made already gains this
         container's reference instead of a duplicate. A medium the
-        never-ingest list names, by a name or by its SHA-1, is left out:
-        neither registered nor uploaded.
+        never-ingest list names is left out: neither registered nor
+        uploaded. A deck's medium is asked of by its SHA-1 and by each of
+        its names in the archive, which the list's globs match; a PDF's
+        image by its SHA-1 alone, as the reader asks of it, since its
+        names are its places in the PDF, no file's (ADR-0008).
         """
         if not record.media:
             return {}
@@ -1222,7 +1225,10 @@ class Registrar:
         derived: dict[str, str] = {}
         media = sorted(record.media.items())
         for number, (key, medium) in enumerate(media, start=1):
-            if self._excluded(medium.names, key):
+            # a PDF's image is named for its places ("page 6, image 1"),
+            # no file's name, so no glob is matched against them
+            globbed = medium.names if record.container != "pdf" else []
+            if self._excluded(globbed, key):
                 continue
             path = directory / medium.file
             # the record names the file for the medium's SHA-1 and the

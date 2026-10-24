@@ -26,6 +26,7 @@ import pytest
 
 from tests.fixtures import pdfs
 from tests.fixtures.records import page_text, record_answer, record_page
+from tests.unit.test_deck_excerpts import talk_folder
 from tests.unit.test_orchestrate import this_run
 from tests.unit.test_pdf_pages import (
     CAPTION,
@@ -538,9 +539,12 @@ class TestRegistration:
     (Orchestrator._step_register), on the in-memory wiki."""
 
     @staticmethod
-    def made(tmp_path, **documents):
+    def made(tmp_path, exclusions=None, **documents):
         corpus = folder(tmp_path, **documents)
-        orchestrator = run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
+        options = {} if exclusions is None else {"exclusions": exclusions}
+        orchestrator = run(
+            tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}), **options
+        )
         wiki = FakeWiki()
         orchestrator._client = wiki
         return orchestrator, wiki
@@ -609,6 +613,56 @@ class TestRegistration:
         record["source_sha1"] = "b" * 40
         (doc.dir / DERIVED_MEDIA).write_text(json.dumps(record))
         assert orchestrator._placed_images(doc) is None
+
+    def test_a_glob_on_a_place_name_leaves_the_image_in(self, tmp_path):
+        """A `page*` glob matches no image of the booklet: its image is
+        named for its place ("page 6, image 1"), no file's name, so the
+        reader and the registrar ask the list of it by its SHA-1 alone
+        (#525). It is read as an excerpt, registered with the booklet,
+        and the excerpt's write finds its item."""
+        orchestrator, wiki = self.made(
+            tmp_path,
+            exclusions=ExclusionList.parse("page*\n"),
+            booklet=booklet(),
+        )
+        assert LETTER_SHA1 in planned(orchestrator)
+        doc = document(orchestrator, "booklet.pdf")
+        Orchestrator._step_register(orchestrator, doc)
+        (image,) = orchestrator.registered_media()[doc.sha1].values()
+        assert strings(wiki, image, "media_sha1") == [LETTER_SHA1]
+        excerpt = excerpt_of(orchestrator, LETTER_SHA1)
+        assert Orchestrator._step_register(orchestrator, excerpt) == image
+
+    def test_a_deck_s_record_marked_a_pdf_s_is_made_again(self, tmp_path):
+        """A deck's record of its media that says it is a PDF's, its bytes
+        the deck's as they are now, is no deck's record: the write makes
+        it again, so a glob on the image's name in the archive still
+        leaves it out, as the reader does, and nothing of it is registered
+        or uploaded (ADR-0008)."""
+        corpus = talk_folder(tmp_path)
+        orchestrator = run(
+            tmp_path,
+            corpus,
+            Reader({}),
+            exclusions=ExclusionList.parse("image2.png\n"),
+        )
+        wiki = FakeWiki()
+        orchestrator._client = wiki
+        doc = document(orchestrator, "library-talk-2018.pptx")
+        record = json.loads((doc.dir / DERIVED_MEDIA).read_text())
+        assert LETTER_SHA1 in record["media"]
+        record["container"] = "pdf"
+        (doc.dir / DERIVED_MEDIA).write_text(json.dumps(record))
+        assert not orchestrator._derived_media_current(doc)
+        Orchestrator._step_register(orchestrator, doc)
+        assert read_derived_media(doc.dir).container == "presentation"
+        assert LETTER_SHA1 not in orchestrator.registered_media()[doc.sha1]
+        assert LETTER_SHA1 not in wiki.files.values()
+        assert not [
+            qid
+            for qid in wiki.entities
+            if strings(wiki, qid, "media_sha1") == [LETTER_SHA1]
+        ]
 
     def test_an_excerpt_the_list_names_now_is_refused(self, tmp_path):
         orchestrator, wiki = self.made(tmp_path, booklet=booklet())

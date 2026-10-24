@@ -137,6 +137,12 @@ The list is a UTF-8 text file, one entry per line:
 *contacts*
 ```
 
+An image a document embeds is matched too: a deck's image by its SHA-1
+and by its names in the archive (`image2.png`), a PDF's placed image by
+its SHA-1 alone, since its names are its places in the PDF, not files.
+A glob does not follow an image's bytes into other documents: to keep
+an image out of every document that holds it, list its SHA-1.
+
 **It fails closed.**
 
 - `yizkr ingest run` refuses to start unless `YIZKR_EXCLUDE_FILE` is set.

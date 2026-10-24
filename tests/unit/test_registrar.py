@@ -2815,6 +2815,50 @@ class TestRegisterDerivedMedia:
             for qid in wiki.entities
         )
 
+    @pytest.mark.parametrize(
+        "container, kept",
+        [("pdf", [IMAGE, OTHER_IMAGE]), ("presentation", [])],
+    )
+    def test_a_glob_matches_a_pdf_s_image_by_sha1_alone(
+        self, tmp_path, container, kept
+    ):
+        """A PDF's image is named for its place ("page 6, image 1"), no
+        file's name, so the never-ingest list asks of it by its SHA-1
+        alone, as the reader does: a `page*` glob leaves it in (#525),
+        whichever of its places it matches. A deck's medium keeps matching
+        by its names in the archive, any of them."""
+        wiki = FakeWiki()
+        registrar = Registrar(wiki, exclusions=ExclusionList.parse("page*\n"))
+        deck = deck_file(tmp_path, "a")
+        registrar.register_artifact(deck, "presentation", "Our Family")
+        record, directory = recorded(
+            tmp_path,
+            deck,
+            "Our Family",
+            [
+                ("image5.png", IMAGE, [6]),
+                ("page 7, image 1.png", IMAGE, [7]),
+                ("page 8, image 1.png", OTHER_IMAGE, [8]),
+            ],
+        )
+        record = record.model_copy(update={"container": container})
+        derived = registrar.register_derived_media(record, directory)
+        assert sorted(derived) == sorted(map(sha1, kept))
+
+    def test_a_pdf_s_image_the_list_names_by_sha1_is_left_out(self, tmp_path):
+        wiki = FakeWiki()
+        registrar = Registrar(
+            wiki, exclusions=ExclusionList.parse(f"{sha1(IMAGE)}\n")
+        )
+        deck = deck_file(tmp_path, "a")
+        registrar.register_artifact(deck, "presentation", "Our Family")
+        record, directory = recorded(
+            tmp_path, deck, "Our Family", [("page 6, image 1.png", IMAGE, [6])]
+        )
+        record = record.model_copy(update={"container": "pdf"})
+        assert registrar.register_derived_media(record, directory) == {}
+        assert sha1(IMAGE) not in wiki.files.values()
+
     def test_a_kept_medium_reached_through_a_link_is_refused(self, tmp_path):
         """The file a record keeps must be a regular file: one replaced by a
         link is never uploaded through, even to the medium's own bytes."""

@@ -685,9 +685,11 @@ artifact a new QID, changes neither.
   which homonym bears it depends on registration order: nothing may key
   on an artifact's label, only on its `media SHA-1`.
 - A file on the never-ingest list is never registered or uploaded, and
-  neither is a medium a container embeds that the list names, by name
-  or by SHA-1. The container's own file is uploaded as it is, with
-  whatever it embeds.
+  neither is a medium a container embeds that the list names: a deck's
+  medium by any of its names in the archive or by SHA-1, a PDF's image
+  by SHA-1 alone, since its names are its places in the PDF ("page 6,
+  image 1"), not files (ADR-0008). The container's own file is uploaded
+  as it is, with whatever it embeds.
 - **Every `media file` holds the bytes its item's `media SHA-1` names.**
   A wiki file is never overwritten: bytes whose file name already holds
   different bytes are uploaded under a content-tagged file name,
