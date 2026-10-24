@@ -2452,8 +2452,6 @@ def missing_field(claims: Iterable[Any]) -> str | None:
                     if error["type"] == "missing"
                 }
         common = lacking if common is None else common & lacking
-        if not common:
-            return None
     return min(common) if common else None
 
 

@@ -453,6 +453,40 @@ class TestAChunkAskedAgain:
         assert llm.asked[1:4] == [("fork", 0), ("fork", 1), ("fork", 1)]
         assert len(batch.claims) == 2
 
+    def test_a_second_answer_kept_cut_off_twice_is_not_asked_a_third_time(
+        self, tmp_path
+    ):
+        class Keeping(Attempting):
+            def attempt(self, number):
+                return Keeping(self.client, number, parent=self)
+
+            def reject(self, response, reason):
+                super().reject(response, reason)
+                return True
+
+        cut = json.dumps(claim(*HILDEGARD))  # no sentinel
+        llm = Keeping(
+            ScriptedLlm(
+                [
+                    entity_manifest_json(),
+                    ndjson([without_language(*HILDEGARD)]),
+                    cut,
+                    cut,
+                    ndjson([claim(*SEBASTIAN)]),
+                ]
+            )
+        )
+        run = extractor(llm, tmp_path)
+        batch = run.extract(transcription(), DOC_REF)
+        assert llm.asked == [
+            ("open", 0),
+            ("fork", 0),
+            ("fork", 1),
+            ("fork", 1),
+            ("fork", 0),
+        ]
+        assert [c.subject.label for c in batch.claims] == ["Sebastian Löbig"]
+
 
 class TestEachExtractionCountsItsOwn:
     def test_the_counts_start_again(self, tmp_path):
