@@ -1165,6 +1165,7 @@ class TestTheManifestsRecords:
             "rejected_claims",
             "rejected_by_reason",
             "unread_objects",
+            "manifest_artifact_kind",
             "fallback",
             # each claim's excerpt looked for in the transcription (#580)
             "quotes",
