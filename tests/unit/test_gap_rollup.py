@@ -210,6 +210,8 @@ class TestDocumentDirectories:
         (run / "corpus" / "clustering").mkdir(parents=True)
         (run / "unreadable").mkdir()
         (run / "unreadable" / "state.json").write_text("{cut")
+        (run / "too-deep").mkdir()
+        (run / "too-deep" / "state.json").write_text("[" * 100_000)
         (run / "listed").mkdir()
         (run / "listed" / "state.json").write_text('["state"]')
         (run / "events.jsonl").write_text("")
