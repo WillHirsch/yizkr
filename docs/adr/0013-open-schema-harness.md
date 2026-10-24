@@ -17,6 +17,9 @@ are no entity kinds; the critic's `escape_hatch_misused` says the same.
 Amended by [ADR-0035](0035-mention-records.md) (owner decision
 2026-09-29, #385): §A's type hint is given in English, so the
 unclassified-entities query (#91) groups like with like.
+Amended by #91 (2026-10-23): §A's standing view is
+`queries/unclassified-entities.rq`, and §B's gap log has a
+cross-document rollup over a run, `yizkr gaps rollup` (both below).
 
 ## Context
 
@@ -69,6 +72,15 @@ timelines or the places map. A standing SPARQL view — unclassified
 entities and their hints, by frequency — is the input to the next
 vocabulary round.
 
+The view is `queries/unclassified-entities.rq`, published with the rest
+of the query library: one row per type hint, compared in lower case,
+with how many entities carry it and how many artifacts state it, and one
+entity as an example; an entity held without a hint is counted under the
+empty hint. Kind and hint statements at normal or preferred rank are
+read, a deprecated one never, and an entity a curator has also given a
+modelled kind stays listed, since its source still holds it
+unclassified (ADR-0002).
+
 This closes the structural hole: claims could always be skipped, but an
 entity was *forced* to pick a kind, so mistyping was mandatory.
 
@@ -87,6 +99,22 @@ curator reads — but are **never written to the graph** (they have no
 property id). A relation the model would otherwise have dropped or
 forced becomes a lossless, reviewable "the vocabulary is missing this"
 signal.
+
+`yizkr gaps rollup [<run>]` (`yizkr.pipeline.gaps`) rolls the gap logs
+of a run's documents up, after the extraction stage, into one
+OpenRefine CSV, `gaps-rollup.csv` in the run directory. A document's
+gaps are read from its chunked extraction's `extraction/gaps.ndjson`;
+where the document has no chunked extraction (no
+`extraction/coverage.json`), from its `gaps.csv`. The frequency key is
+the predicate in its comparison form: Unicode compatibility forms,
+letter case, underscores, hyphens and runs of whitespace aside. Its
+columns are `predicate` (the key), `frequency` (gap lines), `documents`,
+`variants` (the spellings, the most frequent first), an example gap's
+`example_subject`, `example_object` and `example_evidence`,
+`document_sha1s`, and `decision` and `notes`, which the rollup leaves
+empty for the curator: what to map, mint or defer is the owner's
+decision, and nothing reads the column back. The CSV quotes evidence,
+so it is local-only runtime state.
 
 ### C. Critic pass
 

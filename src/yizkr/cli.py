@@ -902,6 +902,30 @@ def cmd_stages_manifest(args) -> int:
     return 0
 
 
+def cmd_gaps_rollup(args) -> int:
+    import csv
+
+    from yizkr.pipeline import gaps
+
+    run = _scratch_run_dir(args)
+    try:
+        written, result = gaps.write_rollup(run, args.out)
+    except (OSError, ValueError, csv.Error) as exc:
+        # a file that cannot be read or written, or a gap file that is no
+        # UTF-8 text or no CSV
+        sys.exit(str(exc))
+    print(
+        f"{result.gaps} gap(s) under {len(result.rows)} predicate(s), from "
+        f"{result.documents_with_gaps} of {result.documents_read} "
+        f"document(s): {written}"
+    )
+    print(
+        f"{written.name} quotes the documents' evidence, and stays local; "
+        f"its decision column is the curator's"
+    )
+    return 0
+
+
 def _scratch_plan(args) -> tuple[Path, dict]:
     """(the corpus folder, the driver's options) for the run a `scratch
     run` or `scratch estimate` command plans; exits when there is no
@@ -1905,6 +1929,39 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("run", type=Path, help="run directory (with run.json)")
     p.set_defaults(func=cmd_stages_manifest)
+
+    from yizkr.pipeline import scratch
+
+    gaps_group = sub.add_parser(
+        "gaps",
+        help="the open-schema harness's relation gaps across a run "
+        "(ADR-0013 §B)",
+    )
+    gsub = gaps_group.add_subparsers(dest="action", required=True)
+    p = gsub.add_parser(
+        "rollup",
+        help="every gap a run's (the latest scratch run by default) "
+        "documents logged at extraction, one row per normalised "
+        "predicate with its frequency and an empty decision column, "
+        "written to gaps-rollup.csv in the run directory for OpenRefine "
+        "(src/yizkr/pipeline/gaps.py); it quotes evidence, so it stays "
+        "local",
+    )
+    p.add_argument("run", nargs="?", help="a run id or directory")
+    p.add_argument(
+        "--runs",
+        type=Path,
+        default=scratch.DEFAULT_RUNS,
+        help=f"the runs directory (default {scratch.DEFAULT_RUNS}); a run "
+        "is named by its id there, or by its directory's path",
+    )
+    p.add_argument(
+        "--out",
+        type=Path,
+        metavar="FILE",
+        help="write the CSV here instead (keep it out of the repository)",
+    )
+    p.set_defaults(func=cmd_gaps_rollup)
 
     _scratch_parsers(sub, effort_choices)
     return parser

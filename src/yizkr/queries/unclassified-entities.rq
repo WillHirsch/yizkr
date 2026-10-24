@@ -1,0 +1,45 @@
+# Unclassified entities by type hint — the input to the next vocabulary
+# round (ADR-0013 §A). An entity a source asserts exists, but that no
+# modelled kind expresses, is held under the holding class with the
+# source's English type hint ("hat shop", "aircraft"; ADR-0035). One row
+# per hint, compared in lower case: how many entities carry it and how
+# many artifacts state it, with one entity as an example. An entity with
+# two hints is counted under each, and one held without a hint under the
+# empty hint. Every kind statement and hint at normal or preferred rank is
+# read; an entity a curator has also given a modelled kind is still
+# listed, since the source that held it unclassified still says so
+# (ADR-0002). A queue for a curator, never a defect report: what to mint
+# or defer is the owner's decision, and nothing is minted from it.
+SELECT ?typeHint ?entities ?artifacts ?example ?exampleLabel
+WHERE {
+  {
+    SELECT ?typeHint (COUNT(DISTINCT ?entity) AS ?entities)
+           (COUNT(DISTINCT ?source) AS ?artifacts)
+           (SAMPLE(?entity) AS ?example)
+    WHERE {
+      ?entity p:{P:instance_of} ?kind .
+      ?kind ps:{P:instance_of} wd:{Q:unclassified_entity} .
+      FILTER NOT EXISTS { ?kind wikibase:rank wikibase:DeprecatedRank . }
+      OPTIONAL {
+        ?entity p:{P:type_hint} ?hintStatement .
+        ?hintStatement ps:{P:type_hint} ?hint .
+        FILTER NOT EXISTS {
+          ?hintStatement wikibase:rank wikibase:DeprecatedRank .
+        }
+        OPTIONAL {
+          ?hintStatement prov:wasDerivedFrom/pr:{P:stated_in} ?hintSource .
+        }
+      }
+      OPTIONAL { ?kind prov:wasDerivedFrom/pr:{P:stated_in} ?kindSource . }
+      BIND(COALESCE(LCASE(STR(?hint)), "") AS ?typeHint)
+      BIND(IF(BOUND(?hint), ?hintSource, ?kindSource) AS ?source)
+    }
+    GROUP BY ?typeHint
+  }
+  # the example's own label, fetched for the entity the group chose
+  OPTIONAL {
+    ?example rdfs:label ?exampleLabel .
+    FILTER(LANG(?exampleLabel) = "en")
+  }
+}
+ORDER BY DESC(?entities) ?typeHint
