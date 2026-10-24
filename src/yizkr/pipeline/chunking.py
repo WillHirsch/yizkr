@@ -40,6 +40,7 @@ from yizkr.claims import (
     EntityRecord,
     JudgementNote,
     PersonStructure,
+    SourceReference,
     drop_containers,
     load_vocabulary,
     set_aside_structure,
@@ -2059,6 +2060,11 @@ class ChunkedClaimExtractor:
             placed_by(transcription, artifact),
             transcription.text,
             reading,
+            preparation.statement_source(
+                None if reading is _UNREAD else reading,
+                transcription,
+                artifact,
+            ),
         )
         self._refuse_empty(batch, chunks=total)
         self.attention = self._attention(batch, chunks=total)
@@ -2239,6 +2245,7 @@ class ChunkedClaimExtractor:
         placed: Mapping[str, Collection[str]] | None = None,
         text: str | None = None,
         reading: Any = _UNREAD,
+        stated: SourceReference | None = None,
     ) -> tuple[ClaimBatch, dict[str, str]]:
         """Merge chunk claims into one validated batch, each claim citing
         `artifact`, the page number printed on its page where
@@ -2253,7 +2260,9 @@ class ChunkedClaimExtractor:
 
         `reading`, the document's statement about its preparation as the
         manifest read it (preparation.parse; None when unread), marks
-        the claims read from the text it covers, located in `text`, once
+        the claims read from the text it covers, located in `text`, each
+        with `stated`, where the document makes the statement
+        (preparation.statement_source), as its circumstance source, once
         every marker the chunk answers gave is dropped, and is counted in
         the coverage (`machine_assisted`) and, when it
         quoted a statement, kept in the side output `preparation.json`.
@@ -2316,7 +2325,7 @@ class ChunkedClaimExtractor:
         self._marked = {"marked": 0, "straddling": 0, "unlocated": 0}
         if reading is not _UNREAD:
             claims, self._marked = preparation.mark(
-                batch.claims, reading, Transcript(text or "")
+                batch.claims, reading, Transcript(text or ""), stated
             )
             batch = batch.model_copy(update={"claims": claims})
         quotes = (

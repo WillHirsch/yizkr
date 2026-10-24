@@ -931,6 +931,31 @@ class TestCounts:
         assert made == {"extraction": 2, "critique": 1}
         assert per_stage(counted, "engine_calls") == made
 
+    def test_a_curator_s_pointer_is_keyed_as_the_driver_asks_it(
+        self, tmp_path, engine
+    ):
+        """A curator's pointer to a document's statement about its
+        preparation (#666): the batch made from the transcription no
+        longer stands, and its entity manifest, which names the pointed
+        words, is a known call the cache cannot answer."""
+        corpus = small(tmp_path)
+        run(tmp_path, corpus, engine)
+        (run_dir,) = scratch.runs_in(runs_dir(tmp_path))
+        letter = run_dir / "c-marriage-cert-1905"
+        source = next(s for s in u.SOURCES if s.key == "marriage-cert-1905")
+        (letter / "preparation.pointer.txt").write_text(
+            source.text.splitlines()[0]
+        )
+        counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
+        extraction = counted.stages["extraction"]
+        assert (extraction.made, extraction.known, extraction.hits) == (
+            1,
+            1,
+            0,
+        )
+        made = run(tmp_path, corpus, engine, resume=LATEST)
+        assert per_stage(counted, "engine_calls") == made
+
     def test_a_batch_made_again_the_same_keeps_its_critique(
         self, tmp_path, engine
     ):

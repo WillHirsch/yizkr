@@ -44,7 +44,15 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from yizkr.claims import Claim, ItemValue, Qualifier, VocabRef
+from yizkr.claims import (
+    ArtifactRef,
+    Claim,
+    ItemValue,
+    MonolingualText,
+    Qualifier,
+    SourceReference,
+    VocabRef,
+)
 from yizkr.core.verbatim import Transcript
 
 # the manifest item the marker names, as the sourcing circumstances
@@ -164,10 +172,11 @@ def parse(
     value; the reading is None when it cannot be used. A statement the
     transcription does not hold verbatim (core/verbatim.py), a passage
     outside its lines or one whose first line follows its last, and,
-    where a curator pointed to the statement (`pointer`), a statement on
-    other lines than the pointer's, are each a problem that makes it
-    unusable."""
-    pointed = pointed_lines(pointer, transcript)
+    where a curator pointed to the statement (`pointer`), a statement
+    that does not occur wholly within the pointer's words, compared as
+    core/verbatim.py compares an excerpt with its transcription, are each
+    a problem that makes it unusable."""
+    pointed_lines(pointer, transcript)
     if not isinstance(answer, dict) or "statement" not in answer:
         return None, ["'preparation' is no object with a 'statement' key"]
     unknown = sorted(set(answer) - {"statement", "covers"})
@@ -181,9 +190,7 @@ def parse(
     lines = transcript.span(statement)
     if lines is None:
         return None, ["the statement is not in the transcription"]
-    if pointed is not None and (
-        lines[1] < pointed[0] or lines[0] > pointed[1]
-    ):
+    if pointer is not None and Transcript(pointer).span(statement) is None:
         return None, [
             "the statement is not the passage the curator pointed to"
         ]
@@ -253,16 +260,44 @@ def _within(span: tuple[int, int], passages: Sequence[Passage]) -> bool:
     )
 
 
+def statement_source(
+    reading: Reading | None, transcription: Any, artifact: ArtifactRef
+) -> SourceReference | None:
+    """Where the document makes the statement the reading quoted: the
+    document, with the page its first line lies on and the number printed
+    there, where the transcription's pages give them
+    (places.evidence_page), and the statement as its excerpt, in the
+    transcription's language. None when the reading quoted none."""
+    from yizkr.pipeline.places import evidence_page
+
+    if reading is None or reading.statement is None:
+        return None
+    page, printed = evidence_page(transcription, reading.statement)
+    return SourceReference(
+        artifact=artifact,
+        page_number=page,
+        printed_page_number=printed,
+        transcription_excerpt=MonolingualText(
+            text=reading.statement, language=transcription.language
+        ),
+    )
+
+
 def mark(
-    claims: Sequence[Claim], reading: Reading | None, transcript: Transcript
+    claims: Sequence[Claim],
+    reading: Reading | None,
+    transcript: Transcript,
+    stated: SourceReference | None = None,
 ) -> tuple[list[Claim], dict[str, int]]:
     """The claims, each read from the text the reading's statement
-    covers carrying the marker, and the counts: `marked`; `straddling`,
-    claims whose excerpt occurs both within and outside the passages,
-    which are not marked; and `unlocated`, claims with no excerpt or one
-    the transcription does not hold, which are not marked when the
-    statement names passages. Under a statement that covers all of the
-    document's own text every claim is marked."""
+    covers carrying the marker, beside its other qualifiers, and the
+    statement's own source, `stated` (statement_source), as its
+    `circumstance_source`, its own source unchanged; and the counts:
+    `marked`; `straddling`, claims whose excerpt occurs both within and
+    outside the passages, which are not marked; and `unlocated`, claims
+    with no excerpt or one the transcription does not hold, which are not
+    marked when the statement names passages. Under a statement that
+    covers all of the document's own text every claim is marked."""
     counts = {"marked": 0, "straddling": 0, "unlocated": 0}
     if reading is None or reading.statement is None:
         return list(claims), counts
@@ -286,7 +321,10 @@ def mark(
         if inside:
             counts["marked"] += 1
             claim = claim.model_copy(
-                update={"qualifiers": [*claim.qualifiers, marker]}
+                update={
+                    "qualifiers": [*claim.qualifiers, marker],
+                    "circumstance_source": stated,
+                }
             )
         marked.append(claim)
     return marked, counts

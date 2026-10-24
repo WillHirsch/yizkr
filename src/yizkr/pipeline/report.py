@@ -1253,8 +1253,7 @@ def _machine_assisted(coverage: dict) -> dict[str, Any] | None:
     whether there was one and what it covers, with the claims marked
     machine-assisted, those not placed within or outside its passages,
     and the markers chunk answers gave that were dropped. None for a
-    coverage that gives no such count, as one written before the marker
-    was set: absent, never zero."""
+    coverage that gives no such count: absent, never zero."""
     found = coverage.get("machine_assisted")
     if not isinstance(found, dict):
         return None

@@ -384,6 +384,9 @@ Still to do, each keeping the two witnesses separable:
 - **Writing.** The writer needs no change. It resolves each claim's
   SHA-1 to the compilation's item or to the excerpt's, and writes the
   marker as it writes circa.
+  Amended by #666, 2026-10-24: it also writes, on each marked claim, a
+  reference block citing where the compilation makes its statement (see
+  the #666 amendment).
 
 **Coexistence and the disagreement report.**
 
@@ -984,14 +987,25 @@ compilation's own text."
   holds them. The manifest's prompt then names that passage, and its
   answer must quote from it. The pointer is an input of the batch, so a
   pointer added or changed makes the batch again; one whose words the
-  transcription does not hold fails the extraction. The curator only
-  points: whether the passage speaks of machine assistance, and of
+  transcription does not hold fails the extraction. An answer whose
+  statement does not stand wholly within the pointed words, compared as
+  an excerpt is (core/verbatim.py), is unusable however near it stands,
+  even on the same line: it marks nothing, with a reason on the batch.
+  The curator only points: whether the passage speaks of machine assistance, and of
   what, is read from the document's words, and a pointed passage read
   as no such statement marks nothing, with a reason on the batch.
 - **The marker.** Every claim whose excerpt the transcription holds
   within the lines the statement covers carries
   `sourcing_circumstances` → `machine_assisted`; under a statement that
   covers all of the document's own text, every claim of the batch does.
+  Each marked claim also carries where the document makes the
+  statement (`circumstance_source`: the same artifact, the page the
+  statement's first line lies on and the number printed there, and the
+  statement as its excerpt), which the writer writes as a reference
+  block of its own, `stated in` the artifact beside the claim's own
+  source block and its run block: the marker's evidence is in the graph,
+  and the claim's own citation is unchanged (CLAUDE.md rule 1). Its
+  other qualifiers stand beside the marker.
   A claim whose excerpt stands both within and outside those lines
   (`straddling`), or that has no excerpt, or one the text does not hold
   (`unlocated`), is not marked, and the batch says how many. Each
@@ -1005,9 +1019,10 @@ compilation's own text."
   marked, straddling, unlocated, dropped) and the run report sums it
   (docs/RUN_REPORT.md). The statement quoted is kept in the
   extraction's local `preparation.json`, never in a report.
-- **The writer** needs no change: it writes the marker as it writes
-  circa, so a marked claim is a statement of its own beside the same
-  value from a source without it.
+- **The writer** writes the marker as it writes circa, so a marked
+  claim is a statement of its own beside the identical value from a
+  source without it, and writes the claim's `circumstance_source` as the
+  third block above; a re-run finds the block and adds nothing.
 - **Stage change.** The entity manifest's prompt changes for every
   document, so it is checked by a whole-corpus scratch run and its diff
   (ADR-0025 §4).

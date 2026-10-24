@@ -4,9 +4,11 @@ A compilation that says its translations were made with translation
 software marks the claims read from its translation with
 `sourcing_circumstances` -> `machine_assisted`, a manifest item the
 bootstrap puts on the instance. The writer writes it as it writes circa,
-so the compilation's value is a statement of its own beside the same
-value from the original it translates, each with its own source, and a
-re-run adds nothing. The fixture is the fictional universe's: *Our
+so the compilation's value is a statement of its own beside the
+identical value from the original it translates, each with its own
+source, and the marked statement also cites, in a reference block of its
+own, the compilation's statement about its translations, on its page 2.
+A re-run adds nothing. The fixture is the fictional universe's: *Our
 Family from Germany* gives Gustav's nickname "Gustl" from its
 translation of the 1939 letter, and the letter's own image gives it from
 "Gustl hat endlich sein Visum". Every title and label carries the
@@ -46,7 +48,21 @@ MARKER = {
 }
 
 
-def _batch(sha1: str, excerpt: str, language: str, qualifiers) -> ClaimBatch:
+# the booklet's statement about its translations, on its page 2
+STATEMENT = (
+    "All translations in this booklet were done with translation software"
+)
+
+
+def _batch(sha1: str, excerpt: str, language: str, marked: bool) -> ClaimBatch:
+    """Gustav's nickname "Gustl", one datavalue for both witnesses, read
+    from `excerpt`, in its own language; the booklet's marked, with the
+    statement its marker stands on."""
+    stated = {
+        "artifact": {"kind": "artifact", "sha1": sha1},
+        "page_number": "2",
+        "transcription_excerpt": {"text": STATEMENT, "language": "en"},
+    }
     return ClaimBatch.model_validate(
         {
             "extraction_run": {
@@ -64,18 +80,19 @@ def _batch(sha1: str, excerpt: str, language: str, qualifiers) -> ClaimBatch:
                     "property": "nickname",
                     "value": {
                         "type": "monolingual",
-                        "value": {"text": "Gustl", "language": language},
+                        "value": {"text": "Gustl", "language": "de"},
                     },
-                    "qualifiers": qualifiers,
+                    "qualifiers": [MARKER] if marked else [],
                     "source": {
                         "artifact": {"kind": "artifact", "sha1": sha1},
-                        "page_number": "6" if qualifiers else None,
+                        "page_number": "6" if marked else None,
                         "transcription_excerpt": {
                             "text": excerpt,
                             "language": language,
                         },
                     },
                 }
+                | ({"circumstance_source": stated} if marked else {})
             ],
             "entities": [{"id": "e1", "label": PERSON, "kind": "human"}],
         }
@@ -99,6 +116,27 @@ def _cited(client, statement: dict) -> set[str]:
     }
 
 
+def _blocks(client, statement: dict) -> set[tuple]:
+    """Each source block of a statement, as (page number, excerpt)."""
+    properties, _ = client.vocabulary()
+
+    def first(reference, key):
+        snaks = reference["snaks"].get(properties[key], [])
+        if not snaks:
+            return None
+        value = snaks[0]["datavalue"]["value"]
+        return value["text"] if isinstance(value, dict) else value
+
+    return {
+        (
+            first(reference, "page_number"),
+            first(reference, "transcription_excerpt"),
+        )
+        for reference in statement.get("references", [])
+        if reference["snaks"].get(properties["stated_in"])
+    }
+
+
 def _circumstances(client, statement: dict) -> set[str]:
     properties, _ = client.vocabulary()
     return {
@@ -116,11 +154,13 @@ def test_a_marked_claim_is_a_statement_of_its_own(client):
     booklet = register_fictional(client, BOOKLET, "artifact")
     letter = register_fictional(client, LETTER, "photograph")
     translated = _batch(
-        booklet.ref.sha1, "Gustl finally has his visa", "en", [MARKER]
+        booklet.ref.sha1, "Gustl finally has his visa", "en", True
     )
     original = _batch(
-        letter.ref.sha1, "Gustl hat endlich sein Visum", "de", []
+        letter.ref.sha1, "Gustl hat endlich sein Visum", "de", False
     )
+    # one datavalue: only the marker keeps the two statements apart
+    assert translated.claims[0].value == original.claims[0].value
     for batch in (translated, original):
         assert validate_against_manifest(batch) == []
     identity = joined(mapped(translated, original), PERSON)
@@ -147,11 +187,20 @@ def test_a_marked_claim_is_a_statement_of_its_own(client):
     marked = by_source[frozenset({booklet.qid})]
     assert _circumstances(client, marked) == {items["machine_assisted"]}
     assert marked["rank"] == "normal"
+    # its own citation, and the statement its marker stands on, each a
+    # block of its own in the booklet
+    assert _blocks(client, marked) == {
+        ("6", "Gustl finally has his visa"),
+        ("2", STATEMENT),
+    }
     # the original's statement carries no marker: never a rank, never the
     # compilation's circumstance spread to another witness
     unmarked = by_source[frozenset({letter.qid})]
     assert _circumstances(client, unmarked) == set()
     assert unmarked["rank"] == "normal"
+    assert _blocks(client, unmarked) == {
+        (None, "Gustl hat endlich sein Visum")
+    }
 
     # a re-run finds both statements, sourced, and adds nothing
     for batch in (translated, original):

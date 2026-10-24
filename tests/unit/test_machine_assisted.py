@@ -17,7 +17,10 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import example_universe as u
+from tests.fixtures.identity import write_mapped
 from tests.unit.test_orchestrate import make_run
+from tests.unit.test_pipeline import MEDIA_SHA1, PROPERTIES, RUN
+from tests.unit.test_pipeline import FakeWiki as PipelineWiki
 from tests.unit.test_run_report import (
     CERT,
     DIRECTORY,
@@ -36,7 +39,12 @@ from yizkr.pipeline.chunking import ChunkedClaimExtractor
 from yizkr.pipeline.estimate import _Extractor, _Keyed, _Tally
 from yizkr.pipeline.extract import vocabulary_prompt_lines
 from yizkr.pipeline.orchestrate import FAILED, DocumentRun, slugify
-from yizkr.pipeline.transcribe import Transcription
+from yizkr.pipeline.transcribe import (
+    PageProvenance,
+    TranscribedPage,
+    Transcription,
+)
+from yizkr.pipeline.writer import BatchWriter
 
 SOURCES = {source.key: source for source in u.SOURCES}
 BOOKLET = SOURCES["family-booklet-2011"]
@@ -646,3 +654,287 @@ class TestTheRunReport:
         again = build(path, now=NOW)["aggregate"]["content"]
         assert again["machine_assisted"]["unread"] == 2
         assert again["machine_assisted"]["statements"] == 0
+
+
+def paged(source: u.Source) -> Transcription:
+    """The source's text read page by page, each `[page N]` the marker of
+    a page, its line the page's own; the booklet's page 6 prints 4."""
+    text, pages = "", []
+    printed = {6: "4"} if source is BOOKLET else {}
+    for line in source.text.splitlines():
+        if line.startswith("[page "):
+            number = int(line[len("[page ") : line.index("]")])
+            body = line[line.index("]") + 2 :]
+            opening = ("\n" if text else "") + f"[Page {number}]\n"
+            start = len(text) + len(opening)
+            text += opening + body
+            pages.append(
+                TranscribedPage(
+                    page=number,
+                    start=start,
+                    end=len(text),
+                    printed_page=printed.get(number),
+                    status="transcribed",
+                    provenance=PageProvenance(method="text-layer", engine="t"),
+                )
+            )
+        else:
+            text += "\n" + line
+            pages[-1] = pages[-1].model_copy(update={"end": len(text)})
+    return Transcription(
+        artifact=ArtifactRef.from_bytes(source.text.encode()),
+        text=text,
+        engine="pdf-pages:test",
+        language=source.lang,
+        pages=pages,
+    )
+
+
+def line_in(text: str, part: str) -> int:
+    (number,) = [
+        n for n, line in enumerate(text.splitlines(), 1) if part in line
+    ]
+    return number
+
+
+class TestTheStatementIsCited:
+    """The marker's evidence is written: each marked claim carries where
+    the document makes its statement, beside its own citation."""
+
+    def extract(self, tmp_path, claims, covers=None):
+        made = paged(BOOKLET)
+        translation = line_in(made.text, "Translation:")
+        reading = {
+            "statement": STATEMENT,
+            "covers": covers
+            or [{"first_line": translation, "last_line": translation}],
+        }
+        engine = Scripted(manifest(reading), answer(claims))
+        extractor = ChunkedClaimExtractor(
+            engine, state_dir=tmp_path / "state", read_preparation=True
+        )
+        return extractor.extract(made, made.artifact), made
+
+    def test_a_marked_claim_cites_the_statement_on_its_page(self, tmp_path):
+        ref = paged(BOOKLET).artifact
+        when = {
+            "property": "point_in_time",
+            "value": {"type": "time", "year": 1939, "month": 7, "day": 28},
+        }
+        translated = claim(
+            ref, "Rahel now lives at Angerring 71", 1901, qualifiers=[when]
+        )
+        translated["source"]["page_number"] = "6"
+        claims = [
+            translated,
+            claim(ref, "Gustl was Ursula's younger brother", 1902),
+        ]
+        batch, made = self.extract(tmp_path, claims)
+        translated, commentary = batch.claims
+        assert marked(batch) == [True, False]
+        # its own qualifier and citation stand beside the marker
+        assert [q.property for q in translated.qualifiers] == [
+            "point_in_time",
+            "sourcing_circumstances",
+        ]
+        assert translated.source.page_number == "6"
+        assert translated.source.printed_page_number == "4"
+        assert translated.source.transcription_excerpt.text == (
+            "Rahel now lives at Angerring 71"
+        )
+        stated = translated.circumstance_source
+        assert stated.artifact == made.artifact
+        assert (stated.page_number, stated.printed_page_number) == ("2", None)
+        assert stated.transcription_excerpt.text == STATEMENT
+        assert stated.transcription_excerpt.language == "en"
+        assert commentary.circumstance_source is None
+        # it survives the batch's serialisation; an unmarked claim's
+        # serialisation names no such field
+        again = ClaimBatch.model_validate_json(batch.model_dump_json())
+        assert again.claims[0].circumstance_source == stated
+        assert "circumstance_source" not in (
+            commentary.model_dump(mode="json")
+        )
+
+    def test_every_passage_the_statement_names_is_marked(self, tmp_path):
+        made = paged(BOOKLET)
+        ref = made.artifact
+        covers = [
+            {"first_line": n, "last_line": n}
+            for n in (
+                line_in(made.text, "Translation:"),
+                line_in(made.text, "Gustl was Ursula"),
+            )
+        ]
+        claims = [
+            claim(ref, "Gustl was Ursula's younger brother", 1901),
+            claim(ref, "Stupfield, 2011", 1902),
+        ]
+        batch, _ = self.extract(tmp_path, claims, covers)
+        assert marked(batch) == [True, False]
+
+    def test_dropping_a_chunk_s_marker_keeps_its_other_qualifiers(
+        self, tmp_path
+    ):
+        ref = paged(BOOKLET).artifact
+        when = {
+            "property": "point_in_time",
+            "value": {"type": "time", "year": 1939},
+        }
+        claims = [
+            claim(
+                ref,
+                "Gustl was Ursula's younger brother",
+                1901,
+                qualifiers=[MODEL_MARKER, when],
+            )
+        ]
+        batch, _ = self.extract(tmp_path, claims)
+        (kept,) = batch.claims
+        assert [q.property for q in kept.qualifiers] == ["point_in_time"]
+
+    def test_a_circumstance_cites_the_claim_s_own_artifact(self):
+        ref = paged(BOOKLET).artifact
+        other = transcription(LETTER).artifact
+        given = claim(ref, "Gustl finally has his visa", 1901) | {
+            "circumstance_source": {"artifact": other.model_dump()}
+        }
+        with pytest.raises(ValueError, match="another artifact"):
+            ClaimBatch.model_validate(
+                {"extraction_run": RUN, "claims": [given]}
+            )
+
+
+class Wiki(PipelineWiki):
+    """The pipeline tests' wiki, with the marker in its vocabulary."""
+
+    def vocabulary(self):
+        properties, items = super().vocabulary()
+        return (
+            properties | {"sourcing_circumstances": "P90"},
+            items | {"machine_assisted": "Q90"},
+        )
+
+
+def written(excerpt: str, marked_: bool) -> ClaimBatch:
+    source = {
+        "artifact": {"kind": "artifact", "sha1": MEDIA_SHA1},
+        "page_number": "6",
+        "transcription_excerpt": {"text": excerpt, "language": "en"},
+    }
+    found = {
+        "subject": {"kind": "local", "local_id": "e1", "label": "Gustav"},
+        "property": "nickname",
+        "value": {
+            "type": "monolingual",
+            "value": {"text": "Gustl", "language": "de"},
+        },
+        "source": source,
+    }
+    if marked_:
+        found |= {
+            "qualifiers": [MODEL_MARKER],
+            "circumstance_source": {
+                "artifact": source["artifact"],
+                "page_number": "2",
+                "transcription_excerpt": {
+                    "text": STATEMENT,
+                    "language": "en",
+                },
+            },
+        }
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": RUN,
+            "claims": [found],
+            "entities": [{"id": "e1", "label": "Gustav", "kind": "human"}],
+        }
+    )
+
+
+def blocks(statement) -> list[tuple]:
+    """Each reference block's (stated in, page number, excerpt)."""
+
+    def first(block, key):
+        snaks = block.snaks.get(PROPERTIES[key]) or []
+        if not snaks:
+            return None
+        value = snaks[0].datavalue["value"]
+        return (
+            value.get("id") or value.get("text")
+            if isinstance(value, dict)
+            else value
+        )
+
+    return [
+        (
+            first(block, "stated_in"),
+            first(block, "page_number"),
+            first(block, "transcription_excerpt"),
+        )
+        for block in statement.references.references
+    ]
+
+
+class TestTheWriter:
+    def test_the_statement_is_a_reference_block_of_its_own(self):
+        wiki = Wiki({MEDIA_SHA1: "Q23"})
+        batch = written("Gustl finally has his visa", True)
+        result = write_mapped(BatchWriter(wiki), batch)
+        assert result.written == 1
+        person = wiki.wbi.item.get(result.created_items["e1"])
+        (statement,) = person.claims.get(PROPERTIES["nickname"])
+        assert [b for b in blocks(statement) if b[0] is not None] == [
+            ("Q23", "6", "Gustl finally has his visa"),
+            ("Q23", "2", STATEMENT),
+        ]
+        # a re-run adds nothing
+        again = write_mapped(BatchWriter(wiki), batch)
+        assert (again.written, again.skipped) == (0, 1)
+        (statement,) = person.claims.get(PROPERTIES["nickname"])
+        assert len(statement.references.references) == 3
+
+    def test_identical_values_are_kept_apart_by_the_marker(self):
+        wiki = Wiki({MEDIA_SHA1: "Q23"})
+        marked_ = written("Gustl finally has his visa", True)
+        plain = written("Gustl was Ursula's younger brother", False)
+        assert marked_.claims[0].value == plain.claims[0].value
+        first = write_mapped(BatchWriter(wiki), marked_)
+        write_mapped(BatchWriter(wiki), plain)
+        person = wiki.wbi.item.get(first.created_items["e1"])
+        statements = person.claims.get(PROPERTIES["nickname"])
+        assert len(statements) == 2
+
+
+class TestTheSamePointedLine:
+    def test_a_statement_beside_the_pointed_words_is_refused(self, tmp_path):
+        # the curator points to "any mistakes are mine"; the statement
+        # about the translation software stands on the same line, outside
+        # the pointed words
+        assert line_of(BOOKLET, "any mistakes are mine") == line_of(
+            BOOKLET, STATEMENT
+        )
+        ref = transcription(BOOKLET).artifact
+        claims = [claim(ref, "Rahel now lives at Angerring 71", 1901)]
+        batch, extractor, _ = extract(
+            BOOKLET,
+            THE_TRANSLATIONS,
+            claims,
+            tmp_path,
+            pointer="any mistakes are mine",
+        )
+        assert marked(batch) == [False]
+        (why,) = extractor.attention
+        assert "not the passage the curator pointed to" in why
+
+    def test_a_statement_within_the_pointed_words_is_taken(self, tmp_path):
+        ref = transcription(BOOKLET).artifact
+        claims = [claim(ref, "Rahel now lives at Angerring 71", 1901)]
+        batch, _, _ = extract(
+            BOOKLET,
+            THE_TRANSLATIONS,
+            claims,
+            tmp_path,
+            pointer=STATEMENT + "; any mistakes are mine.",
+        )
+        assert marked(batch) == [True]
