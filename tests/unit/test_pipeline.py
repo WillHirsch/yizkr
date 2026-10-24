@@ -33,6 +33,7 @@ from yizkr.pipeline.clustering import IdentityMap
 from yizkr.pipeline.extract import (
     ClaimFileExtractor,
     LlmClaimExtractor,
+    UnusableExtraction,
     _parse_response,
 )
 from yizkr.pipeline.resolve import resolve_batch
@@ -219,7 +220,9 @@ class TestExtract:
     def test_llm_extractor_rejects_unknown_property(self):
         bad = [dict(CLAIMS[1], property="shoe_size")]
         llm = FakeLlm(json.dumps({"claims": bad}))
-        with pytest.raises(ValueError, match="shoe_size"):
+        with pytest.raises(
+            UnusableExtraction, match="(?s)every extracted claim.*shoe_size"
+        ):
             LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
 
     def test_llm_extractor_salvages_valid_claims_around_bad_ones(
@@ -302,8 +305,22 @@ class TestExtract:
 
     def test_llm_extractor_rejects_prose_without_json(self):
         llm = FakeLlm("I could not find any claims, sorry!")
-        with pytest.raises(ValueError, match="no claim JSON"):
+        with pytest.raises(UnusableExtraction, match="no claim JSON"):
             LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
+
+    def test_a_bug_in_the_extractor_is_a_bare_value_error(self, monkeypatch):
+        """Only an outcome the extractor expects is an UnusableExtraction:
+        a ValueError from anywhere else stays bare, so `ingest extract`
+        keeps its traceback (#650)."""
+
+        def broken(*args, **kwargs):
+            raise ValueError("an unexpected bug")
+
+        monkeypatch.setattr(extract, "scan_json_objects", broken)
+        llm = FakeLlm(json.dumps({"claims": CLAIMS}))
+        with pytest.raises(ValueError, match="unexpected bug") as raised:
+            LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
+        assert not isinstance(raised.value, UnusableExtraction)
 
     def test_parse_response_tolerates_fences_and_prose(self):
         payload = {"claims": []}
@@ -402,6 +419,21 @@ class TestExtract:
         )
         assert len(result.claims) == 2
         assert result.extraction_run.model_identifier == "manual"
+
+    def test_a_claims_file_failing_the_manifest_is_unusable(self, tmp_path):
+        """A prepared file whose claims fail manifest validation is an
+        UnusableExtraction, with each problem in its reason (#650)."""
+        claims_file = tmp_path / "claims.json"
+        claims_file.write_text(
+            json.dumps({"claims": [dict(CLAIMS[1], property="shoe_size")]})
+        )
+        with pytest.raises(
+            UnusableExtraction,
+            match="(?s)claims file failed manifest validation.*shoe_size",
+        ):
+            ClaimFileExtractor(claims_file).extract(
+                self.transcription(), MEDIA_REF
+            )
 
     def test_file_extractor_keeps_the_artifacts_its_claims_cite(
         self, tmp_path

@@ -564,6 +564,7 @@ def cmd_extract(args) -> int:
                 rejects_dump=rejects_dump,
             )
     from yizkr.pipeline.chunking import ExtractionFailed
+    from yizkr.pipeline.extract import UnusableExtraction
 
     try:
         batch = extractor.extract(transcription, transcription.artifact)
@@ -573,7 +574,7 @@ def cmd_extract(args) -> int:
         # <out>.stale name, so no later step reads it as this run's. Moved,
         # not deleted: it may be the one copy of an earlier extraction.
         moved = _move_aside_earlier_batch(args.out)
-        if not isinstance(exc, ExtractionFailed):
+        if not isinstance(exc, (ExtractionFailed, UnusableExtraction)):
             # the exception keeps its own handling, after one line on what
             # became of the earlier batch
             if moved:

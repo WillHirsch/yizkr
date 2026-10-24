@@ -336,6 +336,15 @@ def scan_json_objects(response: str) -> list[dict]:
     return objects
 
 
+class UnusableExtraction(ValueError):
+    """A single-call extraction ended without a batch for an outcome the
+    extractors expect: an answer with no claim JSON, one whose every
+    claim failed validation, or a claims file that fails manifest
+    validation. The message is the reason, as `ingest extract` reports
+    it in one line. A ValueError, as a caller that catches one still
+    catches it; a bare ValueError is a bug, and keeps its traceback."""
+
+
 def _parse_response(response: str) -> dict:
     """Extract claim JSON from model output.
 
@@ -357,7 +366,7 @@ def _parse_response(response: str) -> dict:
         elif "subject" in obj and "property" in obj:
             salvaged.append(obj)
     if not found and not salvaged:
-        raise ValueError(
+        raise UnusableExtraction(
             f"no claim JSON in extractor response (neither a 'claims' "
             f"object nor loose claim objects): {response.strip()[:200]!r}"
         )
@@ -662,15 +671,16 @@ class LlmClaimExtractor:
     An answer the extractor cannot fully use is rejected through the
     client (llm.reject_response), so that a client that keeps answers
     asks the engine again next time rather than serving it: one with no
-    claim JSON or no valid claim (the extraction then fails), and one cut
-    off, which the engine stopped at its output limit
-    (llm.at_output_limit) or which has no terminal sentinel (the claims it
-    holds are still returned). An answer the client kept from an earlier
-    call is asked for once more when it is rejected, and the engine's
-    answer is used in its place, as it would be without the cache. A call
-    the engine gave up on at its output limit (llm.OutputLimitReached)
-    gave no answer and so no claim: the extraction fails with it, and the
-    cache keeps nothing for it, so the next run asks again."""
+    claim JSON or no valid claim (the extraction then fails, with
+    UnusableExtraction), and one cut off, which the engine stopped at its
+    output limit (llm.at_output_limit) or which has no terminal sentinel
+    (the claims it holds are still returned). An answer the client kept
+    from an earlier call is asked for once more when it is rejected, and
+    the engine's answer is used in its place, as it would be without the
+    cache. A call the engine gave up on at its output limit
+    (llm.OutputLimitReached) gave no answer and so no claim: the
+    extraction fails with it, and the cache keeps nothing for it, so the
+    next run asks again."""
 
     def __init__(
         self,
@@ -740,7 +750,7 @@ class LlmClaimExtractor:
             self.raw_dump.write_text(response)
         try:
             payload = _parse_response(response)
-        except ValueError:
+        except UnusableExtraction:
             reject_answer(response, "extraction: no claim JSON")
             raise
         finished = any(
@@ -764,7 +774,7 @@ class LlmClaimExtractor:
                 for reject in rejects[:20]
                 for problem in reject["problems"]
             )
-            raise ValueError(
+            raise UnusableExtraction(
                 f"every extracted claim failed validation "
                 f"({len(rejects)} rejects):\n  {detail}"
             )
@@ -788,7 +798,8 @@ class ClaimFileExtractor:
     cite their artifacts themselves, by content key, and are validated as
     they are, with the artifacts the transcription's pages place taken as
     placed by the transcription's artifact (placed_by): `extract` takes
-    the same arguments as the other extractors and uses only that.
+    the same arguments as the other extractors and uses only that. A
+    file whose claims fail manifest validation raises UnusableExtraction.
     """
 
     def __init__(
@@ -813,7 +824,7 @@ class ClaimFileExtractor:
             batch, placed=placed_by(transcription, transcription.artifact)
         )
         if problems:
-            raise ValueError(
+            raise UnusableExtraction(
                 "claims file failed manifest validation:\n  "
                 + "\n  ".join(problems)
             )

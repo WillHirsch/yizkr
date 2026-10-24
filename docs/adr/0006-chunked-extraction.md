@@ -408,6 +408,15 @@ run's. A complete extraction writes its batch over an earlier one, as
 before, and a folder at `--out` is refused in one line before any engine
 is reached.
 
+Amended by #650 (2026-10-24): the single-call extractors raise a named
+`UnusableExtraction` (a `ValueError`, in `pipeline/extract.py`) for the
+outcomes they expect: an answer with no claim JSON, an answer whose
+every claim fails validation, and a claims file (`--engine file`) whose
+claims fail manifest validation. `ingest extract` ends on one in its
+one line and EXIT_FAILED, as on an `ExtractionFailed`. Any other
+exception, a bare `ValueError` included, is a bug and keeps its
+traceback.
+
 `auto` (the default) picks chunked when the transcription exceeds a
 conservative threshold (default 4,000 chars). Density — the real
 driver — is unknowable upfront, and chunking a document that would

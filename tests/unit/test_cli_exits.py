@@ -426,13 +426,12 @@ class TestIngestExtract:
     def test_any_other_exception_moves_an_earlier_batch_aside_too(
         self, tmp_path, monkeypatch, capsys
     ):
-        """A ValueError (a single-call extractor's, or a bug's) keeps its
-        traceback, but the earlier batch is moved aside first and a line
-        says where (#639)."""
+        """A bug's bare ValueError keeps its traceback, but the earlier
+        batch is moved aside first and a line says where (#639, #650)."""
         from yizkr.pipeline import extract
 
         def broken(self, transcription, artifact):
-            raise ValueError("every extracted claim failed validation")
+            raise ValueError("an unexpected bug failed validation")
 
         monkeypatch.setattr(extract.ClaimFileExtractor, "extract", broken)
         out = tmp_path / "batch.json"
@@ -446,6 +445,132 @@ class TestIngestExtract:
         assert stale.read_text() == self.EARLIER
         assert capsys.readouterr().err == (
             f"{out} not written; the earlier batch there moved to {stale}\n"
+        )
+
+    @staticmethod
+    def extract_single(tmp_path, monkeypatch, response: str):
+        """`ingest extract --engine llm --strategy single` on a
+        transcription of MEDIA, its engine answering `response`; its
+        status and its batch's path."""
+        from tests.unit.test_pipeline import FakeLlm
+        from yizkr.pipeline import llm
+        from yizkr.pipeline.transcribe import Transcription
+
+        monkeypatch.setattr(
+            llm, "make_client", lambda *args, **kwargs: FakeLlm(response)
+        )
+        path = tmp_path / "transcription.json"
+        path.write_text(
+            Transcription(
+                artifact=MEDIA_REF, text="a page", engine="test"
+            ).model_dump_json()
+        )
+        out = tmp_path / "batch.json"
+        status = cli.main(
+            [
+                *("ingest", "extract", "--transcription", str(path)),
+                *("--engine", "llm", "--strategy", "single"),
+                *("--out", str(out)),
+            ]
+        )
+        return status, out
+
+    def test_a_single_call_answer_without_claim_json_is_one_line(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A single-call answer with no claim JSON ends the step in one
+        line, with a failure's status and no batch, as a chunked
+        extraction's failure does; an earlier batch is moved aside
+        (#650)."""
+        out = tmp_path / "batch.json"
+        out.write_text(self.EARLIER)
+        stale = tmp_path / "batch.json.stale"
+
+        status, _ = self.extract_single(
+            tmp_path, monkeypatch, "no claims here, sorry"
+        )
+
+        assert status == EXIT_FAILED
+        captured = capsys.readouterr()
+        _no_traceback(captured.err)
+        assert captured.err == (
+            "extraction failed: no claim JSON in extractor response "
+            "(neither a 'claims' object nor loose claim objects): "
+            f"'no claims here, sorry'; {out} not written; the earlier "
+            f"batch there moved to {stale}\n"
+        )
+        assert not out.exists()
+        assert stale.read_text() == self.EARLIER
+
+    def test_a_single_call_answer_of_invalid_claims_is_one_line(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A single-call answer whose every claim fails validation ends
+        the step in one line, its reasons folded into it (#650)."""
+        from tests.unit.test_pipeline import CLAIMS
+
+        answer = json.dumps(dict(CLAIMS[1], property="shoe_size"))
+        status, out = self.extract_single(tmp_path, monkeypatch, answer)
+
+        assert status == EXIT_FAILED
+        captured = capsys.readouterr()
+        _no_traceback(captured.err)
+        assert captured.err == (
+            "extraction failed: every extracted claim failed validation "
+            "(1 rejects): claims[0]: unknown property key 'shoe_size'; "
+            f"{out} not written\n"
+        )
+        assert captured.out == ""
+        assert not out.exists()
+
+    def test_a_claims_file_failing_the_manifest_is_one_line(
+        self, tmp_path, capsys
+    ):
+        """A claims file whose claims fail manifest validation ends the
+        step in one line, with a failure's status and no batch (#650)."""
+        from tests.unit.test_pipeline import CLAIMS
+
+        (tmp_path / "claims.json").write_text(
+            json.dumps({"claims": [dict(CLAIMS[1], property="shoe_size")]})
+        )
+
+        status, out = self.extract(tmp_path)
+
+        assert status == EXIT_FAILED
+        captured = capsys.readouterr()
+        _no_traceback(captured.err)
+        assert captured.err == (
+            "extraction failed: claims file failed manifest validation: "
+            f"claims[0]: unknown property key 'shoe_size'; {out} not "
+            "written\n"
+        )
+        assert not out.exists()
+
+    def test_a_bug_in_the_single_call_extractor_keeps_its_traceback(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A bare ValueError raised inside the single-call extractor is a
+        bug, not an expected outcome: it propagates, after the line on
+        an earlier batch's fate (#650)."""
+        from tests.unit.test_pipeline import CLAIMS
+        from yizkr.pipeline import extract
+
+        def broken(*args, **kwargs):
+            raise ValueError("an unexpected bug")
+
+        monkeypatch.setattr(extract, "cite_artifact", broken)
+        out = tmp_path / "batch.json"
+        out.write_text(self.EARLIER)
+
+        with pytest.raises(ValueError, match="unexpected bug") as raised:
+            self.extract_single(
+                tmp_path, monkeypatch, json.dumps({"claims": CLAIMS})
+            )
+
+        assert not isinstance(raised.value, extract.UnusableExtraction)
+        assert capsys.readouterr().err == (
+            f"{out} not written; the earlier batch there moved to "
+            f"{tmp_path / 'batch.json.stale'}\n"
         )
 
     def test_a_successful_extraction_replaces_an_earlier_batch(
