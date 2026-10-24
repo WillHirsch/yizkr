@@ -228,6 +228,10 @@ EXCERPTS_DIR = "excerpts"
 # the transcription route of a paged container, a PDF or a deck, read by
 # its format's reader (yizkr.pipeline.containers)
 PAGED = "paged"
+# the transcription routes whose transcribers check their output: a view
+# made by one of them is checked again when it is reused, by the driver
+# and the estimate alike
+CHECKED_ROUTES = frozenset(("vision", PAGED, "text-file", EXCERPT))
 
 # the stages each kind of document runs before the gates, in order
 _EXTRACTED = ("transcription", "extraction", "critique")
@@ -1487,9 +1491,9 @@ class Orchestrator:
     def _transcription(self, doc: DocumentRun):
         """The document's transcription view, reused when it stands
         (`_reused_view`) and made otherwise, then recorded with its
-        canonical content hash; once per run. A vision or text-file
-        transcription, the routes whose transcribers check their output,
-        is checked again when it is reused: the check may have become
+        canonical content hash; once per run. A transcription made by a
+        route whose transcriber checks its output (CHECKED_ROUTES) is
+        checked again when it is reused: the check may have become
         stricter since the view was made, and one it now fails is made
         again (`_transcription_failure`)."""
         from yizkr.pipeline.transcribe import Transcription
@@ -1497,7 +1501,7 @@ class Orchestrator:
         memo = (doc.sha1, doc.transcription.name)
         if memo in self._views:
             return self._views[memo]
-        checked = self._route(doc) in ("vision", PAGED, "text-file", EXCERPT)
+        checked = self._route(doc) in CHECKED_ROUTES
         transcription = self._reused_view(
             doc,
             doc.transcription,

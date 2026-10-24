@@ -171,9 +171,11 @@ ways to make views again:
 - A scratch run starts from fresh state directories (#194), where every
   view is made again and the cache makes that cheap.
 
-A reused view is a `reused` event for its stage (§8). A vision or
-text-file transcription, the routes whose transcribers check their
-output, is checked again each time it is reused, with the transcription
+A reused view is a `reused` event for its stage (§8). A
+transcription made by a route whose transcriber checks its output
+(vision, paged, text-file and excerpt: `CHECKED_ROUTES` in
+`yizkr.pipeline.orchestrate`, one list the driver and the estimate share)
+is checked again each time it is reused, with the transcription
 check as it is now (§4); a curator's correction and slide text are never
 checked. A transcription the check now fails is moved aside as
 `transcription.superseded-<n>.json`, never deleted, with a `set-aside`
