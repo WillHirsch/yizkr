@@ -235,6 +235,15 @@ PAGED = "paged"
 # and the estimate alike; route names, not the engine prefixes
 # yizkr.pipeline.anomalies.CHECKED_ROUTES judges
 CHECKED_ROUTES = frozenset(("vision", PAGED, "text-file", EXCERPT))
+# the transcription routes the driver dispatches (Orchestrator._transcribe),
+# each to the name of the Orchestrator method that transcribes by it
+TRANSCRIBERS = {
+    "vision": "_transcribe_vision",
+    PAGED: "_transcribe_paged",
+    "text-file": "_transcribe_text_file",
+    "correction": "_transcribe_correction",
+    EXCERPT: "_transcribe_excerpt",
+}
 
 # the stages each kind of document runs before the gates, in order
 _EXTRACTED = ("transcription", "extraction", "critique")
@@ -1775,15 +1784,9 @@ class Orchestrator:
         return transcription
 
     def _transcribe(self, doc: DocumentRun, method: str):
-        """(transcription, language resolution) by the routed method."""
-        transcribe = {
-            "vision": self._transcribe_vision,
-            PAGED: self._transcribe_paged,
-            "text-file": self._transcribe_text_file,
-            "correction": self._transcribe_correction,
-            EXCERPT: self._transcribe_excerpt,
-        }[method]
-        return transcribe(doc)
+        """(transcription, language resolution) by the routed method, its
+        transcriber named in TRANSCRIBERS."""
+        return getattr(self, TRANSCRIBERS[method])(doc)
 
     def _transcribe_excerpt(self, doc: DocumentRun):
         """(transcription, language resolution) of an excerpt: the reading
