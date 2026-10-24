@@ -1548,7 +1548,11 @@ surname types, roles, classes and note categories. Beyond the schema:
   plain (low and angle quotes, the non-breaking hyphen, the figure dash
   and the minus sign among them) and a soft hyphen dropped, with every
   run of whitespace and line breaks made one space and a hyphen at a
-  line's end joined (a soft hyphen at a line's end too), or, where the
+  line's end joined (a soft hyphen at a line's end too; only the hyphen,
+  U+2010, U+2011 and the soft hyphen, tested as written: a dash at a
+  line's end, figure, en or em dash, horizontal bar or minus sign, is a
+  break between words, so "1912" then a dash and "1926" on the next
+  line holds the excerpt "1912", amended by #664), or, where the
   joined reading finds nothing, kept, for an excerpt that crosses the
   hyphen, as a hyphenated name a line breaks at its own hyphen is
   quoted, and then kept with a space after it, as a quote that copies

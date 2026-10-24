@@ -1,6 +1,7 @@
 """The verbatim comparison's third reading of a hyphen at a line's end,
 spaced, and its fold of typographic quotes, dashes and the soft hyphen
-(#612, ADR-0035 §5).
+(#612, ADR-0035 §5), and a dash at a line's end, a break between words
+(#664).
 
 Every text is the fictional universe's (docs/EXAMPLES.md): the hat firm
 at Brunnenring 35, Flörburg, the 1952 letter's sender in Drakeradiel, and
@@ -219,3 +220,80 @@ class TestTheSoftHyphen:
         assert found.locate("Brunnen- ring 35") is None
         assert found.locate("Brunnen-ring 35") is None
         assert found.locate("Brunnen ring 35") is None
+
+
+DASHES = ["‒", "–", "—", "―", "−"]
+
+
+class TestADashAtALinesEnd:
+    """Only the hyphen, U+2010, U+2011 and the soft hyphen break a word
+    at a line's end; a dash there is a break between words (#664)."""
+
+    @pytest.mark.parametrize("dash", DASHES)
+    def test_the_years_either_side_are_words(self, dash):
+        found = Transcript(f"Brunnenring 35, 1912{dash}\n1926")
+        assert found.locate("1912") == 1
+        assert found.span("1926") == (2, 2)
+        assert found.span(f"1912{dash} 1926") == (1, 2)
+        assert found.span("1912- 1926") == (1, 2)
+        # never one word, nor the kept dash closed up
+        assert found.locate("19121926") is None
+        assert found.locate(f"1912{dash}1926") is None
+
+    @pytest.mark.parametrize("dash", DASHES)
+    def test_the_name_before_the_dash_is_whole(self, dash):
+        found = Transcript(f"Gustav Löbig{dash}\nder Hutmacher")
+        assert found.locate("Gustav Löbig") == 1
+        assert found.span("der Hutmacher") == (2, 2)
+        assert found.locate("Gustav Löbigder Hutmacher") is None
+
+    @pytest.mark.parametrize("dash", DASHES)
+    def test_its_words_are_read_apart(self, dash):
+        for reading in word_readings(f"1912{dash}\n1926"):
+            assert reading == ["1912", "1926"]
+        # a dash spaced within a line is no copied line-end hyphen
+        for reading in word_readings(f"Gustav Löbig{dash} der Hutmacher"):
+            assert reading == ["gustav", "lobig", "der", "hutmacher"]
+
+    @pytest.mark.parametrize("dash", DASHES)
+    def test_an_excerpt_s_own_dash_is_no_hyphen(self, dash):
+        # an excerpt that copies the line's end reads the dash spaced
+        assert (
+            Transcript(f"Gustav Löbig{dash} der Hutmacher").locate(
+                f"Löbig{dash}\nder"
+            )
+            == 1
+        )
+        assert (
+            Transcript("Gustav Löbigder Hutmacher").locate(f"Löbig{dash}\nder")
+            is None
+        )
+
+    @pytest.mark.parametrize("dash", DASHES)
+    def test_container_evidence_names_both_words(self, dash):
+        assert container_problem(
+            Container(name="Drake", evidence=f"gemeente Drake{dash}\nradiel"),
+            Transcript(f"Snylsjum, gemeente Drake{dash}\nradiel, Fryslân"),
+        ) == (None, (1, 2))
+        reason, _ = container_problem(
+            Container(name="Drakeradiel", evidence="gemeente Drakeradiel"),
+            Transcript(f"Snylsjum, gemeente Drake{dash}\nradiel, Fryslân"),
+        )
+        assert reason == EVIDENCE_NOT_IN_SOURCE
+
+    @pytest.mark.parametrize("hyphen", ["-", "‐", "‑", "­"])
+    def test_each_hyphen_still_breaks_a_word(self, hyphen):
+        found = Transcript(
+            f"Snylsjum, gemeente Drake{hyphen}\nradiel, Fryslân"
+        )
+        assert found.span("gemeente Drakeradiel") == (1, 2)
+        assert words(f"Drake{hyphen}\nradiel") == ["drakeradiel"]
+        # #589's negatives: part of a word is no match
+        assert found.locate("gemeente Drake") is None
+        assert found.locate("radiel, Fryslân") is None
+
+    def test_the_hyphens_are_those_the_fold_reads_as_one(self):
+        from yizkr.core import verbatim
+
+        assert set(verbatim._HYPHENS) == {"-", "‐", "‑"}
+        assert {fold(c) for c in verbatim._HYPHENS} == {"-"}
