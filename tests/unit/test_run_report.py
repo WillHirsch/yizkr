@@ -56,6 +56,7 @@ from yizkr.claims import (
     _clear_empty,
     set_aside_structure,
     structure_problems,
+    structure_readings,
 )
 from yizkr.pipeline import llm, report
 from yizkr.pipeline.chunking import _set_aside_note
@@ -3148,6 +3149,7 @@ class TestContent:
             label
             for check in (
                 structure_problems,
+                structure_readings,
                 set_aside_structure,
                 _clear_empty,
             )

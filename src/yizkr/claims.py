@@ -1355,12 +1355,6 @@ def label_container(
     return None
 
 
-# the leading label of the reading a place's written name that is its
-# label and one of its containers gives (ADR-0035 §5): counted, never a
-# reason the record is set aside by
-LABEL_AND_CONTAINER = "label and container"
-
-
 def structure_readings(entity: EntityRecord) -> list[str]:
     """The readings of an entity's mention record that set nothing aside
     (ADR-0035 §5), each its label first: for a place record of a place,
@@ -1371,7 +1365,7 @@ def structure_readings(entity: EntityRecord) -> list[str]:
     if not isinstance(structure, PlaceStructure) or entity.kind != "place":
         return []
     return [
-        f"{LABEL_AND_CONTAINER}: structure.place.names.{index}.written: "
+        f"label and container: structure.place.names.{index}.written: "
         f"the label and one of its containers"
         for index, name in enumerate(structure.names)
         if label_container(name.written, entity.label, structure.within)
