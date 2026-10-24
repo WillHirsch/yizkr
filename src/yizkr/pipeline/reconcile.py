@@ -63,6 +63,7 @@ from yizkr.core.wiki import WikiClient
 from yizkr.disagreement import followed
 from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.llm import CUT_OFF_AT_LIMIT, LlmClient, at_output_limit
+from yizkr.pipeline.names import NOT_PERSONS
 from yizkr.queries.publish import (
     load_templates,
     prefix_block,
@@ -91,9 +92,9 @@ class RosterEntity(BaseModel):
     married_names: list[str] = []
     nicknames: list[str] = []
     official_names: list[str] = []
-    # the values of its `referred_to_as` statements, the forms its
-    # sources give as appellations of it (ADR-0018): an alias equal to one
-    # is no name it blocks on
+    # the values of its `referred_to_as` statements not deprecated, the
+    # forms its sources give as appellations of it (ADR-0018): a person's
+    # label or alias equal to one is no name it blocks on
     appellations: list[str] = []
     # raw related-entity QIDs for the impossibility filter (ADR-0017):
     # a kinship edge between two candidates proves they are two people.
@@ -159,7 +160,7 @@ SELECT ?item ?itemLabel ?kind ?kindLabel
        (GROUP_CONCAT(DISTINCT ?marriedName; separator="|") AS ?marriedNames)
        (GROUP_CONCAT(DISTINCT ?nick; separator="|") AS ?nicknames)
        (GROUP_CONCAT(DISTINCT ?officialName; separator="|") AS ?officialNames)
-       (GROUP_CONCAT(DISTINCT ?appellation; separator="|") AS ?appellations)
+       (SAMPLE(?itemAppellations) AS ?appellations)
        (GROUP_CONCAT(DISTINCT STRAFTER(STR(?spouseItem), "entity/");
                       separator="|") AS ?spouseQids)
        (GROUP_CONCAT(DISTINCT STRAFTER(STR(?fatherItem), "entity/");
@@ -177,9 +178,21 @@ WHERE {{
   OPTIONAL {{ ?item wdt:{married_name} ?marriedName . }}
   OPTIONAL {{ ?item wdt:{nickname} ?nick . }}
   OPTIONAL {{ ?item wdt:{official_name} ?officialName . }}
-  # appellations at every rank: a curator's preference among them leaves
-  # each form an appellation
-  OPTIONAL {{ ?item p:{referred_to_as}/ps:{referred_to_as} ?appellation . }}
+  # appellations at any rank but deprecated: a curator's preference among
+  # them leaves each form an appellation, and a deprecated statement
+  # asserts none; grouped apart, so they multiply no other value's rows
+  OPTIONAL {{
+    SELECT ?item (GROUP_CONCAT(DISTINCT ?appellation; separator="|")
+                  AS ?itemAppellations)
+    WHERE {{
+      ?item p:{referred_to_as} ?appellationStatement .
+      ?appellationStatement ps:{referred_to_as} ?appellation .
+      FILTER NOT EXISTS {{
+        ?appellationStatement wikibase:rank wikibase:DeprecatedRank .
+      }}
+    }}
+    GROUP BY ?item
+  }}
   # each date read from its best-rank statement's value node, as the
   # truthy wdt: value is, with its precision, and joined to it as
   # "time|precision" so the sample takes both from one statement
@@ -424,24 +437,30 @@ def entity_name_keys(entity: EntityRecord) -> set[str]:
 def roster_name_keys(roster_entity: RosterEntity) -> set[str]:
     """What a graph item blocks on: its label and aliases, and the values
     of its typed name statements (birth, nickname, official name), each
-    whole. An alias equal to the value of one of its `referred_to_as`
-    statements (ADR-0018), as ``name_form_key`` compares them, is an
-    appellation, no name form, and keys nothing, so two grandmothers
-    each aliased "Oma" never pair by it; a typed name statement keys
-    whatever its value, so a nickname that is also an appellation still
-    keys. A married name is a family name alone by its property, so it
-    never stands for a whole name. A birth name is a full name by its
-    property; one a source gave as a surname alone keys as that surname,
-    which meets only an entity named by it whole, since telling the two
-    apart would read the value's words."""
-    appellations = {name_form_key(form) for form in roster_entity.appellations}
+    whole. A label or alias equal to the value of one of the item's own
+    `referred_to_as` statements not deprecated (ADR-0018), as
+    ``name_form_key`` compares them, is an appellation, no name form, and
+    keys nothing, so two grandmothers each labelled or aliased "Oma"
+    never pair by it, while a longer name holding it as a word still
+    keys. Only a kind that may be a person has appellations: a place's,
+    an organisation's or a family's every name keys. A typed name
+    statement keys whatever its value, so a nickname that is also an
+    appellation still keys. A married name is a family name alone by its
+    property, so it never stands for a whole name. A birth name is a full
+    name by its property; one a source gave as a surname alone keys as
+    that surname, which meets only an entity named by it whole, since
+    telling the two apart would read the value's words."""
+    appellations = (
+        set()
+        if roster_entity.kind in NOT_PERSONS
+        else {name_form_key(form) for form in roster_entity.appellations}
+    )
     return _keys(
         [
-            roster_entity.label,
             *(
-                alias
-                for alias in roster_entity.aliases
-                if name_form_key(alias) not in appellations
+                name
+                for name in (roster_entity.label, *roster_entity.aliases)
+                if name_form_key(name) not in appellations
             ),
             *roster_entity.birth_names,
             *roster_entity.nicknames,

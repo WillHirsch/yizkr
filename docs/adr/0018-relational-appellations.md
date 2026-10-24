@@ -83,13 +83,15 @@ never an alias, are superseded so far; appellations of possibly-living
 people ride the possibly-living exclusion, as before (ADR-0020).
 Amended by #523 (2026-10-24): reconcile's blocking against graph items
 (ADR-0007) keys the same way. The roster reads each item's
-`referred_to_as` values, at every rank, and an alias equal to one of the
-item's own values (compared as alias hygiene compares names) keys
-nothing, so two graph items each aliased "Oma" are never a candidate
-pair by it, while a name form they share still is. The item's label
-and its typed name statements (birth name, nickname, official name)
-key whatever their value: a nickname that is also an appellation keys
-as a nickname.
+`referred_to_as` values at any rank but deprecated, and a person's
+label or alias equal to one of the item's own values (compared as alias
+hygiene compares names) keys nothing, so two graph items each labelled
+or aliased "Oma" are never a candidate pair by it, while a name form
+they share, or a longer name holding the appellation as a word, still
+is. A place, an organisation or a family has no appellations, so every
+name it has keys. The item's typed name statements (birth name,
+nickname, official name) key whatever their value: a nickname that is
+also an appellation keys as a nickname.
 
 ## Context
 

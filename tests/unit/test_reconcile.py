@@ -1778,21 +1778,114 @@ class TestAppellationAliases:
         assert "Q40" in prompt and "Q42" in prompt
         assert "Q41" not in prompt
 
-    def test_a_nickname_statement_keys_though_it_is_an_appellation(self):
-        """A typed name statement keys whatever its value: "Hilde", a
-        nickname and also an appellation, still meets an alias "Hilde"."""
+    @pytest.mark.parametrize(
+        ("statement", "value"),
+        [
+            ("nicknames", "Hilde"),
+            ("birth_names", "Hildegard Laudler"),
+            ("official_names", "Hilde Löbig"),
+        ],
+    )
+    def test_a_typed_name_statement_keys_though_it_is_an_appellation(
+        self, statement, value
+    ):
+        """A typed name statement keys whatever its value: a nickname, a
+        birth name or an official name that is also an appellation still
+        meets an alias of the same form."""
         roster = [
             RosterEntity(
                 qid="Q40",
                 label="Hildegard Löbig",
-                aliases=["Hilde"],
-                nicknames=["Hilde"],
-                appellations=["Hilde"],
+                aliases=[value],
+                appellations=[value],
+                kind="human",
+                **{statement: [value]},
+            ),
+            RosterEntity(
+                qid="Q43", label="H. Löbig", aliases=[value], kind="human"
+            ),
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        propose_graph_pairs(llm, roster)
+        assert len(llm.prompts) == 1
+
+    def test_a_label_that_is_an_appellation_keys_nothing(self):
+        """A person the document never names is labelled by its own words
+        for them ("Oma"), which the writer leaves out of the aliases: the
+        label is filtered as an alias is."""
+        never_named = [
+            RosterEntity(
+                qid=qid, label="Oma", appellations=["Oma"], kind="human"
+            )
+            for qid in ("Q44", "Q45")
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        assert propose_graph_pairs(llm, never_named) == []
+        assert llm.prompts == []
+        found = [
+            EntityRecord(
+                id="e1", label="Hildegard Löbig", aliases=["Oma"], kind="human"
+            )
+        ]
+        assert block_candidates(found, never_named) == {}
+
+    def test_a_name_holding_an_appellation_as_a_word_still_keys(self):
+        """Only an alias equal to an appellation is left out: "Peppi Löbig"
+        keys though "Peppi" is one."""
+        roster = [
+            RosterEntity(
+                qid="Q46",
+                label="Ida Löbig",
+                aliases=["Peppi", "Peppi Löbig"],
+                appellations=["Peppi"],
                 kind="human",
             ),
             RosterEntity(
-                qid="Q43", label="H. Löbig", aliases=["Hilde"], kind="human"
+                qid="Q47",
+                label="Ida Sörne",
+                aliases=["Peppi Löbig"],
+                kind="human",
             ),
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        propose_graph_pairs(llm, roster)
+        assert len(llm.prompts) == 1
+
+    def test_an_alias_matches_its_appellation_as_names_compare(self):
+        """An alias and its appellation are compared by name_form_key:
+        doubled inner whitespace is collapsed, as well as case folded."""
+        roster = [
+            RosterEntity(
+                qid="Q48",
+                label="Rahel Löbig",
+                aliases=["Tante  Rahel"],
+                appellations=["Tante Rahel"],
+                kind="human",
+            ),
+            RosterEntity(
+                qid="Q49",
+                label="R. Löbig",
+                aliases=["Tante Rahel"],
+                kind="human",
+            ),
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        assert propose_graph_pairs(llm, roster) == []
+        assert llm.prompts == []
+
+    @pytest.mark.parametrize("kind", ["place", "organization", "family"])
+    def test_a_kind_never_a_person_keys_every_name(self, kind):
+        """Appellations are a person's only: a place's alias that its own
+        `referred_to_as` statement also gives still keys."""
+        roster = [
+            RosterEntity(
+                qid="Q90",
+                label="Snylsjum",
+                aliases=["Snylsjum village"],
+                appellations=["Snylsjum village"],
+                kind=kind,
+            ),
+            RosterEntity(qid="Q91", label="Snylsjum village", kind=kind),
         ]
         llm = ScriptedLlm(json.dumps({"done": True}))
         propose_graph_pairs(llm, roster)
@@ -1849,10 +1942,19 @@ class TestAppellationAliases:
         assert item.appellations == ["Oma", "Omama"]
         assert item.aliases == ["Oma", "Omama", "Hilde"]
         (query,) = queries
+        flat = " ".join(query.split())
         # P15 is referred_to_as, as TestRosterKinds.Vocabulary numbers it:
-        # every rank's value, not the truthy one alone
-        assert "?item p:P15/ps:P15 ?appellation ." in query
+        # each statement's value at any rank but deprecated, not the
+        # truthy one alone
+        assert "?item p:P15 ?appellationStatement ." in flat
+        assert "?appellationStatement ps:P15 ?appellation ." in flat
         assert (
-            '(GROUP_CONCAT(DISTINCT ?appellation; separator="|")'
-            " AS ?appellations)"
-        ) in query
+            "FILTER NOT EXISTS { ?appellationStatement wikibase:rank"
+            " wikibase:DeprecatedRank . }"
+        ) in flat
+        # grouped per item in a sub-select of their own
+        assert (
+            'SELECT ?item (GROUP_CONCAT(DISTINCT ?appellation; separator="|")'
+            " AS ?itemAppellations)"
+        ) in flat
+        assert "(SAMPLE(?itemAppellations) AS ?appellations)" in flat
