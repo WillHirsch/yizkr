@@ -2916,19 +2916,38 @@ class TestThePipeline:
         extraction prompt is sent: an entity manifest and its chunks, and,
         for the note whose manifest is refused, a segmentation and its
         chunk; with a conversation the chunks fork it, and without one
-        they carry the document inline."""
+        they carry the document inline. Every transcription route that
+        feeds the extraction is taken: a scan read by the engine, a text
+        file, a deck's slide text, and a curator's correction of a text
+        file, which the run after the correction extracts again (#320).
+        The critique view has no content hash in the record, so its bytes
+        are compared too."""
+        from tests.unit.test_no_wiki_before_write import build_deck
+
         folder = folder_of_three(tmp_path)
+        build_deck(folder / "d-deck.pptx", media=False)
+        (folder / "e-card.txt").write_text("Eugen was born in 1863.")
         cache = tmp_path / "cache"
 
         def run(name, engine, cache_dir):
-            orchestrator = CachedRun(
-                folder,
-                tmp_path / name,
-                engine=engine,
-                cache_dir=cache_dir,
-                log=quiet,
-            )
-            assert orchestrator.run() == 2
+            """The folder, then the card corrected and the folder again,
+            in the one state directory, the engine the same for both."""
+            for corrected in (False, True):
+                orchestrator = CachedRun(
+                    folder,
+                    tmp_path / name,
+                    engine=engine,
+                    cache_dir=cache_dir,
+                    log=quiet,
+                )
+                if corrected:
+                    (card,) = [
+                        doc
+                        for doc in orchestrator.documents()
+                        if doc.dir.name == "e-card"
+                    ]
+                    card.correction.write_text("Eugen was born in 1836.")
+                assert orchestrator.run() == 2
             return orchestrator
 
         before = run("before", engine(reset_answers), cache)
@@ -2948,12 +2967,20 @@ class TestThePipeline:
             for orchestrator in (before, after, replay)
             for call in orchestrator.calls
         }
-        # the scan's reading; each document's manifest, chunk and critique;
-        # and for the note, its manifest asked for again, and its
-        # segmentation
+        # the scan's reading; each of the five documents' manifest, chunk
+        # and critique; for the note, its manifest asked for again, and its
+        # segmentation; and the corrected card's manifest, chunk and
+        # critique
         prompts = sorted(before.engine.calls)
-        assert len(prompts) == 12
+        assert len(prompts) == 21
+        assert transcriptions(before.engine) == 1
         assert any(p.startswith("You segment a document") for _, p in prompts)
+        # each transcription route made a view the extraction read
+        assert {
+            doc.dir.name: json.loads(doc.transcription.read_text())["engine"]
+            for doc in before.documents()
+            if doc.dir.name in ("d-deck", "e-card")
+        } == {"d-deck": "pptx-adapter", "e-card": "correction"}
         assert sorted(after.engine.calls) == prompts
 
         def keys(orchestrator, event):
@@ -2963,17 +2990,27 @@ class TestThePipeline:
                 if e["event"] == event
             )
 
-        assert len(keys(before, "cache-miss")) == 12
+        assert len(keys(before, "cache-miss")) == 21
         assert keys(replay, "cache-hit") == keys(before, "cache-miss")
         assert keys(replay, "cache-miss") == []
         records = [
             view_records(tmp_path / name)
             for name in ("before", "after", "replay")
         ]
-        assert len(records[0]) == 3
+        assert len(records[0]) == 5
         for record in records[0].values():
             assert all(record["derived"].values()), record
         assert records[0] == records[1] == records[2]
+        # the critique view, byte for byte
+        critiques = [
+            {
+                doc.dir.name: doc.critique.read_bytes()
+                for doc in orchestrator.documents()
+            }
+            for orchestrator in (before, after, replay)
+        ]
+        assert len(critiques[0]) == 5
+        assert critiques[0] == critiques[1] == critiques[2]
 
     def test_abort_and_resume_lose_no_completed_call(self, tmp_path):
         """A run interrupted mid-extraction keeps every call that
