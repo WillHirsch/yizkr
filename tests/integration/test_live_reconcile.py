@@ -13,6 +13,11 @@ and the younger's birth and death by events dated to a decade and a
 year, so the
 roster's dates round-trip at the precision each statement states, as
 "the 19th century" or "the 1850s", never as a first year (#337).
+
+Two grandmothers each carry the alias "Oma" and a `referred_to_as`
+statement giving it (ADR-0018), so the roster reads each one's
+appellations, and the alias they share is no key: the two are no
+graph-candidate pair (#523).
 """
 
 from __future__ import annotations
@@ -30,6 +35,7 @@ from yizkr.pipeline.reconcile import (
     fetch_place_containment,
     fetch_roster,
     impossible_pair,
+    propose_graph_pairs,
 )
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.writer import BatchWriter
@@ -41,7 +47,8 @@ FIXTURE = (
     "ADR-0017: an elder, the younger whose father he is, and a town part "
     "of a country, in one letter; #337: the elder born in the 19th century "
     "and dead in the 1890s, the younger's birth an event of the 1850s and his "
-    "death an event of 1938"
+    "death an event of 1938; #523: two grandmothers each aliased 'Oma' "
+    "with a referred_to_as statement giving it"
 )
 MARK = fixture_mark(FIXTURE, reconcile, writer)
 ELDER = f"Yizkr Reconcile-Test Elder {MARK}"
@@ -50,6 +57,9 @@ COUNTRY = f"Yizkr Reconcile-Test Country {MARK}"
 TOWN = f"Yizkr Reconcile-Test Town {MARK}"
 BIRTH = f"Yizkr Reconcile-Test Birth {MARK}"
 DEATH = f"Yizkr Reconcile-Test Death {MARK}"
+GRANDMOTHER_A = f"Yizkr Reconcile-Test Grandmother A {MARK}"
+GRANDMOTHER_B = f"Yizkr Reconcile-Test Grandmother B {MARK}"
+APPELLATION = "Oma"
 
 
 def _local(local_id: str, label: str, kind: str) -> dict:
@@ -84,6 +94,18 @@ def _relations_batch(artifact: ArtifactRef) -> ClaimBatch:
                 {"id": "e_country", "label": COUNTRY, "kind": "place"},
                 {"id": "e_birth", "label": BIRTH, "kind": "birth"},
                 {"id": "e_death", "label": DEATH, "kind": "death"},
+                {
+                    "id": "e_grandmother_a",
+                    "label": GRANDMOTHER_A,
+                    "aliases": [APPELLATION],
+                    "kind": "human",
+                },
+                {
+                    "id": "e_grandmother_b",
+                    "label": GRANDMOTHER_B,
+                    "aliases": [APPELLATION],
+                    "kind": "human",
+                },
             ],
             "claims": [
                 {
@@ -158,6 +180,21 @@ def _relations_batch(artifact: ArtifactRef) -> ClaimBatch:
                     "value": {"type": "time", "year": 1938},
                     "source": _source(artifact, "the son, died in 1938"),
                 },
+                *(
+                    {
+                        "subject": _local(local_id, label, "human"),
+                        "property": "referred_to_as",
+                        "value": {
+                            "type": "monolingual",
+                            "value": {"text": APPELLATION, "language": "de"},
+                        },
+                        "source": _source(artifact, f"{APPELLATION} schreibt"),
+                    }
+                    for local_id, label in (
+                        ("e_grandmother_a", GRANDMOTHER_A),
+                        ("e_grandmother_b", GRANDMOTHER_B),
+                    )
+                ),
             ],
         }
     )
@@ -250,3 +287,42 @@ def test_place_containment_closure_round_trips(client, config, written):
         )
         == "place-containment"
     )
+
+
+class _NoCall:
+    """An LLM client that records each prompt and proposes nothing."""
+
+    model_identifier = "integration-test"
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def complete(self, prompt, image_paths=()):
+        self.prompts.append(prompt)
+        return '{"done": true}'
+
+
+def test_appellation_aliases_make_no_candidate_pair(client, config, written):
+    """The roster reads each grandmother's `referred_to_as` value beside
+    her aliases, and the "Oma" they share keys neither, so the two are
+    never put to the adjudicator; read without their appellations, the
+    same two items would be (#523)."""
+    roster = fetch_roster(client, config)
+    grandmothers = [
+        _by_label(roster, GRANDMOTHER_A),
+        _by_label(roster, GRANDMOTHER_B),
+    ]
+    for grandmother in grandmothers:
+        assert APPELLATION in grandmother.aliases
+        assert grandmother.appellations == [APPELLATION]
+    llm = _NoCall()
+    assert propose_graph_pairs(llm, grandmothers) == []
+    assert llm.prompts == []
+    propose_graph_pairs(
+        llm,
+        [
+            grandmother.model_copy(update={"appellations": []})
+            for grandmother in grandmothers
+        ],
+    )
+    assert len(llm.prompts) == 1

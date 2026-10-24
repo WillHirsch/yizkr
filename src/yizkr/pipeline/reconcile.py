@@ -54,6 +54,7 @@ from yizkr.claims import (
     PersonStructure,
     PlaceStructure,
     QidRef,
+    name_form_key,
 )
 from yizkr.core import sparql
 from yizkr.core.config import Config
@@ -90,6 +91,10 @@ class RosterEntity(BaseModel):
     married_names: list[str] = []
     nicknames: list[str] = []
     official_names: list[str] = []
+    # the values of its `referred_to_as` statements, the forms its
+    # sources give as appellations of it (ADR-0018): an alias equal to one
+    # is no name it blocks on
+    appellations: list[str] = []
     # raw related-entity QIDs for the impossibility filter (ADR-0017):
     # a kinship edge between two candidates proves they are two people.
     spouse_qids: list[str] = []
@@ -154,6 +159,7 @@ SELECT ?item ?itemLabel ?kind ?kindLabel
        (GROUP_CONCAT(DISTINCT ?marriedName; separator="|") AS ?marriedNames)
        (GROUP_CONCAT(DISTINCT ?nick; separator="|") AS ?nicknames)
        (GROUP_CONCAT(DISTINCT ?officialName; separator="|") AS ?officialNames)
+       (GROUP_CONCAT(DISTINCT ?appellation; separator="|") AS ?appellations)
        (GROUP_CONCAT(DISTINCT STRAFTER(STR(?spouseItem), "entity/");
                       separator="|") AS ?spouseQids)
        (GROUP_CONCAT(DISTINCT STRAFTER(STR(?fatherItem), "entity/");
@@ -171,6 +177,9 @@ WHERE {{
   OPTIONAL {{ ?item wdt:{married_name} ?marriedName . }}
   OPTIONAL {{ ?item wdt:{nickname} ?nick . }}
   OPTIONAL {{ ?item wdt:{official_name} ?officialName . }}
+  # appellations at every rank: a curator's preference among them leaves
+  # each form an appellation
+  OPTIONAL {{ ?item p:{referred_to_as}/ps:{referred_to_as} ?appellation . }}
   # each date read from its best-rank statement's value node, as the
   # truthy wdt: value is, with its precision, and joined to it as
   # "time|precision" so the sample takes both from one statement
@@ -265,6 +274,7 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
         married_name=properties["married_name"],
         nickname=properties["nickname"],
         official_name=properties["official_name"],
+        referred_to_as=properties["referred_to_as"],
         birth_item=items["birth"],
         death_item=items["death"],
     )
@@ -314,6 +324,7 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
                 married_names=split(binding, "marriedNames"),
                 nicknames=split(binding, "nicknames"),
                 official_names=split(binding, "officialNames"),
+                appellations=split(binding, "appellations"),
                 spouse_qids=split(binding, "spouseQids"),
                 father_qids=split(binding, "fatherQids"),
                 mother_qids=split(binding, "motherQids"),
@@ -413,15 +424,25 @@ def entity_name_keys(entity: EntityRecord) -> set[str]:
 def roster_name_keys(roster_entity: RosterEntity) -> set[str]:
     """What a graph item blocks on: its label and aliases, and the values
     of its typed name statements (birth, nickname, official name), each
-    whole. A married name is a family name alone by its property, so it
+    whole. An alias equal to the value of one of its `referred_to_as`
+    statements (ADR-0018), as ``name_form_key`` compares them, is an
+    appellation, no name form, and keys nothing, so two grandmothers
+    each aliased "Oma" never pair by it; a typed name statement keys
+    whatever its value, so a nickname that is also an appellation still
+    keys. A married name is a family name alone by its property, so it
     never stands for a whole name. A birth name is a full name by its
     property; one a source gave as a surname alone keys as that surname,
     which meets only an entity named by it whole, since telling the two
     apart would read the value's words."""
+    appellations = {name_form_key(form) for form in roster_entity.appellations}
     return _keys(
         [
             roster_entity.label,
-            *roster_entity.aliases,
+            *(
+                alias
+                for alias in roster_entity.aliases
+                if name_form_key(alias) not in appellations
+            ),
             *roster_entity.birth_names,
             *roster_entity.nicknames,
             *roster_entity.official_names,

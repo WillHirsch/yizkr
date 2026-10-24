@@ -411,7 +411,9 @@ re-running one step in isolation — but for a normal ingest you only ever run
   clustering's (#105). The standalone `yizkr ingest reconcile` step still
   reads the graph: it blocks a batch's entities against a roster of the
   whole graph (shared kind + a whole name form, read through the mention
-  record: ADR-0007 as amended by #388), then an LLM adjudicates each
+  record: ADR-0007 as amended by #388; a graph item's alias that its own
+  `referred_to_as` statements give as an appellation keys nothing,
+  ADR-0018 as amended by #523), then an LLM adjudicates each
   candidate as same / uncertain / distinct. Both sides' dates reach the
   adjudicator at the precision their sources state, as the site shows
   them ("the 19th century", "the 1830s", never a first year): the

@@ -1447,6 +1447,7 @@ class TestRosterKinds:
                         "married_name",
                         "nickname",
                         "official_name",
+                        "referred_to_as",
                     ),
                     1,
                 )
@@ -1706,3 +1707,152 @@ class TestDatesAtTheirPrecision:
             assert f'CONCAT(STR(?{name}Time), "|",' in query
         assert "(SAMPLE(?birthDate) AS ?birth)" in query
         assert "(SAMPLE(?birthEventDate) AS ?eventBirth)" in query
+
+
+class TestAppellationAliases:
+    """#523: a graph item's alias that one of its `referred_to_as`
+    statements gives as an appellation (ADR-0018) keys nothing in
+    reconcile's blocking; its name forms still do."""
+
+    @staticmethod
+    def grandmothers(**extra) -> list[RosterEntity]:
+        return [
+            RosterEntity(
+                qid="Q40",
+                label="Hildegard Löbig",
+                aliases=["Oma", "Hilde"],
+                appellations=["Oma"],
+                kind="human",
+                **extra,
+            ),
+            RosterEntity(
+                qid="Q41",
+                label="Sipkje Faxridge",
+                aliases=["oma"],
+                appellations=["Oma"],
+                kind="human",
+            ),
+        ]
+
+    def test_two_grandmothers_aliased_oma_are_no_candidate_pair(self):
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        assert propose_graph_pairs(llm, self.grandmothers()) == []
+        assert llm.prompts == []
+
+    def test_the_alias_keys_without_its_referred_to_as_statement(self):
+        """The rule reads the statements, never the alias's wording: an
+        "Oma" alias no statement gives as an appellation still keys."""
+        roster = [
+            entity.model_copy(update={"appellations": []})
+            for entity in self.grandmothers()
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        propose_graph_pairs(llm, roster)
+        assert len(llm.prompts) == 1
+
+    def test_one_items_appellation_never_hides_anothers_name(self):
+        """Each item's appellations leave out its own aliases only."""
+        roster = self.grandmothers()
+        roster[1] = roster[1].model_copy(update={"appellations": []})
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        propose_graph_pairs(llm, roster)
+        assert len(llm.prompts) == 0
+        roster[0] = roster[0].model_copy(update={"appellations": []})
+        propose_graph_pairs(llm, roster)
+        assert len(llm.prompts) == 1
+
+    def test_a_shared_real_name_still_pairs(self):
+        roster = [
+            *self.grandmothers(),
+            RosterEntity(
+                qid="Q42",
+                label="Hildegard Laudler",
+                aliases=["Oma", "Hildegard Löbig"],
+                appellations=["Oma"],
+                kind="human",
+            ),
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        propose_graph_pairs(llm, roster)
+        (prompt,) = llm.prompts
+        assert "Q40" in prompt and "Q42" in prompt
+        assert "Q41" not in prompt
+
+    def test_a_nickname_statement_keys_though_it_is_an_appellation(self):
+        """A typed name statement keys whatever its value: "Hilde", a
+        nickname and also an appellation, still meets an alias "Hilde"."""
+        roster = [
+            RosterEntity(
+                qid="Q40",
+                label="Hildegard Löbig",
+                aliases=["Hilde"],
+                nicknames=["Hilde"],
+                appellations=["Hilde"],
+                kind="human",
+            ),
+            RosterEntity(
+                qid="Q43", label="H. Löbig", aliases=["Hilde"], kind="human"
+            ),
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        propose_graph_pairs(llm, roster)
+        assert len(llm.prompts) == 1
+
+    def test_a_document_entity_never_meets_an_appellation_alias(self):
+        found = [EntityRecord(id="e1", label="Oma", kind="human")]
+        assert block_candidates(found, self.grandmothers()) == {}
+        graph = [
+            entity.model_copy(update={"appellations": []})
+            for entity in self.grandmothers()
+        ]
+        assert [c.qid for c in block_candidates(found, graph)["e1"]] == [
+            "Q40",
+            "Q41",
+        ]
+
+    def test_fetch_roster_reads_each_referred_to_as_value(self, monkeypatch):
+        import io
+
+        from yizkr.core.config import Config
+        from yizkr.pipeline import reconcile
+
+        rows = [
+            {
+                "item": {"value": "http://wikibase.example/entity/Q40"},
+                "itemLabel": {"value": "Hildegard Löbig"},
+                "kind": {"value": "http://wikibase.example/entity/Q5"},
+                "aliases": {"value": "Oma|Omama|Hilde"},
+                "appellations": {"value": "Oma|Omama"},
+            }
+        ]
+        queries = []
+
+        def urlopen(url, timeout):
+            queries.append(urllib.parse.unquote_plus(url))
+            body = json.dumps({"results": {"bindings": rows}})
+            return io.BytesIO(body.encode())
+
+        monkeypatch.setattr(reconcile.urllib.request, "urlopen", urlopen)
+        monkeypatch.setattr(
+            reconcile, "unsupported_in_graph", lambda *a, **k: None
+        )
+        config = Config(
+            wikibase_url="http://wikibase.example",
+            concept_uri="http://wikibase.example",
+            wdqs_url="http://query.example",
+            sparql_url="http://query.example/sparql",
+            admin_name="x",
+            admin_pass="x",
+            env_file=None,
+        )
+        (item,) = reconcile.fetch_roster(TestRosterKinds.Vocabulary(), config)
+        assert item.appellations == ["Oma", "Omama"]
+        assert item.aliases == ["Oma", "Omama", "Hilde"]
+        (query,) = queries
+        # P15 is referred_to_as, as TestRosterKinds.Vocabulary numbers it:
+        # every rank's value, not the truthy one alone
+        assert "?item p:P15/ps:P15 ?appellation ." in query
+        assert (
+            '(GROUP_CONCAT(DISTINCT ?appellation; separator="|")'
+            " AS ?appellations)"
+        ) in query
