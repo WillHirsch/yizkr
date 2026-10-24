@@ -2048,6 +2048,24 @@ class TestTheRunReport:
             "check): 0 new and 0 carried. Checks that failed: 0; rechecks: 0."
         ) in report.markdown
 
+    def test_the_marriages_are_counted_by_their_weddings(self, report):
+        """The extractions' marriages by their weddings (#656): the 2008
+        family history dates both its marriages and the deck dates
+        Gustav and Florence's, so each is started by a dated wedding;
+        the deck's undated "= Hildegard" gives a marriage alone. The
+        GEDCOM export's marriages are no extraction's, so not counted."""
+        assert report.aggregate["content"]["marriages"] == {
+            "extractions": 5,
+            "total": 4,
+            "dated_wedding": 3,
+            "undated_wedding": 0,
+            "no_wedding": 1,
+        }
+        assert (
+            "4 marriages in 5 extractions: 3 started by a dated wedding, 0 "
+            "by an undated one, 1 with no wedding."
+        ) in report.markdown
+
     def test_the_clusters_are_the_identity_maps_counts(self, report, identity):
         """The report reads the clustering stage's identity map, so every
         count it shows is that map's summary, key for key, and the
