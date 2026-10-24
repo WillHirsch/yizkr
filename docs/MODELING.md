@@ -319,11 +319,14 @@ document as its subject, named by an `artifact` reference to the
 source's media, and no other subject but an un-held media item: the
 seven document-subject properties, `issued_by`, `author`, `addressee`,
 `inception`, `location_of_creation`, `main_subject` and `shows`, each
-what a source states of itself (ADR-0035 §3.4, ADR-0039 §2.2). A batch
-entity of an artifact kind (`artifact` or a `subclass_of` it), the
-un-held media item a structured export describes, takes them too: the
-GEDCOM adapter gives an OBJE's own DATE as its media item's `inception`
-(#583). One property is marked
+what a source states of itself (ADR-0035 §3.4, ADR-0039 §2.2). On a
+structured adapter's batch alone (its run's model identifier in
+`STRUCTURED_ADAPTERS`, which code sets and no model does), a batch entity
+of an artifact kind (`artifact` or a `subclass_of` it), the un-held media
+item the export describes, takes them too: the GEDCOM adapter gives an
+OBJE's own DATE as its media item's `inception` (#583). This is an
+interim rule; a model's batch keeps the one above, pending an ADR-0039
+amendment the owner has asked for. One property is marked
 `placed_subject: true` instead, `caption`: a container's verbatim words
 about an artifact it places, whose subject is an `artifact` reference
 to an image the source's record of derived media names, and nothing

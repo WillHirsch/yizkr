@@ -233,6 +233,7 @@ from importlib.resources import files
 import yaml
 
 from yizkr.claims import (
+    GEDCOM_ADAPTER,
     ArtifactRef,
     ClaimBatch,
     PersonStructure,
@@ -260,7 +261,7 @@ MONTHS = {
     "JUNI": 6, "JULI": 7, "OKTOBER": 10, "DEZEMBER": 12,
 }  # fmt: skip
 
-ADAPTER_IDENTIFIER = "gedcom-adapter"
+ADAPTER_IDENTIFIER = GEDCOM_ADAPTER
 
 
 # ---------------------------------------------------------------------------
@@ -2183,6 +2184,9 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     def local(entity_id: str) -> dict:
         return {"kind": "local", "local_id": entity_id}
 
+    # the lines of the objects' DATEs already warned of as unparsed
+    unparsed_media_dates: set[int] = set()
+
     def made_on(media_id: str, obje: Record) -> None:
         """The object's own DATEs, each an `inception` claim on its media
         item, with the range and circa the date states as the claim's own
@@ -2190,10 +2194,13 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         of the person's image of it. Each claim cites the object, its
         lines its excerpt, so that every person linking to it gives the
         same claim. A date the grammar cannot parse gives no claim and a
-        warning."""
+        warning, once however many people link the object."""
         for date_record in obje.all("DATE"):
             value, quals = parse_gedcom_date(date_record.value)
             if value is None:
+                if date_record.line_number in unparsed_media_dates:
+                    continue
+                unparsed_media_dates.add(date_record.line_number)
                 warnings.append(
                     f"line {date_record.line_number}: unparsed media date "
                     f"{date_record.value!r} — inception omitted"

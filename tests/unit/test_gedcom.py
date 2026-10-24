@@ -11,9 +11,12 @@ from pathlib import Path
 import pytest
 
 from yizkr.claims import (
+    STRUCTURED_ADAPTERS,
     ArtifactRef,
     ClaimBatch,
+    LocalRef,
     MonolingualText,
+    VocabRef,
     structure_problems,
     validate_against_manifest,
 )
@@ -858,27 +861,47 @@ class TestMediaObjects:
             ("studio-portrait-1890s.jpg", [])
         ]
 
-    def test_only_an_artifact_kind_takes_an_inception(self):
-        # the writer and validation take the media item's inception, and
-        # refuse the same claim on Rudolf (ADR-0039 §2.2)
-        batch = adapt_gedcom(CENSUS_GEDCOM, artifact=EXPORT).batch
-        (made,) = (c for c in batch.claims if c.property == "inception")
-        assert pre_plan_refusals(batch, {}) == {}
-        assert subject_refusal(made, {}, (), "artifact") is None
-        assert subject_refusal(made, {}, (), "photograph") is None
-        assert subject_refusal(made, {}, (), "human") == (
-            "its property takes only its source document or an un-held "
-            "media item",
-            "ADR-0035 §3.4",
+    def test_an_unparsed_shared_object_date_warns_once(self):
+        # Eugen and Cäcilie both link the portrait: its one DATE line is
+        # one warning
+        text = (
+            "0 @O1@ OBJE\n1 FILE studio-portrait-1890s.jpg\n"
+            "1 DATE SOMEDAY MAYBE\n"
+            "0 @I2@ INDI\n1 NAME Cäcilie /Tarle/\n1 OBJE @O1@\n"
+            + eugen("1 OBJE @O1@")
         )
-        misplaced = made.model_copy(
-            update={"subject": batch.claims[0].subject}
+        result = adapt_gedcom(text, artifact=EXPORT)
+        assert result.warnings == [
+            "line 3: unparsed media date 'SOMEDAY MAYBE' — inception omitted"
+        ]
+
+    def test_the_objects_own_citation_folds_into_its_inception(self):
+        # (here) the portrait record cites page 9 of the family album
+        text = (
+            "0 @S1@ SOUR\n1 TITL Löbig family album\n"
+            "0 @O1@ OBJE\n1 FILE studio-portrait-1890s.jpg\n"
+            "1 DATE 1895\n1 SOUR @S1@\n2 PAGE 9\n" + eugen("1 OBJE @O1@")
         )
-        assert getattr(misplaced.subject, "local_id", None) == "i1"
-        moved = batch.model_copy(update={"claims": [misplaced]})
-        (problem,) = validate_against_manifest(moved)
-        assert problem.endswith("[document_subject]")
-        assert pre_plan_refusals(moved, {})[0][0] == "subject_rule"
+        batch = adapt_gedcom(text, artifact=EXPORT).batch
+        (made,) = claims_for(batch, "md1", "inception")
+        assert made.source.page_number == "9"
+        assert made.source.transcription_excerpt.text.endswith(
+            " | cited: Löbig family album"
+        )
+
+    def test_an_inline_objects_date_is_its_inception(self):
+        # (here) the portrait embedded in Eugen's record, about 1895
+        text = eugen(
+            "1 OBJE",
+            "2 FILE studio-portrait-1890s.jpg",
+            "2 DATE ABT 1895",
+        )
+        assert stated(text, "md1", "inception") == [
+            ((1895, None, None, "year"), [("sourcing_circumstances", "circa")])
+        ]
+        assert stated(text, "i1", "image") == [
+            ("studio-portrait-1890s.jpg", [])
+        ]
 
     def test_dangling_pointer_warns_and_skips(self):
         result = adapt_gedcom(
@@ -891,6 +914,107 @@ class TestMediaObjects:
         assert not claims_for(result.batch, "i1", "image")
         # a link that no image claim maps is counted too (#324)
         assert result.unsupported_tags == {"OBJE": 1}
+
+
+def adapted_inception(kind: str = "artifact", model: str | None = None):
+    """The school report's batch with its inception claim alone, its media
+    item of `kind`, and, given `model`, as that model's batch."""
+    batch = adapt_gedcom(CENSUS_GEDCOM, artifact=EXPORT).batch
+    run = batch.extraction_run
+    if model is not None:
+        run = run.model_copy(update={"model_identifier": model})
+    return batch.model_copy(
+        update={
+            "extraction_run": run,
+            "entities": [
+                entity.model_copy(update={"kind": kind})
+                if entity.kind == "artifact"
+                else entity
+                for entity in batch.entities
+            ],
+            "claims": [c for c in batch.claims if c.property == "inception"],
+        }
+    )
+
+
+def refused(batch) -> tuple[list[str], dict]:
+    """What validation and the writer say of `batch`'s claims."""
+    return validate_against_manifest(batch), pre_plan_refusals(batch, {})
+
+
+class TestInceptionSubject:
+    """On the adapter's batch alone a document-subject property takes an
+    un-held media item as subject (ADR-0039 §2.2, interim; #583): a
+    model's batch keeps the rule that it takes only its own source."""
+
+    def test_the_adapter_is_a_structured_adapter(self):
+        assert ADAPTER_IDENTIFIER in STRUCTURED_ADAPTERS
+
+    @pytest.mark.parametrize("kind", ["artifact", "photograph", "letter"])
+    def test_the_adapters_media_item_takes_an_inception(self, kind):
+        assert refused(adapted_inception(kind)) == ([], {})
+
+    @pytest.mark.parametrize("kind", ["artifact", "photograph", "letter"])
+    def test_a_models_artifact_entity_takes_none(self, kind):
+        # a letter's batch that dates "the enclosed photograph" 1895
+        problems, refusals = refused(adapted_inception(kind, "scripted"))
+        (problem,) = problems
+        assert problem.endswith("[document_subject]")
+        assert [reason for reason, _ in refusals.values()] == ["subject_rule"]
+
+    @pytest.mark.parametrize("kind", ["human", "artifact_fragment"])
+    def test_no_other_kind_takes_one(self, kind):
+        problems, refusals = refused(adapted_inception(kind))
+        assert any(p.endswith("[document_subject]") for p in problems)
+        assert [reason for reason, _ in refusals.values()] == ["subject_rule"]
+
+    def test_an_artifact_class_itself_takes_none(self):
+        batch = adapted_inception()
+        (made,) = batch.claims
+        classed = batch.model_copy(
+            update={
+                "claims": [
+                    made.model_copy(
+                        update={"subject": VocabRef(key="photograph")}
+                    )
+                ]
+            }
+        )
+        problems, refusals = refused(classed)
+        assert any(p.endswith("[document_subject]") for p in problems)
+        assert [reason for reason, _ in refusals.values()] == ["subject_rule"]
+
+    @pytest.mark.parametrize(
+        ("instance_of", "expected"),
+        [("artifact", None), ("human", "subject_rule")],
+    )
+    def test_the_writer_reads_a_subjects_own_kind(self, instance_of, expected):
+        # a subject with no entity record is of the kind it names itself
+        batch = adapted_inception()
+        (made,) = batch.claims
+        unlisted = batch.model_copy(
+            update={
+                "claims": [
+                    made.model_copy(
+                        update={
+                            "subject": LocalRef(
+                                local_id="md9", instance_of=instance_of
+                            )
+                        }
+                    )
+                ]
+            }
+        )
+        refusals = pre_plan_refusals(unlisted, {})
+        assert refusals.get(0, (None,))[0] == expected
+        assert subject_refusal(made, {}, (), instance_of, structured=True) == (
+            None
+            if expected is None
+            else (
+                "its property takes only its source document",
+                "ADR-0035 §3.4",
+            )
+        )
 
 
 class TestUnsupportedFormat:

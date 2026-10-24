@@ -37,10 +37,11 @@ Per batch, the writer:
    any other document, an artifact subject on a property the manifest
    marks neither way, a placed subject that names no artifact given as
    its source's in this write, or one no item carries, and a claim of
-   either kind of property with any other subject, save a document-subject
-   claim on a batch entity of an artifact kind (an un-held media item,
-   such as a GEDCOM object the export dates, ADR-0039 §2.2), which is
-   written on that entity's item, are refused before the
+   either kind of property with any other subject, save, on a structured
+   adapter's batch (STRUCTURED_ADAPTERS), a document-subject claim on a
+   batch entity of an artifact kind (an un-held media item, such as a
+   GEDCOM object the export dates, ADR-0039 §2.2), which is written on
+   that entity's item, are refused before the
    first write, as a claim whose text the instance cannot hold is
    (below). So is a claim of a property the
    manifest marks retired (`spouse`, which takes no new claim: a marriage
@@ -460,6 +461,7 @@ from yizkr.claims import (
     StringValue,
     TimeValue,
     VocabRef,
+    structured_batch,
 )
 from yizkr.core.dates import UnsupportedDate
 from yizkr.core.wiki import ItemLabels, WikiClient
@@ -1213,9 +1215,7 @@ def tagged_label(label: str, kind: str | None) -> str:
 def artifact_kinds() -> frozenset[str]:
     """The manifest keys of the artifact kinds: artifact, and each class
     the manifest makes a `subclass_of` it."""
-    from yizkr.pipeline.transcription_record import artifact_classes
-
-    return frozenset({"artifact", *artifact_classes()})
+    return load_acceptance().artifact_kinds
 
 
 def is_artifact_kind(kind: str | None) -> bool:
@@ -1416,11 +1416,13 @@ def subject_refusal(
     placed: Mapping[str, Collection[str]],
     resolved: Collection[str] = (),
     subject_kind: str | None = None,
+    structured: bool = False,
 ) -> tuple[str, str] | None:
     """Why the writer refuses the claim's subject, with the decision that
     gives the rule, or None (the module docstring, step 0): a
     document-subject property's subject is the claim's own source
-    (ADR-0035 §3.4), or a batch entity of an artifact kind (`subject_kind`,
+    (ADR-0035 §3.4), or, on a structured adapter's batch (`structured`,
+    structured_batch), a batch entity of an artifact kind (`subject_kind`,
     the kind of a local subject), an un-held media item (ADR-0039 §2.2);
     a placed-subject property's is an artifact among the
     derived media `placed` names for the claim's source, by their SHA-1s,
@@ -1455,15 +1457,12 @@ def subject_refusal(
         return ("; ".join(reasons), "ADR-0035 §3.4") if reasons else None
     if prop in acceptance.document_subjects:
         if (
-            isinstance(subject, LocalRef)
+            structured
+            and isinstance(subject, LocalRef)
             and subject_kind in acceptance.artifact_kinds
         ):
             return None
-        return (
-            "its property takes only its source document or an un-held "
-            "media item",
-            "ADR-0035 §3.4",
-        )
+        return "its property takes only its source document", "ADR-0035 §3.4"
     return None
 
 
@@ -1491,8 +1490,9 @@ def pre_plan_refusals(
       a property that takes none, a caption whose subject is no artifact
       this write is given as placed by its source, and a claim of a
       document-subject or placed-subject property with any other subject,
-      save a document-subject claim on a batch entity of an artifact kind
-      (ADR-0035 §3.4, ADR-0039 §2): the statement would go on the wrong
+      save, on a structured adapter's batch, a document-subject claim on
+      a batch entity of an artifact kind (ADR-0035 §3.4, ADR-0039 §2):
+      the statement would go on the wrong
       item (`subject_rule`);
     * a claim whose own text the instance cannot hold as it is: for
       each of its texts, its value or a qualifier's, what keeps the
@@ -1513,6 +1513,7 @@ def pre_plan_refusals(
     The warning quotes none of the texts."""
     acceptance = load_acceptance()
     kinds = {entity.id: entity.kind for entity in batch.entities}
+    structured = structured_batch(batch)
     refusals = {}
     for index, claim in enumerate(batch.claims):
         uses = [
@@ -1546,6 +1547,7 @@ def pre_plan_refusals(
             kinds.get(subject.local_id, subject.instance_of)
             if isinstance(subject, LocalRef)
             else None,
+            structured,
         )
         if refusal is not None:
             reason, rule = refusal

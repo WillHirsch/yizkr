@@ -561,6 +561,10 @@ the object's lines alone and the object's own citations fold into it,
 so the several people who link one object give one claim; a citation
 beneath a person's OBJE link folds into that person's `image` claim
 only, which is undated. A DATE the grammar cannot parse gives no claim
-and a warning (`unparsed media date … — inception omitted`). ADR-0039
-§2.2's subject rule admits the media item as the subject, as a batch
-entity of an artifact kind.
+and a warning (`unparsed media date … — inception omitted`), given once
+however many people link the object. ADR-0039 §2.2's subject rule admits
+the media item as the subject as an interim exception keyed on the
+adapter's model identifier (`STRUCTURED_ADAPTERS`, owner decision
+2026-10-24): a model's batch never gives an artifact entity a
+document-subject claim, pending an ADR-0039 amendment the owner has asked
+for.
