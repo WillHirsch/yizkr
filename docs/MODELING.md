@@ -2216,9 +2216,14 @@ not a signal to grow the schema on.
   statement whose subject carries a media SHA-1 and that is stated in
   another item, or whose subject is `part of` an item it is stated in,
   at any rank, goes whole, so a placement a curator gave with
-  `--placed` is covered too; a container's agreeing value, which the
-  writer folds into the image's own statement, takes that statement
-  with it. A (c4) statement on a mention item, which carries no SHA-1,
+  `--placed` is covered too. As amended by #669 (2026-10-24), the export
+  removes only the container's references (and the excerpts they hold)
+  from such a statement: one that keeps a reference stated in another
+  item, as the image's own statement does when the writer folds the
+  container's agreeing value into it, stays with that reference, and
+  one that keeps none, an extraction run's reference aside, or that has
+  a qualifier of text (a string or a monolingual text, which may be the
+  container's words), goes whole. A (c4) statement on a mention item, which carries no SHA-1,
   leaves with its excerpt as any of its source's statements do. A line
   the export cannot read as a triple is dropped, and a dump that holds a
   sitelink,

@@ -1033,6 +1033,15 @@ REF_BOOKLET = "b1" * 20  # stated in the booklet (Q20), page 6
 REF_LETTER = "c2" * 20  # stated in the letter's image (Q10) itself
 REF_EXPORT = "d3" * 20  # stated in the export (Q31)
 REF_IMAGE = "e4" * 20  # stated in the image Q14 itself
+# stated in the booklet (Q20), page 6, its translation as the excerpt
+REF_TRANSLATION = "f5" * 20
+REF_RUN = "a6" * 20  # inferred from the extraction run Q50
+EXCERPT, RUN, CAPTION_PID = "P90", "P96", "P91"
+# a second reference stated in a container: the booklet's page 7, or the
+# album Q21
+REF_PAGE_7 = "a7" * 20
+CAPTION_TEXT = "Wastl to Klara, July 1939."
+TRANSLATION = "Flörburg, Brunnenring 35, 28 July 1939"
 NORMAL = "<http://wikiba.se/ontology#NormalRank>"
 DEPRECATED = "<http://wikiba.se/ontology#DeprecatedRank>"
 
@@ -1109,16 +1118,43 @@ def filtered(
         return handle.read()
 
 
+def translated() -> list[str]:
+    """The booklet's reference that gives its translation of the letter's
+    dateline as the excerpt, on page 6."""
+    ref = f"<{W}/reference/{REF_TRANSLATION}>"
+    return [
+        cited_in(REF_TRANSLATION, "Q20"),
+        f'{ref} <{W}/prop/reference/P3> "6" .',
+        f'{ref} <{W}/prop/reference/{EXCERPT}> "{TRANSLATION}"@en .',
+    ]
+
+
+def merged(entity: str, *own: str, rank: str = NORMAL) -> list[str]:
+    """The image's own date, 28 July 1939, as the writer folds the
+    booklet's agreeing translation into it: one statement, its references
+    `own` and the booklet's."""
+    return st(
+        entity,
+        "both",
+        INCEPTION,
+        '"+1939-07-28T00:00:00Z"',
+        *own,
+        REF_TRANSLATION,
+        rank=rank,
+    )
+
+
 def node(name: str) -> str:
     return f"<{W}/entity/statement/{name}>"
 
 
 class TestTheExport:
-    """The non-privileged export leaves out whole a document-subject
-    statement that one source makes about another artifact it places,
-    failing closed (Q9, ADR-0039 §10.5): one whose subject carries a
-    media SHA-1 and that is stated in another item, or whose subject is
-    `part of` the item it is stated in."""
+    """The non-privileged export leaves out, failing closed (Q9, ADR-0039
+    §10.5, §10.6), each reference one source gives a document-subject
+    statement about another artifact it places: one whose subject carries
+    a media SHA-1 and that is stated in another item, or whose subject is
+    `part of` the item it is stated in. A statement left with no
+    reference stated in an item goes whole (#669)."""
 
     def test_a_container_s_claim_about_its_image_goes_whole(self, tmp_path):
         content = filtered(tmp_path, RULE)
@@ -1194,10 +1230,97 @@ class TestTheExport:
         )
         assert "Q10-dep" not in content
 
-    def test_a_merged_statement_goes_whole(self, tmp_path):
+    def test_a_merged_statement_keeps_the_image_s_own_reference(
+        self, tmp_path
+    ):
         # the writer folds the booklet's agreeing date into the image's own
-        # statement: one statement, stated in the image and in the booklet,
-        # left out whole, the image's own reference with it
+        # statement: one statement, stated in the image and in the booklet
+        # (#669). The statement stays with the image's own reference and
+        # its truthy triple; the booklet's reference, and its translation
+        # as the excerpt, go
+        content = filtered(
+            tmp_path,
+            RULE,
+            *hashed("Q14"),
+            *merged("Q14", REF_IMAGE),
+            *translated(),
+        )
+        both = node("Q14-both")
+        assert f"{both} <{W}/prop/statement/{INCEPTION}>" in content
+        assert f"{both} {DERIVED_FROM} <{W}/reference/{REF_IMAGE}>" in content
+        assert f"<{W}/entity/Q14> <{W}/prop/direct/{INCEPTION}>" in content
+        assert REF_TRANSLATION not in content
+        assert TRANSLATION not in content
+        assert node("Q14-sha1") in content
+
+    def test_an_image_part_of_its_container_keeps_its_own_reference(
+        self, tmp_path
+    ):
+        # the letter's image is `part of` the booklet, and an instance
+        # without `media SHA-1` reads it so too
+        for rule in (RULE, PART_OF_ONLY):
+            content = filtered(
+                tmp_path, rule, *merged("Q10", REF_LETTER), *translated()
+            )
+            both = node("Q10-both")
+            assert f"{both} <{W}/prop/statement/{INCEPTION}>" in content
+            assert (
+                f"{both} {DERIVED_FROM} <{W}/reference/{REF_LETTER}>"
+                in content
+            )
+            assert REF_TRANSLATION not in content
+            assert TRANSLATION not in content
+
+    def test_the_container_s_claim_with_its_run_alone_goes_whole(
+        self, tmp_path
+    ):
+        # a run's reference names no source: what is left of the booklet's
+        # own claim once its reference goes is no source's, so it goes
+        # whole, its truthy triple with it
+        content = filtered(
+            tmp_path,
+            RULE,
+            *hashed("Q14"),
+            *st(
+                "Q14",
+                "both",
+                INCEPTION,
+                '"+1939-07-28T00:00:00Z"',
+                REF_TRANSLATION,
+                REF_RUN,
+            ),
+            *translated(),
+            f"<{W}/reference/{REF_RUN}> <{W}/prop/reference/{RUN}> "
+            f"<{W}/entity/Q50> .",
+        )
+        assert "Q14-both" not in content
+        assert f"<{W}/entity/Q14> <{W}/prop/direct/{INCEPTION}>" not in content
+        assert TRANSLATION not in content and REF_RUN not in content
+
+    def test_the_image_s_reference_and_the_runs_stay(self, tmp_path):
+        content = filtered(
+            tmp_path,
+            RULE,
+            *hashed("Q14"),
+            *merged("Q14", REF_IMAGE, REF_RUN),
+            *translated(),
+            f"<{W}/reference/{REF_RUN}> <{W}/prop/reference/{RUN}> "
+            f"<{W}/entity/Q50> .",
+        )
+        both = node("Q14-both")
+        for ref in (REF_IMAGE, REF_RUN):
+            assert f"{both} {DERIVED_FROM} <{W}/reference/{ref}>" in content
+        assert f"<{W}/reference/{REF_RUN}> <{W}/prop/reference/{RUN}>" in (
+            content
+        )
+        assert TRANSLATION not in content
+
+    def test_a_shared_container_reference_stays_where_it_is_kept(
+        self, tmp_path
+    ):
+        # the booklet's reference on its own date is the same node: the
+        # merged statement loses its link to it, the booklet's statement
+        # keeps it, with its lines
         content = filtered(
             tmp_path,
             RULE,
@@ -1211,8 +1334,147 @@ class TestTheExport:
                 REF_BOOKLET,
             ),
         )
-        assert "Q14-both" not in content
-        assert node("Q14-sha1") in content
+        both = node("Q14-both")
+        assert f"{both} <{W}/prop/statement/{INCEPTION}>" in content
+        assert f"{both} {DERIVED_FROM} <{W}/reference/{REF_BOOKLET}>" not in (
+            content
+        )
+        assert f"{node('Q20-own')} {DERIVED_FROM} <{W}/reference/" in content
+        assert (
+            f'<{W}/reference/{REF_BOOKLET}> <{W}/prop/reference/P3> "6" .'
+            in (content)
+        )
+
+    def test_a_deprecated_merged_statement_loses_the_link_too(self, tmp_path):
+        content = filtered(
+            tmp_path,
+            RULE,
+            *hashed("Q14"),
+            *merged("Q14", REF_IMAGE, rank=DEPRECATED),
+            *translated(),
+        )
+        assert node("Q14-both") in content
+        assert TRANSLATION not in content
+
+    def test_a_merged_statement_of_an_item_left_out_goes_whole(self, tmp_path):
+        full = tmp_path / "full.nt.gz"
+        public = tmp_path / "nonprivileged.nt.gz"
+        with gzip.open(full, "wt", encoding="utf-8") as handle:
+            handle.write(
+                "\n".join(
+                    [
+                        *LINES,
+                        *hashed("Q14"),
+                        *st(
+                            "Q14",
+                            "both",
+                            AUTHOR,
+                            f"<{W}/entity/Q3>",
+                            REF_IMAGE,
+                            REF_TRANSLATION,
+                        ),
+                        *translated(),
+                    ]
+                )
+                + "\n"
+            )
+        filter_nonprivileged_export(full, public, {"Q3"}, placed=RULE)
+        with gzip.open(public, "rt", encoding="utf-8") as handle:
+            content = handle.read()
+        assert "Q14-both" not in content and TRANSLATION not in content
+
+    @pytest.mark.parametrize(
+        ("entity", "own", "rule"),
+        [
+            ("Q14", REF_IMAGE, RULE),  # by its media SHA-1
+            ("Q10", REF_LETTER, PART_OF_ONLY),  # `part of` the booklet
+        ],
+    )
+    @pytest.mark.parametrize(
+        "qualifier",
+        [
+            f'<{W}/prop/qualifier/{CAPTION_PID}> "{CAPTION_TEXT}"@en',
+            f'<{W}/prop/qualifier/{EXCERPT}> "{CAPTION_TEXT}"@en',
+            f'<{W}/prop/qualifier/{EXCERPT}> "{CAPTION_TEXT}"',
+        ],
+    )
+    def test_a_merged_statement_with_a_qualifier_of_text_goes_whole(
+        self, tmp_path, entity, own, rule, qualifier
+    ):
+        # the writer merges claims whose qualifiers match, so the
+        # booklet's caption may stand in a qualifier of the merged
+        # statement: which claim's words it is cannot be told (#695)
+        content = filtered(
+            tmp_path,
+            rule,
+            *hashed("Q14"),
+            *merged(entity, own),
+            f"{node(entity + '-both')} {qualifier} .",
+            *translated(),
+        )
+        assert f"{entity}-both" not in content
+        assert CAPTION_TEXT not in content and TRANSLATION not in content
+        # its truthy triple goes, unless another statement gives it: the
+        # letter's image Q10 states the same date once more of itself
+        truthy = f"<{W}/entity/{entity}> <{W}/prop/direct/{INCEPTION}>"
+        assert (truthy in content) == (entity == "Q10")
+
+    def test_a_qualifier_of_no_text_keeps_the_statement(self, tmp_path):
+        content = filtered(
+            tmp_path,
+            RULE,
+            *hashed("Q14"),
+            *merged("Q14", REF_IMAGE),
+            f"{node('Q14-both')} <{W}/prop/qualifier/{PART_OF}> "
+            f"<{W}/entity/Q20> .",
+            f"{node('Q14-both')} <{W}/prop/qualifier/P93> "
+            '"+1939-07-01T00:00:00Z"^^'
+            "<http://www.w3.org/2001/XMLSchema#dateTime> .",
+            *translated(),
+        )
+        both = node("Q14-both")
+        assert f"{both} <{W}/prop/statement/{INCEPTION}>" in content
+        assert f"{both} <{W}/prop/qualifier/P93>" in content
+        assert TRANSLATION not in content
+
+    def test_each_reference_of_the_container_goes(self, tmp_path):
+        # two references stated in the booklet, on pages 6 and 7: both go
+        page_7 = f"<{W}/reference/{REF_PAGE_7}>"
+        content = filtered(
+            tmp_path,
+            RULE,
+            *hashed("Q14"),
+            *merged("Q14", REF_IMAGE, REF_PAGE_7),
+            *translated(),
+            cited_in(REF_PAGE_7, "Q20"),
+            f'{page_7} <{W}/prop/reference/P3> "7" .',
+            f'{page_7} <{W}/prop/reference/{EXCERPT}> "{CAPTION_TEXT}"@en .',
+        )
+        both = node("Q14-both")
+        assert f"{both} <{W}/prop/statement/{INCEPTION}>" in content
+        assert REF_PAGE_7 not in content and REF_TRANSLATION not in content
+        assert CAPTION_TEXT not in content and TRANSLATION not in content
+
+    def test_each_container_an_image_is_part_of_counts(self, tmp_path):
+        # the letter's image is `part of` the booklet and of the album
+        # Q21 too: each one's reference goes
+        album = f"<{W}/reference/{REF_PAGE_7}>"
+        content = filtered(
+            tmp_path,
+            PART_OF_ONLY,
+            *st("Q10", "album", PART_OF, f"<{W}/entity/Q21>", REF_LETTER),
+            *merged("Q10", REF_LETTER, REF_PAGE_7),
+            *translated(),
+            cited_in(REF_PAGE_7, "Q21"),
+            f'{album} <{W}/prop/reference/{EXCERPT}> "{CAPTION_TEXT}"@en .',
+        )
+        both = node("Q10-both")
+        assert f"{both} <{W}/prop/statement/{INCEPTION}>" in content
+        assert f"{both} {DERIVED_FROM} <{W}/reference/{REF_LETTER}>" in (
+            content
+        )
+        assert REF_PAGE_7 not in content and REF_TRANSLATION not in content
+        assert CAPTION_TEXT not in content and TRANSLATION not in content
 
     def test_the_rule_reads_the_instance_s_ids(self):
         properties = {
