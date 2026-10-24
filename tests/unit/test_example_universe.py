@@ -880,6 +880,11 @@ class TestDeathsAndBirths:
             ("caecilie-loebig", "date_of_death", "marriage-cert-1905"),
         }
         for a in unknown:
+            # the source states no limit: no date qualifiers (§2.2); a
+            # "died by" date is derived, never stored on it
+            assert not [
+                key for key, value in a.qualifiers if isinstance(value, u.Date)
+            ], a
             said = [b for b in u.ASSERTIONS if b.source == a.source]
             assert not [
                 b
@@ -1034,6 +1039,27 @@ class TestDeathsAndBirths:
             for d in u.DERIVED_DIED_BY
             if d.person == "rudolf-loebig"
         ] == [("letter-to-leopold-1958", u.Date(1958, 12, 25))]
+
+    def test_the_new_records_state_their_dates_and_their_court(self):
+        # the death register dates the death the day before its entry, and
+        # the adoption order is the Amtsgericht Flörburg's (§4: the court
+        # that granted it is the order's issued_by)
+        assert [
+            (a.value, a.excerpt)
+            for a in u.about("caecilie-loebig", "date_of_death")
+            if a.source == "death-register-1902"
+        ] == [
+            (
+                u.Date(1902, 12, 13),
+                "am dreizehnten Dezember des Jahres tausend neunhundert und "
+                "zwei verstorben",
+            )
+        ]
+        assert values("adoption-order-1950", "issued_by") == [
+            "amtsgericht-floerburg"
+        ]
+        assert ENTITIES["amtsgericht-floerburg"].kind == "organization"
+        assert values("amtsgericht-floerburg", "location") == ["floerburg"]
 
     def test_a_parent_s_kind_is_stated_where_the_source_words_it(self):
         # the order's "Adoptivvater" and "Adoptivmutter" (§4); a
@@ -1714,6 +1740,10 @@ class TestGedcomFixture:
         ]
         ((child, family, _),) = pedigrees
         (fam,) = [r for r in records if r.tag == "FAM" and r.xref == family]
+        # the family he names lists him as its child
+        assert [by_xref[line.value].key for line in fam.all("CHIL")].count(
+            child
+        ) == 1
         adoptive = {
             a.value
             for a in u.about(child)
