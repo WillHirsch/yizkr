@@ -297,3 +297,46 @@ class TestADashAtALinesEnd:
 
         assert set(verbatim._HYPHENS) == {"-", "‐", "‑"}
         assert {fold(c) for c in verbatim._HYPHENS} == {"-"}
+
+
+class TestTheReadingsHoldTogether:
+    """What the dash tests leave to these: a spaced hyphen dropped, line
+    numbers after several joins, and evidence broken by CRLF."""
+
+    def test_the_spaced_reading_keeps_the_hyphen(self):
+        # the spaced reading's hyphen is part of what it compares
+        found = Transcript("Snylsjum, gemeente Drake-\nradiel, Fryslân")
+        assert found.span("gemeente Drake- radiel") == (1, 2)
+        assert found.locate("gemeente Drake radiel") is None
+        assert (
+            Transcript("gemeente Drake\nradiel").locate(
+                "gemeente Drake- radiel"
+            )
+            is None
+        )
+
+    def test_line_numbers_after_several_joins(self):
+        found = Transcript("Mock-\nburg-\nSüd\nKreis Mockburg")
+        assert found.span("MockburgSüd") == (1, 3)
+        assert found.span("Kreis Mockburg") == (4, 4)
+        assert found.span("Mock-burg-Süd Kreis") == (1, 4)
+        # each line keeps its own number once a later line's word joins
+        found = Transcript("Kreis Mockburg\nMock-\nburg-\nSüd")
+        assert found.span("Kreis Mockburg") == (1, 1)
+        assert found.span("Kreis Mockburg MockburgSüd") == (1, 4)
+
+    def test_crlf_evidence_joins(self):
+        assert words("gemeente Drake-\r\nradiel") == [
+            "gemeente",
+            "drakeradiel",
+        ]
+        assert words("gemeente Drake­\r\nradiel") == [
+            "gemeente",
+            "drakeradiel",
+        ]
+        assert container_problem(
+            Container(
+                name="Drakeradiel", evidence="gemeente Drake-\r\nradiel"
+            ),
+            Transcript("Snylsjum, gemeente Drake-\r\nradiel, Fryslân"),
+        ) == (None, (1, 2))

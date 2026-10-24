@@ -19,6 +19,14 @@ Each passage it supersedes or amends keeps its text, followed by a dated
 line (In brief, the #409 amendment, §3.1 to §3.3, §3.5, §3.6, §5, §6
 and §7).
 
+Amended by #664 (2026-10-24): in §5's verbatim comparison only the
+hyphen, U+2010, U+2011 and the soft hyphen, as written, break a word at
+a line's end. A dash there (figure, en or em dash, horizontal bar, minus
+sign), though the fold reads it as a hyphen, is a break between words,
+read as one space in every reading: "1912" then a dash and "1926" on the
+next line holds the excerpt "1912", and not "1912" and "1926" closed up
+across the dash.
+
 Amended by #569 (2026-10-23, the owner's design): each container a
 place's `within` lists (§2.2) is a name and its `evidence`, a verbatim
 excerpt of the document's transcription that states the containment:
