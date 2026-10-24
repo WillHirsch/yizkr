@@ -522,10 +522,11 @@ def _parse_response(response: str) -> dict:
 
 # The claim fields that record a curator's review, never the machine's
 # extraction: `curated` (a person stated the claim, so it carries no
-# extraction-run reference) and `row_approval` (a curator approved the
-# claim on its own review-sheet row). The JSON Schema the prompts carry
-# shows `curated` with the rest of a claim.
-REVIEW_STATE = ("curated", "row_approval")
+# extraction-run reference), `row_approval` (a curator approved the
+# claim on its own review-sheet row) and `confirmed_from` (the local
+# subject a curator's confirmation replaced). The JSON Schema the prompts
+# carry shows `curated` with the rest of a claim.
+REVIEW_STATE = ("curated", "row_approval", "confirmed_from")
 
 
 def cite_artifact(
