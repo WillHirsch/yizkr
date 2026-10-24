@@ -176,23 +176,25 @@ class TestTheComparison:
 
 # Forms a careful reader would accept as quoting the extract, each with
 # whether the comparison counts it a miss. The owner's question, whether a
-# miss should become a reject, reads these: 9 of the 12 are counted.
+# miss should become a reject, reads these: 7 of the 12 are counted.
 NEAR_MISSES = [
     # folded away: no miss
     ("case", "gustav löbig WURDE am 7. januar 1919", False),
     ("spacing", "Gustav  Löbig wurde\tam 7. Januar 1919", False),
     ("accents dropped", "in Florburg, Brunnenring 35", False),
+    # the line's end copied, the hyphen and a space after it (#612)
+    ("layout hyphen copied", "Brunnen- ring 35", False),
+    # dropped, as a soft hyphen is invisible (#612)
+    ("soft hyphen", "Brunnen\u00adring 35", False),
     # not forgiven: a miss
     ("ellipsis", "Gustav Löbig … 1919", True),
     ("comma dropped", "in Flörburg Brunnenring 35", True),
-    ("layout hyphen copied", "Brunnen- ring 35", True),
     ("umlaut transliterated", "in Floerburg, Brunnenring 35", True),
     ("abbreviation expanded", "Hildegard geboren Laudler", True),
     ("wrapped in quotes", '"Gustav Löbig wurde am 7. Januar 1919"', True),
     # the chunk prompts number the lines they show
     ("line number copied", "3: Gustav Löbig wurde am 7. Januar 1919", True),
     ("editorial mark dropped", "Standesamt Flörburg, Nr. 12/1919", True),
-    ("soft hyphen", "Brunnen\u00adring 35", True),
 ]
 
 
@@ -207,7 +209,7 @@ class TestLegitimateNearMisses:
 
     def test_the_expected_rate(self):
         counts = audit(*(excerpt for _, excerpt, _ in NEAR_MISSES))["counts"]
-        assert (counts["not_in_source"], counts["checked"]) == (9, 12)
+        assert (counts["not_in_source"], counts["checked"]) == (7, 12)
 
 
 class TestTheExtraction:
