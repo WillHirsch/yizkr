@@ -609,8 +609,9 @@ did so on 2026-09-29, in the review of its PR.
   PNG of its own, is not matched by a deck's PNG of it. A deck that
   cannot be read as an archive, while the list holds a glob, refuses the
   run, a single-file step and the import alike: the bytes its globs
-  would name cannot be known, and the list fails closed. A PDF's image is read by a vision call of its own, once
-  however many times the PDF places it, and its transcription, which
+  would name cannot be known, and the list fails closed. A PDF's image
+  is read by a vision call of its own, once however many times the PDF
+  places it, and its transcription, which
   names it by its SHA-1, is kept beside its bytes. An image on a page
   read by vision is read with that page, as the compilation's page. An
   image the never-ingest list names on such a page, or in a PDF read

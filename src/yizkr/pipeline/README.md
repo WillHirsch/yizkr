@@ -270,9 +270,9 @@ The corpus lives outside the repository, in the private folder named by
   that they cannot follow the globs into decks. The registrar asks
   `is_excluded()` too, as the write begins: a listed file is refused
   before anything of the wiki is asked, so it is never registered or
-  uploaded, and an embedded medium the list names is left out. New entry points must call it
-  too: transcription import (#104), the run driver (#118) and faces
-  (#160).
+  uploaded, and an embedded medium the list names is left out. New
+  entry points must call it too: transcription import (#104), the run
+  driver (#118) and faces (#160).
 
 ## The stages, individually
 

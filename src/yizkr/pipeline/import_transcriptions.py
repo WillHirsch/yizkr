@@ -813,10 +813,10 @@ def import_transcriptions(
     whose transcriptions are not adopted. Refuses to start without a
     never-ingest list, or with a deck in `corpus` that cannot be read as an
     archive, or a `corpus` that cannot be listed, while the list holds a
-    glob (ExclusionConfigError); for a
-    malformed, unmatched or ambiguous prefix, no model or an alias, an
-    archive or a corpus that is not a folder, a scan in PDF without the
-    renderer the check counts its pages with, or an engine client that
+    glob (ExclusionConfigError); for a malformed, unmatched or ambiguous
+    prefix, no model or an alias, an archive or a corpus that is not a
+    folder, a scan in PDF without the renderer the check counts its pages
+    with, or an engine client that
     cannot start (ImportRefused); and when the cache refuses its folder,
     or another process holds it, or the engine cannot serve the pass
     (llm.PassPaused). `log` takes the
