@@ -690,8 +690,8 @@ def check_global_config(config_dir: Path | None) -> None:
     so those variables would shape every call without showing in
     ``config_hash``. Raises ``CliConfigEnvironment`` when the map is not
     empty, naming the file and the variables but never their values, or
-    when the file cannot be read as JSON. A file caught mid-write is read
-    once more.
+    when the file cannot be read as JSON, nested too deep to decode
+    included. A file caught mid-write is read once more.
     """
     path = claude_global_config_path(config_dir)
     config: Any = None
@@ -700,7 +700,7 @@ def check_global_config(config_dir: Path | None) -> None:
             config = json.loads(path.read_text(encoding="utf-8-sig"))
         except FileNotFoundError:
             return
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, RecursionError) as exc:
             if attempt == 2:
                 raise CliConfigEnvironment(
                     f"the claude CLI's global config {path} cannot be read "
@@ -970,6 +970,17 @@ def _last_event(
     return next(
         (event for event in reversed(events) if event.get("type") == kind),
         {},
+    )
+
+
+def is_api_error_event(event: Mapping[str, Any]) -> bool:
+    """Whether a stream-json event is an assistant event that stands for
+    an API error, not the model's words: one with an `error` (the error's
+    class, a string) or marked is_api_error_message. Its text is the CLI's
+    notice of the error, such as a refusal frame."""
+    return event.get("type") == "assistant" and (
+        isinstance(event.get("error"), str)
+        or event.get("is_api_error_message") is True
     )
 
 
@@ -1641,14 +1652,7 @@ def unsupported_model(
     texts = [result.get("result")]
     for event in events:
         message = event.get("message")
-        if (
-            event.get("type") == "assistant"
-            and isinstance(message, dict)
-            and (
-                isinstance(event.get("error"), str)
-                or event.get("is_api_error_message") is True
-            )
-        ):
+        if isinstance(message, dict) and is_api_error_event(event):
             content = message.get("content")
             texts += [
                 block.get("text")
@@ -1734,14 +1738,7 @@ def classifier_refusal(
     for event in events:
         kind = event.get("type")
         message = event.get("message")
-        if (
-            kind == "assistant"
-            and isinstance(message, dict)
-            and (
-                isinstance(event.get("error"), str)
-                or event.get("is_api_error_message") is True
-            )
-        ):
+        if isinstance(message, dict) and is_api_error_event(event):
             if message.get("stop_reason") == REFUSAL_STOP:
                 blocked_by = blocked_by or REFUSAL_STOP
                 details = message.get("stop_details")
@@ -2889,10 +2886,7 @@ class ClaudeCodeClient:
                     and block.get("type") == "text"
                     and isinstance(block.get("text"), str)
                 ]
-                if (
-                    isinstance(event.get("error"), str)
-                    or event.get("is_api_error_message") is True
-                ):
+                if is_api_error_event(event):
                     notices += texts
                 elif texts:
                     spoke = True

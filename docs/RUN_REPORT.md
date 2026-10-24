@@ -302,8 +302,10 @@ writer refused, count here too, under their check and the stage
 - excerpts not in their source (#580): the claims each extraction kept
   whose `transcription_excerpt` its transcription does not hold,
   compared as core/verbatim.py compares a container's evidence (folded,
+  typographic quotes and dashes read plain, a soft hyphen dropped,
   whitespace and line breaks collapsed, a hyphen at a line's end joined,
-  or kept, for an excerpt that crosses it, whole words only), from each
+  or kept, with or without a space after it, for an excerpt that
+  crosses it, whole words only; #612), from each
   coverage's `quotes`. A miss is a flag, never a reject: the claim is
   kept and written. The aggregate gives the
   claims checked, those with no excerpt, the misses and their rate among
@@ -341,6 +343,16 @@ writer refused, count here too, under their check and the stage
   counted in coverage: it is counted with the call errors, by its
   error's class (`ClassifierRefused`), and a refusal that fails a chunk
   or the extraction is named in the document's failure reason;
+- trailing commas read as JSON syntax (#654): a single trailing comma
+  before a closing `]` or `}` in the manifest answer an extraction used
+  or a chunk's accepted answer, which the extraction reads past and
+  counts (`coverage.json`'s
+  `trailing_commas`), summed over the extractions, with the extractions
+  that read one, and those whose coverage predates the count counted
+  apart, never as zero (`aggregate.content.trailing_commas`: `read`,
+  `extractions`, `absent`). A document's own count is in `report.json`
+  and its drill-down in `report.html` (`coverage.trailing_commas`, null,
+  and "not counted", for a coverage that predates it);
 - mention records and judgement notes, summed from each extraction's
   `coverage.json` (ADR-0035 §4, §5, #420): the mention records given,
   and those by label status (`name`, `role`, `kinship`, `courtesy`,

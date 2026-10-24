@@ -144,7 +144,7 @@ def document_gaps(directory: Path) -> list[dict[str, str]]:
 def _state(directory: Path) -> dict | None:
     try:
         state = json.loads((directory / "state.json").read_text())
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     return state if isinstance(state, dict) else None
 

@@ -483,7 +483,7 @@ def contents_key(context: Any, key: str) -> str:
 def read_record(directory: Path) -> dict:
     try:
         record = json.loads((directory / RECORD).read_text())
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {}
     return record if isinstance(record, dict) else {}
 
@@ -507,7 +507,7 @@ def state_path(config: Any) -> Path:
 def read_state(config: Any) -> dict | None:
     try:
         state = json.loads(state_path(config).read_text())
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     if not isinstance(state, dict) or state.get("format") != STATE_FORMAT:
         return None

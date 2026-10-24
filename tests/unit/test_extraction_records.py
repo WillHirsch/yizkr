@@ -1166,6 +1166,8 @@ class TestTheManifestsRecords:
             "rejected_by_reason",
             "unread_objects",
             "manifest_artifact_kind",
+            # trailing commas read as JSON syntax (#654)
+            "trailing_commas",
             "fallback",
             # each claim's excerpt looked for in the transcription (#580)
             "quotes",
