@@ -1852,9 +1852,25 @@ class TestTimeline:
             f"{label('leopold-loebig')}: event, imprisonment (start time)"
         )
 
+    def test_a_type_label_is_escaped_on_the_page(self, tmp_path, vocabulary):
+        # a type's label comes from the graph, so the page escapes it
+        row = {
+            **HELD_FROM,
+            "eventTypes": literal(
+                urllib.parse.quote("prison <Peiltal> & yard", safe="")
+            ),
+        }
+        site, _ = build(
+            tmp_path, vocabulary, {**RESPONSES, 'date of birth"@en': [row]}
+        )
+        page = (site / "timeline.html").read_text()
+        assert ", prison &lt;Peiltal&gt; &amp; yard (start time)<" in page
+        assert "<Peiltal>" not in page
+
     def test_a_type_label_is_read_whole(self):
         # each label is URI-encoded, so a "|" or a "%" in one splits nothing
-        # (#540); a point in time names the types alone
+        # (#540); the labels are sorted ignoring case, and a point in time
+        # names the types alone
         row = on_timeline(
             "leopold-loebig",
             None,
@@ -1863,7 +1879,7 @@ class TestTimeline:
             types=("imprisonment", "Peiltal court prison | 100% held"),
         )
         assert SiteBuilder.timeline_what(row) == (
-            "Peiltal court prison | 100% held, imprisonment"
+            "imprisonment, Peiltal court prison | 100% held"
         )
         assert SiteBuilder.timeline_what(EUGEN_DIED) == "date of death"
 

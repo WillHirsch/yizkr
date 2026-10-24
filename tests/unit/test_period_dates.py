@@ -315,6 +315,8 @@ class TestThePersonTimeline:
             "wikibase:DeprecatedRank }\n"
         ) in arm
         assert "wdt:{P:participant}" not in q
+        # no other rank filter: one on the participants, one on the types
+        assert arm.count("wikibase:rank") == 2
 
     def test_circa_is_folded_into_one_cell_per_statement(self, q):
         # circa qualifies the whole statement (#315), so it is read after

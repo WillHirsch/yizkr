@@ -1619,11 +1619,11 @@ under its qualifier's label ("1946 (earliest date: 1946; latest start
 date: 1947)"). An event's own start and end time are rows of their own
 there, each bounded by its earliest and latest date ("imprisonment
 (start time)", "imprisonment (end time)"), each once under all the
-event's types, and on the timeline of every participant, whatever their
-rank, but a deprecated one (a preferred participant or type hides no
-other); and the extraction prompts
-give the extractor this convention for residences and other periods,
-and date a marriage by its wedding and end events instead.
+event's types, and on the timeline of each participant whose
+participant statement is not deprecated (a preferred participant or
+type hides no other); and the extraction prompts give the extractor
+this convention for residences and other periods, and date a marriage
+by its wedding and end events instead.
 
 ## Persecution and displacement as events (see ADR-0014)
 

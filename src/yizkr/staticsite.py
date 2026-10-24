@@ -883,16 +883,19 @@ class SiteBuilder:
     def timeline_what(row: dict) -> str:
         """What a person-timeline row dates. An event's row carries its
         types in ?eventTypes, each label URI-encoded and "|"-separated,
-        and they are sorted, since GROUP_CONCAT gives them in no set
-        order, and joined: "event, military service". Its start or end
-        time's row names the time beside them ("imprisonment (start
+        and they are sorted, ignoring case, since GROUP_CONCAT gives them
+        in no set order, and joined: "event, military service". Its start
+        or end time's row names the time beside them ("imprisonment (start
         time)"), and its point in time's row the types alone. Any other
         row is named by its ?what."""
         what = cell(row, "what")
         types = sorted(
-            urllib.parse.unquote(each)
-            for each in cell(row, "eventTypes").split("|")
-            if each
+            (
+                urllib.parse.unquote(each)
+                for each in cell(row, "eventTypes").split("|")
+                if each
+            ),
+            key=str.casefold,
         )
         if not types:
             return what
