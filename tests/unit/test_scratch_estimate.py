@@ -29,6 +29,7 @@ import threading
 import uuid
 from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -57,6 +58,12 @@ from yizkr.pipeline import estimate, llm, scratch
 from yizkr.pipeline.chunking import parse_chunk_response, parse_chunk_unread
 from yizkr.pipeline.estimate import FIRST_TURNS, Estimator, StageCalls
 from yizkr.pipeline.llmcache import CacheRefused
+from yizkr.pipeline.orchestrate import (
+    CHECKED_ROUTES,
+    EXCERPT,
+    PAGED,
+    Orchestrator,
+)
 from yizkr.pipeline.rundir import RunDir, RunSettingsConflict
 from yizkr.pipeline.scratch import (
     EXIT_FAILED,
@@ -1593,6 +1600,74 @@ for path in sys.argv[1:]:
 print("held", flush=True)
 time.sleep(600)
 """
+
+
+class _Looked(Exception):
+    """Raised by a stand-in for the lookup of a transcription view, once
+    it has noted whether the view is to be checked again."""
+
+
+class TestCheckedRoutes:
+    """The estimate checks a reused transcription again on exactly the
+    routes the driver does (#616): Estimator._transcription and
+    Estimator._stale_stages as Orchestrator._transcription, one list,
+    CHECKED_ROUTES. Each looks the view up through a stand-in that notes
+    whether it was handed a recheck; nothing is read or run."""
+
+    # every route the driver transcribes by (Orchestrator._transcribe)
+    ROUTES = ("vision", PAGED, "text-file", "correction", EXCERPT)
+
+    def test_the_checked_routes_are_the_transcribers_that_check(self):
+        """Every route but a curator's correction checks its output."""
+        assert set(self.ROUTES) - CHECKED_ROUTES == {"correction"}
+        assert set(self.ROUTES) >= CHECKED_ROUTES
+
+    @pytest.mark.parametrize("route", ROUTES)
+    def test_the_estimate_rechecks_where_the_driver_does(
+        self, monkeypatch, route
+    ):
+        rechecked: dict[str, bool] = {}
+
+        def looked(name):
+            def look(self, doc, view, load, recheck=None):
+                rechecked[name] = recheck is not None
+                raise _Looked
+
+            return look
+
+        monkeypatch.setattr(Orchestrator, "_route", lambda self, doc: route)
+        monkeypatch.setattr(
+            estimate, "route_transcription", lambda source, correction: route
+        )
+        monkeypatch.setattr(Orchestrator, "_reused_view", looked("driver"))
+        doc = SimpleNamespace(
+            sha1="a" * 40,
+            source=Path("a-letter.txt"),
+            correction=None,
+            transcription=Path("transcription.json"),
+            batch=Path("batch.json"),
+            critique=Path("critique.json"),
+        )
+        driver = object.__new__(Orchestrator)
+        driver._views = {}
+        with pytest.raises(_Looked):
+            driver._transcription(doc)
+
+        estimator = object.__new__(Estimator)
+        monkeypatch.setattr(Estimator, "_stands", looked("estimate"))
+        with pytest.raises(_Looked):
+            estimator._transcription(doc, False, None)
+        monkeypatch.setattr(Estimator, "_fresh", lambda self, doc: False)
+        monkeypatch.setattr(Estimator, "_stands", looked("excerpt"))
+        with pytest.raises(_Looked):
+            estimator._stale_stages(doc, ["transcription"])
+
+        checked = route in CHECKED_ROUTES
+        assert rechecked == {
+            "driver": checked,
+            "estimate": checked,
+            "excerpt": checked,
+        }
 
 
 @pytest.fixture

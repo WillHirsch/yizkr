@@ -343,6 +343,152 @@ class TestIngestExtract:
         assert captured.out == ""
         assert not out.exists()
 
+    @staticmethod
+    def fail_extraction(monkeypatch) -> None:
+        from yizkr.pipeline import extract
+        from yizkr.pipeline.chunking import ExtractionFailed
+
+        def failed(self, transcription, artifact):
+            raise ExtractionFailed("no claims extracted: 1 of 1 chunks failed")
+
+        monkeypatch.setattr(extract.ClaimFileExtractor, "extract", failed)
+
+    EARLIER = '{"claims": [], "note": "an earlier run"}'
+
+    def test_a_failed_extraction_moves_an_earlier_batch_aside(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """An earlier run's batch at --out is moved to the first free
+        <out>.stale name, never over an older one, and the one line says
+        where: no later step reads it as this run's (#639)."""
+        self.fail_extraction(monkeypatch)
+        out = tmp_path / "batch.json"
+        out.write_text(self.EARLIER)
+        older = tmp_path / "batch.json.stale"
+        older.write_text("an older stale batch")
+        stale = tmp_path / "batch.json.stale.1"
+
+        status, _ = self.extract(tmp_path)
+
+        assert status == EXIT_FAILED
+        captured = capsys.readouterr()
+        _no_traceback(captured.err)
+        assert captured.err == (
+            "extraction failed: no claims extracted: 1 of 1 chunks failed; "
+            f"{out} not written; the earlier batch there moved to {stale}\n"
+        )
+        assert captured.out == ""
+        assert not out.exists()
+        assert stale.read_text() == self.EARLIER
+        assert older.read_text() == "an older stale batch"
+
+    def test_an_earlier_batch_that_cannot_be_moved_is_named(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """When the move fails (here no <out>.stale name can be made: it
+        is too long, which holds as root too), the line says the batch
+        still at --out is not this run's, and the step still fails in one
+        line (#639)."""
+        self.fail_extraction(monkeypatch)
+        from yizkr.pipeline.transcribe import Transcription
+
+        transcription = tmp_path / "transcription.json"
+        transcription.write_text(
+            Transcription(
+                artifact=MEDIA_REF, text="a page", engine="test"
+            ).model_dump_json()
+        )
+        out = tmp_path / ("b" * 250 + ".json")
+        out.write_text(self.EARLIER)
+
+        status = cli.main(
+            [
+                *("ingest", "extract", "--transcription", str(transcription)),
+                *("--claims-file", str(tmp_path / "claims.json")),
+                *("--out", str(out)),
+            ]
+        )
+
+        assert status == EXIT_FAILED
+        captured = capsys.readouterr()
+        _no_traceback(captured.err)
+        assert captured.err == (
+            "extraction failed: no claims extracted: 1 of 1 chunks failed; "
+            f"{out} not written; an earlier batch is still at {out} and "
+            "could not be moved aside (File name too long): it is not this "
+            "run's\n"
+        )
+        assert out.read_text() == self.EARLIER
+        assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
+            ["transcription.json", out.name]
+        )
+
+    def test_any_other_exception_moves_an_earlier_batch_aside_too(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A ValueError (a single-call extractor's, or a bug's) keeps its
+        traceback, but the earlier batch is moved aside first and a line
+        says where (#639)."""
+        from yizkr.pipeline import extract
+
+        def broken(self, transcription, artifact):
+            raise ValueError("every extracted claim failed validation")
+
+        monkeypatch.setattr(extract.ClaimFileExtractor, "extract", broken)
+        out = tmp_path / "batch.json"
+        out.write_text(self.EARLIER)
+        stale = tmp_path / "batch.json.stale"
+
+        with pytest.raises(ValueError, match="failed validation"):
+            self.extract(tmp_path)
+
+        assert not out.exists()
+        assert stale.read_text() == self.EARLIER
+        assert capsys.readouterr().err == (
+            f"{out} not written; the earlier batch there moved to {stale}\n"
+        )
+
+    def test_a_successful_extraction_replaces_an_earlier_batch(
+        self, tmp_path, capsys
+    ):
+        """Only a run that does not complete moves a batch aside: a
+        complete one writes its own over it (#639)."""
+        (tmp_path / "claims.json").write_text('{"claims": []}')
+        out = tmp_path / "batch.json"
+        out.write_text(self.EARLIER)
+
+        status, _ = self.extract(tmp_path)
+
+        assert status == EXIT_OK
+        assert capsys.readouterr().out == f"wrote {out} (0 claims)\n"
+        assert json.loads(out.read_text())["claims"] == []
+        assert out.read_text() != self.EARLIER
+        assert not list(tmp_path.glob("batch.json.stale*"))
+
+    def test_a_folder_at_out_is_refused_before_the_engine(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A folder at --out is refused in one line, before extraction,
+        and is never moved aside (#639)."""
+        from yizkr.pipeline import extract
+
+        def reached(self, transcription, artifact):
+            raise AssertionError("the extractor was reached")
+
+        monkeypatch.setattr(extract.ClaimFileExtractor, "extract", reached)
+        out = tmp_path / "batch.json"
+        out.mkdir()
+        (out / "kept.txt").write_text("kept")
+
+        status, _ = self.extract(tmp_path)
+
+        assert status == EXIT_REFUSED
+        err = capsys.readouterr().err
+        _no_traceback(err)
+        assert err == f"--out {out} is a folder, not a batch file; refusing\n"
+        assert (out / "kept.txt").read_text() == "kept"
+        assert not list(tmp_path.glob("batch.json.stale*"))
+
     def test_a_claim_free_batch_says_why_it_is_empty(
         self, tmp_path, monkeypatch, capsys
     ):

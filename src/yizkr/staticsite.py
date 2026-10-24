@@ -879,6 +879,29 @@ class SiteBuilder:
             )
         return range_text(bounds, f"{qid_of(row, 'person')} timeline date")
 
+    @staticmethod
+    def timeline_what(row: dict) -> str:
+        """What a person-timeline row dates. An event's row carries its
+        types in ?eventTypes, each label URI-encoded and "|"-separated,
+        and they are sorted, ignoring case, since GROUP_CONCAT gives them
+        in no set order, and joined: "event, military service". Its start
+        or end time's row names the time beside them ("imprisonment (start
+        time)"), and its point in time's row the types alone. Any other
+        row is named by its ?what."""
+        what = cell(row, "what")
+        types = sorted(
+            (
+                urllib.parse.unquote(each)
+                for each in cell(row, "eventTypes").split("|")
+                if each
+            ),
+            key=str.casefold,
+        )
+        if not types:
+            return what
+        named = ", ".join(types)
+        return f"{named} ({what})" if what else named
+
     @cached_property
     def _circumstances_label(self) -> str:
         """The manifest's label for the sourcing circumstances qualifier,
@@ -1647,7 +1670,7 @@ class SiteBuilder:
                 f"{qualifier_span(self.timeline_qualifiers(row))} — "
                 f'<a href="people/{esc(person)}.html">'
                 f"{esc(cell(row, 'personLabel'))}</a>, "
-                f"{esc(cell(row, 'what'))}" + source + "</div>"
+                f"{esc(self.timeline_what(row))}" + source + "</div>"
             )
         body.append("</div>")
         entries = reading_order(
@@ -1716,7 +1739,8 @@ class SiteBuilder:
                     "start_date": start,
                     "text": {
                         "headline": esc(
-                            f"{cell(row, 'personLabel')}: {cell(row, 'what')}"
+                            f"{cell(row, 'personLabel')}: "
+                            f"{self.timeline_what(row)}"
                         ),
                         "text": esc(
                             f"per {cell(row, 'sourceLabel') or 'unattributed'}"

@@ -2859,6 +2859,35 @@ class TestRegisterDerivedMedia:
         assert registrar.register_derived_media(record, directory) == {}
         assert sha1(IMAGE) not in wiki.files.values()
 
+    @pytest.mark.parametrize("container", ["pdf", "presentation"])
+    def test_bytes_a_glob_names_in_a_deck_are_left_out_anywhere(
+        self, tmp_path, container
+    ):
+        """The run's list names the SHA-1 of an image a glob names in a
+        deck (corpus.gather_embedded, #620): a PDF that places those bytes,
+        or a deck that embeds them under a name the glob does not match,
+        leaves them out, and its other image is registered."""
+        wiki = FakeWiki()
+        exclusions = ExclusionList.parse("image2.png\n").with_embedded(
+            [sha1(IMAGE)]
+        )
+        registrar = Registrar(wiki, exclusions=exclusions)
+        deck = deck_file(tmp_path, "a")
+        registrar.register_artifact(deck, "presentation", "Our Family")
+        record, directory = recorded(
+            tmp_path,
+            deck,
+            "Our Family",
+            [
+                ("page 6, image 1.png", IMAGE, [6]),
+                ("page 7, image 1.png", OTHER_IMAGE, [7]),
+            ],
+        )
+        record = record.model_copy(update={"container": container})
+        derived = registrar.register_derived_media(record, directory)
+        assert sorted(derived) == [sha1(OTHER_IMAGE)]
+        assert sha1(IMAGE) not in wiki.files.values()
+
     def test_a_kept_medium_reached_through_a_link_is_refused(self, tmp_path):
         """The file a record keeps must be a regular file: one replaced by a
         link is never uploaded through, even to the medium's own bytes."""

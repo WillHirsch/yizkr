@@ -240,17 +240,20 @@ members left apart. A pair contradicted is a `different` pair the
 closure joined another way (a `different` is a cannot-link), a `same`
 pair whose evidence says they differ by more than their own dates,
 two other members whose evidence says they differ (_Judge.contradicts),
-or two events with principals (participants in the principal role)
-that ended in clusters held apart, a member of one said `different`
-from a member of the other (`principals_apart`): one event cannot
-happen to two people the identity map keeps apart. A verdict excuses a
-date conflict on its own pair and nothing else: never stated sexes or
-civil statuses that cannot both hold, kin that conflict, a place's
-containers that differ, an organisation's places that differ, event
-kinds that cannot be one, or principals held apart. Each ambiguous
-review pair records whether a `same` could merge it (`same_merges`); a
-candidate cluster of two whose one pair could not (cannot_merge) is not
-pending in a run whose verdicts merge. Any other
+two events with principals (participants in the principal role) that
+ended in clusters held apart, a member of one said `different` from a
+member of the other (evidence `principals_apart`), or two unions with
+couple members (spouses or partners) that ended so (`couple_apart`;
+both people_apart): one event cannot happen to two people the identity
+map keeps apart, nor one union's spouse or partner be two people it
+keeps apart. A verdict excuses a date conflict on its own pair and
+nothing else: never stated sexes or civil statuses that cannot both
+hold, kin that conflict, a place's containers that differ, an
+organisation's places that differ, event kinds that cannot be one, or
+principals or couple members held apart. Each ambiguous review pair
+records whether a `same` could merge it (`same_merges`); a candidate
+cluster of two whose one pair could not (cannot_merge) is not pending
+in a run whose verdicts merge. Any other
 part merges, with the method `adjudicated` when a `same` pair is among
 its links, every member of the components it joins included, since the
 verdict made the merge; and `confident_component` when its confident
@@ -361,7 +364,7 @@ from yizkr.pipeline.writer import stored_term
 # what cluster_corpus makes of a set of manifests: bumped whenever the same
 # manifests and thresholds would give another identity map, so that a
 # stored map is made again
-VERSION = 6
+VERSION = 7
 # the layout of identity-map.json
 FORMAT = 1
 STAGE = "clustering"
@@ -423,8 +426,9 @@ SUMMARY_METHODS = (
 # a review entry of the mentions holding a hub key
 HUB = "hub"
 # the evidence of two events whose principals ended in clusters an
-# adjudicator held apart
+# adjudicator held apart, and of two unions whose couple members did
 PRINCIPALS_APART = "principals_apart"
+COUPLE_APART = "couple_apart"
 
 HUMAN = "human"
 ORGANIZATION = "organization"
@@ -2256,12 +2260,13 @@ def _adjudicated(
     closure joined another way, a `same` pair whose evidence says they
     differ by more than their own dates (stated sexes, civil statuses,
     kin), any other two members whose evidence says they differ, or two
-    events with principals held apart (`apart`, which no verdict
-    excuses); then it falls back to its confident `components`, each
-    merged or apart as it is without verdicts. A merged part's method is
-    `adjudicated` when a `same` pair is among its links,
-    `confident_component` when its confident links alone join it; a
-    member a `different` pair left alone is `adjudicated`."""
+    events with principals or two unions with couple members held apart
+    (`apart`, which no verdict excuses); then it falls back to its
+    confident `components`, each merged or apart as it is without
+    verdicts. A merged part's method is `adjudicated` when a `same` pair
+    is among its links, `confident_component` when its confident links
+    alone join it; a member a `different` pair left alone is
+    `adjudicated`."""
     ambiguous = [pair for pair in own if links[pair][0] == AMBIGUOUS]
     pending = [pair for pair in ambiguous if pair not in inside]
     if not pending or not all(
@@ -2340,7 +2345,8 @@ def _settle(
     (the module docstring says how): an ambiguous one by its confident
     components (_confident_components), and by the adjudicator's
     `verdicts` where they settle it (_adjudicated), where two events
-    whose principals ended held apart (`apart`) contradict."""
+    whose principals, or two unions whose couple members, ended held
+    apart (`apart`) contradict."""
     candidates = _components(ids, links)
     pairs_of: dict[str, list[Pair]] = defaultdict(list)
     for pair in links:
@@ -2674,19 +2680,24 @@ def cluster_corpus(
             said_different.get(member, frozenset()) & other for member in one
         )
 
-    def principals_apart(a: _Node, b: _Node) -> str | None:
+    def people_apart(a: _Node, b: _Node) -> str | None:
         """PRINCIPALS_APART when two events have principals that ended in
-        clusters held apart (held_apart), which no verdict on the events
-        excuses: one event cannot happen to two people the clusters keep
-        apart. None for any other pair."""
-        if a.kind not in EVENT_KINDS or b.kind not in EVENT_KINDS:
+        clusters held apart (held_apart), COUPLE_APART when two unions
+        have couple members that did, which no verdict on the events or
+        unions excuses: one event cannot happen to two people the
+        clusters keep apart, nor one union's spouse or partner be two
+        people they keep apart. None for any other pair."""
+        if a.kind in EVENT_KINDS and b.kind in EVENT_KINDS:
+            ones, others = _principals(a), _principals(b)
+            evidence = PRINCIPALS_APART
+        elif a.kind in UNION_KINDS and b.kind in UNION_KINDS:
+            ones, others, evidence = a.couple, b.couple, COUPLE_APART
+        else:
             return None
         if any(
-            held_apart(first, second)
-            for first in _principals(a)
-            for second in _principals(b)
+            held_apart(first, second) for first in ones for second in others
         ):
-            return PRINCIPALS_APART
+            return evidence
         return None
 
     def stage(of: Callable[[_Node], bool], link: Callable) -> None:
@@ -2701,7 +2712,7 @@ def cluster_corpus(
             judge,
             conflicts,
             settling,
-            principals_apart,
+            people_apart,
         )
         links.update(found)
         settled.extend(entries)
@@ -2772,7 +2783,7 @@ def cluster_corpus(
                                     dates_count=False,
                                 )
                                 is None
-                                and principals_apart(
+                                and people_apart(
                                     index[pair[0]], index[pair[1]]
                                 )
                                 is None,

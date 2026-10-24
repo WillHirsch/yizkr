@@ -437,6 +437,48 @@ class TestReports:
         assert rows["stages.critique.computed"]["baseline"] == ABSENT
         assert rows["calls.engine"]["delta"] == -1
 
+    def test_readings_are_figures_apart_from_the_reasons_set_aside(self):
+        # `dropped` and `read as text` set nothing aside (#611): a run
+        # that reads more entries as text, and sets fewer records aside,
+        # shows its reasons set aside falling and its readings rising;
+        # a baseline from before counted them among the reasons, and has
+        # no readings figure
+        before = {
+            "content": {
+                "records": {
+                    "set_aside_records": 9,
+                    "set_aside_reasons": 12,
+                    "set_aside_by_reason": {"schema": 8, "dropped": 4},
+                    "containers_dropped": 1,
+                    "containers_dropped_by_reason": {"malformed": 1},
+                }
+            }
+        }
+        after = {
+            "content": {
+                "records": {
+                    "set_aside_records": 2,
+                    "set_aside_reasons": 2,
+                    "set_aside_by_reason": {"schema": 2},
+                    "readings": 7,
+                    "readings_by_reason": {"read as text": 6, "dropped": 1},
+                    "containers_dropped": 1,
+                    "containers_dropped_by_reason": {"malformed": 1},
+                }
+            }
+        }
+        rows = {r["figure"]: r for r in rundiff.figures(before, after)}
+        records = "content.records."
+        assert rows[records + "set_aside_reasons"]["delta"] == -10
+        assert rows[records + "set_aside_by_reason.dropped"]["run"] == 0
+        assert rows[records + "readings"]["baseline"] == ABSENT
+        assert rows[records + "readings"]["run"] == 7
+        assert rows[records + "readings_by_reason.read as text"]["run"] == 6
+        assert (
+            rows[records + "containers_dropped_by_reason.malformed"]["delta"]
+            == 0
+        )
+
     def test_the_writers_self_references_are_a_figure_of_their_own(self):
         # the claims the writer refused for an item value that is their
         # subject's item (#491), apart from its other refusals and from

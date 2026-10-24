@@ -108,7 +108,7 @@ from yizkr.claims import (
     TimeValue,
     VocabRef,
 )
-from yizkr.core.dates import UnsupportedDate, year_problem
+from yizkr.core.dates import UnsupportedDate, claim_time_text, year_problem
 
 # `bulk-accept` is an approval that also records HOW it was accepted (a
 # whole-sheet accept-all, ADR-0023), so the write path can mark those edits
@@ -304,14 +304,10 @@ def describe_value(value) -> str:
 def sheet_value(value) -> str:
     """A value as the review sheet shows it: as `describe_value` does, but
     a date at the precision its source states, as the site renders it
-    (`adjudication.date_text`): a decade as "the 1830s", a century as "the
-    19th century", never as its first year."""
+    (`core.dates.claim_time_text`): a decade as "the 1830s", a century as
+    "the 19th century", never as its first year."""
     if isinstance(value, TimeValue):
-        # imported here: adjudication imports this package's clustering
-        # and reconcile modules
-        from yizkr.pipeline.adjudication import date_text
-
-        return date_text(value)
+        return claim_time_text(value, "a date the review sheet shows")
     return describe_value(value)
 
 
