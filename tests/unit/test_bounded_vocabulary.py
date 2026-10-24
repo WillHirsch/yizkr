@@ -36,7 +36,7 @@ ITEM_IDS = {key: f"Q{n}" for n, key in enumerate(RAW["items"], 1)}
 VOCABULARY = (PROPERTY_IDS, ITEM_IDS)
 PAGE = build_mapping_wikitext(MANIFEST, PROPERTY_IDS, ITEM_IDS)
 # items of the instance beside the vocabulary
-PEOPLE = {"Q901": "Eugen Löbig", "Q902": "Margarethe Löbig"}
+PEOPLE = {"Q901": "Eugen Löbig", "Q902": "Rahel Löbig"}
 
 
 def config() -> Config:
@@ -173,6 +173,8 @@ class TestTheBoundedRead:
         (page_read,) = [p for p in wiki.requests if p.get("prop")]
         assert page_read["titles"] == RAW["mapping_page"]
         assert page_read["rvprop"] == "content"
+        assert page_read["rvslots"] == "main"
+        assert page_read["formatversion"] == "2"
 
     def test_the_vocabulary_read_bounded_is_kept(self):
         wiki = FakeWiki()
@@ -253,6 +255,41 @@ class TestTheFallback:
         with pytest.raises(RuntimeError, match=f"{label!r}"):
             wiki.vocabulary()
         assert wiki.whole_reads == 1
+
+    def test_a_page_that_names_an_items_id_under_another_label(self):
+        """The human row names the place item's id: both labels name one
+        id, and the page cannot say which item is the vocabulary's."""
+        human, place = ITEM_IDS["human"], ITEM_IDS["place"]
+        page = PAGE.replace(
+            f"| [[Item:{human}|{human}]] ||", f"| [[Item:{place}|{place}]] ||"
+        )
+        assert page != PAGE
+
+        self.assert_read_whole(FakeWiki(page=page))
+
+    def test_a_page_that_names_a_propertys_id_under_another_label(self):
+        """The date of birth row names the date of death property's id, so
+        a birth must never be written as a death."""
+        born, died = (
+            PROPERTY_IDS["date_of_birth"],
+            PROPERTY_IDS["date_of_death"],
+        )
+        page = PAGE.replace(
+            f"| [[Property:{born}|{born}]] ||",
+            f"| [[Property:{died}|{died}]] ||",
+        )
+        assert page != PAGE
+
+        self.assert_read_whole(FakeWiki(page=page))
+
+    def test_an_answer_that_leaves_out_an_id(self):
+        class Forgetful(FakeWiki):
+            def api_get(self, params):
+                data = super().api_get(params)
+                data.get("entities", {}).pop(ITEM_IDS["human"], None)
+                return data
+
+        self.assert_read_whole(Forgetful())
 
     def test_an_id_that_carries_another_label(self):
         """A vocabulary item relabelled on the wiki and in the manifest
@@ -381,6 +418,7 @@ class TestThePage:
         assert list(mapping_rows("| [[Item:P1|P1]] || instance of || x")) == []
         assert list(mapping_rows("| [[Property:Q1|Q1]] || human || x")) == []
         assert list(mapping_rows("| [[Item:Q1|Q2]] || human || x")) == []
+        assert list(mapping_rows("| [[Property:P1|P2]] || x || y")) == []
 
     def test_page_text(self):
         wiki = FakeWiki()

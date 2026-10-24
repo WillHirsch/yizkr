@@ -312,8 +312,9 @@ class WikiClient:
         revision, the entities' current data).
 
         None, and the caller reads whole, when the page is missing, names
-        a label twice or lacks one the manifest gives, when an id is
-        missing, a redirect or carries another label, and when the read
+        a label twice, names one id under two labels or lacks a label the
+        manifest gives, when an id is missing, a redirect or carries
+        another label, and when the read
         fails in any way: a whole read answers then, and fails loudly
         itself on an instance that cannot answer."""
         try:
@@ -344,7 +345,11 @@ class WikiClient:
                 if entity_id is None:
                     return None
                 found[kind][key] = entity_id
-                wanted[entity_id] = spec["label"]
+                if (
+                    wanted.setdefault(entity_id, spec["label"])
+                    != spec["label"]
+                ):
+                    return None
         ids = sorted(
             wanted, key=lambda entity_id: (entity_id[0], _qid_order(entity_id))
         )

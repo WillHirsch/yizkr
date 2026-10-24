@@ -8,7 +8,10 @@ the wiki page named in the manifest (`Project:Model mapping`).
 Idempotent: entities are matched by exact English label, so re-running
 is safe and a second run against an up-to-date instance is a no-op.
 Local P/Q ids are assigned by the instance and never stored in this
-repo — the wiki mapping page is the per-instance record.
+repo — the wiki mapping page is the per-instance record. The wiki
+client reads the vocabulary from it (`WikiClient.vocabulary`), checking
+that each id it names carries its manifest label, and reads every label
+whole when the page is missing or disagrees.
 
 ## Usage
 

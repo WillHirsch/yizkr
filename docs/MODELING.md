@@ -26,7 +26,7 @@
   That read sees only those ids, so another item under a vocabulary
   item's label goes unseen there, and the bootstrap, which reads every
   label, refuses it. When the page is missing, lacks or repeats a
-  manifest label, or an id is missing, a redirect or carries another
+  manifest label, names one id under two labels, or an id is missing, a redirect or carries another
   label, the vocabulary reads every label whole. No extracted entity is
   found by its label (#109): the writer finds or mints its item through
   the identity map alone (below).

@@ -84,6 +84,8 @@ def with_homonyms(snapshot: dict[str, dict]) -> dict[str, dict]:
 def a_client(snapshot: dict[str, dict]) -> WikiClient:
     client = WikiClient(config())
     client.snapshot = lambda: dict(snapshot)
+    # an instance with no mapping page: the vocabulary reads every label
+    client.page_text = lambda title: None
     return client
 
 
@@ -186,7 +188,7 @@ class TestTheVocabulary:
 
     @pytest.mark.parametrize("labels_read_first", [False, True])
     def test_a_vocabulary_label_two_items_hold_fails(self, labels_read_first):
-        """On a whole read: these clients reach no mapping page, so the
+        """On a whole read: these clients have no mapping page, so the
         vocabulary reads every label (#507)."""
         snapshot = manifest_snapshot()
         human = snapshot["Q1"]["label"]
@@ -418,6 +420,7 @@ class TestBackupAndTheSite:
     def homonyms(self, monkeypatch):
         snapshot = with_homonyms(manifest_snapshot())
         monkeypatch.setattr(WikiClient, "snapshot", lambda self: snapshot)
+        monkeypatch.setattr(WikiClient, "page_text", lambda self, title: None)
 
     def test_the_backups_exclusion_report_reads_the_vocabulary(self, homonyms):
         from yizkr.backup import exclusion_report
