@@ -1130,29 +1130,24 @@ class Orchestrator:
     def _gather_embedded(self, paths: Sequence[Path]) -> None:
         """Give the never-ingest list the SHA-1s of the images its globs
         name, by their names in the archive, in the decks among `paths`
-        that it does not exclude itself (corpus.gather_embedded), in place
-        of any it was given before. This comes before any container's
-        images are read, so the reader (`_excluded_image`) and the write's
-        registrar, which both ask this list, keep those bytes out of every
-        deck and PDF that holds them, and out of the run as a file of
-        their own (ADR-0008). A deck the list excludes is never opened; one
-        that cannot be read as an archive refuses the run
-        (ExclusionConfigError), since the bytes its globs would name cannot
-        be known."""
+        (corpus.gather_embedded), in place of any it was given before.
+        This comes before any container's images are read, so the reader
+        (`_excluded_image`) and the write's registrar, which both ask this
+        list, keep those bytes out of every deck and PDF that holds them
+        as they are, and out of the run as a file of their own (ADR-0008).
+        A deck the list excludes is asked too: its members are hashed in
+        memory and nothing of it is kept, so listing a deck never frees
+        the bytes a glob names in it. A deck that cannot be read as an
+        archive refuses the run (ExclusionConfigError), since the bytes
+        its globs would name cannot be known."""
         if self.exclusions is None:
             return
         listed = self.exclusions.with_embedded(())
-        decks = []
-        for path in paths:
-            if path.suffix.lower() not in PRESENTATION_SUFFIXES:
-                continue
-            try:
-                if is_excluded(listed, path):
-                    continue
-            except OSError:
-                # gather_embedded fails closed on a deck it cannot read
-                pass
-            decks.append(path)
+        decks = [
+            path
+            for path in paths
+            if path.suffix.lower() in PRESENTATION_SUFFIXES
+        ]
         self.exclusions = listed.with_embedded(gather_embedded(listed, decks))
 
     # -- stages ---------------------------------------------------------------

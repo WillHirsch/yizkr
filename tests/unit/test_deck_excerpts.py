@@ -13,6 +13,7 @@ reads each image a vision call gives it.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import struct
 import zipfile
@@ -50,6 +51,7 @@ from tests.unit.test_presentation import (
     SLIDE_REL,
     rels_xml,
 )
+from tests.unit.test_registrar import FakeWiki, strings
 from tests.unit.test_scratch import Corpus, a_run, fakes  # noqa: F401
 from tests.unit.test_scratch_estimate import (  # noqa: F401
     engine,
@@ -76,6 +78,7 @@ from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
     PAGED,
     PDF,
+    Orchestrator,
     document_kind,
     route_transcription,
 )
@@ -786,11 +789,18 @@ class TestAGlobFollowsTheBytes:
         assert self.LISTED.match(sha1=LETTER_SHA1) is None
         assert exclusions_record(gathered) == exclusions_record(self.LISTED)
 
+    # the list a real operator keeps: a SHA-1 of other bytes beside the glob
+    MIXED = ExclusionList.parse(f"{sha1(b'other bytes')}\nimage2.png\n")
+
+    @pytest.mark.parametrize(
+        "listed", [LISTED, MIXED], ids=["glob", "sha1 and glob"]
+    )
     def test_another_deck_s_copy_under_another_name_is_left_out(
-        self, tmp_path
+        self, tmp_path, listed
     ):
         """A second deck embeds the same bytes as `image7.png`, a name the
-        glob does not match: they are not read from it either."""
+        glob does not match: they are not read from it, nor registered or
+        uploaded with either deck, though its record still names them."""
         corpus = talk_folder(tmp_path)
         deck(
             corpus / "library-talk-2019.pptx",
@@ -798,13 +808,41 @@ class TestAGlobFollowsTheBytes:
             {"image7.png": LETTER_PNG},
         )
         orchestrator = run(
+            tmp_path, corpus, reader := Reader({}), exclusions=listed
+        )
+        assert reader.read == []
+        assert orchestrator._excerpts == {}
+        later = document(orchestrator, "library-talk-2019.pptx")
+        assert later.state.status == AWAITING_CLAIMS, later.state.error
+        assert transcription_of(later).pages[0].images == []
+        assert LETTER_SHA1 in read_derived_media(later.dir).media
+        wiki = FakeWiki()
+        orchestrator._client = wiki
+        for name in ("library-talk-2018.pptx", "library-talk-2019.pptx"):
+            Orchestrator._step_register(
+                orchestrator, document(orchestrator, name)
+            )
+        registered = orchestrator.registered_media()
+        assert not any(LETTER_SHA1 in media for media in registered.values())
+        assert LETTER_SHA1 not in wiki.files.values()
+        assert not [
+            qid
+            for qid in wiki.entities
+            if strings(wiki, qid, "media_sha1") == [LETTER_SHA1]
+        ]
+
+    def test_a_deck_named_in_capitals_is_gathered(self, tmp_path):
+        """A deck's suffix is matched ignoring case, as the run reads it:
+        the glob on TALK.PPTX's image keeps it out of the booklet."""
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        library_talk(corpus / "TALK.PPTX")
+        (corpus / "booklet.pdf").write_bytes(booklet())
+        orchestrator = run(
             tmp_path, corpus, reader := Reader({}), exclusions=self.LISTED
         )
         assert reader.read == []
         assert orchestrator._excerpts == {}
-        doc = document(orchestrator, "library-talk-2019.pptx")
-        assert doc.state.status == AWAITING_CLAIMS, doc.state.error
-        assert transcription_of(doc).pages[0].images == []
 
     def test_a_file_that_is_the_bytes_is_excluded(self, tmp_path):
         """A file of the folder whose bytes are the named image is
@@ -821,28 +859,92 @@ class TestAGlobFollowsTheBytes:
             for entry in orchestrator.rundir.manifest()["documents"]
         }
 
-    def test_a_deck_that_cannot_be_read_refuses_the_run(self, tmp_path):
+    @pytest.mark.parametrize(
+        "listed",
+        [LISTED, MIXED, ExclusionList.parse("image2.png\nbroken.*\n")],
+        ids=["glob", "sha1 and glob", "the deck listed"],
+    )
+    def test_a_deck_that_cannot_be_read_refuses_the_run(
+        self, tmp_path, listed
+    ):
         """A deck that is no archive hides what its globs would name, so a
-        list with a glob refuses the run before anything is read; a list
-        with none, or one that excludes that deck itself, does not."""
+        list with a glob refuses the run before anything is read, even
+        when it excludes that deck itself."""
         corpus = talk_folder(tmp_path, **{"broken.pptx": b"PK not a zip"})
         with pytest.raises(ExclusionConfigError, match="broken.pptx"):
-            run(tmp_path, corpus, RefusingReader({}), exclusions=self.LISTED)
-        assert not (tmp_path / "state").exists() or not any(
-            (tmp_path / "state").rglob("transcription.json")
-        )
-        run(
-            tmp_path,
-            corpus,
-            Reader({}),
-            exclusions=ExclusionList.parse("image2.png\nbroken.*\n"),
-        )
-        run(
+            run(tmp_path, corpus, RefusingReader({}), exclusions=listed)
+        assert not list(tmp_path.rglob("transcription.json"))
+
+    def test_a_list_with_no_glob_opens_no_deck(self, tmp_path):
+        """With no glob there is nothing to gather: the deck that is no
+        archive fails alone, and the run goes on."""
+        corpus = talk_folder(tmp_path, **{"broken.pptx": b"PK not a zip"})
+        orchestrator = run(
             tmp_path,
             corpus,
             Reader({LETTER_SHA1: EXCERPT}),
             exclusions=ExclusionList.parse(f"{sha1(RULE)}\n"),
         )
+        assert LETTER_SHA1 in orchestrator._excerpts
+
+    def test_a_corrupt_member_refuses_the_run(self, tmp_path):
+        """A member the glob names whose compressed bytes are damaged
+        refuses the run, as an archive that cannot be read does."""
+        talk = tmp_path / "talk.pptx"
+        name = "ppt/media/image2.png"
+        member = zipfile.ZipInfo(name, date_time=DECK_TIME)
+        member.compress_type = zipfile.ZIP_DEFLATED
+        with zipfile.ZipFile(talk, "w") as archive:
+            archive.writestr(member, LETTER_PNG)
+        data = bytearray(talk.read_bytes())
+        start = 30 + len(name)  # the member's data, after its local header
+        data[start : start + 8] = b"\xff" * 8
+        talk.write_bytes(bytes(data))
+        with pytest.raises(ExclusionConfigError, match="talk.pptx"):
+            gather_embedded(self.LISTED, [talk])
+
+    def test_a_deck_this_user_cannot_read_refuses_the_run(self, tmp_path):
+        """A deck whose file cannot be opened refuses the run, under a
+        list holding a SHA-1 and a glob, as one that is no archive does."""
+        if os.geteuid() == 0:
+            pytest.skip("root reads any file")
+        corpus = talk_folder(tmp_path)
+        talk = corpus / "library-talk-2018.pptx"
+        talk.chmod(0)
+        try:
+            with pytest.raises(ExclusionConfigError, match="library-talk"):
+                run(
+                    tmp_path,
+                    corpus,
+                    RefusingReader({}),
+                    exclusions=self.MIXED,
+                )
+        finally:
+            talk.chmod(0o644)
+
+    def test_the_estimate_counts_no_copy_of_a_named_image(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        """The call estimate asks the same list: a second deck's copy of
+        the named image is no image that may become an excerpt."""
+        corpus = Corpus(tmp_path / "corpus")
+        for name, media in (
+            ("library-talk-2018.pptx", None),
+            ("library-talk-2019.pptx", "image7.png"),
+        ):
+            path = corpus.folder / name
+            if media is None:
+                library_talk(path)
+            else:
+                deck(path, [(LETTER_SLIDE, [media], "")], {media: LETTER_PNG})
+            corpus.texts[name] = slide_transcript(unpack_pptx(path))
+        corpus.texts[f"{LETTER_SHA1}.png"] = EXCERPT
+        excerpts = estimate_of(
+            tmp_path, corpus, engine, exclusions=self.LISTED
+        ).excerpts
+        assert excerpts.images == 0
 
 
 class TestTheRunReport:

@@ -570,20 +570,25 @@ did so on 2026-09-29, in the review of its PR.
   archive, and a glob that names it there names its bytes everywhere
   (#620, the owner's decision of 2026-10-24): before any container's
   images are read, the run gathers the SHA-1s of the images the globs
-  name in the folder's decks (`corpus.gather_embedded`, never opening a
-  deck the list excludes itself), and the list both the reader and the
-  registrar ask names those SHA-1s too. So a PDF that places the bytes,
-  a deck that embeds them under another name, and a file that is them
-  all leave them out, and the run's record of the list is still the
-  file's. A deck that cannot be read as an archive, while the list holds
-  a glob, refuses the run: the bytes its globs would name cannot be
-  known, and the list fails closed. It is read by a vision call of its own, once however
-  many times the PDF places it, and its transcription, which names it by
-  its SHA-1, is kept beside its bytes. An image on a page read by vision
-  is read with that page, as the compilation's page. An image the
-  never-ingest list names on such a page, or in a PDF read whole, reaches
-  the engine with the page: the owner decided that the case will never
-  arise and is not worth handling.
+  name in the folder's decks (`corpus.gather_embedded`), and the list
+  both the reader and the registrar ask names those SHA-1s too. A deck
+  the list excludes is gathered from as well, its members hashed in
+  memory and nothing of it kept, so listing a deck never frees what a
+  glob names in it. So a PDF that holds the same bytes, a deck that
+  embeds them under another name, and a file that is them all leave
+  them out, and the run's record of the list is still the file's. Only
+  identical bytes are followed: a PDF holds the same bytes only for a
+  JPEG it keeps as a file, and an image it holds as pixels, written as a
+  PNG of its own, is not matched by a deck's PNG of it. A deck that
+  cannot be read as an archive, while the list holds a glob, refuses the
+  run: the bytes its globs would name cannot be known, and the list
+  fails closed. A PDF's image is read by a vision call of its own, once
+  however many times the PDF places it, and its transcription, which
+  names it by its SHA-1, is kept beside its bytes. An image on a page
+  read by vision is read with that page, as the compilation's page. An
+  image the never-ingest list names on such a page, or in a PDF read
+  whole, reaches the engine with the page: the owner decided that the
+  case will never arise and is not worth handling.
 - **Determinism.** PDFium is started afresh for each PDF and draws a font
   the PDF does not embed with a built-in one, never the host's, so
   a page's text layer, its rendering and an image's bytes, and so the keys

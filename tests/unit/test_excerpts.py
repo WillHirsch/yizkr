@@ -687,8 +687,13 @@ class TestRegistration:
             Orchestrator._step_register(orchestrator, doc)
         return orchestrator, wiki, reader, pdf, talk
 
+    @pytest.mark.parametrize(
+        "listed",
+        ["image2.png", f"{INSCRIPTION_SHA1}\nimage2.png"],
+        ids=["glob", "sha1 and glob"],
+    )
     def test_a_glob_on_a_deck_s_image_keeps_its_bytes_out_of_a_pdf(
-        self, tmp_path
+        self, tmp_path, listed
     ):
         """An `image2.png` glob names the letter's top in the deck, by its
         name in the archive, and its bytes stay out of the booklet too,
@@ -697,7 +702,7 @@ class TestRegistration:
         neither registers or uploads it. The rule the deck embeds, which
         the glob does not name, is registered with the deck as ever."""
         orchestrator, wiki, reader, pdf, talk = self.talk_and_booklet(
-            tmp_path, "image2.png"
+            tmp_path, listed
         )
         assert reader.read == []
         assert orchestrator._excerpts == {}
@@ -717,6 +722,37 @@ class TestRegistration:
             for qid in wiki.entities
             if strings(wiki, qid, "media_sha1") == [LETTER_SHA1]
         ]
+
+    def test_a_listed_deck_s_named_image_stays_out_of_a_pdf(self, tmp_path):
+        """The list excludes the deck itself as well as naming its image:
+        the deck is no document of the run, and the glob still keeps the
+        image's bytes out of the booklet, which places them: the deck is
+        hashed in memory for them, and nothing of it is kept (#620)."""
+        corpus = talk_folder(tmp_path, **{"booklet.pdf": booklet()})
+        reader = Reader({LETTER_SHA1: EXCERPT})
+        orchestrator = run(
+            tmp_path,
+            corpus,
+            reader,
+            exclusions=ExclusionList.parse(
+                "library-talk-2018.pptx\nimage2.png\n"
+            ),
+        )
+        assert [doc.source.name for doc in orchestrator.documents()] == [
+            "booklet.pdf"
+        ]
+        assert reader.read == []
+        assert orchestrator._excerpts == {}
+        assert LETTER_SHA1 not in planned(orchestrator)
+        wiki = FakeWiki()
+        orchestrator._client = wiki
+        pdf = document(orchestrator, "booklet.pdf")
+        assert pdf.state.status == AWAITING_CLAIMS, pdf.state.error
+        Orchestrator._step_register(orchestrator, pdf)
+        assert LETTER_SHA1 not in orchestrator.registered_media().get(
+            pdf.sha1, {}
+        )
+        assert LETTER_SHA1 not in wiki.files.values()
 
     def test_a_glob_on_another_deck_image_leaves_the_booklet_s_in(
         self, tmp_path

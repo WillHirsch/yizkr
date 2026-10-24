@@ -25,7 +25,8 @@ not only that deck: before any container's images are read, the run
 gathers the SHA-1s of the images the globs name in its decks
 (:func:`gather_embedded`) and adds them to the list it asks
 (:meth:`ExclusionList.with_embedded`), so a PDF that places the same
-bytes, or a file that is them, is excluded too.
+bytes, or a file that is them, is excluded too. Only identical bytes
+are followed.
 
 The list fails closed. A configured file that is missing or unreadable
 is an error, never an empty list. So is a line that would silently
@@ -184,9 +185,13 @@ def gather_embedded(
     name the list's globs match: each member's name in the archive, never
     its folder, as a deck's image is matched where it is read. Every
     member is asked, not only the images the slides place, so nothing a
-    glob names is missed. A deck that cannot be read as an archive fails
-    closed: the bytes its globs would name cannot be known, so nothing is
-    to be read until it is repaired or listed itself."""
+    glob names is missed, and every deck, the list's own included: a
+    member is hashed in memory and nothing of it is kept. Only identical
+    bytes are matched where they recur, so an image another document
+    holds re-encoded (a PDF's image kept as pixels) is not. A deck that
+    cannot be read as an archive fails closed: the bytes its globs would
+    name cannot be known, so nothing is to be read until it is repaired
+    or removed."""
     if not exclusions.patterns:
         return frozenset()
     found: set[str] = set()
