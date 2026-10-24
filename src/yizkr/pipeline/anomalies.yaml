@@ -192,3 +192,11 @@ checks:
   # the invocation ran on. Alert only.
   model-mismatch:
     enabled: true
+
+  # A claim the scratch write refused because its item value, its own or
+  # a qualifier's, is its subject's item: a self-loop, which points to a
+  # false merge in the identity map (two people of one name in one
+  # cluster, say). Any such refusal raises it, once per cluster and
+  # property in a document's write; there is no threshold. Alert only.
+  self-reference:
+    enabled: true

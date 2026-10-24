@@ -55,7 +55,15 @@ uv run yizkr publish-queries             # or: make publish-queries
   participated in, by each event's point in time and its own start and
   end time), plural-by-default with sources (R6). An event's start or end
   time is a date value its earliest and latest date bound, and its row
-  names the time beside the event's type ("imprisonment (start time)").
+  names the time beside the event's types ("imprisonment (start time)").
+  An event's types are folded into one cell (`?eventTypes`), each by its
+  English label (its id when it has none), URI-encoded and `|`-separated,
+  so that a second type adds no row; its `?what` names its start or end
+  time and is unbound for its point in time, and the site shows the
+  types sorted and joined ("event, military service (start time)"). An
+  event's types and participants are read through `p:`/`ps:` at any rank
+  but deprecated, so that a preferred type or participant hides no other
+  (#540).
   A qualifier's row names the statement's property, its value and the qualifier: a
   marriage is its spouse statement's start time, its end the end time,
   and a point in time on a spouse or residence statement an observation
@@ -73,7 +81,7 @@ uv run yizkr publish-queries             # or: make publish-queries
   it), folded into one cell, each by its English label (its id when it
   has none), URI-encoded and `|`-separated, so that a second value adds
   no row; the site shows them after the range ("1833 (sourcing
-  circumstances: circa)"). Rendered and URL-encoded, it is about 11.5 KB,
+  circumstances: circa)"). Rendered and URL-encoded, it is about 14 KB,
   more than the query service accepts in a GET request line, so a client sends it by POST, as the site and the
   live tests do.
 - **kinship** — how each person is related to a subject, derived from

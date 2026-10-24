@@ -13,6 +13,8 @@ reads each image a vision call gives it.
 from __future__ import annotations
 
 import hashlib
+import os
+import random
 import re
 import struct
 import zipfile
@@ -50,6 +52,7 @@ from tests.unit.test_presentation import (
     SLIDE_REL,
     rels_xml,
 )
+from tests.unit.test_registrar import FakeWiki, strings
 from tests.unit.test_scratch import Corpus, a_run, fakes  # noqa: F401
 from tests.unit.test_scratch_estimate import (  # noqa: F401
     engine,
@@ -58,7 +61,11 @@ from tests.unit.test_scratch_estimate import (  # noqa: F401
 )
 from tests.unit.test_scratch_estimate import run as run_scratch
 from yizkr.claims import ClaimBatch
-from yizkr.core.corpus import ExclusionList
+from yizkr.core.corpus import (
+    ExclusionConfigError,
+    ExclusionList,
+    gather_embedded,
+)
 from yizkr.pipeline import presentation, report
 from yizkr.pipeline.containers import (
     MIN_IMAGE_PIXELS,
@@ -72,6 +79,7 @@ from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
     PAGED,
     PDF,
+    Orchestrator,
     document_kind,
     route_transcription,
 )
@@ -87,6 +95,7 @@ from yizkr.pipeline.presentation import (
     unpack_pptx,
 )
 from yizkr.pipeline.report import build
+from yizkr.pipeline.rundir import exclusions_record
 from yizkr.pipeline.scratch import EXIT_OK
 from yizkr.pipeline.textlayer import png
 from yizkr.pipeline.transcribe import Transcription
@@ -750,6 +759,269 @@ class TestADeckSImages:
         )
         assert transcription_of(doc).language == "en"
         assert doc.state.detail["language"]["source"] == "fallback"
+
+
+class TestAGlobFollowsTheBytes:
+    """A glob that names a deck's image by its name in the archive keeps
+    its bytes out of every document of the folder (#620, ADR-0008): the
+    run gathers their SHA-1s before any container's images are read."""
+
+    LISTED = ExclusionList.parse("image2.png\n")
+
+    def test_the_gathered_sha1s_are_the_named_images(self, tmp_path):
+        """Only the members a glob names, by their names in the archive,
+        and none for a list with no glob."""
+        talk = library_talk(tmp_path / "talk.pptx")
+        assert gather_embedded(self.LISTED, [talk]) == {LETTER_SHA1}
+        assert gather_embedded(
+            ExclusionList.parse("IMAGE1.PNG\n"), [talk]
+        ) == {sha1(RULE)}
+        assert gather_embedded(ExclusionList(), [talk]) == frozenset()
+        assert (
+            gather_embedded(ExclusionList.parse(f"{sha1(RULE)}\n"), [talk])
+            == frozenset()
+        )
+
+    def test_the_gathered_sha1s_are_no_entry_of_the_file(self, tmp_path):
+        """The list asks of the gathered bytes as of its own SHA-1s, while
+        the record of the list a run honours stays the file's."""
+        gathered = self.LISTED.with_embedded([LETTER_SHA1.upper()])
+        assert gathered.match(sha1=LETTER_SHA1) is not None
+        assert self.LISTED.match(sha1=LETTER_SHA1) is None
+        assert exclusions_record(gathered) == exclusions_record(self.LISTED)
+
+    # the list a real operator keeps: a SHA-1 of other bytes beside the glob
+    MIXED = ExclusionList.parse(f"{sha1(b'other bytes')}\nimage2.png\n")
+
+    @pytest.mark.parametrize(
+        "listed", [LISTED, MIXED], ids=["glob", "sha1 and glob"]
+    )
+    def test_another_deck_s_copy_under_another_name_is_left_out(
+        self, tmp_path, listed
+    ):
+        """A second deck embeds the same bytes as `image7.png`, a name the
+        glob does not match: they are not read from it, nor registered or
+        uploaded with either deck, though its record still names them."""
+        corpus = talk_folder(tmp_path)
+        deck(
+            corpus / "library-talk-2019.pptx",
+            [(LETTER_SLIDE, ["image7.png"], "")],
+            {"image7.png": LETTER_PNG},
+        )
+        orchestrator = run(
+            tmp_path, corpus, reader := Reader({}), exclusions=listed
+        )
+        assert reader.read == []
+        assert orchestrator._excerpts == {}
+        later = document(orchestrator, "library-talk-2019.pptx")
+        assert later.state.status == AWAITING_CLAIMS, later.state.error
+        assert transcription_of(later).pages[0].images == []
+        assert LETTER_SHA1 in read_derived_media(later.dir).media
+        wiki = FakeWiki()
+        orchestrator._client = wiki
+        for name in ("library-talk-2018.pptx", "library-talk-2019.pptx"):
+            Orchestrator._step_register(
+                orchestrator, document(orchestrator, name)
+            )
+        registered = orchestrator.registered_media()
+        assert not any(LETTER_SHA1 in media for media in registered.values())
+        assert LETTER_SHA1 not in wiki.files.values()
+        assert not [
+            qid
+            for qid in wiki.entities
+            if strings(wiki, qid, "media_sha1") == [LETTER_SHA1]
+        ]
+
+    def test_a_deck_named_in_capitals_is_gathered(self, tmp_path):
+        """A deck's suffix is matched ignoring case, as the run reads it:
+        the glob on TALK.PPTX's image keeps it out of the booklet."""
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        library_talk(corpus / "TALK.PPTX")
+        (corpus / "booklet.pdf").write_bytes(booklet())
+        orchestrator = run(
+            tmp_path, corpus, reader := Reader({}), exclusions=self.LISTED
+        )
+        assert reader.read == []
+        assert orchestrator._excerpts == {}
+
+    def test_a_file_that_is_the_bytes_is_excluded(self, tmp_path):
+        """A file of the folder whose bytes are the named image is
+        excluded whole, as a file the list names by its SHA-1 is."""
+        corpus = talk_folder(tmp_path, **{"letter-top.png": LETTER_PNG})
+        orchestrator = run(
+            tmp_path, corpus, RefusingReader({}), exclusions=self.LISTED
+        )
+        assert [doc.source.name for doc in orchestrator.documents()] == [
+            "library-talk-2018.pptx"
+        ]
+        assert LETTER_SHA1 not in {
+            entry["sha1"]
+            for entry in orchestrator.rundir.manifest()["documents"]
+        }
+
+    @pytest.mark.parametrize(
+        "listed",
+        [LISTED, MIXED, ExclusionList.parse("image2.png\nbroken.*\n")],
+        ids=["glob", "sha1 and glob", "the deck listed"],
+    )
+    def test_a_deck_that_cannot_be_read_refuses_the_run(
+        self, tmp_path, listed
+    ):
+        """A deck that is no archive hides what its globs would name, so a
+        list with a glob refuses the run before anything is read, even
+        when it excludes that deck itself."""
+        corpus = talk_folder(tmp_path, **{"broken.pptx": b"PK not a zip"})
+        with pytest.raises(
+            ExclusionConfigError,
+            match="broken.pptx.*take it out of the corpus folder",
+        ):
+            run(tmp_path, corpus, RefusingReader({}), exclusions=listed)
+        assert not list(tmp_path.rglob("transcription.json"))
+
+    def test_a_list_with_no_glob_opens_no_deck(self, tmp_path):
+        """With no glob there is nothing to gather: the deck that is no
+        archive fails alone, and the run goes on."""
+        corpus = talk_folder(tmp_path, **{"broken.pptx": b"PK not a zip"})
+        orchestrator = run(
+            tmp_path,
+            corpus,
+            Reader({LETTER_SHA1: EXCERPT}),
+            exclusions=ExclusionList.parse(f"{sha1(RULE)}\n"),
+        )
+        assert LETTER_SHA1 in orchestrator._excerpts
+
+    def test_a_corrupt_member_refuses_the_run(self, tmp_path):
+        """A member the glob names whose compressed bytes are damaged
+        refuses the run, as an archive that cannot be read does."""
+        talk = tmp_path / "talk.pptx"
+        name = "ppt/media/image2.png"
+        member = zipfile.ZipInfo(name, date_time=DECK_TIME)
+        member.compress_type = zipfile.ZIP_DEFLATED
+        with zipfile.ZipFile(talk, "w") as archive:
+            archive.writestr(member, LETTER_PNG)
+        data = bytearray(talk.read_bytes())
+        start = 30 + len(name)  # the member's data, after its local header
+        data[start : start + 8] = b"\xff" * 8
+        talk.write_bytes(bytes(data))
+        with pytest.raises(ExclusionConfigError, match="talk.pptx"):
+            gather_embedded(self.LISTED, [talk])
+
+    def test_a_large_member_is_hashed_whole(self, tmp_path):
+        """A member past the first block read is hashed to its end."""
+        data = random.Random(620).randbytes(3 << 19)
+        talk = tmp_path / "talk.pptx"
+        with zipfile.ZipFile(talk, "w") as archive:
+            archive.writestr(
+                zipfile.ZipInfo("ppt/media/image2.png", date_time=DECK_TIME),
+                data,
+            )
+        assert gather_embedded(self.LISTED, [talk]) == {sha1(data)}
+
+    def test_an_encrypted_member_refuses_the_run(self, tmp_path):
+        """A member the glob names that is encrypted cannot be hashed, so
+        it refuses the run as an archive that cannot be read does."""
+        talk = tmp_path / "talk.pptx"
+        with zipfile.ZipFile(talk, "w") as archive:
+            archive.writestr(
+                zipfile.ZipInfo("ppt/media/image2.png", date_time=DECK_TIME),
+                LETTER_PNG,
+            )
+        data = bytearray(talk.read_bytes())
+        # the encryption bit of the general-purpose flags, in the local
+        # header and in the central directory's record
+        data[6] |= 0x1
+        data[data.index(b"PK\x01\x02") + 8] |= 0x1
+        talk.write_bytes(bytes(data))
+        with pytest.raises(ExclusionConfigError, match="talk.pptx"):
+            gather_embedded(self.LISTED, [talk])
+
+    def test_a_glob_listed_after_a_kept_reading_drops_its_excerpt(
+        self, tmp_path
+    ):
+        """A first run with no glob reads the letter's top from the booklet
+        and both decks and keeps its reading; a second lists `image2.png`.
+        The views that mark it are set aside and made again without it,
+        nothing is read, and the reading still on disk makes no excerpt:
+        the second deck's record names the image by `image7.png`, so only
+        the gathered SHA-1 keeps it out. Nothing of it is registered or
+        uploaded."""
+        corpus = talk_folder(tmp_path, **{"booklet.pdf": booklet()})
+        deck(
+            corpus / "library-talk-2019.pptx",
+            [(LETTER_SLIDE, ["image7.png"], "")],
+            {"image7.png": LETTER_PNG},
+        )
+        first = run(
+            tmp_path,
+            corpus,
+            Reader({LETTER_SHA1: EXCERPT}),
+            exclusions=ExclusionList(),
+        )
+        assert LETTER_SHA1 in first._excerpts
+        again = run(
+            tmp_path, corpus, reader := Reader({}), exclusions=self.LISTED
+        )
+        assert reader.read == []
+        assert again._excerpts == {}
+        reasons = {event["reason"] for event in this_run(again, "set-aside")}
+        assert reasons == {
+            f"the never-ingest list names image {LETTER_SHA1[:12]}, which "
+            "it marks"
+        }
+        later = document(again, "library-talk-2019.pptx")
+        assert derived_transcription(later.dir, LETTER_SHA1).exists()
+        wiki = FakeWiki()
+        again._client = wiki
+        for doc in again.documents():
+            assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+            Orchestrator._step_register(again, doc)
+        registered = again.registered_media()
+        assert not any(LETTER_SHA1 in media for media in registered.values())
+        assert LETTER_SHA1 not in wiki.files.values()
+
+    def test_a_deck_this_user_cannot_read_refuses_the_run(self, tmp_path):
+        """A deck whose file cannot be opened refuses the run, under a
+        list holding a SHA-1 and a glob, as one that is no archive does."""
+        if os.geteuid() == 0:
+            pytest.skip("root reads any file")
+        corpus = talk_folder(tmp_path)
+        talk = corpus / "library-talk-2018.pptx"
+        talk.chmod(0)
+        try:
+            with pytest.raises(ExclusionConfigError, match="library-talk"):
+                run(
+                    tmp_path,
+                    corpus,
+                    RefusingReader({}),
+                    exclusions=self.MIXED,
+                )
+        finally:
+            talk.chmod(0o644)
+
+    def test_the_estimate_counts_no_copy_of_a_named_image(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        """The call estimate asks the same list: a second deck's copy of
+        the named image is no image that may become an excerpt."""
+        corpus = Corpus(tmp_path / "corpus")
+        for name, media in (
+            ("library-talk-2018.pptx", None),
+            ("library-talk-2019.pptx", "image7.png"),
+        ):
+            path = corpus.folder / name
+            if media is None:
+                library_talk(path)
+            else:
+                deck(path, [(LETTER_SLIDE, [media], "")], {media: LETTER_PNG})
+            corpus.texts[name] = slide_transcript(unpack_pptx(path))
+        corpus.texts[f"{LETTER_SHA1}.png"] = EXCERPT
+        excerpts = estimate_of(
+            tmp_path, corpus, engine, exclusions=self.LISTED
+        ).excerpts
+        assert excerpts.images == 0
 
 
 class TestTheRunReport:
