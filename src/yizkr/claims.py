@@ -58,18 +58,19 @@ A claim's subject may also be an artifact, named as a source is, by an
 takes the document the claim comes from (what a register office issued,
 what a letter's writer dated), an artifact its source places by bytes
 (the letter's image a booklet's translation dates), a batch entity of an
-artifact kind (the un-held media item a GEDCOM object makes) or an
+artifact kind (the un-held media item a GEDCOM object makes), an
 unclassified entity of the batch (a letter's mention of the certificate
-it encloses), and no other subject; one whose subject is not its own
-source carries the passage that conveys it as its excerpt. The one
-property the manifest marks `placed_subject` (`caption`, ADR-0039 §2.1)
-takes an artifact its source places, and no other subject: a
-container's words about an image on its page. No other property takes
-an artifact as its subject. An extraction never names an artifact kind
-for an entity (artifact_kind_problems, ADR-0039 §10.1(b)), so an entity
-of one is a structured record's or a hand-written batch's. The writer
-checks the same rules and resolves an artifact subject to the artifact
-item as it resolves the source.
+it encloses) or the existing item a curator confirmed one of those last
+two as (the held scan of that certificate), and no other subject; one
+whose subject is not its own source carries the passage that conveys it
+as its excerpt. The one property the manifest marks `placed_subject`
+(`caption`, ADR-0039 §2.1) takes an artifact its source places, and no
+other subject: a container's words about an image on its page. No
+other property takes an artifact as its subject. An extraction never
+names an artifact kind for an entity (artifact_kind_problems, ADR-0039
+§10.1(b)), so an entity of one is a structured record's or a
+hand-written batch's. The writer checks the same rules and resolves an
+artifact subject to the artifact item as it resolves the source.
 
 CLI:
     python3 claims.py --json-schema  # print JSON Schema (for LLM prompts)
@@ -566,6 +567,19 @@ class Claim(StrictModel):
     # would if the field did not exist.
     circumstance_source: SkipJsonSchema[SourceReference | None] = None
 
+    # The local subject a curator's confirmation replaced.
+    # reconcile.apply_equivalences sets it when it turns the claim's local
+    # subject into the QID of the existing item a curator approved the
+    # entity as, with `instance_of` set to the entity's kind (its
+    # manifest record's, else the ref's own), and keeps it on later passes.
+    # The subject rules read it to tell a confirmed mention or record's
+    # artifact from a QID named outright (ADR-0039 §10.1(c)). It is
+    # resolution state, never extraction output: the JSON Schema that
+    # extraction prompts carry leaves it out, extract.cite_artifact drops
+    # it, and a claim without one serialises as if the field did not
+    # exist.
+    confirmed_from: SkipJsonSchema[LocalRef | None] = None
+
     @model_validator(mode="after")
     def _a_circumstance_cited_in_the_claim_s_own_source(self) -> Claim:
         """The statement a sourcing circumstance stands on is the claim's
@@ -590,6 +604,8 @@ class Claim(StrictModel):
         if isinstance(data, dict):
             if self.row_approval is None:
                 data.pop("row_approval", None)
+            if self.confirmed_from is None:
+                data.pop("confirmed_from", None)
             if self.note is None:
                 data.pop("note", None)
             if self.circumstance_source is None:
@@ -894,16 +910,18 @@ def validate_against_manifest(
     * a death's principal is never also its informant (ADR-0035 §3.2);
     * a claim of a property the manifest marks `document_subject` has
       one of the subjects document_subject_form names: its own source,
-      an artifact its source places, a batch entity of an artifact kind
-      or an unclassified entity of the batch, and a claim whose subject
-      is not its own source carries an excerpt (ADR-0035 §3.4, ADR-0039
-      §10); a claim of a property the manifest marks `placed_subject`
-      (`caption`) has an artifact its source places as its subject and
-      no other (ADR-0039 §2.1); and no other property takes an artifact
-      as its subject. `placed` gives, by the SHA-1 of a source's media,
-      the SHA-1s of the artifacts that source places
-      (`placed_artifacts`); a source it does not name places none, so
-      without it every claim about an artifact it places is refused;
+      an artifact its source places, a batch entity of an artifact kind,
+      an unclassified entity of the batch or the existing item a curator
+      confirmed one of those two as (`Claim.confirmed_from`), and a
+      claim whose subject is not its own source carries an excerpt
+      (ADR-0035 §3.4, ADR-0039 §10); a claim of a property the manifest
+      marks `placed_subject` (`caption`) has an artifact its source
+      places as its subject and no other (ADR-0039 §2.1); and no other
+      property takes an artifact as its subject. `placed` gives, by the
+      SHA-1 of a source's media, the SHA-1s of the artifacts that source
+      places (`placed_artifacts`); a source it does not name places
+      none, so without it every claim about an artifact it places is
+      refused;
     * a `name` claim, a name form of no stated type, is a person's or an
       unclassified entity's, never a vocabulary item's, and never
       restates its subject's label (ADR-0011): both are compared by
@@ -932,6 +950,7 @@ def validate_against_manifest(
     entity_qids: dict[str, str] = {
         entity.id: entity.qid for entity in batch.entities if entity.qid
     }
+    records = {entity.id: entity for entity in batch.entities}
     seen_entity_ids: set[str] = set()
     for e_index, entity in enumerate(batch.entities):
         where = f"entities[{e_index}]"
@@ -1045,7 +1064,11 @@ def validate_against_manifest(
         errors.extend(
             f"{where}.subject: {problem}"
             for problem in subject_problems(
-                claim, acceptance, placed, subject_kind
+                claim,
+                acceptance,
+                placed,
+                subject_kind,
+                confirmed_kind(claim, records),
             )
         )
         check_property_value(claim.property, claim.value, where, subject_kind)
@@ -1222,15 +1245,42 @@ def unplaced_hint(count: int) -> str:
 # entity of an artifact kind, the artifact a structured record makes
 # (an un-held media item); an unclassified entity of the batch, the
 # source's own mention of an artifact it only writes about, such as an
-# enclosure (§10.1(c), route (c4)).
+# enclosure (§10.1(c), route (c4)); the existing item a curator
+# confirmed such a record's artifact or mention as, a QID subject whose
+# claim records that local subject (`Claim.confirmed_from`, §10.1(c)).
 SOURCE_FORM = "source"
 PLACED_FORM = "placed"
 RECORD_FORM = "record"
 MENTION_FORM = "mention"
-SUBJECT_FORMS = (SOURCE_FORM, PLACED_FORM, RECORD_FORM, MENTION_FORM)
+CONFIRMED_FORM = "confirmed"
+SUBJECT_FORMS = (
+    SOURCE_FORM,
+    PLACED_FORM,
+    RECORD_FORM,
+    MENTION_FORM,
+    CONFIRMED_FORM,
+)
 # the kind of an entity a source mentions without a kind of its own,
 # which (c4) takes as the subject of its claim about an enclosure
 MENTION_KIND = "unclassified_entity"
+
+
+def confirmed_kind(
+    claim: Claim, records: Mapping[str, EntityRecord]
+) -> str | None:
+    """The kind of the local subject a curator's confirmation replaced on
+    `claim` (`Claim.confirmed_from`, set by reconcile.apply_equivalences),
+    or None: for a subject that is no QID, a claim that records no such
+    subject (a QID named outright), or one whose entity record in the
+    batch (`records`, by id) is not confirmed as that QID. The kind is the
+    record's where the batch holds one, else the recorded ref's own."""
+    subject, former = claim.subject, claim.confirmed_from
+    if not isinstance(subject, QidRef) or former is None:
+        return None
+    record = records.get(former.local_id)
+    if record is None:
+        return former.instance_of
+    return record.kind if record.qid == subject.qid else None
 
 
 def document_subject_form(
@@ -1238,15 +1288,20 @@ def document_subject_form(
     acceptance: Acceptance,
     placed: Mapping[str, Collection[str]] | None = None,
     subject_kind: str | None = None,
+    confirmed: str | None = None,
 ) -> str | None:
     """Which of SUBJECT_FORMS the subject of `claim` is, as the subject
     of a document-subject property, or None for a subject that property
     does not take (ADR-0035 §3.4, ADR-0039 §10.1): the claim's own source;
     an artifact `placed` names for the claim's source; a batch entity
     (a local ref, its kind `subject_kind`) of an artifact kind
-    (`Acceptance.artifact_kinds`); or one of MENTION_KIND. An extraction
-    names no artifact kind (artifact_kind_problems), so an entity
-    of one is a structured record's or a hand-written batch's."""
+    (`Acceptance.artifact_kinds`); one of MENTION_KIND; or an existing
+    item (a QID ref) a curator confirmed one of those last two as, where
+    `confirmed` is the kind of the claim's own local subject before
+    confirmation (confirmed_kind), an artifact kind or MENTION_KIND. An
+    extraction names no artifact kind
+    (artifact_kind_problems), so an entity of one is a structured
+    record's or a hand-written batch's."""
     subject = claim.subject
     source = claim.source.artifact.sha1
     if isinstance(subject, ArtifactRef):
@@ -1260,7 +1315,16 @@ def document_subject_form(
             return RECORD_FORM
         if subject_kind == MENTION_KIND:
             return MENTION_FORM
+    if isinstance(subject, QidRef) and takes_confirmed(confirmed, acceptance):
+        return CONFIRMED_FORM
     return None
+
+
+def takes_confirmed(kind: str | None, acceptance: Acceptance) -> bool:
+    """Is `kind`, that of a local subject a curator's confirmation
+    replaced, one whose confirmed item a document-subject property takes
+    (ADR-0039 §10.1(c)): an artifact kind or MENTION_KIND?"""
+    return kind in acceptance.artifact_kinds or kind == MENTION_KIND
 
 
 def has_excerpt(claim: Claim) -> bool:
@@ -1275,6 +1339,7 @@ def subject_problems(
     acceptance: Acceptance,
     placed: Mapping[str, Collection[str]] | None = None,
     subject_kind: str | None = None,
+    confirmed: str | None = None,
 ) -> list[str]:
     """Why the claim's subject breaks the subject rules of ADR-0035 §3.4
     and ADR-0039 §2 and §10, each ending in its reason code
@@ -1282,10 +1347,11 @@ def subject_problems(
     `placed_subject` takes an artifact its source places, and no other
     subject. A property it marks `document_subject` takes a subject of one
     of the forms document_subject_form names (`subject_kind` is the kind
-    of a local subject), and a claim whose subject is not its own source
-    carries an excerpt, the passage that conveys the fact. No other
-    property takes an artifact as its subject. `placed` is as
-    validate_against_manifest takes it."""
+    of a local subject, `confirmed` that of a QID subject's local subject
+    before confirmation, confirmed_kind), and a claim whose subject is not
+    its own source carries an excerpt, the passage that conveys the
+    fact. No other property takes an artifact as its subject. `placed`
+    is as validate_against_manifest takes it."""
     prop, subject = claim.property, claim.subject
     source = claim.source.artifact
     if prop in acceptance.placed_subjects:
@@ -1304,7 +1370,9 @@ def subject_problems(
             ]
         return []
     if prop in acceptance.document_subjects:
-        form = document_subject_form(claim, acceptance, placed, subject_kind)
+        form = document_subject_form(
+            claim, acceptance, placed, subject_kind, confirmed
+        )
         if form is None:
             if isinstance(subject, ArtifactRef):
                 return [
@@ -1316,8 +1384,10 @@ def subject_problems(
             return [
                 f"property {prop!r} takes as its subject the claim's own "
                 f"source, {source}, an artifact it places, a batch entity "
-                f"of an artifact kind or an unclassified entity of the "
-                f"batch (ADR-0035 §3.4, ADR-0039 §10.1) [{DOCUMENT_SUBJECT}]"
+                f"of an artifact kind, an unclassified entity of the "
+                f"batch or the existing item a curator confirmed one of "
+                f"those two as (ADR-0035 §3.4, ADR-0039 §10.1) "
+                f"[{DOCUMENT_SUBJECT}]"
             ]
         if form != SOURCE_FORM and not has_excerpt(claim):
             return [

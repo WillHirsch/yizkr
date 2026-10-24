@@ -617,8 +617,8 @@ did so on 2026-09-29, in the review of its PR.
   them out, and the run's record of the list is still the file's. The
   single-file steps (`ingest transcribe`, `ingest register` and the
   others) and the transcription import ask the same of the corpus
-  folder's decks, found as a run finds them (`corpus.follow_decks`,
-  #640): a step refuses a file that is such bytes, whatever it is
+  folder's decks, selected by the one function a run selects them by
+  (`corpus.follow_decks`, #640, #685): a step refuses a file that is such bytes, whatever it is
   called and wherever it lies, and the import excludes a transcription
   of them. A single-file step knows the corpus folder only through
   `$YIZKR_CORPUS_DIR`; without it the step says on stderr that it

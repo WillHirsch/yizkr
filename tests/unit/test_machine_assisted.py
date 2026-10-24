@@ -199,8 +199,8 @@ class TestTheManifest:
         assert "circa" in listed
         assert "machine_assisted" not in listed
 
-    def test_the_universe_plans_no_vocabulary_now(self):
-        assert u.PLANNED_VOCABULARY == ()
+    def test_the_universe_no_longer_plans_it(self):
+        assert "machine_assisted" not in u.PLANNED_VOCABULARY
 
 
 class TestTheBooklet:

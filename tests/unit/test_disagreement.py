@@ -242,8 +242,15 @@ class TestTheUniverse:
 
     @staticmethod
     def statements() -> list[Statement]:
+        # set aside until ADR-0040's build (#687) gives them a form here:
+        # an unknown value, which the report never lists, and a parent of
+        # a stated kind, which it compares within that kind alone (§4, §8)
         compared = [
-            a for a in u.ASSERTIONS if a.property in disagreement.COMPARED
+            a
+            for a in u.ASSERTIONS
+            if a.property in disagreement.COMPARED
+            and a.value is not u.UNKNOWN
+            and "parentage" not in dict(a.qualifiers)
         ]
         found = []
         for a in compared:
@@ -285,9 +292,9 @@ class TestTheUniverse:
             if prop in disagreement.COMPARED
         }
         # the refinements of a compared property: Eugen's death, Cäcilie's
-        # birth, Klara's emigration, the arrest, Leopold's and Agnes's
-        # births, and Rudolf's and Florence's deaths
-        assert len(refined) == 8
+        # birth and death, Klara's emigration, the arrest, Leopold's and
+        # Agnes's births, and Rudolf's and Florence's deaths
+        assert len(refined) == 9
         assert not {(row.entity, row.property) for row in rows} & refined
 
 

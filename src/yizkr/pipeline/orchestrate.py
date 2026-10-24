@@ -166,7 +166,7 @@ from yizkr.core.corpus import (
     MISSING_LIST,
     ExclusionConfigError,
     ExclusionList,
-    gather_embedded,
+    follow_decks,
     is_excluded,
 )
 from yizkr.core.wiki import WikiClient
@@ -1122,7 +1122,7 @@ class Orchestrator:
             for path in sorted(self.folder.iterdir())
             if path.is_file() and not path.name.startswith(".")
         ]
-        self._gather_embedded(paths)
+        self._gather_embedded()
         for path in paths:
             # the never-ingest list is asked first, before any step
             # reads the document, and whatever the file's type: an excluded
@@ -1157,28 +1157,25 @@ class Orchestrator:
             docs.append(doc)
         return docs
 
-    def _gather_embedded(self, paths: Sequence[Path]) -> None:
+    def _gather_embedded(self) -> None:
         """Give the never-ingest list the SHA-1s of the images its globs
-        name, by their names in the archive, in the decks among `paths`
-        (corpus.gather_embedded), in place of any it was given before.
-        This comes before any container's images are read, so the reader
-        (`_excluded_image`) and the write's registrar, which both ask this
-        list, keep those bytes out of every deck and PDF that holds them
-        as they are, and out of the run as a file of their own (ADR-0008).
-        A deck the list excludes is asked too: its members are hashed in
-        memory and nothing of it is kept, so listing a deck never frees
-        the bytes a glob names in it. A deck that cannot be read as an
-        archive refuses the run (ExclusionConfigError), since the bytes
-        its globs would name cannot be known."""
+        name, by their names in the archive, in the folder's decks, in
+        place of any it was given before. The decks are selected and
+        hashed by corpus.follow_decks, the one function the single-file
+        steps and the transcription import ask too, so every path asks the
+        list a run asks. This comes before any container's images are
+        read, so the reader (`_excluded_image`) and the write's registrar,
+        which both ask this list, keep those bytes out of every deck and
+        PDF that holds them as they are, and out of the run as a file of
+        their own (ADR-0008). A deck the list excludes is asked too: its
+        members are hashed in memory and nothing of it is kept, so listing
+        a deck never frees the bytes a glob names in it. A deck that
+        cannot be read as an archive, or a folder that cannot be listed,
+        refuses the run (ExclusionConfigError), since the bytes its globs
+        would name cannot be known."""
         if self.exclusions is None:
             return
-        listed = self.exclusions.with_embedded(())
-        decks = [
-            path
-            for path in paths
-            if path.suffix.lower() in PRESENTATION_SUFFIXES
-        ]
-        self.exclusions = listed.with_embedded(gather_embedded(listed, decks))
+        self.exclusions = follow_decks(self.exclusions, self.folder)
 
     # -- stages ---------------------------------------------------------------
 

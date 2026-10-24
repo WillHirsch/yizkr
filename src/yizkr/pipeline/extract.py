@@ -77,7 +77,11 @@ Rules — these mirror the archive's non-negotiable conventions:
   literal "1st century" or the year 30.
 - Every claim MUST include the source reference: the artifact
   {{"kind": "artifact", "sha1": "{artifact_sha1}"}}, plus page number and a
-  short verbatim transcription excerpt supporting it. The page number is
+  short verbatim transcription excerpt supporting it, written
+  "transcription_excerpt": {{"text": "<verbatim>", "language": "<code>"}}
+  on every claim, the language inside the excerpt and never on source:
+  the language of the excerpt's own words, {language} (the
+  transcription's) unless it is written in another. The page number is
   the N of the [Page N] (or [Slide N]) marker the text stands under,
   never a printed page number shown beside that marker.
 - Refer to people, places, and events the document mentions with "local"
@@ -522,10 +526,11 @@ def _parse_response(response: str) -> dict:
 
 # The claim fields that record a curator's review, never the machine's
 # extraction: `curated` (a person stated the claim, so it carries no
-# extraction-run reference) and `row_approval` (a curator approved the
-# claim on its own review-sheet row). The JSON Schema the prompts carry
-# shows `curated` with the rest of a claim.
-REVIEW_STATE = ("curated", "row_approval")
+# extraction-run reference), `row_approval` (a curator approved the
+# claim on its own review-sheet row) and `confirmed_from` (the local
+# subject a curator's confirmation replaced). The JSON Schema the prompts
+# carry shows `curated` with the rest of a claim.
+REVIEW_STATE = ("curated", "row_approval", "confirmed_from")
 # The claim fields the pipeline sets from a document reading it has
 # checked, never the model: `circumstance_source`, where the document
 # states the circumstance of its making that a marked claim's qualifier
@@ -610,14 +615,45 @@ def printed_page_number(
     return printed if printed and printed.strip() else None
 
 
+def language_on_source(claim: object) -> bool:
+    """Whether `claim` gives its excerpt's language on `source` instead:
+    a `language` of non-blank text beside a `transcription_excerpt`
+    object that gives none (no key, null or the empty string).
+    _normalize_claim_shape moves it into the excerpt, and an extraction's
+    coverage counts the claims it moved (`excerpt_language_moved`). A
+    `language` on a source whose excerpt gives any other value (its own
+    code, or an invalid one such as false, 0 or a list), on a source with
+    no excerpt object, or one that is blank or no text, is left where it
+    is, and the claim fails validation as written."""
+    if not isinstance(claim, dict):
+        return False
+    source = claim.get("source")
+    if not isinstance(source, dict):
+        return False
+    excerpt = source.get("transcription_excerpt")
+    language = source.get("language")
+    return (
+        isinstance(language, str)
+        and bool(language.strip())
+        and isinstance(excerpt, dict)
+        and excerpt.get("language") in (None, "")
+    )
+
+
 def _normalize_claim_shape(claim: dict) -> dict:
-    """Repair a mechanical output-shape slip models actually make.
+    """Repair mechanical output-shape slips models actually make.
 
     Item values nest under "value" ({"type": "item", "value": {...}}),
     and models sometimes wrap time values the same way:
     {"type": "time", "value": {"year": ...}} instead of the flat
     {"type": "time", "year": ...} the schema requires. The content is
     unambiguous, so flatten rather than reject 10 minutes of output.
+
+    A model that closes the excerpt one key early gives the excerpt's
+    language on `source` ({"transcription_excerpt": {"text": ...},
+    "language": "de"}); the language is moved into the excerpt that
+    gives none (language_on_source). The value is the model's own,
+    moved, never guessed or defaulted.
     """
 
     def flatten(value: Any) -> Any:
@@ -641,6 +677,13 @@ def _normalize_claim_shape(claim: dict) -> dict:
         ]
     # excerpts are verification aids ("short" per ADR-0003) and Wikibase
     # caps text values at 400 chars; clip visibly rather than lose the claim
+    if language_on_source(fixed):
+        source = dict(fixed["source"])
+        source["transcription_excerpt"] = {
+            **source["transcription_excerpt"],
+            "language": source.pop("language"),
+        }
+        fixed["source"] = source
     source = fixed.get("source")
     if isinstance(source, dict):
         excerpt = source.get("transcription_excerpt")

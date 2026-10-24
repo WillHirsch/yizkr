@@ -326,7 +326,9 @@ writer refused, count here too, under their check and the stage
   the source itself (`source`), an artifact it places (`placed`), the
   artifact its structured record makes (`record`, a GEDCOM object's
   un-held media item) or its mention of an artifact it only writes
-  about (`mention`, an enclosure), each counted, 0 included, and
+  about (`mention`, an enclosure), or the existing item a curator
+  confirmed one of those last two as (`confirmed`, #670), each counted,
+  0 included, and
   `other`, only when counted, for a subject validation would refuse
   (`aggregate.content.container_claims`: `captions`,
   `document_subject_by_property`, `document_subject_by_form`);
@@ -371,6 +373,16 @@ writer refused, count here too, under their check and the stage
   (`coverage.machine_assisted`, null, and "not counted", for a coverage
   that predates it). The statement quoted stays in the extraction's
   local `preparation.json`, never in a report;
+- excerpt languages moved in from source (#668): the claims that gave
+  their excerpt's language on `source`, beside an excerpt that gave
+  none, and had it moved into the excerpt before validation
+  (`coverage.json`'s `excerpt_language_moved`), summed over the
+  extractions, with the extractions that moved one, and those whose
+  coverage predates the count counted apart, never as zero
+  (`aggregate.content.excerpt_language_moved`: `moved`, `extractions`,
+  `absent`). A document's own count is in `report.json` and its
+  drill-down in `report.html` (`coverage.excerpt_language_moved`, null,
+  and "not counted", for a coverage that predates it);
 - marriages and their weddings (#656, ADR-0036): each extraction batch's
   marriages it extracts, a partnership left out, by whether a
   `started_by` claim links the marriage to a wedding of any kind

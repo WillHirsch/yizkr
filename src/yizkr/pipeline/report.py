@@ -123,6 +123,7 @@ from pathlib import Path
 from typing import Any, get_args
 
 from yizkr.claims import (
+    CONFIRMED_FORM,
     CONTAINER_REASONS,
     MENTION_FORM,
     MENTION_KIND,
@@ -1157,7 +1158,9 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
             "marriages": _marriages(entities, claims)
             if stage == "extraction"
             else None,
-            "subject_forms": _subject_forms(claims, entities),
+            "subject_forms": _resolved_subject_forms(
+                directory / RESOLVED_BATCH, claims, entities
+            ),
         }
         coverage = _json(directory / "extraction" / "coverage.json")
         if stage == "extraction" and isinstance(coverage, dict):
@@ -1177,6 +1180,9 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
                     coverage.get("manifest_artifact_kind")
                 ),
                 "trailing_commas": _counted(coverage.get("trailing_commas")),
+                "excerpt_language_moved": _counted(
+                    coverage.get("excerpt_language_moved")
+                ),
                 "fallback": sorted(
                     tier for tier in fallback if isinstance(tier, str)
                 )
@@ -1220,6 +1226,23 @@ def _trailing_commas_line(counts: Mapping[str, int]) -> str:
     line = (
         f"Trailing commas read as JSON syntax: {_n(counts['read'])}, in "
         f"{_n(extractions)} extraction" + ("" if extractions == 1 else "s")
+    )
+    if counts["absent"]:
+        line += (
+            f" (extractions whose coverage predates the count: "
+            f"{_n(counts['absent'])})"
+        )
+    return line + "."
+
+
+def _language_moved_line(counts: Mapping[str, int]) -> str:
+    """The claims whose excerpt's language was given on `source` and moved
+    into the excerpt before validation (extract._normalize_claim_shape),
+    as the report's Content section gives them."""
+    extractions = counts["extractions"]
+    line = (
+        f"Excerpt languages moved in from source: {_n(counts['moved'])}, "
+        f"in {_n(extractions)} extraction" + ("" if extractions == 1 else "s")
     )
     if counts["absent"]:
         line += (
@@ -2748,6 +2771,10 @@ def _aggregate_content(
     # (yizkr.pipeline.preparation), counted by what they found and
     # marked, and the extractions whose coverage gives no count
     assisted: Counter = Counter()
+    # the claims whose excerpt's language was moved in from `source`
+    # (extract._normalize_claim_shape), the extractions with one, and
+    # those whose coverage gives no count
+    languages_moved = moved_extractions = moved_absent = 0
     batches = not_extracted = zero_entities = 0
     # the extractions' marriages by their weddings (`_marriages`)
     marriages: Counter = Counter()
@@ -2818,6 +2845,12 @@ def _aggregate_content(
                 assisted["all"] += reading["covers"] == "all"
                 for count in ("marked", "straddling", "unlocated", "dropped"):
                     assisted[count] += reading[count]
+            moved = coverage.get("excerpt_language_moved")
+            if moved is None:
+                moved_absent += 1
+            else:
+                languages_moved += moved
+                moved_extractions += bool(moved)
             quotes = coverage.get("quotes")
             if quotes is None:
                 quotes_absent += 1
@@ -2960,6 +2993,11 @@ def _aggregate_content(
                 "absent",
             )
         },
+        "excerpt_language_moved": {
+            "moved": languages_moved,
+            "extractions": moved_extractions,
+            "absent": moved_absent,
+        },
         "records": {
             "extractions": record_extractions,
             "given": records_given,
@@ -3014,6 +3052,28 @@ def _aggregate_content(
     }
 
 
+# the batch a curator's approved equivalences resolve (orchestrate's
+# DocumentRun.resolved), where a confirmed subject is recorded
+RESOLVED_BATCH = "batch.resolved.json"
+
+
+def _resolved_subject_forms(
+    resolved: Path, claims: list[dict], entities: list[dict]
+) -> Counter:
+    """The document's document-subject claims by subject form
+    (_subject_forms): read from its resolved batch (`resolved`), where a
+    confirmation has turned a local subject into an existing item's QID,
+    when that file holds a batch, else from the stage's own batch view
+    (`claims`, `entities`)."""
+    found = _json(resolved)
+    if isinstance(found, dict):
+        claims = [c for c in _list(found.get("claims")) if isinstance(c, dict)]
+        entities = [
+            e for e in _list(found.get("entities")) if isinstance(e, dict)
+        ]
+    return _subject_forms(claims, entities)
+
+
 def _subject_forms(claims: list[dict], entities: list[dict]) -> Counter:
     """A batch's document-subject claims by the form of their subject
     (claims.SUBJECT_FORMS, ADR-0039 §10.1), read from the claims as the
@@ -3021,11 +3081,15 @@ def _subject_forms(claims: list[dict], entities: list[dict]) -> Counter:
     artifact the source places, which validation let through; a local
     subject is the artifact a structured record makes when its kind
     (its entity's, or its own `instance_of`) is an artifact kind, and the
-    source's mention of an artifact when it is an unclassified entity. A
-    subject of any other form, which validation refuses, is `other`. The
-    counts name no document."""
+    source's mention of an artifact when it is an unclassified entity; a
+    QID subject is the existing item a curator confirmed one of those as
+    when the claim records that local subject (`confirmed_from`) and its
+    kind is one of those (claims.confirmed_kind). A subject of any other
+    form, which validation refuses, is `other`. The counts name no
+    document."""
     acceptance = load_acceptance()
     kinds = {_text(e.get("id")): _text(e.get("kind")) for e in entities if e}
+    qids = {_text(e.get("id")): _text(e.get("qid")) for e in entities if e}
     forms: Counter = Counter()
     for claim in claims:
         if _text(claim.get("property")) not in acceptance.document_subjects:
@@ -3049,6 +3113,24 @@ def _subject_forms(claims: list[dict], entities: list[dict]) -> Counter:
                 if kind == MENTION_KIND
                 else "other"
             )
+        elif subject.get("kind") == "qid":
+            former = claim.get("confirmed_from")
+            former = former if isinstance(former, dict) else {}
+            local_id = _text(former.get("local_id"))
+            kind = (
+                None
+                if local_id is None
+                else _text(former.get("instance_of"))
+                if local_id not in kinds
+                else kinds[local_id]
+                if qids[local_id] == _text(subject.get("qid"))
+                else None
+            )
+            form = (
+                CONFIRMED_FORM
+                if kind in acceptance.artifact_kinds or kind == MENTION_KIND
+                else "other"
+            )
         else:
             form = "other"
         forms[form] += 1
@@ -3066,8 +3148,9 @@ def _container_claims(
     claims by property (`document_subject`), and those claims by the form
     of their subject (claims.SUBJECT_FORMS, ADR-0039 §10.1): about the
     source itself, an artifact it places, the artifact its structured
-    record makes, or its mention of an artifact it only writes about
-    (each counted, 0 included), and `other` for any other subject. The
+    record makes, its mention of an artifact it only writes about, or
+    the existing item a curator confirmed either of those two as (each
+    counted, 0 included), and `other` for any other subject. The
     properties are the manifest's own, so the counts name no document."""
     acceptance = load_acceptance()
     return {
@@ -3099,6 +3182,7 @@ SUBJECT_FORM_NAMES = {
     PLACED_FORM: "an artifact it places",
     RECORD_FORM: "an artifact its record makes",
     MENTION_FORM: "an artifact it mentions",
+    CONFIRMED_FORM: "an item its mention or record is confirmed as",
     "other": "other",
 }
 
@@ -3714,6 +3798,7 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
                 _retried_line(content["retried_chunks"]),
                 _trailing_commas_line(content["trailing_commas"]),
                 _machine_assisted_line(content["machine_assisted"]),
+                _language_moved_line(content["excerpt_language_moved"]),
             ],
         ),
         _Section(
@@ -4677,6 +4762,11 @@ def _html_document(document: Mapping[str, Any]) -> str:
                 if reading is not None and reading["dropped"]
                 else ""
             )
+        )
+        moved = coverage.get("excerpt_language_moved")
+        items.append(
+            "Excerpt languages moved in from source: "
+            + ("not counted" if moved is None else str(moved))
         )
         quotes = coverage.get("quotes")
         items.append(

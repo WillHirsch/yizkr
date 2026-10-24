@@ -950,14 +950,16 @@ def counterparts(extracted: ClaimBatch, rows: ClaimBatch) -> list[int | None]:
 
     Resolution has two steps. The approved equivalences replace each
     local ref to an approved entity with its QID, and set that entity's
-    `qid`, and a claim they make identical to an earlier one is dropped
-    (reconcile.apply_equivalences). Then each remaining local ref may be
-    replaced with a QID by its entity's label (resolve.resolve_batch).
+    `qid`, and a claim they make identical to an earlier one, but for the
+    local subject each records it replaced, is dropped
+    (reconcile.apply_equivalences, reconcile.collapse). Then each
+    remaining local ref may be replaced with a QID by its entity's label
+    (resolve.resolve_batch).
     The first step is replayed here exactly, from the entities whose
     `qid` `rows` sets; the second is checked claim by claim, a local ref
     against the ref at its place, so rows in which one local id became
     different QIDs in different claims match too."""
-    from yizkr.pipeline.reconcile import apply_equivalences
+    from yizkr.pipeline.reconcile import apply_equivalences, collapse
 
     before = {entity.id: entity.qid for entity in extracted.entities}
     approved = {
@@ -965,18 +967,13 @@ def counterparts(extracted: ClaimBatch, rows: ClaimBatch) -> list[int | None]:
         for entity in rows.entities
         if entity.qid and before.get(entity.id) != entity.qid
     }
-    kept: dict[str, int] = {}
-    merged: list[Claim] = []
-    found: list[int | None] = []
-    for claim in extracted.claims:
-        (resolved,) = apply_equivalences(
+    merged, places = collapse(
+        apply_equivalences(
             extracted.model_copy(update={"claims": [claim]}), approved
-        ).claims
-        key = resolved.model_dump_json()
-        if key not in kept:
-            kept[key] = len(merged)
-            merged.append(resolved)
-        found.append(kept[key])
+        ).claims[0]
+        for claim in extracted.claims
+    )
+    found: list[int | None] = list(places)
     if len(merged) != len(rows.claims) or not all(
         _resolved_as(claim, row)
         for claim, row in zip(merged, rows.claims, strict=True)

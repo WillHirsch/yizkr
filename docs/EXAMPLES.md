@@ -32,7 +32,9 @@ module records the table and the seed (`LANGUAGE_TABLE`,
 `LANGUAGE_SEED`), and `tests/unit/test_example_universe.py` draws them
 again. #400's description, which added these sources, gives every other
 specific drawn for them, each with its table, its seed and its value,
-and the script that draws them again.
+and the script that draws them again. The pull request for #686 does the same for its
+additions: the adoption's people and dates, Cäcilie's death register
+and her half-brother.
 
 ## The world
 
@@ -84,7 +86,15 @@ became the Lobigs.
      an unnamed infant (1922)
    |
 4  Nicholas Lobig (b. 1950), son of Gustav and Florence
+   Alfred Luthorn (b. 1948), son of Ernst and Erna Luthorn,
+     adopted by Leopold and Agnes in 1950
 ```
+
+Cäcilie died on 13 December 1902; her half-brother Christian Tarle of
+Kredfeld reported her death. In 1950 the Amtsgericht Flörburg confirmed
+Leopold and Agnes's adoption of Alfred Luthorn, born in Flörburg on
+30 August 1948, whose birth register names his birth parents, Ernst
+Luthorn and Erna Luthorn, born Wegbach.
 
 Rudolf went to the Soviet Union in 1936 and worked as a fitter in
 Koshnovka. He married Nina Sartina there in 1938 and died there on
@@ -104,7 +114,7 @@ a neighbour in Stupfield whom Nicholas calls *Nana Maisie*.
 
 ## Sources
 
-Twenty-three invented documents carry transcribed text (`Source.text`), and
+Twenty-six invented documents carry transcribed text (`Source.text`), and
 every assertion quotes the passage that makes it (`Assertion.excerpt`).
 The module glosses each Russian and West Frisian text in English, in a
 comment above it.
@@ -113,7 +123,8 @@ comment above it.
 |---|---|---|
 | `studio-photo-1890s` | studio portrait, names pencilled on the back | none |
 | `studio-photo-1895` | Rahel's studio portrait: its mount names the studio, and a pencilled note on it dates it *um 1895* | none |
-| `marriage-cert-1905` | civil marriage certificate, Sebastian and Hildegard | German |
+| `death-register-1902` | Cäcilie's entry in the Flörburg register of deaths, reported by her half-brother: *Ehefrau des Hutmachermeisters Eugen Löbig* | German |
+| `marriage-cert-1905` | civil marriage certificate, Sebastian and Hildegard; it names his late mother, *dessen verstorbener Ehefrau Cäcilie* | German |
 | `album-photo-1906` | the photograph of Wastl and Hilde from the family album, which the 2018 talk places on its slide 2: no writing on it, so it states nothing of itself and is no excerpt; an artifact of its own, `part of` the talk | none |
 | `burial-register-1909` | the cemetery's burial register: Eugen's death, cause and burial | German |
 | `directory-1912` | Flörburg address book: the firm (with its founding year) and the widow | German |
@@ -123,6 +134,8 @@ comment above it.
 | `letter-excerpt-1939` | the top of Sebastian's July 1939 letter to Klara, as an image on page 6 of the 2011 booklet: an artifact of its own, `part of` the booklet | German |
 | `death-certificate-1941` | Rudolf's Soviet death certificate: his name surname first, with a patronymic, and his village with its district, oblast and republic, a field each | Russian |
 | `registration-card-1945` | Ida's post-war card, with her son Leopold's arrest | English |
+| `birth-register-1948` | Alfred Luthorn's entry in the Flörburg register of births: his birth parents, reported by his father | German |
+| `adoption-order-1950` | the Amtsgericht Flörburg's order confirming Leopold and Agnes's adoption of Alfred: *Adoptivvater*, *Adoptivmutter* | German |
 | `naturalisation-1952` | Gustav's naturalisation as Gustave Lobig | English |
 | `letter-to-sipkje-1952` | Sybren van 't Nijks in Snylsjum to his sister Sipkje, Florence's mother, in Stupfield: their widowed mother is now Nicholas's great-grandmother | West Frisian |
 | `compensation-file-1953` | Leopold's claim for his late mother Ida: her deportation | German |
@@ -134,7 +147,7 @@ comment above it.
 | `family-history-2008` | *A few pages of family history*, Nicholas's two typed pages: the hatters of Flörburg, Sebastian and Hildegard's children, the other Ursula Löbig, the emigrations, "I was born in '50" and his father's grave | English |
 | `family-booklet-2011` | *Our Family from Germany*, Nicholas's compilation: the letter's excerpt beside his translation, made with translation software, and his commentary; its physical page 6 is printed as page 4 | English |
 | `library-talk-2018` | *Where the Lobigs came from*, Nicholas's three slides for a library talk, with a photograph from the family album: its text is the deck's slide text | English |
-| `death-certificate-1963` | Florence's death certificate, whose informant gave her own birth name, *Florence Faxridge*, as her mother's | English |
+| `death-certificate-1963` | Florence's death certificate, whose informant gave her own birth name, *Florence Faxridge*, as her mother's; its *Informant: husband* records nothing | English |
 
 ## Pattern index
 
@@ -150,7 +163,13 @@ comment above it.
 | A married-name marker written as a suffix | *Рудольфиха*, Rudolf's given name with the colloquial suffix *-иха*, "Rudolf's wife": what Nina's village calls her (the 1958 letter). Russian uses such forms in rural speech, never in an official name, so it is a `referred_to_as` appellation and a `spouse` claim, never one of her names |
 | A surname with a masculine and a feminine form | *Сартин* and *Сартина*: Pavel Sartin and his sister Nina (the 1958 letter) |
 | A name particle | *van 't Nijks*, kept whole in every name that carries it: *S. van 't Nijks* and *S. Faxridge-van 't Nijks* (the 1952 letter's envelope) |
-| Widow and "the late" markers | *вдова Вашего покойного брата Рудольфа*, "the widow of your late brother Rudolf" (the 1958 letter); *Se is widdo sûnt ús sillige heit stoarn is*, "she is a widow since our late father died" (the 1952 letter). A widow marker is a `spouse` claim, and "the late" a death *before* the letter's date: Rudolf's, which the certificate gives as 6 March 1941 and the tree as 1941. Amended by ADR-0040 (2026-10-24), from its build and follow-up A on: each letter's widow marker states that the couple were married when he died, so it gives the widow's `civil_status` `widowed` and their marriage `ended_by_death_of` him (ADR-0040's Q2). That end is the evidence of his death (Q9), and no death statement is written for him: where one phrase is both markers, the union end alone stands for the death (Q5). His "died by" date is derived when a view is built, labelled as derived (Rudolf by 25 December 1958, at Nina's widowhood on the letter's date). The 1905 certificate's "dessen verstorbener Ehefrau Cäcilie" gives Cäcilie's `date_of_death` of unknown value and no union end; views derive the end. "The late" gives a `date_of_death` of unknown value, in a dated document too |
+| Widow and "the late" markers (ADR-0040 §2.5) | *вдова Вашего покойного брата Рудольфа*, "the widow of your late brother Rudolf" (the 1958 letter); *Se is widdo sûnt ús sillige heit stoarn is*, "she is a widow since our late father died" (the 1952 letter). Each is one phrase that is both markers: it states that the couple were married when he died, so it gives the widow's `civil_status` `widowed` at the letter's date and their marriage `ended_by_death_of` him (ADR-0040's Q2). That end is the evidence of his death (Q9), and no death statement is written for him: the union end alone stands for the death (Q5). His "died by" date is derived when a view is built, never stored (below). The burial register's *Witwer der Cäcilie Löbig geb. Tarle* likewise gives Eugen's `civil_status` `widowed` at his death and their marriage `ended_by_death_of` Cäcilie. The directory's *Löbig, Ursula, Wwe.* names no spouse, so it would give the civil status alone (Amended by ADR-0040, 2026-10-24: until #686, the universe gave each letter's widow marker as a `spouse` claim and its "the late" as a death *before* the letter's date) |
+| A death stated without its date (ADR-0040 §2.2) | the 1905 certificate's *dessen verstorbener Ehefrau Cäcilie*, "his late wife Cäcilie": "his late wife" with no widowhood marked, so it gives Cäcilie a `date_of_death` of unknown value (`UNKNOWN`), cited to those words, and their marriage, with no union end (Q12); views derive the end. "The late" gives the unknown value in a dated document too. The GEDCOM export dates every `DEAT`, so its `1 DEAT Y` form waits for the adapter that gives it the unknown value (#687) |
+| A union ended by a death (ADR-0040 §2.5) | Eugen and Cäcilie's marriage is `ended_by_death_of` Cäcilie twice: by the burial register's widower's word, and by her death register's *Ehefrau des Hutmachermeisters Eugen Löbig*, a death record that calls the deceased the survivor's wife, beside the death it dates. Rudolf and Nina's, and Sipkje's parents', by the letters' widow phrases. Each union is a `marriage` entity whose couple take part as spouses (ADR-0036); no source calls the partner whose death ended it widowed (the guard) |
+| "Died by" dates, derived (ADR-0040 §2.4) | `DERIVED_DIED_BY`, never stored: Cäcilie by 15 December 1905 (the certificate's own date, for its undated death), by 14 December 1902 (her death register's date, which states no widowhood) and by 16 March 1909 (Eugen's widowhood in the burial register); Rudolf by 25 December 1958 (Nina's widowhood on the letter's date), beside the certificate's 6 March 1941; Sipkje's father by 24 January 1952 |
+| A parent's kind (ADR-0040 §4) | the 1950 order of the Amtsgericht Flörburg (its `issued_by`) gives Alfred `father` → Leopold and `mother` → Agnes, each with `parentage` → `parentage_adoptive`, its word (*Adoptivvater*, *Adoptivmutter*) in `kinship_type` and the order's date, 25 May 1950, as `start_time`. His birth register names his birth parents, Ernst and Erna Luthorn, with no kind, since a register words none; a birth father and an adoptive father never disagree. The GEDCOM export gives the adoption as `2 PEDI adopted` beneath his `FAMC`, which the adapter counts and does not map |
+| A half term (ADR-0040 §4) | *seine Halbschwester Cäcilie*, "his half-sister Cäcilie" (her death register): `sibling` with `kinship_type` *Halbschwester*, Christian as the ego |
+| Informants (ADR-0040 §2.8) | a person who only reports a record is left out, unless the record makes them kin of someone it is about: Christian Tarle, who reports his half-sister's death, Ernst Luthorn, who reports his son's birth, and Sebastian, who reports Gustav's, stay as kin, their informant role unrecorded. Florence's death certificate's *Informant: husband*, a reporter given only by role, records nothing: no unnamed husband and no union (`NO_CLAIM`, with its blank *Father: not stated*) |
 | Kinship terms with a side and a degree | *дядя по отцу*, "uncle on the father's side" (Sebastian), and *двоюродная сестра*, "first cousin" (Klara), with Rudolf as the ego (the 1958 letter); *oerbeppe*, "great-grandmother" (Sipkje's mother), with Nicholas as the ego (the 1952 letter). Each is `relative` + `kinship_type`, worded as the source words it, and each follows from the parent edges |
 | An institution named by its kind and its place | *Калдовское районное бюро ЗАГС*, the civil registry of Kaldovsky District, whose name it takes as an adjective (the certificate); *it tichelwurk fan Snylsjum*, "the Snylsjum brickworks" (the 1952 letter) |
 | A place named with its containers | *д. Кошновка Калдовского района Чадской области*, "Koshnovka village, Kaldovsky district, Chadsk oblast", its district and oblast in the genitive (the 1958 letter), and the certificate's form, a field each; *Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân*, the 1952 letter's sender. Each container is a `part_of` claim |
@@ -158,7 +177,7 @@ comment above it.
 | Homonyms (ADR-0017) | two Ursula Löbigs: Sebastian's daughter, born 1911, and a widow in the 1912 directory; a one-year-old cannot be that widow. The 2008 family history names both, one line apart |
 | Mirrored kinship | Sebastian and Hildegard's children, stated from both ends: the parents' `child` claims in the 2008 family history and the 2018 talk; the children's `father` and `mother` elsewhere (the tree, the GEDCOM rendering), and the postcard's *Dein Vater* |
 | Two-digit years | *I was born in '50* (the interview, the 2008 family history) and *Dad died in '96*: the century is the reader's to supply, which the fixture corpus's recorded model gets wrong once (below) |
-| Spouses and parents, 3+ generations | four generations, Eugen to Nicholas; marriages in 1859, 1905, 1938, 1942 and 1947, and two undated ones |
+| Spouses and parents, 3+ generations | four generations, Eugen to Nicholas, and Alfred, adopted; marriages in 1859, 1905, 1938, 1942 and 1947, and two undated ones |
 | Divorce | Leopold and Agnes, married on 8 Feb 1947 and divorced on 2 Jan 1957 by the Landgericht Rekau (the judgment); the 1984 tree says *div. 1957*. The spouse statements carry it as `end_time`, the GEDCOM export as `DIV` |
 | Kinship terms and courtesy titles (ADR-0018) | literal: *Dein Vater* (the postcard, from Klara's view); *Dad*, *Aunt Pünktchen*, *Dad's cousin Leopold* (the interview, from Nicholas's view). Each is recorded as the kinship: *Dein Vater* and *Dad* as `father`; the other two as `relative` + `kinship_type`, with the referent as subject and the ego as object: `Klara —relative→ Nicholas ; kinship_type = "aunt"` (and *Pünktchen* is her `nickname`) and `Leopold —relative→ Gustav ; kinship_type = "cousin"` (the ego is *Dad*). Whether *Dad* and *Aunt Pünktchen*, which name the person, are also aliases and `referred_to_as` appellations with Nicholas as their `perspective` is pending the owner's answer on #499 (the universe records neither so yet); *Dein Vater*, the signature of a writer the postcard never names, is his label, and *Dad's cousin Leopold* a description. Courtesy: *Nana Maisie* (the interview), a neighbour who is no relation: an alias and `referred_to_as`, never `relative` |
 | Plain name forms and appellations (ADR-0018) | plain name forms, a name or a spelling, shortening or diminutive of one: *Gustl*, *Wastl*, *Gus* (aliases, and record given names or nicknames). Appellations, every other form a source uses to name or address a person, are each an alias and a `referred_to_as` statement (#499): the pet names *Peppi* and *Pünktchen*, also record nicknames as what the person is called by anyone (the postcard's *Liebes Pünktchen!* is a `referred_to_as` from Sebastian's view); and, through a relation, *Nana Maisie*, *Рудольфиха* (above) and *Bubele*, ADR-0018's pet name a grandmother gives a grandchild, never record nicknames. The extraction prompts' worked examples add two forms which, like *Bubele*, no source in the universe uses: *Tante Rahel*, Rahel from Klara's view (a kinship term with a name), and *Omama*, Hildegard from Nicholas's view (a kinship term alone, in a letter that names her elsewhere or never) |
@@ -175,7 +194,7 @@ comment above it.
 | A citizenship by name or by adjective (ADR-0035, amended by #573) | worked examples, which no source in the universe states: *Staatsangehörigkeit: Deutsches Reich* (the country by its name, a place of status `toponym`) and *Gustave Lobig, an Australian citizen* (the country only by an adjective of nationality: a place labelled *Australian*, status `adjective`) |
 | Persecution events (ADR-0014) | Leopold's arrest (3 Sep 1939), imprisonment in the Peiltal court prison and release (1 Oct 1939); Ida's deportation to Lager Klurnau (21 Aug 1942) and liberation at Klurnau (28 Jan 1945). Emigrations are `migration` events too |
 | Contradictory dates (ADR-0002) | Gustav born 7 Jan 1919 (civil register) and 1 July 1919 (naturalisation): day and month transposed. Also Fläckfeld's district, and Rahel's address in July 1939 (the booklet, below) |
-| Refinement, not contradiction | Eugen died 1909 (gravestone) and 16 Mar 1909 (burial register); Klara left in '38 or '39 (interview) and on 22 June 1938 (postcard); Leopold born 1914 (tree) and 29 May 1914 (judgment), Agnes likewise; Florence died 1963 (tree) and 3 July 1963 (death certificate); Leopold held "in Peiltal" and in its court prison; Ida deported to Klurnau (card) and to Lager Klurnau (compensation file); Rudolf died 1941 (tree), 6 March 1941 (certificate) and before 25 December 1958 (the 1958 letter) |
+| Refinement, not contradiction | Eugen died 1909 (gravestone) and 16 Mar 1909 (burial register); Klara left in '38 or '39 (interview) and on 22 June 1938 (postcard); Leopold born 1914 (tree) and 29 May 1914 (judgment), Agnes likewise; Florence died 1963 (tree) and 3 July 1963 (death certificate); Cäcilie died 1902 (gravestone, tree) and 13 December 1902 (death register), beside the 1905 certificate's unknown value, which states no date; Leopold held "in Peiltal" and in its court prison; Ida deported to Klurnau (card) and to Lager Klurnau (compensation file); Rudolf died 1941 (tree) and 6 March 1941 (certificate). The 1958 letter states no death of Rudolf's: its "died by 25 December 1958" is derived (Amended by ADR-0040, 2026-10-24: until #686, the letter's "the late" was a stored "before 25 December 1958") |
 | Uncertain dates | circa: Cäcilie *c. 1833* (`ABT 1833`), and Rahel's studio portrait, made *um 1895* (pencilled on its mount); before: the firm gone *before 1926* (`BEF 1926`); after: Rahel died *after 1945* (`AFT 1945`); between: Klara left *between 1938 and 1939* (`BET 1938 AND 1939`); decade: the studio portrait, *1890s* (`BET 1890 AND 1899`) |
 | An embedded original and its translation, as two witnesses (ADR-0008, amended) | *Our Family from Germany* (2011), Nicholas's compilation, sets an image of the top of Sebastian's 1939 letter to Klara (`letter-excerpt-1939`, an artifact of its own, `part of` the booklet on page 6) beside his translation. Where the letter says Rahel now lives at *Angerring 11*, the translation reads *Angerring 71*: each witness gives Rahel's address its own value. The booklet says its translations were done with translation software, so each claim read from the translation carries `sourcing_circumstances` → `machine_assisted` and no claim of the excerpt does. The caption and the commentary are not translations and carry no marker; the commentary says what the letter does not, that Gustav was Ursula's younger brother (`sibling`) |
 | A container's caption, and what a source states of itself (ADR-0039) | *Our Family from Germany* sets the letter's image on its page 6 under the caption *Wastl to Klara, July 1939.*: one verbatim `caption` statement on the image's item, stated in the booklet, page 6; its *July 1939* is never the letter's date. (Widened by #626, 2026-10-24, ADR-0039 §10, from the build on: its *July 1939* is still never the letter's date, since the caption ties it to no event, but its *Wastl to Klara* gives the image `author` → Wastl and `addressee` → Klara, and the booklet's translation of the dateline, *28 July 1939*, *Brunnenring 35*, *Dear Pünktchen!*, gives it `inception`, `location_of_creation` and `addressee`, each stated in the booklet, page 6, `machine_assisted`, and no caption.) The letter's image states of itself its `inception` (*den 28. Juli 1939*, day precision), its `location_of_creation` (Brunnenring 35) and its `addressee` (Klara, greeted as *Pünktchen*), and no `author`, since the top of the letter names no writer. The studio portrait states of itself its `author` (*Photograph Brüsrich*, on its mount) and, from its reverse, one `shows` statement for each of *Muckel · Cilli · Wastl · Rahel · Felix*: a source's words, never a confirmed `depicts`. Rahel's studio portrait likewise states its `author` from its mount. *Where the Lobigs came from*'s slide 2 gives its photograph (`album-photo-1906`) two captions, *Wastl and Hilde* (with a judgement note) and *Photograph from the family album*, and its title *Wastl and Hilde* gives `shows` → Wastl and `shows` → Hilde, each with the same judgement note, of category `relation` (ADR-0039 §10.4) |
@@ -183,8 +202,8 @@ comment above it.
 | A printed page number apart from the physical page (ADR-0037) | *Our Family from Germany* numbers its pages from its third, after the title page and the note on its translations: its physical page 6, which sets the letter's excerpt, carries the printed page number *4*. A claim read from that page cites `page number` 6 with `printed page number` 4; the excerpt is `part of` the booklet on page 6, its physical page |
 | A person without name or sex | the infant of 1922, *N.N. Löbig* (`SEX U`) |
 | People named only by a kinship term | Sipkje and Sybren's parents, *Mem* (mother) and *heit* (father) in the 1952 letter: each has a sex, a placeholder name (*N.N. van 't Nijks*) and the letter's `mother` or `father` claims |
-| Privacy (ADR-0020) | Nicholas Lobig (b. 1950, no death asserted) is possibly living; he is dated to the year only, and the 1952 letter, which names him as a baby, gives no date |
-| GEDCOM rendering (ADR-0021) | `tests/fixtures/example-family.ged`: `LANG English` in its header, typed names, `NICK`, an inline `(Peppi)` (an alias and an unsplit form, ADR-0035 §6), `_MARNM`, `TYPE immigrant`, a dated burial and an undated one, cause of death, child count, residences at street addresses, four marriages (two `MARR`s of `TYPE civil`, the 1905 certificate's and the judgment's) and Felix and Ida's family with no `MARR` (a partnership, ADR-0036 §4), a `DIV`, an `EDUC` and a `NOTE` the adapter reports as unsupported, and the studio portrait as a shared `OBJE` |
+| Privacy (ADR-0020) | Nicholas Lobig (b. 1950, no death asserted) is possibly living; he is dated to the year only, and the 1952 letter, which names him as a baby, gives no date. Alfred Luthorn (b. 1948, no death asserted) is possibly living too, dated to the day by his birth register and the adoption order |
+| GEDCOM rendering (ADR-0021) | `tests/fixtures/example-family.ged`: `LANG English` in its header, typed names, `NICK`, an inline `(Peppi)` (an alias and an unsplit form, ADR-0035 §6), `_MARNM`, `TYPE immigrant`, a dated burial and an undated one, cause of death, child count, residences at street addresses, four marriages (two `MARR`s of `TYPE civil`, the 1905 certificate's and the judgment's) and Felix and Ida's family with no `MARR` (a partnership, ADR-0036 §4), a `DIV`, an `EDUC`, a `NOTE` and Alfred's `PEDI adopted` the adapter reports as unsupported, and the studio portrait as a shared `OBJE` |
 
 ## Using it
 
@@ -202,10 +221,14 @@ People, places, entities (organisations, occupations, a vessel,
 events) and sources are ground truth, so tests can check identity and
 containment decisions against it. Everything said *about* them is a
 source-attributed `Assertion` in the archive's own vocabulary: manifest
-property ids, entity kinds and artifact classes. `PLANNED_VOCABULARY`
-names any value planned rather than in the manifest yet, and is empty:
-`machine_assisted`, which ADR-0008's follow-up B adds, joined the
-manifest with #666. `CONTRADICTIONS` and
+property ids, entity kinds and artifact classes. One value is planned
+rather than in the manifest yet, which `PLANNED_VOCABULARY` names:
+`parentage_adoptive`, which ADR-0040's build (#687) adds with the
+properties `parentage` and `ended_by_death_of` that `PLANNED_PROPERTIES`
+names; `machine_assisted`, which ADR-0008's follow-up B adds, joined the
+manifest with #666. An unknown value is `UNKNOWN`, on the properties
+`UNKNOWN_VALUE_PROPERTIES` names. `DERIVED_DIED_BY` gives the "died by"
+dates a view derives, and `NO_CLAIM` the passages that give no claim. `CONTRADICTIONS` and
 `REFINEMENTS` name the deliberate cases, and `NAMING_PATTERNS` names the
 passages that show each naming pattern mention records must handle
 (#385). Each person's `gedcom_xref` points into

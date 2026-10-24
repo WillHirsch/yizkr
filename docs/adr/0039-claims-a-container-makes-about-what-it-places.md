@@ -39,6 +39,10 @@ settled by their leans; §10.1(c) adopts (c4): a source may also state a
 document-subject property about an artifact it only writes about, on its
 own mention item of it (an `unclassified_entity`), linked to the held
 scan later.
+Amended by #670 (2026-10-24; the owner's decision on #670): a curator's
+confirmation that such a mention, or the artifact a structured record
+makes, is an existing item takes its document-subject claims onto that
+item (§10.1(c), "A confirmed mention or record's artifact").
 Amended by ADR-0040 (2026-10-24): §10.1(c)'s `main_subject` → "Rudolf's
 death" reads `main_subject` → Rudolf, since no death item exists.
 
@@ -819,6 +823,58 @@ own mention item of the enclosure, cited to the source with its passage;
 a curator, or later artifact matching (#162), links that mention item
 to the held scan. The rule admits forms (a), (b) and (c4).
 
+**A confirmed mention or record's artifact** (#670; owner decision,
+2026-10-24: "yes, a confirmed mention takes its document-subject claims
+onto the existing item"). A curator who confirms that a batch's entity
+is an existing item (an approved equivalence:
+`reconcile.apply_equivalences` sets the entity record's `qid` and turns
+its local refs into that QID) links it as this section says. When the
+claim's subject before confirmation was a (c4) mention or a (b)
+record's artifact, the confirmed item is its subject, and the claim is
+written there, cited to the source with its passage, as a confirmed
+person match moves a document's claims onto the existing person. So
+the 1958 letter's `main_subject`, on its mention of the enclosed death
+certificate, goes onto the held scan
+death-certificate-1941 once a curator confirms the mention is that
+scan's item.
+
+- Each claim keeps its own pre-confirmation subject. When
+  `reconcile.apply_equivalences` replaces a claim's local subject with
+  the confirmed QID, it records that local ref on the claim
+  (`Claim.confirmed_from`), its `instance_of` set to the entity's kind:
+  its manifest record's, else the ref's own, so a manifest-free mention
+  keeps its kind. The record is kept through serialization and on later
+  equivalence passes. It is resolution state, never extraction output:
+  the prompts' JSON Schema leaves it out, `extract.cite_artifact` drops
+  it, and a claim without one serialises as before. Where resolution leaves
+  claims the same but for their records, they are kept once
+  (`reconcile.collapse`, which `critique.counterparts` replays): the
+  claim kept is the first whose record makes its subject a document
+  subject, else the first, so a claim that named the QID outright, or
+  whose subject was a person, never displaces a confirmed mention's
+  claim, in either order.
+- The subject form is `confirmed` (`claims.CONFIRMED_FORM`): a QID
+  subject whose claim records a local subject of an artifact kind or an
+  `unclassified_entity` (`claims.confirmed_kind`). Where the batch holds
+  that entity's record, the kind is the record's, and the record must be
+  confirmed as the same QID. Validation (`claims.subject_problems`) and
+  the writer (`writer.subject_refusal`) take it, and no other QID
+  subject: a claim that named a QID outright records no local subject
+  and stays refused, however many entities are later confirmed as that
+  item; so do a claim whose subject was a person, place or event, and
+  one whose recorded entity is confirmed as another item. Each fails
+  closed.
+- It is held to (c4)'s and (b)'s other rules: a claim of this form
+  carries the passage that conveys it as its excerpt (§10.4).
+- The run report counts it (`container_claims.document_subject_by_form`:
+  `confirmed`), reading a document's subject forms from its resolved
+  batch (`batch.resolved.json`, where the confirmation is saved) when
+  there is one, else from its stage's batch view.
+- It arises only from the keeper run on, since scratch runs confirm no
+  matches. Such a claim, on a held scan and stated in another document,
+  then falls under the export's SHA-1 rule (`backup.placed_subject_rule`,
+  §10.5) and is left out of the non-privileged export, failing closed.
+
 #### 10.2 Coexistence, disagreement and display
 
 - These claims stand beside the artifact's own, each with its own
@@ -1067,6 +1123,9 @@ to the held scan. The rule admits forms (a), (b) and (c4).
   whose entity a curator approves as an existing item is refused by
   validation and the writer from then on. Whether an approval should be
   read as the link §10.1(c) names is an owner question (#661).
+  Settled by #670, 2026-10-24: yes; the confirmed item is a subject of
+  its own form, `confirmed` (§10.1(c), "A confirmed mention or record's
+  artifact").
 - **The interim exception is gone**: `claims.STRUCTURED_ADAPTERS`,
   `GEDCOM_ADAPTER`, `structured_batch` and the `structured` argument;
   `gedcom.ADAPTER_IDENTIFIER` keeps its value, "gedcom-adapter".
@@ -1099,7 +1158,8 @@ to the held scan. The rule admits forms (a), (b) and (c4).
   the entities block labels with its type hint.
 - **The report** counts the document-subject claims by subject form
   (`container_claims.document_subject_by_form`: `source`, `placed`,
-  `record`, `mention`, and `other` for a subject validation refuses).
+  `record`, `mention`, and `other` for a subject validation refuses;
+  `confirmed` too, from #670).
 - **The export** (question 9) leaves out whole, at any rank, a
   document-subject statement whose subject carries a `media SHA-1` and
   one of whose references is `stated in` another item, or whose subject

@@ -14,8 +14,9 @@ from itertools import combinations
 import pytest
 
 from tests.fixtures import example_universe as u
+from yizkr.claims import ArtifactRef
 from yizkr.model.schema import load_acceptance, load_manifest
-from yizkr.pipeline.gedcom import parse_gedcom, parse_gedcom_date
+from yizkr.pipeline.gedcom import adapt_gedcom, parse_gedcom, parse_gedcom_date
 
 KEYS = u.by_key()
 PEOPLE = {person.key: person for person in u.PEOPLE}
@@ -89,6 +90,35 @@ def overlap(first: u.Date, second: u.Date) -> bool:
     return low_a <= high_b and low_b <= high_a
 
 
+def spouses_of(union: str, source: str | None = None) -> set[str]:
+    """The couple of a union entity: its participants with the role
+    spouse (ADR-0036), in one source or in any."""
+    return {
+        a.value
+        for a in u.about(union, "participant")
+        if ("object_has_role", "spouse") in a.qualifiers
+        and source in (None, a.source)
+    }
+
+
+def couples() -> set[frozenset]:
+    """Every couple a source states: by the retired `spouse` property, or
+    as a union's spouses."""
+    unions = {
+        e.key for e in u.ENTITIES if e.kind in ("marriage", "partnership")
+    }
+    return {
+        frozenset((a.subject, a.value))
+        for a in u.ASSERTIONS
+        if a.property == "spouse"
+    } | {frozenset(spouses_of(union)) for union in unions}
+
+
+def dated(key: str, prop: str) -> list[u.Date]:
+    """The dates sources give a person's property, unknown values aside."""
+    return [when for when in values(key, prop) if isinstance(when, u.Date)]
+
+
 class TestIntegrity:
     def test_keys_are_unique(self):
         keys = Counter(
@@ -98,9 +128,19 @@ class TestIntegrity:
 
     def test_assertions_follow_the_manifest(self):
         manifest = load_manifest()
-        # a sourcing circumstance is a vocabulary item: the manifest's, or
-        # one it is planned to gain
-        circumstances = set(manifest.items) | set(u.PLANNED_VOCABULARY)
+        # a value of these is a vocabulary item: the manifest's, or one it
+        # is planned to gain
+        vocabulary = set(manifest.items) | set(u.PLANNED_VOCABULARY)
+        valued_by_items = {
+            "sourcing_circumstances",
+            "civil_status",
+            "object_has_role",
+            "kinship_class",
+            "parentage",
+        }
+        datatypes = {
+            prop: spec.datatype for prop, spec in manifest.properties.items()
+        } | u.PLANNED_PROPERTIES
         for assertion in u.ASSERTIONS:
             assert assertion.subject in KEYS, assertion
             assert assertion.source in SOURCES, assertion
@@ -108,9 +148,15 @@ class TestIntegrity:
                 (assertion.property, assertion.value),
                 *assertion.qualifiers,
             ):
-                datatype = manifest.properties[prop].datatype
-                if prop == "sourcing_circumstances":
-                    assert value in circumstances, (prop, value)
+                datatype = datatypes[prop]
+                if value is u.UNKNOWN:
+                    # an unknown value, only where ADR-0040 §2.2 allows
+                    # one, and never without the words that state it (Q10)
+                    assert prop == assertion.property, assertion
+                    assert prop in u.UNKNOWN_VALUE_PROPERTIES, assertion
+                    assert assertion.excerpt, assertion
+                elif prop in valued_by_items:
+                    assert value in vocabulary, (prop, value)
                 elif datatype == "wikibase-item":
                     assert value in KEYS, (prop, value)
                 elif datatype == "time":
@@ -153,15 +199,20 @@ class TestIntegrity:
                 assert a.property == "part_of", a
 
     def test_planned_vocabulary_is_not_in_the_manifest_yet(self):
-        # an item leaves u.PLANNED_VOCABULARY when the manifest gains it
-        gained = set(u.PLANNED_VOCABULARY) & set(load_manifest().items)
+        # an item leaves u.PLANNED_VOCABULARY, and a property
+        # u.PLANNED_PROPERTIES, when the manifest gains it
+        manifest = load_manifest()
+        gained = (set(u.PLANNED_VOCABULARY) & set(manifest.items)) | (
+            set(u.PLANNED_PROPERTIES) & set(manifest.properties)
+        )
         assert not gained, (
             f"the manifest now holds {sorted(gained)}: drop them from "
-            "PLANNED_VOCABULARY, and update the sentences that call them "
+            "PLANNED_VOCABULARY or PLANNED_PROPERTIES, and update the "
+            "sentences that call them "
             "planned: the comment above PLANNED_VOCABULARY in "
             "tests/fixtures/example_universe.py, and docs/EXAMPLES.md, "
-            '"Using it": "One value is planned rather than in the manifest '
-            'yet"'
+            '"Using it": "Two values are planned rather than in the '
+            'manifest yet"'
         )
 
     def test_kinds_are_manifest_items(self):
@@ -457,16 +508,13 @@ class TestFamily:
         }
 
     def test_spouses_in_three_generations(self):
-        couples = {
-            frozenset((a.subject, a.value))
-            for a in u.ASSERTIONS
-            if a.property == "spouse"
-        }
+        stated = couples()
+        assert all(len(couple) == 2 for couple in stated)
         generations = {
-            PEOPLE[next(iter(couple))].generation for couple in couples
+            PEOPLE[next(iter(couple))].generation for couple in stated
         }
         # with Rudolf and Nina, and Sipkje's parents
-        assert len(couples) == 7
+        assert len(stated) == 7
         assert generations == {1, 2, 3}
 
     def test_a_divorce_dated_by_a_source(self):
@@ -603,7 +651,10 @@ class TestEventsAndDates:
 
     @pytest.mark.parametrize(("subject", "prop"), u.REFINEMENTS)
     def test_refinements_are_not_contradictions(self, subject, prop):
-        assertions = u.about(subject, prop)
+        # an unknown value states no date, so it refines nothing
+        assertions = [
+            a for a in u.about(subject, prop) if a.value is not u.UNKNOWN
+        ]
         assert len({a.source for a in assertions}) >= 2
         for first, second in combinations(assertions, 2):
             if isinstance(first.value, u.Date):
@@ -640,7 +691,9 @@ class TestEventsAndDates:
                 for path in u.containment_paths(fine.value)
             )
 
-        assertions = u.about(subject, prop)
+        assertions = [
+            a for a in u.about(subject, prop) if a.value is not u.UNKNOWN
+        ]
         assert any(
             fine.source != coarse.source and narrower(fine, coarse)
             for fine in assertions
@@ -710,6 +763,14 @@ class TestEventsAndDates:
     SELF_DATED = {
         "studio-photo-1890s": (u.Date(1890, decade=True), ""),
         "studio-photo-1895": (u.Date(1895, qualifier="circa"), "um 1895"),
+        "death-register-1902": (
+            u.Date(1902, 12, 14),
+            "Flörburg, am 14. Dezember 1902",
+        ),
+        "marriage-cert-1905": (
+            u.Date(1905, 12, 15),
+            "Flörburg, am 15. Dezember 1905",
+        ),
         "postcard-1938": (
             u.Date(1938, 8, 19, qualifier="before"),
             "[postmark] Flörburg 19.8.38",
@@ -718,6 +779,14 @@ class TestEventsAndDates:
         "death-certificate-1941": (
             u.Date(1941, 3, 7),
             "Дата выдачи: 7 марта 1941 г.",
+        ),
+        "birth-register-1948": (
+            u.Date(1948, 8, 31),
+            "Flörburg, am 31. August 1948",
+        ),
+        "adoption-order-1950": (
+            u.Date(1950, 5, 25),
+            "Flörburg, den 25. Mai 1950",
         ),
         "letter-to-sipkje-1952": (
             u.Date(1952, 1, 24),
@@ -769,19 +838,316 @@ class TestEventsAndDates:
             if a.property == "point_in_time" and a.subject in SOURCES
         ] == []
 
-    def test_exactly_one_possibly_living_person(self):
-        # born, and no source asserts a death: the privacy example
+    def test_the_possibly_living_people(self):
+        # born, and no source asserts a death or a union ended by it: the
+        # privacy examples, Nicholas dated to the year only, and Alfred,
+        # whom his birth register dates to the day
+        ended_by = {
+            a.value for a in u.ASSERTIONS if a.property == "ended_by_death_of"
+        }
         living = [
             key
             for key in PEOPLE
             if values(key, "date_of_birth")
             and not values(key, "date_of_death")
+            and key not in ended_by
         ]
-        assert living == ["nicholas-lobig"]
+        assert living == ["nicholas-lobig", "alfred-luthorn"]
         assert all(
             when.year >= 1940 and when.precision == "year"
             for when in values("nicholas-lobig", "date_of_birth")
         )
+
+
+class TestDeathsAndBirths:
+    """ADR-0040 (#686): a death or a birth is a set of statements on the
+    person, a union ended by a death points to the partner who died, and
+    a parent's kind is stated only where the source states it."""
+
+    @staticmethod
+    def written(source: str) -> u.Date | None:
+        """The source's own date of making, if it states one."""
+        made = [
+            a.value for a in u.about(source, "inception") if a.source == source
+        ]
+        return made[0] if made else None
+
+    def test_an_unknown_value_is_a_death_stated_without_its_date(self):
+        # "dessen verstorbener Ehefrau Cäcilie": the death, no date, and no
+        # union end, since no widowhood is marked (§2.2, Q12)
+        unknown = [a for a in u.ASSERTIONS if a.value is u.UNKNOWN]
+        assert {(a.subject, a.property, a.source) for a in unknown} == {
+            ("caecilie-loebig", "date_of_death", "marriage-cert-1905"),
+        }
+        for a in unknown:
+            # the source states no limit: no date qualifiers (§2.2); a
+            # "died by" date is derived, never stored on it
+            assert not [
+                key for key, value in a.qualifiers if isinstance(value, u.Date)
+            ], a
+            said = [b for b in u.ASSERTIONS if b.source == a.source]
+            assert not [
+                b
+                for b in said
+                if b.property == "ended_by_death_of" and b.value == a.subject
+            ]
+            # the same source dates no death of the person: else the
+            # marker would add nothing (§2.3)
+            assert not [
+                b
+                for b in said
+                if b.subject == a.subject
+                and b.property == "date_of_death"
+                and b is not a
+            ]
+
+    def test_a_stated_union_end_meets_q2_s_test(self):
+        # written only where a source states the couple were married when
+        # the partner died: a widow or widower word naming the late spouse,
+        # or a death record calling the deceased the survivor's spouse (§2.5)
+        ends = [a for a in u.ASSERTIONS if a.property == "ended_by_death_of"]
+        assert {(a.subject, a.value, a.source) for a in ends} == {
+            (
+                "marriage-eugen-caecilie",
+                "caecilie-loebig",
+                "burial-register-1909",
+            ),
+            (
+                "marriage-eugen-caecilie",
+                "caecilie-loebig",
+                "death-register-1902",
+            ),
+            (
+                "marriage-rudolf-nina",
+                "rudolf-loebig",
+                "letter-to-leopold-1958",
+            ),
+            (
+                "marriage-van-t-nijks",
+                "mr-van-t-nijks",
+                "letter-to-sipkje-1952",
+            ),
+        }
+        for end in ends:
+            assert ENTITIES[end.subject].kind == "marriage"
+            couple = spouses_of(end.subject, end.source)
+            assert end.value in couple and len(couple) == 2
+            (survivor,) = couple - {end.value}
+            widowed = [
+                a
+                for a in u.about(survivor, "civil_status")
+                if a.source == end.source and a.value == "widowed"
+            ]
+            deaths = [
+                a
+                for a in u.about(end.value, "date_of_death")
+                if a.source == end.source
+            ]
+            if widowed:
+                # a widow marker: from the same words, and no death
+                # statement for the late spouse (Q5)
+                assert {a.excerpt for a in widowed} == {end.excerpt}
+                assert not deaths
+            else:
+                # a death record: it dates the death it states
+                assert deaths and all(
+                    isinstance(a.value, u.Date) for a in deaths
+                )
+
+    def test_no_source_calls_the_partner_whose_death_ended_it_widowed(self):
+        # the guard of §2.5: validation refuses such a link
+        for end in (
+            a for a in u.ASSERTIONS if a.property == "ended_by_death_of"
+        ):
+            assert not [
+                a
+                for a in u.about(end.value, "civil_status")
+                if a.source == end.source and a.value == "widowed"
+            ], end
+
+    def test_a_marker_that_names_no_spouse_gives_no_union(self):
+        # "Löbig, Ursula, Wwe.": a widow, with no late husband named
+        unions = {
+            e.key for e in u.ENTITIES if e.kind in ("marriage", "partnership")
+        }
+        assert not [
+            union
+            for union in unions
+            if "ursula-loebig-angerring" in spouses_of(union)
+        ]
+
+    def test_no_died_by_date_is_stored(self):
+        # a document's own date never bounds a death as a stored value
+        # (Q5): the bounds are DERIVED_DIED_BY's, derived at view time
+        for a in u.ASSERTIONS:
+            if a.property == "date_of_death" and isinstance(a.value, u.Date):
+                written = self.written(a.source)
+                assert not (
+                    written
+                    and a.value.qualifier == "before"
+                    and bounds(a.value)[1] == _span(written)[1]
+                ), a
+
+    def test_each_died_by_date_follows_the_rule(self):
+        # §2.4: an undated death statement is bounded by its document's
+        # own date; the late spouse of a stated union end by the latest
+        # date the source presents the survivor as widowed, else by its
+        # document's own date
+        expected = set()
+        for a in u.ASSERTIONS:
+            written = self.written(a.source)
+            if (
+                a.property == "date_of_death"
+                and a.value is u.UNKNOWN
+                and written
+            ):
+                expected.add((a.subject, written, a.source, "undated death"))
+            if a.property == "ended_by_death_of":
+                (survivor,) = spouses_of(a.subject, a.source) - {a.value}
+                widowed = [
+                    dict(s.qualifiers)["point_in_time"]
+                    for s in u.about(survivor, "civil_status")
+                    if s.source == a.source and s.value == "widowed"
+                ]
+                by = max(widowed, key=lambda d: bounds(d)[1], default=None)
+                if by := by or self.written(a.source):
+                    expected.add((a.value, by, a.source, "union end"))
+        derived = [
+            (d.person, d.by, d.source, d.via) for d in u.DERIVED_DIED_BY
+        ]
+        assert len(derived) == len(set(derived))
+        assert set(derived) == expected
+
+    def test_no_dated_death_lies_after_a_died_by_date(self):
+        # the derived bounds agree with every dated death statement
+        for died_by in u.DERIVED_DIED_BY:
+            for when in dated(died_by.person, "date_of_death"):
+                assert bounds(when)[0] <= bounds(died_by.by)[1], died_by
+
+    def test_rudolf_s_certificate_and_the_letter_s_derived_date(self):
+        # #624's criteria (§6): the certificate's 6 March 1941 beside the
+        # 1958 letter's derived "died by 25 December 1958"
+        assert {
+            (a.source, a.value)
+            for a in u.about("rudolf-loebig", "date_of_death")
+        } == {
+            ("family-tree-1984", u.Date(1941)),
+            ("death-certificate-1941", u.Date(1941, 3, 6)),
+        }
+        assert [
+            (d.source, d.by)
+            for d in u.DERIVED_DIED_BY
+            if d.person == "rudolf-loebig"
+        ] == [("letter-to-leopold-1958", u.Date(1958, 12, 25))]
+
+    def test_the_new_records_state_their_dates_and_their_court(self):
+        # the death register dates the death the day before its entry, and
+        # the adoption order is the Amtsgericht Flörburg's (§4: the court
+        # that granted it is the order's issued_by)
+        assert [
+            (a.value, a.excerpt)
+            for a in u.about("caecilie-loebig", "date_of_death")
+            if a.source == "death-register-1902"
+        ] == [
+            (
+                u.Date(1902, 12, 13),
+                "am dreizehnten Dezember des Jahres tausend neunhundert und "
+                "zwei verstorben",
+            )
+        ]
+        assert values("adoption-order-1950", "issued_by") == [
+            "amtsgericht-floerburg"
+        ]
+        assert ENTITIES["amtsgericht-floerburg"].kind == "organization"
+        assert values("amtsgericht-floerburg", "location") == ["floerburg"]
+
+    def test_a_parent_s_kind_is_stated_where_the_source_words_it(self):
+        # the order's "Adoptivvater" and "Adoptivmutter" (§4); a
+        # register's parents carry no kind
+        kinds = [a for a in u.ASSERTIONS if "parentage" in dict(a.qualifiers)]
+        assert {(a.subject, a.property, a.value, a.source) for a in kinds} == {
+            (
+                "alfred-luthorn",
+                "father",
+                "leopold-loebig",
+                "adoption-order-1950",
+            ),
+            (
+                "alfred-luthorn",
+                "mother",
+                "agnes-loebig",
+                "adoption-order-1950",
+            ),
+        }
+        for a in kinds:
+            quals = dict(a.qualifiers)
+            assert quals["parentage"] == "parentage_adoptive"
+            assert quals["kinship_type"] in a.excerpt
+            assert quals["start_time"] == self.written(a.source)
+        # his birth register names his birth parents, with no kind stated
+        born = {
+            (a.property, a.value): a
+            for a in u.about("alfred-luthorn")
+            if a.source == "birth-register-1948"
+            and a.property in ("father", "mother")
+        }
+        assert set(born) == {
+            ("father", "ernst-luthorn"),
+            ("mother", "erna-luthorn"),
+        }
+        assert all(
+            "parentage" not in dict(a.qualifiers) for a in born.values()
+        )
+
+    def test_a_half_term_is_a_sibling_worded_as_the_source_words_it(self):
+        (half,) = [
+            a
+            for a in u.ASSERTIONS
+            if a.property == "sibling" and "kinship_type" in dict(a.qualifiers)
+        ]
+        assert (half.subject, half.value) == (
+            "caecilie-loebig",
+            "christian-tarle",
+        )
+        assert dict(half.qualifiers)["kinship_type"] == "Halbschwester"
+        assert "Halbschwester" in half.excerpt
+
+    def test_a_reporter_who_is_kin_stays_and_one_who_is_only_a_role_does_not(
+        self,
+    ):
+        # §2.8: Christian, who reports his half-sister's death, and Ernst,
+        # who reports his son's birth, stay as kin; no informant role is
+        # recorded anywhere
+        for reporter, source in (
+            ("christian-tarle", "death-register-1902"),
+            ("ernst-luthorn", "birth-register-1948"),
+        ):
+            assert "zeigte an" in SOURCES[source].text
+            assert [
+                a
+                for a in u.ASSERTIONS
+                if a.source == source
+                and a.property in {"father", "mother", "sibling"}
+                and reporter in (a.subject, a.value)
+            ]
+        roles = {
+            dict(a.qualifiers).get("object_has_role") for a in u.ASSERTIONS
+        } - {None}
+        assert roles == {"spouse"}
+
+    @pytest.mark.parametrize(("source", "passage"), u.NO_CLAIM)
+    def test_a_passage_that_records_nothing(self, source, passage):
+        # Florence's certificate's "Informant: husband" makes no unnamed
+        # husband and no union, and its blank "Father: not stated" no claim
+        assert passage in SOURCES[source].text
+        said = [a for a in u.ASSERTIONS if a.source == source]
+        assert not [a for a in said if a.excerpt and a.excerpt in passage]
+        assert not [a for a in said if passage in a.excerpt]
+        assert not [
+            a
+            for a in said
+            if a.property in {"spouse", "participant", "father"}
+        ]
 
 
 class TestCompilation:
@@ -1145,29 +1511,41 @@ class TestNamingPatterns:
             for text in written:
                 assert passage in text, text
 
-    def test_a_widow_marker_is_a_marriage_and_a_death(self):
+    def test_a_widow_marker_is_a_widowhood_and_a_union_end(self):
+        # ADR-0040 §2.5 (its Q5): the widow's civil status at the
+        # letter's date, and their marriage ended by his death
         for source, passage in u.NAMING_PATTERNS["widow"]:
-            (married,) = self.claims(source, passage, "spouse")
-            # her husband had died when the source was written
-            deaths = [
-                a.value
-                for a in u.about(married.value, "date_of_death")
+            (status,) = self.claims(source, passage, "civil_status")
+            assert status.value == "widowed"
+            assert dict(status.qualifiers) == {
+                "point_in_time": self.written(source)
+            }
+            (end,) = self.claims(source, passage, "ended_by_death_of")
+            assert ENTITIES[end.subject].kind == "marriage"
+            assert spouses_of(end.subject, source) == {
+                status.subject,
+                end.value,
+            }
+            # no death statement for the late husband: the end stands for it
+            assert not [
+                a
+                for a in u.about(end.value, "date_of_death")
                 if a.source == source
             ]
-            assert deaths
-            for died in deaths:
-                assert bounds(died)[1] <= _span(self.written(source))[1]
 
-    def test_the_late_marker_bounds_a_death_by_the_writing(self):
+    def test_the_late_in_a_widow_phrase_gives_no_death_statement(self):
+        # each "the late" marker here is part of a phrase that is both
+        # markers, so the union end alone stands for the death (ADR-0040
+        # §2.5) and the "died by" date is derived, never stored (Q5)
         for source, passage in u.NAMING_PATTERNS["the late"]:
-            (died,) = self.claims(source, passage, "date_of_death")
-            written = self.written(source)
-            assert died.value == u.Date(
-                written.year, written.month, written.day, qualifier="before"
-            )
-            # every date a source gives the death lies within the bound
-            for other in u.about(died.subject, "date_of_death"):
-                assert overlap(other.value, died.value), other
+            assert not self.claims(source, passage, "date_of_death")
+            (end,) = self.claims(source, passage, "ended_by_death_of")
+            (derived,) = [
+                d
+                for d in u.DERIVED_DIED_BY
+                if (d.person, d.source) == (end.value, source)
+            ]
+            assert derived.by == self.written(source)
 
     def test_a_patronymic_names_the_father(self):
         corroborated = []
@@ -1368,11 +1746,53 @@ class TestGedcomFixture:
             key = titles[obje.first("FILE").text("TITL")]
             assert obje.text("DATE") in _gedcom_dates(key, "inception")
 
-    def test_the_possibly_living_person_has_no_death(self, records, by_xref):
-        (nicholas,) = [
-            r
+    def test_the_possibly_living_people_have_no_death(self, records, by_xref):
+        living = {
+            by_xref[r.xref].key: r
             for r in records
-            if r.tag == "INDI" and by_xref[r.xref].key == "nicholas-lobig"
-        ]
-        assert nicholas.first("DEAT") is None
+            if r.tag == "INDI"
+            and by_xref[r.xref].key in {"nicholas-lobig", "alfred-luthorn"}
+        }
+        assert len(living) == 2
+        assert all(r.first("DEAT") is None for r in living.values())
+        nicholas = living["nicholas-lobig"]
         assert len(nicholas.first("BIRT").text("DATE")) == 4  # year only
+
+    def test_an_adoption_is_a_pedi_counted_and_not_mapped(
+        self, records, by_xref
+    ):
+        # the export's PEDI says what the order says; the adapter counts
+        # it and maps no kind of parenthood (ADR-0040 §4, deferred)
+        pedigrees = [
+            (by_xref[r.xref].key, famc.value, famc.text("PEDI"))
+            for r in records
+            if r.tag == "INDI"
+            for famc in r.all("FAMC")
+            if famc.text("PEDI")
+        ]
+        assert [(key, kind) for key, _, kind in pedigrees] == [
+            ("alfred-luthorn", "adopted")
+        ]
+        ((child, family, _),) = pedigrees
+        (fam,) = [r for r in records if r.tag == "FAM" and r.xref == family]
+        # the family he names lists him as its child
+        assert [by_xref[line.value].key for line in fam.all("CHIL")].count(
+            child
+        ) == 1
+        adoptive = {
+            a.value
+            for a in u.about(child)
+            if ("parentage", "parentage_adoptive") in a.qualifiers
+        }
+        assert {
+            by_xref[fam.text("HUSB")].key,
+            by_xref[fam.text("WIFE")].key,
+        } == adoptive
+        raw = u.GEDCOM_FIXTURE.read_bytes()
+        adapted = adapt_gedcom(raw.decode(), ArtifactRef.from_bytes(raw))
+        assert adapted.unsupported_tags.get("PEDI") == 1
+        assert not [
+            c
+            for c in adapted.batch.claims
+            if any(q.property == "parentage" for q in c.qualifiers)
+        ]
