@@ -1983,22 +1983,35 @@ class TestCoupleHeldApart:
         assert entry["contradiction"] is None
 
     def test_cluster_level_held_apart(self):
-        """The postcard's Leopold is `same` as the extract's and
-        `different` from the register's, whose Leopold the extract's
-        merges with confidently: the `different` holds the clusters
-        apart, and so the postcard's marriage, though `same` as both,
-        does not merge with theirs."""
-        docs = marriages()
+        """The letter names Leopold (born 1910) alone, and merges
+        confidently with the extract's; the postcard's Leopold is
+        `different` from the letter's only, `same` as the extract's. The
+        `different` holds the two clusters apart, so the postcard's and
+        the extract's marriages, whose spouses were never said
+        `different` of each other, do not merge."""
+        letter = register(
+            "letter",
+            [human("e1", "Leopold Löbig")],
+            [("e1", "date_of_birth", day(1910))],
+            {"e1": "leopold-loebig"},
+        )
+        postcard, extract = wed("postcard", 1930), wed("extract", 1910)
+        docs = [postcard, letter, extract]
 
         def verdict_of(pair: frozenset) -> str:
-            if pair == {("postcard", "e1"), ("register", "e1")}:
+            if pair == {("postcard", "e1"), ("letter", "e1")}:
                 return DIFFERENT
             return SAME
 
         settled = verdicts_by_name(docs, verdict_of)
-        found = union_of_each(settled, docs)
-        assert found["register"]["cluster"] == found["extract"]["cluster"]
-        assert found["postcard"]["cluster"] != found["register"]["cluster"]
+
+        def cluster(doc: Doc, local_id: str) -> str:
+            fingerprint = doc.fingerprint(local_id, settled)
+            return settled["mentions"][fingerprint]["cluster"]
+
+        assert cluster(letter, "e1") == cluster(extract, "e1")
+        assert cluster(postcard, "e1") != cluster(extract, "e1")
+        assert cluster(postcard, "m1") != cluster(extract, "m1")
         (entry,) = [e for e in settled["review"] if e["kind"] == "marriage"]
         assert entry["contradiction"]["evidence"] == COUPLE_APART
 
