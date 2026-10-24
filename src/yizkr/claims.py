@@ -779,22 +779,27 @@ class EntityRecord(StrictModel):
     # extract=false for entities that appear ONLY in non-assertive context:
     # travel or event logistics (schedules, bookings, contact lists), people
     # taking part in present-day travel or events, boilerplate. They are
-    # recorded for audit but no claims are extracted about them. Entities
-    # the document asserts historical/genealogical facts about get
-    # extract=true. On official certificates and registers the
-    # administrative apparatus is boilerplate: the registrar, officiant, or
-    # witness who only certifies the record, and the register or certificate
-    # the document cites as its own source, are extract=false. They attest
-    # the record — they are not its genealogical subject. Whom the source
-    # shows acting is the exception, extract=true: the officiant or a
-    # witness of the event the document records (a wedding's registrar), the
-    # authority that issued the document (a civil registry office such as a
-    # Standesamt), and a witness or officiant who is ALSO a relative of the
-    # subject.
+    # recorded for audit but no claims are extracted about them. Entities the
+    # document asserts historical/genealogical facts about get extract=true. On
+    # official certificates, registers and forms the administrative apparatus
+    # is boilerplate. A person who only certifies, registers, officiates,
+    # examines, reports or witnesses the record (a registrar, a pastor who
+    # enters a burial, a doctor who certifies a death, an informant, a
+    # wedding's registrar and its witnesses), and the register or certificate
+    # the document cites as its own source, are extract=false, unless the same
+    # record gives them another role: kin of someone it is about, or a party to
+    # it. A rank, a job, an address or a signature is no other role. They
+    # attest the record — they are not its genealogical subject. A kin witness
+    # or officiant is extract=true, with that role, and so is a parent who
+    # reports a child's birth (Sebastian, who "zeigte an" Gustav's birth, as
+    # his father). The authority that issued the document (a civil registry
+    # office such as a Standesamt) stays extract=true. A neighbour, a teacher
+    # or a doctor a letter names is no apparatus.
     # The entity-manifest prompt (ENTITY_MANIFEST_PROMPT in
     # pipeline/chunking.py) gives the model this rule in the same words;
     # SegmentationUnit.extract is the line-range fallback's flag for a
-    # region.
+    # region. No claim takes a person left out so as its value
+    # (vital_problems, ADR-0040 §2.8).
     extract: bool = True
     # open-schema escape hatch (ADR-0013): free-text note of what an
     # entity actually is when kind is `unclassified_entity` (no modelled

@@ -51,11 +51,14 @@ class TestTheExtractionPrompts:
 
     @PROMPTS
     def test_a_marriage_is_dated_by_its_events(self, prompt):
-        # ADR-0036: no spouse statement carries a wedding's date
+        # ADR-0036: no spouse statement carries a wedding's date; an end
+        # by a partner's death is no event (ADR-0040 §2.5)
         rule = dating_rule(prompt)
         assert (
-            "A marriage has no dates of its own: its wedding and its end "
-            "are events, each with its own `point_in_time`." in rule
+            "A marriage has no dates of its own: its wedding, and a divorce "
+            "or an annulment that ends it, are events, each with its own "
+            "`point_in_time`, and an end by a partner's death takes no date "
+            "of its own." in rule
         )
         assert "spouse" not in rule
 

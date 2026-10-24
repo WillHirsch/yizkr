@@ -106,6 +106,7 @@ from yizkr.claims import (
     QuantityValue,
     StringValue,
     TimeValue,
+    UnknownValue,
     VocabRef,
 )
 from yizkr.core.dates import UnsupportedDate, claim_time_text, year_problem
@@ -275,8 +276,11 @@ def describe_value(value) -> str:
     any value but a date (which the sheet shows through `sheet_value`):
     an item by its reference, a date
     as `YYYY[-MM[-DD]]` with its precision when it is not the plain one, a
-    text by its text and language. Every date is Gregorian and of 1 CE or
-    later (ADR-0034)."""
+    text by its text and language, an unknown value (ADR-0040 §2.2) as
+    "unknown value". Every date is Gregorian and of 1 CE or later
+    (ADR-0034)."""
+    if isinstance(value, UnknownValue):
+        return UNKNOWN_SHOWN
     if isinstance(value, ItemValue):
         return _describe_ref(value.value)
     if isinstance(value, TimeValue):
@@ -299,6 +303,10 @@ def describe_value(value) -> str:
     if hasattr(value, "latitude"):
         return f"{value.latitude}, {value.longitude}"
     return str(value.value)
+
+
+# how a review row and the critic show an unknown value
+UNKNOWN_SHOWN = "unknown value"
 
 
 def sheet_value(value) -> str:
@@ -370,15 +378,19 @@ def _parse_correction(claim: Claim, text: str) -> Claim:
     Supported: time values in unambiguous ISO forms (`1919`, `1919-01`,
     `1919-01-07`), Gregorian and of 1 CE or later, plain text for
     string / external-id / monolingual values, and plain numbers for
-    quantity values. Item corrections are not expressible as text —
-    reject the claim and fix identity through the equivalence flow
+    quantity values. A date of death of unknown value (ADR-0040 §2.2)
+    takes a date as a time value does: the curator's correction states
+    the date the source gives. Item corrections are not expressible as
+    text — reject the claim and fix identity through the equivalence flow
     instead.
     Raises ValueError with a reviewer-readable message otherwise, and
     UnsupportedDate (a ValueError) for a year before the common era
     (ADR-0034).
     """
     value = claim.value
-    if isinstance(value, TimeValue):
+    if isinstance(value, TimeValue) or (
+        isinstance(value, UnknownValue) and claim.property == "date_of_death"
+    ):
         match = _CORRECTION_DATE.match(text)
         if not match:
             raise ValueError(

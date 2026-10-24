@@ -62,7 +62,7 @@ class TestTheManifestRule:
     def test_the_rule_closes_the_marriage_rule(self):
         assert (
             "`divorce` or `annulment` that ended it are events of their "
-            "own. " + self.RULE + " - a marker of a death"
+            "own. " + self.RULE + " - a birth or a death is never an entity"
         ) in MANIFEST
 
     def test_it_is_said_once(self):
@@ -86,14 +86,15 @@ class TestTheChunkRule:
             "The couple take part in the union, not in its wedding. Where "
             "the manifest lists a marriage's wedding, give the marriage its "
             "`started_by` and the wedding the date and place the source "
-            "gives the marriage's start; * its end is an event too"
+            "gives the marriage's start; * a divorce or an annulment that "
+            "ends it is an event too"
         ) in CHUNK
 
 
 class TestTheSingleCallRule:
     def test_the_marriage_rule_says_it(self):
         assert (
-            "each an event with its own date and place. A marriage whose "
+            "of any kind. A marriage whose "
             "start the source dates or places, at any precision, gets its "
             "wedding, as a stated divorce gets its divorce. A marriage the "
             "source only names, a partnership, or an observation (a "

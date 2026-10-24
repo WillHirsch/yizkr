@@ -192,10 +192,18 @@ class TestTheManifestPrompt:
         assert "in English whatever the document's language" in self.prompt
 
     def test_the_issuing_authority_and_an_officiant_are_extracted(self):
-        # ADR-0035 §3.2, §3.4: the apparatus rule gives way where the
-        # source shows them acting
-        assert "the authority that issued the document" in self.prompt
-        assert "Whom the source shows acting is the exception" in self.prompt
+        # ADR-0035 §3.4: the issuing authority stays; ADR-0040 §2.8 (Q6
+        # rule (a)): an official or witness stays only with another role
+        assert "The authority that issued the document" in self.prompt
+        assert (
+            "A person who only certifies, registers, officiates, examines, "
+            "reports or witnesses the record" in self.prompt
+        )
+        assert "unless the same record gives them another role" in (
+            self.prompt
+        )
+        assert "A kin witness or officiant is extract=true" in self.prompt
+        assert "Informant: husband" in self.prompt
 
     def test_marriages_are_entities(self):
         assert "a marriage is an entity, not an event (ADR-0036)" in (
@@ -239,16 +247,14 @@ class TestTheChunkPrompt:
         assert not re.search(r"^\s*spouse:", properties, re.M)
 
     def test_participant_roles(self):
-        for role in (
-            "`principal`",
-            "`parent`",
-            "`informant`",
-            "`witness`",
-            "`officiant`",
-        ):
+        for role in ("`principal`", "`witness`", "`officiant`"):
             assert role in self.prompt, role
-        assert "A death's principal is never its informant." in self.prompt
-        assert "is `parent` and `informant`" in self.prompt
+        # ADR-0040 §3, §2.8: no parent or informant role
+        assert "`parent`" not in self.prompt
+        assert "`informant`" not in self.prompt
+        assert "A birth and a death are statements on the person" in (
+            self.prompt
+        )
 
     def test_kinship_classes_beside_the_term(self):
         assert "`kinship_class`: its class, one of the kin_ items" in (

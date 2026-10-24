@@ -1053,7 +1053,7 @@ class TestThePrompts:
             "stands, conveys that fact of that image or document, with that "
             "passage as the claim's transcription excerpt",
             "a claim about another document always carries its excerpt.",
-            "its `main_subject` is his death.",
+            "its `main_subject` is that man.",
         ):
             assert wanted in paragraph, wanted
 

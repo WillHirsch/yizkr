@@ -145,19 +145,52 @@ Rules — these mirror the archive's non-negotiable conventions:
   no property links two spouses directly: the couple are each a
   `participant` of the `marriage` (or `partnership`) with the
   `object_has_role` `spouse` (or `partner`), and the union is
-  `started_by` its wedding and `ended_by` its end, each an event with its
-  own date and place. A marriage whose start the source dates or places,
+  `started_by` its wedding and `ended_by` a divorce or an annulment that
+  ends it, each an event with its own date and place. A partner's death
+  ends it by `ended_by_death_of` that partner, and ONLY where the source
+  states the couple were married when that partner died: a survivor's
+  widow's or widower's word that names the late spouse ("Witwer der
+  Cäcilie Löbig", "вдова Вашего покойного брата Рудольфа"), or a death
+  record that calls the deceased the survivor's spouse ("Ehefrau des
+  Eugen"). A marriage and a partner's death stated apart ("dessen
+  verstorbener Ehefrau", "Husband: Felix LÖBIG, died 1931") give no end
+  of any kind. A marriage whose start the source dates or places,
   at any precision, gets its wedding, as a stated divorce gets its
   divorce. A marriage the source only names, a partnership, or an
   observation (a directory or census that lists the couple as married,
   with no start) gets no wedding.
+- A birth and a death are statements on the person, never events or
+  entities (ADR-0040): `date_of_birth`, `place_of_birth`, `father` and
+  `mother` on the child; `date_of_death`, `place_of_death`,
+  `cause_of_death` and `age_at_death` (each verbatim where text) and
+  `burial_place` (its `point_in_time` the burial's own date) on the
+  deceased. A death the source states without its date ("the late",
+  "der selige", "покойный", "sillige") gives a `date_of_death` of unknown
+  value, "value": {{"type": "unknown"}}, with the words that state it as
+  its excerpt and no date qualifiers, beside any place, cause or age it
+  gives; a burial stated without its place gives `burial_place` of
+  unknown value. A blank field, "d. ?" or "date unknown" gives no claim.
+  A widow's or widower's marker gives the survivor's `civil_status`
+  `widowed`; one that names the late spouse also gives their marriage,
+  `ended_by_death_of` that spouse, and no death statement for the
+  spouse, and so does one phrase that is both markers ("вдова Вашего
+  покойного брата Рудольфа"). A parent's kind is `parentage` on
+  `father`, `mother` or `child` only where the source's words state it
+  ("Adoptivvater"), with the word in `kinship_type`.
+- A person who only certifies, registers, officiates, examines, reports
+  or witnesses a record, with no other role in it (kin of someone it is
+  about, or a party to it), is no claim's subject or value; a person the
+  record gives only by such a role, with no name ("Informant: husband"),
+  is no entity at all.
 {document_block}
 - Dating a period: a residence, an occupation or a membership is dated
   by its `start_time` and `end_time` qualifiers, a move in and a move out
   as its start and end. `point_in_time` on such a claim only records a
   date at which the source presents it as holding (a census, a
-  directory entry). A marriage has no dates of its own: its wedding and
-  its end are events, each with its own `point_in_time`. A range bounds
+  directory entry). A marriage has no dates of its own: its wedding, and
+  a divorce or an annulment that ends it, are events, each with its own
+  `point_in_time`, and an end by a partner's death takes no date of its
+  own. A range bounds
   one end: a start takes `earliest_date` and `latest_start_date`, an end
   takes `earliest_end_date` and `latest_date`. Moved in "between X and
   Y" is start_time X with earliest_date X and latest_start_date Y; moved
@@ -203,7 +236,9 @@ DOCUMENT_ITSELF = """\
     it issuing (the register office of a certificate, the court of a
     judgment);
   * `author`: who wrote, drew or made it, where it names them (a
-    letter's signature, a studio's name on a photograph's mount);
+    letter's signature, a studio's name on a photograph's mount); a
+    signature that only certifies or registers (a registrar's, a
+    notary's) is no authorship;
   * `addressee`: whom it is addressed to (a letter's greeting, an
     envelope's address);
   * `inception`: when it was made (a letter's dateline), at the
@@ -223,7 +258,7 @@ DOCUMENT_ITSELF = """\
   its page number the page the passage stands on: a claim about another
   document always carries its excerpt. A letter that says it encloses a
   man's death certificate conveys what the certificate is about: its
-  `main_subject` is his death. No other property takes a document as its
+  `main_subject` is that man. No other property takes a document as its
   subject."""
 
 # The paragraph on what the document places (ADR-0039 §3, §10.5), in both
