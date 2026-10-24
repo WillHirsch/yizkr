@@ -268,18 +268,19 @@ class TestPlaceholderComponents:
         assert labels[birth.value.value.local_id] == "Hesse, Germany"
         assert result.outcomes[COUNTED] == 1
 
-    def test_a_plac_with_no_word_places_nothing_but_states_its_event(self):
-        # a PLAC with a value asserts its event (GEDCOM 5.5.1): Eugen's
-        # death is stated, with no place
+    def test_a_plac_with_no_word_places_nothing_and_gives_no_claim(self):
+        # a PLAC with a value asserts its event (GEDCOM 5.5.1), but one
+        # with no word gives no claim, as a blank place field does
+        # (ADR-0040 Q4): Eugen's death is counted, and nothing is claimed
         result = adapted(
             "0 @I1@ INDI\n1 NAME Eugen /Löbig/\n1 DEAT\n2 PLAC ?, -\n"
         )
         batch = result.batch
         assert places(batch) == {}
-        assert [e.kind for e in batch.entities if e.kind == "death"] == [
-            "death"
-        ]
+        assert not [e for e in batch.entities if e.kind == "death"]
+        assert not [c for c in batch.claims if c.property == "date_of_death"]
         assert result.outcomes[COUNTED] == 2
+        assert result.outcomes["DEAT stating its death by no claim"] == 1
 
     def test_each_plac_is_counted_once(self):
         result = adapted(

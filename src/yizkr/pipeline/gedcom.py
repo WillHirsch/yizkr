@@ -81,12 +81,13 @@ dates an image claim of its own. A family's MARRs of one kind are one
 wedding and its DIVs one divorce, and each date and place of each is a
 claim of its own on that event. What gives nothing to claim (`1 BIRT Y`,
 a date the grammar cannot parse) never hides what does: it adds no claim
-beside one that does, while a DEAT that states the death with no date,
-place or cause (`1 DEAT Y`) still gives a `death` event (below), beside
-what another DEAT gives, and a `1 MARR Y` or a `1 DIV Y` still gives its
-wedding or divorce. An event that restates another line for line, its
-citation included, gives the same claim, which the batch holds once; the
-same value under another citation is a claim of its own. A family's HUSB
+beside one that does, while a DEAT that states the death and dates it
+nowhere (`1 DEAT Y`) still gives a `date_of_death` of unknown value
+(below), beside what another DEAT gives, and a `1 MARR Y` or a `1 DIV Y`
+still gives its wedding or divorce. An event that restates another line
+for line, its citation included, gives the same claim, which the batch
+holds once; the same value under another citation is a claim of its own.
+A family's HUSB
 and WIFE are still read once, and so is an object's FILE: a further one
 is counted (below), its TITL with it. Every PAGE of a citation, and
 every TITL of a source record, of an object or of its first FILE, is
@@ -103,12 +104,12 @@ and no nickname; a name form of no stated type, a bracketed part or a
 NAME with no TYPE the adapter recognises, is a `name` claim (ADR-0011)
 unless it is the label's form; docs/MODELING.md "Names"; a nickname that
 several NAMEs give is a claim of each, citing its own NAME), birth/death
-dates and
-places, a death the export states with no date, place or cause (by a Y
-alone, or by a DATE the grammar cannot parse), which is a `death` event
-with the person as its principal (ADR-0020, ADR-0035 §3.2),
-cause of death (DEAT.CAUS, verbatim), burials (BURI place, dated when
-the record is), occupations (OCCU, minted as occupation items with the
+dates and places, a death the export states and dates nowhere, which is
+a `date_of_death` of unknown value citing the DEAT, beside any place and
+cause it gives (ADR-0040 §2.2, Q4), cause of death (DEAT.CAUS,
+verbatim), burials (BURI place, dated when the record is, as its point
+in time; a burial stated with no place is a `burial_place` of unknown
+value, Q3), occupations (OCCU, minted as occupation items with the
 source's wording), number of children (NCHI), residences (place, dated
 when the record is), parent-child relations, and unions (union_claims;
 ADR-0036 §5): a family with two partners is a partnership, or a marriage
@@ -198,11 +199,19 @@ only as GEDCOM 5.5.1 has an event asserted, by a DATE or PLAC with a
 value (a DATE the grammar cannot parse, only when the DEAT's own line
 has none), or else by a Y on that line: one that states none (a bare
 DEAT, or one with only a SOUR, NOTE, AGE or CAUS) gives no claim, since
-a death event or a cause of death would mark the person as not possibly
-living (ADR-0020), and is counted as DEAT. A person's label is the
-first name form a NAME gives; where none gives one, the brackets that
-hold a word of a NAME's value give it, then a GIVN's quotes or
-brackets, then a NICK, then a `_MARNM`. A person none of these gives a
+a death statement or a cause of death would mark the person as not
+possibly living (ADR-0020), and is counted as DEAT. One that states it
+only by what gives no claim, a DATE the grammar cannot parse or a PLAC of
+placeholder words, and no Y, gives no claim either, counted (ADR-0040
+Q4); one whose DATE the grammar cannot parse beside a place gives the
+place and no date, counted, unless a Y states the death whatever its
+DATE holds. A BURI follows a DEAT's rules (Q3), its census included.
+An AGE beneath a DEAT stays unmapped, counted (Q1), and so do PEDI,
+_FREL, _MREL and ADOP, until a source carries them (ADR-0040 §4). A
+person's label is the first name form a NAME gives; where none gives
+one, the brackets that hold a word of a NAME's value give it, then a
+GIVN's quotes or brackets, then a NICK, then a `_MARNM`.
+A person none of these gives a
 word (a placeholder with no letter or digit, '?' or '_', gives none) is
 skipped, with a warning, counted, and the family links that name them
 give no claim.
@@ -1884,7 +1893,8 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         return bool(partners(fam))
 
     def states_event(death: Record) -> bool:
-        """Whether an event record (a DEAT, a MARR, a DIV, an ANUL) states that
+        """Whether an event record (a DEAT, a BURI, a MARR, a DIV, an ANUL)
+        states that
         the event happened. GEDCOM 5.5.1 has an event asserted by a DATE or a
         PLAC with a value, or else by a Y on the event's own line, and lets a
         SOUR or a NOTE be attached to an event without asserting it. A DATE the
@@ -1895,9 +1905,9 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         that a date the adapter cannot read never overrules another value,
         such as an N denying the event. What
         else it holds (a CAUS, an AGE, a SOUR, a NOTE) states nothing: a death
-        event or a cause of death is death evidence, which marks the person as
-        not possibly living (ADR-0020), a wedding makes a marriage, and a
-        divorce or an annulment ends a union."""
+        statement, a burial or a cause of death is death evidence, which marks
+        the person as not possibly living (ADR-0020), a wedding makes a
+        marriage, and a divorce or an annulment ends a union."""
         value = death.value.strip()
         dates = [
             date.value for date in death.all("DATE") if date.value.strip()
@@ -1912,9 +1922,13 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     def unread(parent: Record, child: Record) -> bool:
         """Whether `child`, of a tag the adapter reads beneath `parent`'s,
         goes unread for what it says there."""
-        if child.tag in ("DEAT", "MARR", "DIV", "ANUL") and not states_event(
-            child
-        ):
+        if child.tag in (
+            "DEAT",
+            "BURI",
+            "MARR",
+            "DIV",
+            "ANUL",
+        ) and not states_event(child):
             # an event record that states no event gives no claim
             return True
         if parent.tag == "MARR" and child.tag == "TYPE":
@@ -2362,26 +2376,6 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             claim(person_id(indi_xref), place_prop, place_item(place), event)
         return gave
 
-    # person xref -> the local id of their death event
-    death_ids: dict[str, str] = {}
-
-    def death_event(xref: str, label: str, death: Record) -> str:
-        """The death event of the person `xref`, labelled with the
-        person's `label`: one for each person, however many DEATs state
-        the death."""
-        if xref not in death_ids:
-            death_ids[xref] = fresh(f"{person_id(xref)}-death")
-            entities.append(
-                {
-                    "id": death_ids[xref],
-                    "label": f"Death of {label}",
-                    "kind": "death",
-                    "summary": "death stated in the GEDCOM export",
-                    "mention_lines": [death.line_number],
-                }
-            )
-        return death_ids[xref]
-
     def role(key: str) -> dict:
         """The object_has_role qualifier of a participant role."""
         return {
@@ -2389,19 +2383,21 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             "value": {"type": "item", "value": {"kind": "vocab", "key": key}},
         }
 
-    def died(xref: str, label: str, death: Record) -> None:
-        """A DEAT that states the death (`states_event`) but gives no
-        date, place or cause, by its Y alone or by a DATE the grammar
-        cannot parse, says that the person died and nothing else: a
-        `death` event with the person as its principal (ADR-0020 §2,
-        ADR-0035 §3.2, docs/MODELING.md "Living persons and privacy"),
-        which the participant claim states, citing this DEAT."""
-        claim(
-            death_event(xref, label, death),
-            "participant",
-            {"type": "item", "value": local(person_id(xref))},
-            death,
-            [role("principal")],
+    unknown = {"type": "unknown"}
+
+    def stated_alone(event: Record) -> bool:
+        """Whether an event record that states its event (`states_event`)
+        states it only by what gives no claim, and no Y: a DATE the grammar
+        cannot parse ("Spring 1900"), whose limit may exist, or a PLAC of
+        placeholder words alone ("unbekannt"), which places it nowhere. Such
+        a DEAT or BURI gives no claim, counted (ADR-0040 Q4)."""
+        return (
+            event.value.strip().upper() != "Y"
+            and not places(event)
+            and all(
+                parse_gedcom_date(date.value)[0] is None
+                for date in event.all("DATE")
+            )
         )
 
     def monolingual(text: str) -> dict:
@@ -2894,40 +2890,57 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             event_claims(xref, birth, "date_of_birth", "place_of_birth")
         for death in record.all("DEAT"):
             # a DEAT that states no death gives no claim, not even its
-            # cause, and the census counts it
+            # cause, and the census counts it; nor does one that states it
+            # only by what gives no claim (Q4), counted
             if not states_event(death):
                 continue
-            gave = event_claims(xref, death, "date_of_death", "place_of_death")
+            if stated_alone(death):
+                outcome("DEAT stating its death by no claim")
+                continue
+            event_claims(xref, death, "date_of_death", "place_of_death")
             # cause of death stays verbatim prose (docs/MODELING.md), in
             # the export's language, like the excerpts
             for cause in death.all("CAUS"):
                 if cause.value:
-                    gave = True
                     claim(
                         person_id(xref),
                         "cause_of_death",
                         monolingual(cause.value),
                         death,
                     )
-            # a DEAT that states the death and gives no claim gives the
-            # death event, beside what any other DEAT gives
-            if not gave:
-                died(xref, names[0], death)
+            # a DEAT that states the death and dates it nowhere gives the
+            # death's date as unknown, citing this DEAT, beside its place
+            # and cause and what any other DEAT gives (ADR-0040 §2.2); one
+            # whose DATE the grammar cannot read gives no date, counted,
+            # since its limit may exist, unless a Y states the death
+            # whatever its DATE holds (Q4)
+            given = [date.value for date in death.all("DATE") if date.value]
+            if not any(parse_gedcom_date(date)[0] for date in given):
+                if not given or death.value.strip().upper() == "Y":
+                    claim(person_id(xref), "date_of_death", unknown, death)
+                    outcome("DEAT with no date: unknown date of death")
+                else:
+                    outcome("DEAT with an unread DATE: no date of death")
         for burial in record.all("BURI"):
-            burial_places = places(burial)
-            if not burial_places:
-                warnings.append(
-                    f"line {burial.line_number}: BURI without a PLAC that "
-                    "names a place — no burial claim emitted"
-                )
+            # a BURI follows a DEAT's rules (Q3, Q4): one that states no
+            # burial gives no claim, and the census counts it
+            if not states_event(burial):
+                continue
+            if stated_alone(burial):
+                outcome("BURI stating its burial by no claim")
                 continue
             dates = each_date(burial, dated_qualifiers, "burial")
-            for place in burial_places:
+            # a burial stated without its place gives the place as
+            # unknown, dated where the record is (Q3)
+            burial_places = [place_item(place) for place in places(burial)]
+            if not burial_places:
+                outcome("BURI with no place: unknown place of burial")
+            for value in burial_places or [unknown]:
                 for quals in dates:
                     claim(
                         person_id(xref),
                         "burial_place",
-                        place_item(place),
+                        value,
                         burial,
                         quals,
                     )
