@@ -32,8 +32,14 @@ from yizkr.pipeline import extract
 from yizkr.pipeline.clustering import IdentityMap
 from yizkr.pipeline.extract import (
     ClaimFileExtractor,
+    ExtractionFailed,
     LlmClaimExtractor,
     _parse_response,
+)
+from yizkr.pipeline.llm import (
+    REFUSAL_STOP,
+    ClassifierRefused,
+    OutputLimitReached,
 )
 from yizkr.pipeline.resolve import resolve_batch
 from yizkr.pipeline.review import (
@@ -216,11 +222,54 @@ class TestExtract:
         assert "never narrow" in llm.prompts[0].lower()
         assert '"Claim"' in llm.prompts[0]
 
-    def test_llm_extractor_rejects_unknown_property(self):
+    def test_llm_extractor_rejects_unknown_property(self, tmp_path):
+        """An answer whose every claim fails validation fails the
+        extraction, with the count of its rejects and where their reasons
+        are, not the reasons themselves (#650)."""
         bad = [dict(CLAIMS[1], property="shoe_size")]
+        rejects_path = tmp_path / "batch.json.rejected.json"
         llm = FakeLlm(json.dumps({"claims": bad}))
-        with pytest.raises(ValueError, match="shoe_size"):
+        with pytest.raises(ExtractionFailed) as raised:
+            LlmClaimExtractor(llm, rejects_dump=rejects_path).extract(
+                self.transcription(), MEDIA_REF
+            )
+        assert str(raised.value) == (
+            "every extracted claim failed validation "
+            f"(1 rejects; reasons in {rejects_path})"
+        )
+        (reject,) = json.loads(rejects_path.read_text())
+        assert "shoe_size" in reject["problems"][0]
+
+    def test_an_answer_without_claims_says_so(self):
+        """An answer that holds no claims at all fails as one: it has no
+        rejects to count (#650)."""
+        llm = FakeLlm('{"claims": []}\n{"done": true}')
+        with pytest.raises(ExtractionFailed) as raised:
             LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
+        assert str(raised.value) == "the answer holds no claims"
+
+    @pytest.mark.parametrize(
+        ("error", "reason"),
+        [
+            (OutputLimitReached(), "cut off at max_tokens"),
+            (ClassifierRefused(REFUSAL_STOP), "safety classifier refused"),
+        ],
+        ids=["output-limit", "classifier"],
+    )
+    def test_a_call_given_no_answer_fails_the_extraction(self, error, reason):
+        """A call the engine gave no answer to fails the extraction with
+        the engine's reason (#650)."""
+
+        class NoAnswer(FakeLlm):
+            def complete(self, prompt, image_paths=()):
+                raise error
+
+        with pytest.raises(ExtractionFailed, match=reason) as raised:
+            LlmClaimExtractor(NoAnswer("")).extract(
+                self.transcription(), MEDIA_REF
+            )
+        assert str(raised.value).startswith("the engine gave no answer: ")
+        assert raised.value.__cause__ is error
 
     def test_llm_extractor_salvages_valid_claims_around_bad_ones(
         self, tmp_path
@@ -302,8 +351,22 @@ class TestExtract:
 
     def test_llm_extractor_rejects_prose_without_json(self):
         llm = FakeLlm("I could not find any claims, sorry!")
-        with pytest.raises(ValueError, match="no claim JSON"):
+        with pytest.raises(ExtractionFailed, match="no claim JSON"):
             LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
+
+    def test_a_bug_in_the_extractor_is_a_bare_value_error(self, monkeypatch):
+        """Only an outcome the extractor expects is an ExtractionFailed:
+        a ValueError from anywhere else stays bare, so `ingest extract`
+        keeps its traceback (#650)."""
+
+        def broken(*args, **kwargs):
+            raise ValueError("an unexpected bug")
+
+        monkeypatch.setattr(extract, "scan_json_objects", broken)
+        llm = FakeLlm(json.dumps({"claims": CLAIMS}))
+        with pytest.raises(ValueError, match="unexpected bug") as raised:
+            LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
+        assert not isinstance(raised.value, ExtractionFailed)
 
     def test_parse_response_tolerates_fences_and_prose(self):
         payload = {"claims": []}
@@ -341,7 +404,7 @@ class TestExtract:
     def test_parse_response_ignores_json_without_claims(self):
         text = json.dumps({"note": "irrelevant"}) + json.dumps({"claims": []})
         assert _parse_response(text) == {"claims": []}
-        with pytest.raises(ValueError, match="claims"):
+        with pytest.raises(ExtractionFailed, match="claims"):
             _parse_response(json.dumps({"note": "no claims here"}))
 
     def test_nested_time_values_are_flattened_not_rejected(self):
@@ -388,7 +451,7 @@ class TestExtract:
         parsing/validation fails, so nothing paid-for is unrecoverable."""
         raw = tmp_path / "deep" / "batch.json.raw.txt"
         llm = FakeLlm("total garbage, no JSON at all")
-        with pytest.raises(ValueError):
+        with pytest.raises(ExtractionFailed):
             LlmClaimExtractor(llm, raw_dump=raw).extract(
                 self.transcription(), MEDIA_REF
             )
@@ -403,6 +466,21 @@ class TestExtract:
         assert len(result.claims) == 2
         assert result.extraction_run.model_identifier == "manual"
 
+    def test_a_claims_file_failing_the_manifest_is_unusable(self, tmp_path):
+        """A prepared file whose claims fail manifest validation is an
+        ExtractionFailed, with each problem in its reason (#650)."""
+        claims_file = tmp_path / "claims.json"
+        claims_file.write_text(
+            json.dumps({"claims": [dict(CLAIMS[1], property="shoe_size")]})
+        )
+        with pytest.raises(
+            ExtractionFailed,
+            match="(?s)claims file failed manifest validation.*shoe_size",
+        ):
+            ClaimFileExtractor(claims_file).extract(
+                self.transcription(), MEDIA_REF
+            )
+
     def test_file_extractor_keeps_the_artifacts_its_claims_cite(
         self, tmp_path
     ):
@@ -414,7 +492,9 @@ class TestExtract:
         )
         claims_file = tmp_path / "claims.json"
         claims_file.write_text(json.dumps({"claims": [by_qid]}))
-        with pytest.raises(ValueError, match="artifact"):
+        with pytest.raises(
+            ExtractionFailed, match="(?s)failed schema validation.*artifact"
+        ):
             ClaimFileExtractor(claims_file).extract(
                 self.transcription(), MEDIA_REF
             )
@@ -553,7 +633,7 @@ class TestExtractedClaimsCiteTheirDocument:
         else:
             claim["source"] = source
         with pytest.raises(
-            ValueError,
+            ExtractionFailed,
             match=r"every extracted claim failed validation \(1 rejects\)",
         ):
             self.answered(claim)
