@@ -135,7 +135,10 @@ Rules — these mirror the archive's non-negotiable conventions:
   `participant` of the `marriage` (or `partnership`) with the
   `object_has_role` `spouse` (or `partner`), and the union is
   `started_by` its wedding and `ended_by` its end, each an event with its
-  own date and place.
+  own date and place. A marriage whose start the source dates or places,
+  at any precision, gets its wedding, as a stated divorce gets its
+  divorce. A marriage the source only names, a partnership, or an
+  observation (a directory or census entry) gets none.
 {document_block}
 - Dating a period: a residence, an occupation or a membership is dated
   by its `start_time` and `end_time` qualifiers, a move in and a move out

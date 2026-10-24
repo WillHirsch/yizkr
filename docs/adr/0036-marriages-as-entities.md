@@ -105,6 +105,17 @@ roles, `started_by`, `ended_by` (a partner's own `death` event
 included), and each event's own date, place and `carried_out_by`, each
 with both references (ADR-0003).
 
+Amended by #656 (2026-10-24; owner decision): **a dated marriage gets
+its wedding.** The extraction prompts ask for a marriage's wedding
+where the source dates or places the marriage's start, at any
+precision, as a stated divorce gets its divorce, and for none where the
+source only names the marriage, for a partnership, and for an
+observation (a directory or census entry). The chunk call gives the
+listed wedding the date and place, and the marriage its `started_by`.
+The run report counts each extraction's marriages by their weddings,
+from the batch's structure alone: started by a dated wedding, by an
+undated one, or by none.
+
 ## Context
 
 MODELING.md dates a marriage as Wikidata dates spouse (P26): a statement
@@ -166,6 +177,8 @@ can still generate P26 so qualified. #394 adds the new classes' ids.
 |---|---|
 | "Die am 8. Februar 1947 vor dem Standesbeamten in Flörburg geschlossene Ehe der Parteien wird geschieden" (the 1957 judgment) | Leopold and Agnes's marriage; its civil wedding on 8 February 1947 at Flörburg; its divorce on 2 January 1957, carried out by the Landgericht Rekau |
 | "Vor dem Standesbeamten erschienen zum Zwecke der Eheschließung" (the 1905 certificate) | Sebastian and Hildegard's marriage, and its civil wedding on 15 December 1905 at Flörburg |
+| "= (1942) Florence Faxridge" (the 1984 tree; amended by #656) | Gustav and Florence's marriage, and its wedding in 1942 |
+| "= Hildegard 'Hilde' Laudler" (the 1984 tree, undated; amended by #656) | Sebastian and Hildegard's marriage alone, with no wedding |
 | "Witwer der Cäcilie Löbig geb. Tarle" (the burial register) | Eugen and Cäcilie's marriage, `ended_by` Cäcilie's death event, which ADR-0035 §3.1 makes of the same words |
 | "Husband: Felix LÖBIG, died 1931" (Ida's 1945 card) | an undated marriage: a source that merely names a spouse dates nothing, and the card's own date observes nothing, since Felix died in 1931 |
 | a directory or a census listing a couple as married, with no start or end | an observation: a `point_in_time` on the union, never a wedding date. A union has no date of its own, so clustering never keys on it and the disagreement report never compares it |

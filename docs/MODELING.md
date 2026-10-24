@@ -1511,7 +1511,14 @@ part in the marriage (or partnership) with the role `spouse` (or
 `partner`), the union is `started_by` its wedding and `ended_by` a
 divorce, an annulment, a partner's death, or an event of unstated kind
 where the source does not say how it ended, and each of those events
-carries its own date and place. Until the rest of the pipeline moves to
+carries its own date and place. A marriage whose start the source dates
+or places, at any precision, gets its wedding, as a stated divorce gets
+its divorce; a marriage the source only names, a partnership, and an
+observation (a directory or census entry) get none (#656). In the 1984
+tree, "= (1942) Florence Faxridge" gives a marriage and its 1942
+wedding, and the undated "= Hildegard" gives the marriage alone. The run
+report counts each extraction's marriages by their weddings: started by
+a dated wedding, by an undated one, or by none. Until the rest of the pipeline moves to
 marriages, the readers of spouse statements (among them the disagreement
 report, the timeline, the kinship query, reconciliation, clustering and
 the static site) still read them; extraction refuses and counts any
