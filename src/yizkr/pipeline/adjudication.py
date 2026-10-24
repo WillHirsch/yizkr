@@ -571,16 +571,6 @@ def adjudicate(
     per_call = config.adjudication.pairs_per_call
     identity = clustering.cluster_corpus(manifests, config)
     planned = identity["summary"]["adjudication"]["calls_ambiguous_clusters"]
-    # the clusters no verdict could merge, left unasked when verdicts merge
-    unmergeable = (
-        sum(
-            clustering.cannot_merge(entry)
-            for entry in identity["review"]
-            if entry.get("status") == AMBIGUOUS
-        )
-        if merge
-        else 0
-    )
     evidence = Evidence(manifests, identity["mentions"])
     verdicts: dict[Pair, tuple[str, str]] = {}
     asked: set[Pair] = set()
@@ -630,6 +620,18 @@ def adjudicate(
             config,
             {pair: verdict for pair, (verdict, _reason) in verdicts.items()},
         )
+    # the clusters no verdict could merge, left unasked when verdicts
+    # merge, counted on the last map: a cluster of events can become one
+    # only once its people's verdicts are in, and none is ever asked
+    unmergeable = (
+        sum(
+            clustering.cannot_merge(entry)
+            for entry in identity["review"]
+            if entry.get("status") == AMBIGUOUS
+        )
+        if merge
+        else 0
+    )
     found = Counter(verdict for verdict, _reason in verdicts.values())
     counts = {
         "merge": merge,

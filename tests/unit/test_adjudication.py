@@ -1436,12 +1436,12 @@ def test_a_same_verdict_overrides_a_date_contradiction():
 # -- events whose principals ended held apart (#610) -------------------------
 
 
-def emigrated(name: str, *, dated: bool, companion: bool = False) -> Doc:
+def emigrated(name: str, *, dated: bool, witness: bool = False) -> Doc:
     """A register of Klara Löbig's emigration, with Klara its principal:
     dated, her birth 1917 and the emigration 22 June 1938, or undated, as
-    the postcard gives it. With `companion`, Gustav Löbig, undated, takes
-    part too, in a role other than principal, a placeholder pattern no
-    source of the universe shows."""
+    the postcard gives it. With `witness`, Gustav Löbig, undated, takes
+    part too, as a witness, a placeholder pattern no source of the
+    universe shows."""
     entities = [
         human("e1", "Klara Löbig"),
         entity("v1", "Emigration of Klara Löbig", "migration"),
@@ -1453,9 +1453,9 @@ def emigrated(name: str, *, dated: bool, companion: bool = False) -> Doc:
             ("e1", "date_of_birth", day(1917)),
             ("v1", "point_in_time", day(1938, 6, 22)),
         ]
-    if companion:
+    if witness:
         entities.append(human("e2", "Gustav Löbig"))
-        claims.append(("v1", "participant", item("e2"), role("companion")))
+        claims.append(("v1", "participant", item("e2"), role("witness")))
         truth["e2"] = "gustav-loebig"
     return register(name, entities, claims, truth)
 
@@ -1470,6 +1470,62 @@ def emigrations() -> list[Doc]:
         emigrated("register", dated=True),
         emigrated("extract", dated=True),
     ]
+
+
+def klara_born(name: str, born: int, *, emigrated: bool) -> Doc:
+    """A register of Klara Löbig, born in `born` as it reads it (1920
+    for 1917 a misreading, a placeholder pattern), and with `emigrated`,
+    her emigration, 22 June 1938, with Klara its principal."""
+    entities = [human("e1", "Klara Löbig")]
+    claims = [("e1", "date_of_birth", day(born))]
+    truth = {"e1": "klara-loebig"}
+    if emigrated:
+        entities.append(entity("v1", "Emigration of Klara Löbig", "migration"))
+        claims += [
+            ("v1", "participant", item("e1"), role("principal")),
+            ("v1", "point_in_time", day(1938, 6, 22)),
+        ]
+        truth["v1"] = "emigration-1938"
+    return register(name, entities, claims, truth)
+
+
+def emigrated_together(name: str, *, dated: bool) -> Doc:
+    """A register of one emigration with two principals, Klara and
+    Gustav Löbig, a placeholder pattern: dated, Klara born 1917, Gustav
+    7 January 1919 and the emigration 22 June 1938, or undated."""
+    entities = [
+        human("e1", "Klara Löbig"),
+        human("e2", "Gustav Löbig"),
+        entity("v1", "Emigration of Klara and Gustav Löbig", "migration"),
+    ]
+    claims = [
+        ("v1", "participant", item("e1"), role("principal")),
+        ("v1", "participant", item("e2"), role("principal")),
+    ]
+    if dated:
+        claims += [
+            ("e1", "date_of_birth", day(1917)),
+            ("e2", "date_of_birth", day(1919, 1, 7)),
+            ("v1", "point_in_time", day(1938, 6, 22)),
+        ]
+    truth = {
+        "e1": "klara-loebig",
+        "e2": "gustav-loebig",
+        "v1": "emigration-1938",
+    }
+    return register(name, entities, claims, truth)
+
+
+def verdicts_by_name(docs: list[Doc], verdict_of) -> dict:
+    """The map under verdicts `verdict_of` gives each ambiguous pair, by
+    its two mentions' (register name, local id)."""
+    identity = cluster_corpus([doc.manifest for doc in docs])
+    names = {
+        doc.fingerprint(local_id, identity): (named(doc), local_id)
+        for doc in docs
+        for local_id in doc.truth
+    }
+    return settle_by(docs, names, verdict_of)
 
 
 def postcard_verdicts(docs: list[Doc], person: str, event: str):
@@ -1491,10 +1547,10 @@ def postcard_verdicts(docs: list[Doc], person: str, event: str):
 
 
 def named(doc: Doc) -> str:
-    """The name of one of the registers emigrated makes."""
+    """The name of one of the registers of Klara these tests make."""
     (name,) = [
         name
-        for name in ("postcard", "register", "extract")
+        for name in ("postcard", "letter", "register", "extract")
         if doc.sha1 == hashlib.sha1(name.encode()).hexdigest()
     ]
     return name
@@ -1580,14 +1636,97 @@ class TestPrincipalsHeldApart:
         assert {m["method"] for m in found.values()} == {ADJUDICATED}
         assert len({m["cluster"] for m in found.values()}) == 1
 
+    def test_a_different_inside_an_unsettled_person_cluster(self):
+        """The postcard's Klara is `different` from the register's and
+        `uncertain` against the extract's: her candidate cluster stays
+        unsettled, yet the `different` holds her apart, so a `same` on
+        the emigrations does not merge the postcard's."""
+        docs = emigrations()
+
+        def verdict_of(pair: frozenset) -> str:
+            if pair == {("postcard", "e1"), ("register", "e1")}:
+                return DIFFERENT
+            if pair == {("postcard", "e1"), ("extract", "e1")}:
+                return UNCERTAIN
+            return SAME
+
+        settled = verdicts_by_name(docs, verdict_of)
+        postcard = docs[0].fingerprint("e1", settled)
+        assert settled["mentions"][postcard]["method"] == AMBIGUOUS
+        found = emigration_of(settled, docs)
+        assert found["postcard"]["method"] == AMBIGUOUS
+        assert found["register"]["cluster"] == found["extract"]["cluster"]
+        assert found["postcard"]["cluster"] != found["register"]["cluster"]
+        (entry,) = [e for e in settled["review"] if e["kind"] == "migration"]
+        assert entry["contradiction"]["evidence"] == PRINCIPALS_APART
+
+    def test_cluster_level_held_apart(self):
+        """The postcard's and the letter's Klara (born 1917) merge, and
+        so do the register's and the extract's (born 1920); only the
+        letter's and the extract's are said `different`. That holds the
+        two clusters apart, so the postcard's and the register's
+        emigrations, whose principals were never said `different` of
+        each other, do not merge."""
+        docs = [
+            klara_born("postcard", 1917, emigrated=True),
+            klara_born("letter", 1917, emigrated=False),
+            klara_born("register", 1920, emigrated=True),
+            klara_born("extract", 1920, emigrated=False),
+        ]
+
+        def verdict_of(pair: frozenset) -> str:
+            held = {("letter", "e1"), ("extract", "e1")}
+            return DIFFERENT if pair == held else SAME
+
+        settled = verdicts_by_name(docs, verdict_of)
+
+        def cluster(doc: Doc, local_id: str) -> str:
+            fingerprint = doc.fingerprint(local_id, settled)
+            return settled["mentions"][fingerprint]["cluster"]
+
+        postcard, letter, register_, extract = docs
+        assert cluster(postcard, "e1") == cluster(letter, "e1")
+        assert cluster(register_, "e1") == cluster(extract, "e1")
+        assert cluster(postcard, "e1") != cluster(register_, "e1")
+        assert cluster(postcard, "v1") != cluster(register_, "v1")
+        (entry,) = [e for e in settled["review"] if e["kind"] == "migration"]
+        assert entry["contradiction"]["evidence"] == PRINCIPALS_APART
+
+    def test_two_principals_one_held_apart(self):
+        """One emigration with two principals, Klara and Gustav: the
+        postcard's Gustav is `same` as the registers', but its Klara is
+        `different`, so its emigration does not merge with theirs; with
+        every pair `same`, all three merge, adjudicated."""
+        docs = [
+            emigrated_together("postcard", dated=False),
+            emigrated_together("register", dated=True),
+            emigrated_together("extract", dated=True),
+        ]
+
+        def verdict_of(pair: frozenset) -> str:
+            if ("postcard", "e1") in pair:
+                return DIFFERENT
+            return SAME
+
+        settled = verdicts_by_name(docs, verdict_of)
+        found = emigration_of(settled, docs)
+        assert found["postcard"]["cluster"] != found["register"]["cluster"]
+        assert found["register"]["cluster"] == found["extract"]["cluster"]
+        (entry,) = [e for e in settled["review"] if e["kind"] == "migration"]
+        assert entry["contradiction"]["evidence"] == PRINCIPALS_APART
+        merged = verdicts_by_name(docs, lambda pair: SAME)
+        found = emigration_of(merged, docs)
+        assert {m["method"] for m in found.values()} == {ADJUDICATED}
+        assert len({m["cluster"] for m in found.values()}) == 1
+
     def test_a_participant_held_apart_in_another_role_is_no_principal(self):
-        """Gustav takes part in both emigrations, but not as principal,
-        and the two Gustavs are said `different`: the emigrations' one
+        """Gustav witnesses both emigrations, never their principal, and
+        the two Gustavs are said `different`: the emigrations' one
         principal, Klara, merged, so a `same` on the emigrations merges
         them."""
         docs = [
-            emigrated("postcard", dated=True, companion=True),
-            emigrated("register", dated=True, companion=True),
+            emigrated("postcard", dated=True, witness=True),
+            emigrated("register", dated=True, witness=True),
         ]
         identity = cluster_corpus([doc.manifest for doc in docs])
         gustavs = {doc.fingerprint("e2", identity) for doc in docs}
@@ -1627,7 +1766,7 @@ class TestPrincipalsHeldApart:
     def test_a_pair_of_two_such_events_is_not_asked(self):
         """The postcard and one register: once the postcard's Klara is
         `different`, no `same` could merge the two emigrations, so the
-        stage does not ask them."""
+        stage does not ask them, and counts them as unmergeable."""
         docs = emigrations()[:2]
         who = truths(docs)
         identity = cluster_corpus([doc.manifest for doc in docs])
@@ -1637,6 +1776,7 @@ class TestPrincipalsHeldApart:
         (people,) = engine.prompts
         assert "a migration in" not in people
         assert made.counts["asked_pairs"] == 1
+        assert made.counts["unmergeable_pairs_not_asked"] == 1
         found = emigration_of(made.identity, docs)
         assert found["postcard"]["cluster"] != found["register"]["cluster"]
 

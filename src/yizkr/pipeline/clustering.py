@@ -2653,11 +2653,11 @@ def cluster_corpus(
     # the cluster each settled mention ended in, merged or apart, and the
     # mentions an adjudicator said each is `different` from
     ended: dict[str, frozenset[str]] = {}
-    said_different: dict[str, set[str]] = defaultdict(set)
+    said_different: dict[str, set[str]] = {}
     for (first, second), verdict in settling.items():
         if verdict == DIFFERENT:
-            said_different[first].add(second)
-            said_different[second].add(first)
+            said_different.setdefault(first, set()).add(second)
+            said_different.setdefault(second, set()).add(first)
 
     def merged(first: str, second: str) -> bool:
         return first in together and together[first] == together.get(second)
@@ -2665,11 +2665,14 @@ def cluster_corpus(
     def held_apart(first: str, second: str) -> bool:
         """Whether two mentions ended in two clusters an adjudicator held
         apart: a member of one said `different` from a member of the
-        other."""
+        other, whether or not that verdict settled their candidate
+        cluster."""
         one, other = ended.get(first), ended.get(second)
         if one is None or other is None or one == other:
             return False
-        return any(said_different[member] & other for member in one)
+        return any(
+            said_different.get(member, frozenset()) & other for member in one
+        )
 
     def principals_apart(a: _Node, b: _Node) -> str | None:
         """PRINCIPALS_APART when two events have principals that ended in
