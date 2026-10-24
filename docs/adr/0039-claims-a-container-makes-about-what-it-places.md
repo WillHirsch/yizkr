@@ -1100,6 +1100,24 @@ to the held scan. The rule admits forms (a), (b) and (c4).
   once a curator or artifact matching merges a mention into the held
   scan's item, its statements stand on an item with a SHA-1, cited by
   the letter, and are left out whole, failing closed.
+  - *Amended by #669 (owner, 2026-10-24, on #661's question 2):* the
+    export removes the container's references, not the statements they
+    are on. A reference is the container's when it is on a
+    document-subject statement whose subject carries a `media SHA-1` and
+    is `stated in` another item, or whose subject is `part of`, at any
+    rank, an item it is `stated in`. The export drops that reference's
+    link from the statement, and with it the reference and its excerpt,
+    unless a statement that stays names the same reference node. A
+    statement that keeps no reference `stated in` an item once those go,
+    the container's own claim, goes whole as before, its truthy triple
+    with it: an extraction run's reference names no source, so it does
+    not keep the statement. So the container's agreeing value, which the
+    writer folds into the image's own statement, leaves the statement
+    with the image's own reference and excerpt (the letter's own *den 28.
+    Juli 1939*), and the booklet's reference and translation stay out.
+    The run references stay on a statement that stays, the container's
+    run's included, as they hold no source text
+    (`backup._placed_subject_statements`).
 - **The site.** `named_in_html` names a (c4) mention item, which has no
   artifact page, by its label, unlinked.
 - **Chunk ownership.** Under entity assignment a (c4) claim belongs to
