@@ -139,8 +139,8 @@ reason reads "the entity manifest names no entity".
 
 A chunk answer in which every claim lacks the same field the claim
 schema requires (the excerpt's `language`, say: `missing_field` checks
-the claims as the merge validates them, cited and with their local refs
-settled) is asked again once (#501): the chunk's prompt with a note
+the claims as the merge validates them, with their artifact cited and
+their shape repaired) is asked again once (#501): the chunk's prompt with a note
 naming the field and the claim count (`MISSING_FIELD_NOTE`), as the
 call's attempt 1 (`llm.for_attempt`), forked from the same conversation
 as the first answer, or inline when that came inline. Behind the LLM

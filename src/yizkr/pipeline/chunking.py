@@ -1932,14 +1932,11 @@ class ChunkedClaimExtractor:
         else:
             self._log(f"  extract: {total} chunk(s) (line-range fallback)")
 
-        def missing(claims: list[dict], chunk_id: str) -> str | None:
-            """The required field every claim of a chunk answer lacks, as
-            the merge would validate them (missing_field), or None."""
-            try:
-                shaped = [transform(claim, chunk_id) for claim in claims]
-            except Exception:  # a transform reject, never a missing field
-                return None
-            return missing_field(cite_artifact(shaped, artifact))
+        def missing(claims: list[dict]) -> str | None:
+            """The required field every claim of a chunk answer lacks, the
+            artifact cited as the merge cites it (missing_field), or
+            None."""
+            return missing_field(cite_artifact(claims, artifact))
 
         def run_one(chunk_id: str, group: list) -> _Chunk | None:
             """One chunk end to end, or None on failure. Thread-safe:
@@ -1949,7 +1946,7 @@ class ChunkedClaimExtractor:
                     build_prompt(group, False),
                     handle,
                     build_prompt(group, inline_document),
-                    lambda claims: missing(claims, chunk_id),
+                    missing,
                 )
             except ConversationChanged:
                 raise
@@ -2437,10 +2434,11 @@ def missing_field(claims: Iterable[Any]) -> str | None:
     required field, or when they lack none in common. When they lack
     several in common, the first path in sorted order. Each claim's shape
     is repaired as validation repairs it (salvage_valid_claims) before it
-    is checked, so `claims` are as the merge validates them, local refs
-    settled and the artifact cited. A claim that fails for any other
-    reason, a value of the wrong type or a manifest problem, lacks
-    none."""
+    is checked; `claims` are to be cited as the merge cites them
+    (cite_artifact), so that the source's artifact is not missing. The
+    local refs the merge settles fill no required field. A claim that
+    fails for any other reason, a value of the wrong type or a manifest
+    problem, lacks none."""
     common: set[str] | None = None
     for claim in claims:
         lacking: set[str] = set()

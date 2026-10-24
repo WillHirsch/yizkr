@@ -287,10 +287,9 @@ class TestAChunkAskedAgain:
         assert side_output(tmp_path, "coverage.json")["retried_chunks"] == 0
 
     def test_fields_the_merge_fills_are_not_missing(self, tmp_path):
-        """A claim is checked as the merge validates it: the artifact
-        cited (cite_artifact) and its local refs settled against the
-        manifest (normalize_to_manifest), so a source without its
-        artifact, or a subject without its label, is no slip."""
+        """A claim is checked as the merge validates it, the artifact
+        cited (cite_artifact), so a source without its artifact is no
+        slip."""
         bare = claim(*HILDEGARD)
         del bare["source"]["artifact"]
         del bare["subject"]["label"]
@@ -453,6 +452,32 @@ class TestAChunkAskedAgain:
         batch = run.extract(transcription(), DOC_REF)
         assert llm.asked[1:4] == [("fork", 0), ("fork", 1), ("fork", 1)]
         assert len(batch.claims) == 2
+
+
+class TestEachExtractionCountsItsOwn:
+    def test_the_counts_start_again(self, tmp_path):
+        """An extractor counts the retries and refusals of its latest
+        extraction alone, as it keeps its other state."""
+        llm = Attempting(
+            ScriptedLlm(
+                [
+                    entity_manifest_json(),
+                    ndjson([without_language(*HILDEGARD)]),
+                    refused(),
+                    ndjson([claim(*SEBASTIAN)]),
+                    entity_manifest_json(),
+                    ndjson([claim(*HILDEGARD)]),
+                    ndjson([claim(*SEBASTIAN)]),
+                ]
+            )
+        )
+        run = extractor(llm, tmp_path)
+        run.extract(transcription(), DOC_REF)
+        assert (run.retried_chunks, run.refused) == (1, {"chunk": 1})
+        run.extract(transcription(), DOC_REF)
+        assert (run.retried_chunks, run.refused) == (0, {})
+        coverage = side_output(tmp_path, "coverage.json")
+        assert (coverage["retried_chunks"], coverage["refused"]) == (0, {})
 
 
 class TestARefusedCall:
