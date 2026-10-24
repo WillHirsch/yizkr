@@ -339,11 +339,15 @@ class TestFollowDecks:
 
         assert DECK_SUFFIXES == PRESENTATION_SUFFIXES
 
-    def test_it_replaces_what_was_followed_before(self, tmp_path):
-        before = self.LISTED.with_embedded([sha1("from another corpus")])
-        followed = follow_decks(before, tmp_path)
-        assert followed.embedded == frozenset()
-        assert followed.patterns == self.LISTED.patterns
+    @pytest.mark.parametrize(
+        "text", ["image2.png\n", f"{sha1(POSTCARD)}\n"], ids=["glob", "sha1"]
+    )
+    def test_it_replaces_what_was_followed_before(self, tmp_path, text):
+        """What another folder's decks named is dropped, whether or not
+        the list holds a glob to follow into this one's."""
+        listed = ExclusionList.parse(text)
+        before = listed.with_embedded([sha1("from another corpus")])
+        assert follow_decks(before, tmp_path) == listed
 
     def test_a_list_with_no_glob_reads_no_folder(self, tmp_path):
         listed = ExclusionList.parse(f"{sha1(POSTCARD)}\n")

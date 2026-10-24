@@ -134,7 +134,7 @@ def _refuse_if_excluded(
     exclusions = load_exclusions(required=False, env_file=args.env_file)
     if exclusions is None:
         return
-    folder = corpus_dir(args.env_file) if exclusions.patterns else None
+    folder = corpus_dir(args.env_file)
     if folder is not None:
         exclusions = follow_decks(exclusions, folder)
     if is_excluded(exclusions, path, sha1=sha1):
