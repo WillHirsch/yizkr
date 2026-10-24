@@ -209,6 +209,15 @@
 1 DEAT
 2 DATE 1974
 1 FAMS @F5@
+0 @I18@ INDI
+1 NAME Alfred /Luthorn/
+2 TYPE birth
+1 SEX M
+1 BIRT
+2 DATE 30 AUG 1948
+2 PLAC Flörburg, Hesse, Germany
+1 FAMC @F5@
+2 PEDI adopted
 0 @F1@ FAM
 1 HUSB @I1@
 1 WIFE @I2@
@@ -242,6 +251,7 @@
 0 @F5@ FAM
 1 HUSB @I11@
 1 WIFE @I17@
+1 CHIL @I18@
 1 MARR
 2 TYPE civil
 2 DATE 8 FEB 1947

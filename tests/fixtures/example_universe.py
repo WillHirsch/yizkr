@@ -44,6 +44,25 @@ per the civil register, 1 July per his naturalisation: day and month
 transposed), and the sources carry every uncertain date form: circa,
 before, after, between and decade.
 
+Deaths, births and parenthood take ADR-0040's form (#686).  A death is
+a set of statements on the person: a source that states a death but not
+its date gives a ``date_of_death`` of unknown value (``UNKNOWN``), as
+the 1905 certificate's "dessen verstorbener Ehefrau Cäcilie" does.  A
+widow's or widower's marker that names the late spouse gives the
+survivor's ``civil_status`` ``widowed`` and the union
+``ended_by_death_of`` the spouse, and no death statement for the spouse:
+the burial register's "Witwer der Cäcilie", Nina's "вдова Вашего
+покойного брата Рудольфа" and Sybren's "widdo ... ús sillige heit".
+Cäcilie's death register, which calls her "Ehefrau des
+Hutmachermeisters Eugen Löbig", ends the union too.  No "died by" date
+is stored: ``DERIVED_DIED_BY`` gives the dates a view derives.  Leopold
+and Agnes adopt Alfred Luthorn in 1950, by an order of the Amtsgericht
+Flörburg that calls them his "Adoptivvater" and "Adoptivmutter", while
+his birth register names his birth parents; the export gives the
+adoption as a ``PEDI``.  Cäcilie's half-brother Christian Tarle reports
+her death, and Florence's death certificate's "Informant: husband"
+records nothing (``NO_CLAIM``).
+
 Nicholas's 2011 booklet, "Our Family from Germany", is a compilation:
 it sets an image of the top of a 1939 letter from Sebastian to Klara,
 an artifact of its own, beside a translation made with translation
@@ -158,6 +177,19 @@ class Date:
 
 
 @dataclass(frozen=True)
+class Unknown:
+    """An unknown value (Wikibase "some value"): a source states that
+    there is a value and gives none, as a death stated without its date
+    (ADR-0040 §2.2)."""
+
+    def __str__(self) -> str:
+        return "unknown value"
+
+
+UNKNOWN = Unknown()
+
+
+@dataclass(frozen=True)
 class Name:
     """One form of a name.
 
@@ -225,7 +257,7 @@ class Assertion:
 
     subject: str
     property: str
-    value: str | int | Date
+    value: str | int | Date | Unknown
     source: str
     qualifiers: tuple[tuple[str, str | Date], ...] = ()
     excerpt: str = ""
@@ -284,6 +316,17 @@ PEOPLE = (
         ),
         gedcom_xref="@I2@",
         note="Born in Kredfeld; the tree gives her birth year as circa.",
+    ),
+    Person(
+        "christian-tarle",
+        "Christian Tarle",
+        "male",
+        1,
+        _names(("Christian Tarle", "birth", "de")),
+        note=(
+            "Cäcilie's half-brother in Kredfeld, who reported her death: "
+            "kin of the person the record is about, so kept (ADR-0040 §2.8)."
+        ),
     ),
     Person(
         "sebastian-loebig",
@@ -560,6 +603,38 @@ PEOPLE = (
         note=(
             "Sipkje and Sybren's mother, whom Sybren's letter names only as "
             "Mem (mother): a widow, and Nicholas's great-grandmother."
+        ),
+    ),
+    Person(
+        "ernst-luthorn",
+        "Ernst Luthorn",
+        "male",
+        3,
+        _names(("Ernst Luthorn", "birth", "de")),
+        note="Alfred's birth father, who reported his birth in 1948.",
+    ),
+    Person(
+        "erna-luthorn",
+        "Erna Luthorn",
+        "female",
+        3,
+        _names(
+            ("Erna Wegbach", "birth", "de"),
+            ("Erna Luthorn", "married", "de"),
+            ("Erna Luthorn geborene Wegbach", "as_written", "de"),
+        ),
+        note="Alfred's birth mother.",
+    ),
+    Person(
+        "alfred-luthorn",
+        "Alfred Luthorn",
+        "male",
+        4,
+        _names(("Alfred Luthorn", "birth", "de")),
+        gedcom_xref="@I18@",
+        note=(
+            "Born in Flörburg in 1948 and adopted by Leopold and Agnes in "
+            "1950; no source asserts a death, so possibly living."
         ),
     ),
 )
@@ -872,6 +947,34 @@ ENTITIES = (
         ),
     ),
     Entity(
+        "amtsgericht-floerburg",
+        "Amtsgericht Flörburg",
+        "organization",
+        note="The local court whose 1950 order confirms Alfred's adoption.",
+    ),
+    # unions a source states ended by a death (ADR-0040 §2.5), as ADR-0036
+    # gives them: the couple take part with the role spouse.  The
+    # universe's other couples keep the retired `spouse` form, which the
+    # fixture corpus's recorded model answers as such a union.
+    Entity(
+        "marriage-eugen-caecilie",
+        "Marriage of Eugen and Cäcilie Löbig",
+        "marriage",
+        note="Ended by Cäcilie's death in 1902.",
+    ),
+    Entity(
+        "marriage-rudolf-nina",
+        "Marriage of Rudolf Löbig and Nina Sartina",
+        "marriage",
+        note="Ended by Rudolf's death in 1941.",
+    ),
+    Entity(
+        "marriage-van-t-nijks",
+        "Marriage of Sipkje's parents",
+        "marriage",
+        note="Ended by her father's death, before 1952.",
+    ),
+    Entity(
         "snylsjum-brickworks",
         "Snylsjum brickworks",
         "organization",
@@ -948,6 +1051,27 @@ SOURCES = (
         "photograph",
         text="[mount] Photograph Brüsrich · Peiltal [mount, pencil] um 1895",
         note="A pencilled note on its mount dates it as circa: um 1895.",
+    ),
+    Source(
+        "death-register-1902",
+        "Death register entry for Cäcilie Löbig",
+        "de",
+        1902,
+        "artifact",
+        text=(
+            "Standesamt Flörburg. Flörburg, am 14. Dezember 1902. Vor dem "
+            "Standesbeamten erschien Christian Tarle, wohnhaft in Kredfeld, "
+            "und zeigte an, daß seine Halbschwester Cäcilie Löbig geborene "
+            "Tarle, Ehefrau des Hutmachermeisters Eugen Löbig, wohnhaft in "
+            "Flörburg, Brunnenring 35, zu Flörburg in ihrer Wohnung am "
+            "dreizehnten Dezember des Jahres tausend neunhundert und zwei "
+            "verstorben sei."
+        ),
+        note=(
+            "One entry in the Flörburg register of deaths.  It calls the "
+            "deceased the survivor's wife, so it states that the marriage "
+            "lasted until her death (ADR-0040 §2.5)."
+        ),
     ),
     Source(
         "marriage-cert-1905",
@@ -1052,6 +1176,44 @@ SOURCES = (
             "to Klurnau. Liberated at Klurnau 28.1.1945. Husband: "
             "Felix LÖBIG, died 1931. Son: Leopold LÖBIG, arrested "
             "3.9.1939, held in Peiltal court prison until 1.10.1939."
+        ),
+    ),
+    Source(
+        "birth-register-1948",
+        "Birth register entry for Alfred Luthorn",
+        "de",
+        1948,
+        "artifact",
+        text=(
+            "Standesamt Flörburg. Flörburg, am 31. August 1948. Der Ernst "
+            "Luthorn, wohnhaft in Flörburg, zeigte an, daß von seiner "
+            "Ehefrau Erna Luthorn geborene Wegbach zu Flörburg in seiner "
+            "Wohnung am dreißigsten August des Jahres tausend neunhundert "
+            "achtundvierzig ein Knabe geboren worden sei, welcher den "
+            "Vornamen Alfred erhalten habe."
+        ),
+        note=(
+            "One entry in the Flörburg register of births: it names "
+            "Alfred's birth parents, with no kind of parenthood worded."
+        ),
+    ),
+    Source(
+        "adoption-order-1950",
+        "Order confirming the adoption of Alfred Luthorn",
+        "de",
+        1950,
+        "certificate",
+        text=(
+            "Amtsgericht Flörburg. Flörburg, den 25. Mai 1950. Beschluß. "
+            "Der Vertrag, durch den die Eheleute Leopold Löbig und Agnes "
+            "Löbig geb. Nertler, wohnhaft in Flörburg, den am 30. August "
+            "1948 zu Flörburg geborenen Knaben Alfred Luthorn an Kindes "
+            "Statt angenommen haben, wird bestätigt. Leopold Löbig ist der "
+            "Adoptivvater, Agnes Löbig die Adoptivmutter des Kindes."
+        ),
+        note=(
+            "The court's order: its words state the kind of parenthood, "
+            "adoptive, which the birth register does not (ADR-0040 §4)."
         ),
     ),
     Source(
@@ -1391,7 +1553,9 @@ SOURCES = (
         note=(
             "Its informant gave Florence's own birth name as her mother's: "
             "the mother it names is Sipkje, named wrongly. The fixture "
-            "corpus's hard (kin-edge) conflict (tests/fixtures/corpus)."
+            "corpus's hard (kin-edge) conflict (tests/fixtures/corpus). "
+            "Its informant is given only by role, so the line records "
+            "nothing (ADR-0040 §2.8)."
         ),
     ),
 )
@@ -1400,7 +1564,17 @@ SOURCES = (
 # ADR-0008 (as amended by #289) adds `machine_assisted`, the sourcing
 # circumstance of a text that its source says was prepared with machine
 # assistance, with the extraction change that sets it (its follow-up B).
-PLANNED_VOCABULARY = ("machine_assisted",)
+# ADR-0040 adds the qualifier `parentage` with its value
+# `parentage_adoptive`, and the property `ended_by_death_of`, with its
+# build (follow-up B, #687).
+PLANNED_VOCABULARY = ("machine_assisted", "parentage_adoptive")
+PLANNED_PROPERTIES = {
+    "ended_by_death_of": "wikibase-item",
+    "parentage": "wikibase-item",
+}
+# The properties whose value may be unknown (ADR-0040 §2.2), which the
+# manifest marks from that build on.
+UNKNOWN_VALUE_PROPERTIES = ("date_of_death", "burial_place")
 
 ASSERTIONS = tuple(
     _said(
@@ -1473,7 +1647,104 @@ ASSERTIONS = tuple(
         ),
     )
     + _said(
+        "death-register-1902",
+        (
+            "death-register-1902",
+            "inception",
+            Date(1902, 12, 14),
+            "Flörburg, am 14. Dezember 1902",
+        ),
+        (
+            "floerburg-registry",
+            "location",
+            "floerburg",
+            "Standesamt Flörburg",
+        ),
+        (
+            "caecilie-loebig",
+            "date_of_death",
+            Date(1902, 12, 13),
+            "am dreizehnten Dezember des Jahres tausend neunhundert und "
+            "zwei verstorben",
+        ),
+        (
+            "caecilie-loebig",
+            "place_of_death",
+            "floerburg",
+            "zu Flörburg in ihrer Wohnung",
+        ),
+        (
+            "caecilie-loebig",
+            "residence",
+            "brunnenring-35",
+            {"point_in_time": Date(1902, 12, 13)},
+            "wohnhaft in Flörburg, Brunnenring 35",
+        ),
+        (
+            "caecilie-loebig",
+            "birth_name",
+            "Cäcilie Tarle",
+            "Cäcilie Löbig geborene Tarle",
+        ),
+        (
+            "caecilie-loebig",
+            "married_name",
+            "Cäcilie Löbig",
+            "Cäcilie Löbig geborene Tarle",
+        ),
+        (
+            "eugen-loebig",
+            "occupation",
+            "master-hatter",
+            "Ehefrau des Hutmachermeisters Eugen Löbig",
+        ),
+        # a death record that calls the deceased the survivor's wife: their
+        # marriage ended by her death (ADR-0040 §2.5), with no civil status
+        # for him
+        *(
+            (
+                "marriage-eugen-caecilie",
+                "participant",
+                partner,
+                {"object_has_role": "spouse"},
+                "Cäcilie Löbig geborene Tarle, Ehefrau des "
+                "Hutmachermeisters Eugen Löbig",
+            )
+            for partner in ("eugen-loebig", "caecilie-loebig")
+        ),
+        (
+            "marriage-eugen-caecilie",
+            "ended_by_death_of",
+            "caecilie-loebig",
+            "Cäcilie Löbig geborene Tarle, Ehefrau des Hutmachermeisters "
+            "Eugen Löbig",
+        ),
+        # its informant is kin, so kept, as her half-brother; his role as
+        # informant is not recorded (ADR-0040 §2.8).  A half term is
+        # `sibling` with its word in `kinship_type` (ADR-0040 §4)
+        (
+            "caecilie-loebig",
+            "sibling",
+            "christian-tarle",
+            {"kinship_type": "Halbschwester"},
+            "seine Halbschwester Cäcilie",
+        ),
+        (
+            "christian-tarle",
+            "residence",
+            "kredfeld",
+            {"point_in_time": Date(1902, 12, 14)},
+            "Christian Tarle, wohnhaft in Kredfeld",
+        ),
+    )
+    + _said(
         "marriage-cert-1905",
+        (
+            "marriage-cert-1905",
+            "inception",
+            Date(1905, 12, 15),
+            "Flörburg, am 15. Dezember 1905",
+        ),
         (
             "floerburg-registry",
             "location",
@@ -1516,6 +1787,25 @@ ASSERTIONS = tuple(
             "mother",
             "caecilie-loebig",
             "Cäcilie geborene Tarle",
+        ),
+        # "his late wife", with no widowhood marked: her death, stated
+        # without its date, and the marriage, with no union end (ADR-0040
+        # §2.5, its Q12); views derive the end
+        (
+            "caecilie-loebig",
+            "date_of_death",
+            UNKNOWN,
+            "dessen verstorbener Ehefrau Cäcilie geborene Tarle",
+        ),
+        *(
+            (
+                "marriage-eugen-caecilie",
+                "participant",
+                partner,
+                {"object_has_role": "spouse"},
+                "Eugen Löbig und dessen verstorbener Ehefrau Cäcilie",
+            )
+            for partner in ("eugen-loebig", "caecilie-loebig")
         ),
         (
             "eugen-loebig",
@@ -1620,9 +1910,29 @@ ASSERTIONS = tuple(
             {"point_in_time": Date(1909, 3, 16)},
             "Wohnung: Brunnenring 35",
         ),
+        # a widower's word that names the late wife: his civil status at
+        # his death, and their marriage ended by her death; no death
+        # statement for her (ADR-0040 §2.5, §2.7)
         (
             "eugen-loebig",
-            "spouse",
+            "civil_status",
+            "widowed",
+            {"point_in_time": Date(1909, 3, 16)},
+            "Witwer der Cäcilie Löbig geb. Tarle",
+        ),
+        *(
+            (
+                "marriage-eugen-caecilie",
+                "participant",
+                partner,
+                {"object_has_role": "spouse"},
+                "Witwer der Cäcilie Löbig geb. Tarle",
+            )
+            for partner in ("eugen-loebig", "caecilie-loebig")
+        ),
+        (
+            "marriage-eugen-caecilie",
+            "ended_by_death_of",
             "caecilie-loebig",
             "Witwer der Cäcilie Löbig geb. Tarle",
         ),
@@ -1908,6 +2218,137 @@ ASSERTIONS = tuple(
             "date_of_death",
             Date(1931),
             "Felix LÖBIG, died 1931",
+        ),
+    )
+    + _said(
+        "birth-register-1948",
+        (
+            "birth-register-1948",
+            "inception",
+            Date(1948, 8, 31),
+            "Flörburg, am 31. August 1948",
+        ),
+        (
+            "alfred-luthorn",
+            "date_of_birth",
+            Date(1948, 8, 30),
+            "am dreißigsten August des Jahres tausend neunhundert "
+            "achtundvierzig",
+        ),
+        (
+            "alfred-luthorn",
+            "place_of_birth",
+            "floerburg",
+            "zu Flörburg in seiner Wohnung",
+        ),
+        # a register words no kind of parenthood, so its parents carry
+        # none (ADR-0040 §4); the father who reports the birth stays as
+        # its father, his informant role unrecorded (§2.8)
+        ("alfred-luthorn", "father", "ernst-luthorn", "Der Ernst Luthorn"),
+        (
+            "alfred-luthorn",
+            "mother",
+            "erna-luthorn",
+            "Erna Luthorn geborene Wegbach",
+        ),
+        (
+            "erna-luthorn",
+            "birth_name",
+            "Erna Wegbach",
+            "Erna Luthorn geborene Wegbach",
+        ),
+        (
+            "erna-luthorn",
+            "married_name",
+            "Erna Luthorn",
+            "Erna Luthorn geborene Wegbach",
+        ),
+        (
+            "ernst-luthorn",
+            "residence",
+            "floerburg",
+            {"point_in_time": Date(1948, 8, 31)},
+            "Luthorn, wohnhaft in Flörburg",
+        ),
+    )
+    + _said(
+        "adoption-order-1950",
+        (
+            "adoption-order-1950",
+            "inception",
+            Date(1950, 5, 25),
+            "Flörburg, den 25. Mai 1950",
+        ),
+        (
+            "adoption-order-1950",
+            "issued_by",
+            "amtsgericht-floerburg",
+            "Amtsgericht Flörburg",
+        ),
+        (
+            "amtsgericht-floerburg",
+            "location",
+            "floerburg",
+            "Amtsgericht Flörburg",
+        ),
+        (
+            "alfred-luthorn",
+            "date_of_birth",
+            Date(1948, 8, 30),
+            "den am 30. August 1948 zu Flörburg geborenen Knaben",
+        ),
+        (
+            "alfred-luthorn",
+            "place_of_birth",
+            "floerburg",
+            "den am 30. August 1948 zu Flörburg geborenen Knaben",
+        ),
+        # the order's own words state the kind: each adoptive parent with
+        # `parentage` adoptive, its word in `kinship_type` and the order's
+        # date as its start (ADR-0040 §4)
+        (
+            "alfred-luthorn",
+            "father",
+            "leopold-loebig",
+            {
+                "parentage": "parentage_adoptive",
+                "kinship_type": "Adoptivvater",
+                "start_time": Date(1950, 5, 25),
+            },
+            "Leopold Löbig ist der Adoptivvater",
+        ),
+        (
+            "alfred-luthorn",
+            "mother",
+            "agnes-loebig",
+            {
+                "parentage": "parentage_adoptive",
+                "kinship_type": "Adoptivmutter",
+                "start_time": Date(1950, 5, 25),
+            },
+            "Agnes Löbig die Adoptivmutter",
+        ),
+        (
+            "agnes-loebig",
+            "birth_name",
+            "Agnes Nertler",
+            "Agnes Löbig geb. Nertler",
+        ),
+        (
+            "agnes-loebig",
+            "married_name",
+            "Agnes Löbig",
+            "Agnes Löbig geb. Nertler",
+        ),
+        *(
+            (
+                partner,
+                "residence",
+                "floerburg",
+                {"point_in_time": Date(1950, 5, 25)},
+                "Nertler, wohnhaft in Flörburg",
+            )
+            for partner in ("leopold-loebig", "agnes-loebig")
         ),
     )
     + _said(
@@ -3017,19 +3458,33 @@ ASSERTIONS = tuple(
             "vasily-sartin",
             "Нина Васильевна Сартина",
         ),
-        # "вдова" (widow) states the marriage, and "покойного" (the late)
-        # a death before the letter: claims, not parts of a name
+        # "вдова" (widow) and "покойного" (the late), one phrase that is
+        # both markers: claims, not parts of a name.  It gives her civil
+        # status on the letter's date and their marriage ended by his
+        # death, which alone stands for the death: no death statement for
+        # him (ADR-0040 §2.5, its Q5)
         (
             "nina-sartina",
-            "spouse",
-            "rudolf-loebig",
+            "civil_status",
+            "widowed",
+            {"point_in_time": Date(1958, 12, 25)},
             "вдова Вашего покойного брата Рудольфа",
         ),
+        *(
+            (
+                "marriage-rudolf-nina",
+                "participant",
+                partner,
+                {"object_has_role": "spouse"},
+                "вдова Вашего покойного брата Рудольфа",
+            )
+            for partner in ("nina-sartina", "rudolf-loebig")
+        ),
         (
+            "marriage-rudolf-nina",
+            "ended_by_death_of",
             "rudolf-loebig",
-            "date_of_death",
-            Date(1958, 12, 25, qualifier="before"),
-            "покойного брата Рудольфа",
+            "вдова Вашего покойного брата Рудольфа",
         ),
         (
             "rudolf-loebig",
@@ -3171,18 +3626,32 @@ ASSERTIONS = tuple(
         ),
         ("sipkje-faxridge", "father", "mr-van-t-nijks", "ús sillige heit"),
         ("sybren-van-t-nijks", "father", "mr-van-t-nijks", "ús sillige heit"),
-        # "widdo" (widow) and "sillige" (the late)
+        # "widdo" (widow) and "sillige" (the late), one phrase that is both
+        # markers: her civil status on the letter's date, and their
+        # marriage ended by his death, with no death statement for him
+        # (ADR-0040 §2.5, its Q5)
         (
             "mrs-van-t-nijks",
-            "spouse",
-            "mr-van-t-nijks",
+            "civil_status",
+            "widowed",
+            {"point_in_time": Date(1952, 1, 24)},
             "Se is widdo sûnt ús sillige heit stoarn is",
         ),
+        *(
+            (
+                "marriage-van-t-nijks",
+                "participant",
+                partner,
+                {"object_has_role": "spouse"},
+                "Se is widdo sûnt ús sillige heit stoarn is",
+            )
+            for partner in ("mrs-van-t-nijks", "mr-van-t-nijks")
+        ),
         (
+            "marriage-van-t-nijks",
+            "ended_by_death_of",
             "mr-van-t-nijks",
-            "date_of_death",
-            Date(1952, 1, 24, qualifier="before"),
-            "ús sillige heit",
+            "Se is widdo sûnt ús sillige heit stoarn is",
         ),
         # an employer named by its kind and its village
         (
@@ -3321,11 +3790,81 @@ REFINEMENTS = (
     ("leopold-loebig", "date_of_birth"),
     # 1912 (tree) narrowed to 20 April 1912 (divorce judgment).
     ("agnes-loebig", "date_of_birth"),
-    # 1941 (tree) narrowed to 6 March 1941 (certificate), and bounded by
-    # the 1958 letter's "the late".
+    # 1941 (tree) narrowed to 6 March 1941 (certificate).  The 1958
+    # letter's widow phrase states no death of his: its "died by 25
+    # December 1958" is derived (DERIVED_DIED_BY).
     ("rudolf-loebig", "date_of_death"),
+    # 1902 (gravestone, tree) narrowed to 13 December 1902 (death
+    # register); the 1905 certificate's unknown value states no date.
+    ("caecilie-loebig", "date_of_death"),
     # 1963 (tree) narrowed to 3 July 1963 (death certificate).
     ("florence-lobig", "date_of_death"),
+)
+
+
+@dataclass(frozen=True)
+class DiedBy:
+    """A "died by" date that a view derives and never stores (ADR-0040
+    §2.4): ``person`` died no later than ``by``, at its precision, per
+    ``source``.  ``via`` is ``"undated death"`` for a death statement of
+    unknown value, bounded by its document's own date, or ``"union
+    end"`` for the late spouse of a union the source ends by that death,
+    bounded by the latest date at which it presents the survivor as
+    widowed, or else by its own date."""
+
+    person: str
+    by: Date
+    source: str
+    via: str
+
+
+# The "died by" dates the shared derivation gives the universe (ADR-0040
+# §2.4; its build, #687, reads these).
+DERIVED_DIED_BY = (
+    # "dessen verstorbener Ehefrau", by the certificate's own date
+    DiedBy(
+        "caecilie-loebig",
+        Date(1905, 12, 15),
+        "marriage-cert-1905",
+        "undated death",
+    ),
+    # "Ehefrau des Hutmachermeisters Eugen Löbig", which states no
+    # widowhood, so by the register entry's own date
+    DiedBy(
+        "caecilie-loebig",
+        Date(1902, 12, 14),
+        "death-register-1902",
+        "union end",
+    ),
+    # "Witwer der Cäcilie", at Eugen's widowhood on his death
+    DiedBy(
+        "caecilie-loebig",
+        Date(1909, 3, 16),
+        "burial-register-1909",
+        "union end",
+    ),
+    # Nina's widowhood on the letter's date
+    DiedBy(
+        "rudolf-loebig",
+        Date(1958, 12, 25),
+        "letter-to-leopold-1958",
+        "union end",
+    ),
+    # Mem's widowhood on the letter's date
+    DiedBy(
+        "mr-van-t-nijks",
+        Date(1952, 1, 24),
+        "letter-to-sipkje-1952",
+        "union end",
+    ),
+)
+
+# Passages that give no claim: a person given only by the role in which
+# they report, with no name, is not made, even by a kinship word, and
+# makes no union (ADR-0040 §2.8); a blank field gives no claim (§2.2).
+NO_CLAIM = (
+    ("death-certificate-1963", "Informant: husband"),
+    ("death-certificate-1963", "Father: not stated"),
 )
 
 # The naming patterns that extraction's mention records must handle
