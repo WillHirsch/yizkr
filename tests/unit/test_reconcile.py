@@ -347,6 +347,26 @@ class TestBlocking:
             "Q53"
         ]
 
+    def test_a_label_and_container_name_is_no_short_form(self):
+        """The province written "Fryslân, Nederlân", its toponym Fryslân,
+        keys as Fryslân beside its other name Friesland: as its label it
+        is no short form of another name, left out."""
+        found = EntityRecord(
+            id="e1",
+            label="Fryslân",
+            kind="place",
+            structure={
+                "kind": "place",
+                "status": "toponym",
+                "names": [
+                    {"written": "Fryslân, Nederlân", "toponym": "Fryslân"},
+                    {"written": "Friesland"},
+                ],
+                "within": ["Nederlân"],
+            },
+        )
+        assert entity_name_keys(found) == {"fryslan", "friesland"}
+
     def test_any_other_written_name_keys_as_written(self):
         """A written name that adds a word that is no container of the
         record keys whole, as written."""

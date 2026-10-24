@@ -155,6 +155,13 @@ class TestEntityKeys:
                 "aliases": ["Oma", "Hilde"],
                 "kind": "human",
             },
+            # her appellation is no appellation of Sipkje's
+            {
+                "id": "e3",
+                "label": "Sipkje Faxridge",
+                "aliases": ["Mem"],
+                "kind": "human",
+            },
             {
                 "id": "e2",
                 "label": "Flörburg",
@@ -167,6 +174,7 @@ class TestEntityKeys:
             entities,
             [
                 called("e1", "Hildegard Löbig", "Oma"),
+                called("e1", "Hildegard Löbig", "Mem"),
                 called("e2", "Flörburg", "die Stadt"),
             ],
         )
@@ -174,6 +182,8 @@ class TestEntityKeys:
             "hildegard lobig",
             "hildegard loebig",
             "hilde",
+            "sipkje faxridge",
+            "mem",
             "florburg",
             "floerburg",
             "die stadt",
