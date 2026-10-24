@@ -357,8 +357,9 @@ re-running one step in isolation — but for a normal ingest you only ever run
   PDFium is started afresh for each PDF and draws fonts a PDF does not
   embed with its own, never the host's, so a page reads and renders alike
   on every host and in every run. The standalone `ingest transcribe
-  --engine llm` reads a PDF whole, and refuses a deck, which only a run
-  reads, slide by slide.
+  --engine llm` reads a PDF whole, and refuses a deck, or any ZIP
+  archive whatever it is called, which only a run reads, slide by
+  slide; the vision engine is never given an archive whole.
 - **transcription record** — the vision engine answers the transcription
   prompt with a record (ADR-0037,
   `yizkr.pipeline.transcription_record`): the document's class, from the

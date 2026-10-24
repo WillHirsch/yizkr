@@ -607,9 +607,16 @@ did so on 2026-09-29, in the review of its PR.
   step (`ingest transcribe --engine llm`) gives the engine its file
   whole, embedded images and all, so it refuses a deck, whatever the
   list holds, in one line naming `scratch run`, the route that reads a
-  deck slide by slide and leaves out what the list names; and the
-  vision transcriber refuses a deck whoever calls it, so a deck is never
-  sent whole (#684). Reading the deck with `DeckTranscriber` there
+  deck slide by slide and leaves out what the list names (#684). A deck
+  is known by its suffix or, whatever it is called, by its own leading
+  bytes: any ZIP archive is refused, so a deck renamed without its
+  suffix, or as a `.zip`, `.pptm` or `.png`, is refused too. The step
+  refuses before the list is followed into the corpus's decks, before
+  the file is hashed and before any client is made, so nothing of it but
+  those four bytes is read. The vision transcriber refuses an archive
+  the same way whoever calls it, before it hashes, counts or sends
+  anything; a run that routes a renamed deck to vision, by its suffix,
+  fails that document closed rather than sending it. Reading the deck with `DeckTranscriber` there
   instead was the other choice, but the step writes one transcription
   file and has nowhere to keep the readings of the images a deck's
   slides embed, which a run keeps beside the deck's record. Only

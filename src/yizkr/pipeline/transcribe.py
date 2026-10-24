@@ -263,6 +263,35 @@ def require_pdf_renderer(
         )
 
 
+# the leading bytes of a ZIP archive, as a deck is: a member's local
+# header, an empty archive's end record, a spanned archive's marker
+ZIP_SIGNATURES = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
+
+
+def is_archive(media_path: Path) -> bool:
+    """Is the file at `media_path` a deck, by its suffix, or any ZIP
+    archive, by its own leading bytes, whatever it is called? Reads those
+    four bytes and nothing else; raises OSError for a file it cannot
+    read."""
+    if media_path.suffix.lower() in DECK_SUFFIXES:
+        return True
+    with open(media_path, "rb") as file:
+        return file.read(4).startswith(ZIP_SIGNATURES)
+
+
+def refuse_archive(media_path: Path) -> None:
+    """Raise ValueError for a file the vision engine is never given whole:
+    a deck, or any other ZIP archive (`is_archive`), whose members the
+    never-ingest list may name. A deck is read slide by slide
+    (`DeckTranscriber`), leaving those members out (ADR-0008); a renamed
+    one routed to vision fails its document instead of being sent."""
+    if is_archive(media_path):
+        raise ValueError(
+            f"{media_path.name} is a deck or another ZIP archive: it is "
+            "never sent whole to the vision engine"
+        )
+
+
 def preflight_vision_transcription(
     media_paths: Iterable[Path],
     which: Callable[[str], str | None] | None = None,
@@ -612,15 +641,10 @@ class LlmVisionTranscriber(_CheckedTranscriber):
         gave (an archived transcription), the one the adoption names
         (`made_by`). Raises UnreadableAnswer for an answer the engine cut
         off at its output limit (llm.at_output_limit), or that is not the
-        record. Raises ValueError for a deck before anything reads it: a
-        deck is read slide by slide (`DeckTranscriber`), never sent whole
-        (ADR-0008)."""
+        record. Raises ValueError for an archive (`refuse_archive`)
+        before anything hashes or sends it."""
         self._response = None
-        if media_path.suffix.lower() in DECK_SUFFIXES:
-            raise ValueError(
-                f"{media_path.name} is a deck: it is read slide by slide, "
-                "never sent whole to the vision engine"
-            )
+        refuse_archive(media_path)
         artifact = ArtifactRef.from_path(media_path)
         text = self.client.complete(TRANSCRIPTION_PROMPT, [media_path])
         self._response = text
@@ -639,6 +663,13 @@ class LlmVisionTranscriber(_CheckedTranscriber):
             language=self.last_resolution.code,
             engine=f"llm-vision:{made_by or self.client.model_identifier}",
         )
+
+    def transcribe(self, media_path: Path) -> Transcription:
+        """The checked transcription (`_CheckedTranscriber.transcribe`),
+        refusing an archive (`refuse_archive`) before its pages are
+        counted."""
+        refuse_archive(media_path)
+        return super().transcribe(media_path)
 
     def _reject(self, failed: TranscriptionCheckFailed) -> bool:
         """Reject the answer through the client, so that a client that

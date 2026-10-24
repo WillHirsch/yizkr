@@ -416,7 +416,32 @@ def cmd_register(args) -> int:
     return 0
 
 
+def _refuse_archive_for_vision(path: Path) -> None:
+    """Refuse, in one line naming the run's route, a file the vision step
+    would send whole that is a deck or any other ZIP archive, by its
+    suffix or its own leading bytes (transcribe.is_archive): its members
+    may be ones the never-ingest list names, and a run reads a deck slide
+    by slide, leaving them out (ADR-0008). It runs before the list is
+    followed into the corpus's decks, so nothing of the file but those
+    bytes is read, and before any client is made."""
+    from yizkr.pipeline.transcribe import is_archive
+
+    try:
+        archive = is_archive(path)
+    except OSError as exc:
+        sys.exit(f"cannot read {path}: {exc.strerror or exc}; refusing")
+    if archive:
+        sys.exit(
+            f"{path.name} is a deck or another ZIP archive, which this step "
+            "would send whole: a run reads a deck slide by slide, leaving "
+            "out what the never-ingest list names (yizkr scratch run); "
+            "refusing"
+        )
+
+
 def cmd_transcribe(args) -> int:
+    if args.engine == "llm":
+        _refuse_archive_for_vision(args.file)
     _refuse_if_excluded(args, args.file)
     if args.engine == "textfile":
         if not args.text_file:
@@ -429,17 +454,6 @@ def cmd_transcribe(args) -> int:
             fallback_language=args.fallback_language,
         )
     elif args.engine == "llm":
-        from yizkr.core.corpus import DECK_SUFFIXES
-
-        # the vision engine is given its file whole, embedded images and
-        # all, so a deck, whose images the never-ingest list may name, is
-        # left to a run, which reads it slide by slide (ADR-0008)
-        if args.file.suffix.lower() in DECK_SUFFIXES:
-            sys.exit(
-                f"{args.file.name} is a deck, which this step would send "
-                "whole: a run reads it slide by slide, leaving out what the "
-                "never-ingest list names (yizkr scratch run); refusing"
-            )
         from yizkr.pipeline.llm import make_client
         from yizkr.pipeline.transcribe import (
             LlmVisionTranscriber,
