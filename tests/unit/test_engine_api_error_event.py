@@ -106,3 +106,28 @@ class TestCallersAgree:
         events = [INIT, assistant("notice ", marks), assistant(ANSWER, {})]
         assembled = ClaudeCodeClient._assemble_stream(stream(events))
         assert assembled == (ANSWER if expected else "notice " + ANSWER)
+
+    @pytest.mark.parametrize("message", [None, "API Error"])
+    def test_an_api_error_event_with_no_message_dict_is_skipped(self, message):
+        """An API-error event whose message is not an object carries no
+        text or stop reason to read: both readers pass over it."""
+        event = {
+            "type": "assistant",
+            "message": message,
+            "session_id": "s1",
+            "error": "invalid_request",
+            "is_api_error_message": True,
+        }
+        events = [
+            INIT,
+            event,
+            {
+                "type": "result",
+                "is_error": True,
+                "api_error_status": BAD_REQUEST,
+                "result": "API Error",
+                "session_id": "s1",
+            },
+        ]
+        assert unsupported_model(events, 1) is None
+        assert classifier_refusal(events, 1) is None
