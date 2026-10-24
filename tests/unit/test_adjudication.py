@@ -13,6 +13,7 @@ universe says its two mentions are. No wiki, no model.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -55,6 +56,7 @@ from yizkr.pipeline.clustering import (
     CONFLICTING,
     DIFFERENT,
     IDENTITY_MAP,
+    PRINCIPALS_APART,
     SAME,
     UNCERTAIN,
     adjudication_calls,
@@ -1429,6 +1431,199 @@ def test_a_same_verdict_overrides_a_date_contradiction():
     assert {e["method"] for e in settled["mentions"].values()} == {ADJUDICATED}
     assert settled["summary"]["clusters"][ADJUDICATED] == 1
     assert settled["summary"]["cluster_mentions"][ADJUDICATED] == 3
+
+
+# -- events whose principals ended held apart (#610) -------------------------
+
+
+def emigrated(name: str, *, dated: bool, companion: bool = False) -> Doc:
+    """A register of Klara Löbig's emigration, with Klara its principal:
+    dated, her birth 1917 and the emigration 22 June 1938, or undated, as
+    the postcard gives it. With `companion`, Gustav Löbig, undated, takes
+    part too, in a role other than principal, a placeholder pattern no
+    source of the universe shows."""
+    entities = [
+        human("e1", "Klara Löbig"),
+        entity("v1", "Emigration of Klara Löbig", "migration"),
+    ]
+    claims = [("v1", "participant", item("e1"), role("principal"))]
+    truth = {"e1": "klara-loebig", "v1": "emigration-1938"}
+    if dated:
+        claims += [
+            ("e1", "date_of_birth", day(1917)),
+            ("v1", "point_in_time", day(1938, 6, 22)),
+        ]
+    if companion:
+        entities.append(human("e2", "Gustav Löbig"))
+        claims.append(("v1", "participant", item("e2"), role("companion")))
+        truth["e2"] = "gustav-loebig"
+    return register(name, entities, claims, truth)
+
+
+def emigrations() -> list[Doc]:
+    """The postcard's undated emigration of Klara and two dated registers
+    of it: the registers' Klaras link confidently, and so do their
+    emigrations, once she merged; the postcard's Klara pairs ambiguously
+    with each, and so does its emigration."""
+    return [
+        emigrated("postcard", dated=False),
+        emigrated("register", dated=True),
+        emigrated("extract", dated=True),
+    ]
+
+
+def postcard_verdicts(docs: list[Doc], person: str, event: str):
+    """The verdict on each ambiguous pair the postcard's mentions are in:
+    `person` on its Klara's, `event` on its emigration's."""
+    identity = cluster_corpus([doc.manifest for doc in docs])
+    names = {
+        doc.fingerprint(local_id, identity): (named(doc), local_id)
+        for doc in docs
+        for local_id in doc.truth
+    }
+
+    def verdict_of(pair: frozenset) -> str:
+        (local_id,) = {local_id for _key, local_id in pair}
+        assert ("postcard", local_id) in pair
+        return person if local_id == "e1" else event
+
+    return settle_by(docs, names, verdict_of)
+
+
+def named(doc: Doc) -> str:
+    """The name of one of the registers emigrated makes."""
+    (name,) = [
+        name
+        for name in ("postcard", "register", "extract")
+        if doc.sha1 == hashlib.sha1(name.encode()).hexdigest()
+    ]
+    return name
+
+
+def emigration_of(identity: dict, docs: list[Doc]) -> dict[str, dict]:
+    """Each register's emigration's entry of the map, by its name."""
+    return {
+        named(doc): identity["mentions"][doc.fingerprint("v1", identity)]
+        for doc in docs
+    }
+
+
+class TestPrincipalsHeldApart:
+    def test_a_different_person_keeps_the_emigrations_apart(self):
+        """The postcard's Klara is said `different` from the registers':
+        her emigration has a principal the registers' do not, so the part
+        `same` joins does not merge and falls back to its confident
+        components: the registers' emigrations merge, the postcard's
+        stays apart."""
+        docs = emigrations()
+        settled = postcard_verdicts(docs, DIFFERENT, SAME)
+        found = emigration_of(settled, docs)
+        assert found["postcard"]["method"] == AMBIGUOUS
+        assert found["register"]["method"] == CONFIDENT_COMPONENT
+        assert found["register"]["cluster"] == found["extract"]["cluster"]
+        assert found["postcard"]["cluster"] != found["register"]["cluster"]
+        (entry,) = [e for e in settled["review"] if e["kind"] == "migration"]
+        assert entry["status"] == ADJUDICATED
+        assert entry["contradiction"]["evidence"] == PRINCIPALS_APART
+        postcard = docs[0].fingerprint("v1", settled)
+        assert postcard in entry["contradiction"]["mentions"]
+        # a `same` could merge none of the postcard's emigration's pairs
+        assert {
+            p["same_merges"] for p in entry["pairs"] if p["link"] == AMBIGUOUS
+        } == {False}
+
+    def test_a_same_person_lets_the_emigrations_merge(self):
+        """The postcard's Klara is said `same` as the registers': the
+        three emigrations merge, adjudicated, as without the rule."""
+        docs = emigrations()
+        settled = postcard_verdicts(docs, SAME, SAME)
+        found = emigration_of(settled, docs)
+        assert {m["method"] for m in found.values()} == {ADJUDICATED}
+        assert len({m["cluster"] for m in found.values()}) == 1
+        (entry,) = [e for e in settled["review"] if e["kind"] == "migration"]
+        assert entry["contradiction"] is None
+
+    def test_a_different_person_with_no_verdict_on_the_events(self):
+        """Without verdicts on the emigrations, the `different` on the
+        people changes nothing of them: the registers' merge as their
+        confident component, the postcard's waits, ambiguous, for its
+        own verdicts, which a `same` could not settle."""
+        docs = emigrations()
+        identity = cluster_corpus([doc.manifest for doc in docs])
+        people = {
+            clustering._pair(*p["mentions"]): DIFFERENT
+            for entry in identity["review"]
+            if entry["kind"] == "human"
+            for p in entry["pairs"]
+            if p["link"] == AMBIGUOUS
+        }
+        settled = cluster_corpus([d.manifest for d in docs], None, people)
+        found = emigration_of(settled, docs)
+        assert found["postcard"]["method"] == AMBIGUOUS
+        assert found["register"]["method"] == CONFIDENT_COMPONENT
+        (entry,) = [e for e in settled["review"] if e["kind"] == "migration"]
+        assert entry["status"] == AMBIGUOUS
+        assert entry["contradiction"] is None
+
+    def test_a_participant_held_apart_in_another_role_is_no_principal(self):
+        """Gustav takes part in both emigrations, but not as principal,
+        and the two Gustavs are said `different`: the emigrations' one
+        principal, Klara, merged, so a `same` on the emigrations merges
+        them."""
+        docs = [
+            emigrated("postcard", dated=True, companion=True),
+            emigrated("register", dated=True, companion=True),
+        ]
+        identity = cluster_corpus([doc.manifest for doc in docs])
+        gustavs = {doc.fingerprint("e2", identity) for doc in docs}
+        verdicts = {
+            clustering._pair(*p["mentions"]): (
+                DIFFERENT if set(p["mentions"]) == gustavs else SAME
+            )
+            for entry in identity["review"]
+            for p in entry["pairs"]
+            if p["link"] == AMBIGUOUS
+        }
+        assert DIFFERENT in verdicts.values()
+        settled = cluster_corpus([d.manifest for d in docs], None, verdicts)
+        found = emigration_of(settled, docs)
+        assert {m["method"] for m in found.values()} == {ADJUDICATED}
+        assert len({m["cluster"] for m in found.values()}) == 1
+
+    def test_the_stage_asks_the_events_after_the_people(self):
+        """The stage asks the people first; the engine, told the
+        postcard's Klara is another, says `different` of hers and `same`
+        of every emigration pair. The postcard's emigration stays apart;
+        the registers' merge."""
+        docs = emigrations()
+        who = truths(docs)
+        identity = cluster_corpus([doc.manifest for doc in docs])
+        who[docs[0].fingerprint("e1", identity)] = "another-klara"
+        engine = Engine(who)
+        made, _ = run(docs, engine)
+        people, events = engine.prompts
+        assert "a human in" in people and "a migration in" not in people
+        assert "a migration in" in events
+        found = emigration_of(made.identity, docs)
+        assert found["postcard"]["method"] == AMBIGUOUS
+        assert found["register"]["cluster"] == found["extract"]["cluster"]
+        assert found["postcard"]["cluster"] != found["register"]["cluster"]
+
+    def test_a_pair_of_two_such_events_is_not_asked(self):
+        """The postcard and one register: once the postcard's Klara is
+        `different`, no `same` could merge the two emigrations, so the
+        stage does not ask them."""
+        docs = emigrations()[:2]
+        who = truths(docs)
+        identity = cluster_corpus([doc.manifest for doc in docs])
+        who[docs[0].fingerprint("e1", identity)] = "another-klara"
+        engine = Engine(who)
+        made, _ = run(docs, engine)
+        (people,) = engine.prompts
+        assert "a migration in" not in people
+        assert made.counts["asked_pairs"] == 1
+        found = emigration_of(made.identity, docs)
+        assert found["postcard"]["cluster"] != found["register"]["cluster"]
 
 
 def test_no_qid_reaches_the_evidence_or_the_prompt():

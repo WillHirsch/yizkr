@@ -1762,7 +1762,12 @@ class TestTheVerdicts:
         the `different` would cut the cluster's one pending pair: the
         postcard's mention would be a cluster of its own, adjudicated
         apart, and the confident component of the rest would merge, and
-        no cluster would hold two universe entities."""
+        no cluster would hold two universe entities. Nor would any event
+        have as its principals two people clustering keeps apart (#610):
+        Klara's emigration, `same` on every pair, holds the postcard's
+        Klara and the others', so it does not merge, and each of its
+        mentions stays apart. Universe keys cannot see that merge, since
+        the universe has one emigration, so it is asserted directly."""
         pair = frozenset(
             ((fc.LETTER, "Klara Löbig"), (fc.EXPORT, "Klara Löbig"))
         )
@@ -1789,6 +1794,21 @@ class TestTheVerdicts:
             klara[fc.EXPORT]
         )
         assert identity.map["summary"]["adjudicated_apart"] == 1
+        # Klara's emigration, which every document gives with its Klara as
+        # principal, never holds the postcard's with the others' (#610):
+        # the part `same` joins has principals held apart, so it falls
+        # back to its confident components, each mention alone
+        emigration = identity.of("emigration-1938")
+        assert set(emigration) == {fc.LETTER, fc.NARRATIVE, fc.DECK}
+        assert len({identity.cluster(f) for f in emigration.values()}) == 3
+        assert {identity.method(f) for f in emigration.values()} == {
+            clustering.AMBIGUOUS
+        }
+        contradiction = identity.candidate(emigration[fc.DECK])[
+            "contradiction"
+        ]
+        assert emigration[fc.LETTER] in contradiction["mentions"]
+        assert contradiction["evidence"] == clustering.PRINCIPALS_APART
         keys = universe_keys(runs, run)
         docs = [
             Doc(

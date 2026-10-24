@@ -336,7 +336,15 @@ disagree on dates); whatever else the pair's evidence says differs keeps
 it apart whatever the verdict: for people, stated sexes or civil
 statuses that cannot both hold, and kin that conflict; for places,
 containers that differ (neither equal nor nested); for organisations,
-places that differ; for events and unions, kinds that cannot be one. In
+places that differ; for events and unions, kinds that cannot be one;
+and for events, principals held apart (amended by #610, 2026-10-24, the
+owner's decision there): two events whose principals ended in clusters
+an adjudicator held apart, a member of one said `different` from a
+member of the other, contradict, since one event cannot happen to two
+people the identity map keeps apart. Events are settled after people,
+so a part of events whose `same` verdicts join two such events does not
+merge and falls back to its confident components, and a candidate
+cluster of two such events is one no `same` could merge. In
 a development-stage run a candidate cluster of two whose one pair no
 `same` could merge is not asked, since no verdict on it changes a
 cluster, and is counted; in keeper mode it is asked, for the review
