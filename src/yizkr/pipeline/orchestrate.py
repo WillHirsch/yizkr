@@ -2129,15 +2129,37 @@ class Orchestrator:
         statement-part it doubts (ADR-0023) and its category, and each
         finding that failed its checks on the first row, marked unchecked.
         `rows` is the batch the sheet lists, the extraction's batch
-        resolved."""
+        resolved; a finding names an image the document places by its
+        place, read from the transcription view (critique.artifact_places).
+        """
         if not doc.critique.exists() or not doc.batch.exists():
             return {}
-        from yizkr.pipeline.critique import entries, sheet_notes
+        from yizkr.pipeline.critique import (
+            artifact_places,
+            entries,
+            sheet_notes,
+        )
 
         extracted = ClaimBatch.model_validate_json(doc.batch.read_text())
         return sheet_notes(
-            entries(json.loads(doc.critique.read_text())), extracted, rows
+            entries(json.loads(doc.critique.read_text())),
+            extracted,
+            rows,
+            artifact_places(self._transcription_view(doc)),
         )
+
+    @staticmethod
+    def _transcription_view(doc: DocumentRun):
+        """The document's transcription view as it stands, or None when it
+        is missing or cannot be read: read only, never made."""
+        from yizkr.pipeline.transcribe import Transcription
+
+        try:
+            return Transcription.model_validate_json(
+                doc.transcription.read_text()
+            )
+        except (OSError, ValueError):
+            return None
 
     # the command an artifact's description says ingested it
     command = "yizkr ingest run"

@@ -1496,10 +1496,10 @@ class TestTheWriter:
 
 
 class TestTheCritic:
-    def test_it_lists_a_document_subject_by_its_content_key(self):
-        """The critic lists each claim by its subject's id; a document
-        subject has none, so it is listed by its content key, as the
-        prompts name a document."""
+    def test_it_lists_the_document_itself_as_this_document(self):
+        """The critic lists each claim by its subject's id; the claim's own
+        source has none, so it is listed as "this document" (ADR-0039
+        §10.4, #646)."""
         batch = ClaimBatch.model_validate(
             {
                 "extraction_run": run(),
@@ -1508,7 +1508,7 @@ class TestTheCritic:
             }
         )
         (listing,) = critique.listings(batch)
-        assert listing == (f"sha1:{DOC_REF.sha1}", "issued_by", "e9")
+        assert listing == ("this document", "issued_by", "e9")
 
     def test_its_agency_relations_include_issued_by(self):
         mismatch = critique.CATEGORIES["relation_kind_mismatch"]
