@@ -898,8 +898,10 @@ artifact a new QID, changes neither.
     non-deprecated statement of that date allows (a `point_in_time` with
     its `latest_date`, or every `inception` of the document), at its
     precision.
-  - The derivation reads only `date of death` statements and union
-    ends. A burial gives no "died by".
+  - It derives bounds only from `date of death` statements (dated,
+    bounded or unknown) and union ends, reading each document's
+    `inception` and the survivor's `civil_status` for their dates. A
+    burial gives no "died by".
   - A derived date is labelled as derived, stores nothing, is never
     written, and is never death evidence of its own.
 - Ambiguous date formats (07-01-1919: 7 January or July 1?) must not be
@@ -1572,8 +1574,9 @@ primitive network and the *same* term set describes any pair:
   - Lean-only: the rule covers a record's apparatus (certificates,
     registers, forms) and persons only, so organizations stay
     `issued_by` or `carried_out_by`, and a doctor whom a letter names
-    stays. A person given only by the role in which they report or
-    certify, with no name ("Informant: husband"), is not made.
+    stays. Also lean-only: a person given only by the role in which they
+    report or certify, with no name, is not made. Its case, "Informant:
+    husband", records nothing by the owner's decision (2026-10-24).
   - The GEDCOM adapter makes no death event.
   - Roles stay for the other events and for unions.
 - **A parent's kind** (ADR-0040 §4).
@@ -1646,9 +1649,9 @@ Amended by ADR-0040 (2026-10-24), carried out by its build:
   give no end. Views derive the end from the partners' death spans,
   labelled as derived, and never write it (ADR-0040 §2.6).
 - The link is death evidence for the partner it names (ADR-0040's Q9).
-- A widow's or widower's marker gives the survivor's `civil_status`
-  `widowed` and the union end, and no death statement for the late
-  spouse. The late spouse's "died by" date is derived (ADR-0040's Q5).
+- A widow's or widower's marker that names the late spouse gives the
+  survivor's `civil_status` `widowed` and the union end, and no death
+  statement for the late spouse. The late spouse's "died by" date is derived (ADR-0040's Q5).
 
 **The GEDCOM adapter makes unions (ADR-0036 §5).** A family's couple
 are its first two `HUSB` and `WIFE` lines, in whatever combination (a
@@ -1974,7 +1977,8 @@ not a signal to grow the schema on.
     death`, `place of burial` or `age at death` (ADR-0040's Q1), each a
     statement on the person.
   - A death a source states without a date is a `date of death` of
-    unknown value ("Uncertainty and time"). It is a truthy value, so it
+    unknown value ("Uncertainty and time"), save a widow marker's late
+    spouse (ADR-0040 §2.5). It is a truthy value, so it
     releases its person, as the site's `?deceased` and the export's dump
     already read it, because a source stated the death. A deprecated
     one, or a "no value", releases no one.

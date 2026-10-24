@@ -1239,8 +1239,9 @@ A `participant` claim gains a role, as Wikidata qualifies one with
   kin of someone it is about or a party to it. A rank, a job, an address
   or a signature is not another role. So a wedding's Standesbeamter and
   its non-kin witnesses are left out, and a kin witness or officiant
-  stays, with that role. The rule (lean-only) covers a record's apparatus
-  (certificates, registers, forms), and persons only: the issuing office
+  stays, with that role. Its scope is lean-only: the rule covers a
+  record's apparatus (certificates, registers, forms), and persons
+  only: the issuing office
   stays `issued_by` and a court `carried_out_by`, as the
   issuing-authority exception keeps them. Validation and the writer
   refuse any claim in the batch whose value is an `extract` false

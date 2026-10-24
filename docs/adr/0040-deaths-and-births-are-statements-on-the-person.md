@@ -173,7 +173,12 @@ draft:
   - its union-end sentence (around :133-138);
   - its "Dating a period" sentence, whose "its wedding and its end are
     events" (around :144-145) makes a death end an event;
-  - the roles and kinds it renders from the manifest.
+  - the roles and kinds it renders from the manifest;
+  - `DOCUMENT_ITSELF`'s hard-coded `author` line ("a letter's
+    signature, …", around :182-183), which reaches both extractors
+    through `document_block`. It is narrowed as the manifest's `author`
+    description is (Q6): a signature that only certifies or registers is
+    no authorship.
 
 **Related issues.**
 
@@ -232,11 +237,14 @@ of them preferred (rule 6).
   refused without one (Q10). The critic's `excerpt_does_not_state`
   (#607) judges that excerpt as any other.
 
-**What counts as one source.** "That source's statement of the death"
-is, in a GEDCOM export, the DEAT, since each DEAT carries its own
-citation: `1 DEAT Y` beside a dated DEAT gives both. In a document, it
-is the document. GEDCOM DEATs that state the death without a claim of
-their own are covered by Q4.
+**What counts as one source.** In a GEDCOM export, each DEAT, since
+each carries its own citation: `1 DEAT Y` beside a dated DEAT gives
+both. In a document, the document. GEDCOM DEATs that state the death
+without a claim of their own are covered by Q4.
+
+**A burial alone is not such a statement.** It gives its
+`burial_place` (Q3) and no `date_of_death`, so a burial record gets no
+"died by" (§2.4).
 
 #### 2.3 "The late", and a source's own date for the death
 
@@ -283,9 +291,11 @@ from. An undated or open-ended document gives no bound.
   - A document dated only "1890s" gives "by the 1890s", at decade
     precision.
 - **The late spouse of a stated union end** (§2.5) has no death
-  statement. They died no later than the date at which the same batch
-  presents the survivor as widowed (the survivor's `civil_status`
-  `widowed`, Q7), or, where it gives none, the document's own date.
+  statement from a widow marker. (A death record's "Ehefrau des Eugen"
+  does state her death, and gives its own statements.) They died no
+  later than the latest date at which the batch presents the survivor
+  as widowed (the survivor's `civil_status` `widowed`, Q7), or, where it
+  gives none, the document's own date.
   - The burial register gives Cäcilie "by 16 March 1909", at Eugen's
     widowhood.
   - The 1958 letter's "вдова Вашего покойного брата Рудольфа" gives
@@ -297,10 +307,12 @@ from. An undated or open-ended document gives no bound.
   at its precision.
 - **No bound.** A document with no stated date, or one whose date is
   open at the late end ("after 1945"), gives none.
-- **What the derivation reads.** Only `date_of_death` statements
-  (dated, bounded or unknown) and union ends. A burial gives no "died
-  by": it gives its `burial_place` with its `point_in_time` (or unknown
-  value), and no death bound (Q3).
+- **What the derivation reads.** It derives bounds only from
+  `date_of_death` statements (dated, bounded or unknown) and union
+  ends, reading each document's `inception` and the survivor's
+  `civil_status` for their dates. A burial gives no "died by": it gives
+  its `burial_place` with its `point_in_time` (or unknown value), and no
+  death bound (Q3).
 
 **Its inputs.** The derivation is a pure function over claims, or query
 rows, with their references. It reads no wiki of its own.
@@ -385,9 +397,9 @@ It gives no death statement for the spouse: the end is the evidence
     no death evidence from that marker, and stays possibly living
     (fails closed).
   - **What it cannot check.** A death record's "Ehefrau des Eugen"
-    need come with no `civil_status` `widowed`, so the guard may have
-    nothing to compare. The critic checks that the value is the person whose death
-    the record states.
+    need not come with a `civil_status` `widowed`, so the guard may
+    have nothing to compare. The critic checks that the value is the
+    person whose death the record states.
 
 #### 2.6 The derived end of a union
 
@@ -396,7 +408,7 @@ It gives no death statement for the spouse: the end is the evidence
 partner's death statements and their sources.
 
 **Each partner's death span** is the hull of all their non-deprecated
-dated death statements (derived "died by" bounds included), each at its
+dated `date_of_death` statements (derived "died by" bounds included), each at its
 stated bounds. It is never narrower than the statements it comes from,
 and no one statement is picked (rule 6). From the spans:
 
@@ -753,8 +765,10 @@ Build B (the PR's follow-up) carries these changes. In brief:
     sentence stop making every end an event;
   - the widow-marker rules end the union by `ended_by_death_of`, and
     give the late spouse no death statement (Q5); where one phrase is
-    both markers, it gives the union end alone (§2.5);
-  - "the late" gives the unknown value (Q5);
+    both markers, it gives the union end and the survivor's
+    `civil_status` `widowed`, and no death statement (§2.5);
+  - "the late", and any death stated without its date, gives the unknown
+    value, beside any place, cause or age (§2.2);
   - each says that a marriage plus a partner's death gives no end of any
     kind, and offers `ended_by_death_of` only for §2.5's stated forms,
     listing their words;
@@ -781,7 +795,10 @@ Build B (the PR's follow-up) carries these changes. In brief:
   - Cäcilie by 16 March 1909;
   - Rudolf by 25 December 1958;
   - an undated "the late" with no bound;
-  - two widowhoods in one source;
+  - two widowhoods in one source: a hypothetical batch that presents
+    Eugen as widowed on 15 December 1905 and on 16 March 1909 bounds his
+    late wife by 16 March 1909, the latest of the two, since the batch
+    cannot tell which widowhood each statement belongs to (rule 5);
   - a union's derived end, both when the spans lie apart and when they
     overlap.
 - **Clustering** (`pipeline/clustering.py`):
@@ -836,15 +853,15 @@ Build B (the PR's follow-up) carries these changes. In brief:
   - an unknown value is set aside and never listed;
   - parents are compared within one kind;
   - derived bounds are compared through the shared derivation, fed
-    from the graph with each death statement and its references, each
-    cited artifact's `inception`, the `civil_status` `widowed`
-    statements, and the union ends.
+    from the graph with each death statement, union end and
+    `civil_status` `widowed` statement with its references, and each
+    cited artifact's `inception`.
 - **Reconcile** (`ROSTER_QUERY`):
   - an unknown value;
   - death dates read through the shared derivation, fed with the same
-    rows as the disagreement report (each death statement and its
-    references, each cited artifact's `inception`, the `civil_status`
-    `widowed` statements, the union ends);
+    rows as the disagreement report (each death statement, union end
+    and `civil_status` `widowed` statement with its references, and
+    each cited artifact's `inception`);
   - the event arms stay, for events a curator makes (Q5), but for a
     birth or a death event they read the `principal` alone, as the
     timeline's arm does, so a witness of a curator-made death event
