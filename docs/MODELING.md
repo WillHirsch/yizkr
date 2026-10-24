@@ -373,6 +373,17 @@ hand-written batch makes an artifact-kind entity (ADR-0039 §10.1(b),
 §10.6). `placed_subject` stays `caption`'s alone. This and every other
 line dated #626 in this file describe the model from that build on.
 
+Built by #646 (2026-10-24), with the owner's answers to ADR-0039's
+questions 5 to 10: the rule above holds, and a document-subject property
+also takes a fourth subject, an `unclassified_entity` of the claim's own
+batch, the source's own mention of an artifact it only writes about,
+such as the 1958 letter's enclosed death certificate, whose
+`main_subject` the letter gives on that mention item (ADR-0039
+§10.1(c), route (c4)). A claim whose subject is not its own source
+carries the passage that conveys it as its excerpt: validation rejects
+one without it (`excerpt_required`) and the writer refuses it
+(ADR-0039 §10.4).
+
 **A retired property** stays in the instance and takes no new claim: it
 accepts nothing, validation refuses every claim of it, and no prompt that
 the manifest renders offers it. `spouse` is retired (ADR-0036): the spouse

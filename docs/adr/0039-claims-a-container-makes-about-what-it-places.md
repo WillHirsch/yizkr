@@ -1012,6 +1012,62 @@ the rule admits forms (a) and (b) only.
   ADR-0021's #583 amendment; ADR-0035's #583 line; MODELING.md's
   `document_subject` paragraph.
 
+**As built (#646, 2026-10-24),** with the owner's answers to questions
+5 to 10 (each its lean; (c4) for an enclosure):
+
+- **The subject forms.** `claims.document_subject_form` names four:
+  the source itself (`source`), an artifact it places (`placed`), a
+  batch entity of an artifact kind (`record`) and, under (c4), an
+  `unclassified_entity` of the batch (`mention`). Validation
+  (`claims.subject_problems`) and the writer (`writer.subject_refusal`)
+  take those and no other subject on a document-subject property; a
+  `placed` subject in the writer must also have an item. A claim of any
+  form but `source` with no excerpt is a reject under
+  `excerpt_required` and a `subject_rule` refusal whose message says it
+  carries no excerpt (question 8).
+- **The interim exception is gone**: `claims.STRUCTURED_ADAPTERS`,
+  `GEDCOM_ADAPTER`, `structured_batch` and the `structured` argument;
+  `gedcom.ADAPTER_IDENTIFIER` keeps its value, "gedcom-adapter".
+  `claims.unplaced_captions` is renamed `unplaced_claims`: it counts
+  every caption or document-subject claim about an artifact other than
+  its source whose source has no placed media given, and
+  `unplaced_hint` says "claim(s) about an artifact other than their
+  source".
+- **The kind check.** `claims.artifact_kind_problems` names an entity
+  record or a local ref of an artifact kind, each problem ending in
+  `[artifact_kind]`. `extract.salvage_valid_claims` rejects such a
+  claim under that reason, counted in `rejected_by_reason`, and refuses
+  an entity manifest that holds such a record, as it refuses one that
+  fails validation. `ChunkedClaimExtractor._parse_entity_manifest`
+  gives such a record as a problem, as it does an unknown kind, so the
+  answer is unusable and, after its attempts, the manifest falls back,
+  which the run report counts as the `manifest` fallback tier.
+  `artifact_fragment` is no artifact kind, and passes. Validation
+  itself does not apply the check, so a hand-written batch or a
+  structured record keeps an artifact-kind entity.
+- **The critic** names the source as "this document" and an image the
+  document places by its first place ("page 6, image 1",
+  `critique.artifact_places`), as the extraction prompts list it; a
+  finding that names a claim so resolves to it at the critique and on
+  the review sheet, which reads the transcription view for the places.
+  A (c4) mention is named by its manifest id, as every entity is, which
+  the entities block labels with its type hint.
+- **The report** counts the document-subject claims by subject form
+  (`container_claims.document_subject_by_form`: `source`, `placed`,
+  `record`, `mention`, and `other` for a subject validation refuses).
+- **The export** (question 9) leaves out whole a document-subject
+  statement whose subject is `part of`, at any rank, an item one of its
+  references is `stated in` (`backup.placed_subject_rule`).
+- **The site.** `named_in_html` names a (c4) mention item, which has no
+  artifact page, by its label, unlinked.
+- **What is not built.** The manifest has no `machine_assisted` item yet
+  (ADR-0008's follow-up B), so the booklet's translation claims carry
+  no such qualifier in the pipeline; the fixture universe gives them
+  with it, as planned vocabulary. The fixture corpus holds no booklet,
+  and its deck's photograph is a decoration-sized stand-in that the
+  deck's transcription does not mark, so no corpus document places an
+  image and the corpus gives no claim about one.
+
 #### 10.7 Amendments to other records (#626, 2026-10-24)
 
 Each gets a dated line; no earlier amendment line is rewritten.
