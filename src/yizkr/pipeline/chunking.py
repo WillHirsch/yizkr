@@ -1370,11 +1370,12 @@ class ChunkedClaimExtractor:
         refused (ADR-0035 §5): the entity keeps its label, aliases and
         kind, and the manifest counts each reason by its category, and the
         records set aside (one record can give several reasons, and one
-        whose only reasons are name parts dropped for an empty string
-        stands). A place's container that cannot stand is dropped alone,
-        its record standing (claims.drop_containers): its evidence is
-        looked for in `text`, the transcription, when given, and each
-        container checked is kept for the local audit."""
+        whose only reasons are name parts dropped for an empty string or
+        entries read as their text stands). A place's container that
+        cannot stand is dropped alone, its record standing
+        (claims.drop_containers): its evidence is looked for in `text`,
+        the transcription, when given, and each container checked is kept
+        for the local audit."""
         _, item_keys = load_vocabulary()
         for obj in scan_json_objects(response):
             if "entities" not in obj:

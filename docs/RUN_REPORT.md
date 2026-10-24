@@ -306,21 +306,27 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   (each container checked, with its evidence and the transcription line
   it was compared with, stays in the extraction's local
   `containers.json`); the reasons records were set aside by, by
-  category (`schema`, `dropped`, `kind`, `addition`, `initial`,
-  `no name part`, `no toponym`; `report.SET_ASIDE_REASONS`); the notes by category
-  (`kind`, `relation`, `date_reading`, `identity`, `other`, the
-  categories of `claims.JudgementNote`); and the notes set aside. Counts
-  only, never a label, a reason's text or a note's text.
+  category (`schema`, `dropped`, `read as text`, `kind`, `addition`,
+  `initial`, `no name part`, `no toponym`; `report.SET_ASIDE_REASONS`);
+  the notes by category (`kind`, `relation`, `date_reading`,
+  `identity`, `other`, the categories of `claims.JudgementNote`); and
+  the notes set aside. Counts only, never a label, a reason's text or a
+  note's text.
   `coverage.json`'s `records.set_aside` counts reasons, not records: a
-  record that does not parse gives one `schema`, and one of the wrong
-  kind one `kind`, but any other record gives one for each problem found
-  in it (each part of a name that no form of the entity holds gives its
+  record that does not parse gives one `schema` (besides any
+  `read as text` or `dropped` reasons given before it), and one of the
+  wrong kind one `kind`, but any other record gives one for each problem
+  found in it (each part of a name that no form of the entity holds gives its
   own `addition`, and a place's name is checked as written and again by
   its toponym and its head), so the reasons can outnumber the records
   set aside, which `records.set_aside_records` counts, once each. A
   `dropped` reason counts a name part dropped for an empty string
   (ADR-0035 §5, #497), and the record it leaves often stands, so it is
   counted among the reasons whether or not its record was set aside. A
+  `read as text` reason counts an entry of a list of strings written as
+  an object holding its text, read as that text (ADR-0035 §5, #514); it
+  sets nothing aside, and the record then stands or is set aside on its
+  other reasons, as `dropped` does. A
   record set aside on a mention of a kind that takes one (a
   person, place, organisation or family) leaves that mention recordless,
   so the recordless mentions are those given no record and those whose

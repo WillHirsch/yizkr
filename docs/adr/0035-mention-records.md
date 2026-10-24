@@ -113,6 +113,25 @@ stands after a drop is not counted in `records.set_aside_records`. The
 entity-manifest prompt says to omit a field the model cannot fill,
 never to write it as "".
 
+Amended by #514 (2026-10-23, option (a) of its reopening): an entry of a
+list of strings that is written as an object holding only a string
+`written`, the shape of a given name, a person's surname or a place's
+name, is read as that text before the record is validated (§5), as
+#497's empty strings are, by its shape, never its wording. The lists are
+a person's `patronymics`, `nicknames`, `titles`, `suffixes` and
+`unsplit`, an organisation's `names`, `kinds` and `places`, and a
+family's `surnames`, where the object may also carry a person's surname
+`type` (`birth`, `married` or `other`, or one written as "", which
+#497 reads as absent), which the reading leaves out: a family's surname
+has none. Each entry read gives the reason
+`read as text`, counted in `coverage.json` (`records.set_aside`) and the
+run report beside `dropped`; it sets nothing aside, and what is left
+stands or is set aside as any record does (a text read that no form of
+the entity holds is an `addition`). An object holding anything else, a
+`written` that is no string, and a place's container (an object of its
+own, §2.2) are not read so. The entity-manifest prompt is
+unchanged, so cached answers are reused.
+
 Amended by #499 (2026-10-16): every form a source uses to name or
 address a person is an alias, and each that is no plain name form is
 also a `referred_to_as` claim (ADR-0018, as amended). §8's cleanup keeps
@@ -1456,7 +1475,10 @@ surname types, roles, classes and note categories. Beyond the schema:
   principal is not its informant.
 
 **Omissions and inconsistencies are flagged, never repaired by parsing.**
-An omitted optional field is empty. A structure that fails validation is
+An omitted optional field is empty. Two shapes are read structurally
+first, each counted, never a word (amended by #497 and #514): an empty
+string, and an entry of a list of strings written as an object holding
+its text. A structure that fails validation is
 set aside, never the whole manifest: the entity keeps its label, aliases
 and kind, and the reason is counted in the extraction's `coverage.json`
 (`records.set_aside`, by category), as is the record

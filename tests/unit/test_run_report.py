@@ -2932,6 +2932,12 @@ class TestContent:
             },  # fmt: skip
             {"kind": "human", "status": "name"},
             {"kind": "human", "status": "name", "nicknames": [""]},
+            {
+                "kind": "human",
+                "status": "name",
+                "given": [{"written": "Hildegard"}],
+                "titles": [{"written": "Hildegard"}],
+            },
         ]
         reasons = set()
         for structure in records_given:

@@ -1425,6 +1425,11 @@ _STRUCTURE_MODELS = {
 }
 
 
+# the types a person's surname takes, which a family's surname written
+# in that shape may carry (`_read_written`)
+_SURNAME_TYPES = get_args(Surname.model_fields["type"].annotation)
+
+
 def _part_model(annotation) -> type | None:
     """The type of one name part a record field holds: `str` or a part
     model for a list of them or an optional one, None for any other
@@ -1455,13 +1460,37 @@ def _clear_empty_part(part, model: type) -> tuple[object, str | None]:
     return cleared, None
 
 
+def _read_written(part, kind: str) -> tuple[object, str | None]:
+    """An entry of a list of strings with the shape of a name part
+    object read as its text (ADR-0035 §5): an object holding only a
+    string `written`, as a given name, a person's surname or a place's
+    name is written, or, in a family's `surnames`, its only list, that
+    and a person's surname `type`, or one written as "". Returns the
+    entry, as text where it was read so, and what it was read from, None
+    when it was left as it is. Only the shape is read, never the
+    wording; any other object is left for validation."""
+    if not isinstance(part, dict) or not isinstance(part.get("written"), str):
+        return part, None
+    if set(part) == {"written"}:
+        return part["written"], "an object holding only its written text"
+    if (
+        kind == "family"
+        and set(part) == {"written", "type"}
+        and part["type"] in (*_SURNAME_TYPES, "")
+    ):
+        return part["written"], "an object holding its written text and a type"
+    return part, None
+
+
 def _clear_empty(structure: dict) -> tuple[dict, list[str]]:
-    """A mention record as the model wrote it, with its empty strings
-    read structurally (ADR-0035 §5): an optional field written as "" is
-    absent, and a name part that is "", or whose required field is, is
-    dropped, each drop giving the reason `dropped`. Only an empty string
-    is read so, never a word; whatever else the record holds is left for
-    validation."""
+    """A mention record as the model wrote it, with its shapes read
+    structurally (ADR-0035 §5). An entry of a list of strings written as
+    an object holding its text (`_read_written`) is that text, giving the
+    reason `read as text`. An optional field written as "" is absent,
+    and a name part that is "", or whose required field is, is dropped,
+    each drop giving the reason `dropped`. Only these shapes and an
+    empty string are read so, never a word; whatever else the record
+    holds is left for validation."""
     kind = structure.get("kind")
     model = _STRUCTURE_MODELS.get(kind) if isinstance(kind, str) else None
     if model is None:
@@ -1476,11 +1505,17 @@ def _clear_empty(structure: dict) -> tuple[dict, list[str]]:
         listed = isinstance(value, list)
         kept = []
         for index, part in enumerate(value if listed else [value]):
+            where = f"{field}.{index}" if listed else field
+            if part_model is str and listed:
+                part, shape = _read_written(part, kind)
+                if shape is not None:
+                    dropped.append(
+                        f"read as text: structure.{kind}.{where}: {shape}"
+                    )
             part, empty = _clear_empty_part(part, part_model)
             if empty is None:
                 kept.append(part)
                 continue
-            where = f"{field}.{index}" if listed else field
             dropped.append(
                 f"dropped: structure.{kind}.{where}{empty}: an empty string"
             )
@@ -1498,10 +1533,12 @@ def set_aside_structure(entity: dict) -> tuple[dict, list[str]]:
     mention record set aside when the record cannot stand (ADR-0035 §5),
     and the reasons.
 
-    The record's empty strings are read first (`_clear_empty`): an
-    optional field written as "" is absent, and a name part that is "",
-    or whose required field is, is dropped, each giving the reason
-    `dropped`. What is left stands or is set aside as the record would.
+    The record's shapes are read first (`_clear_empty`): an entry of a
+    list of strings written as an object holding its text is that text,
+    giving the reason `read as text`; an optional field written as "" is
+    absent, and a name part that is "", or whose required field is, is
+    dropped, each giving the reason `dropped`. What is left stands or is
+    set aside as the record would.
     The entity keeps its label, aliases and kind: a record that fails is
     dropped, never the entity or the manifest, and the entity is then
     recordless, with no `structure` key. A record that does not parse

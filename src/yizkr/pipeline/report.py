@@ -316,12 +316,14 @@ FALLBACK_TIERS = frozenset({"manifest", "segmentation"})
 # the leading labels of the reasons an extraction sets a mention record
 # aside by (ADR-0035 §5): claims.set_aside_structure's `schema` and
 # `dropped` (a name part dropped for an empty string, which leaves the
-# record standing when what is left can stand) and
-# claims.structure_problems' own
+# record standing when what is left can stand), `read as text` (an entry
+# of a list of strings written as an object holding its text, read as
+# that text, which sets nothing aside) and claims.structure_problems' own
 SET_ASIDE_REASONS = frozenset(
     {
         "schema",
         "dropped",
+        "read as text",
         "kind",
         "addition",
         "initial",
@@ -1180,7 +1182,8 @@ def _records(coverage: dict) -> dict[str, Any]:
     the report's fixed vocabulary, OTHER for one it does not know.
 
     The coverage's `set_aside` counts reasons, not records: a record that
-    does not parse counts once, as `schema`, one of the wrong kind once,
+    does not parse counts once, as `schema` (besides any `read as text`
+    or `dropped` reasons given before it), one of the wrong kind once,
     as `kind`, and any other once for each problem found in it; an
     entity's note set aside counts once, as `note`, which is told apart
     here as a note set aside.

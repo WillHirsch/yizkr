@@ -1095,6 +1095,46 @@ class TestTheManifestsRecords:
             "appellation_parts": 0,
         }
 
+    def test_a_list_entry_written_as_an_object_reads_as_its_text(
+        self, tmp_path
+    ):
+        """An entry of a list of strings written as an object holding
+        only `written` is that text, counted as `read as text`: the
+        record stands when what is left can, and is no record set aside;
+        one whose text is no name part of the entity is then set aside
+        for `addition`, once (#514)."""
+        batch, coverage = extract(
+            tmp_path,
+            HILDEGARD
+            | {
+                "structure": {
+                    "kind": "human",
+                    "status": "name",
+                    "given": [{"written": "Hildegard"}],
+                    "surnames": [{"written": "Löbig"}],
+                    "unsplit": [{"written": "Hildegard Löbig"}],
+                }
+            },
+            SEBASTIAN
+            | {
+                "structure": {
+                    "kind": "human",
+                    "status": "name",
+                    "given": [{"written": "Sebastian"}],
+                    "titles": [{"written": "Inh."}],
+                }
+            },
+        )
+        structures = {e.id: e.structure for e in batch.entities}
+        assert structures["e1"].unsplit == ["Hildegard Löbig"]
+        assert structures["e2"] is None
+        assert coverage["records"]["set_aside_records"] == 1
+        assert coverage["records"]["set_aside"] == {
+            "addition": 1,
+            "read as text": 2,
+        }
+        assert coverage["records"]["unsplit_forms"] == 1
+
     def test_a_manifest_with_bad_records_is_never_refused(self):
         parsed, problems = ChunkedClaimExtractor._parse_entity_manifest(
             manifest(
