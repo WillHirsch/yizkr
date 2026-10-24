@@ -351,7 +351,8 @@ cluster of two such events is one no `same` could merge. Likewise for
 unions, couple members held apart (amended by #641, 2026-10-24, the
 owner's decision there): two unions whose couple members (spouses or
 partners) ended in clusters an adjudicator held apart contradict, since
-one union cannot have two spouses the identity map keeps apart. Unions
+one union's spouse or partner cannot be two people the identity map
+keeps apart. Unions
 are settled after people, so a part of unions whose `same` verdicts
 join two such unions does not merge and falls back to its confident
 components, and a candidate cluster of two such unions is one no `same`

@@ -769,8 +769,9 @@ refuses). The module docstrings are the full account; in short:
   cannot-link), a `same` pair that differs by more than its own dates (a
   verdict excuses a date conflict on its own pair, never stated sexes,
   civil statuses or kin that conflict, a place's containers or an
-  organisation's places that differ, or event kinds that cannot be
-  one), or any two members whose evidence says they differ. A cluster
+  organisation's places that differ, event kinds that cannot be one,
+  or events whose principals, or unions whose couple members, ended in
+  clusters held apart), or any two members whose evidence says they differ. A cluster
   of two whose one pair no `same` could merge is not asked in a
   development-stage run (no verdict changes a cluster), and is counted.
   A part that holds a pair contradicted falls back to its confident

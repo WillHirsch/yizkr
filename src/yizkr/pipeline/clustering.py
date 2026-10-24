@@ -245,15 +245,15 @@ ended in clusters held apart, a member of one said `different` from a
 member of the other (evidence `principals_apart`), or two unions with
 couple members (spouses or partners) that ended so (`couple_apart`;
 both people_apart): one event cannot happen to two people the identity
-map keeps apart, nor one union have two spouses it keeps apart. A
-verdict excuses a date conflict on its own pair and nothing else: never
-stated sexes or civil statuses that cannot both hold, kin that
-conflict, a place's containers that differ, an organisation's places
-that differ, event kinds that cannot be one, or principals or couple
-members held apart. Each ambiguous review pair records whether a
-`same` could merge it (`same_merges`); a candidate cluster of two whose
-one pair could not (cannot_merge) is not pending in a run whose
-verdicts merge. Any other
+map keeps apart, nor one union's spouse or partner be two people it
+keeps apart. A verdict excuses a date conflict on its own pair and
+nothing else: never stated sexes or civil statuses that cannot both
+hold, kin that conflict, a place's containers that differ, an
+organisation's places that differ, event kinds that cannot be one, or
+principals or couple members held apart. Each ambiguous review pair
+records whether a `same` could merge it (`same_merges`); a candidate
+cluster of two whose one pair could not (cannot_merge) is not pending
+in a run whose verdicts merge. Any other
 part merges, with the method `adjudicated` when a `same` pair is among
 its links, every member of the components it joins included, since the
 verdict made the merge; and `confident_component` when its confident
@@ -2685,8 +2685,8 @@ def cluster_corpus(
         clusters held apart (held_apart), COUPLE_APART when two unions
         have couple members that did, which no verdict on the events or
         unions excuses: one event cannot happen to two people the
-        clusters keep apart, nor one union have two spouses they keep
-        apart. None for any other pair."""
+        clusters keep apart, nor one union's spouse or partner be two
+        people they keep apart. None for any other pair."""
         if a.kind in EVENT_KINDS and b.kind in EVENT_KINDS:
             ones, others = _principals(a), _principals(b)
             evidence = PRINCIPALS_APART

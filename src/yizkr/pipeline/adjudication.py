@@ -622,8 +622,9 @@ def adjudicate(
             {pair: verdict for pair, (verdict, _reason) in verdicts.items()},
         )
     # the clusters no verdict could merge, left unasked when verdicts
-    # merge, counted on the last map: a cluster of events can become one
-    # only once its people's verdicts are in, and none is ever asked
+    # merge, counted on the last map: a cluster of unions or events can
+    # become one only once its people's verdicts are in, and none is ever
+    # asked
     unmergeable = (
         sum(
             clustering.cannot_merge(entry)
