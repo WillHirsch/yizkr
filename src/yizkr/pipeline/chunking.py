@@ -1236,14 +1236,15 @@ class ChunkedClaimExtractor:
 
     Matches LlmClaimExtractor's extract() signature so the CLI treats the
     strategies interchangeably. After extract(), `failed_chunks` lists
-    chunks that produced nothing despite retries, with their reasons in
-    `failure_reasons` — the batch is still returned (partial progress is
-    the point) and the caller decides how loudly to fail — and
-    `attention` says what a reader of the batch should know: a fallback
-    tier, or why it holds no claims. An extraction that would end with no
-    claims for want of a usable answer raises ExtractionFailed instead
-    (`_refuse_empty`), so a batch without claims is returned only when the
-    answers the extractor accepted say the document holds none.
+    chunks that produced nothing (after their retries, or at once when
+    refused), with their reasons in `failure_reasons` — the batch is still
+    returned (partial progress is the point) and the caller decides how
+    loudly to fail — and `attention` says what a reader of the batch should
+    know: a fallback tier, or why it holds no claims. An extraction that
+    would end with no claims for want of a usable answer raises
+    ExtractionFailed instead (`_refuse_empty`), so a batch without claims
+    is returned only when the answers the extractor accepted say the
+    document holds none.
     """
 
     def __init__(
@@ -2063,7 +2064,7 @@ class ChunkedClaimExtractor:
         the model's answers could not be used, rather than hand on an empty
         batch that reads as a claim-free document's:
 
-        - chunks failed after their retries;
+        - chunks failed;
         - the chunks' answers held objects the parser could not read as
           claims (parse_chunk_unread), such as claims wrapped in one
           object or written with other keys;
