@@ -62,31 +62,35 @@ itself in its own `--help`.
     the fixture undoes after the last unit test.
   - No unit test reaches the network (the `_no_network` fixture, #618).
     A name lookup (`socket.getaddrinfo`, `gethostbyname`,
-    `gethostbyname_ex`) of any host but a loopback one, and a socket
-    `connect` or `connect_ex` to any address but a loopback one, raise
-    `NetworkRefused`, whose message names the test and what it asked
-    for. Unix sockets, servers on loopback (the status page's, the
-    live-stack lock's test server) and lookups of `localhost` go
-    through. The proxy variables (`http_proxy`, `https_proxy`,
-    `all_proxy`, in either case) are removed, since a proxy listening on
-    loopback would carry a request past the guard. `NetworkRefused` is
-    no `OSError`, so a client that falls back on a failed connection
-    does not take it for one; and since code can still catch it (the
-    bounded vocabulary read catches every exception), each refusal is
-    recorded and fails the test at its teardown. A unit test that reads
-    the wiki through a real `WikiClient` gives it a stand-in `api_get`
-    (or `page_text`, `snapshot`) instead, as
-    `tests/unit/test_registration_flags.py` and
+    `gethostbyname_ex`) or a reverse lookup (`gethostbyaddr`,
+    `getnameinfo`) of any host or address but a loopback one, and a
+    socket `connect` or `connect_ex` to any address but a loopback one,
+    raise `NetworkRefused`, whose message names the test and what it
+    asked for. Unix sockets, servers on loopback (the status page's, the
+    live-stack lock's test server) and lookups of `localhost` itself go
+    through; a name under `localhost` is refused, as the system's
+    resolver may send it to the DNS server. The proxy variables
+    (`http_proxy`, `https_proxy`, `all_proxy`, in either case) are
+    removed, since a proxy listening on loopback would carry a request
+    past the guard. `NetworkRefused` is no `OSError`, so a client that
+    falls back on a failed connection does not take it for one; and
+    since code can still catch it (the bounded vocabulary read catches
+    every exception), each refusal is recorded and fails the test at its
+    teardown. A unit test that reads the wiki through a real
+    `WikiClient` gives it a stand-in `api_get` (or `page_text`,
+    `snapshot`) instead, as `tests/unit/test_registration_flags.py` and
     `tests/unit/test_homonym_labels.py` do. The full unit suite passes
-    with the guard on. Child processes a test starts, and fixtures of a
-    module or of the session (which set up before the test's), are not
-    guarded; the processes inherit the environment without its proxy
-    variables. The live tests under `tests/integration` are not guarded at all.
+    with the guard on. Not guarded: UDP sends (`sendto`, `sendmsg`),
+    child processes a test starts, which inherit the environment without
+    its proxy variables, and fixtures of a module or of the session,
+    which set up before the test's. The live tests under
+    `tests/integration` are not guarded at all.
   - The config directory, the no-op sync calls, the recorded anomaly
     timers, the removed `$YIZKR_ANOMALIES` and proxy variables, the
-    network guard and the instance record's folder are patches held by the test's own `monkeypatch`, so a test
-    that calls `monkeypatch.undo()` loses them for the rest of its run. A
-    test that needs a patch for part of its run scopes it with
+    network guard and the instance record's folder are patches held by
+    the test's own `monkeypatch`, so a test that calls
+    `monkeypatch.undo()` loses them for the rest of its run. A test that
+    needs a patch for part of its run scopes it with
     `with monkeypatch.context() as patch:` instead.
 - **No unit test depends on real elapsed time or the real wall clock**
   (#437). Code that reads a clock or sleeps takes a seam (`clock=`,

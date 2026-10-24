@@ -3883,7 +3883,10 @@ class TestTheClientsBoundedReads:
             every label (snapshot), as the unit tests read no wiki (#618).
             The page read is all a test that gives no api_get of its own
             asks for."""
-            assert params.get("prop") == "revisions", params
+            # pytest.fail, a BaseException, passes the bounded read's
+            # `except Exception`, which an AssertionError would not
+            if params.get("prop") != "revisions":
+                pytest.fail(f"unexpected api_get {params}")
             return {"query": {"pages": [{"missing": True}]}}
 
         client.api_get = no_mapping_page

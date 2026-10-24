@@ -66,11 +66,13 @@ changing what they check:
 
 - **No network.** No unit test reaches past this machine (the
   `_no_network` fixture). A name lookup (`socket.getaddrinfo`,
-  `gethostbyname`, `gethostbyname_ex`) of any host but a loopback one,
-  and a socket connect to any address but a loopback one, raise
+  `gethostbyname`, `gethostbyname_ex`) or a reverse lookup
+  (`gethostbyaddr`, `getnameinfo`) of any host or address but a loopback
+  one, and a socket connect to any address but a loopback one, raise
   NetworkRefused, naming the test and what it asked for. Unix sockets,
   loopback servers (the status page's, the live-stack lock's) and
-  lookups of no host or `localhost` go through. NetworkRefused is no
+  lookups of no host or of `localhost` itself go through; a name under
+  `localhost` may go to the DNS server, so it is refused. NetworkRefused is no
   OSError, so a client that falls back when a connection fails does not
   take it for one; and as code can still catch it, every refusal is
   recorded, and the test fails at its teardown if it made any. A unit
@@ -320,14 +322,16 @@ class NetworkRefused(Exception):
 
 def is_local_host(host) -> bool:
     """Whether a lookup of `host` stays on this machine: no host (None or
-    empty, which getaddrinfo reads as the local one), `localhost` or a
-    name under it, or a loopback or unspecified address."""
+    empty, which getaddrinfo reads as the local one), `localhost`, or a
+    loopback or unspecified address."""
     if host is None:
         return True
     if isinstance(host, (bytes, bytearray)):
         host = bytes(host).decode("ascii", "replace")
     host = str(host).strip("[]").split("%", 1)[0].rstrip(".").lower()
-    if host in ("", "localhost") or host.endswith(".localhost"):
+    # a name under localhost may go to the DNS server, as the system's
+    # resolver need not answer it locally
+    if host in ("", "localhost"):
         return True
     try:
         address = ipaddress.ip_address(host)
@@ -364,7 +368,12 @@ class NetworkGuard:
     and records each refusal. Installed, it also removes the proxy
     variables."""
 
-    LOOKUPS = ("getaddrinfo", "gethostbyname", "gethostbyname_ex")
+    LOOKUPS = (
+        "getaddrinfo",
+        "gethostbyname",
+        "gethostbyname_ex",
+        "gethostbyaddr",
+    )
     CONNECTS = ("connect", "connect_ex")
 
     def __init__(self, test: str) -> None:
@@ -397,6 +406,15 @@ class NetworkGuard:
 
         return guarded
 
+    def reverse_lookup(self, real):
+        def guarded(address, *args, **kwargs):
+            host = address[0] if isinstance(address, tuple) else address
+            if not is_local_host(host):
+                self.refuse(f"socket.getnameinfo({address!r})")
+            return real(address, *args, **kwargs)
+
+        return guarded
+
     def install(self, monkeypatch) -> None:
         for name in PROXY_VARIABLES:
             monkeypatch.delenv(name, raising=False)
@@ -404,6 +422,9 @@ class NetworkGuard:
             monkeypatch.setattr(
                 socket, name, self.lookup(name, getattr(socket, name))
             )
+        monkeypatch.setattr(
+            socket, "getnameinfo", self.reverse_lookup(socket.getnameinfo)
+        )
         for name in self.CONNECTS:
             monkeypatch.setattr(
                 socket.socket,

@@ -342,7 +342,7 @@ class TestHostSettings:
 class TestNoNetwork:
     @pytest.mark.parametrize(
         "host",
-        [None, "", "localhost", "LOCALHOST.", "status.localhost", b"localhost"]
+        [None, "", "localhost", "LOCALHOST.", b"localhost"]
         + ["127.0.0.1", "127.8.0.1", "::1", "[::1]", "0.0.0.0", "::"],
     )
     def test_a_lookup_of_this_machine_is_local(self, host):
@@ -351,6 +351,8 @@ class TestNoNetwork:
     @pytest.mark.parametrize(
         "host",
         ["wiki.invalid", "wiki.example", "localhost.example", "192.0.2.1"]
+        # the system's resolver may send a name under localhost to DNS
+        + ["status.localhost"]
         + ["2001:db8::1", "[2001:db8::1]", b"query.invalid"],
     )
     def test_a_lookup_of_another_host_is_not(self, host):
@@ -395,16 +397,21 @@ class TestNoNetwork:
 
     @pytest.mark.parametrize("call", ["connect", "connect_ex"])
     def test_a_connect_off_this_machine_is_refused(self, _no_network, call):
-        with (
-            socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock,
-            pytest.raises(conftest.NetworkRefused, match="192.0.2.1"),
-        ):
-            getattr(sock, call)(("192.0.2.1", 80))
+        """A connect the guard missed would fail at once on the
+        non-blocking socket, with no wait for an answer."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setblocking(False)
+            with pytest.raises(conftest.NetworkRefused, match="192.0.2.1"):
+                getattr(sock, call)(("192.0.2.1", 80))
         with pytest.raises(conftest.NetworkRefused, match="gethostbyname"):
             socket.gethostbyname("wiki.invalid")
         with pytest.raises(conftest.NetworkRefused, match="hostbyname_ex"):
             socket.gethostbyname_ex("wiki.invalid")
-        assert len(_no_network.refused) == 3
+        with pytest.raises(conftest.NetworkRefused, match="gethostbyaddr"):
+            socket.gethostbyaddr("192.0.2.1")
+        with pytest.raises(conftest.NetworkRefused, match="getnameinfo"):
+            socket.getnameinfo(("192.0.2.1", 80), 0)
+        assert len(_no_network.refused) == 5
         _no_network.refused.clear()
 
     def test_a_wiki_client_s_read_is_refused(self, _no_network):
@@ -428,6 +435,16 @@ class TestNoNetwork:
             client.page_text("Yizkr:Vocabulary")
         assert _no_network.refused
         _no_network.refused.clear()
+
+    def test_every_unit_test_is_guarded(self, request):
+        """The guard is autouse: this test does not ask for it."""
+        assert "_no_network" in request.fixturenames
+        with pytest.raises(conftest.NetworkRefused):
+            socket.getaddrinfo("wiki.invalid", 80)
+        request.getfixturevalue("_no_network").refused.clear()
+
+    def test_a_reverse_lookup_of_loopback_goes_through(self):
+        socket.getnameinfo(("127.0.0.1", 80), socket.NI_NUMERICHOST)
 
     def test_loopback_and_unix_sockets_go_through(self, tmp_path):
         with socket.create_server(("127.0.0.1", 0)) as server:
@@ -463,13 +480,23 @@ class TestNoNetwork:
         network, so the guard removes every proxy variable."""
         import urllib.request
 
-        assert not set(conftest.PROXY_VARIABLES) & set(os.environ)
+        # what requests and urllib read, written out rather than taken
+        # from the conftest
+        names = {
+            "http_proxy",
+            "HTTP_PROXY",
+            "https_proxy",
+            "HTTPS_PROXY",
+            "all_proxy",
+            "ALL_PROXY",
+        }
+        assert not names & set(os.environ)
         with pytest.MonkeyPatch.context() as patch:
-            for name in conftest.PROXY_VARIABLES:
+            for name in names:
                 patch.setenv(name, "http://127.0.0.1:3128")
             conftest.NetworkGuard("tests/unit/test_a.py::test_b").install(
                 patch
             )
-            assert not set(conftest.PROXY_VARIABLES) & set(os.environ)
+            assert not names & set(os.environ)
         # what requests and urllib look up for a request's scheme
         assert not {"http", "https", "all"} & set(urllib.request.getproxies())
