@@ -426,16 +426,21 @@ def _refuse_archive_for_vision(path: Path) -> None:
     bytes is read, and before any client is made."""
     from yizkr.pipeline.transcribe import is_archive
 
+    route = (
+        "a run reads a deck slide by slide, leaving out what the "
+        "never-ingest list names (yizkr scratch run); refusing"
+    )
     try:
         archive = is_archive(path)
     except OSError as exc:
-        sys.exit(f"cannot read {path}: {exc.strerror or exc}; refusing")
+        sys.exit(
+            f"cannot read {path.name} ({exc.strerror or exc}) to tell "
+            f"whether it is a deck, which this step never sends whole: {route}"
+        )
     if archive:
         sys.exit(
             f"{path.name} is a deck or another ZIP archive, which this step "
-            "would send whole: a run reads a deck slide by slide, leaving "
-            "out what the never-ingest list names (yizkr scratch run); "
-            "refusing"
+            f"would send whole: {route}"
         )
 
 

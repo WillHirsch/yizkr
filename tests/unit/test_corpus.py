@@ -516,6 +516,7 @@ DECK_NAMES = [
     "library-talk-2018.zip",
     "library-talk-2018.pptm",
     "album-photograph.png",
+    "library-talk-2018.docx",
 ]
 
 
@@ -633,6 +634,22 @@ class TestSingleVisionStepRefusesADeck:
         self.assert_refused(refused, TALK)
         assert engine.sent == []
 
+    @pytest.mark.parametrize("name", DECK_NAMES)
+    def test_a_deck_it_may_not_read_is_refused_naming_the_run(
+        self, engine, listed, tmp_path, name
+    ):
+        deck = self.deck_as(tmp_path, name)
+        deck.chmod(0)
+        try:
+            if os.access(deck, os.R_OK):
+                pytest.skip("this user reads any file")
+            with pytest.raises(SystemExit) as refused:
+                self.transcribe(tmp_path, deck)
+        finally:
+            deck.chmod(0o600)
+        self.assert_refused(refused, name)
+        assert engine.sent == []
+
     def test_a_corpus_folder_that_cannot_be_listed_is_not_reached(
         self, engine, listed, tmp_path, monkeypatch
     ):
@@ -699,6 +716,59 @@ class TestSingleVisionStepRefusesADeck:
             with pytest.raises(ValueError, match="ZIP archive"):
                 read(deck)
         assert engine.sent == []
+
+    @pytest.mark.parametrize(
+        "head",
+        [b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"],
+        ids=["member", "empty", "spanned"],
+    )
+    def test_each_zip_signature_is_an_archive(self, tmp_path, head):
+        from yizkr.pipeline.transcribe import is_archive
+
+        media = tmp_path / "album-photograph.png"
+        media.write_bytes(head + b"fictional rest of the archive")
+        assert is_archive(media)
+
+    @pytest.mark.parametrize(
+        "head", [b"\x89PNG", b"%PDF", b"PK\x01\x02", b"PK"], ids=repr
+    )
+    def test_other_leading_bytes_are_not(self, tmp_path, head):
+        from yizkr.pipeline.transcribe import is_archive
+
+        media = tmp_path / "album-photograph.png"
+        media.write_bytes(head + b" fictional scan")
+        assert not is_archive(media)
+
+    def test_only_four_bytes_are_read(self, tmp_path, monkeypatch):
+        """Telling an archive needs its four leading bytes, and nothing of
+        it is read beyond them."""
+        import builtins
+
+        import yizkr.pipeline.transcribe as transcribe
+
+        sizes = []
+
+        class Spy:
+            def __init__(self, file):
+                self.file = file
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self.file.close()
+
+            def read(self, size=-1):
+                sizes.append(size)
+                return self.file.read(size)
+
+        def spied_open(*args, **kwargs):
+            return Spy(builtins.open(*args, **kwargs))
+
+        monkeypatch.setattr(transcribe, "open", spied_open, raising=False)
+        deck = self.deck_as(tmp_path, "library-talk-2018")
+        assert transcribe.is_archive(deck)
+        assert sizes == [4]
 
     def test_a_run_fails_a_renamed_deck_rather_than_send_it(self, tmp_path):
         """A run routes a deck called as an image to vision, and the
