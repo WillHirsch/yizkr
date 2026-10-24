@@ -691,8 +691,7 @@ def check_global_config(config_dir: Path | None) -> None:
     ``config_hash``. Raises ``CliConfigEnvironment`` when the map is not
     empty, naming the file and the variables but never their values, or
     when the file cannot be read as JSON, nested too deep to decode
-    included. A file caught mid-write is read
-    once more.
+    included. A file caught mid-write is read once more.
     """
     path = claude_global_config_path(config_dir)
     config: Any = None
