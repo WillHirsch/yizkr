@@ -159,7 +159,7 @@ class TestEntityKeys:
             {
                 "id": "e3",
                 "label": "Sipkje Faxridge",
-                "aliases": ["Mem"],
+                "aliases": ["Omama"],
                 "kind": "human",
             },
             {
@@ -174,7 +174,7 @@ class TestEntityKeys:
             entities,
             [
                 called("e1", "Hildegard Löbig", "Oma"),
-                called("e1", "Hildegard Löbig", "Mem"),
+                called("e1", "Hildegard Löbig", "Omama"),
                 called("e2", "Flörburg", "die Stadt"),
             ],
         )
@@ -183,7 +183,7 @@ class TestEntityKeys:
             "hildegard loebig",
             "hilde",
             "sipkje faxridge",
-            "mem",
+            "omama",
             "florburg",
             "floerburg",
             "die stadt",
