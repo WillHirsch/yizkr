@@ -563,8 +563,7 @@ def cmd_extract(args) -> int:
                 raw_dump=raw_dump,
                 rejects_dump=rejects_dump,
             )
-    from yizkr.pipeline.chunking import ExtractionFailed
-    from yizkr.pipeline.extract import UnusableExtraction
+    from yizkr.pipeline.extract import ExtractionFailed
 
     try:
         batch = extractor.extract(transcription, transcription.artifact)
@@ -574,16 +573,17 @@ def cmd_extract(args) -> int:
         # <out>.stale name, so no later step reads it as this run's. Moved,
         # not deleted: it may be the one copy of an earlier extraction.
         moved = _move_aside_earlier_batch(args.out)
-        if not isinstance(exc, (ExtractionFailed, UnusableExtraction)):
+        if not isinstance(exc, ExtractionFailed):
             # the exception keeps its own handling, after one line on what
             # became of the earlier batch
             if moved:
                 print(f"{args.out} not written{moved}", file=sys.stderr)
             raise
-        # a failure, as a partial batch is, not a refusal: the same input
-        # may extract on another run, from the LLM cache at no engine cost
-        # for the calls that completed. No batch is written, so none reads
-        # as a claim-free document's.
+        # a failure, as a partial batch is, not a refusal: an engine's
+        # extraction may succeed on another run, from the LLM cache at no
+        # engine cost for the calls that completed, and a claims file once
+        # it is fixed. No batch is written, so none reads as a claim-free
+        # document's.
         print(
             f"extraction failed: {' '.join(str(exc).split())}; "
             f"{args.out} not written{moved}",

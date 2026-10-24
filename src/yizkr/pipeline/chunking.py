@@ -45,6 +45,7 @@ from yizkr.claims import (
 )
 from yizkr.core.verbatim import Transcript, words
 from yizkr.pipeline.extract import (
+    ExtractionFailed,
     _normalize_claim_shape,
     cite_artifact,
     claim_schema_prompt_text,
@@ -902,20 +903,6 @@ claim.
 class ChunkIncomplete(Exception):
     """A chunk answer cut off: stopped at the engine's output limit, or
     without its terminal sentinel."""
-
-
-class ExtractionFailed(RuntimeError):
-    """The extraction ended with no claims for want of a usable answer: a
-    chunk failed, the chunks' answers held objects the parser could not
-    read as claims, or validation rejected every claim. The message leads
-    with that outcome and its causes, then names any fallback tier taken,
-    with the reason each attempt at the refused turn gave; it is the
-    reason the extraction stage records.
-
-    An extraction that ends with no claims because the answers it accepted
-    say the document holds none, on whichever tier, is not a failure: its
-    batch is returned, and the extractor's `attention` says why it is
-    empty."""
 
 
 def parse_chunk_response(
