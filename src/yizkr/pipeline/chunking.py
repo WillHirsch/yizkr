@@ -391,7 +391,9 @@ Rules — these mirror the archive's non-negotiable conventions:
   * its wedding is an event of its own: the union is `started_by` it,
     and the wedding carries its own `point_in_time`, `location`, and
     any witness or officiant as a participant with that role. The couple
-    take part in the union, not in its wedding;
+    take part in the union, not in its wedding. Where the manifest lists
+    a marriage's wedding, give the marriage its `started_by` and the
+    wedding the date and place the source gives the marriage's start;
   * its end is an event too: the union is `ended_by` a `divorce` or an
     `annulment` (with its own date and place, and `carried_out_by` the
     court or authority that pronounced it), or by a partner's own
@@ -625,7 +627,13 @@ Also:
   `marriage`. Its wedding (a
   `wedding`, or a `civil_wedding` or `religious_wedding` where the source
   states the kind) and a `divorce` or `annulment` that ended it are
-  events of their own;
+  events of their own. A marriage whose start the source dates or
+  places, at any precision, gets its wedding entry, as a stated divorce
+  gets its divorce. A marriage the source only names, a partnership, or
+  an observation (a directory or census that lists the couple as
+  married, with no start) gets no wedding entry: in the 1984 tree,
+  "= (1942) Florence Faxridge" gives a marriage and its 1942 wedding,
+  and the undated "= Hildegard" gives the marriage alone;
 - a marker of a death ("the late", "verstorben", "покойный", "sillige")
   gives that person's `death` event; a widow's or widower's marker that
   names the late spouse ("Witwer der Cäcilie Löbig") gives the marriage

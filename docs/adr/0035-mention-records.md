@@ -19,6 +19,14 @@ Each passage it supersedes or amends keeps its text, followed by a dated
 line (In brief, the #409 amendment, §3.1 to §3.3, §3.5, §3.6, §5, §6
 and §7).
 
+Amended by #664 (2026-10-24): in §5's verbatim comparison only the
+hyphen, U+2010, U+2011 and the soft hyphen, as written, break a word at
+a line's end. A dash there (figure, en or em dash, horizontal bar, minus
+sign), though the fold reads it as a hyphen, is a break between words,
+read as one space in every reading: "1912" then a dash and "1926" on the
+next line holds the excerpt "1912", and not "1912" and "1926" closed up
+across the dash.
+
 Amended by #569 (2026-10-23, the owner's design): each container a
 place's `within` lists (§2.2) is a name and its `evidence`, a verbatim
 excerpt of the document's transcription that states the containment:
@@ -193,7 +201,8 @@ of the entity already holds the name. The container must stand on its
 evidence: a record whose matched container is then dropped is checked
 again and set aside by `addition`, its containers left out of the
 audit. Any other addition still sets the record aside. §8's alias hygiene reads such a
-name as the label. No prompt changes, so cached answers are reused and
+name as the label, and so, as amended by #683, do clustering's keys
+(§7, rule 1), reconcile's blocking and the serial sequencer. No prompt changes, so cached answers are reused and
 only the records' reading changes.
 
 Amended by #514 (2026-10-23, option (a) of its reopening): an entry of a
@@ -1669,7 +1678,11 @@ surname types, roles, classes and note categories. Beyond the schema:
   plain (low and angle quotes, the non-breaking hyphen, the figure dash
   and the minus sign among them) and a soft hyphen dropped, with every
   run of whitespace and line breaks made one space and a hyphen at a
-  line's end joined (a soft hyphen at a line's end too), or, where the
+  line's end joined (a soft hyphen at a line's end too; only the hyphen,
+  U+2010, U+2011 and the soft hyphen, tested as written: a dash at a
+  line's end, figure, en or em dash, horizontal bar or minus sign, is a
+  break between words, so "1912" then a dash and "1926" on the next
+  line holds the excerpt "1912", amended by #664), or, where the
   joined reading finds nothing, kept, for an excerpt that crosses the
   hyphen, as a hyphenated name a line breaks at its own hyphen is
   quoted, and then kept with a space after it, as a quote that copies
@@ -1797,7 +1810,12 @@ and brackets in a NAME value, which §10 names.
      confident: the export does not say which word is which, and some of
      its words may be markers ("geb.").
    - A place: each of its names as written, its address among them,
-     except a short form that is another name's toponym (§2.2).
+     except a short form that is another name's toponym (§2.2). (Amended
+     by #683: a written name that is the label and one of the record's
+     own containers, as #655 reads it, keys as the label, so "Snylsjum,
+     Fryslân" labelled "Snylsjum" meets a "Snylsjum" written without its
+     container; reconcile's blocking and the serial sequencer key it
+     the same way.)
    - An organisation: each proper name; without one, each kind with each
      place.
    - A family: each surname.

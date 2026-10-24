@@ -15,6 +15,12 @@ the export makes, stated in the export. The non-privileged export leaves
 the booklet's claim about its image out, whole, failing closed, and keeps
 the export's claim about the media item, which is no part of the export.
 
+A second booklet's image also states its own date, its dateline *den 28.
+Juli 1939*: the writer folds the two agreeing claims into one statement
+with two references, and the non-privileged export keeps that statement
+with the image's own reference and excerpt, and leaves out the booklet's
+reference and its translation (#669).
+
 Every title, label, excerpt and media byte carries the session's marker
 (conftest.fixture_mark), so each session meets the fixture as a first
 write and a re-run within it reuses its items. Like every live test it
@@ -58,11 +64,18 @@ pytestmark = pytest.mark.live
 FIXTURE = (
     "#646: a booklet whose page 6 places an image of a letter, the "
     "booklet's translation of the letter's dateline as the image's "
-    "inception, and an export whose object dates its own media item"
+    "inception, and an export whose object dates its own media item; "
+    "a second booklet's image whose own dateline agrees with the booklet's "
+    "translation"
 )
 MARK = fixture_mark(FIXTURE, registrar, writer, backup, gedcom, claims)
 TITLE = f"Yizkr Placed Inception Test Our Family from Germany {MARK}"
 TRANSLATION = f"Flörburg, Brunnenring 35, 28 July 1939 ({MARK})"
+MERGED_TITLE = f"Yizkr Merged Inception Test Our Family from Germany {MARK}"
+# ASCII alone, so a line of the dump holds each as written, however its
+# writer escapes a literal
+MERGED_TRANSLATION = f"28 July 1939, Brunnenring 35 ({MARK})"
+DATELINE = f"Brunnenring 35, den 28. Juli 1939 ({MARK})"
 DESCRIPTION = "written by tests/integration; safe to delete"
 EXPORT = (
     "0 HEAD\n1 CHAR UTF-8\n"
@@ -84,16 +97,16 @@ def run() -> dict:
 
 
 def translation_batch(
-    booklet: ArtifactRef, image: ArtifactRef, excerpt: bool = True
+    booklet: ArtifactRef,
+    image: ArtifactRef,
+    excerpt: bool = True,
+    text: str = TRANSLATION,
 ) -> ClaimBatch:
     """The booklet's translation of the letter's dateline, as the image's
     `inception`, on page 6."""
     source: dict = {"artifact": booklet.model_dump(), "page_number": "6"}
     if excerpt:
-        source["transcription_excerpt"] = {
-            "text": TRANSLATION,
-            "language": "en",
-        }
+        source["transcription_excerpt"] = {"text": text, "language": "en"}
     return ClaimBatch.model_validate(
         {
             "extraction_run": run(),
@@ -114,13 +127,40 @@ def translation_batch(
     )
 
 
-@pytest.fixture(scope="module")
-def placed(client, tmp_path_factory):
-    """The booklet and the image it places on its page 6, registered as
-    the write registers a PDF read page by page: (the booklet, the image's
-    key, the image's item)."""
-    booklet = register_fictional(client, TITLE, "artifact")
-    data = fictional_png(f"yizkr live test: {TITLE}, page 6, image 1")
+def dateline_batch(image: ArtifactRef) -> ClaimBatch:
+    """The letter's image's own dateline, as its own `inception`."""
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": run(),
+            "claims": [
+                {
+                    "subject": image.model_dump(),
+                    "property": "inception",
+                    "value": {
+                        "type": "time",
+                        "year": 1939,
+                        "month": 7,
+                        "day": 28,
+                    },
+                    "source": {
+                        "artifact": image.model_dump(),
+                        "transcription_excerpt": {
+                            "text": DATELINE,
+                            "language": "de",
+                        },
+                    },
+                }
+            ],
+        }
+    )
+
+
+def place(client, tmp_path_factory, title: str):
+    """A booklet titled `title` and the image it places on its page 6,
+    registered as the write registers a PDF read page by page: (the
+    booklet, the image's key, the image's item)."""
+    booklet = register_fictional(client, title, "artifact")
+    data = fictional_png(f"yizkr live test: {title}, page 6, image 1")
     image = ArtifactRef.from_bytes(data)
     directory = tmp_path_factory.mktemp("derived")
     (directory / DERIVED_MEDIA_DIR).mkdir()
@@ -129,7 +169,7 @@ def placed(client, tmp_path_factory):
     record = DerivedMediaRecord(
         source_sha1=booklet.ref.sha1,
         container="pdf",
-        title=TITLE,
+        title=title,
         media={
             image.sha1: DerivedMedium(
                 names=["page 6, image 1"], slides=[6], file=file
@@ -138,6 +178,40 @@ def placed(client, tmp_path_factory):
     )
     derived = Registrar(client).register_derived_media(record, directory)
     return booklet, image, derived[image.sha1]
+
+
+@pytest.fixture(scope="module")
+def placed(client, tmp_path_factory):
+    """The booklet and the image it places on its page 6."""
+    return place(client, tmp_path_factory, TITLE)
+
+
+@pytest.fixture(scope="module")
+def merged(client, tmp_path_factory):
+    """The second booklet and its image, the booklet's translation of the
+    image's dateline and the image's own dateline written as one
+    `inception` statement with two references: (the booklet, the image's
+    key, the image's item)."""
+    booklet, image, image_qid = place(client, tmp_path_factory, MERGED_TITLE)
+    where = {booklet.ref.sha1: {image.sha1}}
+    by_booklet = write_mapped(
+        BatchWriter(client),
+        translation_batch(booklet.ref, image, text=MERGED_TRANSLATION),
+        placed=where,
+    )
+    assert by_booklet.refused == []
+    own = dateline_batch(image)
+    assert validate_against_manifest(own) == []
+    by_image = write_mapped(
+        BatchWriter(client, artifact_qids={image.sha1: image_qid}), own
+    )
+    assert by_image.refused == []
+    (statement,) = statements(client, image_qid, "inception")
+    assert {v["id"] for v in cited(client, statement, "stated_in")} == {
+        booklet.qid,
+        image_qid,
+    }
+    return booklet, image, image_qid
 
 
 @pytest.fixture(scope="module")
@@ -250,7 +324,7 @@ def test_the_export_s_inception_is_on_its_unheld_media_item(client, exported):
 
 
 def test_the_nonprivileged_export_leaves_the_container_s_claim_out(
-    client, config, placed, exported, tmp_path
+    client, config, placed, exported, merged, tmp_path
 ):
     if not (DEPLOY / "docker-compose.yml").is_file():
         pytest.skip("run from the repo root")
@@ -263,7 +337,8 @@ def test_the_nonprivileged_export_leaves_the_container_s_claim_out(
         translation_batch(booklet.ref, image),
         placed=where,
     )
-    wait_for_query_service(config, client, [image_qid, media_item])
+    merged_booklet, _merged_image, merged_qid = merged
+    wait_for_query_service(config, client, [image_qid, media_item, merged_qid])
     dump_rdf(DEPLOY, tmp_path / "full.nt.gz")
     export_nonprivileged(config, tmp_path)
 
@@ -297,3 +372,46 @@ def test_the_nonprivileged_export_leaves_the_container_s_claim_out(
     # the export's claim about its un-held media item stays
     assert dated(full, media_item)
     assert dated(kept, media_item)
+
+    # the merged statement stays with the image's own reference and
+    # excerpt; the second booklet's reference and its translation go
+    concept = config.concept_uri
+    derived_from = "<http://www.w3.org/ns/prov#wasDerivedFrom>"
+    stated_in = properties["stated_in"]
+    (claim,) = [
+        line.split(" ")[2]
+        for line in dated(full, merged_qid)
+        if f"/prop/{inception}>" in line.split(" ", 2)[1]
+    ]
+
+    def cites(dump: list[str], qid: str) -> set[str]:
+        """The merged statement's references stated in `qid`."""
+        refs = {
+            line.split(" ")[2]
+            for line in dump
+            if line.startswith(f"{claim} {derived_from} ")
+        }
+        return {
+            line.split(" ")[0]
+            for line in dump
+            if line.split(" ")[0] in refs
+            and line.split(" ", 2)[1].endswith(f"/reference/{stated_in}>")
+            and line.split(" ")[2] == f"<{concept}/entity/{qid}>"
+        }
+
+    assert cites(full, merged_booklet.qid) and cites(full, merged_qid)
+    assert any(line.startswith(f"{claim} ") for line in kept)
+    assert cites(kept, merged_qid)
+    assert cites(kept, merged_booklet.qid) == set()
+    assert not any(
+        line.startswith(f"{claim} {derived_from} {ref}")
+        for ref in cites(full, merged_booklet.qid)
+        for line in kept
+    )
+    assert any(DATELINE in line for line in kept)
+    assert not any(MERGED_TRANSLATION in line for line in kept)
+    assert any(
+        line.startswith(f"<{concept}/entity/{merged_qid}> ")
+        and line.split(" ", 2)[1].endswith(f"/prop/direct/{inception}>")
+        for line in kept
+    )
