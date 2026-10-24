@@ -974,7 +974,9 @@ Two Anthropic-backed providers, differing in how usage is billed:
   and is the answer. The answer never takes text from an API-error
   assistant event (one with an `error` or marked `is_api_error_message`),
   so a refusal frame left in a stream the CLI asked again and the model
-  then answered is no part of the answer, nor of its cache entry (#622).
+  then answered is no part of the answer, nor of its cache entry (#622);
+  such text is the answer only when the stream holds no other assistant
+  text and no result.
   The pinned CLI may ask a refused turn again once on its own; pinning
   that retry off changes the config hash, and so every cache key, and
   waits for the next deliberate engine config change. A call that exits with any other failure keeps the

@@ -560,6 +560,12 @@ class TestRetried:
         events[-1]["result"] = "answer"
         assert ClaudeCodeClient._assemble_stream(stream(events)) == "answer"
 
+    def test_with_no_result_the_frame_comes_before_raw_stdout(self):
+        """A stream cut off after the frame alone answers with the frame's
+        text, as before, never with the raw event stream."""
+        events = [INIT, retried_events("s1")[0]]
+        assert ClaudeCodeClient._assemble_stream(stream(events)) == NOTICE
+
     def test_the_answer_and_its_cache_entry_hold_no_notice(
         self, cli, clock, tmp_path
     ):

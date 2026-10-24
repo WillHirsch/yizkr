@@ -2867,10 +2867,12 @@ class ClaudeCodeClient:
         `error` or marked is_api_error_message, such as a refusal frame
         the CLI prints before it asks again) carries the CLI's notice,
         not the model's words, so its text is never part of the answer.
-        Falls back to the terminal result event (or raw stdout) if no
-        assistant event holds any text.
+        Falls back to the terminal result event, then to the API-error
+        events' text, then to raw stdout, if no other assistant event
+        holds any text.
         """
         pieces: list[str] = []
+        notices: list[str] = []
         spoke = False
         result_text: str | None = None
         for event in _stream_events(stdout):
@@ -2880,19 +2882,21 @@ class ClaudeCodeClient:
             )
             blocks = content if isinstance(content, list) else []
             if event.get("type") == "assistant":
+                texts = [
+                    block["text"]
+                    for block in blocks
+                    if isinstance(block, dict)
+                    and block.get("type") == "text"
+                    and isinstance(block.get("text"), str)
+                ]
                 if (
                     isinstance(event.get("error"), str)
                     or event.get("is_api_error_message") is True
                 ):
-                    continue
-                for block in blocks:
-                    if (
-                        isinstance(block, dict)
-                        and block.get("type") == "text"
-                        and isinstance(block.get("text"), str)
-                    ):
-                        spoke = True
-                        pieces.append(block["text"])
+                    notices += texts
+                elif texts:
+                    spoke = True
+                    pieces += texts
             elif event.get("type") == "user" and any(
                 isinstance(block, dict) and block.get("type") == "tool_result"
                 for block in blocks
@@ -2908,6 +2912,8 @@ class ClaudeCodeClient:
             return "".join(pieces)
         if result_text:
             return result_text
+        if notices:
+            return "".join(notices)
         return stdout
 
     @staticmethod
