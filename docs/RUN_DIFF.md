@@ -345,7 +345,20 @@ expects it and why:
   claims changed in their `locator` where the change is not about pages
   or regions;
 - mentions removed in bulk, or mention records set aside up
-  (`content.records.set_aside_records`), recordless mentions up;
+  (`content.records.set_aside_records`, and the reasons they were set
+  aside by, `set_aside_reasons` and `set_aside_by_reason`), recordless
+  mentions up. Since #611 those reasons leave out `dropped` and
+  `read as text`, which set nothing aside: they are the readings
+  (`content.records.readings`, by reason in `readings_by_reason`), and
+  readings up are no regression where the change reads more of what a
+  record gives (a run that reads more entries as text shows its reasons
+  set aside falling and its readings rising). A baseline from before
+  #611 counts both among `set_aside_reasons` and `set_aside_by_reason`
+  and has no readings figure, so the first run after it shows
+  `set_aside_reasons` falling by the baseline's `dropped` and
+  `read as text`, and `set_aside_by_reason.dropped` and
+  `set_aside_by_reason.read as text` falling to 0, with `readings` and
+  `readings_by_reason.*` absent in the baseline;
   place containers dropped up (`content.records.containers_dropped`, by
   reason in `containers_dropped_by_reason`, `malformed` among them since
   #607) where the change does not touch what the manifest gives as a

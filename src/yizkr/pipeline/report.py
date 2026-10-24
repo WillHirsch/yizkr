@@ -313,17 +313,11 @@ HOLDS = frozenset(
 REQUESTERS = frozenset({"operator", "monitor", "anomaly"})
 ACTIONS = frozenset({"pause", "resume", "abort"})
 FALLBACK_TIERS = frozenset({"manifest", "segmentation"})
-# the leading labels of the reasons an extraction sets a mention record
-# aside by (ADR-0035 §5): claims.set_aside_structure's `schema` and
-# `dropped` (a name part dropped for an empty string, which leaves the
-# record standing when what is left can stand), `read as text` (an entry
-# of a list of strings written as an object holding its text, read as
-# that text, which sets nothing aside) and claims.structure_problems' own
+# the leading labels of the reasons claims.set_aside_structure (`schema`)
+# and claims.structure_problems set a mention record aside by (ADR-0035 §5)
 SET_ASIDE_REASONS = frozenset(
     {
         "schema",
-        "dropped",
-        "read as text",
         "kind",
         "addition",
         "initial",
@@ -331,6 +325,13 @@ SET_ASIDE_REASONS = frozenset(
         "no toponym",
     }
 )
+# the leading labels of the readings coverage.json counts among the same
+# reasons, which set nothing aside (ADR-0035 §5): `dropped` (a name part
+# dropped for an empty string, which leaves the record standing when what
+# is left can stand) and `read as text` (an entry of a list of strings
+# written as an object holding its text, read as that text); the report
+# counts them apart from the reasons records were set aside by
+READING_REASONS = frozenset({"dropped", "read as text"})
 # the reason an entity's judgement note is set aside by (ADR-0035 §5),
 # which coverage.json counts among the records' reasons, once a note
 NOTE_SET_ASIDE = "note"
@@ -1246,10 +1247,14 @@ def _records(coverage: dict) -> dict[str, Any]:
 
     The coverage's `set_aside` counts reasons, not records: a record that
     does not parse counts once, as `schema` (besides any `read as text`
-    or `dropped` reasons given before it), one of the wrong kind once,
+    or `dropped` readings given before it), one of the wrong kind once,
     as `kind`, and any other once for each problem found in it; an
     entity's note set aside counts once, as `note`, which is told apart
-    here as a note set aside.
+    here as a note set aside. Its `dropped` and `read as text` set
+    nothing aside, whether or not the record then stands, so they are
+    told apart here as readings, never among the reasons records were
+    set aside by; a container dropped alone is counted by its own
+    reasons, apart from both.
     The extraction writes its records and its notes together, so both
     are None unless the coverage holds both, as the line-range tier's and
     one written before these counts do not: absent, never zero. The
@@ -1262,6 +1267,11 @@ def _records(coverage: dict) -> dict[str, Any]:
         return {"records": None, "notes": None}
     reasons = _tally(records.get("set_aside")) or {}
     noted = reasons.pop(NOTE_SET_ASIDE, 0)
+    readings = {
+        reason: reasons.pop(reason)
+        for reason in sorted(READING_REASONS)
+        if reason in reasons
+    }
     dropped = _tally(records.get("containers_dropped"))
     return {
         "records": {
@@ -1278,6 +1288,7 @@ def _records(coverage: dict) -> dict[str, Any]:
             "set_aside_by_reason": _folded(
                 reasons, lambda value: _known(value, SET_ASIDE_REASONS)
             ),
+            "readings_by_reason": _by_count(readings),
             "containers_checked": _counted(records.get("containers_checked")),
             "containers_dropped_by_reason": (
                 None
@@ -2582,6 +2593,8 @@ def _aggregate_content(
     by_axis: Counter = Counter()
     by_category: Counter = Counter()
     set_aside: Counter = Counter()
+    # the readings that set nothing aside (READING_REASONS)
+    readings: Counter = Counter()
     statuses: Counter = Counter()
     notes: Counter = Counter()
     absent: Counter = Counter()
@@ -2688,6 +2701,7 @@ def _aggregate_content(
                 else:
                     appellation_parts += records["appellation_parts"]
                 set_aside.update(records["set_aside_by_reason"])
+                readings.update(records["readings_by_reason"])
                 if records["containers_dropped_by_reason"] is None:
                     absent["containers"] += 1
                 else:
@@ -2780,6 +2794,8 @@ def _aggregate_content(
             "appellation_parts": appellation_parts,
             "set_aside_reasons": set_aside.total(),
             "set_aside_by_reason": _by_count(set_aside),
+            "readings": readings.total(),
+            "readings_by_reason": _by_count(readings),
             "containers_checked": containers_checked,
             "containers_dropped": containers_dropped.total(),
             "containers_dropped_by_reason": _by_count(containers_dropped),
@@ -3749,6 +3765,10 @@ def _records_blocks(
             "reasons records were set aside: "
             f"{_n(records['set_aside_reasons'])} (a record can give "
             "several)",
+            "Fields read so their record could stand (a name part "
+            "dropped for an empty string, an entry read as its text), "
+            "setting nothing aside, so counted apart from the reasons "
+            f"records were set aside: {_n(records['readings'])}",
             "Place containers checked: "
             f"{_n(records['containers_checked'])}; dropped alone, their "
             "records standing, so counted apart from records set aside: "
@@ -3781,6 +3801,14 @@ def _records_blocks(
             _table(
                 ("Set-aside reason", "Reasons"),
                 records["set_aside_by_reason"].items(),
+                numbers=(1,),
+            )
+        )
+    if records["readings_by_reason"]:
+        blocks.append(
+            _table(
+                ("Reading (nothing set aside)", "Fields"),
+                records["readings_by_reason"].items(),
                 numbers=(1,),
             )
         )
@@ -4380,6 +4408,8 @@ def _html_document(document: Mapping[str, Any]) -> str:
                 f"{_absent(records['set_aside_records'])}; reasons set "
                 "aside: "
                 f"{_listed(_by_count(records['set_aside_by_reason']))}; "
+                "readings, nothing set aside: "
+                f"{_listed(_by_count(records['readings_by_reason']))}; "
                 "place containers checked: "
                 f"{_absent(records['containers_checked'])}; dropped: "
                 + (

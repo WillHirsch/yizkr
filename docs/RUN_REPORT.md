@@ -350,8 +350,10 @@ writer refused, count here too, under their check and the stage
   `containers.json`; a coverage written before #607 may also count the
   containers kept whose evidence is their name alone, which the report
   no longer reads); the reasons records were set aside by, by
-  category (`schema`, `dropped`, `read as text`, `kind`, `addition`,
-  `initial`, `no name part`, `no toponym`; `report.SET_ASIDE_REASONS`);
+  category (`schema`, `kind`, `addition`, `initial`, `no name part`,
+  `no toponym`; `report.SET_ASIDE_REASONS`); the readings that set
+  nothing aside, by category (`dropped`, `read as text`;
+  `report.READING_REASONS`), counted apart from those reasons (#611);
   the notes by category (`kind`, `relation`, `date_reading`,
   `identity`, `other`, the categories of `claims.JudgementNote`); and
   the notes set aside. Counts only, never a label, a reason's text or a
@@ -365,12 +367,26 @@ writer refused, count here too, under their check and the stage
   its toponym and its head), so the reasons can outnumber the records
   set aside, which `records.set_aside_records` counts, once each. A
   `dropped` reason counts a name part dropped for an empty string
-  (ADR-0035 §5, #497), and the record it leaves often stands, so it is
-  counted among the reasons whether or not its record was set aside. A
+  (ADR-0035 §5, #497), and the record it leaves often stands. A
   `read as text` reason counts an entry of a list of strings written as
-  an object holding its text, read as that text (ADR-0035 §5, #514); it
-  sets nothing aside, and the record then stands or is set aside on its
-  other reasons, as `dropped` does. A
+  an object holding its text, read as that text (ADR-0035 §5, #514).
+  Neither sets anything aside: the record then stands or is set aside on
+  its other reasons. `coverage.json` counts both among `set_aside`, but
+  the report counts them apart, as readings (#611): the headline
+  "reasons records were set aside" (`set_aside_reasons`,
+  `set_aside_by_reason`) counts only the reasons that set a record
+  aside, and the readings have a line ("Fields read so their record
+  could stand", `readings`) and a table ("Reading (nothing set aside)",
+  `readings_by_reason`) of their own, and in a document's drill-down
+  "readings, nothing set aside". So a change that reads more entries as
+  text, and so sets fewer records aside, shows its reasons set aside
+  falling and its readings rising, never the reasons rising. Three
+  kinds of count stay apart, each in its own line and table: the
+  reasons a record was set aside by, the readings that set nothing
+  aside, and the reasons a place container was dropped alone, its
+  record standing ("Container dropped reason",
+  `containers_dropped_by_reason`, `malformed` among them, #607), which
+  are never a record's reasons or readings. A
   record set aside on a mention of a kind that takes one (a
   person, place, organisation or family) leaves that mention recordless,
   so the recordless mentions are those given no record and those whose
@@ -422,7 +438,8 @@ writer refused, count here too, under their check and the stage
   `report.json`'s `aggregate.content.records` (`extractions`, `given`,
   `recordless`, `by_status`, `unsplit_forms`, `set_aside_records`,
   `appellation_labels`, `appellation_parts`, `set_aside_reasons`,
-  `set_aside_by_reason`, `containers_checked`, `containers_dropped`,
+  `set_aside_by_reason`, `readings`, `readings_by_reason`,
+  `containers_checked`, `containers_dropped`,
   `containers_dropped_by_reason`, `absent.predating`,
   `absent.line_range`, `absent.set_aside_records`,
   `absent.unsplit_forms`, `absent.appellation_labels`,
