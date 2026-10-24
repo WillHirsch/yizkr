@@ -1921,6 +1921,22 @@ class TestCoupleHeldApart:
             p["same_merges"] for p in entry["pairs"] if p["link"] == AMBIGUOUS
         } == {False}
 
+    def test_a_different_alone_keeps_the_marriages_apart(self):
+        """The postcard's Leopold `different`, its Agnes not extracted, so
+        no contradiction keeps an Agnes apart: the `different` alone keeps
+        the postcard's marriage apart, the registers' merging."""
+        docs = [
+            wed("postcard", 1930, agnes_extracted=False),
+            wed("register", 1910),
+            wed("extract", 1910),
+        ]
+        settled = verdicts_by_name(docs, leopold_apart)
+        found = union_of_each(settled, docs)
+        assert found["register"]["cluster"] == found["extract"]["cluster"]
+        assert found["postcard"]["cluster"] != found["register"]["cluster"]
+        (entry,) = [e for e in settled["review"] if e["kind"] == "marriage"]
+        assert entry["contradiction"]["evidence"] == COUPLE_APART
+
     def test_a_same_spouse_lets_the_marriages_merge(self):
         """Every pair `same`, the postcard's Leopold's included, and the
         postcard's Agnes not extracted, so nothing reads the Leopolds'
@@ -2094,14 +2110,16 @@ class TestCoupleHeldApart:
         `different` from the letter's only, `same` as the extract's. The
         `different` holds the two clusters apart, so the postcard's and
         the extract's marriages, whose spouses were never said
-        `different` of each other, do not merge."""
+        `different` of each other, do not merge. The postcard's Agnes is
+        not extracted, so the kin rule keeps no Agnes apart."""
         letter = register(
             "letter",
             [human("e1", "Leopold Löbig")],
             [("e1", "date_of_birth", day(1910))],
             {"e1": "leopold-loebig"},
         )
-        postcard, extract = wed("postcard", 1930), wed("extract", 1910)
+        postcard = wed("postcard", 1930, agnes_extracted=False)
+        extract = wed("extract", 1910)
         docs = [postcard, letter, extract]
 
         def verdict_of(pair: frozenset) -> str:
