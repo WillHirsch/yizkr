@@ -373,7 +373,9 @@ class TestThePersonTimeline:
         assert "?anyValuePredicate" not in q
 
     def test_the_projection_carries_each_range(self, q):
-        projection = set(re.findall(r"\?(\w+)", q.split("WHERE", 1)[0]))
+        # the SELECT clause alone, never the header comment that names them
+        (select,) = re.findall(r"^SELECT(.*?)^WHERE", q, flags=re.S | re.M)
+        projection = set(re.findall(r"\?(\w+)", select))
         assert {
             "what",
             "eventTypes",
