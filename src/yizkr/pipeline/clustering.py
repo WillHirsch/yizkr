@@ -27,9 +27,11 @@ extraction are clustered; the others are each a cluster of their own
 **Records.** Clustering keys and judges on each mention's record, what
 extraction says its names are made of (`EntityRecord.structure`,
 ADR-0035 §2), never on the wording, word order or punctuation of its
-label. A person, a place, an organisation or a family without a record
-(none given, one extraction set aside under ADR-0035 §5, a record of
-another kind, or a batch without a manifest) is *recordless*
+label, save that a place's written name that is its label and one of
+its own containers keys as that label (ADR-0035 §7, rule 1). A person,
+a place, an organisation or a family without a record (none given, one
+extraction set aside under ADR-0035 §5, a record of another kind, or a
+batch without a manifest) is *recordless*
 (ADR-0035 §7, rule 1): it keys on its exact normalised name, from its
 label and each alias, meets only mentions without a record, and never
 links confidently. A form its document gives as an appellation of it (a
@@ -78,7 +80,10 @@ spelling is never turned back into an umlaut.
   status keys nothing.
 - *A place* whose status is `toponym`: each of its names as written, its
   address among them, save a short form that is another of its names'
-  toponym ("Klurnau" beside "Lager Klurnau"). Its `within` never key.
+  toponym ("Klurnau" beside "Lager Klurnau"). A written name that is its
+  label and one of its own containers (`claims.label_container`:
+  "Snylsjum, Fryslân" of the label "Snylsjum", within Fryslân) keys as
+  the label, as alias hygiene reads it. Its `within` never key.
 - *An organisation*: each proper name; without one, each kind with each
   of its places. Its places are those its record names, or else the
   places its `location` claims point to, with every place its manifest

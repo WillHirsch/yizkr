@@ -1677,11 +1677,17 @@ class TestKeys:
         pairs = blocked_pairs([toponym.manifest, plain.manifest])
         assert pairs == {pair(toponym, "e1", plain, "e1")}
 
+    @pytest.mark.parametrize(
+        "within", [["Fryslân"], ["Drakeradiel", "Fryslân"]]
+    )
     @pytest.mark.parametrize("toponym", [None, "Snylsjum"])
-    def test_a_label_and_container_name_keys_as_its_label(self, toponym):
+    def test_a_label_and_container_name_keys_as_its_label(
+        self, toponym, within
+    ):
         """#683: the 1952 letter's "Snylsjum, Fryslân", labelled Snylsjum
         within Fryslân, keys as Snylsjum, as alias hygiene reads it, and
-        meets a Snylsjum written without its container."""
+        meets a Snylsjum written without its container; Fryslân need not
+        be the record's first container."""
         letter = register(
             "letter",
             [
@@ -1689,7 +1695,7 @@ class TestKeys:
                     "e1",
                     "Snylsjum",
                     names=[("Snylsjum, Fryslân", toponym, None)],
-                    within=["Fryslân"],
+                    within=within,
                 )
             ],
             [],
@@ -1700,6 +1706,34 @@ class TestKeys:
         )
         pairs = blocked_pairs([letter.manifest, plain.manifest])
         assert pairs == {pair(letter, "e1", plain, "e1")}
+
+    def test_a_later_label_and_container_name_keys_as_its_label(self):
+        """A label-and-container name that is not the record's first name
+        keys as the label too: the province, named Friesland and
+        "Fryslân, Nederlân", meets a Fryslân written without its
+        container."""
+        province = register(
+            "province",
+            [
+                place(
+                    "e1",
+                    "Fryslân",
+                    aliases=["Friesland"],
+                    names=[
+                        "Friesland",
+                        ("Fryslân, Nederlân", "Fryslân", None),
+                    ],
+                    within=["Nederlân"],
+                )
+            ],
+            [],
+            {"e1": "fryslan"},
+        )
+        plain = register(
+            "plain", [place("e1", "Fryslân")], [], {"e1": "fryslan"}
+        )
+        pairs = blocked_pairs([province.manifest, plain.manifest])
+        assert pairs == {pair(province, "e1", plain, "e1")}
 
     def test_a_name_that_adds_no_container_keys_as_written(self):
         """A written name that adds a word that is no container of the

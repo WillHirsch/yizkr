@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from yizkr.pipeline.sequencing import sequence_documents
 
 
@@ -122,11 +124,13 @@ class TestEntityKeys:
         )
         assert keys == {"gustav lobig", "gustav loebig", "gustl"}
 
-    def test_a_persons_appellation_keys_nothing(self, tmp_path):
-        """#681: a person's alias that the batch gives as an appellation
-        (ADR-0018) keys nothing, as reconcile blocks given the batch, so
-        two documents that share only "Oma" do not connect by it; a place
-        keys on every name, and an alias the batch does not mark keys."""
+    @pytest.mark.parametrize("kind", ["human", "other"])
+    def test_a_persons_appellation_keys_nothing(self, tmp_path, kind):
+        """#681: a person's alias, or that of a kind that may be a
+        person's, that the batch gives as an appellation (ADR-0018) keys
+        nothing, each of them, as reconcile blocks given the batch, so two
+        documents that share only "Oma" do not connect by it; a place keys
+        on every name, and an alias the batch does not mark keys."""
         from yizkr.claims import ArtifactRef
 
         def called(local_id: str, label: str, text: str) -> dict:
@@ -152,8 +156,8 @@ class TestEntityKeys:
             {
                 "id": "e1",
                 "label": "Hildegard Löbig",
-                "aliases": ["Oma", "Hilde"],
-                "kind": "human",
+                "aliases": ["Oma", "Omama", "Hilde"],
+                "kind": kind,
             },
             # her appellation is no appellation of Sipkje's
             {
@@ -173,8 +177,8 @@ class TestEntityKeys:
             tmp_path,
             entities,
             [
-                called("e1", "Hildegard Löbig", "Oma"),
                 called("e1", "Hildegard Löbig", "Omama"),
+                called("e1", "Hildegard Löbig", "Oma"),
                 called("e2", "Flörburg", "die Stadt"),
             ],
         )
