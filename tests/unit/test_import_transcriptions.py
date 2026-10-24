@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -950,6 +951,58 @@ class TestTheNeverIngestList:
         assert found.outcome != IMPORTED
         assert (found.outcome, found.skipped) == (SKIPPED, NOT_IN_CORPUS)
         assert live(tmp_path) == [] and rejected(tmp_path) == []
+
+    def test_a_scan_whose_bytes_a_glob_names_in_a_deck_is_excluded(
+        self, tmp_path, engine, monkeypatch
+    ):
+        """A glob that names a deck's image names its bytes wherever they
+        are, as in a run (#640): the studio portrait's scan is the image
+        the talk embeds as image2.png, so its archived transcription is
+        excluded by its SHA-1 before it is opened."""
+        corpus = small(tmp_path)
+        with zipfile.ZipFile(
+            corpus.folder / "library-talk-2018.pptx", "w"
+        ) as deck:
+            deck.writestr(
+                zipfile.ZipInfo(
+                    "ppt/media/image2.png", (2018, 5, 4, 12, 0, 0)
+                ),
+                (corpus.folder / PHOTO).read_bytes(),
+            )
+        archive = Archive(tmp_path / "archive")
+        archive.add(
+            "portrait", file=PHOTO, sha1=corpus.sha1(PHOTO), text=PORTRAIT
+        )
+        read = opened(monkeypatch)
+        (found,) = import_(
+            tmp_path,
+            archive,
+            corpus,
+            exclusions=ExclusionList.parse("image2.png\n"),
+        ).outcomes
+        assert (found.outcome, found.sha1) == (EXCLUDED, corpus.sha1(PHOTO))
+        assert read == ["portrait/state.json"]
+        assert live(tmp_path) == [] and rejected(tmp_path) == []
+
+    def test_an_unreadable_deck_refuses_before_the_archive_is_read(
+        self, tmp_path, engine, monkeypatch
+    ):
+        """While the list holds a glob, a deck that cannot be read as an
+        archive leaves the bytes its globs name unknown: nothing of the
+        archive is read."""
+        corpus = small(tmp_path)
+        (corpus.folder / "library-talk-2018.pptx").write_bytes(b"not a zip")
+        archive = an_archive(tmp_path, corpus)
+        read = opened(monkeypatch)
+        with pytest.raises(ExclusionConfigError, match="library-talk-2018"):
+            import_(
+                tmp_path,
+                archive,
+                corpus,
+                exclusions=ExclusionList.parse("image2.png\n"),
+            )
+        assert read == []
+        assert not (tmp_path / "cache").exists()
 
     def test_without_a_list_nothing_is_read(
         self, tmp_path, engine, monkeypatch

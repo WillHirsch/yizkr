@@ -162,6 +162,7 @@ from typing import Any
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.core.config import Config
 from yizkr.core.corpus import (
+    DECK_SUFFIXES,
     MISSING_LIST,
     ExclusionConfigError,
     ExclusionList,
@@ -198,7 +199,7 @@ from yizkr.pipeline.stages import (
 GEDCOM_SUFFIXES = {".ged"}
 TEXT_SUFFIXES = {".txt", ".md"}
 MEDIA_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff"}
-PRESENTATION_SUFFIXES = {".pptx"}
+PRESENTATION_SUFFIXES = DECK_SUFFIXES
 SUPPORTED_SUFFIXES = (
     GEDCOM_SUFFIXES | TEXT_SUFFIXES | MEDIA_SUFFIXES | PRESENTATION_SUFFIXES
 )

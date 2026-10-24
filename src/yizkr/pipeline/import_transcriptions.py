@@ -39,8 +39,11 @@ media's transcriptions, in turn:
   transcription the archive holds of it. A transcription whose own SHA-1
   the list names is excluded alone. A document with no readable
   `state.json` is not opened at all: the list cannot be asked for it.
-  Without a list the import refuses to start. The corpus is found as the
-  run finds it, with the list asked of each file there too.
+  Without a list the import refuses to start. As in a run, the list also
+  names the bytes of the images its globs name in the corpus's decks
+  (yizkr.core.corpus.follow_decks), so a transcription of such bytes is
+  excluded by its SHA-1 before its text is read. The corpus is found as
+  the run finds it, with the list asked of each file there too.
 * **Left out.** A media whose SHA-1 starts with a prefix the operator
   gives is not adopted, so the next run transcribes it afresh, and any
   adoption the cache serves for its call, whichever archive it came from,
@@ -123,6 +126,7 @@ from yizkr.core.corpus import (
     MISSING_LIST,
     ExclusionConfigError,
     ExclusionList,
+    follow_decks,
     is_excluded,
 )
 from yizkr.pipeline.stages import sha256_text
@@ -808,13 +812,13 @@ def import_transcriptions(
     $YIZKR_LLM_MODEL. `leave_out` gives prefixes of the SHA-1s of media
     whose transcriptions are not adopted. Refuses to start without a
     never-ingest list, or with a deck in `corpus` that cannot be read as an
-    archive while the list holds a glob (ExclusionConfigError); for a
-    malformed, unmatched or ambiguous prefix, no model or an alias, an
-    archive or a corpus that is not a folder, a scan in PDF without the
-    renderer the check counts its pages with, or an engine client that
-    cannot start (ImportRefused); and when the cache refuses its folder,
-    or another process holds it, or the engine cannot serve the pass
-    (llm.PassPaused). `log` takes the
+    archive, or a `corpus` that cannot be listed, while the list holds a
+    glob (ExclusionConfigError); for a malformed, unmatched or ambiguous
+    prefix, no model or an alias, an archive or a corpus that is not a
+    folder, a scan in PDF without the renderer the check counts its pages
+    with, or an engine client that cannot start (ImportRefused); and when
+    the cache refuses its folder, or another process holds it, or the
+    engine cannot serve the pass (llm.PassPaused). `log` takes the
     corpus's discovery lines, which name its files. Returns what became of
     each media's transcriptions."""
     from yizkr.pipeline.orchestrate import Orchestrator
@@ -825,6 +829,9 @@ def import_transcriptions(
     _run_model()
     if not corpus.is_dir():
         raise ImportRefused(f"the corpus {corpus} is not a folder")
+    # the list names the bytes its globs name in the corpus's decks, as
+    # the run's does, before any record is asked of
+    exclusions = follow_decks(exclusions, corpus)
 
     # the never-ingest list, first pass: the states alone. A media any of
     # whose states it excludes is excluded whole
