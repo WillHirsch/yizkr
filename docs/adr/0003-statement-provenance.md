@@ -29,7 +29,14 @@ village is Koshnovka, and conveys that Koshnovka is in Kaldovsky
 District; so does "District: Kaldovsky District" in the district field
 of the same form rendered one field a line. It fails: a passage that
 only names both places (a list of towns), and a bare "Fläckfeld" beside
-"Flörburg, Kreis Peiltal", where "Kreis Peiltal" is about Flörburg. The
+"Flörburg, Kreis Peiltal", where "Kreis Peiltal" is about Flörburg. A
+certificate's issuing heading fails too: on the 1963 death certificate,
+"State of Victoria. Certificate of death." names the state that issued
+it, not a field of the place of death, so it does not by itself convey
+that the place of death, "Place of death: Stupfield.", lies in Victoria
+(the owner's decision, 2026-10-24, #645, on PR #637's probe, in which
+the critic read the heading so and asked for both citations to be
+dropped). The
 location the reference names counts: a claim that gives a page is read
 at its occurrences on that page, where the transcription numbers it (an
 image excerpt's claims cite the page of the container it was found on).
