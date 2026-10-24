@@ -484,3 +484,89 @@ class TestSingleStepsFollowDecks:
             monkeypatch.setenv(CORPUS_DIR_VAR, str(tmp_path / "corpus"))
         assert self.transcribe(tmp_path, stand_alone).exists()
         assert capsys.readouterr().err == ""
+
+
+# -- the single vision step and a deck (#684) ---------------------------------
+
+
+class Reached(Exception):
+    """The vision engine was asked: the step got past every refusal."""
+
+
+class Engine:
+    """A vision client that records each file it is given, by name and
+    bytes, and then stops the step."""
+
+    model_identifier = "fictional-vision-model"
+
+    def __init__(self):
+        self.sent: list[tuple[str, bytes]] = []
+
+    def complete(self, prompt, files):
+        self.sent += [(path.name, path.read_bytes()) for path in files]
+        raise Reached
+
+
+class TestSingleVisionStepRefusesADeck:
+    """`ingest transcribe --engine llm` would give the vision engine its
+    file whole, embedded images and all, so it refuses a deck and names
+    the run that reads one slide by slide: nothing of the deck, and so
+    nothing of a member a never-ingest glob names in it, is sent."""
+
+    @pytest.fixture
+    def engine(self, env, monkeypatch):
+        import yizkr.pipeline.llm as llm
+
+        engine = Engine()
+        monkeypatch.setattr(llm, "make_client", lambda *a, **k: engine)
+        return engine
+
+    @staticmethod
+    def transcribe(tmp_path, media):
+        out = tmp_path / "transcription.json"
+        run_cli("ingest", "transcribe", "--engine", "llm",
+                "--file", str(media), "--out", str(out))  # fmt: skip
+        return out
+
+    @pytest.mark.parametrize("name", [TALK, "LIBRARY-TALK-2018.PPTX"])
+    def test_a_deck_whose_member_a_glob_names_is_refused(
+        self, engine, tmp_path, monkeypatch, name
+    ):
+        listed_file = tmp_path / "exclude.txt"
+        listed_file.write_text("image2.png\n")
+        monkeypatch.setenv(EXCLUDE_FILE_VAR, str(listed_file))
+        monkeypatch.setenv(CORPUS_DIR_VAR, str(tmp_path / "corpus"))
+        deck = talk(tmp_path / "corpus", name)
+        with pytest.raises(SystemExit) as refused:
+            self.transcribe(tmp_path, deck)
+        message = str(refused.value.code)
+        assert name in message and "scratch run" in message
+        assert "\n" not in message
+        assert engine.sent == []
+        assert not (tmp_path / "transcription.json").exists()
+
+    def test_a_deck_is_refused_with_no_list(self, engine, tmp_path):
+        deck = talk(tmp_path / "corpus")
+        with pytest.raises(SystemExit, match="deck"):
+            self.transcribe(tmp_path, deck)
+        assert engine.sent == []
+
+    def test_an_image_still_reaches_the_engine(self, engine, tmp_path):
+        """The refusal is the deck's alone: the talk's photograph as a
+        file of its own, on no list, is sent."""
+        scan = tmp_path / "album-photograph.png"
+        scan.write_bytes(TALK_IMAGE)
+        with pytest.raises(Reached):
+            self.transcribe(tmp_path, scan)
+        assert engine.sent == [("album-photograph.png", TALK_IMAGE)]
+
+    def test_the_transcriber_never_sends_a_deck(self, tmp_path):
+        """The vision transcriber refuses a deck itself, whoever calls
+        it, before it hashes or sends anything."""
+        from yizkr.pipeline.transcribe import LlmVisionTranscriber
+
+        engine = Engine()
+        deck = talk(tmp_path / "corpus")
+        with pytest.raises(ValueError, match="deck"):
+            LlmVisionTranscriber(engine).transcribe(deck)
+        assert engine.sent == []

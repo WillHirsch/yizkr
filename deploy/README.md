@@ -188,6 +188,10 @@ content out under any name, list its SHA-1.
   find the decks: it says so on stderr and goes on, so a file whose
   bytes a glob names only inside a deck is not refused. Set
   `YIZKR_CORPUS_DIR`, or list the file's SHA-1, to keep such a file out.
+  `ingest transcribe --engine llm` sends its file to the vision engine
+  whole, so it refuses a deck (`.pptx`) whether or not a list is set: a
+  run (`yizkr scratch run`) reads a deck slide by slide and leaves out
+  each image the list names.
   `scratch import-transcriptions` takes the corpus folder it is given
   and follows the globs into its decks before it reads the archive.
 

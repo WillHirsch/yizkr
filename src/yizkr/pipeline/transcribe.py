@@ -128,6 +128,7 @@ from pydantic import (
 )
 
 from yizkr.claims import ArtifactRef
+from yizkr.core.corpus import DECK_SUFFIXES
 from yizkr.pipeline.language import (
     LanguageResolution,
     record_language,
@@ -611,8 +612,15 @@ class LlmVisionTranscriber(_CheckedTranscriber):
         gave (an archived transcription), the one the adoption names
         (`made_by`). Raises UnreadableAnswer for an answer the engine cut
         off at its output limit (llm.at_output_limit), or that is not the
-        record."""
+        record. Raises ValueError for a deck before anything reads it: a
+        deck is read slide by slide (`DeckTranscriber`), never sent whole
+        (ADR-0008)."""
         self._response = None
+        if media_path.suffix.lower() in DECK_SUFFIXES:
+            raise ValueError(
+                f"{media_path.name} is a deck: it is read slide by slide, "
+                "never sent whole to the vision engine"
+            )
         artifact = ArtifactRef.from_path(media_path)
         text = self.client.complete(TRANSCRIPTION_PROMPT, [media_path])
         self._response = text

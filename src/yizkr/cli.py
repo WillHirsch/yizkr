@@ -429,6 +429,17 @@ def cmd_transcribe(args) -> int:
             fallback_language=args.fallback_language,
         )
     elif args.engine == "llm":
+        from yizkr.core.corpus import DECK_SUFFIXES
+
+        # the vision engine is given its file whole, embedded images and
+        # all, so a deck, whose images the never-ingest list may name, is
+        # left to a run, which reads it slide by slide (ADR-0008)
+        if args.file.suffix.lower() in DECK_SUFFIXES:
+            sys.exit(
+                f"{args.file.name} is a deck, which this step would send "
+                "whole: a run reads it slide by slide, leaving out what the "
+                "never-ingest list names (yizkr scratch run); refusing"
+            )
         from yizkr.pipeline.llm import make_client
         from yizkr.pipeline.transcribe import (
             LlmVisionTranscriber,

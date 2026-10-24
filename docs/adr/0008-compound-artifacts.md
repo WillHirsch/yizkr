@@ -603,7 +603,16 @@ did so on 2026-09-29, in the review of its PR.
   called and wherever it lies, and the import excludes a transcription
   of them. A single-file step knows the corpus folder only through
   `$YIZKR_CORPUS_DIR`; without it the step says on stderr that it
-  cannot follow the globs into decks, and goes on. Only
+  cannot follow the globs into decks, and goes on. The single vision
+  step (`ingest transcribe --engine llm`) gives the engine its file
+  whole, embedded images and all, so it refuses a deck, whatever the
+  list holds, in one line naming `scratch run`, the route that reads a
+  deck slide by slide and leaves out what the list names; and the
+  vision transcriber refuses a deck whoever calls it, so a deck is never
+  sent whole (#684). Reading the deck with `DeckTranscriber` there
+  instead was the other choice, but the step writes one transcription
+  file and has nowhere to keep the readings of the images a deck's
+  slides embed, which a run keeps beside the deck's record. Only
   identical bytes are followed: a PDF holds the same bytes only for a
   JPEG it keeps as a file, and an image it holds as pixels, written as a
   PNG of its own, is not matched by a deck's PNG of it. A deck that
