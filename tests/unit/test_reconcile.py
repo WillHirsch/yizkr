@@ -316,6 +316,43 @@ class TestBlocking:
             "Q52"
         ]
 
+    @staticmethod
+    def snylsjum(written: str, toponym: str | None = None) -> EntityRecord:
+        """The 1952 letter's Snylsjum, its written name as given, within
+        Fryslân (docs/EXAMPLES.md)."""
+        name = {"written": written}
+        if toponym:
+            name["toponym"] = toponym
+        return EntityRecord(
+            id="e1",
+            label="Snylsjum",
+            kind="place",
+            structure={
+                "kind": "place",
+                "status": "toponym",
+                "names": [name],
+                "within": ["Fryslân"],
+            },
+        )
+
+    @pytest.mark.parametrize("toponym", [None, "Snylsjum"])
+    def test_a_label_and_container_name_keys_as_its_label(self, toponym):
+        """#683: "Snylsjum, Fryslân", labelled Snylsjum within Fryslân,
+        keys as Snylsjum, as alias hygiene reads it, so it meets the
+        graph's Snylsjum written without its container."""
+        found = self.snylsjum("Snylsjum, Fryslân", toponym)
+        assert entity_name_keys(found) == {"snylsjum"}
+        graph = [RosterEntity(qid="Q53", label="Snylsjum", kind="place")]
+        assert [c.qid for c in block_candidates([found], graph)["e1"]] == [
+            "Q53"
+        ]
+
+    def test_any_other_written_name_keys_as_written(self):
+        """A written name that adds a word that is no container of the
+        record keys whole, as written."""
+        found = self.snylsjum("Snylsjum, Drakeradiel")
+        assert entity_name_keys(found) == {"snylsjum drakeradiel"}
+
     def test_a_person_record_adds_its_unsplit_forms_and_nicknames(self):
         found = [
             EntityRecord(

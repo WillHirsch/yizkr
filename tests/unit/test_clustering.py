@@ -1677,6 +1677,51 @@ class TestKeys:
         pairs = blocked_pairs([toponym.manifest, plain.manifest])
         assert pairs == {pair(toponym, "e1", plain, "e1")}
 
+    @pytest.mark.parametrize("toponym", [None, "Snylsjum"])
+    def test_a_label_and_container_name_keys_as_its_label(self, toponym):
+        """#683: the 1952 letter's "Snylsjum, Fryslân", labelled Snylsjum
+        within Fryslân, keys as Snylsjum, as alias hygiene reads it, and
+        meets a Snylsjum written without its container."""
+        letter = register(
+            "letter",
+            [
+                place(
+                    "e1",
+                    "Snylsjum",
+                    names=[("Snylsjum, Fryslân", toponym, None)],
+                    within=["Fryslân"],
+                )
+            ],
+            [],
+            {"e1": "snylsjum"},
+        )
+        plain = register(
+            "plain", [place("e1", "Snylsjum")], [], {"e1": "snylsjum"}
+        )
+        pairs = blocked_pairs([letter.manifest, plain.manifest])
+        assert pairs == {pair(letter, "e1", plain, "e1")}
+
+    def test_a_name_that_adds_no_container_keys_as_written(self):
+        """A written name that adds a word that is no container of the
+        record keys whole, and does not meet the bare label."""
+        written = register(
+            "written",
+            [
+                place(
+                    "e1",
+                    "Snylsjum",
+                    names=["Snylsjum, Drakeradiel"],
+                    within=["Fryslân"],
+                )
+            ],
+            [],
+            {"e1": "snylsjum-drakeradiel"},
+        )
+        plain = register(
+            "plain", [place("e1", "Snylsjum")], [], {"e1": "snylsjum"}
+        )
+        assert blocked_pairs([written.manifest, plain.manifest]) == set()
+
     def test_an_address_keys_whole_never_by_its_street(self):
         """Brunnenring 35 and Brunnenring 12 share a street, and are two
         addresses: an address keys as written, never by its street."""

@@ -341,6 +341,7 @@ from yizkr.claims import (
     PlaceStructure,
     TimeValue,
     VocabRef,
+    label_container,
     name_form_key,
 )
 from yizkr.pipeline.fingerprints import (
@@ -1248,16 +1249,27 @@ def _derive_person(
 def _derive_place(node: _Node, record: PlaceStructure) -> None:
     if record.status != "toponym":
         return
+    # a written name that is the label and one of the record's own
+    # containers keys as the label, as alias hygiene reads it
+    label = node.mention.label
+    written = [
+        (
+            label
+            if label_container(name.written, label, record.within)
+            else name.written
+        )
+        for name in record.names
+    ]
     # a short form that is another of its names' toponym keys nothing
     toponyms = _all(
         part_keys(name.toponym)
-        for name in record.names
-        if name.toponym and normal(name.toponym) != normal(name.written)
+        for name, form in zip(record.names, written, strict=True)
+        if name.toponym and normal(name.toponym) != normal(form)
     )
     names = [
         keys
-        for name in record.names
-        if (keys := part_keys(name.written)) and not keys & toponyms
+        for form in written
+        if (keys := part_keys(form)) and not keys & toponyms
     ]
     if record.address is not None and (
         keys := part_keys(record.address.written)

@@ -178,7 +178,8 @@ of the entity already holds the name. The container must stand on its
 evidence: a record whose matched container is then dropped is checked
 again and set aside by `addition`, its containers left out of the
 audit. Any other addition still sets the record aside. §8's alias hygiene reads such a
-name as the label. No prompt changes, so cached answers are reused and
+name as the label, and so, as amended by #683, do clustering's keys
+(§7, rule 1), reconcile's blocking and the serial sequencer. No prompt changes, so cached answers are reused and
 only the records' reading changes.
 
 Amended by #514 (2026-10-23, option (a) of its reopening): an entry of a
@@ -1670,7 +1671,12 @@ and brackets in a NAME value, which §10 names.
      confident: the export does not say which word is which, and some of
      its words may be markers ("geb.").
    - A place: each of its names as written, its address among them,
-     except a short form that is another name's toponym (§2.2).
+     except a short form that is another name's toponym (§2.2). (Amended
+     by #683: a written name that is the label and one of the record's
+     own containers, as #655 reads it, keys as the label, so "Snylsjum,
+     Fryslân" labelled "Snylsjum" meets a "Snylsjum" written without its
+     container; reconcile's blocking and the serial sequencer key it
+     the same way.)
    - An organisation: each proper name; without one, each kind with each
      place.
    - A family: each surname.
