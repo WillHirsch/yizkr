@@ -2014,8 +2014,10 @@ class Orchestrator:
             failed = extractor.failed_chunks
             if failed:
                 first = extractor.failure_reasons.get(failed[0], "")
+                plural = "" if len(failed) == 1 else "s"
                 raise RuntimeError(
-                    f"{len(failed)} chunks failed ({', '.join(failed)}; "
+                    f"{len(failed)} chunk{plural} failed "
+                    f"({', '.join(failed)}; "
                     f"{failed[0]}: {first}); re-run to retry them"
                 )
             return batch

@@ -607,7 +607,7 @@ def cmd_extract(args) -> int:
     failed = getattr(extractor, "failed_chunks", None)
     if failed:
         print(
-            f"warning: {len(failed)} chunks failed after retries "
+            f"warning: {len(failed)} chunks failed "
             f"({', '.join(failed)}); batch is PARTIAL — re-run to retry "
             f"them (with --cache DIR, the calls that completed are "
             f"answered from the cache)",
