@@ -1113,6 +1113,14 @@ to the held scan. The rule admits forms (a), (b) and (c4).
   deck's transcription does not mark, so no corpus document places an
   image and the corpus gives no claim about one.
 
+  Amended by #665, 2026-10-24: the deck's photograph is now a stand-in
+  large enough to be read on its own, with a recorded reading (a
+  photograph with no writing, so no excerpt), so the deck's
+  transcription marks it and a corpus run gives slide 2's two captions
+  and its `shows` → Wastl and `shows` → Hilde, each with its judgement
+  note of category `relation` (§10.4). The corpus still holds no
+  booklet.
+
 #### 10.7 Amendments to other records (#626, 2026-10-24)
 
 Each gets a dated line; no earlier amendment line is rewritten.

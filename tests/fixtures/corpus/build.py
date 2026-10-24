@@ -8,11 +8,12 @@ what it wrote last: the committed files are its output, and
 tests/unit/test_fixture_corpus.py fails when they differ from what it
 makes now. Each document's content comes from the example universe
 (tests/fixtures/example_universe.py): the family history's text is its
-source's; the deck's slides give its source's text; the three images are
-stand-ins for the certificates and the postcard, whose texts the recorded
-engine reads off them (tests/fixtures/corpus/answers.py); and the export is
-a slice of the universe's GEDCOM rendering (tests/fixtures/example-family.ged)
-with two traps of its own.
+source's; the deck's slides give its source's text, and its photograph is
+a stand-in for album-photo-1906, large enough to be read on its own; the
+three images are stand-ins for the certificates and the postcard, whose
+texts the recorded engine reads off them (tests/fixtures/corpus/
+answers.py); and the export is a slice of the universe's GEDCOM rendering
+(tests/fixtures/example-family.ged) with two traps of its own.
 
 Nothing it writes depends on when or where it runs: the images are stored
 without compression, so their bytes depend on no zlib, and the deck is a
@@ -194,6 +195,24 @@ def _stored(data: bytes) -> bytes:
     return bytes(out)
 
 
+def _png(width: int, height: int, rows: list[bytes], title: str) -> bytes:
+    """A grayscale PNG of `rows` (each a filter byte and `width` pixels),
+    with `title` in an iTXt chunk."""
+    header = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)
+    caption = (
+        b"Title\x00\x00\x00\x00\x00"
+        + title.encode()
+        + b" (a fictional stand-in, docs/EXAMPLES.md)"
+    )
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _chunk(b"IHDR", header)
+        + _chunk(b"iTXt", caption)
+        + _chunk(b"IDAT", _stored(b"".join(rows)))
+        + _chunk(b"IEND", b"")
+    )
+
+
 def stand_in(text: str, title: str) -> bytes:
     """A small grayscale PNG that stands in for a scan: a light page with a
     dark bar for every LINE_CHARS characters of `text`, and `title` in an
@@ -218,19 +237,30 @@ def stand_in(text: str, title: str) -> bytes:
             length = max(1, lines[line] * (PAGE_WIDTH - 8) // LINE_CHARS)
             row[4 : 4 + length] = bytes([INK]) * length
         rows.append(b"\x00" + bytes(row))
-    header = struct.pack(">IIBBBBB", PAGE_WIDTH, height, 8, 0, 0, 0, 0)
-    caption = (
-        b"Title\x00\x00\x00\x00\x00"
-        + title.encode()
-        + b" (a fictional stand-in, docs/EXAMPLES.md)"
-    )
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + _chunk(b"IHDR", header)
-        + _chunk(b"iTXt", caption)
-        + _chunk(b"IDAT", _stored(b"".join(rows)))
-        + _chunk(b"IEND", b"")
-    )
+    return _png(PAGE_WIDTH, height, rows, title)
+
+
+# the size of the stand-in photograph: large enough to be read on its own
+# (yizkr.pipeline.containers, MIN_IMAGE_SIDE and MIN_IMAGE_PIXELS)
+PHOTOGRAPH_SIZE = (128, 96)
+
+
+def photograph(title: str, people: int = 2) -> bytes:
+    """A grayscale PNG that stands in for a photograph of `people`
+    figures: a light ground with a dark block for each, and no writing.
+    It is PHOTOGRAPH_SIZE, large enough to be read on its own, and the
+    recorded engine reads it by its bytes."""
+    width, height = PHOTOGRAPH_SIZE
+    slot = width // people
+    rows = []
+    for y in range(height):
+        row = bytearray([PAPER] * width)
+        if height // 4 <= y < height - 8:
+            for figure in range(people):
+                left = figure * slot + slot // 4
+                row[left : left + slot // 2] = bytes([INK]) * (slot // 2)
+        rows.append(b"\x00" + bytes(row))
+    return _png(width, height, rows, title)
 
 
 # -- the deck -----------------------------------------------------------------
@@ -264,10 +294,8 @@ SLIDES = (
         False,
     ),
 )
-PHOTOGRAPH = stand_in(
-    "Sebastian Wastl Hildegard Hilde Ursula Klara Gustav",
-    "Photograph from the family album",
-)
+# the photograph on slide 2, a source of the universe of its own
+PHOTOGRAPH = photograph(SOURCES["album-photo-1906"].title)
 
 _P = "http://schemas.openxmlformats.org/presentationml/2006/main"
 _A = "http://schemas.openxmlformats.org/drawingml/2006/main"

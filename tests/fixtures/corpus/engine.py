@@ -3,7 +3,8 @@ fixture corpus's calls from its recorded answers (answers.py).
 
 It answers every call the stages before write make of a document of the
 corpus, and tells the document by its bytes: a vision call by the SHA-1 of
-the image it is given, an extraction call by the artifact SHA-1 its prompt
+the image it is given (a document's, or one a document places,
+answers.PLACED), an extraction call by the artifact SHA-1 its prompt
 names, and a critique call by the entity manifest its prompt lists; the
 clustering stage's adjudication of ambiguous pairs (#106) it answers by
 the recorded verdict on each pair (verdicts.py), whose two mentions it
@@ -44,6 +45,7 @@ from tests.fixtures.corpus.answers import (
     claims,
     manifest,
     mistakes_in,
+    placed_by_sha1,
 )
 from tests.fixtures.corpus.verdicts import BY_PAIR, Mention, Verdict
 from tests.fixtures.records import record_answer
@@ -175,15 +177,19 @@ class RecordedEngine:
 
     def _chunk(self, prompt: str) -> str:
         """The claims of the entities the chunk is assigned, and its
-        sentinel."""
+        sentinel. The claims about an image the document places are the
+        chunk's that is assigned the manifest's first entity, so they are
+        answered once."""
         recorded, sha1 = self._named(prompt)
         self.calls.log("chunk", recorded.document)
         assigned = set(_ASSIGNED_ID.findall(prompt.partition(ASSIGNED)[2]))
+        if recorded.entities[0].id in assigned:
+            assigned.add(None)
         sharper = all(m.rule in prompt for m in mistakes_in(recorded))
         answered = [
             claim
             for claim in claims(recorded, sha1, sharper=sharper)
-            if claim["subject"]["local_id"] in assigned
+            if claim["subject"].get("local_id") in assigned
         ]
         lines = [json.dumps(claim, ensure_ascii=False) for claim in answered]
         sentinel = {"done": True, "claims_emitted": len(answered)}
@@ -279,12 +285,19 @@ class RecordedEngine:
             (path,) = image_paths
             sha1 = hashlib.sha1(Path(path).read_bytes()).hexdigest()
             recorded = recorded_by_sha1().get(sha1)
-            if recorded is None or not recorded.read:
+            placed = placed_by_sha1().get(sha1)
+            if placed is not None:
+                # an image a document places, read on its own: logged by
+                # the universe source it is
+                self.calls.log("vision", placed.source)
+                source = SOURCES[placed.source]
+            elif recorded is None or not recorded.read:
                 raise NoAnswer("no recorded reading of this image")
-            self.calls.log("vision", recorded.document)
+            else:
+                self.calls.log("vision", recorded.document)
+                source = SOURCES[recorded.source]
             # the transcription record (ADR-0037): the source's class
             # where it is one of the record's, else unclassified
-            source = SOURCES[recorded.source]
             document_class = source.artifact_class
             if document_class not in document_classes():
                 document_class = "unclassified"

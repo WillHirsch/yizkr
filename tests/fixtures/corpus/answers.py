@@ -15,12 +15,23 @@ as models are: the family history's "I was born in '50" is read as 1850
 recorded model reads it right, and the critic flags the mistake wherever a
 batch holds it.
 
+An image a document places and the pipeline reads on its own (PLACED) has
+a recorded reading of its own, its source's text, and the document's
+claims about it are the universe's assertions of the document whose
+subject is that image: the deck's slide 2 gives its photograph two
+captions and a `shows` for each person its title names (ADR-0039 §10.4),
+each claim cited to its passage, with a judgement note of category
+`relation`, written here by hand too, where the passage is a slide's
+title over its one image.
+
 The export (a GEDCOM file) is adapted, not extracted, so it has no answers.
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
+import zipfile
 from dataclasses import dataclass
 from functools import cache
 
@@ -29,6 +40,7 @@ from tests.fixtures.corpus import (
     CERTIFICATE,
     DEATH_CERTIFICATE,
     DECK,
+    FOLDER,
     LETTER,
     NARRATIVE,
 )
@@ -689,6 +701,47 @@ RECORDED = {
 }
 
 
+@dataclass(frozen=True)
+class Placed:
+    """An image a document of the corpus places, large enough to be read on
+    its own: the universe source it is, the document that places it, and
+    its path in that document's archive. `relation` is the passage the
+    document does not say plainly speaks of it (a slide's title over its
+    one image): each claim cited to it carries a judgement note of
+    category `relation`, as the extraction prompts ask."""
+
+    source: str
+    container: str
+    member: str
+    relation: str = ""
+    note: str = ""
+
+    def data(self) -> bytes:
+        """The image's bytes, as the committed container holds them."""
+        with zipfile.ZipFile(FOLDER / self.container) as archive:
+            return archive.read(self.member)
+
+    def sha1(self) -> str:
+        return hashlib.sha1(self.data()).hexdigest()
+
+
+PLACED = (
+    Placed(
+        "album-photo-1906",
+        DECK,
+        "ppt/media/image1.png",
+        relation="Wastl and Hilde",
+        note="slide 2's title read as speaking of the photograph below it",
+    ),
+)
+
+
+@cache
+def placed_by_sha1() -> dict[str, Placed]:
+    """Each placed image, by the SHA-1 of its committed bytes."""
+    return {placed.sha1(): placed for placed in PLACED}
+
+
 # -- the answers --------------------------------------------------------------
 
 _PAGE = re.compile(r"^\[(?:page|Slide) (\d+)[\] ]", re.IGNORECASE)
@@ -788,6 +841,26 @@ def _value(recorded: Recorded, prop: str, value, language: str) -> dict:
     return {"type": "string", "value": value}
 
 
+def placed_in(recorded: Recorded) -> list[Placed]:
+    """The images the document places that are read on their own."""
+    return [p for p in PLACED if p.container == recorded.document]
+
+
+def said_of_placed(recorded: Recorded) -> list[tuple[Placed, u.Assertion]]:
+    """The universe's assertions of the document's source about an image
+    it places, each with the image: what its passages say of it, its
+    composition link (`part_of`) aside, which the pipeline records from
+    the container itself (ADR-0008)."""
+    return [
+        (placed, a)
+        for placed in placed_in(recorded)
+        for a in u.ASSERTIONS
+        if a.source == recorded.source
+        and a.subject == placed.source
+        and a.property != "part_of"
+    ]
+
+
 def said(recorded: Recorded) -> list[u.Assertion]:
     """The universe's assertions of the document's source that a claim
     can make: those about an entity of the document, not about the
@@ -855,13 +928,64 @@ def answered_as(recorded: Recorded, assertion: u.Assertion) -> list[tuple]:
     ]
 
 
+def _source(recorded: Recorded, sha1: str, excerpt: str) -> dict:
+    """A claim's source: the document, the page its excerpt is on, and
+    the excerpt."""
+    return {
+        "artifact": {"kind": "artifact", "sha1": sha1},
+        "page_number": page_of(recorded, excerpt),
+        "transcription_excerpt": {
+            "text": excerpt,
+            "language": recorded.language,
+        },
+    }
+
+
+# a placed image's page is the claim's source page, never a qualifier
+PAGE_NUMBER = "page_number"
+
+
+def placed_claims(recorded: Recorded, sha1: str) -> list[dict]:
+    """The claims the recorded model answers about the images the
+    document, whose SHA-1 is `sha1`, places: each subject the image's
+    artifact reference, as the prompts list it."""
+    answered = []
+    for placed, assertion in said_of_placed(recorded):
+        claim = {
+            "subject": {"kind": "artifact", "sha1": placed.sha1()},
+            "property": assertion.property,
+            "value": _value(
+                recorded,
+                assertion.property,
+                assertion.value,
+                recorded.language,
+            ),
+            "qualifiers": [
+                {
+                    "property": qualifier,
+                    "value": _value(
+                        recorded, qualifier, held, recorded.language
+                    ),
+                }
+                for qualifier, held in assertion.qualifiers
+                if qualifier != PAGE_NUMBER
+            ],
+            "source": _source(recorded, sha1, assertion.excerpt),
+            "confidence": CONFIDENCE,
+        }
+        if placed.relation and assertion.excerpt == placed.relation:
+            claim["note"] = {"category": "relation", "text": placed.note}
+        answered.append(claim)
+    return answered
+
+
 def claims(
     recorded: Recorded, sha1: str, *, sharper: bool = False
 ) -> list[dict]:
     """Every claim the recorded model answers for the document, whose
     SHA-1 is `sha1`: those of each assertion (answered_as), with its
     mistakes unless `sharper` (the chunk prompt carries each mistake's
-    rule)."""
+    rule), then those about the images it places (placed_claims)."""
     ids = recorded.ids()
     by_id = {entity.id: entity for entity in recorded.entities}
     answered = []
@@ -894,18 +1018,11 @@ def claims(
                         }
                         for qualifier, held in qualifiers
                     ],
-                    "source": {
-                        "artifact": {"kind": "artifact", "sha1": sha1},
-                        "page_number": page_of(recorded, assertion.excerpt),
-                        "transcription_excerpt": {
-                            "text": assertion.excerpt,
-                            "language": recorded.language,
-                        },
-                    },
+                    "source": _source(recorded, sha1, assertion.excerpt),
                     "confidence": CONFIDENCE,
                 }
             )
-    return answered
+    return answered + placed_claims(recorded, sha1)
 
 
 def mistakes_in(recorded: Recorded) -> list[Mistake]:

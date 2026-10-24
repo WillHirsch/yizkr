@@ -79,7 +79,11 @@ from yizkr.pipeline.orchestrate import (
     PDF,
     document_kind,
 )
-from yizkr.pipeline.presentation import slide_transcript, unpack_pptx
+from yizkr.pipeline.presentation import (
+    slide_transcript,
+    unpack_pptx,
+    unread_reason,
+)
 from yizkr.pipeline.report import (
     COMPUTED,
     JSON_FILE,
@@ -116,6 +120,9 @@ EXTRACTED = (
     fc.DEATH_CERTIFICATE,
 )
 IMAGES = (fc.CERTIFICATE, fc.LETTER, fc.DEATH_CERTIFICATE)
+# the images a document places that the engine reads on their own, by the
+# universe source each is: the deck's photograph (#665)
+PLACED_IMAGES = tuple(placed.source for placed in answers.PLACED)
 # the corpus stage of the test's own, run after the registered ones
 PROBE = "probe"
 # every claim that marks a person dead (ADR-0020)
@@ -293,17 +300,34 @@ RETIRED = {
 }
 
 
+def subject_in_universe(claim, known: dict[str, str]) -> str:
+    """A claim's subject in the universe's terms: an entity's key, or an
+    image the document places, by the universe source it is."""
+    if claim.subject.kind == "artifact":
+        return answers.placed_by_sha1()[claim.subject.sha1].source
+    return known[claim.subject.local_id]
+
+
 def said_in(name: str, batch: ClaimBatch) -> set[tuple]:
     """Every claim of a document's batch as (subject, property, value), in
     the universe's terms."""
     known = truth(name, batch)
     return {
         (
-            known[claim.subject.local_id],
+            subject_in_universe(claim, known),
             claim.property,
             in_universe(claim.value, known),
         )
         for claim in batch.claims
+    }
+
+
+def placed(name: str) -> dict[str, frozenset[str]]:
+    """What validation is handed of the images a document places: by the
+    document's SHA-1, theirs (extract.placed_by)."""
+    recorded = answers.RECORDED[name]
+    return {
+        sha1(name): frozenset(p.sha1() for p in answers.placed_in(recorded))
     }
 
 
@@ -370,6 +394,19 @@ class TestTheCorpus:
         (photograph,) = content.media
         assert (photograph.slides, content.skipped_media) == ([2], {})
 
+    def test_the_deck_s_photograph_is_read_on_its_own(self):
+        """The deck's photograph is large enough to be read on its own,
+        not decoration (#665), and has a recorded reading: the universe's
+        photograph, with no writing on it."""
+        (placed,) = answers.PLACED
+        assert placed.container == fc.DECK
+        data = placed.data()
+        assert data == build.PHOTOGRAPH
+        assert unread_reason(".png", data) is None
+        assert answers.placed_by_sha1() == {placed.sha1(): placed}
+        source = SOURCES[placed.source]
+        assert (source.artifact_class, source.text) == ("photograph", "")
+
     def test_the_export_is_a_slice_of_the_universes_with_its_traps(self):
         """Each record of the export is the fixture's record of the same
         xref, with lines left out (the daughter Ursula's dates, the widow's
@@ -426,7 +463,8 @@ class TestTheCorpus:
             about = {
                 a.subject for a in u.ASSERTIONS if a.source == recorded.source
             }
-            assert about - set(ids) <= {recorded.source}, name
+            images = {p.source for p in answers.placed_in(recorded)}
+            assert about - set(ids) <= {recorded.source} | images, name
             for entity in recorded.entities:
                 assert answers.mention_lines(recorded, entity), entity
             entities = answers.manifest(recorded)["entities"]
@@ -435,7 +473,7 @@ class TestTheCorpus:
             for sharper in (False, True):
                 claimed = answers.claims(recorded, sha1(name), sharper=sharper)
                 batch, rejects = salvage_valid_claims(
-                    claimed, run, entities=entities
+                    claimed, run, entities=entities, placed=placed(name)
                 )
                 assert rejects == [], name
                 assert not {c.property for c in batch.claims} & RETIRED
@@ -452,7 +490,10 @@ class TestTheCorpus:
                     else:
                         assert roles == ["principal"], claim
                 answered[sharper] = said_in(name, batch)
-            stated = set()
+            stated = {
+                (a.subject, a.property, a.value)
+                for _image, a in answers.said_of_placed(recorded)
+            }
             for a in answers.said(recorded):
                 if a.property not in RETIRED:
                     stated.add((a.subject, a.property, a.value))
@@ -630,11 +671,11 @@ class TestTheRun:
     def test_the_engine_answers_only_what_each_document_needs(self, runs):
         run = runs.run("first")
         asked = runs.calls
-        assert sorted(asked.of("vision")) == sorted(IMAGES)
+        assert sorted(asked.of("vision")) == sorted([*IMAGES, *PLACED_IMAGES])
         for what in ("manifest", "chunk", "critique"):
             assert set(asked.of(what)) == set(EXTRACTED), what
-        # the text file and the deck are transcribed without the engine,
-        # and the export is adapted
+        # the text file and the deck's slides are transcribed without the
+        # engine (the deck's photograph by it), and the export is adapted
         engines = {
             name: json.loads(doc.transcription.read_text())["engine"]
             for name, doc in runs.views(run).items()
@@ -655,6 +696,48 @@ class TestTheRun:
             ]
             assert made == ["open", *["fork"] * chunks(name)], name
         assert chunks(fc.NARRATIVE) > 1
+
+    def test_the_deck_says_whom_its_photograph_shows(self, runs):
+        """The deck's transcription marks its photograph on slide 2, and
+        its batch gives the photograph the talk's two captions and a
+        `shows` for each person slide 2's title names, each cited to the
+        deck, slide 2, with the passage as its excerpt; those the title
+        gives carry a judgement note of category `relation` (ADR-0039
+        §10.4, #665). The photograph has no writing, so it is no excerpt
+        and no document of the run."""
+        run = runs.run("first")
+        (placed,) = answers.PLACED
+        deck = runs.views(run)[fc.DECK]
+        pages = json.loads(deck.transcription.read_text())["pages"]
+        assert [page["images"] for page in pages] == [[], [placed.sha1()], []]
+        batch = runs.batch(run, fc.DECK)
+        about = [c for c in batch.claims if c.subject.kind == "artifact"]
+        assert {c.subject.sha1 for c in about} == {placed.sha1()}
+        known = truth(fc.DECK, batch)
+        assert {
+            (
+                c.property,
+                in_universe(c.value, known),
+                c.source.transcription_excerpt.text,
+                c.note.category if c.note else None,
+            )
+            for c in about
+        } == {
+            ("caption", "Wastl and Hilde", "Wastl and Hilde", "relation"),
+            (
+                "caption",
+                "Photograph from the family album",
+                "Photograph from the family album",
+                None,
+            ),
+            ("shows", "sebastian-loebig", "Wastl and Hilde", "relation"),
+            ("shows", "hildegard-loebig", "Wastl and Hilde", "relation"),
+        }
+        assert {c.source.page_number for c in about} == {"2"}
+        assert {c.source.artifact.sha1 for c in about} == {sha1(fc.DECK)}
+        assert placed.sha1() not in {
+            doc.sha1 for doc in runs.views(run).values()
+        }
 
 
 # -- the traps ----------------------------------------------------------------
@@ -1989,7 +2072,8 @@ class TestTheRunReport:
             assert (row[REUSED], row[PENDING], row[FAILED]) == (0, 0, 0), name
             assert row[NEEDS_ATTENTION] == 0, name
         # what sent each computed stage to the engine, and what calls it
-        assert rows["transcription"]["forced"] == {"absent": 3, "no call": 2}
+        # the deck's transcription calls the engine for its photograph
+        assert rows["transcription"]["forced"] == {"absent": 4, "no call": 1}
         assert rows["extraction"]["forced"] == {"absent": 5}
         assert rows["critique"]["forced"] == {"absent": 5}
         assert rows["gedcom"]["forced"] == {"no call": 1}
@@ -2001,7 +2085,7 @@ class TestTheRunReport:
             report.markdown
         )
         assert (
-            "| transcription | none | absent 3, no call 2 | none | none |"
+            "| transcription | none | absent 4, no call 1 | none | none |"
         ) in report.markdown
 
     def test_the_corpus_stages_are_the_registered_ones_and_the_probe(
@@ -2157,8 +2241,9 @@ class TestTheRunReport:
         """A second run makes every view again from fresh state
         directories, and the LLM cache answers every call it makes: the
         report counts each stage that calls the engine reused, by the
-        reason the cache gave, and the stages that call it for nothing
-        (a text file, a deck, the GEDCOM adapter) computed with no call.
+        reason the cache gave (the deck's by its photograph's reading),
+        and the stages that call it for nothing (a text file, the GEDCOM
+        adapter) computed with no call.
         Invoked again, the run keeps how each view came about."""
         first = runs.run("first")
         made = report_of(first).aggregate["calls"]["engine"]
@@ -2168,16 +2253,16 @@ class TestTheRunReport:
         report = report_of(second)
         rows = {row["name"]: row for row in report.aggregate["stages"]}
         assert {name: row["reused_by"] for name, row in rows.items()} == {
-            "transcription": {"key match": 3},
+            "transcription": {"key match": 4},
             "extraction": {"key match": 5},
             "critique": {"key match": 5},
             "gedcom": {},
         }
         assert (rows["transcription"][COMPUTED], rows["gedcom"][COMPUTED]) == (
-            2,
+            1,
             1,
         )
-        assert rows["transcription"]["forced"] == {"no call": 2}
+        assert rows["transcription"]["forced"] == {"no call": 1}
         assert rows["extraction"][COMPUTED] == 0
         # every call the first run made of the engine, the cache answers
         assert report.aggregate["calls"]["engine"] == 0
@@ -2187,7 +2272,7 @@ class TestTheRunReport:
         assert len(events(second, "cache-hit")) == made
         assert report.aggregate["calls"]["misses_by_reason"] == {}
         assert report.aggregate["anomalies"]["alerts"] == 0
-        assert "| transcription | key match 3 | no call 2 | none | none |" in (
+        assert "| transcription | key match 4 | no call 1 | none | none |" in (
             report.markdown
         )
         assert "| extraction | key match 5 | none | none | none |" in (
