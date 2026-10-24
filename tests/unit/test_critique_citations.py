@@ -140,12 +140,14 @@ def place_of_death(excerpt: str | None, **kwargs) -> dict:
     )
 
 
-def eugen_batch(*claims: dict, mention_lines=(), within=()) -> ClaimBatch:
+def eugen_batch(
+    *claims: dict, mention_lines=(), within=(), place_lines=(1,)
+) -> ClaimBatch:
     """Eugen (e01) and Flörburg (e02), with `claims`; Flörburg's record
-    puts it in each of `within`."""
+    puts it in each of `within`, its mentions on `place_lines`."""
     flörburg = {"id": "e02", "label": "Flörburg", "kind": "place"}
     if within:
-        flörburg["mention_lines"] = [1]
+        flörburg["mention_lines"] = list(place_lines)
         flörburg["structure"] = {
             "kind": "place",
             "names": [{"written": "Flörburg"}],
@@ -262,6 +264,46 @@ class TestThePrompt:
             "- e02 within Hesse | -",
         ]
 
+    def test_a_within_row_lists_the_place_s_mentions_first(self):
+        batch = eugen_batch(
+            within=[{"name": "Kreis Peiltal", "evidence": "Flörburg"}],
+            place_lines=[3],
+        )
+        assert within_rows(prompt_of(batch, transcription(REGISTER))) == [
+            '- e02 within Kreis Peiltal | lines 3; 1: "Flörburg"'
+        ]
+
+    def test_the_marker_line_shows_the_printed_page(self):
+        given = transcription(
+            "", [(1, "Friedhof Flörburg, Beerdigungsbuch 1909.")]
+        )
+        given.pages[0].printed_page = "17"
+        prompt = prompt_of(eugen_batch(place_of_death("Flörburg")), given)
+        assert (
+            'each line numbered:\n1: [Page 1] (printed page number "17")\n'
+            "2: Friedhof Flörburg, Beerdigungsbuch 1909.\n"
+        ) in prompt
+
+    def test_a_line_break_in_a_time_stays_on_its_row(self):
+        batch = eugen_batch(
+            place_of_death(
+                "Flörburg",
+                qualifiers=[
+                    {
+                        "property": "sourcing_circumstances",
+                        "value": {
+                            "type": "string",
+                            "value": "um\n1909 \\ etwa",
+                        },
+                    }
+                ],
+            )
+        )
+        (row,) = rows(prompt_of(batch, transcription(REGISTER)))
+        assert row.split(" | ")[3] == (
+            "times: sourcing_circumstances um\\n1909 \\\\ etwa"
+        )
+
     def test_the_separate_containment_block_is_gone(self):
         assert "Each `part_of` claim above" not in CRITIQUE_PROMPT
         assert "{containment_block}" not in CRITIQUE_PROMPT
@@ -303,6 +345,24 @@ class TestOccurrences:
         assert rows(prompt) == [
             "e01 | place_of_death | e02 | times: - | lines 5; 4; 3 and 2 "
             'more: "Flörburg"'
+        ]
+
+    def test_an_occurrence_holding_a_mention_line_comes_first(self):
+        text = "\n".join(
+            [
+                "Hutmacher Löbig",  # 1
+                "Eugen Löbig,",  # 2
+                "Hutmacher",  # 3
+                "Löbig.",  # 4
+            ]
+        )
+        prompt = prompt_of(
+            eugen_batch(place_of_death("Hutmacher Löbig"), mention_lines=[3]),
+            transcription(text),
+        )
+        assert rows(prompt) == [
+            "e01 | place_of_death | e02 | times: - | lines 3-4; 1: "
+            '"Hutmacher Löbig"'
         ]
 
     def test_an_excerpt_over_lines_gives_its_range(self):
@@ -474,11 +534,19 @@ class TestTheOneTest:
     def test_any_occurrence_passes_on_the_cited_page(self):
         assert (
             "A citation passes when any one of its occurrences conveys the "
-            "fact; for a claim that gives a page, the occurrence must be on "
+            "fact; for a row that names a page, the occurrence must be on "
             "that page. You may read any occurrence in the numbered "
             "transcription, not only those listed. A citation not in the "
             "transcription is judged on its words alone."
         ) in self.PROMPT
+
+    def test_the_legend_says_a_page_lists_its_own_occurrences(self):
+        assert (
+            "a row that names a page lists only the occurrences on that "
+            "page, and otherwise every occurrence is listed, nearest the "
+            "subject's mentions first; at most three are shown"
+        ) in self.PROMPT
+        assert '"clipped" for one cut short (ending in "…")' in self.PROMPT
 
     def test_the_suggestion_re_cites_or_drops(self):
         assert (

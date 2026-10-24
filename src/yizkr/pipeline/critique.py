@@ -246,7 +246,7 @@ both places (a list of towns); a bare "Fläckfeld" beside "Flörburg, Kreis
 Peiltal", where "Kreis Peiltal" is about Flörburg, so Fläckfeld put in
 Kreis Peiltal on an excerpt that reads only "Fläckfeld" fails. A
 citation passes when any one of its occurrences conveys the fact; for a
-claim that gives a page, the occurrence must be on that page. You may
+row that names a page, the occurrence must be on that page. You may
 read any occurrence in the numbered transcription, not only those
 listed. A citation not in the transcription is judged on its words
 alone.
@@ -282,11 +282,12 @@ description):
 
 Claims (subject | property | value | times | citation): the times a claim
 carries ("-" for none), and its citation, the excerpt it cites with where
-it occurs: at most three occurrences, those on the page it cites first,
-then those nearest the subject's mentions ("and N more" for the rest);
+it occurs: a row that names a page lists only the occurrences on that
+page, and otherwise every occurrence is listed, nearest the subject's
+mentions first; at most three are shown ("and N more" for the rest);
 "not on page N" for an excerpt found only on other pages; "not in the
-transcription" for one found nowhere; "clipped" for one the extraction
-cut short, located by its words before the "…"; "-" for none:
+transcription" for one found nowhere; "clipped" for one cut short
+(ending in "…"), located by its words before the "…"; "-" for none:
 {claims_block}
 
 Each container a place's mention record puts it in, nearest first, with

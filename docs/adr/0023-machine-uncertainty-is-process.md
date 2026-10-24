@@ -54,9 +54,9 @@ citation with the lines (and page) where it occurs, as each container's
 row gives its evidence; the separate containment block goes. The fixed
 list gains `excerpt_does_not_state`, any claim other than a `part_of`
 whose excerpt fails the test, on its value or its times; one with no
-excerpt is not judged (the excerpt check counts it). `unsupported_containment`
-is a `part_of` claim whose citation fails the test, or that cites no
-excerpt; `evidence_does_not_state` a container whose evidence fails it.
+excerpt is not judged (the excerpt check counts it).
+`unsupported_containment` is a `part_of` claim whose citation fails the
+test, or that cites no excerpt; `evidence_does_not_state` a container whose evidence fails it.
 A suggestion re-cites a passage that conveys the fact by its lines, and
 says drop only when the source conveys it nowhere. A finding names a
 claim by its row's first three columns (§3), and a finding of either

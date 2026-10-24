@@ -838,8 +838,9 @@ class TestAnExcerpt:
             for c in batch_of(excerpt).claims
         } == {("5", None)}
         # only the booklet's extraction prompts show a printed number,
-        # beside page 5 (a critique prompt names no SHA-1, and carries the
-        # transcription as the extraction prompts do, #607)
+        # beside page 5 (a critique prompt never holds its document's own
+        # SHA-1, though it carries the numbered transcription, image
+        # markers and all, as the extraction prompts do, #607)
         shown = [
             prompt
             for kind, prompt in reader.calls

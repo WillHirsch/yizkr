@@ -82,7 +82,7 @@ import json
 import re
 import sys
 import unicodedata
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal, get_args
@@ -1711,7 +1711,7 @@ def container_problems(entity: EntityRecord) -> list[str]:
 def drop_containers(
     entity: dict,
     transcript: verbatim.Transcript | None,
-    malformed: list[dict] = (),
+    malformed: Sequence[dict] = (),
 ) -> tuple[dict, list[dict]]:
     """An entity of an entity manifest whose record stands
     (`set_aside_structure`), with each container of its place record that

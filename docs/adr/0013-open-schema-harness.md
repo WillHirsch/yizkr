@@ -125,8 +125,8 @@ so it is local-only runtime state.
 ### C. Critic pass
 
 After extraction, one adversarial LLM turn reviews the entity manifest +
-claims + the transcription (amended by #607) and flags confident-but-wrong assignments the first pass will not
-self-report: an entity whose kind looks wrong (an agent typed as a
+claims + the transcription (amended by #607) and flags
+confident-but-wrong assignments the first pass will not self-report: an entity whose kind looks wrong (an agent typed as a
 place), an alias that looks like a role/field label rather than a name
 (MOTHER, INFORMANT, BRIDE), a claim whose property looks misapplied. It
 **flags, never rewrites** — findings land in `critique.json`, are

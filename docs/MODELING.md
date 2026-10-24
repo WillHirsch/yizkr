@@ -1268,10 +1268,11 @@ language:
   stands, it conveys the containment, so a container's name alone in the
   district field of a form about the place is evidence enough, while a
   name in a list of towns is not (ADR-0003, amended by #607; the critic
-  may flag one that does not, `evidence_does_not_state`). Each container in `within` is a place entity of the
-  manifest too, with its own record, and so in turn is each of its own
-  containers (*Fläckfeld, Kreis Mockburg, Hesse* gives three place
-  entities; ADR-0035, amended by #572);
+  may flag one that does not, `evidence_does_not_state`). Each container
+  in `within` is a place entity of the manifest too, with its own
+  record, and so in turn is each of its own containers (*Fläckfeld,
+  Kreis Mockburg, Hesse* gives three place entities; ADR-0035, amended
+  by #572);
 - **an organisation:** its proper names, the words naming its kind, and
   its places (*Калдовское районное бюро ЗАГС* has a kind and a place, and
   no proper name);
