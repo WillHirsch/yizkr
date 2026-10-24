@@ -207,10 +207,16 @@ and `yizkr.reset` for the reset.
     reading failed the check is read again, and counted. In a run
     invoked again, a container (PDF or deck) whose transcription stands is not
     read again: its excerpts are those its directory holds, and each counts the
-    stages whose views do not stand, and every stage after the first of them.
+    stages whose views do not stand, as the driver rechecks them (its
+    transcription against the check, its critique's entries): a
+    transcription made again from its container's reading (no model call)
+    with the content its batch was made from leaves the views after it
+    standing; otherwise every stage after the first of them counts too.
     An image of a container whose transcription is made again counts every
     excerpt stage, though an excerpt the run holds for it may have views that
-    stand. Each excerpt stage (as `--until` plans them) is
+    stand. An excerpt stage left to make starts its role's engine client, as
+    the run does, so another claude CLI than the run's refuses the estimate
+    for it too. Each excerpt stage (as `--until` plans them) is
     counted by the mean for excerpts over every run in the runs
     directory that measured the stage for one, pooled, so a run made
     under older prompts or models counts too, else as typical (none, an

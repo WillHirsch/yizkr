@@ -724,7 +724,10 @@ cache answers) calls every page blank or not a document page is left
 out; one whose earlier reading failed the check is read again, and
 counted. In a run invoked again, the excerpts a PDF whose transcription
 stands holds already are counted from its directory, each for the stages
-whose views do not stand and every stage after the first of them; an
+whose views do not stand and every stage after the first of them (amended
+by #494: as the driver rechecks them, and an excerpt transcription made
+again from its container's reading with the content its batch was made
+from leaves the views after it standing); an
 image of a PDF whose transcription is made again counts every excerpt
 stage, though an excerpt the run holds for it may have views that stand.
 Each excerpt stage's calls are counted by the mean for excerpts over
