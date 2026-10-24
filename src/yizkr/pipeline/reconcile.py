@@ -55,7 +55,11 @@ from yizkr.claims import (
 )
 from yizkr.core import sparql
 from yizkr.core.config import Config
-from yizkr.core.dates import time_text, unsupported_in_graph
+from yizkr.core.dates import (
+    claim_time_text,
+    time_text,
+    unsupported_in_graph,
+)
 from yizkr.core.wiki import WikiClient
 from yizkr.disagreement import followed
 from yizkr.pipeline.extract import scan_json_objects
@@ -677,7 +681,7 @@ def block_candidates(
 
 def entity_facts(batch: ClaimBatch, entity_id: str) -> str:
     """Compact relational facts about a manifest entity, from the batch: a
-    date at the precision its source states (`adjudication.date_text`)."""
+    date at the precision its source states (`core.dates.claim_time_text`)."""
     lines = []
     for claim in batch.claims:
         if getattr(claim.subject, "local_id", None) != entity_id:
@@ -688,11 +692,7 @@ def entity_facts(batch: ClaimBatch, entity_id: str) -> str:
                 value.value, "qid", ""
             )
         elif value.type == "time":
-            # imported here: adjudication imports clustering, which
-            # imports this module
-            from yizkr.pipeline.adjudication import date_text
-
-            rendered = date_text(value)
+            rendered = claim_time_text(value, "a batch date")
         elif value.type == "monolingual":
             rendered = value.value.text  # names, causes: just the text
         else:

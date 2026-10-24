@@ -36,7 +36,7 @@ names it as a value (its kin, the events it takes part in with its role,
 its places), each value named by its label and kind; with clustering's
 own evidence for the pair (how names, dates and kin compare, and what
 keeps the pair apart). A date is rendered at its own precision, as the
-site renders it (staticsite.format_time): "the 1830s", "the 19th
+site renders it (core.dates.time_text): "the 1830s", "the 19th
 century", never a first year; with the bounds and circa the source
 gives (rule 5).
 
@@ -119,7 +119,6 @@ from pathlib import Path
 from typing import Any
 
 from yizkr.claims import (
-    WIKIBASE_PRECISION,
     ClaimBatch,
     CoordinateValue,
     EntityRecord,
@@ -131,6 +130,7 @@ from yizkr.claims import (
     TimeValue,
     VocabRef,
 )
+from yizkr.core import dates
 from yizkr.pipeline import clustering
 from yizkr.pipeline.clustering import (
     AMBIGUOUS,
@@ -220,19 +220,9 @@ Pairs:
 
 def date_text(value: TimeValue) -> str:
     """A date at the precision its source states, as the site renders it
-    (staticsite.format_time): a decade as "the 1830s", a century as "the
-    19th century", a year, a month or a day; never a first year."""
-    from yizkr.staticsite import format_time
-
-    precision = value.precision or (
-        "day" if value.day else "month" if value.month else "year"
-    )
-    stamp = (
-        f"+{value.year:04d}-{value.month or 1:02d}-{value.day or 1:02d}"
-        "T00:00:00Z"
-    )
-    text = format_time(stamp, str(WIKIBASE_PRECISION[precision]))
-    return f"the {text}" if precision in ("century", "decade") else text
+    (``core.dates.claim_time_text``): a decade as "the 1830s", a century as
+    "the 19th century", a year, a month or a day; never a first year."""
+    return dates.claim_time_text(value, "a date an adjudication prompt shows")
 
 
 def record_line(entity: EntityRecord) -> str:
@@ -762,8 +752,9 @@ def stage_key(
 
 def code_digest() -> str:
     """The SHA-256 of what renders and reads the calls: this module's
-    source, and the site's date formatter it renders dates with."""
-    from yizkr import staticsite
+    source, and the date formatters it renders dates with (the claim
+    date's stamp, precision and span rule, and the site's formatter)."""
+    from yizkr import claims, staticsite
 
     return sha256_text(
         canonical_json(
@@ -774,6 +765,11 @@ def code_digest() -> str:
                 "dates": sha256_text(
                     inspect.getsource(staticsite.format_time)
                     + inspect.getsource(staticsite.ordinal)
+                    + inspect.getsource(dates.claim_time_text)
+                    + inspect.getsource(dates.time_stamp)
+                    + inspect.getsource(dates.time_text)
+                    + repr(dates.SPAN_PRECISIONS)
+                    + repr(sorted(claims.WIKIBASE_PRECISION.items()))
                 ),
             }
         )

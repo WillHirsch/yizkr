@@ -1115,8 +1115,9 @@ class TestStage:
         assert not ensure_adjudicated(context, config).reused
 
     def test_other_code_is_made_again(self, tmp_path, monkeypatch):
-        """The stage's outputs are keyed on its own source and the site's
-        date formatter (code_digest): other code makes them again."""
+        """The stage's outputs are keyed on its own source and the date
+        formatters it renders with (code_digest): other code makes them
+        again."""
         from yizkr import staticsite
 
         docs = [gustav("one", dated=True), gustav("two", dated=False)]
@@ -1128,6 +1129,31 @@ class TestStage:
             return value
 
         monkeypatch.setattr(staticsite, "format_time", format_time)
+        assert adjudication.code_digest() != digest
+        monkeypatch.undo()
+        # the claim date's stamp and its span rule, in core.dates (#617)
+        from yizkr import claims
+        from yizkr.core import dates
+
+        def time_stamp(value):
+            return "+1830-01-01T00:00:00Z", 9
+
+        def time_text(value, precision, where):
+            return value
+
+        def claim_time_text(value, where):
+            return str(value.year)
+
+        for name, replacement in (
+            ("claim_time_text", claim_time_text),
+            ("time_stamp", time_stamp),
+            ("time_text", time_text),
+            ("SPAN_PRECISIONS", (7,)),
+        ):
+            monkeypatch.setattr(dates, name, replacement)
+            assert adjudication.code_digest() != digest, name
+            monkeypatch.undo()
+        monkeypatch.setitem(claims.WIKIBASE_PRECISION, "decade", 9)
         assert adjudication.code_digest() != digest
         monkeypatch.undo()
         # the module's own source: a copy with one line more
