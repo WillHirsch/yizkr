@@ -355,6 +355,18 @@ writer refused, count here too, under their check and the stage
   `extractions`, `absent`). A document's own count is in `report.json`
   and its drill-down in `report.html` (`coverage.trailing_commas`, null,
   and "not counted", for a coverage that predates it);
+- marriages and their weddings (#656, ADR-0036): each extraction batch's
+  marriages it extracts, a partnership left out, by whether a
+  `started_by` claim links the marriage to a wedding of any kind
+  (`wedding`, `civil_wedding`, `religious_wedding`) the batch lists, and
+  whether a claim of that wedding has a time value: `dated_wedding`,
+  `undated_wedding`, `no_wedding`. It reads the batch's entities and
+  claims alone, never a manifest summary, an excerpt or the
+  transcription, and the GEDCOM adapter's batches are no extraction, so
+  they are not counted (`aggregate.content.marriages`: `extractions`,
+  `total`, `dated_wedding`, `undated_wedding`, `no_wedding`). A
+  document's own counts are in `report.json` and `report.html`
+  (`batch.marriages`, null for a batch that is no extraction's);
 - mention records and judgement notes, summed from each extraction's
   `coverage.json` (ADR-0035 §4, §5, #420): the mention records given,
   and those by label status (`name`, `role`, `kinship`, `courtesy`,

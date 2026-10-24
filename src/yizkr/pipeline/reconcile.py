@@ -52,6 +52,7 @@ from yizkr.claims import (
     PersonStructure,
     PlaceStructure,
     QidRef,
+    label_container,
     name_form_key,
     takes_confirmed,
 )
@@ -416,7 +417,11 @@ def entity_name_keys(
     "Gustl Löbig" and "Gustav Löbig"); a
     place by its record's own names and address, a short form that is
     another of its names' toponym left out (so a camp never meets its
-    town), or by its label where the record names none. Every other
+    town), or by its label where the record names none. A place's written
+    name that is its label and one of its own containers
+    (``claims.label_container``: "Snylsjum, Fryslân" of the label
+    "Snylsjum", within Fryslân) keys as its label, as alias hygiene reads
+    it, so it meets the place written without its container. Every other
     entity, and one without a record, keys by its label and aliases,
     each whole.
 
@@ -447,16 +452,20 @@ def entity_name_keys(
     if isinstance(record, PlaceStructure):
         if record.status != "toponym":
             return set()
+        written = [
+            (
+                entity.label
+                if label_container(name.written, entity.label, record.within)
+                else name.written
+            )
+            for name in record.names
+        ]
         toponyms = _keys(
             name.toponym
-            for name in record.names
-            if name.toponym and _keys([name.toponym]) != _keys([name.written])
+            for name, form in zip(record.names, written, strict=True)
+            if name.toponym and _keys([name.toponym]) != _keys([form])
         )
-        names = [
-            name.written
-            for name in record.names
-            if not _keys([name.written]) & toponyms
-        ]
+        names = [form for form in written if not _keys([form]) & toponyms]
         if record.address is not None:
             names.append(record.address.written)
         return _keys(names or [entity.label])

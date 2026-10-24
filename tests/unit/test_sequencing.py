@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from yizkr.pipeline.sequencing import sequence_documents
 
 
@@ -75,7 +77,7 @@ class TestEntityKeys:
     extractable entities, read through their mention records, as
     reconcile blocks (#388): a shared surname alone connects nothing."""
 
-    def keys(self, tmp_path, entities):
+    def keys(self, tmp_path, entities, claims=()):
         from types import SimpleNamespace
 
         from yizkr.pipeline.orchestrate import Orchestrator
@@ -89,7 +91,7 @@ class TestEntityKeys:
                         "pipeline_version": "0.1.0",
                         "started_at": "2026-07-13T09:00:00Z",
                     },
-                    "claims": [],
+                    "claims": list(claims),
                     "entities": entities,
                 }
             )
@@ -121,6 +123,103 @@ class TestEntityKeys:
             ],
         )
         assert keys == {"gustav lobig", "gustav loebig", "gustl"}
+
+    @pytest.mark.parametrize("kind", ["human", "other"])
+    def test_a_persons_appellation_keys_nothing(self, tmp_path, kind):
+        """#681: a person's alias, or that of a kind that may be a
+        person's, that the batch gives as an appellation (ADR-0018) keys
+        nothing, each of them, as reconcile blocks given the batch, so two
+        documents that share only "Oma" do not connect by it; a place keys
+        on every name, and an alias the batch does not mark keys."""
+        from yizkr.claims import ArtifactRef
+
+        def called(local_id: str, label: str, text: str) -> dict:
+            return {
+                "subject": {
+                    "kind": "local",
+                    "local_id": local_id,
+                    "label": label,
+                },
+                "property": "referred_to_as",
+                "value": {
+                    "type": "monolingual",
+                    "value": {"text": text, "language": "de"},
+                },
+                "source": {
+                    "artifact": ArtifactRef.from_bytes(
+                        b"fictional scan: the 2008 family history"
+                    ).model_dump()
+                },
+            }
+
+        entities = [
+            {
+                "id": "e1",
+                "label": "Hildegard Löbig",
+                "aliases": ["Oma", "Omama", "Hilde"],
+                "kind": kind,
+            },
+            # her appellation is no appellation of Sipkje's
+            {
+                "id": "e3",
+                "label": "Sipkje Faxridge",
+                "aliases": ["Omama"],
+                "kind": "human",
+            },
+            {
+                "id": "e2",
+                "label": "Flörburg",
+                "aliases": ["die Stadt"],
+                "kind": "place",
+            },
+        ]
+        keys = self.keys(
+            tmp_path,
+            entities,
+            [
+                called("e1", "Hildegard Löbig", "Omama"),
+                called("e1", "Hildegard Löbig", "Oma"),
+                called("e2", "Flörburg", "die Stadt"),
+            ],
+        )
+        assert keys == {
+            "hildegard lobig",
+            "hildegard loebig",
+            "hilde",
+            "sipkje faxridge",
+            "omama",
+            "florburg",
+            "floerburg",
+            "die stadt",
+        }
+        assert "oma" in self.keys(tmp_path, entities)
+
+    def test_a_label_and_container_name_keys_as_its_label(self, tmp_path):
+        """#683: a place's written name that is its label and one of its
+        own containers keys as the label, so it meets the same place
+        written without its container."""
+        keys = self.keys(
+            tmp_path,
+            [
+                {
+                    "id": "e1",
+                    "label": "Snylsjum",
+                    "kind": "place",
+                    "structure": {
+                        "kind": "place",
+                        "status": "toponym",
+                        "names": [
+                            {
+                                "written": "Snylsjum, Fryslân",
+                                "toponym": "Snylsjum",
+                            }
+                        ],
+                        "within": ["Fryslân"],
+                    },
+                }
+            ],
+        )
+        assert keys == {"snylsjum"}
 
     def test_no_batch_no_keys(self, tmp_path):
         from types import SimpleNamespace

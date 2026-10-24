@@ -145,6 +145,7 @@ from yizkr.pipeline.anomalies import (
     Checks,
     route,
 )
+from yizkr.pipeline.clustering import WEDDING_KINDS
 from yizkr.pipeline.critique import AXES, CATEGORIES, Finding
 from yizkr.pipeline.critique import entry as critique_entry
 from yizkr.pipeline.llm import OUTPUT_LIMIT, ROLE_STAGES, USAGE_TOKENS
@@ -1112,7 +1113,8 @@ def _pages(pages: Any) -> dict[str, Any]:
 def _read_views(document: Document, directory: Path, state: dict) -> None:
     """What the document's views hold, for each stage that completed: the
     transcription's language, route and how its language was resolved;
-    the batch's entities by kind and claims by property; the extraction's
+    the batch's entities by kind and claims by property, and an
+    extraction's marriages by their weddings (`_marriages`); the extraction's
     coverage (chunks, rejects, fallback tiers, and the mention records
     and judgement notes it counts: None for both unless it counts both);
     and the critique's findings by class. A view that is missing or
@@ -1153,6 +1155,9 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
             "entities": Counter(_text(e.get("kind")) or "?" for e in entities),
             "not_extracted": sum(e.get("extract") is False for e in entities),
             "claims": Counter(_text(c.get("property")) or "?" for c in claims),
+            "marriages": _marriages(entities, claims)
+            if stage == "extraction"
+            else None,
             "subject_forms": _resolved_subject_forms(
                 directory / RESOLVED_BATCH, claims, entities
             ),
@@ -1355,6 +1360,57 @@ def _critique(findings: list) -> dict[str, Any]:
         counted["findings"] += 1
         counted["by_axis"][found.axis] += 1
         counted["by_category"][found.category] += 1
+    return counted
+
+
+def _local(value: Any) -> str | None:
+    """The local id an entity reference names, or None."""
+    if isinstance(value, dict) and value.get("kind") == "local":
+        return _text(value.get("local_id"))
+    return None
+
+
+def _marriages(entities: list[dict], claims: list[dict]) -> Counter:
+    """An extraction's marriages that it extracts, by their weddings
+    (ADR-0036): `dated_wedding`, `started_by` a wedding of any kind that
+    one of its claims dates (a claim with a time value), else
+    `undated_wedding`, `started_by` a wedding, else `no_wedding`. Read
+    from the batch's structure alone, never from a summary or an
+    excerpt; a partnership is no marriage, so it is not counted."""
+    kinds = {
+        _text(e.get("id")): _text(e.get("kind"))
+        for e in entities
+        if _text(e.get("id"))
+    }
+    marriages = [
+        _text(e.get("id"))
+        for e in entities
+        if _text(e.get("id"))
+        and e.get("kind") == "marriage"
+        and e.get("extract") is not False
+    ]
+    weddings: dict[str, set[str]] = {}
+    dated: set[str] = set()
+    for claim in claims:
+        subject = _local(claim.get("subject"))
+        value = claim.get("value")
+        if subject is None or not isinstance(value, dict):
+            continue
+        if value.get("type") == "time":
+            dated.add(subject)
+        elif claim.get("property") == "started_by":
+            target = _local(value.get("value"))
+            if target is not None and kinds.get(target) in WEDDING_KINDS:
+                weddings.setdefault(subject, set()).add(target)
+    counted: Counter = Counter()
+    for marriage in marriages:
+        started = weddings.get(marriage, set())
+        if started & dated:
+            counted["dated_wedding"] += 1
+        elif started:
+            counted["undated_wedding"] += 1
+        else:
+            counted["no_wedding"] += 1
     return counted
 
 
@@ -1640,6 +1696,9 @@ def _document_record(document: Document) -> dict[str, Any]:
             "entities": dict(batch["entities"]),
             "not_extracted": batch["not_extracted"],
             "claims": dict(batch["claims"]),
+            "marriages": dict(batch["marriages"])
+            if batch["marriages"] is not None
+            else None,
         }
         if batch is not None
         else None,
@@ -2641,6 +2700,9 @@ def _aggregate_content(
     # whose coverage gives no count
     trailing_commas = trailing_extractions = trailing_absent = 0
     batches = not_extracted = zero_entities = 0
+    # the extractions' marriages by their weddings (`_marriages`)
+    marriages: Counter = Counter()
+    marriage_extractions = 0
     extractions = chunks = rejected = unread = with_rejects = given = 0
     # the chunks asked again for a missing required field, the extractions
     # that asked one, and those whose coverage predates the count
@@ -2661,6 +2723,9 @@ def _aggregate_content(
             if batch["claims"].get("name"):
                 untyped_names[_kind(document.kind)] += batch["claims"]["name"]
             zero_entities += not batch["entities"].total()
+            if batch["marriages"] is not None:
+                marriage_extractions += 1
+                marriages.update(batch["marriages"])
         coverage = document.views.get("coverage")
         if coverage is not None and batch is not None:
             extractions += 1
@@ -2801,6 +2866,13 @@ def _aggregate_content(
             "by_kind": _by_count(zero_claims),
         },
         "zero_entities": zero_entities,
+        "marriages": {
+            "extractions": marriage_extractions,
+            "total": marriages.total(),
+            "dated_wedding": marriages["dated_wedding"],
+            "undated_wedding": marriages["undated_wedding"],
+            "no_wedding": marriages["no_wedding"],
+        },
         "chunks": chunks,
         "retried_chunks": {
             "chunks": retried,
@@ -3713,6 +3785,19 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
             3,
         ),
         _Section(
+            "Marriages and their weddings",
+            [
+                f"{_n(content['marriages']['total'])} marriages in "
+                f"{_n(content['marriages']['extractions'])} extractions: "
+                f"{_n(content['marriages']['dated_wedding'])} started by a "
+                "dated wedding, "
+                f"{_n(content['marriages']['undated_wedding'])} by an "
+                "undated one, "
+                f"{_n(content['marriages']['no_wedding'])} with no wedding."
+            ],
+            3,
+        ),
+        _Section(
             "Critic findings by axis and category",
             [
                 f"{_n(critic['findings'])} findings from "
@@ -4520,6 +4605,11 @@ def _html_document(document: Mapping[str, Any]) -> str:
             f"{batch['not_extracted']}"
         )
         items.append(f"Claims: {_listed(_by_count(batch['claims']))}")
+        if batch.get("marriages") is not None:
+            items.append(
+                "Marriages by their weddings: "
+                f"{_listed(_by_count(batch['marriages']))}"
+            )
     coverage = document["coverage"]
     if coverage:
         retried = coverage.get("retried_chunks")

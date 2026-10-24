@@ -117,6 +117,18 @@ longer holds.
 - `ended_by` keeps the divorce, the annulment and an end of unstated kind
   (§1, §2, §3, §5, §6).
 
+Amended by #656 (2026-10-24; owner decision): **a dated marriage gets
+its wedding.** The extraction prompts ask for a marriage's wedding
+where the source dates or places the marriage's start, at any
+precision, as a stated divorce gets its divorce, and for no wedding
+where the source only names the marriage, for a partnership, and for
+an observation (a directory or census that lists the couple as
+married, with no start). The chunk call gives the
+listed wedding the date and place, and the marriage its `started_by`.
+The run report counts each extraction's marriages by their weddings,
+from the batch's structure alone: started by a dated wedding, by an
+undated one, or by none.
+
 ## Context
 
 MODELING.md dates a marriage as Wikidata dates spouse (P26): a statement
@@ -190,6 +202,8 @@ can still generate P26 so qualified. #394 adds the new classes' ids.
 |---|---|
 | "Die am 8. Februar 1947 vor dem Standesbeamten in Flörburg geschlossene Ehe der Parteien wird geschieden" (the 1957 judgment) | Leopold and Agnes's marriage; its civil wedding on 8 February 1947 at Flörburg; its divorce on 2 January 1957, carried out by the Landgericht Rekau |
 | "Vor dem Standesbeamten erschienen zum Zwecke der Eheschließung" (the 1905 certificate) | Sebastian and Hildegard's marriage, and its civil wedding on 15 December 1905 at Flörburg |
+| "= (1942) Florence Faxridge" (the 1984 tree; amended by #656) | Gustav and Florence's marriage, and its wedding in 1942 |
+| "= Hildegard 'Hilde' Laudler" (the 1984 tree, undated; amended by #656) | Sebastian and Hildegard's marriage alone, with no wedding |
 | "Witwer der Cäcilie Löbig geb. Tarle" (the burial register) | Eugen and Cäcilie's marriage, `ended_by` Cäcilie's death event, which ADR-0035 §3.1 makes of the same words |
 | (amended by ADR-0040, 2026-10-24) "Witwer der Cäcilie Löbig geb. Tarle" | Eugen and Cäcilie's marriage, `ended_by_death_of` Cäcilie (ADR-0040's Q2), since "Witwer der" states that they were married when she died; the same words give Eugen's `civil_status` `widowed`, and no death statement for Cäcilie, whose "died by 16 March 1909" is derived (ADR-0040's Q7, Q5; §2.7) |
 | (added by ADR-0040, 2026-10-24) "dessen verstorbener Ehefrau Cäcilie" (the 1905 certificate) | Eugen and Cäcilie's marriage, with no end: the words state a relation and a death, not that she was still his wife when she died. Views derive the end (ADR-0040's Q2, Q12) |
