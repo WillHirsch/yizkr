@@ -1160,6 +1160,7 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
                 if isinstance(fallback, dict)
                 else [],
                 **_records(coverage),
+                "quotes": _quotes(coverage),
             }
     if document.completed("critique"):
         findings = _view(
@@ -1167,6 +1168,28 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
         )
         if findings is not None:
             views["critique"] = _critique(findings)
+
+
+def _quotes(coverage: dict) -> dict[str, Any] | None:
+    """The claims' excerpts an extraction's coverage counts
+    (chunking.excerpt_audit): those checked against the transcription,
+    the claims with none, and those whose excerpt the transcription does
+    not hold, by property as the coverage names it (folded in the
+    aggregate). None for a coverage that gives no count of them, as one
+    written before they were counted: absent, never zero."""
+    quotes = coverage.get("quotes")
+    if not isinstance(quotes, dict):
+        return None
+    checked = _counted(quotes.get("checked"))
+    missing = _counted(quotes.get("not_in_source"))
+    if checked is None or missing is None:
+        return None
+    return {
+        "checked": checked,
+        "without_excerpt": _count(quotes.get("without_excerpt")),
+        "not_in_source": missing,
+        "by_property": _tally(quotes.get("not_in_source_by_property")) or {},
+    }
 
 
 def _records(coverage: dict) -> dict[str, Any]:
@@ -2535,6 +2558,12 @@ def _aggregate_content(
     # the place containers dropped alone from records that stand, by
     # reason (claims.drop_containers)
     containers_dropped: Counter = Counter()
+    # the claims whose excerpt their transcription does not hold, by
+    # property (chunking.excerpt_audit), and the extractions that count
+    # them, hold a miss, or give no count
+    quotes_missing: Counter = Counter()
+    quote_extractions = quotes_checked = quotes_without = 0
+    quote_documents = quotes_absent = quotes_not_in_source = 0
     batches = not_extracted = zero_entities = 0
     extractions = chunks = rejected = unread = with_rejects = given = 0
     failed_rejecting = critiques = with_findings = findings = invalid = 0
@@ -2569,6 +2598,16 @@ def _aggregate_content(
             fallbacks.update(
                 _known(tier, FALLBACK_TIERS) for tier in coverage["fallback"]
             )
+            quotes = coverage.get("quotes")
+            if quotes is None:
+                quotes_absent += 1
+            else:
+                quote_extractions += 1
+                quotes_checked += quotes["checked"]
+                quotes_without += quotes["without_excerpt"]
+                quote_documents += bool(quotes["not_in_source"])
+                quotes_not_in_source += quotes["not_in_source"]
+                quotes_missing.update(quotes["by_property"])
             records, noted = coverage["records"], coverage["notes"]
             if records is None:
                 absent[_uncounted(coverage)] += 1
@@ -2644,6 +2683,19 @@ def _aggregate_content(
                 by_reason, lambda value: _known(value, REJECT_REASONS)
             ),
             "by_reason_absent": reasons_absent,
+        },
+        "quotes": {
+            "extractions": quote_extractions,
+            "checked": quotes_checked,
+            "without_excerpt": quotes_without,
+            "not_in_source": quotes_not_in_source,
+            "documents_with_miss": quote_documents,
+            "rate": _share(quotes_not_in_source, quotes_checked),
+            "not_in_source_by_property": _folded(
+                quotes_missing,
+                lambda value: _known(value, vocabulary.properties),
+            ),
+            "absent": quotes_absent,
         },
         "container_claims": _container_claims(claims, vocabulary),
         "zero_claims": {
@@ -3386,6 +3438,11 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
             3,
         ),
         _Section(
+            "Excerpts not in their source",
+            _quote_blocks(content["quotes"]),
+            3,
+        ),
+        _Section(
             "What sources say of the artifacts themselves",
             [
                 f"Captions given, a container's words about an image it "
@@ -3560,6 +3617,33 @@ def _write_sections(content: Mapping[str, Any]) -> list[_Section]:
         ]
     sections.append(_Section("Place hierarchy", [shown], 3))
     return sections
+
+
+def _quote_blocks(quotes: Mapping[str, Any]) -> list[Any]:
+    blocks: list[Any] = [
+        [
+            "Claims whose excerpt was looked for in their transcription: "
+            f"{_n(quotes['checked'])}, in "
+            f"{_n(quotes['extractions'])} extractions; claims with no "
+            f"excerpt: {_n(quotes['without_excerpt'])}",
+            "Excerpts the transcription does not hold: "
+            f"{_n(quotes['not_in_source'])} "
+            f"({_pct(quotes['rate'])} of those checked), in "
+            f"{_n(quotes['documents_with_miss'])} documents; the claims "
+            "are kept",
+            "Extractions whose coverage predates the count: "
+            f"{_n(quotes['absent'])}",
+        ]
+    ]
+    if quotes["not_in_source_by_property"]:
+        blocks.append(
+            _table(
+                ("Property", "Excerpts not in source"),
+                quotes["not_in_source_by_property"].items(),
+                numbers=(1,),
+            )
+        )
+    return blocks
 
 
 def _contradiction_sections(content: Mapping[str, Any]) -> list[_Section]:
@@ -4190,6 +4274,18 @@ def _html_document(document: Mapping[str, Any]) -> str:
             f"{coverage['rejected_claims']}; unread objects: "
             f"{coverage['unread_objects']}; fallback tiers: "
             f"{', '.join(coverage['fallback']) or 'none'}"
+        )
+        quotes = coverage.get("quotes")
+        items.append(
+            "Excerpts not in the transcription: "
+            + (
+                "not counted (its coverage gives no count of them)"
+                if quotes is None
+                else f"{quotes['not_in_source']} of "
+                f"{quotes['checked']} checked, by property: "
+                f"{_listed(_by_count(quotes['by_property']))}; claims "
+                f"with no excerpt: {quotes['without_excerpt']}"
+            )
         )
         records, notes = coverage.get("records"), coverage.get("notes")
         if records is None or notes is None:

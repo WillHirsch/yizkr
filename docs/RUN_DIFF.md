@@ -349,6 +349,11 @@ expects it and why:
   place containers dropped up (`content.records.containers_dropped`, by
   reason in `containers_dropped_by_reason`) where the change does not
   touch what the manifest gives as a container's evidence;
+- excerpts not in their source up (`content.quotes.not_in_source`,
+  its `rate`, by property in `not_in_source_by_property`) where the
+  change does not touch what a chunk is asked to quote; a change to the
+  comparison itself (core/verbatim.py) moves these counts with no
+  change to any batch;
 - clusters: merges where the change should split, or the reverse; a rise
   in `conflicting` or hard conflicts; `methods_changed` toward
   `ambiguous` in bulk; adjudicated merges (`merges_by_method`) the

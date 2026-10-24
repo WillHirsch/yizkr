@@ -111,6 +111,16 @@ checks:
     max-share: 0.25
     min-count: 4
 
+  # Per document, more than `max-share` of the claims whose excerpt was
+  # checked quoting words its transcription does not hold, over at least
+  # `min-count` (the extraction's coverage). Alert only: the claim is kept.
+  # With these defaults one miss alerts a document of 4 to 9 claims
+  # checked; tune them once a run shows how often a sound excerpt misses.
+  excerpt-not-in-source:
+    enabled: true
+    max-share: 0.1
+    min-count: 4
+
   # A batch's claims about someone it gives a date of birth for that are
   # dated wholly before the earliest year a birth it gives them may lie
   # in, or wholly more than `max-years-after-birth` years after the

@@ -33,6 +33,17 @@ evidence, and a finding names the container by its name (`container`).
 It is advisory, as every finding is, and counted with the critic's
 categories, apart from the deterministic reasons a container is dropped
 by (§3).
+Amended by #580 (2026-10-23, the owner's choice of a flag first): beside
+the critic, a deterministic check looks for each claim's
+`transcription_excerpt` in its document's transcription, compared as a
+container's evidence is (`core/verbatim.py`, ADR-0035 §5). A miss is
+process data, never graph data and never a reject: the claim is kept
+and written, the miss is counted in the extraction's coverage
+(`quotes`), the run report (by property) and the run diff, raised by
+the `excerpt-not-in-source` anomaly check (docs/ANOMALIES.md), and kept
+with the transcription line nearest to it in the extraction's local
+`quotes.json`. Whether a miss becomes a reject is the owner's to
+decide once a scratch run shows how often a legitimate excerpt misses.
 Superseded in part by [ADR-0035](0035-mention-records.md) (owner
 decision 2026-09-29, #385): §2 and Ruling 1 no longer keep every machine
 judgement out of the graph. An extraction's judgement note, a category
