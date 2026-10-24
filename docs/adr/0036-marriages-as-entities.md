@@ -104,6 +104,18 @@ with their kinds, the couple's `participant` statements with their
 roles, `started_by`, `ended_by` (a partner's own `death` event
 included), and each event's own date, place and `carried_out_by`, each
 with both references (ADR-0003).
+Superseded by ADR-0040 (2026-10-24, the owner's decisions and answers of
+2026-10-24): "`ended_by` (a partner's own `death` event included)" no
+longer holds.
+- A union ended by a death points to the partner who died, through
+  `ended_by_death_of`: a person value with no date of its own.
+- It is written only where a source specifically states that the couple
+  were married when that partner died. Where the end is only implicit,
+  views derive it and nothing is written (ADR-0040's Q2).
+- Readers take that partner's own death statements and derived "died
+  by" dates, so nothing is copied.
+- `ended_by` keeps the divorce, the annulment and an end of unstated kind
+  (§1, §2, §3, §5, §6).
 
 ## Context
 
@@ -135,6 +147,7 @@ derived from it. A *union* below is any partnership, a marriage included.
 | `started_by` | union → the event that began it: its wedding, or each of two ceremonies. It accepts `wedding` and its subclasses (ADR-0035 §3.5) | none (P26 takes a start time, P580) |
 | `ended_by` | union → the event that ended it: a divorce, an annulment, a partner's own `death` event, or an `event` of unstated kind. It accepts `divorce`, `annulment`, `death` and `event` | none (nearest: end cause, P1534, which names a cause's class) |
 | `spouse` | property, retired: it accepts nothing, so validation refuses any claim of it, and no prompt offers it. The spouse link is a query | P26 |
+| `ended_by_death_of` | (amended by ADR-0040, 2026-10-24) union → the partner whose death ended it, a person, with no date of its own. It is written only where a source specifically states that the couple were married when that partner died (ADR-0040's Q2). `ended_by` no longer accepts `death`, and reads "a divorce, an annulment, or an `event` of unstated kind" | none (nearest: end cause, P1534) |
 
 - **`marriage` keeps its key, label and Wikidata id**, and becomes a
   subclass of `partnership` instead of `event`; each scratch run's reset
@@ -143,12 +156,23 @@ derived from it. A *union* below is any partnership, a marriage included.
   its bounds, as a P26 statement holds its dates, and no event needs a
   link back. A death that ends a union is the partner's own `death` event
   (ADR-0020 §2, ADR-0035 §3.2): `ended_by` points to it, never to a copy.
+  Superseded by ADR-0040, 2026-10-24: there is no death event.
+  - A death that ends a union is named by `ended_by_death_of` → the
+    partner who died, written only where a source states that the
+    couple were married when that partner died (ADR-0040's Q2).
+  - Otherwise the end is derived in views from the partners' death
+    statements (ADR-0040 §2.6), and nothing is written.
+  - Where the batch names the couple, validation checks that the value
+    is one of them.
 - **Each event has its own date** (`point_in_time` at its precision,
   with `earliest_date`, `latest_date` and its own circa), **place**
   (`location`) **and participants** (roles `witness`, `officiant`); a
   divorce names the court that acts by `carried_out_by` (ADR-0031;
   defined in ADR-0035 §3.4). The couple take part in the union alone,
   and its events reach them through it.
+  (Amended by ADR-0040, 2026-10-24, its Q6, rule (a): a wedding's
+  registrar and its non-kin witnesses are left out, `extract` false. A
+  kin witness or officiant stays, with that role.)
 - **The spouse link is a query**: two participants of one marriage with
   role `spouse`. The partner link reads every partnership, marriages
   included, and either role: a married couple are partners too. A spouse
@@ -167,7 +191,10 @@ can still generate P26 so qualified. #394 adds the new classes' ids.
 | "Die am 8. Februar 1947 vor dem Standesbeamten in Flörburg geschlossene Ehe der Parteien wird geschieden" (the 1957 judgment) | Leopold and Agnes's marriage; its civil wedding on 8 February 1947 at Flörburg; its divorce on 2 January 1957, carried out by the Landgericht Rekau |
 | "Vor dem Standesbeamten erschienen zum Zwecke der Eheschließung" (the 1905 certificate) | Sebastian and Hildegard's marriage, and its civil wedding on 15 December 1905 at Flörburg |
 | "Witwer der Cäcilie Löbig geb. Tarle" (the burial register) | Eugen and Cäcilie's marriage, `ended_by` Cäcilie's death event, which ADR-0035 §3.1 makes of the same words |
+| (amended by ADR-0040, 2026-10-24) "Witwer der Cäcilie Löbig geb. Tarle" | Eugen and Cäcilie's marriage, `ended_by_death_of` Cäcilie (ADR-0040's Q2), since "Witwer der" states that they were married when she died; the same words give Eugen's `civil_status` `widowed`, and no death statement for Cäcilie, whose "died by 16 March 1909" is derived (ADR-0040's Q7, Q5; §2.7) |
+| (added by ADR-0040, 2026-10-24) "dessen verstorbener Ehefrau Cäcilie" (the 1905 certificate) | Eugen and Cäcilie's marriage, with no end: the words state a relation and a death, not that she was still his wife when she died. Views derive the end (ADR-0040's Q2, Q12) |
 | "Husband: Felix LÖBIG, died 1931" (Ida's 1945 card) | an undated marriage: a source that merely names a spouse dates nothing, and the card's own date observes nothing, since Felix died in 1931 |
+| (amended by ADR-0040, 2026-10-24) "Husband: Felix LÖBIG, died 1931" | still no end: the card does not state that they were married when he died, so views derive the end (ADR-0040's Q2) |
 | a directory or a census listing a couple as married, with no start or end | an observation: a `point_in_time` on the union, never a wedding date. A union has no date of its own, so clustering never keys on it and the disagreement report never compares it |
 | "Löbig, Ursula, Wwe." (the 1912 directory) | no union, since no spouse is named: ADR-0035's `civil_status` |
 | a couple presented as a couple, with no word of a marriage | a partnership, which may be a marriage no source identifies. Two people named only as a child's parents are not thereby a couple |
@@ -188,6 +215,11 @@ can still generate P26 so qualified. #394 adds the new classes' ids.
   unstated kind meets a civil or a religious one, but a civil and a
   religious wedding are two ceremonies; an end of unstated kind meets
   any end. A death stays its principal's own (ADR-0035 §7).
+  (Superseded by ADR-0040, 2026-10-24: "A death stays its principal's
+  own" reads "A death is the person's own statements": no death event
+  is keyed. `ended_by_death_of` is not lifted as a key, since the couple
+  already key the union. Clustering's death comparison reads it for the
+  late partner's derived span.)
 
 ### 4. Neutral coexistence (ADR-0002)
 
@@ -213,6 +245,8 @@ can still generate P26 so qualified. #394 adds the new classes' ids.
 | `FROM … TO …` on a MARR, on a DIV | a wedding dated by the FROM and an end of unstated kind dated by the TO; the divorce's own start and end time, as an imprisonment is dated |
 | an undated `DIV Y` | an undated divorce, as an undated death is a death event (ADR-0020 §2), so no unknown value is needed |
 | a partner's DEAT | no end: GEDCOM does not say that the marriage lasted until the death |
+| (amended by ADR-0040, 2026-10-24) a partner's DEAT | still no end written; views derive the end (ADR-0040's Q2) |
+| (amended by ADR-0040, 2026-10-24) an undated `DIV Y` | still an undated divorce, an event. But "as an undated death is a death event (ADR-0020 §2), so no unknown value is needed" no longer holds, since an undated death is a `date_of_death` of unknown value (ADR-0040 §2.2). A divorce is the couple's event, with its own court and place, so it stays one |
 | a SOUR beneath a MARR, DIV or ANUL | a citation of that event's claims, folded as the spouse claims fold it now (ADR-0021) |
 
 ### 6. Privacy and display
@@ -223,11 +257,23 @@ can still generate P26 so qualified. #394 adds the new classes' ids.
   possibly-living check releases each; the site badges them otherwise.
   A partner's death, a witness and an officiant follow the person rule,
   and taking part in a union or its events is person evidence (ADR-0020).
+  Amended by ADR-0040, 2026-10-24:
+  - The partner's death is that partner's own statements.
+  - The partner named by `ended_by_death_of` follows the person rule
+    through `PERSON_VALUE_PROPERTIES`, never as a bound: it stays out of
+    `backup.UNION_BOUNDS`.
+  - `ended_by_death_of` is death evidence for the partner it names
+    (ADR-0040's Q9). A partner it alone releases is kept when the union
+    is left out, without the statement that released them.
 - **Display.** A person's timeline (`person-timeline.rq`) lists the
   events that start and end the person's unions, so weddings and
   divorces are events of both spouses. The site shows each person's
   derived spouses and partners, each with every source that states it
   (R6). Weddings and divorces reach the places map by their `location`.
+  (Amended by ADR-0040, 2026-10-24: a union with no stated end shows
+  "no source states how it ended", with each partner's death statements
+  and their sources, and beside them the end derived from the partners'
+  death spans, labelled as derived (ADR-0040 §2.6).)
 
 ### 7. Residences, occupations and other periods
 
