@@ -7,6 +7,12 @@ kinship edge and a containment edge under labels carrying the session's
 marker (conftest.fixture_mark), so each session meets them as a first
 write, then assert `fetch_roster` / `fetch_place_containment` round-trip
 them and `impossible_pair` rules the same-name pairs out.
+
+The elder's birth and death are stated at century and decade precision,
+and the younger's birth and death by events dated to a decade and a
+year, so the
+roster's dates round-trip at the precision each statement states, as
+"the 19th century" or "the 1850s", never as a first year (#337).
 """
 
 from __future__ import annotations
@@ -33,13 +39,17 @@ pytestmark = pytest.mark.live
 # what the fixture is; a change to it gives the fixture new items
 FIXTURE = (
     "ADR-0017: an elder, the younger whose father he is, and a town part "
-    "of a country, in one letter"
+    "of a country, in one letter; #337: the elder born in the 19th century "
+    "and dead in the 1890s, the younger's birth an event of the 1850s and his "
+    "death an event of 1938"
 )
 MARK = fixture_mark(FIXTURE, reconcile, writer)
 ELDER = f"Yizkr Reconcile-Test Elder {MARK}"
 YOUNGER = f"Yizkr Reconcile-Test Younger {MARK}"
 COUNTRY = f"Yizkr Reconcile-Test Country {MARK}"
 TOWN = f"Yizkr Reconcile-Test Town {MARK}"
+BIRTH = f"Yizkr Reconcile-Test Birth {MARK}"
+DEATH = f"Yizkr Reconcile-Test Death {MARK}"
 
 
 def _local(local_id: str, label: str, kind: str) -> dict:
@@ -72,6 +82,8 @@ def _relations_batch(artifact: ArtifactRef) -> ClaimBatch:
                 {"id": "e_elder", "label": ELDER, "kind": "human"},
                 {"id": "e_town", "label": TOWN, "kind": "place"},
                 {"id": "e_country", "label": COUNTRY, "kind": "place"},
+                {"id": "e_birth", "label": BIRTH, "kind": "birth"},
+                {"id": "e_death", "label": DEATH, "kind": "death"},
             ],
             "claims": [
                 {
@@ -91,6 +103,60 @@ def _relations_batch(artifact: ArtifactRef) -> ClaimBatch:
                         "value": _local("e_country", COUNTRY, "place"),
                     },
                     "source": _source(artifact, "a town in the country"),
+                },
+                {
+                    "subject": _local("e_elder", ELDER, "human"),
+                    "property": "date_of_birth",
+                    "value": {
+                        "type": "time",
+                        "year": 1801,
+                        "precision": "century",
+                    },
+                    "source": _source(artifact, "born last century"),
+                },
+                {
+                    "subject": _local("e_elder", ELDER, "human"),
+                    "property": "date_of_death",
+                    "value": {
+                        "type": "time",
+                        "year": 1890,
+                        "precision": "decade",
+                    },
+                    "source": _source(artifact, "died in the nineties"),
+                },
+                {
+                    "subject": _local("e_birth", BIRTH, "birth"),
+                    "property": "participant",
+                    "value": {
+                        "type": "item",
+                        "value": _local("e_younger", YOUNGER, "human"),
+                    },
+                    "source": _source(artifact, "born in the fifties"),
+                },
+                {
+                    "subject": _local("e_birth", BIRTH, "birth"),
+                    "property": "point_in_time",
+                    "value": {
+                        "type": "time",
+                        "year": 1850,
+                        "precision": "decade",
+                    },
+                    "source": _source(artifact, "born in the fifties"),
+                },
+                {
+                    "subject": _local("e_death", DEATH, "death"),
+                    "property": "participant",
+                    "value": {
+                        "type": "item",
+                        "value": _local("e_younger", YOUNGER, "human"),
+                    },
+                    "source": _source(artifact, "the son, died in 1938"),
+                },
+                {
+                    "subject": _local("e_death", DEATH, "death"),
+                    "property": "point_in_time",
+                    "value": {"type": "time", "year": 1938},
+                    "source": _source(artifact, "the son, died in 1938"),
                 },
             ],
         }
@@ -144,6 +210,20 @@ def test_roster_exposes_kinship_qids(client, config, written):
     # (#388)
     assert younger.kind == elder.kind == "human"
     assert _by_label(roster, TOWN).kind == "place"
+
+
+def test_roster_dates_round_trip_at_their_precision(client, config, written):
+    roster = fetch_roster(client, config)
+    elder = _by_label(roster, ELDER)
+    younger = _by_label(roster, YOUNGER)
+    # direct statements, at century and decade precision
+    assert (elder.birth, elder.death) == ("the 19th century", "the 1890s")
+    # a birth event's point in time, at decade precision, and a death
+    # event's, at year precision, fill the gaps
+    assert (younger.birth, younger.death) == ("the 1850s", "1938")
+    # as the adjudicator reads them
+    assert "born: the 19th century; died: the 1890s" in elder.facts()
+    assert "born: the 1850s; died: 1938" in younger.facts()
 
 
 def test_kinship_edge_makes_the_pair_impossible(client, config, written):

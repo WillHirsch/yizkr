@@ -708,6 +708,98 @@ class TestAcceptAllRefusesDepicts:
 
         assert not out.exists()
 
+    @pytest.mark.parametrize("body", ["rows", "header", "empty", "bom-only"])
+    def test_apply_review_refuses_a_sheet_without_claim_id(
+        self, tmp_path, body
+    ):
+        # it matches rows to claims by claim_id: without that column it
+        # refuses before reading any row, rather than a KeyError, and a
+        # file with no header row at all is refused the same way (#532)
+        text = portrait_text()
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(text, review_csv)
+        edit_columns(
+            review_csv,
+            drop_column("claim_id"),
+            lambda header, rows: (header, rows if body == "rows" else []),
+        )
+        if body == "empty":
+            review_csv.write_text("")
+        elif body == "bom-only":
+            review_csv.write_bytes(codecs.BOM_UTF8)
+
+        with pytest.raises(ValueError, match="no 'claim_id' column"):
+            apply_review(text, review_csv)
+
+    @pytest.mark.parametrize(
+        "name",
+        ["Claim_ID", "claim_id ", "claim" + ZWSP + "_id"],
+        ids=["capitalised", "trailing-space", "zero-width-inside"],
+    )
+    def test_apply_review_refuses_a_renamed_claim_id_as_accept_all_does(
+        self, tmp_path, name
+    ):
+        # the same comparison and wording as accept-all's refusal (#532)
+        text = portrait_text()
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(text, review_csv)
+        edit_columns(review_csv, rename_column("claim_id", name))
+        edit_rows(review_csv, lambda row: {**row, "decision": "approve"})
+
+        with pytest.raises(ValueError) as refusal:
+            apply_review(text, review_csv)
+
+        assert (
+            "has a column like 'claim_id' but none named exactly "
+            "'claim_id'" in str(refusal.value)
+        )
+
+    @pytest.mark.parametrize(
+        "edit",
+        [
+            drop_column("claim_id"),
+            rename_column("claim_id", "Claim_ID"),
+            None,  # a 0-byte file: no header row at all
+        ],
+        ids=["dropped", "renamed", "empty"],
+    )
+    def test_apply_review_cli_refuses_a_sheet_without_claim_id(
+        self, tmp_path, edit
+    ):
+        # one line naming the column, exit 1, and no --out written (#532)
+        text = portrait_text()
+        batch = tmp_path / "batch.json"
+        batch.write_text(text.model_dump_json(indent=2))
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(text, review_csv)
+        if edit is None:
+            review_csv.write_text("")
+        else:
+            edit_columns(review_csv, edit)
+        approved = tmp_path / "approved.json"
+        args = build_parser().parse_args(
+            [
+                "ingest",
+                "apply-review",
+                "--batch",
+                str(batch),
+                "--csv",
+                str(review_csv),
+                "--out",
+                str(approved),
+            ]
+        )
+
+        with pytest.raises(SystemExit) as exit_:
+            args.func(args)
+
+        # sys.exit(message): the message goes to stderr, the status is 1
+        message = exit_.value.code
+        assert isinstance(message, str)
+        assert "\n" not in message
+        assert "'claim_id'" in message
+        assert not approved.exists()
+
     def test_row_with_an_extra_cell_is_refused_before_writing(self, tmp_path):
         text = portrait_text()
         review_csv = tmp_path / "review.csv"

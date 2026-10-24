@@ -57,7 +57,7 @@ from yizkr.claims import (
 )
 from yizkr.core import sparql
 from yizkr.core.config import Config
-from yizkr.core.dates import unsupported_in_graph
+from yizkr.core.dates import time_text, unsupported_in_graph
 from yizkr.core.wiki import WikiClient
 from yizkr.disagreement import followed
 from yizkr.pipeline.extract import scan_json_objects
@@ -79,6 +79,8 @@ class RosterEntity(BaseModel):
     # an unrecognized kind's label, shown beside its QID to the
     # adjudicator and never read
     kind_label: str = ""
+    # each date as text at the precision its statement states ("the 19th
+    # century", "1919-01-07"), one sampled per item
     birth: str = ""
     death: str = ""
     spouses: list[str] = []
@@ -169,15 +171,46 @@ WHERE {{
   OPTIONAL {{ ?item wdt:{married_name} ?marriedName . }}
   OPTIONAL {{ ?item wdt:{nickname} ?nick . }}
   OPTIONAL {{ ?item wdt:{official_name} ?officialName . }}
-  OPTIONAL {{ ?item wdt:{date_of_birth} ?birthDate . }}
-  OPTIONAL {{ ?item wdt:{date_of_death} ?deathDate . }}
+  # each date read from its best-rank statement's value node, as the
+  # truthy wdt: value is, with its precision, and joined to it as
+  # "time|precision" so the sample takes both from one statement
+  OPTIONAL {{ ?item p:{date_of_birth} ?birthStatement .
+              ?birthStatement a wikibase:BestRank .
+              wd:{date_of_birth} wikibase:statementValue ?birthLink .
+              ?birthStatement ?birthLink ?birthNode .
+              ?birthNode wikibase:timeValue ?birthTime ;
+                         wikibase:timePrecision ?birthPrecision .
+              BIND(CONCAT(STR(?birthTime), "|", STR(?birthPrecision))
+                   AS ?birthDate) }}
+  OPTIONAL {{ ?item p:{date_of_death} ?deathStatement .
+              ?deathStatement a wikibase:BestRank .
+              wd:{date_of_death} wikibase:statementValue ?deathLink .
+              ?deathStatement ?deathLink ?deathNode .
+              ?deathNode wikibase:timeValue ?deathTime ;
+                         wikibase:timePrecision ?deathPrecision .
+              BIND(CONCAT(STR(?deathTime), "|", STR(?deathPrecision))
+                   AS ?deathDate) }}
   # dates asserted via event items (participant in a birth/death event)
   OPTIONAL {{ ?birthEvent wdt:{participant} ?item ;
                           wdt:{instance_of} wd:{birth_item} ;
-                          wdt:{point_in_time} ?birthEventDate . }}
+                          p:{point_in_time} ?birthEventStatement .
+              ?birthEventStatement a wikibase:BestRank .
+              wd:{point_in_time} wikibase:statementValue ?birthEventLink .
+              ?birthEventStatement ?birthEventLink ?birthEventNode .
+              ?birthEventNode wikibase:timeValue ?birthEventTime ;
+                              wikibase:timePrecision ?birthEventPrecision .
+              BIND(CONCAT(STR(?birthEventTime), "|",
+                          STR(?birthEventPrecision)) AS ?birthEventDate) }}
   OPTIONAL {{ ?deathEvent wdt:{participant} ?item ;
                           wdt:{instance_of} wd:{death_item} ;
-                          wdt:{point_in_time} ?deathEventDate . }}
+                          p:{point_in_time} ?deathEventStatement .
+              ?deathEventStatement a wikibase:BestRank .
+              wd:{point_in_time} wikibase:statementValue ?deathEventLink .
+              ?deathEventStatement ?deathEventLink ?deathEventNode .
+              ?deathEventNode wikibase:timeValue ?deathEventTime ;
+                              wikibase:timePrecision ?deathEventPrecision .
+              BIND(CONCAT(STR(?deathEventTime), "|",
+                          STR(?deathEventPrecision)) AS ?deathEventDate) }}
   # relation labels carry QIDs: bare labels are ambiguous (two Ursulas)
   OPTIONAL {{ ?item wdt:{spouse} ?spouseItem .
               ?spouseItem rdfs:label ?spouseLabel .
@@ -246,6 +279,14 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
     def field(binding: dict, name: str) -> str:
         return binding.get(name, {}).get("value", "")
 
+    def date(binding: dict, *names: str) -> str:
+        # the first of `names` the item has, each a "time|precision" pair
+        stamp = next(filter(None, (field(binding, n) for n in names)), "")
+        if not stamp:
+            return ""
+        time, _, precision = stamp.rpartition("|")
+        return time_text(time, precision, "a roster date")
+
     def split(binding: dict, name: str) -> list[str]:
         raw = field(binding, name)
         return [part for part in raw.split("|") if part] if raw else []
@@ -262,13 +303,10 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
                 kind_label=(
                     "" if kind_qid in kind_key else field(binding, "kindLabel")
                 ),
-                # direct statements win; event-derived dates fill gaps
-                birth=(
-                    field(binding, "birth") or field(binding, "eventBirth")
-                )[:10],
-                death=(
-                    field(binding, "death") or field(binding, "eventDeath")
-                )[:10],
+                # direct statements win; event-derived dates fill gaps;
+                # each at the precision its statement states
+                birth=date(binding, "birth", "eventBirth"),
+                death=date(binding, "death", "eventDeath"),
                 spouses=split(binding, "spouses"),
                 fathers=split(binding, "fathers"),
                 mothers=split(binding, "mothers"),
@@ -605,7 +643,8 @@ def block_candidates(
 
 
 def entity_facts(batch: ClaimBatch, entity_id: str) -> str:
-    """Compact relational facts about a manifest entity, from the batch."""
+    """Compact relational facts about a manifest entity, from the batch: a
+    date at the precision its source states (`adjudication.date_text`)."""
     lines = []
     for claim in batch.claims:
         if getattr(claim.subject, "local_id", None) != entity_id:
@@ -616,11 +655,11 @@ def entity_facts(batch: ClaimBatch, entity_id: str) -> str:
                 value.value, "qid", ""
             )
         elif value.type == "time":
-            rendered = "-".join(
-                str(part)
-                for part in (value.year, value.month, value.day)
-                if part is not None
-            )
+            # imported here: adjudication imports clustering, which
+            # imports this module
+            from yizkr.pipeline.adjudication import date_text
+
+            rendered = date_text(value)
         elif value.type == "monolingual":
             rendered = value.value.text  # names, causes: just the text
         else:

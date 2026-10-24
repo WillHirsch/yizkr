@@ -412,7 +412,11 @@ re-running one step in isolation — but for a normal ingest you only ever run
   reads the graph: it blocks a batch's entities against a roster of the
   whole graph (shared kind + a whole name form, read through the mention
   record: ADR-0007 as amended by #388), then an LLM adjudicates each
-  candidate as same / uncertain / distinct. It passes the blocking
+  candidate as same / uncertain / distinct. Both sides' dates reach the
+  adjudicator at the precision their sources state, as the site shows
+  them ("the 19th century", "the 1830s", never a first year): the
+  batch's from its claims, the roster's from each date statement's value
+  node and its precision (rule 5). It passes the blocking
   neither the batch's claims nor the place containment, so the
   impossibility filter (ADR-0017) prunes next to nothing there. Only your
   `approve` rows of its CSV take effect, because a wrong merge corrupts
@@ -425,14 +429,22 @@ re-running one step in isolation — but for a normal ingest you only ever run
   OpenRefine or any spreadsheet (R4). Rows are matched back by
   `claim_id`, a content hash: sorting or filtering the sheet cannot
   mis-apply decisions, and edited claim content is detected loudly.
+  The sheet shows a date as the site does, at the precision its source
+  states: a century as "the 19th century", a decade as "the 1890s",
+  never as its first year (a correction is still typed as `YYYY`,
+  `YYYY-MM` or `YYYY-MM-DD`).
   **Only explicit approvals pass** — a per-row `approve`, or the
   `bulk-accept` that accept-all writes — and no decision means no write;
   human confirmation is part of the data flow (R3). apply-review refuses
   the whole sheet, writing nothing, when it has `bulk-accept` on any
   claim whose property in the batch is `depicts`, whatever the sheet's
   cells say (only a per-row human decision confirms a depicts claim,
-  ADR-0005), or when it carries an equivalences sheet's `entity_id` or
-  `verdict` column (its approvals may be ratified machine verdicts).
+  ADR-0005), when it carries an equivalences sheet's `entity_id` or
+  `verdict` column (its approvals may be ratified machine verdicts), or
+  when it has no column named exactly `claim_id`, before reading any row
+  (a column like it, by accept-all's comparison, is refused in
+  accept-all's words). `ingest apply-review` prints each refusal as one
+  line, exits 1 and writes no `--out`.
 - **accept-all** — writes a `*.reviewed.csv` from a gate CSV with the
   `decision` column pre-filled, so a curator can flip the few outliers
   instead of typing a decision on every row. It writes `<input-stem>`

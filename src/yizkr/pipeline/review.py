@@ -1,7 +1,8 @@
 """Human review step: ClaimBatch <-> CSV for OpenRefine (R4).
 
 `export_review_csv` renders one row per claim with human-readable
-values, source locators, a machine-written `critique_notes` column, and
+values (a date at the precision its source states, as the site shows it:
+`sheet_value`), source locators, a machine-written `critique_notes` column, and
 empty curator columns. Reviewers work in OpenRefine or any spreadsheet
 and fill:
 
@@ -62,7 +63,8 @@ any `depicts` row, or without the exactly named `claim_id` and
 `property` columns that show them. `apply_review` refuses a
 `bulk-accept` on any claim whose property in the batch is `depicts`,
 whatever the sheet's cells say. It also refuses any sheet carrying an
-equivalences sheet's columns. A claims sheet disguised well enough to
+equivalences sheet's columns, and any without a column named exactly
+`claim_id`, which it matches rows by. A claims sheet disguised well enough to
 reach `accept_all`'s equivalences branch comes out with those columns,
 so the `approve`s that branch writes are never applied. A per-row
 `approve` passes as it does for any claim, and `apply_review` records it
@@ -269,7 +271,9 @@ def _describe_ref(ref) -> str:
 
 
 def describe_value(value) -> str:
-    """A value as a review row shows it: an item by its reference, a date
+    """A value as the extraction critic lists it, and as a review row shows
+    any value but a date (which the sheet shows through `sheet_value`):
+    an item by its reference, a date
     as `YYYY[-MM[-DD]]` with its precision when it is not the plain one, a
     text by its text and language. Every date is Gregorian and of 1 CE or
     later (ADR-0034)."""
@@ -297,6 +301,20 @@ def describe_value(value) -> str:
     return str(value.value)
 
 
+def sheet_value(value) -> str:
+    """A value as the review sheet shows it: as `describe_value` does, but
+    a date at the precision its source states, as the site renders it
+    (`adjudication.date_text`): a decade as "the 1830s", a century as "the
+    19th century", never as its first year."""
+    if isinstance(value, TimeValue):
+        # imported here: adjudication imports this package's clustering
+        # and reconcile modules
+        from yizkr.pipeline.adjudication import date_text
+
+        return date_text(value)
+    return describe_value(value)
+
+
 def export_review_csv(
     batch: ClaimBatch,
     path: Path,
@@ -321,9 +339,9 @@ def export_review_csv(
                     "claim_id": claim_id(claim),
                     "subject": _describe_ref(claim.subject),
                     "property": claim.property,
-                    "value": describe_value(claim.value),
+                    "value": sheet_value(claim.value),
                     "qualifiers": "; ".join(
-                        f"{q.property}={describe_value(q.value)}"
+                        f"{q.property}={sheet_value(q.value)}"
                         for q in claim.qualifiers
                     ),
                     "source_artifact": _describe_ref(claim.source.artifact),
@@ -440,6 +458,11 @@ def apply_review(
     `verdict` raises ValueError too. A claims sheet shaped like an
     equivalences sheet is malformed, and its `approve` decisions may be
     ratified machine verdicts rather than a human's.
+
+    So does a sheet without a column named exactly `claim_id`, before any
+    row is read: with a column like it by `accept_all`'s comparison (case,
+    surrounding space and invisible format characters ignored), the error
+    says so in `accept_all`'s words.
     """
     rows: dict[str, dict] = {}
     warnings: list[str] = []
@@ -458,6 +481,20 @@ def apply_review(
                 f"like an equivalences sheet is malformed, and its approvals "
                 f"may be ratified machine verdicts; decide a fresh "
                 f"export-review sheet instead"
+            )
+        fieldnames = reader.fieldnames or []
+        if "claim_id" not in fieldnames:
+            if "claim_id" in {_header_key(name) for name in fieldnames}:
+                raise ValueError(
+                    f"{csv_path} has a column like 'claim_id' but none named "
+                    f"exactly 'claim_id' — apply-review matches each row to "
+                    f"its claim by that column, named as export-review "
+                    f"writes it"
+                )
+            raise ValueError(
+                f"{csv_path} has no 'claim_id' column — apply-review "
+                f"matches each row to its claim by that column; apply a "
+                f"sheet export-review wrote"
             )
         for row in reader:
             rows[row["claim_id"]] = row
