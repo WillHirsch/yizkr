@@ -123,6 +123,7 @@ from yizkr.pipeline.containers import VISION_SUFFIXES
 from yizkr.pipeline.critique import run_critique
 from yizkr.pipeline.orchestrate import (
     BATCH_VOLATILE,
+    CHECKED_ROUTES,
     DOCUMENT_STAGES,
     EXCERPT,
     PAGED,
@@ -790,7 +791,7 @@ class Estimator(ScratchDriver):
         if not fresh:
             recheck = (
                 functools.partial(self._transcription_failure, doc)
-                if method in ("vision", PAGED, "text-file")
+                if method in CHECKED_ROUTES
                 else None
             )
             view = self._stands(
@@ -1135,7 +1136,7 @@ class Estimator(ScratchDriver):
         excerpt fails there), it is the first stage made, and every one
         after it is made too."""
         route = self._route(excerpt)
-        checked = route in ("vision", PAGED, "text-file", EXCERPT)
+        checked = route in CHECKED_ROUTES
         views = {
             "transcription": (
                 excerpt.transcription,
