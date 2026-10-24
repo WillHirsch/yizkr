@@ -1214,8 +1214,7 @@ class ChunkedClaimExtractor:
     safety classifier refused (llm.ClassifierRefused), a chunk's, its
     fork's, the manifest's or the segmentation's, is never asked again,
     and a refused fork does not drop to inline context: the chunk, or
-    the extraction, fails with the refusal's class in its reason, and
-    `refused` counts the calls refused, by turn.
+    the extraction, fails with the refusal's class in its reason.
     The entity manifest and the segmentation are asked in two attempts
     each, keyed apart behind the cache (llm.for_attempt): a refused
     answer is kept, so a later run replays the same attempts and takes the
@@ -1271,9 +1270,6 @@ class ChunkedClaimExtractor:
         # chunks asked again because every claim of their answer lacked
         # the same required field (_ask_again)
         self.retried_chunks = 0
-        # the calls the safety classifier refused, by turn: manifest,
-        # segmentation or chunk
-        self.refused: dict[str, int] = {}
         # open-schema gaps (ADR-0013): relations no property expresses,
         # collected per run for review; never written to the graph
         self.gaps: list[dict] = []
@@ -1326,10 +1322,7 @@ class ChunkedClaimExtractor:
     # -- phase 1a: entity manifest (ADR-0007, the default) ----------------
 
     def _first_turn(
-        self,
-        turn: str,
-        prompt: str,
-        parse: Callable[[str], tuple[Any, list[str]]],
+        self, prompt: str, parse: Callable[[str], tuple[Any, list[str]]]
     ) -> tuple[Any, Any, list[str], bool]:
         """(parsed answer or None, conversation handle, why each attempt
         that gave no usable answer failed, any call answered) for a turn
@@ -1352,8 +1345,7 @@ class ChunkedClaimExtractor:
         asked again: the refusal is the platform's decision about the
         call's content, which a second attempt sends unchanged. It ends
         the turn as a call unanswered, whatever an earlier attempt gave,
-        so no fallback tier stands in for it, and `turn` (manifest or
-        segmentation) is counted among the calls refused."""
+        so no fallback tier stands in for it."""
         handle = None
         answered = False
         reasons: list[str] = []
@@ -1371,7 +1363,6 @@ class ChunkedClaimExtractor:
                 continue
             except ClassifierRefused as exc:
                 reasons.append(f"{type(exc).__name__}: {exc}")
-                self._note_refused(turn)
                 return None, None, reasons, False
             except Exception as exc:
                 reasons.append(f"{type(exc).__name__}: {exc}")
@@ -1406,7 +1397,6 @@ class ChunkedClaimExtractor:
             numbered_text=number_lines(transcription.prompt_text()),
         )
         return self._first_turn(
-            "manifest",
             prompt,
             lambda response: self._parse_entity_manifest(
                 response, line_count, transcription.text
@@ -1509,7 +1499,6 @@ class ChunkedClaimExtractor:
             numbered_text=number_lines(transcription.prompt_text()),
         )
         segmentation, handle, reasons, answered = self._first_turn(
-            "segmentation",
             prompt,
             lambda response: self._parse_segmentation(response, line_count),
         )
@@ -1749,10 +1738,7 @@ class ChunkedClaimExtractor:
                         handle = None
                 if response is None:
                     response = self.client.complete(fallback_prompt)
-            except ConversationChanged:
-                raise
-            except ClassifierRefused:
-                self._note_refused("chunk")
+            except (ConversationChanged, ClassifierRefused):
                 raise
             except OutputLimitReached:
                 last_error = ChunkIncomplete(CUT_OFF_AT_LIMIT)
@@ -1798,8 +1784,8 @@ class ChunkedClaimExtractor:
         The second answer replaces the first, and is validated as usual
         in the merge. When the second call gives none (it fails, the
         engine gives up on it at its output limit, it is cut off, or the
-        safety classifier refuses it, which is counted and never asked
-        again), the first answer stands. A cut-off second answer is
+        safety classifier refuses it, which is never asked again), the
+        first answer stands. A cut-off second answer is
         rejected, and one the client kept from an earlier call is asked
         for once more (llm.reject_response), so a later run asks the
         engine again; a give-up at the output limit is kept under the
@@ -1821,7 +1807,6 @@ class ChunkedClaimExtractor:
             except ConversationChanged:
                 raise
             except ClassifierRefused:
-                self._note_refused("chunk")
                 break
             except Exception:
                 break
@@ -1832,12 +1817,6 @@ class ChunkedClaimExtractor:
                 if not reject_response(client, again, f"chunk: {exc}"):
                     break
         return claims, response
-
-    def _note_refused(self, turn: str) -> None:
-        """Count a call the safety classifier refused, by its turn:
-        manifest, segmentation or chunk."""
-        with self._state_lock:
-            self.refused[turn] = self.refused.get(turn, 0) + 1
 
     # -- orchestration ---------------------------------------------------
 
@@ -1868,7 +1847,6 @@ class ChunkedClaimExtractor:
         self.failed_chunks = []
         self.failure_reasons = {}
         self.retried_chunks = 0
-        self.refused = {}
         self.gaps = []
         self.fallback = {}
         self.attention = []
@@ -2238,7 +2216,6 @@ class ChunkedClaimExtractor:
             "unread_objects": sum(len(found) for found in unread.values()),
             "fallback": dict(self.fallback),
             "retried_chunks": self.retried_chunks,
-            "refused": dict(sorted(self.refused.items())),
         }
         if quotes is not None:
             coverage["quotes"] = quotes["counts"]

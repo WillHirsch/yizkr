@@ -989,12 +989,12 @@ Two Anthropic-backed providers, differing in how usage is billed:
   inline, fails at once, with no chunk retry and no drop to inline
   context, and a refused entity manifest or segmentation takes no second
   attempt and no fallback tier, so the extraction fails; the failed
-  document's reason names `ClassifierRefused`, and the extraction's
-  `coverage.json`, written for a complete extraction, counts the refused
-  calls by turn (`refused`: `manifest`, `segmentation`, `chunk`), which
-  there can only be the second ask of a chunk whose claims all lacked a
-  required field (see the extraction's failures, above), after which
-  the first answer stands. Other failures keep
+  document's reason names `ClassifierRefused`. A refused second ask of a
+  chunk whose claims all lacked a required field (see the extraction's
+  failures, above) fails nothing: the first answer stands. Every refused
+  call, that one included, is counted with the run report's call errors,
+  by its error's class; `coverage.json` keeps no count of its own. Other
+  failures keep
   their chunk retries, the fork's drop to inline context and the
   manifest's and segmentation's second attempt. The run report
   and the monitor count it under its own name, in the call errors and

@@ -368,11 +368,11 @@ no artifact its source places; ADR-0039), for the run report.
 
 Amended by #501, #621 (2026-10-24): `coverage.json` also counts the
 chunks asked again for a missing required field (`retried_chunks`, §5),
-which the run report sums, and the calls the safety classifier refused,
-by turn (`refused`: `manifest`, `segmentation`, `chunk`). Since it is
-written only for a complete extraction, `refused` can count only a
-chunk's refused retry, after which the first answer stood; a refusal
-that fails a chunk or the extraction is in its error.
+which the run report sums. It counts no refused call: a call the safety
+classifier refused is counted with the run report's call errors, by its
+error's class (`ClassifierRefused`), and one that fails a chunk or the
+extraction is named in the document's failure reason, which keeps no
+coverage file.
 
 ### 7. Strategy selection and CLI surface
 

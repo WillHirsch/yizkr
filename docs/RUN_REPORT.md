@@ -315,7 +315,10 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   as zero (`aggregate.content.retried_chunks`: `chunks`, `extractions`,
   `absent`). A document's own count is in `report.json` and
   `report.html` (`coverage.retried_chunks`, null for a coverage that
-  predates it);
+  predates it). A call the safety classifier refused (#621) is not
+  counted in coverage: it is counted with the call errors, by its
+  error's class (`ClassifierRefused`), and a refusal that fails a chunk
+  or the extraction is named in the document's failure reason;
 - mention records and judgement notes, summed from each extraction's
   `coverage.json` (ADR-0035 §4, §5, #420): the mention records given,
   and those by label status (`name`, `role`, `kinship`, `courtesy`,

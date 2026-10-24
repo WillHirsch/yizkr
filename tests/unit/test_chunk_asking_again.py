@@ -7,7 +7,7 @@ prompt naming the field, and coverage and the run report count it.
 #621: a call the safety classifier refused (llm.ClassifierRefused), a
 chunk's, its fork's, the manifest's or the segmentation's, is never asked
 again and never drops to inline context; the failure names the refusal by
-its class, and coverage counts the refusals. Other failures keep their
+its class, as the run report's call errors count it. Other failures keep their
 retries and fallback (tests/unit/test_chunking.py).
 
 The engine is the scripted fake of tests/unit/test_chunking.py, its
@@ -213,7 +213,7 @@ class TestAChunkAskedAgain:
         assert side_output(tmp_path, "rejects.json") is None
         coverage = side_output(tmp_path, "coverage.json")
         assert coverage["retried_chunks"] == 1
-        assert coverage["refused"] == {}
+        assert "refused" not in coverage
 
     def test_inline_it_is_asked_again_inline(self, tmp_path):
         """A client without conversations is asked again with the inline
@@ -372,17 +372,18 @@ class TestAChunkAskedAgain:
         assert len(batch.claims) == 2
 
     @pytest.mark.parametrize(
-        ("second", "refusals"),
+        "second",
         [
-            pytest.param(refused(), {"chunk": 1}, id="refused"),
-            pytest.param(OutputLimitReached(), {}, id="gave-up"),
+            pytest.param(refused(), id="refused"),
+            pytest.param(OutputLimitReached(), id="gave-up"),
         ],
     )
     def test_when_the_second_call_gives_nothing_the_first_stands(
-        self, tmp_path, second, refusals
+        self, tmp_path, second
     ):
-        """The second call is made once: a refusal is counted and never
-        asked again, and neither it nor any other failure is retried."""
+        """The second call is made once: a refusal is never asked again,
+        and neither it nor any other failure is retried; it fails
+        nothing."""
         llm = Attempting(
             ScriptedLlm(
                 [
@@ -406,7 +407,6 @@ class TestAChunkAskedAgain:
         assert len(side_output(tmp_path, "rejects.json")) == 1
         coverage = side_output(tmp_path, "coverage.json")
         assert coverage["retried_chunks"] == 1
-        assert coverage["refused"] == refusals
 
     def test_a_second_call_that_fails_forked_and_inline_is_not_retried(
         self, tmp_path
@@ -610,8 +610,8 @@ class TestTheSecondAnswer:
 
 class TestEachExtractionCountsItsOwn:
     def test_the_counts_start_again(self, tmp_path):
-        """An extractor counts the retries and refusals of its latest
-        extraction alone, as it keeps its other state."""
+        """An extractor counts the retries of its latest extraction alone,
+        as it keeps its other state."""
         llm = Attempting(
             ScriptedLlm(
                 [
@@ -627,11 +627,10 @@ class TestEachExtractionCountsItsOwn:
         )
         run = extractor(llm, tmp_path)
         run.extract(transcription(), DOC_REF)
-        assert (run.retried_chunks, run.refused) == (1, {"chunk": 1})
+        assert run.retried_chunks == 1
         run.extract(transcription(), DOC_REF)
-        assert (run.retried_chunks, run.refused) == (0, {})
-        coverage = side_output(tmp_path, "coverage.json")
-        assert (coverage["retried_chunks"], coverage["refused"]) == (0, {})
+        assert run.retried_chunks == 0
+        assert side_output(tmp_path, "coverage.json")["retried_chunks"] == 0
 
 
 class TestARefusedCall:
@@ -661,7 +660,6 @@ class TestARefusedCall:
         ]
         assert run.failed_chunks == ["c001"]
         assert run.failure_reasons["c001"].startswith("ClassifierRefused: ")
-        assert run.refused == {"chunk": 1}
         assert [c.subject.label for c in batch.claims] == ["Sebastian Löbig"]
 
     def test_a_refused_inline_chunk_is_not_asked_again(self, tmp_path):
@@ -710,7 +708,6 @@ class TestARefusedCall:
             run.extract(transcription(), DOC_REF)
         assert str(raised.value).startswith("entity manifest: ")
         assert llm.asked == [("open", 0)]
-        assert run.refused == {"manifest": 1}
 
     def test_a_manifest_refused_on_its_second_attempt_takes_no_fallback(
         self, tmp_path
@@ -731,7 +728,6 @@ class TestARefusedCall:
             run.extract(transcription(), DOC_REF)
         assert str(raised.value).startswith("segmentation: ")
         assert llm.asked == [("open", 0), ("open", 1), ("open", 0)]
-        assert run.refused == {"segmentation": 1}
 
     def test_other_manifest_failures_keep_their_second_attempt(self, tmp_path):
         llm = Attempting(
@@ -748,7 +744,6 @@ class TestARefusedCall:
         batch = run.extract(transcription(), DOC_REF)
         assert llm.asked[:2] == [("open", 0), ("open", 1)]
         assert len(batch.claims) == 2
-        assert side_output(tmp_path, "coverage.json")["refused"] == {}
 
 
 class TestTheStageNamesTheRefusal:
@@ -907,7 +902,7 @@ class TestARefusedReplay:
     the conversation's opening turn (ADR-0032 §6). A replay the safety
     classifier refuses is a failure of the session, not of the chunk:
     every chunk drops to inline context, whichever reached the replay
-    first, and no chunk is counted as refused."""
+    first, and no chunk fails."""
 
     def test_every_chunk_drops_to_inline(self, tmp_path):
         from tests.unit.test_llmcache import (
@@ -941,5 +936,4 @@ class TestARefusedReplay:
         engine = RefusedReplay(extractor_answers())
         run, batch = extract(engine)
         assert run.failed_chunks == []
-        assert run.refused == {}
         assert batch.claims == first.claims
