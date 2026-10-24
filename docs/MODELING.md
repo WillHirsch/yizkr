@@ -1907,8 +1907,8 @@ not a signal to grow the schema on.
   (ADR-0014), so "died, nothing else known" is a death event with the
   person as its principal participant.
   Superseded by ADR-0040, 2026-10-24, carried out by its build: "or a
-  `death` event of which they are the principal", "an undated death
-  event" and "'died, nothing else known' is a death event" no longer
+  `death` event of which they are the principal" and "an undated death
+  event" (for an event a curator makes, on ADR-0040's Q5 lean), and "'died, nothing else known' is a death event" no longer
   hold. Death evidence is a `date of death`, `place of death`, `cause of
   death` or `place of burial` (and `age at death`, on ADR-0040's Q1
   lean), each a statement on the person. "Died, nothing else known" is a
@@ -2168,19 +2168,19 @@ not a signal to grow the schema on.
   can show the death beside the "possibly living" badge: the death is
   shown, never weighed, and the badge alone decides the export.
 - Superseded by ADR-0040, 2026-10-24, carried out by its build: the
-  display above, of an undated death event, goes with
-  `UNDATED_DEATHS_QUERY`. Each `date of death` statement shows on the
+  display above, which #623 built, is replaced (owner, 2026-10-24),
+  save the one exception below (ADR-0040's Q5 lean). Each `date of death` statement shows on the
   person page with its own sources, an unknown value as "died (date not
   stated)", and each source's statement shows beside the dated entry
   (#624's criteria): Rudolf's certificate's 6 March 1941 and the 1958
   letter's bound 25 December 1958, side by side. The timeline shows an
   unknown value beside the person's dated death entry when a statement
-  dates that death (#624: a certificate's date and a GEDCOM `1 DEAT Y`
-  side by side, each with its source), and under "No date stated" only
-  when none does; a burial by its `point_in_time`; the places map gains `place of birth`, `place of
-  death` and `place of burial` (lean). A curator-made undated
-  death event still shows, on ADR-0040's Q5 lean, through a narrowed
-  `UNDATED_DEATHS_QUERY` for curator-made events only, on its
-  principal's page and timeline, since rule 6 needs every source's
+  dates that death (#624's criterion; hypothetical until follow-up A: a
+  certificate's date and a GEDCOM `1 DEAT Y` side by side, each with its
+  source), and under "No date stated" only when none does; a burial by
+  its `point_in_time`; the places map gains `place of birth`, `place of
+  death` and `place of burial` (lean). On ADR-0040's Q5 lean there is
+  the one exception, for the owner to confirm: `UNDATED_DEATHS_QUERY` stays as it is (reading the `principal` only), and after build B it meets only events a curator makes, so a curator-made undated death event still shows on
+  its principal's page and timeline, since rule 6 needs every source's
   assertion shown whatever the release; the timeline shows a birth or
   death event on its principal's timeline alone.

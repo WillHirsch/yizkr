@@ -328,7 +328,8 @@ replaces `living person = no`: to include someone, assert their death the
 ordinary source-first way, not by flipping a flag.
 
 Superseded by ADR-0040, 2026-10-24: "or is the principal of a `death`
-event", "or an even-undated death event" and "Death is an event like any other …, so 'died, nothing else
+event" and "or an even-undated death event" (for an event a curator
+makes, on ADR-0040's Q5 lean), and "Death is an event like any other …, so 'died, nothing else
 known' is simply a death event with the person as participant" no longer
 hold. "Died, nothing else known" is a `date of death` of unknown value
 (Wikibase "some value"), given only where a source says the person died

@@ -251,8 +251,8 @@ migrates it.
 - `date_of_birth`, `place_of_birth`, `father` and `mother`, each cited.
   Gustav's birth register extract (`birth-extract-1938`) gives Gustav a
   `date_of_birth` of 7 January 1919 and a `place_of_birth` of Flörburg,
-  with `father` → Sebastian and `mother` → Hildegard. Its informant
-  (Sebastian, who "zeigte an") is not extracted.
+  with `father` → Sebastian and `mother` → Hildegard. Sebastian's role
+  as its informant ("zeigte an") is not recorded (§2.6).
 - "Born, nothing else known" needs no statement.
 - **The `parent` role is retired** as the `spouse` property was:
   `object_has_role` no longer accepts it, and no prompt offers it. The
@@ -376,21 +376,21 @@ migrates it.
   tested on a row of its own (follow-up A's case).
 - **Timeline.** `person-timeline.rq` lists only dated rows, so an
   unknown value needs its own reader. It shows beside the person's
-  dated death entry when a statement dates that death (#624: a
-  certificate's dated death and a GEDCOM `1 DEAT Y` show side by side,
-  each with its source), and under "No date stated" only when no
-  statement dates it. A burial is placed by its `point_in_time`.
+  dated death entry when a statement dates that death (#624's
+  criterion; hypothetical until follow-up A: a certificate's dated
+  death and a GEDCOM `1 DEAT Y`, side by side, each with its source),
+  and under "No date stated" only when no statement dates it. A burial is placed by its `point_in_time`.
 - **Events a curator makes** (Q5). The timeline's event arm reads
   `participant` at any role, so a dated birth or death event would show
   on every participant's timeline, an informant's included. Lean: for
   a `birth` or `death` event it reads the `principal` alone, so the
   event shows on its principal's timeline only; other events keep every
   participant.
-- `UNDATED_DEATHS_QUERY` and its entries give way to the statements.
-  On Q5's lean a narrowed form stays, for curator-made death events
-  only, so that such an undated death still shows as "died (date not
-  stated)" with its sources on its principal's page and timeline (rule
-  6), however the release is settled.
+- The undated-death display that #623 built is replaced (owner,
+  2026-10-24): an undated death is shown through the person's
+  statements. On Q5's lean there is the one exception, for the owner to confirm: `UNDATED_DEATHS_QUERY` stays as it is (reading the `principal` only), and after build B it meets only events a curator makes, since no extraction or GEDCOM batch makes a death event. Such a death still
+  shows as "died (date not stated)" with its sources on its principal's
+  page and timeline (rule 6), however the release is settled.
 - **Places map.** It gains `place_of_birth`, `place_of_death` and
   `burial_place` (lean), since a death's place no longer reaches it
   through an event's `location`.
@@ -461,7 +461,9 @@ Build B (the PR's follow-up) carries them; in brief:
 - **run evidence** (`scratchwrite.run_site`, `report.py`,
   docs/RUN_REPORT.md, docs/RUN_DIFF.md): the site stage's record, from
   `publish_site`'s summary, gains the possibly-living count and the
-  releases by cause (a dated or other death property, an unknown-value
+  releases by cause (a dated `date_of_death`, a bounded
+  `date_of_death` (its value equal to its `latest_date`), another death
+  property, an unknown-value
   `date_of_death` by kind of source, `age_at_death`, an unknown
   `burial_place`, the birth cutoff), counted on the written graph as
   disagreements are, and the report and the diff carry them. Today none
@@ -532,7 +534,8 @@ and so not asked:
      `date_of_death` is derived from it.
    - *A burial stated without its place, lean:* a `burial_place` of
      unknown value, with its `point_in_time` where dated.
-     - A `1 BURI` with `2 DATE 20 MAR 1909` and no PLAC gives that;
+     - A hypothetical `1 BURI` with `2 DATE 20 MAR 1909` and no PLAC
+       gives that;
        `1 BURI Y` gives it undated.
      - Reason: a stated burial presupposes the death, as ADR-0020 §2
        counts a burial place. Today the adapter warns and writes
@@ -563,7 +566,8 @@ and so not asked:
      it.
    - A PLAC with no word (`2 PLAC ?, -`) gives no claim, counted, as a
      blank place field does. So does a PLAC of placeholder words only
-     (`2 PLAC unbekannt`, which `_names_a_place` passes through
+     (`2 PLAC unbekannt`, which `_names_a_place` takes as stating the
+     death while `_place_parts` drops it as a placeholder,
      `gedcom_placeholders.yaml`). Alternative: the unknown value, since
      GEDCOM 5.5.1 has a PLAC with a value assert the event.
    - `states_event` is unchanged for MARR, DIV and ANUL.
@@ -572,7 +576,9 @@ and so not asked:
 5. **Birth and death events a curator makes** (the classes stay). There
    are two choices.
    - **Release.**
-     - *Lean:* such an event releases no one.
+     - *Lean:* such an event releases no one. A hypothetical undated
+       "Death of Rahel" event a curator makes, with Rahel as its
+       principal, is no death evidence for her.
      - What goes: the death-event release (`event_principal` in
        `read_evidence`), a dated birth event's release of a principal
        born only by it, and the event arms of `ROSTER_QUERY`.
@@ -584,15 +590,17 @@ and so not asked:
      - *Alternative:* keep both arms of `read_evidence` and the
        roster's event arms.
    - **Display.**
-     - *Lean:* keep a narrowed `UNDATED_DEATHS_QUERY`, for curator-made
-       death events only. It shows "died (date not stated)" with its
-       sources on the principal's page and timeline. Reason: rule 6
-       needs every source's assertion shown, whatever the release
-       (#354: "only shown, never weighed").
+     - Decided: the undated-death display that #623 built is replaced
+       (owner, 2026-10-24).
+     - *Lean:* the one exception, for the owner to confirm: `UNDATED_DEATHS_QUERY` stays as it is (reading the `principal` only), and after build B it meets only events a curator makes, since no extraction or GEDCOM batch makes a death event. It shows "Death of Rahel" as "died (date
+       not stated)" with its sources on her page and timeline. Reason:
+       rule 6 needs every source's assertion shown, whatever the
+       release (PR #623: "only shown, never weighed").
      - The timeline's event arm reads a birth or a death event's
        `principal` alone (§6).
-     - *Alternative:* drop the display. A curator-made undated death
-       would then show on no page, and rule 6 would not be met for it.
+     - *Alternative:* no exception: the query goes with the rest of
+       the display. A curator-made undated death would then show on no
+       page, and rule 6 would not be met for it.
 6. **Informants.** PR #633 merged with no informant rule, so "a record
    states its own informant" has no home.
    - *Lean:* follow-up C, an ADR-0039 amendment issue, decides it,
@@ -641,6 +649,9 @@ and so not asked:
     - *Lean:* refused, as the death properties are, so it fails closed.
       `date_of_birth` is person evidence (`PERSON_SUBJECT_PROPERTIES`),
       so an event or a family that carries one is taken for a person.
+      For example, the 1905 marriage certificate's "geboren am 15.
+      Februar 1862", put on the marriage rather than on Sebastian, is
+      refused.
     - *Alternative:* the owner's death-only rule.
 12. **"His late wife" with no widowhood marked** (raised by this
     draft). The 1905 certificate's "dessen verstorbener Ehefrau

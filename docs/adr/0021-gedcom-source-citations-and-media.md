@@ -323,9 +323,11 @@ gave its cause of death all the same:
   `date_of_death` of unknown value on the person, cited to that DEAT
   with its SOUR and PAGE and with the DEAT's lines as its excerpt, beside
   what any other DEAT gives; there is no death event and no "Death of"
-  label. A DATE the grammar cannot parse, a DATE that says the date is
-  unknown, and a PLAC with no word are ADR-0040's Q4 (lean: no claim,
-  counted). The rest stands: a DEAT that states no death gives no claim,
+  label. A DATE that says the date is unknown gives no claim (owner,
+  2026-10-24). The other cases are ADR-0040's Q4 (lean: `1 DEAT Y`
+  with `2 DATE ?` gives the unknown value; a DATE the grammar cannot
+  parse, and a PLAC with no word or of placeholder words only, give no
+  claim, counted). The rest stands: a DEAT that states no death gives no claim,
   its CAUS included.
 - **A family with one partner or none has its MARR and DIV counted.** A
   family whose HUSB or WIFE is missing, or names no person the adapter
