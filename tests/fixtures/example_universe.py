@@ -2561,13 +2561,55 @@ ASSERTIONS = tuple(
         ("sebastian-loebig", "nickname", "Wastl", "Wastl to Klara"),
         # the caption is the booklet's words about the image it places on
         # page 6, kept verbatim on the image's item (ADR-0039 §2.1); its
-        # "July 1939" is never the letter's date
+        # "July 1939" does not say what it dates, so it is never the
+        # letter's date (§10.4)
         (
             "letter-excerpt-1939",
             "caption",
             "Wastl to Klara, July 1939.",
             {"page_number": "6"},
             "Wastl to Klara, July 1939.",
+        ),
+        # what the booklet's passages convey of the letter its page 6
+        # places, beside the letter's own statements (ADR-0039 §10, #646):
+        # the caption's "X to Y" names the letter's writer and recipient
+        (
+            "letter-excerpt-1939",
+            "author",
+            "sebastian-loebig",
+            {"page_number": "6"},
+            "Wastl to Klara, July 1939.",
+        ),
+        (
+            "letter-excerpt-1939",
+            "addressee",
+            "klara-loebig",
+            {"page_number": "6"},
+            "Wastl to Klara, July 1939.",
+        ),
+        # and its translation of the letter's top conveys what that text
+        # states, marked as the rest of the translation is, and like the
+        # rest of it locates no page; it is no caption (§10.2)
+        (
+            "letter-excerpt-1939",
+            "inception",
+            Date(1939, 7, 28),
+            {"sourcing_circumstances": "machine_assisted"},
+            "Flörburg, Brunnenring 35, 28 July 1939",
+        ),
+        (
+            "letter-excerpt-1939",
+            "location_of_creation",
+            "brunnenring-35",
+            {"sourcing_circumstances": "machine_assisted"},
+            "Flörburg, Brunnenring 35, 28 July 1939",
+        ),
+        (
+            "letter-excerpt-1939",
+            "addressee",
+            "klara-loebig",
+            {"sourcing_circumstances": "machine_assisted"},
+            "Dear Pünktchen!",
         ),
         (
             "gustav-loebig",
