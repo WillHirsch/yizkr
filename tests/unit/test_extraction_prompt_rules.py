@@ -853,3 +853,129 @@ class TestCitizenshipIsARelationOfPlace:
             "`adjective` for a country given only by an adjective of "
             'nationality ("Australian"), which is no name of it.'
         ) in MANIFEST
+
+
+# -- string lists, couples in lists and completeness (#625, #627) ------------
+
+# the manifest prompt as the model reads it, its doubled braces single
+SHOWN = flat(
+    ENTITY_MANIFEST_PROMPT.format(
+        kinds="",
+        kind_descriptions="",
+        artifact_sha1=SCAN.sha1,
+        language="de",
+        numbered_text="",
+    )
+)
+
+_PERSON = SHOWN[
+    SHOWN.index('- A person: {"kind": "human"') : SHOWN.index(
+        '- A place: {"kind": "place"'
+    )
+]
+_RULES = SHOWN[SHOWN.index("Rules: ") : SHOWN.index("Entity kinds")]
+
+
+class TestStringListsAreShownAsStrings:
+    """Each list of strings a mention record holds is shown as one, so
+    the model is never led to copy the `written` object of a given name
+    or a place name into it (#625; ADR-0035 §5)."""
+
+    @pytest.mark.parametrize(
+        "shape",
+        [
+            '"patronymics": ["..."]',
+            '"nicknames": ["..."]',
+            '"suffixes": ["..."]',
+            '"unsplit": ["..."]',
+            '"titles": ["..."]',
+            '{"kind": "organization", "names": ["..."], "kinds": ["..."], '
+            '"places": ["..."]}',
+            '{"kind": "family", "surnames": ["..."]}',
+        ],
+    )
+    def test_each_string_list_is_a_list_of_strings(self, shape):
+        assert shape in SHOWN
+
+    def test_no_list_is_shown_without_its_items(self):
+        assert "[...]" not in SHOWN
+
+    def test_the_lists_of_objects_keep_their_objects(self):
+        for shape in (
+            '"given": [{"written": "...", "standard": "...", '
+            '"initial": false}]',
+            '"surnames": [{"written": "...", "type": "<birth, married or '
+            'other>"}]',
+            '"names": [{"written": "...", "toponym": "...", "head": "..."}]',
+            '"within": [{"name": "...", "evidence": "..."}]',
+        ):
+            assert shape in SHOWN, shape
+
+    def test_the_office_and_occupation_line_sits_next_to_titles(self):
+        """The person's shape ends with `titles`, and the bullet right
+        after it says what a title is and that an office or an
+        occupation is a claim, not a name part."""
+        assert (
+            '"titles": ["..."]}. * Titles are honorifics and ranks (Mrs, '
+            "Dr., Frau, Fräulein, Mefrou, Rabbi), never a kinship word. An "
+            'office or an occupation beside a name ("Standesbeamter", '
+            '"Hutmachermeister") is no name part: it is a claim at '
+            "extraction. * status says what the label is"
+        ) in _PERSON
+
+    def test_the_patronymic_bullet_keeps_its_markers(self):
+        assert (
+            "of its own, never a surname. Titles and suffixes (generational "
+            'and status words, such as "Wwe.") never name anyone. A word '
+            'that states a fact (a widow\'s marker, "the late") is no name '
+            "part: it becomes a claim at extraction."
+        ) in _PERSON
+
+    def test_the_line_is_said_once(self):
+        assert SHOWN.count("Titles are honorifics and ranks") == 1
+        assert SHOWN.count("an occupation beside a name") == 1
+
+
+class TestCouplesInAList:
+    """A spouse entry in a list with no marriage stated is a couple, a
+    partnership; a stated marriage stays a marriage (#627; ADR-0036)."""
+
+    SENTENCE = (
+        "A spouse entry in a list (a descendant list, a family register) "
+        "with no marriage stated presents a couple, given a `partnership`; "
+        "a stated marriage stays a `marriage`."
+    )
+
+    def test_the_partnership_rule_says_it(self):
+        assert self.SENTENCE in SHOWN
+
+    def test_it_sits_in_the_partnership_rule(self):
+        """After the rule's parents exception and before its events."""
+        assert (
+            "a `partnership` for a couple it presents as a couple without "
+            "saying they married (two people named only as a child's "
+            "parents are not thereby a couple). " + self.SENTENCE + " Its "
+            "wedding (a `wedding`"
+        ) in SHOWN
+
+
+class TestCompletenessComesFirst:
+    """The completeness rule opens the prompt and covers places (#627)."""
+
+    RULE = (
+        "Prefer completeness: an entity mentioned once still gets an "
+        "entry, and every place the document names, even once, gets a "
+        "`place` entity."
+    )
+
+    def test_the_opening_paragraph_says_it(self):
+        opening = SHOWN[: SHOWN.index("The relation decides the kind")]
+        assert (
+            "(kind occupation_class, label in the source's exact wording). "
+            + self.RULE
+            + " The document may be in any language"
+        ) in opening
+
+    def test_it_is_said_once_and_not_among_the_rules(self):
+        assert SHOWN.count("Prefer completeness") == 1
+        assert "mentioned once" not in _RULES
