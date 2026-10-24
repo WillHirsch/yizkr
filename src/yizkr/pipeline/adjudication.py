@@ -69,8 +69,9 @@ components given both verdicts among them, say), a `same` pair whose
 evidence says they differ by more than their own dates (a verdict
 excuses a date conflict on its own pair, never stated sexes, civil
 statuses or kin that conflict, a place's containers or an
-organisation's places that differ, or event kinds that cannot be one),
-or two other members whose evidence says they differ; then it falls
+organisation's places that differ, event kinds that cannot be one, or
+events whose principals ended in clusters held apart), or two other
+members whose evidence says they differ; then it falls
 back to its confident components, each merged or apart as without
 verdicts. A candidate cluster of two whose one pair no
 `same` could merge (clustering.cannot_merge) is not asked, since no
@@ -570,16 +571,6 @@ def adjudicate(
     per_call = config.adjudication.pairs_per_call
     identity = clustering.cluster_corpus(manifests, config)
     planned = identity["summary"]["adjudication"]["calls_ambiguous_clusters"]
-    # the clusters no verdict could merge, left unasked when verdicts merge
-    unmergeable = (
-        sum(
-            clustering.cannot_merge(entry)
-            for entry in identity["review"]
-            if entry.get("status") == AMBIGUOUS
-        )
-        if merge
-        else 0
-    )
     evidence = Evidence(manifests, identity["mentions"])
     verdicts: dict[Pair, tuple[str, str]] = {}
     asked: set[Pair] = set()
@@ -629,6 +620,18 @@ def adjudicate(
             config,
             {pair: verdict for pair, (verdict, _reason) in verdicts.items()},
         )
+    # the clusters no verdict could merge, left unasked when verdicts
+    # merge, counted on the last map: a cluster of events can become one
+    # only once its people's verdicts are in, and none is ever asked
+    unmergeable = (
+        sum(
+            clustering.cannot_merge(entry)
+            for entry in identity["review"]
+            if entry.get("status") == AMBIGUOUS
+        )
+        if merge
+        else 0
+    )
     found = Counter(verdict for verdict, _reason in verdicts.values())
     counts = {
         "merge": merge,

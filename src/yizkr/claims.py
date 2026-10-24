@@ -82,7 +82,7 @@ import json
 import re
 import sys
 import unicodedata
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal, get_args
@@ -1490,7 +1490,8 @@ def _clear_empty(structure: dict) -> tuple[dict, list[str]]:
     and a name part that is "", or whose required field is, is dropped,
     each drop giving the reason `dropped`. Only these shapes and an
     empty string are read so, never a word; whatever else the record
-    holds is left for validation."""
+    holds is left for validation, but for a place's container of the
+    wrong shape, which is taken out first (`_take_malformed`)."""
     kind = structure.get("kind")
     model = _STRUCTURE_MODELS.get(kind) if isinstance(kind, str) else None
     if model is None:
@@ -1528,7 +1529,49 @@ def _clear_empty(structure: dict) -> tuple[dict, list[str]]:
     return cleared, dropped
 
 
-def set_aside_structure(entity: dict) -> tuple[dict, list[str]]:
+def _first_error(exc: ValidationError) -> str:
+    """A validation error's first location and message."""
+    first = exc.errors()[0]
+    location = ".".join(str(step) for step in first["loc"])
+    return f"{location or 'entry'}: {first['msg']}"
+
+
+def _take_malformed(
+    structure: dict,
+) -> tuple[dict, list[tuple[int, object, str]]]:
+    """A place's mention record with each entry of its `within` list that
+    cannot become a `Container` taken out (ADR-0035 §5): one that is
+    neither an object nor a string, one with a key a container has not,
+    one with no name or a name that is no string, and one whose evidence
+    is neither a string nor null. Also each entry taken out, as (its
+    index in the list, the entry, its first validation error). A bare
+    string is a name alone, never malformed; a `within` that is no list
+    is left for validation."""
+    if structure.get("kind") != "place":
+        return structure, []
+    within = structure.get("within")
+    if not isinstance(within, list):
+        return structure, []
+    kept: list[object] = []
+    taken: list[tuple[int, object, str]] = []
+    for index, raw in enumerate(within):
+        if isinstance(raw, str):
+            kept.append(raw)
+            continue
+        try:
+            Container.model_validate(raw)
+        except ValidationError as exc:
+            taken.append((index, raw, _first_error(exc)))
+            continue
+        kept.append(raw)
+    if not taken:
+        return structure, []
+    return {**structure, "within": kept}, taken
+
+
+def set_aside_structure(
+    entity: dict, malformed: list[dict] | None = None
+) -> tuple[dict, list[str]]:
     """An entity of an entity manifest, as the model wrote it, with its
     mention record set aside when the record cannot stand (ADR-0035 §5),
     and the reasons.
@@ -1537,8 +1580,12 @@ def set_aside_structure(entity: dict) -> tuple[dict, list[str]]:
     list of strings written as an object holding its text is that text,
     giving the reason `read as text`; an optional field written as "" is
     absent, and a name part that is "", or whose required field is, is
-    dropped, each giving the reason `dropped`. What is left stands or is
-    set aside as the record would.
+    dropped, each giving the reason `dropped`. Then each of a place's
+    containers of the wrong shape is taken out (`_take_malformed`), so
+    that it is dropped alone rather than setting the record aside; when
+    `malformed` is given, it receives each one's audit entry
+    (`drop_containers`). What is left stands or is set aside as the
+    record would.
     The entity keeps its label, aliases and kind: a record that fails is
     dropped, never the entity or the manifest, and the entity is then
     recordless, with no `structure` key. A record that does not parse
@@ -1552,7 +1599,13 @@ def set_aside_structure(entity: dict) -> tuple[dict, list[str]]:
     dropped: list[str] = []
     if isinstance(structure, dict):
         structure, dropped = _clear_empty(structure)
+        structure, taken = _take_malformed(structure)
         entity = {**entity, "structure": structure}
+        if malformed is not None:
+            malformed += [
+                _malformed_audit(entity, index, raw, error)
+                for index, raw, error in taken
+            ]
     rest = {key: value for key, value in entity.items() if key != "structure"}
     try:
         record = EntityRecord.model_validate(entity)
@@ -1573,11 +1626,37 @@ def set_aside_structure(entity: dict) -> tuple[dict, list[str]]:
 NO_EVIDENCE = "no-evidence"
 EVIDENCE_NOT_IN_SOURCE = "evidence-not-in-source"
 EVIDENCE_DOES_NOT_NAME = "evidence-does-not-name"
+# an entry that cannot become a container (_take_malformed)
+MALFORMED = "malformed"
 CONTAINER_REASONS = (
     NO_EVIDENCE,
     EVIDENCE_NOT_IN_SOURCE,
     EVIDENCE_DOES_NOT_NAME,
+    MALFORMED,
 )
+# how much of a malformed entry its audit entry keeps, as JSON
+_MALFORMED_CLIP = 200
+
+
+def _malformed_audit(
+    entity: dict, index: int, raw: object, error: str
+) -> dict:
+    """The audit entry of a container taken out as malformed: its field
+    path, the reason, the entry as JSON, clipped, and its first
+    validation error, with no name, evidence or lines."""
+    given = json.dumps(raw, ensure_ascii=False, default=str)
+    return {
+        "entity": entity.get("id"),
+        "field": f"structure.place.within.{index}",
+        "name": None,
+        "evidence": None,
+        "reason": MALFORMED,
+        "entry": given[:_MALFORMED_CLIP],
+        "error": error,
+        "line": None,
+        "last_line": None,
+        "line_text": None,
+    }
 
 
 def container_problem(
@@ -1612,14 +1691,6 @@ def container_problem(
     return None, lines
 
 
-def name_only(container: Container) -> bool:
-    """Whether a container's evidence gives its name and nothing else,
-    folded, as words: evidence that names no place it is said to hold."""
-    return container.evidence is not None and verbatim.words(
-        container.evidence
-    ) == verbatim.words(container.name)
-
-
 def container_problems(entity: EntityRecord) -> list[str]:
     """Why each of a place's containers cannot stand, checked with no
     transcript (`container_problem`), each reason first and then the
@@ -1637,61 +1708,64 @@ def container_problems(entity: EntityRecord) -> list[str]:
     return found
 
 
-def _place_forms(entity: dict, structure: dict) -> list[list[str]]:
-    """The folded words of each form a place goes by: its label, its
-    aliases, and its record's names and address as written."""
-    forms = [entity.get("label") or "", *(entity.get("aliases") or [])]
-    for name in structure.get("names") or []:
-        forms.append(name.get("written") or "")
-    address = structure.get("address")
-    if isinstance(address, dict):
-        forms.append(address.get("written") or "")
-    return [_words(form) for form in forms if form]
-
-
 def drop_containers(
-    entity: dict, transcript: verbatim.Transcript | None
+    entity: dict,
+    transcript: verbatim.Transcript | None,
+    malformed: Sequence[dict] = (),
 ) -> tuple[dict, list[dict]]:
     """An entity of an entity manifest whose record stands
     (`set_aside_structure`), with each container of its place record that
     cannot stand dropped alone (`container_problem`), the record standing
     with its names, keys and other entries (ADR-0035 §5). An entry written
     as a bare string gives a name alone, no evidence, and is dropped as
-    `no-evidence` like any other.
+    `no-evidence` like any other. `malformed` holds the audit entries of
+    the record's containers of the wrong shape, which
+    `set_aside_structure` took out (`malformed`); they join the audit
+    only when the record stands. An entry given that cannot become a
+    container is dropped as malformed too, so that nothing given raises.
 
-    Also an audit entry for each container checked, kept or dropped: the
-    entity's id; the entry's field path (its index counts the entries
-    left once those written as empty strings were dropped,
-    `set_aside_structure`); its name and evidence; the reason it was
-    dropped (None when kept); the first and last numbers of the
-    transcription lines its evidence was compared with, and the first
-    line's text; whether the evidence names the place itself (its label,
-    an alias or a name its record gives, folded, as whole words); and
-    whether the evidence is the container's name alone (`name_only`).
-    The audit stays with the document's local extraction records, never
-    in a report."""
+    Also an audit entry for each container checked, kept, dropped or
+    malformed, in the order of the list: the entity's id; the entry's
+    field path (its index counts the entries left once those written as
+    empty strings were dropped, `set_aside_structure`, malformed ones
+    among them); its name and evidence; the reason it was dropped (None
+    when kept); and the first and last numbers of the transcription
+    lines its evidence was compared with, and the first line's text. The
+    audit stays with the document's local extraction records, never in a
+    report."""
     structure = entity.get("structure")
     if not isinstance(structure, dict) or structure.get("kind") != "place":
         return entity, []
     within = structure.get("within")
-    if not isinstance(within, list) or not within:
+    if not isinstance(within, list):
         return entity, []
-    forms = _place_forms(entity, structure)
+    taken = {int(found["field"].rsplit(".", 1)[1]) for found in malformed}
+    indexes = [
+        index
+        for index in range(len(within) + len(taken))
+        if index not in taken
+    ][: len(within)]
     kept: list[object] = []
-    audit: list[dict] = []
-    for index, raw in enumerate(within):
-        container = (
-            Container(name=raw) if isinstance(raw, str) else Container(**raw)
-        )
+    audit: list[dict] = list(malformed)
+    for index, raw in zip(indexes, within, strict=True):
+        if isinstance(raw, str):
+            container = Container(name=raw)
+        else:
+            try:
+                container = Container.model_validate(raw)
+            except ValidationError as exc:
+                audit.append(
+                    _malformed_audit(entity, index, raw, _first_error(exc))
+                )
+                continue
         reason, lines = container_problem(container, transcript)
         first, last = lines if lines is not None else (None, None)
-        evidence = container.evidence
         audit.append(
             {
                 "entity": entity.get("id"),
                 "field": f"structure.place.within.{index}",
                 "name": container.name,
-                "evidence": evidence,
+                "evidence": container.evidence,
                 "reason": reason,
                 "line": first,
                 "last_line": last,
@@ -1700,17 +1774,11 @@ def drop_containers(
                     if transcript is not None and first is not None
                     else None
                 ),
-                "names_place": evidence is not None
-                and any(
-                    _occurs(" ".join(form), [verbatim.words(evidence)])
-                    for form in forms
-                    if form
-                ),
-                "name_only": name_only(container),
             }
         )
         if reason is None:
             kept.append(raw)
+    audit.sort(key=lambda found: int(found["field"].rsplit(".", 1)[1]))
     if len(kept) == len(within):
         return entity, audit
     return {**entity, "structure": {**structure, "within": kept}}, audit

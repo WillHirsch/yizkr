@@ -44,6 +44,23 @@ the `excerpt-not-in-source` anomaly check (docs/ANOMALIES.md), and kept
 with the transcription line nearest to it in the extraction's local
 `quotes.json`. Whether a miss becomes a reject is the owner's to
 decide once a scratch run shows how often a legitimate excerpt misses.
+Amended by #607 (2026-10-24, the owner's decision of 2026-10-23): the
+support rules of #465, #515 and #569 give way to ADR-0003's test, written
+once in the critique prompt: read where it stands in the source, does
+the passage convey the fact the claim or container states, its value and
+any time it carries? The critic reads the document's whole transcription,
+each line numbered, and each claim's row gives its times and its
+citation with the lines (and page) where it occurs, as each container's
+row gives its evidence; the separate containment block goes. The fixed
+list gains `excerpt_does_not_state`, any claim other than a `part_of`
+whose excerpt fails the test, on its value or its times; one with no
+excerpt is not judged (the excerpt check counts it).
+`unsupported_containment` is a `part_of` claim whose citation fails the
+test, or that cites no excerpt; `evidence_does_not_state` a container whose evidence fails it.
+A suggestion re-cites a passage that conveys the fact by its lines, and
+says drop only when the source conveys it nowhere. A finding names a
+claim by its row's first three columns (§3), and a finding of either
+claim key that names no claim fails its checks.
 Superseded in part by [ADR-0035](0035-mention-records.md) (owner
 decision 2026-09-29, #385): §2 and Ruling 1 no longer keep every machine
 judgement out of the graph. An extraction's judgement note, a category

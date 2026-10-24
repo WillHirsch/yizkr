@@ -13,6 +13,15 @@ Its implementation comes before #146, the first scratch run that writes,
 since the owner resolves every open issue that affects write structure
 first (2026-10-16).
 
+Amended by #607 (2026-10-24, the owner's decision of 2026-10-23): the
+extraction critic checks a `part_of` claim, its times included, by
+ADR-0003's test, reading its citation where it stands in the numbered
+transcription; the claim's row gives its times and its citation, and the
+separate containment block goes (§8.3). The excerpt §8.5 writes on a
+link is a located passage (ADR-0003); its page is that of the
+evidence's first occurrence, an approximation the principle does not
+require.
+
 ## Context
 
 ADR-0009 treats containment between places as "world knowledge, not a
@@ -231,10 +240,11 @@ Applied with the implementation (accepted by the owner, 2026-10-23):
    start or end, `point_in_time` where it presents it as holding at a
    date, with ranges and circa, and none otherwise. Neither the
    document's own date nor the date of an event the source places there
-   is the containment's time: a containment belongs to the place (§2). The
-   critic's containment block shows each `part_of` claim's dating
-   qualifiers beside its excerpt, and `unsupported_containment` names
-   both dates as times the excerpt does not state for the containment.
+   is the containment's time: a containment belongs to the place (§2).
+   The critic reads each `part_of` claim's row, its dating qualifiers
+   beside its citation where it stands, and judges both by ADR-0003's
+   test (amended by #607): a time the passage does not convey for the
+   containment fails it (`unsupported_containment`).
 4. **The writer** writes a `part_of` claim's time qualifiers like any
    claim's. The claim schema and the manifest accept, where they don't yet, `point_in_time`,
    `start_time`, `end_time`, the four range qualifiers and

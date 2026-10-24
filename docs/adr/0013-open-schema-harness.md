@@ -20,6 +20,12 @@ unclassified-entities query (#91) groups like with like.
 Amended by #91 (2026-10-23): §A's standing view is
 `queries/unclassified-entities.rq`, and §B's gap log has a
 cross-document rollup over a run, `yizkr gaps rollup` (both below).
+Amended by #607 (2026-10-24, the owner's decision of 2026-10-23): §C's
+critic reviews the entity manifest, the claims and the document's
+transcription, whole and each line numbered, and reads each citation
+where it stands (ADR-0003's test, ADR-0023); the critique view is made
+from the batch and the transcription, so a changed transcription makes
+it again.
 
 ## Context
 
@@ -119,8 +125,8 @@ so it is local-only runtime state.
 ### C. Critic pass
 
 After extraction, one adversarial LLM turn reviews the entity manifest +
-claims and flags confident-but-wrong assignments the first pass will not
-self-report: an entity whose kind looks wrong (an agent typed as a
+claims + the transcription (amended by #607) and flags
+confident-but-wrong assignments the first pass will not self-report: an entity whose kind looks wrong (an agent typed as a
 place), an alias that looks like a role/field label rather than a name
 (MOTHER, INFORMANT, BRIDE), a claim whose property looks misapplied. It
 **flags, never rewrites** — findings land in `critique.json`, are
