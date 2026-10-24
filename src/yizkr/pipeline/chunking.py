@@ -29,6 +29,7 @@ from typing import Any, NamedTuple
 from pydantic import BaseModel, ConfigDict, Field
 
 from yizkr.claims import (
+    ARTIFACT_KIND,
     MANIFEST_REASON,
     REJECT_REASONS,
     SCHEMA_REASON,
@@ -44,6 +45,7 @@ from yizkr.claims import (
     set_aside_structure,
 )
 from yizkr.core.verbatim import Transcript, words
+from yizkr.model.schema import load_acceptance
 from yizkr.pipeline.extract import (
     cite_artifact,
     claim_schema_prompt_text,
@@ -512,8 +514,10 @@ of an assigned unit belongs to you, including relations to entities
 outside the unit — a unit person's father/mother from the enclosing tree
 structure or the unit's context line, their unions, their instance_of,
 and the `issued_by` claim of an issuer the unit names. A claim about the
-document itself, and a `caption` claim, belongs to the unit whose lines
-hold the passage that states it.
+document itself, a claim about an image it places (a `caption`, or one
+of the properties on what a document is), and a claim about a document
+it mentions belong to the unit whose lines hold the passage that states
+or conveys it.
 Do not skip a claim because its object or evidence lies partly outside
 your units.
 
@@ -532,11 +536,14 @@ Emit every claim whose SUBJECT is one of your ASSIGNED entities below —
 and only those. Relations to entities outside your assignment (their
 parents, unions, locations) still belong to you when your entity is
 the subject; refer to the other entity by its manifest id. Every claim
-whose subject is the document itself (`issued_by`, `author`,
-`addressee`, `inception`, `location_of_creation`, `main_subject`,
-`shows`), and every `caption` claim, belongs to the chunk assigned
-{first_entity}, the first entity assigned for extraction, whatever its
-value. Do not emit claims whose
+whose subject is the document itself or an image it places (`issued_by`,
+`author`, `addressee`, `inception`, `location_of_creation`,
+`main_subject`, `shows`, and every `caption` claim) belongs to the chunk
+assigned {first_entity}, the first entity assigned for extraction,
+whatever its value. A claim about a document the text mentions, whose
+subject is that document's manifest entity, belongs to the chunk that
+entity is assigned to, as any claim whose subject it is. Do not emit
+claims whose
 subject is not assigned to you, and do not emit instance_of claims (the
 manifest's kind already records it).
 
@@ -1377,7 +1384,10 @@ class ChunkedClaimExtractor:
         no entity list. Only a list, or null, is one, and any other value
         is unusable. An empty one, or null, is the engine's word that the
         document names nothing: a manifest of no entities, accepted as it
-        stands, so no chunk is asked and no fallback tier is taken.
+        stands, so no chunk is asked and no fallback tier is taken. A
+        record of a kind that is no manifest item, or of an artifact kind,
+        which no extraction names (ADR-0039 §10.1(b)), is a problem that
+        makes the answer unusable.
 
         An entity's mention record or judgement note that fails validation
         is set aside, never repaired and never the reason the manifest is
@@ -1392,6 +1402,7 @@ class ChunkedClaimExtractor:
         the transcription, when given, and each container checked is kept
         for the local audit."""
         _, item_keys = load_vocabulary()
+        artifact_kinds = load_acceptance().artifact_kinds
         for obj in scan_json_objects(response):
             if "entities" not in obj:
                 continue
@@ -1432,6 +1443,14 @@ class ChunkedClaimExtractor:
                 if record.kind not in item_keys:
                     problems.append(
                         f"entity {record.id}: unknown kind {record.kind!r}"
+                    )
+                elif record.kind in artifact_kinds:
+                    # a document the text mentions is an unclassified
+                    # entity with a type hint (ADR-0039 §10.1(b))
+                    problems.append(
+                        f"entity {record.id}: artifact kind "
+                        f"{record.kind!r}, which no extraction names "
+                        f"[{ARTIFACT_KIND}]"
                     )
                 # mention lines are best-effort: clamp, don't reject
                 record.mention_lines = [

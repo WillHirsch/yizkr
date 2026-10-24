@@ -233,7 +233,6 @@ from importlib.resources import files
 import yaml
 
 from yizkr.claims import (
-    GEDCOM_ADAPTER,
     ArtifactRef,
     ClaimBatch,
     PersonStructure,
@@ -261,7 +260,7 @@ MONTHS = {
     "JUNI": 6, "JULI": 7, "OKTOBER": 10, "DEZEMBER": 12,
 }  # fmt: skip
 
-ADAPTER_IDENTIFIER = GEDCOM_ADAPTER
+ADAPTER_IDENTIFIER = "gedcom-adapter"
 
 
 # ---------------------------------------------------------------------------

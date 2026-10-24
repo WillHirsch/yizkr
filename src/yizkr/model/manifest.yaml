@@ -624,13 +624,14 @@ properties:
     datatype: quantity
 
   # The subject is the source document itself, named by its content key
-  # as a claim's source is (document_subject, ADR-0035 §3.4).
+  # as a claim's source is, an artifact it places, or the artifact its
+  # record makes or its text mentions (document_subject, ADR-0035 §3.4,
+  # ADR-0039 §10).
   issued_by:
     label: issued by
     description: >-
       document -> the organization that issued it, such as the register
-      office that issued a certificate; the subject is the source
-      document itself
+      office that issued a certificate
     datatype: wikibase-item
     accepts: [organization, unclassified_entity]
     wikidata: P2378
@@ -728,15 +729,16 @@ properties:
     datatype: string
     offered: false
 
-  # --- a source's claims about itself, and a container's words about
-  # what it places (ADR-0039) ---
+  # --- what a source says an artifact is (itself, an artifact it places,
+  # one its record makes or its text mentions), and a container's words
+  # about what it places (ADR-0039) ---
 
   author:
     label: author
     description: >-
-      document -> who wrote, drew or made it, as the document itself
-      states (a signature, a studio's stamp on a mount); the subject is
-      the source document itself
+      document -> who wrote, drew or made it, as the document states of
+      itself (a signature, a studio's stamp on a mount) or a source's
+      passage conveys of a document it places or mentions
     datatype: wikibase-item
     accepts: [human, organization, family, unclassified_entity]
     wikidata: P50
@@ -745,9 +747,9 @@ properties:
   addressee:
     label: addressee
     description: >-
-      document -> whom it was addressed to, as the document itself states
-      (a letter's greeting or address); the subject is the source
-      document itself
+      document -> whom it was addressed to, as the document states of
+      itself (a letter's greeting or address) or a source's passage
+      conveys of a document it places or mentions
     datatype: wikibase-item
     accepts: [human, organization, family, unclassified_entity]
     wikidata: P1817
@@ -756,9 +758,9 @@ properties:
   inception:
     label: inception
     description: >-
-      document -> when it was made, as the document itself states (a
-      letter's dateline), at the precision it gives; the subject is the
-      source document itself
+      document -> when it was made, as the document states of itself (a
+      letter's dateline) or a source's passage conveys of a document it
+      places or mentions, at the precision it gives
     datatype: time
     wikidata: P571
     document_subject: true
@@ -766,9 +768,9 @@ properties:
   location_of_creation:
     label: location of creation
     description: >-
-      document -> the place where it was made, as the document itself
-      states (a letter's heading); the subject is the source document
-      itself
+      document -> the place where it was made, as the document states of
+      itself (a letter's heading) or a source's passage conveys of a
+      document it places or mentions
     datatype: wikibase-item
     accepts: [place, unclassified_entity]
     wikidata: P1071
@@ -777,10 +779,10 @@ properties:
   main_subject:
     label: main subject
     description: >-
-      document -> what it is about, as the document itself states: a
+      document -> what it is about, as the document states of itself or a
+      source's passage conveys of a document it places or mentions: a
       letter's topic, the district a map covers, the family a booklet is
-      about; never whom an image shows (shows); the subject is the source
-      document itself
+      about; never whom an image shows (shows)
     datatype: wikibase-item
     accepts: any
     wikidata: P921
@@ -790,9 +792,9 @@ properties:
     label: shows
     description: >-
       image -> who or what it shows, as its own content names them (an
-      inscription on a print: one claim per name); a source's words,
-      never a confirmed depiction; the subject is the source document
-      itself
+      inscription on a print: one claim per name) or a source's passage
+      conveys of an image it places or mentions; a source's words, never
+      a confirmed depiction
     datatype: wikibase-item
     accepts: any
     document_subject: true

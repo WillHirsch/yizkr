@@ -3861,11 +3861,35 @@ class TestWhatSourcesSayOfArtifacts:
         path = record(tmp_path / RUN_ID)
         directory = path / slugify(Path(FILES[CERT][0]).stem)
         view = json.loads((directory / "batch.json").read_text())
+        image = {"kind": "artifact", "sha1": "ab" * 20}
+        itself = {"kind": "artifact", "sha1": CERT}
+        view["entities"] += [
+            {"id": "md1", "label": "Studio portrait", "kind": "photograph"},
+            {
+                "id": "u1",
+                "label": "death certificate",
+                "kind": "unclassified_entity",
+            },
+        ]
         view["claims"] += [
             claim("e1", "caption", "Wastl to Klara, July 1939.", CERT),
-            claim("e1", "inception", "28. Juli 1939", CERT),
-            claim("e1", "inception", "1905", CERT),
-            claim("e1", "shows", "Muckel", CERT),
+            # the source itself; an image it places; the media item its
+            # record makes; its mention of an enclosure (#646)
+            {
+                **claim("e1", "inception", "28. Juli 1939", CERT),
+                "subject": itself,
+            },
+            {**claim("e1", "inception", "1905", CERT), "subject": image},
+            {
+                **claim("e1", "shows", "Muckel", CERT),
+                "subject": {"kind": "local", "local_id": "md1"},
+            },
+            {
+                **claim("e1", "main_subject", "seine Sterbeurkunde", CERT),
+                "subject": {"kind": "local", "local_id": "u1"},
+            },
+            # a subject of no form validation lets through
+            claim("e1", "author", "Wastl", CERT),
         ]
         (directory / "batch.json").write_text(json.dumps(view))
         covered = directory / "extraction" / "coverage.json"
@@ -3882,7 +3906,19 @@ class TestWhatSourcesSayOfArtifacts:
         content = counted["aggregate"]["content"]
         assert content["container_claims"] == {
             "captions": 1,
-            "document_subject_by_property": {"inception": 2, "shows": 1},
+            "document_subject_by_property": {
+                "author": 1,
+                "inception": 2,
+                "main_subject": 1,
+                "shows": 1,
+            },
+            "document_subject_by_form": {
+                "source": 1,
+                "placed": 1,
+                "record": 1,
+                "mention": 1,
+                "other": 1,
+            },
         }
 
     def test_rejects_by_reason(self, counted):
@@ -3900,8 +3936,10 @@ class TestWhatSourcesSayOfArtifacts:
         text = render_markdown(counted["aggregate"])
         assert (
             "Captions given, a container's words about an image it places: "
-            "1. Claims a document gives about itself, by property: "
-            "inception 2, shows 1."
+            "1. Claims of what an artifact is, by property: inception 2, "
+            "author 1, main_subject 1, shows 1; by their subject: the "
+            "source itself 1, an artifact it places 1, an artifact its "
+            "record makes 1, an artifact it mentions 1, other 1."
         ) in text
         assert "Rejects by reason: placed_subject 2, other 1, schema 1" in (
             text
