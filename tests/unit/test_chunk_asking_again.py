@@ -533,17 +533,23 @@ class TestTheSecondAnswer:
     def test_a_changed_conversation_on_the_retry_restarts_the_pass(
         self, tmp_path
     ):
+        # one chunk for both people, so no other chunk's call is in flight
+        # when the retry ends the pass
         llm = ScriptedLlm(
             [
                 entity_manifest_json(),
-                ndjson([without_language(*HILDEGARD)]),
+                ndjson(
+                    [
+                        without_language(*HILDEGARD),
+                        without_language(*SEBASTIAN),
+                    ]
+                ),
                 ConversationChanged("answered differently"),  # the retry
                 entity_manifest_json(),  # the pass starts over
-                ndjson([claim(*HILDEGARD)]),
-                ndjson([claim(*SEBASTIAN)]),
+                ndjson([claim(*HILDEGARD), claim(*SEBASTIAN)]),
             ]
         )
-        run = extractor(llm, tmp_path)
+        run = extractor(llm, tmp_path, budget=10_000)
         batch = run.extract(transcription(), DOC_REF)
         assert [method for method, _ in llm.calls].count("open") == 2
         assert llm.responses == []
