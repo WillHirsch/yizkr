@@ -27,12 +27,13 @@ for it are unchanged, and made again when they change, or when
 again in place. A changed prompt, model or piece of code does not by
 itself make a view stale; a scratch run starts from fresh state
 directories instead. The one check a view must still pass is the
-transcription check: a vision or text-file transcription is checked
-again whenever it is reused, and one that now fails is moved aside and
-made again in the run. The model calls a view is made with go through the
-LLM cache when the run has one (ADR-0032): an accelerator, which the
-pipeline runs the same without. The client factory (yizkr.pipeline.llm)
-wraps the run's engine clients in it; the orchestrator only names the
+transcription check: a transcription made by a route whose transcriber
+checks its output (CHECKED_ROUTES) is checked again whenever it is
+reused, and one that now fails is moved aside and made again in the
+run. The model calls a view is made with go through the LLM cache when
+the run has one (ADR-0032): an accelerator, which the pipeline runs the
+same without. The client factory (yizkr.pipeline.llm) wraps the run's
+engine clients in it; the orchestrator only names the
 cache folder, the refreshed roles and the epochs, and records the cache's
 events in the run directory. The transcription is routed per document
 (vision, paged, text file); a curator's
@@ -230,7 +231,8 @@ EXCERPTS_DIR = "excerpts"
 PAGED = "paged"
 # the transcription routes whose transcribers check their output: a view
 # made by one of them is checked again when it is reused, by the driver
-# and the estimate alike
+# and the estimate alike; route names, not the engine prefixes
+# yizkr.pipeline.anomalies.CHECKED_ROUTES judges
 CHECKED_ROUTES = frozenset(("vision", PAGED, "text-file", EXCERPT))
 
 # the stages each kind of document runs before the gates, in order
