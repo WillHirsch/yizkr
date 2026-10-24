@@ -920,6 +920,10 @@ class SiteBuilder:
             "timeline_rows": len(timeline),
             "gallery_items": len(gallery),
             "inconsistencies": len(inconsistencies),
+            # the disagreements by property (its manifest key)
+            "inconsistencies_by_property": disagreement.counts_by_property(
+                inconsistencies
+            ),
             "scratch_runs": self.scratch_runs,
         }
 

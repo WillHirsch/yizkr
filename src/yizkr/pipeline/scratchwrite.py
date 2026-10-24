@@ -148,9 +148,13 @@ the stage's directory of the run, once the query service shows the run
 items of the run whose writes the instance holds and the newest revision
 the write or the place stage left. Every page's header
 says the instance holds a development-stage scratch run, and names it.
+Its record keeps the different-source disagreements the site's
+inconsistencies page lists, as counts alone: their total and their
+count by property (its manifest key), since the run directory is the
+only place they outlast the next reset.
 
 Each stage keeps what it did in its directory of the run (RECORD); the
-run report reads the write's.
+run report reads the write's, the place stage's and the site's.
 
 **Progress.** Each stage tells the run's events how far it has got, in
 `progress` events (rundir.PROGRESS) that the live monitor shows: what it
@@ -1094,10 +1098,15 @@ def run_site(context: Any) -> list[str]:
     progress(context, SITE, BUILDING)
     out = context.directory / "site"
     summary = build_site(config, out)
-    save_record(
-        context.directory,
-        {"run_id": expected, "out": str(out), "built_at": _now()},
-    )
+    record = {"run_id": expected, "out": str(out), "built_at": _now()}
+    total = summary.get("inconsistencies")
+    by_property = summary.get("inconsistencies_by_property")
+    if isinstance(total, int) and isinstance(by_property, dict):
+        record["disagreements"] = {
+            "total": total,
+            "by_property": by_property,
+        }
+    save_record(context.directory, record)
     context.log(
         f"{SITE}: built in {out} for scratch run {expected} "
         f"({summary.get('people', 0)} people, "
