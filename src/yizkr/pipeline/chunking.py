@@ -54,6 +54,7 @@ from yizkr.pipeline.extract import (
     claim_schema_prompt_text,
     document_block,
     entity_kind_prompt_lines,
+    language_on_source,
     placed_by,
     run_metadata,
     salvage_valid_claims,
@@ -217,7 +218,11 @@ Rules — these mirror the archive's non-negotiable conventions:
   the year 30, with a date_reading note.
 - Every claim MUST include the source reference: the artifact
   {{"kind": "artifact", "sha1": "{artifact_sha1}"}}, plus page number and a
-  short verbatim transcription excerpt supporting it. The page number is
+  short verbatim transcription excerpt supporting it, written
+  "transcription_excerpt": {{"text": "<verbatim>", "language": "<code>"}}
+  on every claim, the language inside the excerpt and never on source:
+  the language of the excerpt's own words, {language} (the
+  transcription's) unless it is written in another. The page number is
   the N of the [Page N] (or [Slide N]) marker the text stands under,
   never a printed page number shown beside that marker.
 - Use ONLY these property keys (property key: datatype — what it means),
@@ -1661,6 +1666,7 @@ class ChunkedClaimExtractor:
         property_keys, item_keys = vocabulary_prompt_lines()
         return CHUNK_PROMPT.format(
             artifact_sha1=artifact.sha1,
+            language=transcription.language,
             property_keys=property_keys,
             item_keys=item_keys,
             assignment_block=assignment_block,
@@ -2235,6 +2241,9 @@ class ChunkedClaimExtractor:
             }
         else:
             entities_payload = []
+        # the claims whose excerpt's language validation finds moved in
+        # from `source` (extract._normalize_claim_shape)
+        moved = sum(language_on_source(claim) for claim in deduped)
         batch, rejects = salvage_valid_claims(
             deduped, run, entities=entities_payload, placed=placed
         )
@@ -2266,7 +2275,8 @@ class ChunkedClaimExtractor:
         # the extraction's health, on either tier, for the checks that read
         # a stored batch: how many chunks it asked, what they came to, the
         # trailing commas its manifest and chunk answers were read past
-        # (scan_json_answer), and each fallback tier it took, with the
+        # (scan_json_answer), the claims whose excerpt's language was
+        # moved in from `source`, and each fallback tier it took, with the
         # reason
         coverage |= {
             "chunks": len(chunk_ids),
@@ -2279,6 +2289,7 @@ class ChunkedClaimExtractor:
             "fallback": dict(self.fallback),
             "manifest_artifact_kind": self._manifest_artifact_kind,
             "retried_chunks": self.retried_chunks,
+            "excerpt_language_moved": moved,
         }
         if quotes is not None:
             coverage["quotes"] = quotes["counts"]

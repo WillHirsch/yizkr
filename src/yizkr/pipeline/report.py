@@ -1180,6 +1180,9 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
                     coverage.get("manifest_artifact_kind")
                 ),
                 "trailing_commas": _counted(coverage.get("trailing_commas")),
+                "excerpt_language_moved": _counted(
+                    coverage.get("excerpt_language_moved")
+                ),
                 "fallback": sorted(
                     tier for tier in fallback if isinstance(tier, str)
                 )
@@ -1222,6 +1225,23 @@ def _trailing_commas_line(counts: Mapping[str, int]) -> str:
     line = (
         f"Trailing commas read as JSON syntax: {_n(counts['read'])}, in "
         f"{_n(extractions)} extraction" + ("" if extractions == 1 else "s")
+    )
+    if counts["absent"]:
+        line += (
+            f" (extractions whose coverage predates the count: "
+            f"{_n(counts['absent'])})"
+        )
+    return line + "."
+
+
+def _language_moved_line(counts: Mapping[str, int]) -> str:
+    """The claims whose excerpt's language was given on `source` and moved
+    into the excerpt before validation (extract._normalize_claim_shape),
+    as the report's Content section gives them."""
+    extractions = counts["extractions"]
+    line = (
+        f"Excerpt languages moved in from source: {_n(counts['moved'])}, "
+        f"in {_n(extractions)} extraction" + ("" if extractions == 1 else "s")
     )
     if counts["absent"]:
         line += (
@@ -2699,6 +2719,10 @@ def _aggregate_content(
     # (extract.scan_json_answer), the extractions with one, and those
     # whose coverage gives no count
     trailing_commas = trailing_extractions = trailing_absent = 0
+    # the claims whose excerpt's language was moved in from `source`
+    # (extract._normalize_claim_shape), the extractions with one, and
+    # those whose coverage gives no count
+    languages_moved = moved_extractions = moved_absent = 0
     batches = not_extracted = zero_entities = 0
     # the extractions' marriages by their weddings (`_marriages`)
     marriages: Counter = Counter()
@@ -2758,6 +2782,12 @@ def _aggregate_content(
             else:
                 trailing_commas += commas
                 trailing_extractions += bool(commas)
+            moved = coverage.get("excerpt_language_moved")
+            if moved is None:
+                moved_absent += 1
+            else:
+                languages_moved += moved
+                moved_extractions += bool(moved)
             quotes = coverage.get("quotes")
             if quotes is None:
                 quotes_absent += 1
@@ -2884,6 +2914,11 @@ def _aggregate_content(
             "read": trailing_commas,
             "extractions": trailing_extractions,
             "absent": trailing_absent,
+        },
+        "excerpt_language_moved": {
+            "moved": languages_moved,
+            "extractions": moved_extractions,
+            "absent": moved_absent,
         },
         "records": {
             "extractions": record_extractions,
@@ -3684,6 +3719,7 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
                 "chunks.",
                 _retried_line(content["retried_chunks"]),
                 _trailing_commas_line(content["trailing_commas"]),
+                _language_moved_line(content["excerpt_language_moved"]),
             ],
         ),
         _Section(
@@ -4626,6 +4662,11 @@ def _html_document(document: Mapping[str, Any]) -> str:
         items.append(
             "Trailing commas read as JSON syntax: "
             + ("not counted" if commas is None else str(commas))
+        )
+        moved = coverage.get("excerpt_language_moved")
+        items.append(
+            "Excerpt languages moved in from source: "
+            + ("not counted" if moved is None else str(moved))
         )
         quotes = coverage.get("quotes")
         items.append(

@@ -355,6 +355,16 @@ writer refused, count here too, under their check and the stage
   `extractions`, `absent`). A document's own count is in `report.json`
   and its drill-down in `report.html` (`coverage.trailing_commas`, null,
   and "not counted", for a coverage that predates it);
+- excerpt languages moved in from source (#668): the claims that gave
+  their excerpt's language on `source`, beside an excerpt that gave
+  none, and had it moved into the excerpt before validation
+  (`coverage.json`'s `excerpt_language_moved`), summed over the
+  extractions, with the extractions that moved one, and those whose
+  coverage predates the count counted apart, never as zero
+  (`aggregate.content.excerpt_language_moved`: `moved`, `extractions`,
+  `absent`). A document's own count is in `report.json` and its
+  drill-down in `report.html` (`coverage.excerpt_language_moved`, null,
+  and "not counted", for a coverage that predates it);
 - marriages and their weddings (#656, ADR-0036): each extraction batch's
   marriages it extracts, a partnership left out, by whether a
   `started_by` claim links the marriage to a wedding of any kind
