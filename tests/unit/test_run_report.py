@@ -2307,7 +2307,8 @@ class TestContent:
             "- Records set aside: 2; reasons records were set aside: 4 (a "
             "record can give several)\n"
             "- Fields read so their record could stand (a name part "
-            "dropped for an empty string, an entry read as its text), "
+            "dropped for an empty string, an entry read as its text, a "
+            "place's name that is its label and one of its containers), "
             "setting nothing aside, so counted apart from the reasons "
             "records were set aside: 0\n"
             "- Place containers checked: 4; dropped alone, their records "
@@ -2514,7 +2515,8 @@ class TestContent:
             "- Records set aside: 1; reasons records were set aside: 2 (a "
             "record can give several)\n"
             "- Fields read so their record could stand (a name part "
-            "dropped for an empty string, an entry read as its text), "
+            "dropped for an empty string, an entry read as its text, a "
+            "place's name that is its label and one of its containers), "
             "setting nothing aside, so counted apart from the reasons "
             "records were set aside: 0\n"
             "- Place containers checked: 0; dropped alone, their records "
@@ -2709,7 +2711,8 @@ class TestContent:
             "- Records set aside: 3; reasons records were set aside: 5 (a "
             "record can give several)\n"
             "- Fields read so their record could stand (a name part "
-            "dropped for an empty string, an entry read as its text), "
+            "dropped for an empty string, an entry read as its text, a "
+            "place's name that is its label and one of its containers), "
             "setting nothing aside, so counted apart from the reasons "
             "records were set aside: 7\n"
             "- Place containers checked: 6; dropped alone, their records "
@@ -2737,6 +2740,45 @@ class TestContent:
             "1; readings, nothing set aside: read as text 4, dropped 2; "
             "place containers checked: 2; dropped: malformed 1; "
         ) in drilled(made, POSTCARD)
+
+    def test_a_label_and_container_is_a_reading(self, tmp_path):
+        """A place's written name that is its label and one of its
+        containers sets nothing aside (ADR-0035 §5, #655): it is counted
+        among the readings, beside `dropped` and `read as text`, never
+        among the reasons records were set aside by."""
+        path = record(tmp_path / "run")
+        name = slugify(Path(FILES[POSTCARD][0]).stem)
+        target = path / name / "extraction" / "coverage.json"
+        value = json.loads(target.read_text())
+        value.update(
+            records=records(
+                1,
+                1,
+                {"label and container": 3, "addition": 1, "dropped": 1},
+                {"toponym": 1},
+                set_aside_records=1,
+            ),
+            notes={"relation": 1},
+        )
+        target.write_text(json.dumps(value))
+        made = build(path, now=NOW)
+        postcard = document(made, POSTCARD)["coverage"]["records"]
+        assert postcard["set_aside_by_reason"] == {"addition": 1}
+        assert postcard["readings_by_reason"] == {
+            "label and container": 3,
+            "dropped": 1,
+        }
+        counted = made["aggregate"]["content"]["records"]
+        assert counted["readings_by_reason"]["label and container"] == 3
+        assert "label and container" not in counted["set_aside_by_reason"]
+        assert (
+            "| Reading (nothing set aside) | Fields |\n"
+            "|---|---:|\n"
+            "| label and container | 3 |\n"
+        ) in render_markdown(made["aggregate"])
+        assert "readings, nothing set aside: label and container 3, " in (
+            drilled(made, POSTCARD)
+        )
 
     def test_a_coverage_that_counts_zero_is_not_absent(self, tmp_path):
         """Records and notes that count nothing are counted as zero; a
@@ -2817,7 +2859,8 @@ class TestContent:
             "- Records set aside: 0; reasons records were set aside: 0 (a "
             "record can give several)\n"
             "- Fields read so their record could stand (a name part "
-            "dropped for an empty string, an entry read as its text), "
+            "dropped for an empty string, an entry read as its text, a "
+            "place's name that is its label and one of its containers), "
             "setting nothing aside, so counted apart from the reasons "
             "records were set aside: 0\n"
             "- Place containers checked: 0; dropped alone, their records "
@@ -3079,6 +3122,18 @@ class TestContent:
         reasons |= {r.split(":", 1)[0] for r in structure_problems(place)}
         _, found = set_aside_structure(
             {**person, "structure": {"kind": "human", "status": 7}}
+        )
+        reasons |= {reason.split(":", 1)[0] for reason in found}
+        # a place's name that is its label and one of its containers
+        _, found = set_aside_structure(
+            {
+                **town,
+                "structure": {
+                    "kind": "place",
+                    "names": [{"written": "Flörburg, Hesse"}],
+                    "within": ["Hesse"],
+                },
+            }
         )
         reasons |= {reason.split(":", 1)[0] for reason in found}
         assert reasons == report.SET_ASIDE_REASONS | report.READING_REASONS
