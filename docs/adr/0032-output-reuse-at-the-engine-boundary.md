@@ -387,6 +387,19 @@ reason not to key chunk retries this way (a chunk that failed every
 attempt would fail again from the cache in every run) does not apply to
 it. `--refresh extract` or a new epoch asks again.
 
+*Amended by #501, #621 (2026-10-24):* the chunk retry for a missing
+required field is a third caller. A chunk whose answer gives no claim
+with a field the claim schema requires, the same field for every claim,
+is asked again once as attempt 1, its prompt naming the field; the first
+answer is kept, not rejected, under its own key. The second answer
+replaces it; when the second call gives nothing the first stands. A
+give-up at the output limit on the retry is kept under the attempt-1
+key, so a later run gives up on it again without a call and the first
+answer stands again; a cut-off second answer is rejected instead (§4),
+so the next run asks again. Its retries' fallback is the first answer,
+so a give-up kept there fails no chunk. A call the safety classifier
+refused is never an attempt's: it ends the turn (ADR-0006 §5).
+
 This holds for a stored answer that a parser made stricter since now
 refuses: it is replayed and refused, not rejected (§4), and spends its
 attempt; a later attempt that no earlier run asked goes to the engine.
@@ -447,6 +460,13 @@ fork's context assumes:
   conversation in the pass at once, without asking the engine again: a
   failing engine is asked once per pass, not once per chunk, and each
   chunk drops to inline context (#236).
+  *Amended by #501, #621 (2026-10-24):* a replay the safety classifier
+  refuses (`ClassifierRefused`) is remembered alike, and fails the fork
+  that needed it, and every later fork, with a `RuntimeError` that names
+  the refusal: it is the failure of the conversation's session, not the
+  refusal of a fork, so every chunk drops to inline context as for any
+  failed replay, whichever chunk reached the replay first. A chunk whose
+  own fork or inline call is refused still fails at once (ADR-0006 §5).
 
 A session, however obtained, serves every later fork of the conversation
 in the run, and never a conversation opened on another answer than the

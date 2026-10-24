@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from yizkr.claims import (
     MANIFEST_REASON,
@@ -45,6 +45,7 @@ from yizkr.claims import (
 )
 from yizkr.core.verbatim import Transcript, words
 from yizkr.pipeline.extract import (
+    _normalize_claim_shape,
     cite_artifact,
     claim_schema_prompt_text,
     document_block,
@@ -57,6 +58,7 @@ from yizkr.pipeline.extract import (
 )
 from yizkr.pipeline.llm import (
     CUT_OFF_AT_LIMIT,
+    ClassifierRefused,
     ConversationalLlmClient,
     ConversationChanged,
     LlmClient,
@@ -885,6 +887,18 @@ Transcription of artifact sha1:{artifact_sha1} (language: {language}):
 """
 
 
+# Appended to a chunk's prompt when every claim of its answer lacks the
+# same required field (missing_field): the chunk is asked again once, as
+# attempt 1 of the call (llm.for_attempt), naming the field.
+MISSING_FIELD_NOTE = """
+
+Your earlier answer to this assignment could not be used: none of its
+{count} claims gives `{field}`, which the claim schema requires. Answer
+the whole assignment again, as asked above, and give `{field}` on every
+claim.
+"""
+
+
 class ChunkIncomplete(Exception):
     """A chunk answer cut off: stopped at the engine's output limit, or
     without its terminal sentinel."""
@@ -1193,6 +1207,14 @@ class ChunkedClaimExtractor:
     rejected answer the cache kept from an earlier call spends no retry:
     the engine has not answered the chunk yet, and has as many tries as
     it would without the cache.
+    A chunk whose answer gives no claim with a field the claim schema
+    requires, the same field for every claim (missing_field), is asked
+    again once, naming the field, as a second attempt keyed apart
+    (`_ask_again`), and `retried_chunks` counts such chunks. A call the
+    safety classifier refused (llm.ClassifierRefused), a chunk's, its
+    fork's, the manifest's or the segmentation's, is never asked again,
+    and a refused fork does not drop to inline context: the chunk, or
+    the extraction, fails with the refusal's class in its reason.
     The entity manifest and the segmentation are asked in two attempts
     each, keyed apart behind the cache (llm.for_attempt): a refused
     answer is kept, so a later run replays the same attempts and takes the
@@ -1245,6 +1267,9 @@ class ChunkedClaimExtractor:
         self._state_lock = threading.Lock()
         self.failed_chunks: list[str] = []
         self.failure_reasons: dict[str, str] = {}
+        # chunks asked again because every claim of their answer lacked
+        # the same required field (_ask_again)
+        self.retried_chunks = 0
         # open-schema gaps (ADR-0013): relations no property expresses,
         # collected per run for review; never written to the graph
         self.gaps: list[dict] = []
@@ -1314,7 +1339,13 @@ class ChunkedClaimExtractor:
         it is kept under its attempt, as a refused answer is, so a later
         run raises it again without asking the engine. No handle
         survives a refused answer: forking would plant known-bad output in
-        every chunk's context."""
+        every chunk's context.
+
+        A call the safety classifier refused (llm.ClassifierRefused) is not
+        asked again: the refusal is the platform's decision about the
+        call's content, which a second attempt sends unchanged. It ends
+        the turn as a call unanswered, whatever an earlier attempt gave,
+        so no fallback tier stands in for it."""
         handle = None
         answered = False
         reasons: list[str] = []
@@ -1330,6 +1361,9 @@ class ChunkedClaimExtractor:
                 reasons.append(CUT_OFF_AT_LIMIT)
                 handle = None
                 continue
+            except ClassifierRefused as exc:
+                reasons.append(f"{type(exc).__name__}: {exc}")
+                return None, None, reasons, False
             except Exception as exc:
                 reasons.append(f"{type(exc).__name__}: {exc}")
                 handle = None
@@ -1650,8 +1684,28 @@ class ChunkedClaimExtractor:
             inline_document,
         )
 
+    @staticmethod
+    def _fork(client: Any, handle: Any, prompt: str) -> str | None:
+        """A chunk's answer from a fork of the conversation `handle` names,
+        made through `client`, or None when the fork machinery failed
+        (session gone, old CLI): the chunk then drops to inline context. A
+        changed conversation, an answer the engine gave up on at its
+        output limit and a refusal of the call (ClassifierRefused) are no
+        failure of the fork machinery: they propagate, so a refused fork
+        is never asked again inline."""
+        try:
+            return client.fork(handle, prompt)
+        except (ConversationChanged, OutputLimitReached, ClassifierRefused):
+            raise
+        except Exception:
+            return None
+
     def _run_chunk(
-        self, prompt: str, handle: Any, fallback_prompt: str
+        self,
+        prompt: str,
+        handle: Any,
+        fallback_prompt: str,
+        missing: Callable[[list[dict]], str | None] | None = None,
     ) -> tuple[list[dict], str]:
         """(claims, response) for one chunk: call (fork if possible) and
         parse, with retries. A response cut off, at the engine's output
@@ -1662,26 +1716,29 @@ class ChunkedClaimExtractor:
         limit (OutputLimitReached) gave no response to reject: it spends
         its try as a cut-off one does, and its reason is the same. A
         conversation that changed (ConversationChanged) is no failure of
-        the chunk: it ends the extraction's pass, which starts over."""
+        the chunk: it ends the extraction's pass, which starts over. A
+        call the safety classifier refused (ClassifierRefused) fails the
+        chunk at once, with no retry and no inline fallback: the refusal
+        is the platform's decision about the call's content, which asking
+        again sends unchanged.
+
+        `missing`, when given, names the required field every claim of
+        an answer lacks (missing_field), or None; an answer it names one
+        for is asked again once (_ask_again)."""
         last_error: Exception = ChunkIncomplete("not attempted")
         tries = 1 + self.retries
         kept_rejected = False
         while tries:
             tries -= 1
             try:
+                response = None
                 if handle is not None:
-                    try:
-                        response = self.client.fork(handle, prompt)
-                    except (ConversationChanged, OutputLimitReached):
-                        raise
-                    except Exception:
-                        # fork machinery failed (session gone, old CLI):
-                        # this chunk drops to inline context
+                    response = self._fork(self.client, handle, prompt)
+                    if response is None:
                         handle = None
-                        response = self.client.complete(fallback_prompt)
-                else:
+                if response is None:
                     response = self.client.complete(fallback_prompt)
-            except ConversationChanged:
+            except (ConversationChanged, ClassifierRefused):
                 raise
             except OutputLimitReached:
                 last_error = ChunkIncomplete(CUT_OFF_AT_LIMIT)
@@ -1691,14 +1748,75 @@ class ChunkedClaimExtractor:
                 continue
             cut = at_output_limit(self.client, response)
             try:
-                return parse_chunk_response(response, cut_off=cut), response
+                claims = parse_chunk_response(response, cut_off=cut)
             except ChunkIncomplete as exc:
                 last_error = exc
                 kept = reject_response(self.client, response, f"chunk: {exc}")
                 if kept and not kept_rejected:
                     kept_rejected = True
                     tries += 1
+                continue
+            field = None if missing is None else missing(claims)
+            if field is None:
+                return claims, response
+            return self._ask_again(
+                prompt, handle, fallback_prompt, field, claims, response
+            )
         raise last_error
+
+    def _ask_again(
+        self,
+        prompt: str,
+        handle: Any,
+        fallback_prompt: str,
+        field: str,
+        claims: list[dict],
+        response: str,
+    ) -> tuple[list[dict], str]:
+        """(claims, response) for a chunk whose answer, `claims` as parsed
+        from `response`, gives no claim with the required `field`: the
+        chunk asked again once, its prompt naming the field
+        (MISSING_FIELD_NOTE), as attempt 1 of the call (llm.for_attempt),
+        in the same conversation the answer came from, or inline when it
+        came inline. Behind the LLM cache the first answer is kept and the
+        second is keyed apart, so a later run replays both.
+
+        The second answer replaces the first, and is validated as usual
+        in the merge. When the second call gives none (it fails, the
+        engine gives up on it at its output limit, it is cut off, or the
+        safety classifier refuses it, which is never asked again), the
+        first answer stands. A cut-off second answer is
+        rejected, and one the client kept from an earlier call is asked
+        for once more (llm.reject_response), so a later run asks the
+        engine again; a give-up at the output limit is kept under the
+        attempt's key behind the LLM cache, so a later run gives up on it
+        again without a call, and the first answer stands again."""
+        with self._state_lock:
+            self.retried_chunks += 1
+        note = MISSING_FIELD_NOTE.format(count=len(claims), field=field)
+        client = for_attempt(self.client, 1)
+        for _ask in range(2):
+            try:
+                again = None
+                if handle is not None:
+                    again = self._fork(client, handle, prompt + note)
+                    if again is None:
+                        handle = None
+                if again is None:
+                    again = client.complete(fallback_prompt + note)
+            except ConversationChanged:
+                raise
+            except ClassifierRefused:
+                break
+            except Exception:
+                break
+            cut = at_output_limit(client, again)
+            try:
+                return parse_chunk_response(again, cut_off=cut), again
+            except ChunkIncomplete as exc:
+                if not reject_response(client, again, f"chunk: {exc}"):
+                    break
+        return claims, response
 
     # -- orchestration ---------------------------------------------------
 
@@ -1728,6 +1846,7 @@ class ChunkedClaimExtractor:
         text_lines = transcription.prompt_text().splitlines()
         self.failed_chunks = []
         self.failure_reasons = {}
+        self.retried_chunks = 0
         self.gaps = []
         self.fallback = {}
         self.attention = []
@@ -1798,6 +1917,12 @@ class ChunkedClaimExtractor:
         else:
             self._log(f"  extract: {total} chunk(s) (line-range fallback)")
 
+        def missing(claims: list[dict]) -> str | None:
+            """The required field every claim of a chunk answer lacks, the
+            artifact cited as the merge cites it (missing_field), or
+            None."""
+            return missing_field(cite_artifact(claims, artifact))
+
         def run_one(chunk_id: str, group: list) -> _Chunk | None:
             """One chunk end to end, or None on failure. Thread-safe:
             shared state goes through the lock."""
@@ -1806,6 +1931,7 @@ class ChunkedClaimExtractor:
                     build_prompt(group, False),
                     handle,
                     build_prompt(group, inline_document),
+                    missing,
                 )
             except ConversationChanged:
                 raise
@@ -2089,6 +2215,7 @@ class ChunkedClaimExtractor:
             "rejected_by_reason": rejected_by_reason(rejects),
             "unread_objects": sum(len(found) for found in unread.values()),
             "fallback": dict(self.fallback),
+            "retried_chunks": self.retried_chunks,
         }
         if quotes is not None:
             coverage["quotes"] = quotes["counts"]
@@ -2275,6 +2402,55 @@ def excerpt_audit(claims: Iterable[Claim], transcript: Transcript) -> dict:
         },
         "missing": missing,
     }
+
+
+def missing_field(claims: Iterable[Any]) -> str | None:
+    """The required field every one of `claims` lacks, by its path in the
+    claim's JSON (`source.transcription_excerpt.language`, `value.year`;
+    _field_path), or None: for no claims, or when any claim lacks no
+    required field, or when they lack none in common. When they lack
+    several in common, the first path in sorted order. Each claim's shape
+    is repaired as validation repairs it (salvage_valid_claims) before it
+    is checked; `claims` are to be cited as the merge cites them
+    (cite_artifact), so that the source's artifact is not missing. The
+    local refs the merge settles fill no required field. A claim that
+    fails for any other reason, a value of the wrong type or a manifest
+    problem, lacks none."""
+    common: set[str] | None = None
+    for claim in claims:
+        lacking: set[str] = set()
+        if isinstance(claim, dict):
+            shaped = _normalize_claim_shape(claim)
+            try:
+                Claim.model_validate(shaped)
+            except ValidationError as exc:
+                lacking = {
+                    _field_path(shaped, error["loc"])
+                    for error in exc.errors()
+                    if error["type"] == "missing"
+                }
+        common = lacking if common is None else common & lacking
+    return min(common) if common else None
+
+
+def _field_path(claim: dict, loc: Iterable[Any]) -> str:
+    """The path of the field a validation error's `loc` names, as the
+    claim's JSON spells it: walked along `claim`, a list's index and a
+    tagged union's tag (`time` in `value.time.year`), which are no keys
+    of the claim, are left out, and the last part, the field missing, is
+    kept."""
+    parts = list(loc)
+    path: list[str] = []
+    node: Any = claim
+    for number, part in enumerate(parts):
+        if isinstance(node, list) and isinstance(part, int):
+            node = node[part] if 0 <= part < len(node) else None
+        elif isinstance(node, dict) and part in node:
+            path.append(str(part))
+            node = node[part]
+        elif number == len(parts) - 1:
+            path.append(str(part))
+    return ".".join(path)
 
 
 def rejected_by_reason(rejects: Iterable[dict]) -> dict[str, int]:

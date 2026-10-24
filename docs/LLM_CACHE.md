@@ -327,7 +327,7 @@ A key is the SHA-256 of the canonical JSON of its components:
 | `files` | The content SHA-256 of each file the call may read: the files its caller passes (`image_paths`), in order |
 | `parent` | For a fork, the keys of the conversation it forks |
 | `opening` | For a fork, the SHA-256 of the conversation's opening answer, which the fork's context holds: a kept session is resumed only for the answer it was made on |
-| `attempt` | Which attempt at the call this is, for a caller that asks again and then falls back (the entity manifest, the segmentation); 0 otherwise |
+| `attempt` | Which attempt at the call this is, for a caller that asks again and then falls back (the entity manifest, the segmentation, and the one retry of a chunk whose claims all lack the same required field, at attempt 1); 0 otherwise |
 | `epoch` | The role's epoch: 0 unless `--epoch ROLE=N` says otherwise |
 
 The role itself is not a component: two roles making the same call share
@@ -700,9 +700,10 @@ Attempt 0 is keyed as the client's own calls are, so a call made outside
 `llm.for_attempt` whose components are identical to attempt 0's is
 served attempt 0's give-up, and raises `OutputLimitReached` with no
 call; no caller makes such a call, as only the extraction's first
-turns (the entity manifest and the segmentation) are asked in attempts,
-with prompts of their own. Only attempts keep their give-ups: a chunk's
-retries share one key, and a give-up kept there would fail every retry
+turns (the entity manifest and the segmentation) and a chunk's retry for
+a missing required field (attempt 1, its prompt naming the field) are
+asked in attempts, with prompts of their own. Only attempts keep their
+give-ups: a chunk's retries for a failed or cut-off answer share one key, and a give-up kept there would fail every retry
 from the cache in every run. `--refresh extract` asks again, and the
 give-up entry is moved aside as replaced by what the refreshed call
 stores, an answer or a new give-up; a refreshed call that answers empty

@@ -137,6 +137,25 @@ manifest that names no entity (an empty list) is such an answer, taken at
 once: no second attempt, no segmentation and no fallback tier, and the
 reason reads "the entity manifest names no entity".
 
+A chunk answer in which every claim lacks the same field the claim
+schema requires (the excerpt's `language`, say: `missing_field` checks
+the claims as the merge validates them, with their artifact cited and
+their shape repaired) is asked again once (#501): the chunk's prompt with a note
+naming the field and the claim count (`MISSING_FIELD_NOTE`), as the
+call's attempt 1 (`llm.for_attempt`), forked from the same conversation
+as the first answer, or inline when that came inline. Behind the LLM
+cache the first answer is kept, not rejected, and the second is keyed
+apart, so a later run replays both without asking the engine. The second
+answer replaces the first and is validated as usual; when the second
+call gives nothing (it fails, is cut off, or is refused), the first
+answer stands. A cut-off second answer is rejected, so the next run asks
+the engine again; a give-up at the output limit is kept under the
+attempt's key, so the next run gives up on it again without a call, and
+the first answer stands again. An answer with one claim that gives the field, or whose
+claims lack different fields, or fail for another reason, is not asked
+again. The extraction's `coverage.json` counts such chunks
+(`retried_chunks`), and the run report sums them.
+
 State for each document lives in `var/runs/<folder>/<doc>/`: its views
 (`transcription.json`, `batch.json`, `critique.json`, and the extractor's
 coverage, rejects and gaps under `extraction/`) and the files the later
@@ -965,11 +984,19 @@ Two Anthropic-backed providers, differing in how usage is billed:
   engine does not ask it again, as it does a limit, and the LLM cache
   keeps nothing for it, so the next run asks again. Its stage records
   it as any failed call: a `call` event with outcome `error`, error
-  `ClassifierRefused` and stop reason `refusal`, and the stage's own
-  handling of a failed call (the extractor's chunk retries ask a chunk
-  again, a fork's failure drops the chunk to inline context, and the
-  entity manifest's or segmentation's second attempt asks again too; a
-  failed document's reason names `ClassifierRefused`). The run report
+  `ClassifierRefused` and stop reason `refusal`. The chunked extractor
+  never asks a refused call again (#621): a refused chunk, forked or
+  inline, fails at once, with no chunk retry and no drop to inline
+  context, and a refused entity manifest or segmentation takes no second
+  attempt and no fallback tier, so the extraction fails; the failed
+  document's reason names `ClassifierRefused`. A refused second ask of a
+  chunk whose claims all lacked a required field (see the extraction's
+  failures, above) fails nothing: the first answer stands. Every refused
+  call, that one included, is counted with the run report's call errors,
+  by its error's class; `coverage.json` keeps no count of its own. Other
+  failures keep
+  their chunk retries, the fork's drop to inline context and the
+  manifest's and segmentation's second attempt. The run report
   and the monitor count it under its own name, in the call errors and
   the failure labels. A refusal a fallback model then answered ends on
   a result that reports no error, and is the answer. The answer never

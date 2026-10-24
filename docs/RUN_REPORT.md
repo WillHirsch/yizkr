@@ -310,6 +310,17 @@ writer refused, count here too, under their check and the stage
   `document_subject_by_property`);
 - zero-claim documents, by kind, and batches with no entity; the chunks
   and the fallback tiers taken;
+- the chunks asked again because every claim of their answer lacked the
+  same required field (#501), summed from each extraction's
+  `coverage.json` (`retried_chunks`), with the extractions that asked
+  one, and those whose coverage predates the count counted apart, never
+  as zero (`aggregate.content.retried_chunks`: `chunks`, `extractions`,
+  `absent`). A document's own count is in `report.json` and
+  `report.html` (`coverage.retried_chunks`, null for a coverage that
+  predates it). A call the safety classifier refused (#621) is not
+  counted in coverage: it is counted with the call errors, by its
+  error's class (`ClassifierRefused`), and a refusal that fails a chunk
+  or the extraction is named in the document's failure reason;
 - mention records and judgement notes, summed from each extraction's
   `coverage.json` (ADR-0035 §4, §5, #420): the mention records given,
   and those by label status (`name`, `role`, `kinship`, `courtesy`,
