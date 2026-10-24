@@ -11,14 +11,16 @@ claims where the passage, read where it stands, conveys the fact (Q7); the
 critic names the source as "this document" and a placed image by its
 place; the run report splits the claims by subject form; the
 non-privileged export leaves out a container's claims about what it places
-(Q9).
+(Q9). A curator's confirmation that a mention, or a record's artifact, is
+an existing item takes its claims onto that item (#670).
 
 The fixtures are the fictional universe's (docs/EXAMPLES.md): *Our Family
 from Germany* (`family-booklet-2011`) places the top of Sebastian's letter
 to Klara (`letter-excerpt-1939`) on its page 6, under the caption "Wastl
 to Klara, July 1939." and beside its translation "Flörburg, Brunnenring
 35, 28 July 1939. Dear Pünktchen!"; the 1958 letter to Leopold
-(`letter-to-leopold-1958`) encloses Rudolf's death certificate.
+(`letter-to-leopold-1958`) encloses Rudolf's death certificate, held as
+the scan `death-certificate-1941`.
 """
 
 from __future__ import annotations
@@ -54,6 +56,7 @@ from yizkr.backup import (
 from yizkr.claims import (
     ArtifactRef,
     ClaimBatch,
+    QidRef,
     artifact_kind_problems,
     document_subject_form,
     unplaced_claims,
@@ -75,12 +78,17 @@ from yizkr.pipeline.extract import (
     document_block,
     salvage_valid_claims,
 )
+from yizkr.pipeline.reconcile import apply_equivalences
 from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.writer import BatchWriter, pre_plan_refusals
 
 # the 1958 letter to Leopold, which encloses Rudolf's death certificate
 LETTER_1958_REF = ArtifactRef.from_bytes(b"\x89PNG the 1958 letter")
+# the held scan of that certificate, death-certificate-1941
+CERTIFICATE_1941_REF = ArtifactRef.from_bytes(
+    b"\x89PNG death-certificate-1941"
+)
 ENCLOSING = "Вы просили прислать свидетельство о его смерти, посылаю."
 TRANSLATION = "Flörburg, Brunnenring 35, 28 July 1939"
 GREETING = "Dear Pünktchen!"
@@ -224,6 +232,30 @@ class TestTheSubjectForms:
         ]
         assert forms == ["source", "placed", "record", "mention", None, None]
 
+    @pytest.mark.parametrize(
+        ("confirmed", "form"),
+        [
+            ({"unclassified_entity"}, "confirmed"),
+            ({"photograph"}, "confirmed"),
+            ({"unclassified_entity", "photograph"}, "confirmed"),
+            (set(), None),
+            ({"human"}, None),
+            ({"unclassified_entity", "human"}, None),
+        ],
+    )
+    def test_a_confirmed_item_is_named_by_what_it_was(self, confirmed, form):
+        qid = claim("inception", JULY_28, {"kind": "qid", "qid": "Q41"})
+        assert (
+            document_subject_form(
+                batch(qid).claims[0],
+                load_acceptance(),
+                PLACED,
+                None,
+                confirmed,
+            )
+            == form
+        )
+
     def test_an_image_the_booklet_does_not_place_is_refused(self):
         """A placed-subject claim on an image the booklet's record does not
         name is rejected in validation and refused by the writer."""
@@ -317,6 +349,127 @@ class TestTheSubjectForms:
             batch(dated), {}, placed, {LETTER_REF.sha1, PORTRAIT_REF.sha1}
         ).values()
         assert refusal[0] == "subject_rule"
+
+
+class TestAConfirmedMention:
+    """A curator confirms that the 1958 letter's mention of the death
+    certificate it encloses is the held scan death-certificate-1941, an
+    existing item: the letter's `main_subject` goes onto that item, cited
+    to the letter with its passage (#670, ADR-0039 §10.1(c)). The same
+    holds for the artifact a structured record makes, and for no other
+    entity."""
+
+    HELD = "Q41"
+
+    def confirmed(self, *claims: dict, entities, approved) -> ClaimBatch:
+        return apply_equivalences(batch(*claims, entities=entities), approved)
+
+    def test_validation_and_the_writer_take_it(self):
+        confirmed = self.confirmed(
+            enclosure(), entities=[CERTIFICATE, DEATH], approved={"u1": "Q41"}
+        )
+        assert confirmed.claims[0].subject.qid == self.HELD
+        assert validate_against_manifest(confirmed) == []
+        assert pre_plan_refusals(confirmed, {}) == {}
+
+    def test_a_record_s_confirmed_artifact_takes_its_claim(self):
+        dated = claim(
+            "inception", JULY_28, local("m1", "O1", "photograph"), page=None
+        )
+        record = {"id": "m1", "label": "O1", "kind": "photograph"}
+        confirmed = self.confirmed(
+            dated, entities=[record], approved={"m1": "Q41"}
+        )
+        assert validate_against_manifest(confirmed) == []
+        assert pre_plan_refusals(confirmed, {}) == {}
+
+    @pytest.mark.parametrize("kind", ["human", "death", "artifact_fragment"])
+    def test_no_other_confirmed_entity_takes_one(self, kind):
+        wrong = claim("inception", JULY_28, local("x1", "x", kind), page=None)
+        confirmed = self.confirmed(
+            wrong,
+            entities=[{"id": "x1", "label": "x", "kind": kind}],
+            approved={"x1": "Q41"},
+        )
+        assert any(
+            p.endswith("[document_subject]")
+            for p in validate_against_manifest(confirmed)
+        )
+        (refusal,) = pre_plan_refusals(confirmed, {}).values()
+        assert refusal[0] == "subject_rule"
+
+    def test_a_mention_confirmed_with_a_person_as_one_item_is_refused(self):
+        # the curator confirms both the mention and a person as one item,
+        # so what the claim's subject was is unknown
+        confirmed = self.confirmed(
+            enclosure(),
+            entities=[
+                CERTIFICATE,
+                DEATH,
+                {"id": "p1", "label": "Rudolf Löbig", "kind": "human"},
+            ],
+            approved={"u1": "Q41", "p1": "Q41"},
+        )
+        assert any(
+            p.endswith("[document_subject]")
+            for p in validate_against_manifest(confirmed)
+        )
+        (refusal,) = pre_plan_refusals(confirmed, {}).values()
+        assert refusal[0] == "subject_rule"
+
+    def test_another_item_than_the_one_confirmed_is_refused(self):
+        confirmed = self.confirmed(
+            enclosure(), entities=[CERTIFICATE, DEATH], approved={"u1": "Q41"}
+        )
+        moved = confirmed.model_copy(
+            update={
+                "claims": [
+                    confirmed.claims[0].model_copy(
+                        update={"subject": QidRef(qid="Q43")}
+                    )
+                ]
+            }
+        )
+        assert any(
+            p.endswith("[document_subject]")
+            for p in validate_against_manifest(moved)
+        )
+        (refusal,) = pre_plan_refusals(moved, {}).values()
+        assert refusal[0] == "subject_rule"
+
+    def test_it_still_needs_its_excerpt(self):
+        bare = {
+            **enclosure(),
+            "source": {"artifact": LETTER_1958_REF.model_dump()},
+        }
+        confirmed = self.confirmed(
+            bare, entities=[CERTIFICATE, DEATH], approved={"u1": "Q41"}
+        )
+        (problem,) = validate_against_manifest(confirmed)
+        assert problem.endswith("[excerpt_required]")
+        ((reason, warning),) = pre_plan_refusals(confirmed, {}).values()
+        assert reason == "subject_rule"
+        assert "carries no excerpt" in warning
+
+    def test_the_writer_puts_it_on_the_held_scan(self):
+        wiki = ArtifactWiki()
+        qids = registered(wiki, LETTER_1958_REF, CERTIFICATE_1941_REF)
+        held = qids[CERTIFICATE_1941_REF.sha1]
+        confirmed = self.confirmed(
+            enclosure(), entities=[CERTIFICATE, DEATH], approved={"u1": held}
+        )
+        result = write_mapped(BatchWriter(wiki), confirmed)
+        assert (result.written, result.refused) == (1, [])
+        assert "u1" not in result.created_items
+        (about,) = wiki.wbi.item.get(held).claims.get("P96")
+        assert (
+            about.mainsnak.datavalue["value"]["id"]
+            == (result.created_items["d1"])
+        )
+        assert stated(about) == [(qids[LETTER_1958_REF.sha1], [])]
+        assert not wiki.wbi.item.get(qids[LETTER_1958_REF.sha1]).claims.get(
+            "P96"
+        )
 
 
 class TestTheExcerpt:
@@ -820,6 +973,7 @@ class TestTheReportForms:
             "placed": 0,
             "record": 0,
             "mention": 0,
+            "confirmed": 0,
         }
 
 

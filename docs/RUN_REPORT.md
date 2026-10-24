@@ -326,7 +326,9 @@ writer refused, count here too, under their check and the stage
   the source itself (`source`), an artifact it places (`placed`), the
   artifact its structured record makes (`record`, a GEDCOM object's
   un-held media item) or its mention of an artifact it only writes
-  about (`mention`, an enclosure), each counted, 0 included, and
+  about (`mention`, an enclosure), or the existing item a curator
+  confirmed one of those last two as (`confirmed`, #670), each counted,
+  0 included, and
   `other`, only when counted, for a subject validation would refuse
   (`aggregate.content.container_claims`: `captions`,
   `document_subject_by_property`, `document_subject_by_form`);

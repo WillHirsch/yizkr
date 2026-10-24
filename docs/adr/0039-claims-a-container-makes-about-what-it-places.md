@@ -39,6 +39,10 @@ settled by their leans; §10.1(c) adopts (c4): a source may also state a
 document-subject property about an artifact it only writes about, on its
 own mention item of it (an `unclassified_entity`), linked to the held
 scan later.
+Amended by #670 (2026-10-24; the owner's decision on #670): a curator's
+confirmation that such a mention, or the artifact a structured record
+makes, is an existing item takes its document-subject claims onto that
+item (§10.1(c), "A confirmed mention or record's artifact").
 
 Revised 2026-10-16 on the owner's direction on #517, quoted: "Wait, are
 these fields about a source's relevance to its container, or independent
@@ -812,6 +816,42 @@ own mention item of the enclosure, cited to the source with its passage;
 a curator, or later artifact matching (#162), links that mention item
 to the held scan. The rule admits forms (a), (b) and (c4).
 
+**A confirmed mention or record's artifact** (#670; owner decision,
+2026-10-24: "yes, a confirmed mention takes its document-subject claims
+onto the existing item"). A curator who confirms that a batch's entity
+is an existing item (an approved equivalence:
+`reconcile.apply_equivalences` sets the entity record's `qid` and turns
+its local refs into that QID) links it as this section says. When the
+claim's subject before confirmation was a (c4) mention or a (b)
+record's artifact, the confirmed item is its subject, and the claim is
+written there, cited to the source with its passage, as a confirmed
+person match moves a document's claims onto the existing person. So
+the 1958 letter's `main_subject` → Rudolf's death, on its mention of the
+enclosed death certificate, goes onto the held scan
+death-certificate-1941 once a curator confirms the mention is that
+scan's item.
+
+- The subject form is `confirmed` (`claims.CONFIRMED_FORM`): a QID
+  subject for which the claim's batch holds at least one entity record
+  with that `qid`, every one of them of an artifact kind or an
+  `unclassified_entity` (`claims.confirmed_kinds`,
+  `claims.confirmed_subject`). Validation (`claims.subject_problems`)
+  and the writer (`writer.subject_refusal`) take it, and no other QID
+  subject: a QID named outright, one a person, place or event was
+  confirmed as, or one both a mention and an entity of another kind
+  were confirmed as (what the claim's subject was is then unknown) is
+  refused, failing closed.
+- It is held to (c4)'s and (b)'s other rules: a claim of this form
+  carries the passage that conveys it as its excerpt (§10.4).
+- An approved local id that no entity record holds leaves no record of
+  what its subject was, so its claims are refused.
+- The run report counts it (`container_claims.document_subject_by_form`:
+  `confirmed`).
+- It arises only from the keeper run on, since scratch runs confirm no
+  matches. Such a claim, on a held scan and stated in another document,
+  then falls under the export's SHA-1 rule (`backup.placed_subject_rule`,
+  §10.5) and is left out of the non-privileged export, failing closed.
+
 #### 10.2 Coexistence, disagreement and display
 
 - These claims stand beside the artifact's own, each with its own
@@ -1052,6 +1092,9 @@ to the held scan. The rule admits forms (a), (b) and (c4).
   whose entity a curator approves as an existing item is refused by
   validation and the writer from then on. Whether an approval should be
   read as the link §10.1(c) names is an owner question (#661).
+  Settled by #670, 2026-10-24: yes; the confirmed item is a subject of
+  its own form, `confirmed` (§10.1(c), "A confirmed mention or record's
+  artifact").
 - **The interim exception is gone**: `claims.STRUCTURED_ADAPTERS`,
   `GEDCOM_ADAPTER`, `structured_batch` and the `structured` argument;
   `gedcom.ADAPTER_IDENTIFIER` keeps its value, "gedcom-adapter".
@@ -1084,7 +1127,8 @@ to the held scan. The rule admits forms (a), (b) and (c4).
   the entities block labels with its type hint.
 - **The report** counts the document-subject claims by subject form
   (`container_claims.document_subject_by_form`: `source`, `placed`,
-  `record`, `mention`, and `other` for a subject validation refuses).
+  `record`, `mention`, and `other` for a subject validation refuses;
+  `confirmed` too, from #670).
 - **The export** (question 9) leaves out whole, at any rank, a
   document-subject statement whose subject carries a `media SHA-1` and
   one of whose references is `stated in` another item, or whose subject

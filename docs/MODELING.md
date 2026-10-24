@@ -392,6 +392,21 @@ approved equivalence turns a local subject into a QID reference, which
 no subject form takes, so a document-subject claim on a mention or
 media item a curator approves as an existing item is refused from then
 on (an owner question, #661).
+Widened by #670 (2026-10-24, the owner's decision; ADR-0039 §10.1(c)):
+a curator's confirmation is the link (c4) names. When a document-subject
+claim's subject before confirmation was a mention (an
+`unclassified_entity`) or the artifact a structured record makes (an
+entity of an artifact kind), the existing item a curator confirms it as
+is its subject: the claim is written there, cited to its source with its
+passage, so the 1958 letter's `main_subject` of the death certificate
+it encloses goes onto the held scan death-certificate-1941. Validation
+and the writer read what the subject was from the batch's entity
+records carrying that QID (`qid`, set by the approved equivalence),
+and accept it only when there is at least one and each is of one of
+those kinds; any other QID subject stays refused. The run report counts
+these claims as the `confirmed` form. They arise only from the keeper
+run on, and the non-privileged export leaves them out, since their
+subject is a held scan stated in another document.
 
 **A retired property** stays in the instance and takes no new claim: it
 accepts nothing, validation refuses every claim of it, and no prompt that

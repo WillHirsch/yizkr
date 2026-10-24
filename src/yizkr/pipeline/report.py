@@ -123,6 +123,7 @@ from pathlib import Path
 from typing import Any, get_args
 
 from yizkr.claims import (
+    CONFIRMED_FORM,
     CONTAINER_REASONS,
     MENTION_FORM,
     MENTION_KIND,
@@ -134,6 +135,7 @@ from yizkr.claims import (
     JudgementNote,
     PersonStructure,
     PlaceStructure,
+    confirmed_subject,
     load_vocabulary,
 )
 from yizkr.model.schema import load_acceptance
@@ -2871,11 +2873,17 @@ def _subject_forms(claims: list[dict], entities: list[dict]) -> Counter:
     artifact the source places, which validation let through; a local
     subject is the artifact a structured record makes when its kind
     (its entity's, or its own `instance_of`) is an artifact kind, and the
-    source's mention of an artifact when it is an unclassified entity. A
-    subject of any other form, which validation refuses, is `other`. The
-    counts name no document."""
+    source's mention of an artifact when it is an unclassified entity; a
+    QID subject is the existing item a curator confirmed one of those as
+    when the batch's entities with that `qid` are all of those kinds
+    (claims.confirmed_subject). A subject of any other form, which
+    validation refuses, is `other`. The counts name no document."""
     acceptance = load_acceptance()
     kinds = {_text(e.get("id")): _text(e.get("kind")) for e in entities if e}
+    confirmed: dict[str, set[str | None]] = {}
+    for entity in entities:
+        if entity and (qid := _text(entity.get("qid"))):
+            confirmed.setdefault(qid, set()).add(_text(entity.get("kind")))
     forms: Counter = Counter()
     for claim in claims:
         if _text(claim.get("property")) not in acceptance.document_subjects:
@@ -2899,6 +2907,10 @@ def _subject_forms(claims: list[dict], entities: list[dict]) -> Counter:
                 if kind == MENTION_KIND
                 else "other"
             )
+        elif subject.get("kind") == "qid" and confirmed_subject(
+            confirmed.get(_text(subject.get("qid")), ()), acceptance
+        ):
+            form = CONFIRMED_FORM
         else:
             form = "other"
         forms[form] += 1
@@ -2916,8 +2928,9 @@ def _container_claims(
     claims by property (`document_subject`), and those claims by the form
     of their subject (claims.SUBJECT_FORMS, ADR-0039 §10.1): about the
     source itself, an artifact it places, the artifact its structured
-    record makes, or its mention of an artifact it only writes about
-    (each counted, 0 included), and `other` for any other subject. The
+    record makes, its mention of an artifact it only writes about, or
+    the existing item a curator confirmed either of those two as (each
+    counted, 0 included), and `other` for any other subject. The
     properties are the manifest's own, so the counts name no document."""
     acceptance = load_acceptance()
     return {
@@ -2949,6 +2962,7 @@ SUBJECT_FORM_NAMES = {
     PLACED_FORM: "an artifact it places",
     RECORD_FORM: "an artifact its record makes",
     MENTION_FORM: "an artifact it mentions",
+    CONFIRMED_FORM: "an item its mention or record is confirmed as",
     "other": "other",
 }
 

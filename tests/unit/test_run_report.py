@@ -4074,6 +4074,13 @@ class TestWhatSourcesSayOfArtifacts:
                 "label": "death certificate",
                 "kind": "unclassified_entity",
             },
+            # a mention a curator confirmed as an existing item (#670)
+            {
+                "id": "u2",
+                "label": "photograph",
+                "kind": "unclassified_entity",
+                "qid": "Q42",
+            },
         ]
         view["claims"] += [
             claim("e1", "caption", "Wastl to Klara, July 1939.", CERT),
@@ -4091,6 +4098,11 @@ class TestWhatSourcesSayOfArtifacts:
             {
                 **claim("e1", "main_subject", "seine Sterbeurkunde", CERT),
                 "subject": {"kind": "local", "local_id": "u1"},
+            },
+            # the item a curator confirmed its mention as (#670)
+            {
+                **claim("e1", "inception", "1912", CERT),
+                "subject": {"kind": "qid", "qid": "Q42"},
             },
             # a subject of no form validation lets through
             claim("e1", "author", "Wastl", CERT),
@@ -4113,7 +4125,7 @@ class TestWhatSourcesSayOfArtifacts:
             "captions": 1,
             "document_subject_by_property": {
                 "author": 1,
-                "inception": 2,
+                "inception": 3,
                 "main_subject": 1,
                 "shows": 1,
             },
@@ -4122,6 +4134,7 @@ class TestWhatSourcesSayOfArtifacts:
                 "placed": 1,
                 "record": 1,
                 "mention": 1,
+                "confirmed": 1,
                 "other": 1,
             },
         }
@@ -4146,10 +4159,11 @@ class TestWhatSourcesSayOfArtifacts:
         text = render_markdown(counted["aggregate"])
         assert (
             "Captions given, a container's words about an image it places: "
-            "1. Claims of what an artifact is, by property: inception 2, "
+            "1. Claims of what an artifact is, by property: inception 3, "
             "author 1, main_subject 1, shows 1; by their subject: the "
             "source itself 1, an artifact it places 1, an artifact its "
-            "record makes 1, an artifact it mentions 1, other 1."
+            "record makes 1, an artifact it mentions 1, an item its "
+            "mention or record is confirmed as 1, other 1."
         ) in text
         assert "Rejects by reason: placed_subject 2, other 1, schema 1" in (
             text
