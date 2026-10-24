@@ -102,10 +102,17 @@ def item(ref: dict) -> dict:
 
 
 def time_value(date: u.Date) -> dict:
-    """`date` as a time value at its own precision: the claim's precision
-    defaults to the finest field given."""
+    """`date` as a time value at its own precision, decade included. A
+    range ("between") needs earliest and latest qualifiers, which this
+    fixture does not write, so it is refused rather than narrowed."""
+    if date.qualifier == "between":
+        raise ValueError(f"a range is no single time value: {date}")
     parts = {"year": date.year, "month": date.month, "day": date.day}
-    return {"type": "time", **{k: v for k, v in parts.items() if v}}
+    return {
+        "type": "time",
+        **{k: v for k, v in parts.items() if v},
+        "precision": date.precision,
+    }
 
 
 def fixture_batch(
