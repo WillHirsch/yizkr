@@ -220,12 +220,9 @@ Pairs:
 
 def date_text(value: TimeValue) -> str:
     """A date at the precision its source states, as the site renders it
-    (``core.dates.time_text``): a decade as "the 1830s", a century as "the
-    19th century", a year, a month or a day; never a first year."""
-    stamp, precision = dates.time_stamp(value)
-    return dates.time_text(
-        stamp, precision, "a date an adjudication prompt shows"
-    )
+    (``core.dates.claim_time_text``): a decade as "the 1830s", a century as
+    "the 19th century", a year, a month or a day; never a first year."""
+    return dates.claim_time_text(value, "a date an adjudication prompt shows")
 
 
 def record_line(entity: EntityRecord) -> str:
@@ -756,7 +753,7 @@ def stage_key(
 def code_digest() -> str:
     """The SHA-256 of what renders and reads the calls: this module's
     source, and the date formatters it renders dates with (the claim
-    date's stamp and precision, and the site's formatter)."""
+    date's stamp, precision and span rule, and the site's formatter)."""
     from yizkr import claims, staticsite
 
     return sha256_text(
@@ -768,8 +765,10 @@ def code_digest() -> str:
                 "dates": sha256_text(
                     inspect.getsource(staticsite.format_time)
                     + inspect.getsource(staticsite.ordinal)
+                    + inspect.getsource(dates.claim_time_text)
                     + inspect.getsource(dates.time_stamp)
                     + inspect.getsource(dates.time_text)
+                    + repr(dates.SPAN_PRECISIONS)
                     + repr(sorted(claims.WIKIBASE_PRECISION.items()))
                 ),
             }

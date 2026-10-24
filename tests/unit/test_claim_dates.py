@@ -21,7 +21,12 @@ from yizkr.claims import (
     SourceReference,
     TimeValue,
 )
-from yizkr.core.dates import claim_time_text, time_stamp, time_text
+from yizkr.core.dates import (
+    UnsupportedDate,
+    claim_time_text,
+    time_stamp,
+    time_text,
+)
 from yizkr.pipeline.adjudication import date_text
 from yizkr.pipeline.extract import run_metadata
 from yizkr.pipeline.reconcile import entity_facts
@@ -156,6 +161,32 @@ def test_every_reader_renders_a_date_alike(time, stamp, precision, shown):
     assert facts_of(value) == f"date_of_birth: {shown}"
 
 
+@pytest.mark.parametrize(
+    "fields, why",
+    [
+        ({"year": 0}, "before the common era"),
+        ({"year": -1836}, "before the common era"),
+        ({"year": 1919, "calendar": "julian"}, "is not the Gregorian"),
+    ],
+    ids=["year-0", "bce", "julian"],
+)
+def test_each_reader_refuses_an_unsupported_date_naming_itself(fields, why):
+    # validation refuses these; a value built without it (a
+    # model_construct) is refused where it is rendered (ADR-0034)
+    value = TimeValue.model_construct(**{"calendar": "gregorian", **fields})
+    readers = [
+        (date_text, "a date an adjudication prompt shows: "),
+        (sheet_value, "a date the review sheet shows: "),
+        (facts_of, "a batch date: "),
+        (lambda value: claim_time_text(value, "a date"), "a date: "),
+    ]
+    for render, where in readers:
+        with pytest.raises(UnsupportedDate) as refused:
+            render(value)
+        assert str(refused.value).startswith(where), where
+        assert why in str(refused.value)
+
+
 def test_the_sheet_and_reconcile_render_a_date_without_adjudication():
     # the adjudication stage imports clustering, orchestrate and llm; the
     # review sheet and the reconcile roster need none of them for a date
@@ -164,10 +195,22 @@ import sys
 from yizkr.claims import TimeValue
 from yizkr.pipeline.review import sheet_value
 from yizkr.pipeline import reconcile
+from yizkr.claims import (
+    ArtifactRef, Claim, ClaimBatch, LocalRef, SourceReference,
+)
+from yizkr.pipeline.extract import run_metadata
 value = TimeValue(year=1830, precision="decade")
 assert sheet_value(value) == "the 1830s"
-from yizkr.claims import ClaimBatch
-reconcile.entity_facts(ClaimBatch.model_construct(claims=[]), "e1")
+claim = Claim(
+    subject=LocalRef(local_id="e1", label="Gustav Löbig"),
+    property="date_of_birth",
+    value=value,
+    source=SourceReference(
+        artifact=ArtifactRef.from_bytes(b"fictional scan: a register")
+    ),
+)
+batch = ClaimBatch(extraction_run=run_metadata("fake-model"), claims=[claim])
+assert reconcile.entity_facts(batch, "e1") == "date_of_birth: the 1830s"
 loaded = sorted(
     name for name in sys.modules
     if name in (

@@ -1141,9 +1141,14 @@ class TestStage:
         def time_text(value, precision, where):
             return value
 
+        def claim_time_text(value, where):
+            return str(value.year)
+
         for name, replacement in (
+            ("claim_time_text", claim_time_text),
             ("time_stamp", time_stamp),
             ("time_text", time_text),
+            ("SPAN_PRECISIONS", (7,)),
         ):
             monkeypatch.setattr(dates, name, replacement)
             assert adjudication.code_digest() != digest, name
