@@ -869,11 +869,12 @@ artifact a new QID, changes neither.
   needs no date of death to sit on.)
 - **A death stated without a date is an unknown value** (ADR-0040 §2.2,
   §2.3).
-  - A `date of death` of unknown value (Wikibase "some value") is given
-    where a source says the person died and gives no date for that
-    death, and that source's statement of the death gives no other death
-    claim. Examples: a GEDCOM `1 DEAT Y`; "the late" ("der selige",
-    "покойного"), in a dated document too (ADR-0040's Q5).
+  - A source that states a death but not its date gives a `date of
+    death` of unknown value (Wikibase "some value"), beside any place,
+    cause or age it gives. Examples: a GEDCOM `1 DEAT Y`; "the late"
+    ("der selige", "покойного"), in a dated document too (ADR-0040's
+    Q5). The one exception: a widow's or widower's marker that names the
+    late spouse gives no death statement for them (ADR-0040 §2.5).
   - `place of burial` takes an unknown value for a burial stated without
     its place (ADR-0040's Q3).
   - An unknown value carries no date qualifiers, and an excerpt that
@@ -882,21 +883,23 @@ artifact a new QID, changes neither.
     unknown value.
   - A marker adds nothing where the same source dates the death itself.
 - **"Died by" dates are derived, never stored** (ADR-0040 §2.4, its Q5).
-  One shared derivation works them out when a view is built:
-  - The late spouse of a stated union end died no later than the date
-    at which the same marker presents the survivor as widowed (its Q7).
-    The burial register gives Cäcilie "died by 16 March 1909", at
-    Eugen's widowhood. The 1958 letter gives Rudolf "died by 25 December
-    1958", at Nina's, beside the certificate's 6 March 1941; the two
-    differ only in resolution.
-  - A death statement of no date (an unknown value, or a place, cause,
-    age or burial with no dated death from the same source) died no
-    later than its document's own date. A hypothetical dated postcard's
-    "der selige Felix", whose date is "before 19 August 1938", gives
-    Felix "died by 19 August 1938".
-  - Each bound is the latest date that any non-deprecated statement of
-    that date allows (a `point_in_time` with its `latest_date`, or every
-    `inception` of the document), at its precision and never narrower.
+  One shared derivation works them out when a view is built, as one
+  rule: a death statement with no date is bounded by its document's own
+  date; a stated widowhood date replaces it for the late spouse; neither
+  is ever narrower than the date it comes from; an undated or
+  open-ended document gives no bound.
+  - A hypothetical dated postcard's "der selige Felix", whose date is
+    "before 19 August 1938", gives Felix "died by 19 August 1938".
+  - The burial register gives Cäcilie "died by 16 March 1909", at
+    Eugen's widowhood (its Q7). The 1958 letter gives Rudolf "died by 25
+    December 1958", at Nina's, beside the certificate's 6 March 1941;
+    the two differ only in resolution.
+  - "Never narrower": the bound is the latest date that any
+    non-deprecated statement of that date allows (a `point_in_time` with
+    its `latest_date`, or every `inception` of the document), at its
+    precision.
+  - The derivation reads only `date of death` statements and union
+    ends. A burial gives no "died by".
   - A derived date is labelled as derived, stores nothing, is never
     written, and is never death evidence of its own.
 - Ambiguous date formats (07-01-1919: 7 January or July 1?) must not be
@@ -936,9 +939,8 @@ artifact a new QID, changes neither.
     every death property.
   - Its `point_in_time` is the burial's own date as the source gives it
     ("Beerdigt: 20. März 1909"), never the document's date. No `date of
-    death` is derived from the burial's own date; a burial with no date
-    is bounded by its document's date, as any death statement of no date
-    is (ADR-0040 §2.4).
+    death` and no "died by" date is derived from a burial (ADR-0040
+    §2.4).
   - A burial stated without its place gives a `place of burial` of
     unknown value, dated where dated.
 
@@ -1564,12 +1566,14 @@ primitive network and the *same* term set describes any pair:
     "a death's principal is never also its informant" goes.
   - A person who only certifies, registers, officiates, examines,
     reports or witnesses is left out, unless the same record gives them
-    another role (kin of someone it is about, or a party to it). The
-    rule covers a record's apparatus and persons only: organizations
-    stay `issued_by` or `carried_out_by`. A wedding's registrar and
-    non-kin witnesses are left out; a kin witness or officiant stays,
-    with that role. A person given only by the role in which they report
-    or certify, with no name ("Informant: husband"), is not made.
+    another role (kin of someone it is about, or a party to it). A
+    wedding's registrar and non-kin witnesses are left out; a kin
+    witness or officiant stays, with that role.
+  - Lean-only: the rule covers a record's apparatus (certificates,
+    registers, forms) and persons only, so organizations stay
+    `issued_by` or `carried_out_by`, and a doctor whom a letter names
+    stays. A person given only by the role in which they report or
+    certify, with no name ("Informant: husband"), is not made.
   - The GEDCOM adapter makes no death event.
   - Roles stay for the other events and for unions.
 - **A parent's kind** (ADR-0040 §4).
