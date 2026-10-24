@@ -355,8 +355,10 @@ expects it and why:
   set aside falling and its readings rising). A baseline from before
   #611 counts both among `set_aside_reasons` and `set_aside_by_reason`
   and has no readings figure, so the first run after it shows
-  `set_aside_reasons` falling by its readings and `readings` absent in
-  the baseline;
+  `set_aside_reasons` falling by the baseline's `dropped` and
+  `read as text`, and `set_aside_by_reason.dropped` and
+  `set_aside_by_reason.read as text` falling to 0, with `readings` and
+  `readings_by_reason.*` absent in the baseline;
   place containers dropped up (`content.records.containers_dropped`, by
   reason in `containers_dropped_by_reason`, `malformed` among them since
   #607) where the change does not touch what the manifest gives as a

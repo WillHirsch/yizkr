@@ -313,9 +313,8 @@ HOLDS = frozenset(
 REQUESTERS = frozenset({"operator", "monitor", "anomaly"})
 ACTIONS = frozenset({"pause", "resume", "abort"})
 FALLBACK_TIERS = frozenset({"manifest", "segmentation"})
-# the leading labels of the reasons an extraction sets a mention record
-# aside by (ADR-0035 §5): claims.set_aside_structure's `schema` and
-# claims.structure_problems' own
+# the leading labels of the reasons claims.set_aside_structure (`schema`)
+# and claims.structure_problems set a mention record aside by (ADR-0035 §5)
 SET_ASIDE_REASONS = frozenset(
     {
         "schema",
