@@ -385,7 +385,7 @@ class TestNoNetwork:
         import requests
 
         with pytest.raises(conftest.NetworkRefused) as refused:
-            requests.get("http://wiki.invalid/w/api.php", timeout=5)
+            requests.get("http://wiki.invalid/w/api.php")
         assert not isinstance(refused.value, OSError)
         assert request.node.nodeid in str(refused.value)
         assert "getaddrinfo('wiki.invalid'" in str(refused.value)
