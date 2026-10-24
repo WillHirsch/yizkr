@@ -308,6 +308,15 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   `document_subject_by_property`);
 - zero-claim documents, by kind, and batches with no entity; the chunks
   and the fallback tiers taken;
+- trailing commas read as JSON syntax (#654): a single trailing comma
+  before a closing `]` or `}` in an entity manifest or a chunk's answer,
+  which the extraction reads past and counts (`coverage.json`'s
+  `trailing_commas`), summed over the extractions, with the extractions
+  that read one and, counted apart, never as zero, those whose coverage
+  predates the count (`aggregate.content.trailing_commas`: `read`,
+  `documents`, `absent`). A document's own count is in `report.json`
+  and its drill-down in `report.html` (`coverage.trailing_commas`, null,
+  and "not counted", for a coverage that predates it);
 - mention records and judgement notes, summed from each extraction's
   `coverage.json` (ADR-0035 §4, §5, #420): the mention records given,
   and those by label status (`name`, `role`, `kinship`, `courtesy`,

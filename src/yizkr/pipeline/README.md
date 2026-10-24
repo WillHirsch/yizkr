@@ -137,6 +137,17 @@ manifest that names no entity (an empty list) is such an answer, taken at
 once: no second attempt, no segmentation and no fallback tier, and the
 reason reads "the entity manifest names no entity".
 
+The readers of the entity manifest and of the chunks' answers
+(`extract.scan_json_answer`) read a single trailing comma directly
+before a closing `]` or `}`, outside any string, as JSON syntax: the
+object decodes as it would without the comma, and `coverage.json`
+counts each one so read (`trailing_commas`: those of the manifest the
+extraction used and of each chunk's accepted answer). It is a syntax
+slip, not a content repair: no value is added, changed or guessed. Any
+other defect still leaves the object unread: two commas, a comma before
+a value or after a key, a missing comma, a mismatched closer. The other
+stages' readers (`extract.scan_json_objects`) read no trailing comma.
+
 State for each document lives in `var/runs/<folder>/<doc>/`: its views
 (`transcription.json`, `batch.json`, `critique.json`, and the extractor's
 coverage, rejects and gaps under `extraction/`) and the files the later

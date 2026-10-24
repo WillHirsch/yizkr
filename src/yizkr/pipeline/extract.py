@@ -33,7 +33,7 @@ from collections.abc import Collection, Iterable, Mapping
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import yizkr
 from yizkr.claims import (
@@ -308,32 +308,120 @@ def _ask_git_for_commit() -> str | None:
     return commit if result.returncode == 0 and commit else None
 
 
+class JsonScan(NamedTuple):
+    """What scan_json_answer reads from an answer: its objects, as
+    scan_json_objects gives them, and how many trailing commas it read as
+    JSON syntax to decode them."""
+
+    objects: list[dict]
+    trailing_commas: int
+
+
 def scan_json_objects(response: str) -> list[dict]:
     """Every JSON object decodable from model output, in order.
 
     Tolerates code fences, surrounding prose, NDJSON, and corrupt
     regions (scanning resumes after any undecodable span). Objects
     nested inside a decoded object are not yielded separately."""
+    return _scan(response, read_trailing_commas=False).objects
+
+
+def scan_json_answer(response: str) -> JsonScan:
+    """The objects of an answer as scan_json_objects reads them, but with
+    a single trailing comma directly before a closing `]` or `}`, outside
+    any string and with only whitespace between, read as JSON syntax, and
+    each one so read counted. The comma is the only thing read past: two
+    commas, a comma before a value or after a key, a missing comma or any
+    other defect still leaves the span undecodable, and no value is
+    added, changed or guessed."""
+    return _scan(response, read_trailing_commas=True)
+
+
+def _scan(response: str, *, read_trailing_commas: bool) -> JsonScan:
     text = response.strip()
     fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.S)
     if fenced:
         text = fenced.group(1)
     decoder = json.JSONDecoder()
     objects: list[dict] = []
+    commas = 0
     index = 0
     while True:
         start = text.find("{", index)
         if start == -1:
             break
         try:
-            obj, end = decoder.raw_decode(text, start)
+            if read_trailing_commas:
+                obj, end, text, read = _decode_past_trailing_commas(
+                    decoder, text, start
+                )
+                commas += read
+            else:
+                obj, end = decoder.raw_decode(text, start)
         except json.JSONDecodeError:
             index = start + 1
             continue
         if isinstance(obj, dict):
             objects.append(obj)
         index = end
-    return objects
+    return JsonScan(objects, commas)
+
+
+def _decode_past_trailing_commas(
+    decoder: json.JSONDecoder, text: str, start: int
+) -> tuple[Any, int, str, int]:
+    """(value, end, text, commas read): the value decoded at `start`, with
+    each trailing comma the decoder stops at blanked to a space, so every
+    position stands, and the text it was decoded from. The decoder stops
+    either at the comma or at the bracket after it, depending on the
+    Python version; either way the stop is outside any string, the comma
+    must have only whitespace before the closing bracket or brace and a
+    value before it (not a comma, `[`, `{` or `:`), and the value must
+    then decode whole. Raises json.JSONDecodeError otherwise."""
+    read = 0
+    while True:
+        try:
+            obj, end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError as exc:
+            comma = _trailing_comma(text, exc.pos)
+            if comma is None:
+                raise
+            text = f"{text[:comma]} {text[comma + 1 :]}"
+            read += 1
+            continue
+        return obj, end, text, read
+
+
+def _trailing_comma(text: str, stop: int) -> int | None:
+    """The index of the trailing comma the decoder stopped at, at `stop`
+    or just before it, or None when it stopped for anything else."""
+    if stop >= len(text):
+        return None
+    if text[stop] == ",":
+        closer = _skip_space(text, stop + 1, 1)
+        if closer is None or text[closer] not in "]}":
+            return None
+        comma = stop
+    elif text[stop] in "]}":
+        comma = _skip_space(text, stop - 1, -1)
+        if comma is None or text[comma] != ",":
+            return None
+    else:
+        return None
+    before = _skip_space(text, comma - 1, -1)
+    if before is None or text[before] in ",[{:":
+        return None
+    return comma
+
+
+def _skip_space(text: str, index: int, step: int) -> int | None:
+    """The first index from `index`, moving by `step`, whose character is
+    not JSON whitespace, or None when the text ends first."""
+    while 0 <= index < len(text):
+        if text[index] not in " \t\n\r":
+            return index
+        index += step
+    return None
 
 
 def _parse_response(response: str) -> dict:

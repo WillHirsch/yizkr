@@ -342,6 +342,16 @@ reason (`rejected_by_reason`: each code of `claims.REJECT_REASONS` that
 a reject gives, such as `placed_subject` for a caption whose subject is
 no artifact its source places; ADR-0039), for the run report.
 
+Amended by #654 (2026-10-24): the readers of the entity manifest and of
+the chunks' answers read a single trailing comma directly before a
+closing `]` or `}`, outside any string and with only whitespace
+between, as JSON syntax, and `coverage.json` counts each one so read
+(`trailing_commas`: the manifest the extraction used, and each chunk's
+accepted answer). No value is added, changed or guessed; any other JSON
+defect (two commas, a comma before a value, a missing comma) still
+leaves its object unread, as before. A manifest refused only for such a
+comma no longer spends its second attempt.
+
 ### 7. Strategy selection and CLI surface
 
     yizkr ingest extract ... --strategy auto|single|chunked
