@@ -55,6 +55,7 @@ from yizkr.backup import (
 )
 from yizkr.claims import (
     ArtifactRef,
+    Claim,
     ClaimBatch,
     QidRef,
     artifact_kind_problems,
@@ -75,6 +76,7 @@ from yizkr.pipeline.extract import (
     DOCUMENT_ITSELF,
     PLACED_ARTIFACTS,
     ClaimFileExtractor,
+    cite_artifact,
     document_block,
     salvage_valid_claims,
 )
@@ -235,12 +237,11 @@ class TestTheSubjectForms:
     @pytest.mark.parametrize(
         ("confirmed", "form"),
         [
-            ({"unclassified_entity"}, "confirmed"),
-            ({"photograph"}, "confirmed"),
-            ({"unclassified_entity", "photograph"}, "confirmed"),
-            (set(), None),
-            ({"human"}, None),
-            ({"unclassified_entity", "human"}, None),
+            ("unclassified_entity", "confirmed"),
+            ("photograph", "confirmed"),
+            (None, None),
+            ("human", None),
+            ("artifact_fragment", None),
         ],
     )
     def test_a_confirmed_item_is_named_by_what_it_was(self, confirmed, form):
@@ -398,24 +399,128 @@ class TestAConfirmedMention:
         (refusal,) = pre_plan_refusals(confirmed, {}).values()
         assert refusal[0] == "subject_rule"
 
-    def test_a_mention_confirmed_with_a_person_as_one_item_is_refused(self):
-        # the curator confirms both the mention and a person as one item,
-        # so what the claim's subject was is unknown
+    def test_a_qid_named_outright_stays_refused_beside_a_confirmation(self):
+        """A claim that named the item by its QID before any confirmation
+        records no local subject, so another entity's confirmation as that
+        item does not make it a document subject, through a round trip
+        and a second pass."""
+        outright = claim(
+            "inception",
+            JULY_28,
+            {"kind": "qid", "qid": "Q41"},
+            source=LETTER_1958_REF,
+            excerpt=ENCLOSING,
+            page=None,
+            language="ru",
+        )
         confirmed = self.confirmed(
             enclosure(),
-            entities=[
-                CERTIFICATE,
-                DEATH,
-                {"id": "p1", "label": "Rudolf Löbig", "kind": "human"},
-            ],
-            approved={"u1": "Q41", "p1": "Q41"},
+            outright,
+            entities=[CERTIFICATE, DEATH],
+            approved={"u1": "Q41"},
+        )
+        again = apply_equivalences(
+            ClaimBatch.model_validate_json(confirmed.model_dump_json()),
+            {"u1": "Q41"},
+        )
+        for resolved in (confirmed, again):
+            (problem,) = validate_against_manifest(resolved)
+            assert problem.startswith("claims[1].subject")
+            assert problem.endswith("[document_subject]")
+            assert list(pre_plan_refusals(resolved, {})) == [1]
+
+    def test_the_record_survives_a_round_trip_and_a_second_pass(self):
+        confirmed = self.confirmed(
+            enclosure(), entities=[CERTIFICATE, DEATH], approved={"u1": "Q41"}
+        )
+        (former,) = (claim.confirmed_from for claim in confirmed.claims)
+        assert (former.local_id, former.instance_of) == (
+            "u1",
+            "unclassified_entity",
+        )
+        again = apply_equivalences(
+            ClaimBatch.model_validate_json(confirmed.model_dump_json()),
+            {"u1": "Q41"},
+        )
+        assert again.claims[0].confirmed_from == former
+        assert validate_against_manifest(again) == []
+        assert pre_plan_refusals(again, {}) == {}
+
+    def test_a_manifest_free_mention_keeps_its_claim(self):
+        """A batch with no entity manifest names its mention by the ref's
+        own `instance_of`, which the record keeps."""
+        confirmed = self.confirmed(
+            enclosure(), entities=(), approved={"u1": "Q41"}
+        )
+        assert confirmed.claims[0].confirmed_from.instance_of == (
+            "unclassified_entity"
+        )
+        assert validate_against_manifest(confirmed) == []
+        assert pre_plan_refusals(confirmed, {}) == {}
+
+    def test_a_record_confirmed_as_another_item_is_refused(self):
+        confirmed = self.confirmed(
+            enclosure(), entities=[CERTIFICATE, DEATH], approved={"u1": "Q41"}
+        )
+        moved = confirmed.model_copy(
+            update={
+                "entities": [
+                    entity.model_copy(update={"qid": "Q43"})
+                    if entity.id == "u1"
+                    else entity
+                    for entity in confirmed.entities
+                ]
+            }
         )
         assert any(
             p.endswith("[document_subject]")
-            for p in validate_against_manifest(confirmed)
+            for p in validate_against_manifest(moved)
         )
-        (refusal,) = pre_plan_refusals(confirmed, {}).values()
+        (refusal,) = pre_plan_refusals(moved, {}).values()
         assert refusal[0] == "subject_rule"
+
+    def test_an_extraction_cannot_give_the_record(self):
+        given = {
+            **enclosure(),
+            "confirmed_from": local("u1", "death certificate", "photograph"),
+        }
+        (cited,) = cite_artifact([given], LETTER_1958_REF)
+        assert "confirmed_from" not in cited
+        assert "confirmed_from" not in json.dumps(Claim.model_json_schema())
+
+    def test_a_claim_without_the_record_serialises_as_before(self):
+        (plain,) = batch(enclosure()).claims
+        assert "confirmed_from" not in plain.model_dump_json()
+
+    def test_claims_two_confirmations_make_one_are_kept_once(self):
+        twin = {
+            **enclosure(),
+            "subject": local("u2", "death certificate", "unclassified_entity"),
+        }
+        second = {**CERTIFICATE, "id": "u2"}
+        confirmed = self.confirmed(
+            enclosure(),
+            twin,
+            entities=[CERTIFICATE, second, DEATH],
+            approved={"u1": "Q41", "u2": "Q41"},
+        )
+        (kept,) = confirmed.claims
+        assert kept.confirmed_from.local_id == "u1"
+
+    def test_an_excerpt_the_instance_keeps_blank_is_refused(self):
+        blank = {
+            **enclosure(),
+            "source": {
+                "artifact": LETTER_1958_REF.model_dump(),
+                "transcription_excerpt": {"text": "\u180e", "language": "ru"},
+            },
+        }
+        confirmed = self.confirmed(
+            blank, entities=[CERTIFICATE, DEATH], approved={"u1": "Q41"}
+        )
+        ((reason, warning),) = pre_plan_refusals(confirmed, {}).values()
+        assert reason == "subject_rule"
+        assert "carries no excerpt" in warning
 
     def test_another_item_than_the_one_confirmed_is_refused(self):
         confirmed = self.confirmed(
@@ -467,6 +572,16 @@ class TestAConfirmedMention:
             == (result.created_items["d1"])
         )
         assert stated(about) == [(qids[LETTER_1958_REF.sha1], [])]
+        # the machine's claim also cites its extraction run (ADR-0003)
+        runs = [
+            snak.datavalue["value"]["id"]
+            for block in about.references.references
+            for snak in block.snaks.get(
+                PROPERTIES["inferred_from_extraction_run"]
+            )
+            or []
+        ]
+        assert runs == [result.run_qid]
         assert not wiki.wbi.item.get(qids[LETTER_1958_REF.sha1]).claims.get(
             "P96"
         )
@@ -957,6 +1072,56 @@ class TestTheManifestText:
 
 
 class TestTheReportForms:
+    def test_a_confirmed_subject_is_counted_from_its_own_record(self):
+        """The report counts a QID subject as `confirmed` only where the
+        claim records its own local subject, of a mention's or an
+        artifact kind, and that entity's record is confirmed as that QID
+        (#670)."""
+        from yizkr.pipeline import report
+
+        qid = {"kind": "qid", "qid": "Q41"}
+
+        def former(local_id: str, kind: str | None) -> dict:
+            return {"kind": "local", "local_id": local_id, "instance_of": kind}
+
+        entities = [
+            {**CERTIFICATE, "qid": "Q41"},
+            {"id": "p1", "label": "Rudolf", "kind": "human", "qid": "Q41"},
+            {**CERTIFICATE, "id": "u3", "qid": "Q43"},
+        ]
+        claims = [
+            # the mention confirmed as the item
+            {
+                **enclosure(),
+                "subject": qid,
+                "confirmed_from": former("u1", None),
+            },
+            # a manifest-free mention, by its own kind
+            {
+                **enclosure(),
+                "subject": qid,
+                "confirmed_from": former("u9", "unclassified_entity"),
+            },
+            # the QID named outright, though entities are confirmed as it
+            {**enclosure(), "subject": qid},
+            # a person confirmed as the item
+            {
+                **enclosure(),
+                "subject": qid,
+                "confirmed_from": former("p1", None),
+            },
+            # a mention whose record is confirmed as another item
+            {
+                **enclosure(),
+                "subject": qid,
+                "confirmed_from": former("u3", None),
+            },
+        ]
+        assert report._subject_forms(claims, entities) == {
+            "confirmed": 2,
+            "other": 3,
+        }
+
     def test_other_is_given_only_when_counted(self):
         from collections import Counter
 

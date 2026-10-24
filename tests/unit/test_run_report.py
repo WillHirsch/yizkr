@@ -4074,12 +4074,12 @@ class TestWhatSourcesSayOfArtifacts:
                 "label": "death certificate",
                 "kind": "unclassified_entity",
             },
-            # a mention a curator confirmed as an existing item (#670)
+            # a mention a curator confirms as an existing item, in the
+            # resolved batch below (#670)
             {
                 "id": "u2",
                 "label": "photograph",
                 "kind": "unclassified_entity",
-                "qid": "Q42",
             },
         ]
         view["claims"] += [
@@ -4099,15 +4099,35 @@ class TestWhatSourcesSayOfArtifacts:
                 **claim("e1", "main_subject", "seine Sterbeurkunde", CERT),
                 "subject": {"kind": "local", "local_id": "u1"},
             },
-            # the item a curator confirmed its mention as (#670)
+            # its mention of a photograph, which a curator confirms
+            {
+                **claim("e1", "inception", "1912", CERT),
+                "subject": {"kind": "local", "local_id": "u2"},
+            },
+            # subjects of no form validation lets through: a person, and
+            # an item named by its QID outright
+            claim("e1", "author", "Wastl", CERT),
             {
                 **claim("e1", "inception", "1912", CERT),
                 "subject": {"kind": "qid", "qid": "Q42"},
             },
-            # a subject of no form validation lets through
-            claim("e1", "author", "Wastl", CERT),
         ]
         (directory / "batch.json").write_text(json.dumps(view))
+        # the confirmation is saved in the resolved batch alone, as
+        # orchestrate writes it (DocumentRun.resolved)
+        resolved = json.loads(json.dumps(view))
+        for entity in resolved["entities"]:
+            if entity["id"] == "u2":
+                entity["qid"] = "Q42"
+        for made in resolved["claims"]:
+            if made["subject"] == {"kind": "local", "local_id": "u2"}:
+                made["subject"] = {"kind": "qid", "qid": "Q42"}
+                made["confirmed_from"] = {
+                    "kind": "local",
+                    "local_id": "u2",
+                    "instance_of": "unclassified_entity",
+                }
+        (directory / "batch.resolved.json").write_text(json.dumps(resolved))
         covered = directory / "extraction" / "coverage.json"
         counts = json.loads(covered.read_text())
         counts["rejected_by_reason"] = {
@@ -4125,7 +4145,7 @@ class TestWhatSourcesSayOfArtifacts:
             "captions": 1,
             "document_subject_by_property": {
                 "author": 1,
-                "inception": 3,
+                "inception": 4,
                 "main_subject": 1,
                 "shows": 1,
             },
@@ -4135,7 +4155,7 @@ class TestWhatSourcesSayOfArtifacts:
                 "record": 1,
                 "mention": 1,
                 "confirmed": 1,
-                "other": 1,
+                "other": 2,
             },
         }
 
@@ -4159,11 +4179,11 @@ class TestWhatSourcesSayOfArtifacts:
         text = render_markdown(counted["aggregate"])
         assert (
             "Captions given, a container's words about an image it places: "
-            "1. Claims of what an artifact is, by property: inception 3, "
+            "1. Claims of what an artifact is, by property: inception 4, "
             "author 1, main_subject 1, shows 1; by their subject: the "
             "source itself 1, an artifact it places 1, an artifact its "
             "record makes 1, an artifact it mentions 1, an item its "
-            "mention or record is confirmed as 1, other 1."
+            "mention or record is confirmed as 1, other 2."
         ) in text
         assert "Rejects by reason: placed_subject 2, other 1, schema 1" in (
             text

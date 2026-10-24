@@ -44,6 +44,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from yizkr.claims import (
+    Claim,
     ClaimBatch,
     EntityRecord,
     ItemValue,
@@ -1047,6 +1048,13 @@ def read_reviewed_aliases(path: Path) -> dict[str, list[str]]:
     return reviewed
 
 
+def collapse_key(claim: Claim) -> str:
+    """What two resolved claims share when apply_equivalences keeps them
+    once: all of their content but the local subject each records it
+    replaced (`Claim.confirmed_from`)."""
+    return claim.model_copy(update={"confirmed_from": None}).model_dump_json()
+
+
 def apply_equivalences(
     batch: ClaimBatch,
     approved: dict[str, str],
@@ -1055,7 +1063,12 @@ def apply_equivalences(
     """Rewrite approved entities to their existing items.
 
     Sets EntityRecord.qid (the writer appends the document's aliases to
-    that item) and replaces local refs with qid refs in every claim.
+    that item) and replaces local refs with qid refs in every claim. A
+    claim whose subject it replaces records that local subject as its
+    `confirmed_from`, its `instance_of` the entity's kind (its record's,
+    else the ref's own), so the subject rules can tell a confirmed
+    mention or record's artifact from a QID named outright (ADR-0039
+    §10.1(c)); a claim keeps one it already records.
     `reviewed_aliases` (from the CSV's aliases column) overrides an
     approved entity's alias list — what the reviewer pruned is never
     appended.
@@ -1066,8 +1079,19 @@ def apply_equivalences(
             return QidRef(qid=approved[ref.local_id])
         return ref
 
+    kinds = {entity.id: entity.kind for entity in batch.entities}
+
     def resolve_claim(claim):
         updates: dict = {"subject": resolve_ref(claim.subject)}
+        subject = claim.subject
+        if isinstance(subject, LocalRef) and subject.local_id in approved:
+            updates["confirmed_from"] = subject.model_copy(
+                update={
+                    "instance_of": kinds.get(
+                        subject.local_id, subject.instance_of
+                    )
+                }
+            )
         if isinstance(claim.value, ItemValue):
             updates["value"] = ItemValue(value=resolve_ref(claim.value.value))
         updates["qualifiers"] = [
@@ -1087,11 +1111,12 @@ def apply_equivalences(
     # two document entities approved to the SAME item (a source with
     # internally duplicated records) can leave byte-identical claims;
     # collapse them here, where identity collapses (the ADR-0006 merge
-    # invariant, applied post-equivalence)
+    # invariant, applied post-equivalence), keeping the first one's
+    # record of its local subject
     resolved_claims = []
     seen: set[str] = set()
     for claim in (resolve_claim(claim) for claim in batch.claims):
-        key = claim.model_dump_json()
+        key = collapse_key(claim)
         if key not in seen:
             seen.add(key)
             resolved_claims.append(claim)

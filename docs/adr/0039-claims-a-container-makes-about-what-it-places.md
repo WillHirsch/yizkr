@@ -838,22 +838,34 @@ certificate, goes onto the held scan
 death-certificate-1941 once a curator confirms the mention is that
 scan's item.
 
+- Each claim keeps its own pre-confirmation subject. When
+  `reconcile.apply_equivalences` replaces a claim's local subject with
+  the confirmed QID, it records that local ref on the claim
+  (`Claim.confirmed_from`), its `instance_of` set to the entity's kind:
+  its manifest record's, else the ref's own, so a manifest-free mention
+  keeps its kind. The record is kept through serialization and on later
+  equivalence passes. It is resolution state, never extraction output:
+  the prompts' JSON Schema leaves it out, `extract.cite_artifact` drops
+  it, and a claim without one serialises as before. Where two
+  confirmations collapse two claims into one, the first one's record is
+  kept.
 - The subject form is `confirmed` (`claims.CONFIRMED_FORM`): a QID
-  subject for which the claim's batch holds at least one entity record
-  with that `qid`, every one of them of an artifact kind or an
-  `unclassified_entity` (`claims.confirmed_kinds`,
-  `claims.confirmed_subject`). Validation (`claims.subject_problems`)
-  and the writer (`writer.subject_refusal`) take it, and no other QID
-  subject: a QID named outright, one a person, place or event was
-  confirmed as, or one both a mention and an entity of another kind
-  were confirmed as (what the claim's subject was is then unknown) is
-  refused, failing closed.
+  subject whose claim records a local subject of an artifact kind or an
+  `unclassified_entity` (`claims.confirmed_kind`). Where the batch holds
+  that entity's record, the kind is the record's, and the record must be
+  confirmed as the same QID. Validation (`claims.subject_problems`) and
+  the writer (`writer.subject_refusal`) take it, and no other QID
+  subject: a claim that named a QID outright records no local subject
+  and stays refused, however many entities are later confirmed as that
+  item; so do a claim whose subject was a person, place or event, and
+  one whose recorded entity is confirmed as another item. Each fails
+  closed.
 - It is held to (c4)'s and (b)'s other rules: a claim of this form
   carries the passage that conveys it as its excerpt (§10.4).
-- An approved local id that no entity record holds leaves no record of
-  what its subject was, so its claims are refused.
 - The run report counts it (`container_claims.document_subject_by_form`:
-  `confirmed`).
+  `confirmed`), reading a document's subject forms from its resolved
+  batch (`batch.resolved.json`, where the confirmation is saved) when
+  there is one, else from its stage's batch view.
 - It arises only from the keeper run on, since scratch runs confirm no
   matches. Such a claim, on a held scan and stated in another document,
   then falls under the export's SHA-1 rule (`backup.placed_subject_rule`,

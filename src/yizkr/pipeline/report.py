@@ -135,7 +135,6 @@ from yizkr.claims import (
     JudgementNote,
     PersonStructure,
     PlaceStructure,
-    confirmed_subject,
     load_vocabulary,
 )
 from yizkr.model.schema import load_acceptance
@@ -1154,7 +1153,9 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
             "entities": Counter(_text(e.get("kind")) or "?" for e in entities),
             "not_extracted": sum(e.get("extract") is False for e in entities),
             "claims": Counter(_text(c.get("property")) or "?" for c in claims),
-            "subject_forms": _subject_forms(claims, entities),
+            "subject_forms": _resolved_subject_forms(
+                directory / RESOLVED_BATCH, claims, entities
+            ),
         }
         coverage = _json(directory / "extraction" / "coverage.json")
         if stage == "extraction" and isinstance(coverage, dict):
@@ -2866,6 +2867,28 @@ def _aggregate_content(
     }
 
 
+# the batch a curator's approved equivalences resolve (orchestrate's
+# DocumentRun.resolved), where a confirmed subject is recorded
+RESOLVED_BATCH = "batch.resolved.json"
+
+
+def _resolved_subject_forms(
+    resolved: Path, claims: list[dict], entities: list[dict]
+) -> Counter:
+    """The document's document-subject claims by subject form
+    (_subject_forms): read from its resolved batch (`resolved`), where a
+    confirmation has turned a local subject into an existing item's QID,
+    when that file holds a batch, else from the stage's own batch view
+    (`claims`, `entities`)."""
+    found = _json(resolved)
+    if isinstance(found, dict):
+        claims = [c for c in _list(found.get("claims")) if isinstance(c, dict)]
+        entities = [
+            e for e in _list(found.get("entities")) if isinstance(e, dict)
+        ]
+    return _subject_forms(claims, entities)
+
+
 def _subject_forms(claims: list[dict], entities: list[dict]) -> Counter:
     """A batch's document-subject claims by the form of their subject
     (claims.SUBJECT_FORMS, ADR-0039 §10.1), read from the claims as the
@@ -2875,15 +2898,13 @@ def _subject_forms(claims: list[dict], entities: list[dict]) -> Counter:
     (its entity's, or its own `instance_of`) is an artifact kind, and the
     source's mention of an artifact when it is an unclassified entity; a
     QID subject is the existing item a curator confirmed one of those as
-    when the batch's entities with that `qid` are all of those kinds
-    (claims.confirmed_subject). A subject of any other form, which
-    validation refuses, is `other`. The counts name no document."""
+    when the claim records that local subject (`confirmed_from`) and its
+    kind is one of those (claims.confirmed_kind). A subject of any other
+    form, which validation refuses, is `other`. The counts name no
+    document."""
     acceptance = load_acceptance()
     kinds = {_text(e.get("id")): _text(e.get("kind")) for e in entities if e}
-    confirmed: dict[str, set[str | None]] = {}
-    for entity in entities:
-        if entity and (qid := _text(entity.get("qid"))):
-            confirmed.setdefault(qid, set()).add(_text(entity.get("kind")))
+    qids = {_text(e.get("id")): _text(e.get("qid")) for e in entities if e}
     forms: Counter = Counter()
     for claim in claims:
         if _text(claim.get("property")) not in acceptance.document_subjects:
@@ -2907,10 +2928,24 @@ def _subject_forms(claims: list[dict], entities: list[dict]) -> Counter:
                 if kind == MENTION_KIND
                 else "other"
             )
-        elif subject.get("kind") == "qid" and confirmed_subject(
-            confirmed.get(_text(subject.get("qid")), ()), acceptance
-        ):
-            form = CONFIRMED_FORM
+        elif subject.get("kind") == "qid":
+            former = claim.get("confirmed_from")
+            former = former if isinstance(former, dict) else {}
+            local_id = _text(former.get("local_id"))
+            kind = (
+                None
+                if local_id is None
+                else _text(former.get("instance_of"))
+                if local_id not in kinds
+                else kinds[local_id]
+                if qids[local_id] == _text(subject.get("qid"))
+                else None
+            )
+            form = (
+                CONFIRMED_FORM
+                if kind in acceptance.artifact_kinds or kind == MENTION_KIND
+                else "other"
+            )
         else:
             form = "other"
         forms[form] += 1

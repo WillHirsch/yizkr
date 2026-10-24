@@ -555,6 +555,18 @@ class Claim(StrictModel):
     row_approval: SkipJsonSchema[str | None] = Field(
         default=None, pattern=r"^[0-9a-f]{12}$"
     )
+    # The local subject a curator's confirmation replaced.
+    # reconcile.apply_equivalences sets it when it turns the claim's local
+    # subject into the QID of the existing item a curator approved the
+    # entity as, with `instance_of` set to the entity's kind (its
+    # manifest record's, else the ref's own), and keeps it on later passes.
+    # The subject rules read it to tell a confirmed mention or record's
+    # artifact from a QID named outright (ADR-0039 §10.1(c)). It is
+    # resolution state, never extraction output: the JSON Schema that
+    # extraction prompts carry leaves it out, extract.cite_artifact drops
+    # it, and a claim without one serialises as if the field did not
+    # exist.
+    confirmed_from: SkipJsonSchema[LocalRef | None] = None
 
     @model_serializer(mode="wrap")
     def _omit_absent_row_approval(
@@ -566,6 +578,8 @@ class Claim(StrictModel):
         if isinstance(data, dict):
             if self.row_approval is None:
                 data.pop("row_approval", None)
+            if self.confirmed_from is None:
+                data.pop("confirmed_from", None)
             if self.note is None:
                 data.pop("note", None)
         return data
@@ -870,7 +884,7 @@ def validate_against_manifest(
       one of the subjects document_subject_form names: its own source,
       an artifact its source places, a batch entity of an artifact kind,
       an unclassified entity of the batch or the existing item a curator
-      confirmed one of those two as (an entity record's `qid`), and a
+      confirmed one of those two as (`Claim.confirmed_from`), and a
       claim whose subject is not its own source carries an excerpt
       (ADR-0035 §3.4, ADR-0039 §10); a claim of a property the manifest
       marks `placed_subject` (`caption`) has an artifact its source
@@ -908,7 +922,7 @@ def validate_against_manifest(
     entity_qids: dict[str, str] = {
         entity.id: entity.qid for entity in batch.entities if entity.qid
     }
-    qid_kinds = confirmed_kinds(batch.entities)
+    records = {entity.id: entity for entity in batch.entities}
     seen_entity_ids: set[str] = set()
     for e_index, entity in enumerate(batch.entities):
         where = f"entities[{e_index}]"
@@ -1026,9 +1040,7 @@ def validate_against_manifest(
                 acceptance,
                 placed,
                 subject_kind,
-                qid_kinds.get(claim.subject.qid, ())
-                if isinstance(claim.subject, QidRef)
-                else (),
+                confirmed_kind(claim, records),
             )
         )
         check_property_value(claim.property, claim.value, where, subject_kind)
@@ -1207,7 +1219,7 @@ def unplaced_hint(count: int) -> str:
 # source's own mention of an artifact it only writes about, such as an
 # enclosure (§10.1(c), route (c4)); the existing item a curator
 # confirmed such a record's artifact or mention as, a QID subject whose
-# batch entities approved to it are all of those kinds (§10.1(c)).
+# claim records that local subject (`Claim.confirmed_from`, §10.1(c)).
 SOURCE_FORM = "source"
 PLACED_FORM = "placed"
 RECORD_FORM = "record"
@@ -1225,19 +1237,22 @@ SUBJECT_FORMS = (
 MENTION_KIND = "unclassified_entity"
 
 
-def confirmed_kinds(
-    entities: Iterable[EntityRecord],
-) -> dict[str, frozenset[str]]:
-    """By QID, the kinds of the batch's entity records a curator
-    confirmed as that existing item (`EntityRecord.qid`, which
-    reconcile.apply_equivalences sets as it turns their local refs into
-    that QID), so the subject rules can read what a QID subject was
-    before confirmation."""
-    kinds: dict[str, set[str]] = {}
-    for entity in entities:
-        if entity.qid:
-            kinds.setdefault(entity.qid, set()).add(entity.kind)
-    return {qid: frozenset(found) for qid, found in kinds.items()}
+def confirmed_kind(
+    claim: Claim, records: Mapping[str, EntityRecord]
+) -> str | None:
+    """The kind of the local subject a curator's confirmation replaced on
+    `claim` (`Claim.confirmed_from`, set by reconcile.apply_equivalences),
+    or None: for a subject that is no QID, a claim that records no such
+    subject (a QID named outright), or one whose entity record in the
+    batch (`records`, by id) is not confirmed as that QID. The kind is the
+    record's where the batch holds one, else the recorded ref's own."""
+    subject, former = claim.subject, claim.confirmed_from
+    if not isinstance(subject, QidRef) or former is None:
+        return None
+    record = records.get(former.local_id)
+    if record is None:
+        return former.instance_of
+    return record.kind if record.qid == subject.qid else None
 
 
 def document_subject_form(
@@ -1245,7 +1260,7 @@ def document_subject_form(
     acceptance: Acceptance,
     placed: Mapping[str, Collection[str]] | None = None,
     subject_kind: str | None = None,
-    confirmed: Collection[str] = (),
+    confirmed: str | None = None,
 ) -> str | None:
     """Which of SUBJECT_FORMS the subject of `claim` is, as the subject
     of a document-subject property, or None for a subject that property
@@ -1254,9 +1269,9 @@ def document_subject_form(
     (a local ref, its kind `subject_kind`) of an artifact kind
     (`Acceptance.artifact_kinds`); one of MENTION_KIND; or an existing
     item (a QID ref) a curator confirmed one of those last two as, where
-    `confirmed` holds the kinds of the batch's entities confirmed as it
-    (confirmed_kinds), at least one and each of an artifact kind or
-    MENTION_KIND. An extraction names no artifact kind
+    `confirmed` is the kind of the claim's own local subject before
+    confirmation (confirmed_kind), an artifact kind or MENTION_KIND. An
+    extraction names no artifact kind
     (artifact_kind_problems), so an entity of one is a structured
     record's or a hand-written batch's."""
     subject = claim.subject
@@ -1272,24 +1287,11 @@ def document_subject_form(
             return RECORD_FORM
         if subject_kind == MENTION_KIND:
             return MENTION_FORM
-    if isinstance(subject, QidRef) and confirmed_subject(
-        confirmed, acceptance
+    if isinstance(subject, QidRef) and (
+        confirmed in acceptance.artifact_kinds or confirmed == MENTION_KIND
     ):
         return CONFIRMED_FORM
     return None
-
-
-def confirmed_subject(
-    confirmed: Collection[str | None], acceptance: Acceptance
-) -> bool:
-    """Do `confirmed`, the kinds of the batch's entities a curator
-    confirmed as an existing item (confirmed_kinds), make that item a
-    document subject: at least one, and each an artifact kind or
-    MENTION_KIND (ADR-0039 §10.1(c))?"""
-    return bool(confirmed) and all(
-        kind in acceptance.artifact_kinds or kind == MENTION_KIND
-        for kind in confirmed
-    )
 
 
 def has_excerpt(claim: Claim) -> bool:
@@ -1304,7 +1306,7 @@ def subject_problems(
     acceptance: Acceptance,
     placed: Mapping[str, Collection[str]] | None = None,
     subject_kind: str | None = None,
-    confirmed: Collection[str] = (),
+    confirmed: str | None = None,
 ) -> list[str]:
     """Why the claim's subject breaks the subject rules of ADR-0035 §3.4
     and ADR-0039 §2 and §10, each ending in its reason code
@@ -1312,8 +1314,8 @@ def subject_problems(
     `placed_subject` takes an artifact its source places, and no other
     subject. A property it marks `document_subject` takes a subject of one
     of the forms document_subject_form names (`subject_kind` is the kind
-    of a local subject, `confirmed` the kinds of the batch's entities
-    confirmed as a QID subject's item), and a claim whose subject is not
+    of a local subject, `confirmed` that of a QID subject's local subject
+    before confirmation, confirmed_kind), and a claim whose subject is not
     its own source carries an excerpt, the passage that conveys the
     fact. No other property takes an artifact as its subject. `placed`
     is as validate_against_manifest takes it."""

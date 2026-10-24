@@ -32,7 +32,8 @@ Per batch, the writer:
    such as a GEDCOM object the export dates); the item of an
    unclassified entity of its batch (a source's mention of an enclosure);
    or the existing item a curator confirmed either of those last two as
-   (the batch's entity records with that `qid` all of those kinds).
+   (the claim's `confirmed_from`, the local subject the confirmation
+   replaced).
    A claim whose subject is an artifact its source places, on a
    document-subject property or on the one property the manifest marks
    `placed_subject` (a `caption`, ADR-0039 §2.1), names an artifact among
@@ -469,7 +470,7 @@ from yizkr.claims import (
     StringValue,
     TimeValue,
     VocabRef,
-    confirmed_kinds,
+    confirmed_kind,
     document_subject_form,
     has_excerpt,
 )
@@ -1426,7 +1427,7 @@ def subject_refusal(
     placed: Mapping[str, Collection[str]],
     resolved: Collection[str] = (),
     subject_kind: str | None = None,
-    confirmed: Collection[str] = (),
+    confirmed: str | None = None,
 ) -> tuple[str, str] | None:
     """Why the writer refuses the claim's subject, with the decision that
     gives the rule, or None (the module docstring, step 0). A
@@ -1435,8 +1436,8 @@ def subject_refusal(
     media SHA-1 an item carries (`resolved`, the SHA-1s resolved;
     ADR-0039 §2.1). A document-subject property's is one of the forms
     claims.document_subject_form names (`subject_kind` is the kind of a
-    local subject, `confirmed` the kinds of the batch's entities a
-    curator confirmed as a QID subject's item, claims.confirmed_kinds):
+    local subject, `confirmed` that of a QID subject's local subject
+    before a curator's confirmation, claims.confirmed_kind):
     the claim's own source (ADR-0035 §3.4), an artifact `placed` names
     for it that an item carries, a batch entity of an artifact kind, an
     unclassified entity of the batch or the existing item a curator
@@ -1548,7 +1549,7 @@ def pre_plan_refusals(
     The warning quotes none of the texts."""
     acceptance = load_acceptance()
     kinds = {entity.id: entity.kind for entity in batch.entities}
-    qid_kinds = confirmed_kinds(batch.entities)
+    records = {entity.id: entity for entity in batch.entities}
     refusals = {}
     for index, claim in enumerate(batch.claims):
         uses = [
@@ -1582,9 +1583,7 @@ def pre_plan_refusals(
             kinds.get(subject.local_id, subject.instance_of)
             if isinstance(subject, LocalRef)
             else None,
-            qid_kinds.get(subject.qid, ())
-            if isinstance(subject, QidRef)
-            else (),
+            confirmed_kind(claim, records),
         )
         if refusal is not None:
             reason, rule = refusal
