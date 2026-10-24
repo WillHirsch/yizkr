@@ -1909,8 +1909,10 @@ class TestViews:
         assert derived["batch.json"] == {
             "transcription.json": content["transcription.json"]
         }
+        # the critic reads each citation where it stands (#607)
         assert derived["critique.json"] == {
-            "batch.json": content["batch.json"]
+            "batch.json": content["batch.json"],
+            "transcription.json": content["transcription.json"],
         }
 
     def test_a_forgotten_view_keeps_no_content(self, tmp_path):
@@ -1930,6 +1932,53 @@ class TestViews:
         orchestrator.run()
         (doc,) = orchestrator.documents()
         doc.critique.unlink()
+        asked = len(orchestrator.calls)
+        assert orchestrator.run() == 2
+        assert steps(orchestrator.calls[asked:]) == ["critique"]
+        reused = [event["stage"] for event in this_run(orchestrator, "reused")]
+        assert reused == ["transcription", "extraction"]
+
+    def test_the_critic_is_given_the_transcription(
+        self, tmp_path, monkeypatch
+    ):
+        """The critique prompt carries the document's transcription, each
+        line numbered, as the extraction prompts do (#607)."""
+        from yizkr.pipeline.chunking import number_lines
+        from yizkr.pipeline.transcribe import Transcription
+
+        prompts: list[str] = []
+        answer = ScriptedModel.complete
+
+        def recording(self, prompt, image_paths=()):
+            prompts.append(prompt)
+            return answer(self, prompt, image_paths)
+
+        monkeypatch.setattr(ScriptedModel, "complete", recording)
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        (prompt,) = [
+            prompt
+            for prompt in prompts
+            if prompt.startswith("You review a genealogical extraction")
+        ]
+        text = Transcription.model_validate_json(doc.transcription.read_text())
+        assert (
+            f"each line numbered:\n{number_lines(text.prompt_text())}\n"
+            in (prompt)
+        )
+
+    def test_a_critique_goes_stale_with_its_transcription(self, tmp_path):
+        """The critic reads each citation where it stands (#607): a
+        transcription whose content changed, under a batch that stands,
+        makes the critique again, and it alone."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        doc.derivations.set_content(doc.transcription.name, "f" * 64)
+        doc.derivations.record(doc.batch)
+        assert doc.derivations.current(doc.batch)
+        assert not doc.derivations.current(doc.critique)
         asked = len(orchestrator.calls)
         assert orchestrator.run() == 2
         assert steps(orchestrator.calls[asked:]) == ["critique"]

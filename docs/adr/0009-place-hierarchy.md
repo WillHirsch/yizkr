@@ -90,6 +90,11 @@ inferred from what is known of the place or carried over from another
 place the document names; the critic flags a `part_of` its excerpt does
 not state (`unsupported_containment`, ADR-0023). Everything else is this
 pass's to propose.
+Amended by #607 (2026-10-24): the extraction rule above stands as the
+chunk and single-call prompts state it. The critic judges a `part_of`
+by ADR-0003's test, its citation read where it stands in the
+transcription, rather than by the three places listed above
+(`unsupported_containment`, ADR-0023 as amended).
 
 ## Context
 
