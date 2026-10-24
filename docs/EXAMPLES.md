@@ -233,7 +233,10 @@ its own. `engine.RecordedEngine` answers every call the stages before
 write make of them, as a faithful model would, from the universe's own
 assertions for each source (`answers.py`), with one deliberate mistake: it
 reads the family history's *'50* as 1850, and reads it right once the
-chunk prompt carries a rule about two-digit years. Its answers take the
+chunk prompt carries a rule about two-digit years. It answers the
+clustering stage's adjudication from `verdicts.py`, the `same` or
+`different` the corpus records for each pair it is asked, keyed by the
+two mentions' documents and labels (#587). Its answers take the
 form the extraction prompts ask for (ADR-0035, ADR-0036; #407): each
 person, place and organisation of a manifest has its mention record (the
 postcard's writer, whom it names only as *Dein Vater*, is labelled so,
@@ -247,9 +250,12 @@ each trap, with no gold set. Past the driver it holds the run report
 (`yizkr scratch report`) and the clustering stage's identity map to the
 corpus too (#380): the report's aggregates for the corpus, with no
 universe name, file name or SHA-1 in report.md, and each trap's
-clustering outcome, the one no merge rule meets (a conflicting
-cluster's confident component, #361, #568) recorded as expected with its
-reason.
+clustering outcome under the recorded verdicts, each verdict held to the
+universe and the adjudicated map to no false merge; the ones no merge
+rule meets (a conflicting cluster's confident component, #361, #568;
+the postcard's *Gustl*, whose `same` a contradiction with the
+certificate's *Gustave Lobig* overrules, #587) are recorded as expected
+with their reasons.
 
 `TRAPS`, in `tests/fixtures/corpus/__init__.py`, names the seven traps the
 corpus sets, in #76's words and, for the hard (kin-edge) conflict the

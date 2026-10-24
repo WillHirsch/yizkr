@@ -5,9 +5,9 @@ It answers every call the stages before write make of a document of the
 corpus, and tells the document by its bytes: a vision call by the SHA-1 of
 the image it is given, an extraction call by the artifact SHA-1 its prompt
 names, and a critique call by the entity manifest its prompt lists; the
-clustering stage's adjudication of ambiguous pairs (#106) it answers
-`uncertain` for every pair, as the recorded model gives no identity
-verdicts, so the identity map stays clustering's own. It
+clustering stage's adjudication of ambiguous pairs (#106) it answers by
+the recorded verdict on each pair (verdicts.py), whose two mentions it
+tells by the SHA-1 of the document each is in and its label. It
 holds conversations as the claude-code engine does: each is a session,
 whose transcript it gives to be kept (one .jsonl file holding the opening
 turn) and resumes only from such a transcript of the same turn, and it
@@ -23,6 +23,7 @@ corpus). A call it has no answer for fails the test that made it.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -35,7 +36,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from tests.fixtures.corpus import FOLDER
+from tests.fixtures.corpus import DOCUMENTS, FOLDER
 from tests.fixtures.corpus.answers import (
     RECORDED,
     SOURCES,
@@ -44,6 +45,7 @@ from tests.fixtures.corpus.answers import (
     manifest,
     mistakes_in,
 )
+from tests.fixtures.corpus.verdicts import BY_PAIR, Mention, Verdict
 from tests.fixtures.records import record_answer
 
 from yizkr.pipeline.llm import ClaudeCodeClient
@@ -59,6 +61,12 @@ MISREAD = "implausible_value"
 SEGMENTATION_PROMPT = "You segment a document transcription"
 ADJUDICATION_PROMPT = "You adjudicate IDENTITY for a family archive"
 _ADJUDICATED_PAIR = re.compile(r"^(\d+)\. clustering's comparison", re.M)
+# a mention of an adjudicated pair: its document's SHA-1, and its label
+_ADJUDICATED_MENTION = re.compile(
+    r"^  Mention [AB]: fingerprint \w+, .*, document ([0-9a-f]{40})\n"
+    r"    label: (.+)$",
+    re.M,
+)
 ASSIGNED = "Assigned entities:"
 _SHA1 = re.compile(r"[0-9a-f]{40}")
 _ASSIGNED_ID = re.compile(r"^- (\w+): ", re.MULTILINE)
@@ -83,6 +91,8 @@ class Calls:
 
     def __init__(self) -> None:
         self.asked: list[tuple[str, str]] = []
+        # each recorded verdict given, in order
+        self.verdicts: list[Verdict] = []
         self._lock = threading.Lock()
 
     def log(self, what: str, document: str) -> None:
@@ -208,16 +218,47 @@ class RecordedEngine:
         lines = [json.dumps(finding) for finding in findings]
         return "\n".join([*lines, json.dumps({"done": True})])
 
+    @staticmethod
+    def _pairs(prompt: str) -> dict[int, frozenset[Mention]]:
+        """Each pair an adjudication prompt asks of, by its number, as its
+        two mentions: (the document's file name, the label)."""
+        documents = {
+            hashlib.sha1((FOLDER / name).read_bytes()).hexdigest(): name
+            for name in DOCUMENTS
+        }
+        blocks = _ADJUDICATED_PAIR.split(prompt)[1:]
+        pairs = {}
+        for number, block in zip(blocks[::2], blocks[1::2], strict=True):
+            found = _ADJUDICATED_MENTION.findall(block)
+            if any(sha1 not in documents for sha1, _label in found):
+                raise NoAnswer(
+                    f"pair {number} names a document outside the corpus"
+                )
+            mentions = frozenset(
+                (documents[sha1], ast.literal_eval(label))
+                for sha1, label in found
+            )
+            if len(mentions) != 2:
+                raise NoAnswer(f"pair {number} names no two mentions")
+            pairs[int(number)] = mentions
+        return pairs
+
     def _adjudication(self, prompt: str) -> str:
-        """`uncertain` for every pair the prompt asks of, and the
+        """The recorded verdict on every pair the prompt asks of, and the
         sentinel."""
         self.calls.log("adjudication", "corpus")
-        lines = [
-            json.dumps(
-                {"pair": int(number), "verdict": "uncertain", "reason": "-"}
-            )
-            for number in _ADJUDICATED_PAIR.findall(prompt)
-        ]
+        lines = []
+        for number, pair in self._pairs(prompt).items():
+            recorded = BY_PAIR.get(pair)
+            if recorded is None:
+                raise NoAnswer(f"no recorded verdict on {sorted(pair)}")
+            self.calls.verdicts.append(recorded)
+            answer = {
+                "pair": number,
+                "verdict": recorded.verdict,
+                "reason": recorded.reason,
+            }
+            lines.append(json.dumps(answer, ensure_ascii=False))
         return "\n".join([*lines, json.dumps({"done": True})])
 
     # -- the engine's calls --------------------------------------------------
