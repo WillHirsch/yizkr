@@ -356,6 +356,23 @@ that directory), or the source's SHA-1 and theirs
 each, as a registration makes it. Without it each caption is refused,
 and the command says how to give them (#551).
 
+Amended by #626 (2026-10-24; ADR-0039 §10), carried out by the build
+that #626's draft names (until it lands, the rule above holds): a
+`document_subject` property takes three subjects, each only where the
+claim's passage, read where it stands, conveys the fact (ADR-0003's
+support test, as #607 writes it; owner decision on #607, 2026-10-23,
+Q2): the claim's own source; an artifact the source places
+(checked as a caption's subject is); and a batch entity of an artifact
+kind, the artifact a source's own structured record makes, such as a
+GEDCOM object's un-held media item. The interim sentence above ("On a
+structured adapter's batch alone … pending an ADR-0039 amendment") is
+replaced by this general rule: the rule keys on the subject's kind,
+and an extraction may not name an artifact kind, in a manifest record
+or a `LocalRef`'s `instance_of`, so only a structured record or a
+hand-written batch makes an artifact-kind entity (ADR-0039 §10.1(b),
+§10.6). `placed_subject` stays `caption`'s alone. This and every other
+line dated #626 in this file describe the model from that build on.
+
 **A retired property** stays in the instance and takes no new claim: it
 accepts nothing, validation refuses every claim of it, and no prompt that
 the manifest renders offers it. `spouse` is retired (ADR-0036): the spouse
@@ -726,6 +743,11 @@ artifact a new QID, changes neither.
   item (ADR-0035 §3.4). The other document-subject properties (`author`,
   `addressee`, `inception`, `location_of_creation`, `main_subject`,
   `shows`) take the document as their subject the same way (ADR-0039).
+  Widened by #626, 2026-10-24 (ADR-0039 §10): each of them, `issued_by`
+  included, may also take an artifact the source places, or the
+  artifact the source's own structured record makes, where the passage
+  conveys the fact; a certificate's own `issued_by` still cites the
+  certificate.
   `author` and `addressee` take a person, an organization or a family,
   and the critic's `relation_kind_mismatch` category names them, as
   relations of authorship or address, with those kinds, as it names the
@@ -960,6 +982,8 @@ its own content states it, is `shows`; `depicts` is the faces flow's
 confirmed depiction (ADR-0005; ADR-0039 §2.2). Prefer an existing
 Wikidata-mirrored property, keep values structured (never strings),
 and reference the artifact itself or the producing run.
+Widened by #626, 2026-10-24: `shows` may also come from a source that
+places the image, where its passage conveys it (ADR-0039 §10.4).
 
 ## Compound artifacts (see ADR-0008)
 
@@ -1043,6 +1067,18 @@ and reference the artifact itself or the producing run.
   container with the caption as its excerpt, or combine two sources'
   values as a new statement with both references and the qualifier
   `determination_method` → `combined_from_sources` (ADR-0039 §4).
+  Widened by #626, 2026-10-24 (ADR-0039 §10): the caption stays one
+  verbatim statement, and beside it the container states the seven
+  document-subject properties of the artifact where its passage, read
+  where it stands, conveys them, cited to the container with the page
+  and the passage as its excerpt: the caption gives the letter's image
+  `author` → Wastl and `addressee` → Klara, but no `inception` from its
+  "July 1939", which it ties to no event; the booklet's translation of
+  the dateline gives `inception` → 28 July 1939, `location_of_creation`
+  → Brunnenring 35 and `addressee` → Pünktchen, each `machine_assisted`,
+  and no caption. A line about the reproduction (who scanned it, when)
+  gives no such claim. A curator may still write, from the keeper run
+  on, a fact the extraction missed.
 - **The static site shows what sources say about an artifact** (ADR-0039
   §7). An artifact's page has a section "What sources say about this
   artifact": its captions first, each with the container that gives it
@@ -1057,6 +1093,11 @@ and reference the artifact itself or the producing run.
   artifacts": each document-subject statement whose value is the person
   ("shown in" the portrait, "addressee of" the letter), with its
   sources. A caption names no one, so it is never listed there.
+  Widened by #626, 2026-10-24 (ADR-0039 §10.2): the section also lists
+  what other sources state of the artifact, each value with its source,
+  page and printed page, every value of one property together, none
+  first; "Named in artifacts" labels values the same way; and an
+  un-held media item's page shows its `inception`.
 - **Machine-assisted preparation is a sourcing circumstance.** When a
   compilation states that its text was prepared with machine assistance
   (that its translations are machine translations, say), each claim read
@@ -1104,6 +1145,9 @@ and reference the artifact itself or the producing run.
   tied to a region or confirmed by a person, and neither maps to P180.
   The faces flow may read them as a hint for whom to propose, outside
   the graph until a person confirms a `depicts`.
+  Widened by #626, 2026-10-24: `shows` may also come from a source that
+  places the image, where its passage conveys it (ADR-0039 §10.4); it
+  is still a source's words, never a depiction.
 
 ## Names (see ADR-0011)
 
@@ -1683,7 +1727,11 @@ not a signal to grow the schema on.
   caption (ADR-0039), so
   two sources that date one document differently are listed side by
   side, each with its source; as for any other date, one whose span lies
-  inside the other's differs only in resolution (below). A name
+  inside the other's differs only in resolution (below). (Widened by
+  #626, 2026-10-24, ADR-0039 §10.2: the date of making may also come,
+  with no curator, from a container whose passage conveys it, such as
+  the booklet's translation of a letter's dateline, or from an export's
+  record of an object; these are compared the same way.) A name
   compares as text: spellings that differ only in letter case (a sharp
   s written SS among them) or language tag are one value, listed once
   with the sources of all of them. Properties that legitimately accumulate values over a life —
@@ -1935,7 +1983,12 @@ not a signal to grow the schema on.
   so each goes whole, with its references and the excerpts only it
   holds, failing closed. The document-subject statements need no rule
   of their own: one whose value is an item left out goes whole, as any
-  statement does. A line the export
+  statement does. Widened by #626, 2026-10-24 (ADR-0039 §10.5, on its
+  lean): a document-subject statement whose subject is `part of` the
+  item its reference's `stated in` names, as a placed image is of its
+  container, goes whole too, failing closed, since its excerpt may be a
+  caption's text; a statement about an artifact a GEDCOM's record makes
+  leaves as any of that export's statements does. A line the export
   cannot read as a triple is dropped, and a dump that holds a sitelink,
   whose page's own triples never name its entity, or a property of a
   type the model does not use (a URL, a media file, a shape) makes the
