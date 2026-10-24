@@ -903,12 +903,16 @@ def cmd_stages_manifest(args) -> int:
 
 
 def cmd_gaps_rollup(args) -> int:
+    import csv
+
     from yizkr.pipeline import gaps
 
     run = _scratch_run_dir(args)
     try:
         written, result = gaps.write_rollup(run, args.out)
-    except OSError as exc:
+    except (OSError, ValueError, csv.Error) as exc:
+        # a file that cannot be read or written, or a gap file that is no
+        # UTF-8 text or no CSV
         sys.exit(str(exc))
     print(
         f"{result.gaps} gap(s) under {len(result.rows)} predicate(s), from "

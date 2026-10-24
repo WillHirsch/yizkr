@@ -4,9 +4,11 @@ A fictional fixture of entities held under the holding class, each with
 the type hint its source gives, the 2002 interview's word for the
 family firm, "hat shop", among them:
 
-* two entities with one hint in two spellings, from two sources, are
-  one row: two entities, two artifacts (the hint is compared in lower
-  case, ADR-0035);
+* three entities with one hint in two spellings, two from one source
+  and one from another, are one row: three entities, two artifacts (the
+  hint is compared in lower case, ADR-0035);
+* an entity whose hint two artifacts state, one by a curator's
+  reference, is one entity and two artifacts;
 * an entity whose hint a curator deprecated is not counted under it;
 * an entity whose unclassified kind a curator deprecated is not listed;
 * an entity held without a hint is counted under the empty hint;
@@ -23,6 +25,8 @@ presence is asserted.
 from __future__ import annotations
 
 import pytest
+from wikibaseintegrator.datatypes import Item
+from wikibaseintegrator.models import Reference
 from wikibaseintegrator.wbi_enums import WikibaseRank
 
 from tests.fixtures import example_universe as u
@@ -46,7 +50,8 @@ UNIVERSE = u.by_key()
 FIXTURE = (
     "#91: unclassified entities with type hints from the 2002 interview "
     "and the 1952 naturalisation certificate, one hint and one kind "
-    "deprecated by a curator"
+    "deprecated by a curator, and one hint cited by a curator in a second "
+    "artifact"
 )
 MARK = fixture_mark(FIXTURE, writer)
 INTERVIEW = "interview-2002"
@@ -67,6 +72,7 @@ LINER = f"ocean liner {MARK}"
 # local id -> (label, hint, source)
 ENTITIES = {
     "blue-hat": (f"Unclassified Blue Hat {MARK}", SHOP, INTERVIEW),
+    "parlour": (f"Unclassified Hat Parlour {MARK}", SHOP, INTERVIEW),
     "stall": (f"Unclassified Hat Stall {MARK}", SHOP_AGAIN, NATURALISATION),
     "craft": (f"Unclassified Craft {MARK}", CRAFT, INTERVIEW),
     "liner": (f"Unclassified Liner {MARK}", LINER, NATURALISATION),
@@ -113,6 +119,25 @@ def _batch(source: str, artifact: ArtifactRef) -> ClaimBatch:
     )
 
 
+def _cite_hint(client, qid: str, artifact: str) -> None:
+    """Add a reference block stated in `artifact` to the item's type hint,
+    as a curator would who reads the same hint in a second source."""
+    properties, _ = client.vocabulary()
+    item = client.wbi.item.get(qid)
+    (hint,) = item.claims.get(properties["type_hint"])
+    cited = {
+        snak.datavalue["value"]["id"]
+        for reference in hint.references
+        for snak in reference.snaks.get(properties["stated_in"])
+    }
+    if artifact in cited:
+        return
+    block = Reference()
+    block.add(Item(prop_nr=properties["stated_in"], value=artifact))
+    hint.references.add(block)
+    item.write(summary="integration test: curator reference on a fixture")
+
+
 def _deprecate(client, qid: str, prop: str, value=None) -> None:
     """Give the item's `prop` statement (the one whose item value is
     `value`, when given) deprecated rank, as a curator would."""
@@ -130,10 +155,12 @@ def _deprecate(client, qid: str, prop: str, value=None) -> None:
 
 @pytest.fixture(scope="module")
 def written(client, config) -> dict[str, str]:
-    """Write each source's batch, deprecate the craft's hint and the
-    liner's kind, and wait until the query service holds every item.
-    Returns the QIDs by local id."""
+    """Write each source's batch, cite the airship's hint in the
+    interview too, deprecate the craft's hint and the liner's kind, and
+    wait until the query service holds every item. Returns the QIDs by
+    local id."""
     qids: dict[str, str] = {}
+    artifacts: dict[str, str] = {}
     for source in (INTERVIEW, NATURALISATION):
         registered = register_fictional(
             client,
@@ -144,7 +171,9 @@ def written(client, config) -> dict[str, str]:
             BatchWriter(client), _batch(source, registered.ref)
         )
         qids.update(result.created_items)
+        artifacts[source] = registered.qid
     properties, items = client.vocabulary()
+    _cite_hint(client, qids["airship"], artifacts[INTERVIEW])
     _deprecate(client, qids["craft"], properties["type_hint"])
     _deprecate(
         client,
@@ -176,22 +205,21 @@ def rows(client, config, written) -> dict[str, dict]:
 
 
 def test_one_hint_in_two_spellings_is_one_row(rows, written, config):
+    # three entities, two of them from one artifact
     row = rows[SHOP.lower()]
-    assert (row["entities"], row["artifacts"]) == ("2", "2")
+    assert (row["entities"], row["artifacts"]) == ("3", "2")
+    shops = ("blue-hat", "parlour", "stall")
     entity = f"{config.concept_uri}/entity/"
-    assert row["example"] in {
-        entity + written["blue-hat"],
-        entity + written["stall"],
-    }
-    assert row["exampleLabel"] in {
-        ENTITIES["blue-hat"][0],
-        ENTITIES["stall"][0],
-    }
+    examples = {entity + written[key]: ENTITIES[key][0] for key in shops}
+    # the example's label is the example's own
+    assert row["exampleLabel"] == examples[row["example"]]
 
 
 def test_a_hint_of_one_entity_is_its_row(rows, written, config):
+    # its hint is stated in the certificate and, by a curator's
+    # reference, in the interview: one entity, two artifacts
     row = rows[AIRSHIP.lower()]
-    assert (row["entities"], row["artifacts"]) == ("1", "1")
+    assert (row["entities"], row["artifacts"]) == ("1", "2")
     assert (
         row["example"] == f"{config.concept_uri}/entity/{written['airship']}"
     )

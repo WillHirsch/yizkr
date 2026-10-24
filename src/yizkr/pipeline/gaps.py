@@ -8,9 +8,11 @@ gaps are read, after its extraction, from
 
 - `extraction/gaps.ndjson`, which the chunked extractor writes, one gap
   object a line (ChunkedClaimExtractor, SIDE_OUTPUTS); or, where the
-  document has no chunked extraction (no `extraction/coverage.json`),
-- `gaps.csv`, the per-document review CSV with the columns subject,
-  predicate, object and evidence.
+  directory holds none of the extraction's side outputs (no
+  `extraction/coverage.json`),
+- `gaps.csv`, the per-document review CSV the orchestrator renders from
+  the extraction's gaps, with the columns subject, predicate, object
+  and evidence.
 
 A complete chunked extraction writes its coverage report always and its
 gap log only when it found gaps, removing a stale one, so where the
@@ -120,8 +122,9 @@ def _ndjson_gaps(path: Path) -> list[dict[str, str]]:
 
 
 def _csv_gaps(path: Path) -> list[dict[str, str]]:
-    text = path.read_text(encoding="utf-8")
-    rows = csv.DictReader(io.StringIO(text, newline=""))
+    # newline="" keeps a line break inside a quoted field as written
+    with open(path, newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
     return [gap for gap in map(_gap, rows) if gap is not None]
 
 

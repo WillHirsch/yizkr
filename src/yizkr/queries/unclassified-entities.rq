@@ -10,30 +10,36 @@
 # listed, since the source that held it unclassified still says so
 # (ADR-0002). A queue for a curator, never a defect report: what to mint
 # or defer is the owner's decision, and nothing is minted from it.
-SELECT ?typeHint (COUNT(DISTINCT ?entity) AS ?entities)
-       (COUNT(DISTINCT ?source) AS ?artifacts)
-       (SAMPLE(?entity) AS ?example) (SAMPLE(?entityLabel) AS ?exampleLabel)
+SELECT ?typeHint ?entities ?artifacts ?example ?exampleLabel
 WHERE {
-  ?entity p:{P:instance_of} ?kind .
-  ?kind ps:{P:instance_of} wd:{Q:unclassified_entity} .
-  FILTER NOT EXISTS { ?kind wikibase:rank wikibase:DeprecatedRank . }
-  OPTIONAL {
-    ?entity p:{P:type_hint} ?hintStatement .
-    ?hintStatement ps:{P:type_hint} ?hint .
-    FILTER NOT EXISTS {
-      ?hintStatement wikibase:rank wikibase:DeprecatedRank .
+  {
+    SELECT ?typeHint (COUNT(DISTINCT ?entity) AS ?entities)
+           (COUNT(DISTINCT ?source) AS ?artifacts)
+           (SAMPLE(?entity) AS ?example)
+    WHERE {
+      ?entity p:{P:instance_of} ?kind .
+      ?kind ps:{P:instance_of} wd:{Q:unclassified_entity} .
+      FILTER NOT EXISTS { ?kind wikibase:rank wikibase:DeprecatedRank . }
+      OPTIONAL {
+        ?entity p:{P:type_hint} ?hintStatement .
+        ?hintStatement ps:{P:type_hint} ?hint .
+        FILTER NOT EXISTS {
+          ?hintStatement wikibase:rank wikibase:DeprecatedRank .
+        }
+        OPTIONAL {
+          ?hintStatement prov:wasDerivedFrom/pr:{P:stated_in} ?hintSource .
+        }
+      }
+      OPTIONAL { ?kind prov:wasDerivedFrom/pr:{P:stated_in} ?kindSource . }
+      BIND(COALESCE(LCASE(STR(?hint)), "") AS ?typeHint)
+      BIND(IF(BOUND(?hint), ?hintSource, ?kindSource) AS ?source)
     }
-    OPTIONAL {
-      ?hintStatement prov:wasDerivedFrom/pr:{P:stated_in} ?hintSource .
-    }
+    GROUP BY ?typeHint
   }
-  OPTIONAL { ?kind prov:wasDerivedFrom/pr:{P:stated_in} ?kindSource . }
+  # the example's own label, fetched for the entity the group chose
   OPTIONAL {
-    ?entity rdfs:label ?entityLabel .
-    FILTER(LANG(?entityLabel) = "en")
+    ?example rdfs:label ?exampleLabel .
+    FILTER(LANG(?exampleLabel) = "en")
   }
-  BIND(COALESCE(LCASE(STR(?hint)), "") AS ?typeHint)
-  BIND(IF(BOUND(?hint), ?hintSource, ?kindSource) AS ?source)
 }
-GROUP BY ?typeHint
 ORDER BY DESC(?entities) ?typeHint

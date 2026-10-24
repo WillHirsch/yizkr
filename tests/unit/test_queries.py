@@ -135,9 +135,18 @@ class TestLibrary:
             line for line in q.splitlines() if not line.startswith("#")
         )
         projection = query.split("WHERE", 1)[0]
-        for name in ("typeHint", "entities", "artifacts", "example"):
+        for name in (
+            "typeHint",
+            "entities",
+            "artifacts",
+            "example",
+            "exampleLabel",
+        ):
             assert f"?{name}" in projection
-        assert "COUNT(DISTINCT ?entity) AS ?entities" in projection
+        assert "COUNT(DISTINCT ?entity) AS ?entities" in q
+        assert "COUNT(DISTINCT ?source) AS ?artifacts" in q
+        # the example's label is its own: fetched for the chosen example
+        assert "?example rdfs:label ?exampleLabel ." in q
         assert "?kind ps:{P:instance_of} wd:{Q:unclassified_entity} ." in q
         assert "?hintStatement ps:{P:type_hint} ?hint ." in q
         assert "LCASE(STR(?hint))" in q
@@ -147,9 +156,8 @@ class TestLibrary:
             .rstrip()
             .endswith("OPTIONAL")
         )
-        assert re.search(
-            r"GROUP BY \?typeHint\s+ORDER BY DESC\(\?entities\)", q
-        )
+        assert "GROUP BY ?typeHint\n" in q
+        assert q.rstrip().endswith("ORDER BY DESC(?entities) ?typeHint")
         # a deprecated kind or hint is a curator's rank, and not read
         assert q.count("wikibase:rank wikibase:DeprecatedRank") == 2
 

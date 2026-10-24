@@ -179,6 +179,17 @@ class TestDocumentGaps:
         )
         assert gaps.document_gaps(directory) == [FOUNDED]
 
+    def test_a_line_break_in_csv_evidence_is_kept(self, run):
+        evidence = "Hutmacherei zum Blauen Hut\r\ngegr. 1863"
+        directory = document(
+            run,
+            "directory",
+            DIRECTORY,
+            gaps_csv=[dict(FOUNDED, evidence=evidence)],
+        )
+        (gap,) = gaps.document_gaps(directory)
+        assert gap["evidence"] == evidence
+
     def test_a_document_without_gap_files_has_none(self, run):
         assert gaps.document_gaps(document(run, "postcard", POSTCARD)) == []
 
@@ -380,6 +391,38 @@ class TestCli:
         status = main(["gaps", "rollup", "--runs", str(tmp_path / "none")])
         assert status == EXIT_REFUSED
         assert "no scratch run" in capsys.readouterr().err
+
+    def test_a_file_that_cannot_be_written_is_refused(
+        self, run, tmp_path, capsys
+    ):
+        from yizkr.core.exits import EXIT_REFUSED
+
+        (tmp_path / "a-file").write_text("")
+        out = tmp_path / "a-file" / "rollup.csv"
+        status = main(["gaps", "rollup", str(run), "--out", str(out)])
+        assert status == EXIT_REFUSED
+        assert "[Errno 17] File exists" in capsys.readouterr().err
+
+    def test_a_gap_log_that_is_no_utf8_is_refused(self, run, capsys):
+        from yizkr.core.exits import EXIT_REFUSED
+
+        directory = document(run, "postcard", POSTCARD, ndjson=[])
+        (directory / "extraction" / "gaps.ndjson").write_bytes(b"\xff\xfe")
+        assert main(["gaps", "rollup", str(run)]) == EXIT_REFUSED
+        assert "can't decode" in capsys.readouterr().err
+        assert not (run / ROLLUP_FILE).exists()
+
+    def test_a_gap_csv_that_is_no_csv_is_refused(self, run, capsys):
+        from yizkr.core.exits import EXIT_REFUSED
+
+        document(
+            run,
+            "directory",
+            DIRECTORY,
+            gaps_csv=[dict(FOUNDED, evidence="gegr. 1863 " * 20000)],
+        )
+        assert main(["gaps", "rollup", str(run)]) == EXIT_REFUSED
+        assert "field limit" in capsys.readouterr().err
 
     def test_out(self, run, tmp_path, capsys):
         out = tmp_path / "rollup.csv"
