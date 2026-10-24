@@ -108,9 +108,10 @@ with both references (ADR-0003).
 Amended by #656 (2026-10-24; owner decision): **a dated marriage gets
 its wedding.** The extraction prompts ask for a marriage's wedding
 where the source dates or places the marriage's start, at any
-precision, as a stated divorce gets its divorce, and for none where the
-source only names the marriage, for a partnership, and for an
-observation (a directory or census entry). The chunk call gives the
+precision, as a stated divorce gets its divorce, and for no wedding
+where the source only names the marriage, for a partnership, and for
+an observation (a directory or census that lists the couple as
+married, with no start). The chunk call gives the
 listed wedding the date and place, and the marriage its `started_by`.
 The run report counts each extraction's marriages by their weddings,
 from the batch's structure alone: started by a dated wedding, by an

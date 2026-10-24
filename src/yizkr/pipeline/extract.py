@@ -138,7 +138,8 @@ Rules — these mirror the archive's non-negotiable conventions:
   own date and place. A marriage whose start the source dates or places,
   at any precision, gets its wedding, as a stated divorce gets its
   divorce. A marriage the source only names, a partnership, or an
-  observation (a directory or census entry) gets none.
+  observation (a directory or census that lists the couple as married,
+  with no start) gets no wedding.
 {document_block}
 - Dating a period: a residence, an occupation or a membership is dated
   by its `start_time` and `end_time` qualifiers, a move in and a move out

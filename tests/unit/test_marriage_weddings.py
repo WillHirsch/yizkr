@@ -53,8 +53,9 @@ class TestTheManifestRule:
         "A marriage whose start the source dates or places, at any "
         "precision, gets its wedding entry, as a stated divorce gets its "
         "divorce. A marriage the source only names, a partnership, or an "
-        "observation (a directory or census entry) gets none: in the 1984 "
-        'tree, "= (1942) Florence Faxridge" gives a marriage and its 1942 '
+        "observation (a directory or census that lists the couple as "
+        "married, with no start) gets no wedding entry: in the 1984 tree, "
+        '"= (1942) Florence Faxridge" gives a marriage and its 1942 '
         'wedding, and the undated "= Hildegard" gives the marriage alone;'
     )
 
@@ -85,8 +86,7 @@ class TestTheChunkRule:
             "The couple take part in the union, not in its wedding. Where "
             "the manifest lists a marriage's wedding, give the marriage its "
             "`started_by` and the wedding the date and place the source "
-            "gives the marriage's start, as a divorce takes its own; * its "
-            "end is an event too"
+            "gives the marriage's start; * its end is an event too"
         ) in CHUNK
 
 
@@ -97,7 +97,8 @@ class TestTheSingleCallRule:
             "start the source dates or places, at any precision, gets its "
             "wedding, as a stated divorce gets its divorce. A marriage the "
             "source only names, a partnership, or an observation (a "
-            "directory or census entry) gets none."
+            "directory or census that lists the couple as married, with no "
+            "start) gets no wedding."
         ) in SINGLE
 
 
@@ -139,12 +140,15 @@ def _year(subject, year, excerpt):
 
 
 def tree_batch() -> dict:
-    """The 1984 tree's unions as an extraction might give them: Gustav
-    and Florence's marriage and its 1942 wedding; Leopold and Agnes's,
-    its 1947 wedding and its 1957 divorce; Sebastian and Hildegard's,
-    undated, with no wedding; Rudolf and Nina's, whose wedding the
-    source places in the Soviet Union and does not date; Felix and Ida's
-    partnership; and a marriage not extracted."""
+    """A batch built from the universe's couples, varied to cover each
+    case: three marriages started by a dated wedding (Gustav and
+    Florence, 1942; Leopold and Agnes, 1947, later divorced; Eugen and
+    Cäcilie, 1859), one by a wedding the source places and does not date
+    (Rudolf and Nina, in the Soviet Union), and two with no wedding
+    (Sebastian and Hildegard; Felix and Ida, a spouse the source only
+    names); Felix and Ida's partnership too, and a marriage not
+    extracted. The three counts differ, so no two can be swapped
+    unseen."""
     entities = [
         _entity("e1", "Marriage of Gustav and Florence", "marriage"),
         _entity("e2", "Wedding of Gustav and Florence", "wedding"),
@@ -157,8 +161,11 @@ def tree_batch() -> dict:
         _entity("e9", "Soviet Union", "place"),
         _entity("e10", "Partnership of Felix and Ida", "partnership"),
         _entity("e11", "Wedding of Felix and Ida", "wedding"),
+        _entity("e12", "Marriage of Eugen and Cäcilie", "marriage"),
+        _entity("e20", "Wedding of Eugen and Cäcilie", "wedding"),
+        _entity("e21", "Marriage of Felix and Ida", "marriage"),
         _entity(
-            "e12", "Marriage of Eugen and Cäcilie", "marriage", extract=False
+            "e22", "Marriage of Leopold and Agnes", "marriage", extract=False
         ),
     ]
     claims = [
@@ -175,6 +182,8 @@ def tree_batch() -> dict:
         _year("e11", 1913, "Felix = Ida"),
         # a dated event that no marriage is started by dates none
         _link("e6", "ended_by", "e5", "= Hildegard"),
+        _link("e12", "started_by", "e20", "= (1859) Cäcilie 'Cilli' Tarle"),
+        _year("e20", 1859, "= (1859) Cäcilie 'Cilli' Tarle"),
     ]
     return {
         "schema_version": 1,
@@ -198,7 +207,7 @@ class TestTheCount:
     def test_marriages_by_their_weddings(self):
         view = tree_batch()
         assert report._marriages(view["entities"], view["claims"]) == Counter(
-            {"dated_wedding": 2, "undated_wedding": 1, "no_wedding": 1}
+            {"dated_wedding": 3, "undated_wedding": 1, "no_wedding": 2}
         )
 
     def test_a_started_by_to_no_wedding_gives_none(self):
@@ -225,7 +234,7 @@ class TestTheCount:
                 },
             },
         ]
-        assert report._marriages(entities, claims)["no_wedding"] == 2
+        assert report._marriages(entities, claims)["no_wedding"] == 3
 
     def test_one_dated_wedding_of_two_dates_the_marriage(self):
         """A marriage started by two ceremonies, one of them dated."""
@@ -237,7 +246,7 @@ class TestTheCount:
             _link("e3", "started_by", "e14", "= (1947) Agnes Nertler")
         )
         counted = report._marriages(view["entities"], view["claims"])
-        assert counted["dated_wedding"] == 2
+        assert counted["dated_wedding"] == 3
 
     def test_a_malformed_batch_counts_what_it_can(self):
         entities = [
@@ -289,17 +298,17 @@ class TestTheReportCounts:
             for d in counted["documents"]
         )
         assert {k: v for k, v in marriages.items() if k != "extractions"} == {
-            "total": 4,
-            "dated_wedding": 2,
+            "total": 6,
+            "dated_wedding": 3,
             "undated_wedding": 1,
-            "no_wedding": 1,
+            "no_wedding": 2,
         }
 
     def test_each_document_gives_its_own(self, counted):
         assert document(counted, CERT)["batch"]["marriages"] == {
-            "dated_wedding": 2,
+            "dated_wedding": 3,
             "undated_wedding": 1,
-            "no_wedding": 1,
+            "no_wedding": 2,
         }
         assert document(counted, TREE)["batch"]["marriages"] is None
 
@@ -307,10 +316,10 @@ class TestTheReportCounts:
         text = report.render_markdown(counted["aggregate"])
         assert "### Marriages and their weddings" in text
         assert (
-            "4 marriages in "
+            "6 marriages in "
             f"{counted['aggregate']['content']['marriages']['extractions']} "
-            "extractions: 2 started by a dated wedding, 1 by an undated "
-            "one, 1 with no wedding."
+            "extractions: 3 started by a dated wedding, 1 by an undated "
+            "one, 2 with no wedding."
         ) in text
         assert leaks(text) == []
         assert "Florence" not in text
@@ -318,6 +327,6 @@ class TestTheReportCounts:
     def test_the_drill_down_gives_the_document_s_own(self, counted):
         page = report.render_html(counted)
         assert (
-            "Marriages by their weddings: dated_wedding 2, no_wedding 1, "
+            "Marriages by their weddings: dated_wedding 3, no_wedding 2, "
             "undated_wedding 1"
         ) in page
