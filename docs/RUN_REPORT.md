@@ -291,7 +291,12 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   claim that does not parse) and `manifest` (any other manifest
   problem), with the extractions whose
   coverage counts none (`aggregate.content.rejects.by_reason`,
-  `by_reason_absent`);
+  `by_reason_absent`); and the entity-manifest answers refused for
+  naming an artifact kind, whether a later attempt mended the turn or
+  the extraction fell back (ADR-0039 §10.1(b); #646), from each
+  coverage's `manifest_artifact_kind`, with the extractions whose
+  coverage counts none (`manifest_artifact_kind`,
+  `manifest_artifact_kind_absent`);
 - excerpts not in their source (#580): the claims each extraction kept
   whose `transcription_excerpt` its transcription does not hold,
   compared as core/verbatim.py compares a container's evidence (folded,
@@ -320,9 +325,7 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   about (`mention`, an enclosure), each counted, 0 included, and
   `other`, only when counted, for a subject validation would refuse
   (`aggregate.content.container_claims`: `captions`,
-  `document_subject_by_property`, `document_subject_by_form`). An
-  entity manifest that names an artifact kind is refused like one with
-  an unknown kind, so it shows as the `manifest` fallback tier;
+  `document_subject_by_property`, `document_subject_by_form`);
 - zero-claim documents, by kind, and batches with no entity; the chunks
   and the fallback tiers taken;
 - mention records and judgement notes, summed from each extraction's

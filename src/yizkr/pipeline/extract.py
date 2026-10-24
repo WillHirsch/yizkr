@@ -179,8 +179,9 @@ DOCUMENT_ITSELF = """\
   artifact: {{"kind": "artifact", "sha1": "{artifact_sha1}"}}; an image
   this document places, by its artifact reference exactly as listed
   below; or a document this text mentions (a letter's enclosure), by its
-  local reference, an `unclassified_entity` whose type_hint says what it
-  is ("death certificate", "photograph"); and never anything else. Never
+  local reference, an `unclassified_entity` whose type_hint (in the
+  entity manifest) or label says what it is ("death certificate",
+  "photograph"); and never anything else. Never
   give an entity an artifact kind (`photograph`, `letter`, `certificate`
   and the like): a document the text mentions is an
   `unclassified_entity` with a type_hint.
@@ -238,9 +239,10 @@ PLACED_ARTIFACTS = """\
   per person it names. Give none the passage does not convey: the
   caption's "July 1939" does not say whether the letter was written,
   sent or received then, so it gives no `inception`; a line on the
-  reproduction ("Scanned for this booklet, 2010.") says who copied the
-  image and when, not who made the original or when, so it gives none at
-  all. A translation of the image's own text is no caption: it conveys
+  reproduction ("Scanned by Nicholas for this booklet, 2010.") says who
+  copied the image and when, not who made the original or when, so it
+  gives none of these properties; where it speaks of the image it stays a
+  caption. A translation of the image's own text is no caption: it conveys
   what that text states (its dateline, its place, its greeting), so it
   gives those claims, its subject the image, and no `caption`. The people
   a passage names are entities of this document, with what it says of

@@ -1435,7 +1435,8 @@ def subject_refusal(
     `placed` names for it that an item carries, a batch entity of an
     artifact kind or an unclassified entity of the batch; and a claim
     whose subject is not its own source carries the passage that conveys
-    it as its excerpt (ADR-0039 §10.1, §10.4). No other property takes an
+    it as its excerpt, one that is not blank as the instance keeps text
+    (_locator_text; ADR-0039 §10.1, §10.4). No other property takes an
     artifact subject (ADR-0039 §2)."""
     acceptance = load_acceptance()
     prop, subject = claim.property, claim.subject
@@ -1473,10 +1474,13 @@ def subject_refusal(
                 "no item carries its subject's media SHA-1",
                 "ADR-0039 §10.1",
             )
-        if form != SOURCE_FORM and not has_excerpt(claim):
+        excerpt = claim.source.transcription_excerpt
+        if form != SOURCE_FORM and not (
+            has_excerpt(claim) and _locator_text(excerpt.text)
+        ):
             return (
-                "its subject is an artifact other than its own source, and "
-                "it carries no excerpt of the passage that conveys it",
+                "its subject is not its own source, and it carries no "
+                "excerpt of the passage that conveys it",
                 "ADR-0039 §10.4",
             )
         return None

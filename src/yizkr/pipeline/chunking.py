@@ -1543,6 +1543,11 @@ class ChunkedClaimExtractor:
         manifest, handle, reasons, answered = self._entity_manifest(
             transcription, artifact
         )
+        # the manifest answers refused for naming an artifact kind, whether
+        # a later attempt mended the turn or not (ADR-0039 §10.1(b))
+        self._manifest_artifact_kind = sum(
+            f"[{ARTIFACT_KIND}]" in reason for reason in reasons
+        )
         if manifest is not None:
             self._set_aside = manifest.set_aside
             self._set_aside_records = manifest.set_aside_records
@@ -1754,6 +1759,7 @@ class ChunkedClaimExtractor:
         self.used_fallback_manifest = False
         self.used_fallback_segmentation = False
         self._refusals = {}
+        self._manifest_artifact_kind = 0
         self._unread = {}
         self._set_aside = {}
         self._set_aside_records = 0
@@ -2108,6 +2114,7 @@ class ChunkedClaimExtractor:
             "rejected_by_reason": rejected_by_reason(rejects),
             "unread_objects": sum(len(found) for found in unread.values()),
             "fallback": dict(self.fallback),
+            "manifest_artifact_kind": self._manifest_artifact_kind,
         }
         if quotes is not None:
             coverage["quotes"] = quotes["counts"]

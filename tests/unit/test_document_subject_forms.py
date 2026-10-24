@@ -30,12 +30,15 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures.identity import write_mapped
+from tests.unit.test_chunking import ScriptedLlm, ndjson
 from tests.unit.test_container_claims import (
     BOOKLET_REF,
     CAPTION,
+    DECK_REF,
     JULY_28,
     LETTER_REF,
     PLACED,
+    PORTRAIT_REF,
     STRAY_REF,
     booklet,
     flat,
@@ -288,6 +291,33 @@ class TestTheSubjectForms:
         (refusal,) = pre_plan_refusals(batch(wrong), {}).values()
         assert refusal[0] == "subject_rule"
 
+    @pytest.mark.parametrize(
+        "subject",
+        [
+            {"kind": "qid", "qid": "Q42"},
+            {"kind": "vocab", "key": "photograph"},
+        ],
+    )
+    def test_an_item_or_a_class_named_outright_takes_none(self, subject):
+        wrong = claim("inception", JULY_28, subject, page=None)
+        assert any(p.endswith("[document_subject]") for p in checked(wrong))
+        (refusal,) = pre_plan_refusals(batch(wrong), {}).values()
+        assert refusal[0] == "subject_rule"
+
+    def test_an_image_another_container_places_is_not_the_booklet_s(self):
+        # the deck places the portrait; the booklet does not
+        placed = {
+            BOOKLET_REF.sha1: {LETTER_REF.sha1},
+            DECK_REF.sha1: {PORTRAIT_REF.sha1},
+        }
+        dated = claim("inception", JULY_28, PORTRAIT_REF.model_dump())
+        (problem,) = checked(dated, placed=placed)
+        assert problem.endswith("[document_subject]")
+        (refusal,) = pre_plan_refusals(
+            batch(dated), {}, placed, {LETTER_REF.sha1, PORTRAIT_REF.sha1}
+        ).values()
+        assert refusal[0] == "subject_rule"
+
 
 class TestTheExcerpt:
     """A claim about an artifact other than its own source carries the
@@ -324,10 +354,18 @@ class TestTheExcerpt:
         ((reason, warning),) = refusals.values()
         assert reason == "subject_rule"
         assert (
-            "its subject is an artifact other than its own source, and it "
-            "carries no excerpt of the passage that conveys it "
-            "(ADR-0039 §10.4)"
+            "its subject is not its own source, and it carries no excerpt "
+            "of the passage that conveys it (ADR-0039 §10.4)"
         ) in warning
+
+    def test_an_excerpt_the_instance_keeps_blank_is_refused(self):
+        # U+180E is no whitespace to Python, but the instance trims it
+        blank = claim("inception", JULY_28, LETTER, excerpt="\u180e")
+        assert checked(blank, placed=PLACED) == []
+        ((reason, warning),) = pre_plan_refusals(
+            batch(blank), {}, PLACED, {LETTER_REF.sha1}
+        ).values()
+        assert reason == "subject_rule" and "no excerpt" in warning
 
     def test_a_document_s_claim_about_itself_needs_none(self):
         itself = claim(
@@ -435,6 +473,28 @@ class TestNoExtractionNamesAnArtifactKind:
             local("u1", "portret", "unclassified_entity"),
         )
         assert artifact_kind_problems(batch(classed)) == []
+
+    def test_a_manifest_turn_refused_for_one_is_counted(self, tmp_path):
+        # the first answer types the letter's image as a photograph and is
+        # refused; the second mends it: the turn stands, and the refusal is
+        # counted in the coverage (Q5)
+        typed = {"id": "e1", "label": "portret", "kind": "photograph"}
+        mended = {**typed, "kind": "unclassified_entity"}
+        llm = ScriptedLlm(
+            [
+                json.dumps({"entities": [typed]}),
+                json.dumps({"entities": [mended]}),
+                ndjson([]),
+            ]
+        )
+        ChunkedClaimExtractor(llm, state_dir=tmp_path / "state").extract(
+            booklet(), BOOKLET_REF
+        )
+        coverage = json.loads(
+            (tmp_path / "state" / "coverage.json").read_text()
+        )
+        assert coverage["manifest_artifact_kind"] == 1
+        assert coverage["fallback"] == {}
 
     def test_a_manifest_of_one_poisons_salvage(self):
         with pytest.raises(ValueError, match=r"\[artifact_kind\]"):
@@ -613,8 +673,9 @@ class TestThePrompts:
             "an image this document places, by its artifact reference "
             "exactly as listed below; or a document this text mentions (a "
             "letter's enclosure), by its local reference, an "
-            '`unclassified_entity` whose type_hint says what it is ("death '
-            'certificate", "photograph"); and never anything else.',
+            "`unclassified_entity` whose type_hint (in the entity manifest) "
+            'or label says what it is ("death certificate", "photograph"); '
+            "and never anything else.",
             "Never give an entity an artifact kind (`photograph`, `letter`, "
             "`certificate` and the like): a document the text mentions is an "
             "`unclassified_entity` with a type_hint.",
@@ -638,13 +699,18 @@ class TestThePrompts:
             "`author` (Wastl) and `addressee` (Klara)",
             "a slide's title over its one photograph gives one `shows` per "
             "person it names",
+            # Q7: the relation note rides with a reading of the title
+            "with the same judgement note where the caption has one",
+            # the claim's page is the passage's
+            "its page number the page the passage stands on",
             # Q7: the caption's date dates nothing it names
             'the caption\'s "July 1939" does not say whether the letter was '
             "written, sent or received then, so it gives no `inception`",
             # a reproduction line gives no claim
-            'a line on the reproduction ("Scanned for this booklet, 2010.") '
-            "says who copied the image and when, not who made the original "
-            "or when, so it gives none at all.",
+            'a line on the reproduction ("Scanned by Nicholas for this '
+            'booklet, 2010.") says who copied the image and when, not who '
+            "made the original or when, so it gives none of these "
+            "properties; where it speaks of the image it stays a caption.",
             # a translation gives the claims and no caption
             "A translation of the image's own text is no caption: it conveys "
             "what that text states (its dateline, its place, its greeting), "
@@ -703,6 +769,60 @@ class TestThePrompts:
         ) in entities
 
 
+class TestTheManifestText:
+    """The seven descriptions drop "the subject is the source document
+    itself", and those that said "as the document itself states" cover a
+    source that conveys them about another artifact (ADR-0039 §10.5)."""
+
+    def test_no_description_says_the_subject_is_the_source(self):
+        from yizkr.model.schema import load_manifest
+
+        properties = load_manifest().properties
+        for key in load_acceptance().document_subjects:
+            assert "the subject is the source document itself" not in (
+                properties[key].description
+            ), key
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "author",
+            "addressee",
+            "inception",
+            "location_of_creation",
+            "main_subject",
+            "shows",
+        ],
+    )
+    def test_each_covers_what_a_passage_conveys(self, key):
+        from yizkr.model.schema import load_manifest
+
+        description = " ".join(
+            load_manifest().properties[key].description.split()
+        )
+        assert "a source's passage conveys of a" in description, key
+
+
+class TestTheReportForms:
+    def test_other_is_given_only_when_counted(self):
+        from collections import Counter
+
+        from yizkr.pipeline import report
+
+        vocabulary = report._Vocabulary(
+            frozenset(), frozenset({"inception"}), frozenset()
+        )
+        counted = report._container_claims(
+            Counter({"inception": 1}), Counter({"source": 1}), vocabulary
+        )
+        assert counted["document_subject_by_form"] == {
+            "source": 1,
+            "placed": 0,
+            "record": 0,
+            "mention": 0,
+        }
+
+
 # -- the critic ---------------------------------------------------------------
 
 
@@ -737,6 +857,38 @@ class TestTheCritic:
         assert "page 6, image 1 | author | e3 | times: -" in prompt
         assert '"this document" for the source itself' in flat(prompt)
 
+    def test_the_support_test_names_the_artifact(self):
+        prompt = flat(
+            critique.critique_prompt(
+                self.claims(), booklet(), ["author"], ["human"]
+            )
+        )
+        assert (
+            "For a claim about an artifact (this document, an image it "
+            "places, or a document it mentions), the fact includes which "
+            "artifact: the passage must convey it of that one."
+        ) in prompt
+        assert "or, for a claim about an artifact, on which artifact it " in (
+            flat(critique.CATEGORIES["excerpt_does_not_state"])
+        )
+
+    def test_a_deck_s_image_is_named_by_its_slide_and_first_place(self):
+        from tests.unit.test_container_claims import ALBUM_REF, paged
+        from yizkr.pipeline.transcribe import DECK_ENGINE
+
+        deck = paged(
+            DECK_REF,
+            [
+                (2, [ALBUM_REF.sha1], "Wastl and Hilde"),
+                (3, [PORTRAIT_REF.sha1, ALBUM_REF.sha1], "Stupfield"),
+            ],
+            engine=DECK_ENGINE,
+        )
+        assert critique.artifact_places(deck) == {
+            ALBUM_REF.sha1: "slide 2, image 1",
+            PORTRAIT_REF.sha1: "slide 3, image 1",
+        }
+
     def test_without_its_transcription_an_image_is_its_content_key(self):
         assert critique.listings(self.claims())[0][0] == str(LETTER_REF)
 
@@ -758,6 +910,14 @@ class TestTheCritic:
         found = critique.check(finding, self.claims(), vocabulary, places)
         assert isinstance(found, critique.Finding)
         assert critique.claim_of(found, self.claims(), places) == 0
+        marked = {
+            **finding,
+            "claim": {**finding["claim"], "subject": "Page 6, image 1"},
+        }
+        assert isinstance(
+            critique.check(marked, self.claims(), vocabulary, places),
+            critique.Finding,
+        )
         unresolved = critique.check(finding, self.claims(), vocabulary)
         assert isinstance(unresolved, critique.Invalid)
 

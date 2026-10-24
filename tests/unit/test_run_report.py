@@ -3899,6 +3899,7 @@ class TestWhatSourcesSayOfArtifacts:
             "schema": 1,
             HOSTILE: 1,
         }
+        counts["manifest_artifact_kind"] = 2
         covered.write_text(json.dumps(counts))
         return build(path, now=NOW)
 
@@ -3931,6 +3932,11 @@ class TestWhatSourcesSayOfArtifacts:
         # the other extractions' coverage, written before it counted
         # reasons, counts none
         assert rejects["by_reason_absent"] == rejects["extractions"] - 1
+        # the entity-manifest answers refused for an artifact kind (#646)
+        assert rejects["manifest_artifact_kind"] == 2
+        assert rejects["manifest_artifact_kind_absent"] == (
+            rejects["extractions"] - 1
+        )
 
     def test_report_md_gives_them_by_name_alone(self, counted):
         text = render_markdown(counted["aggregate"])
@@ -3944,5 +3950,8 @@ class TestWhatSourcesSayOfArtifacts:
         assert "Rejects by reason: placed_subject 2, other 1, schema 1" in (
             text
         )
+        assert (
+            "Entity-manifest answers refused for naming an artifact kind: 2"
+        ) in text
         assert leaks(text) == []
         assert "Wastl" not in text and HOSTILE not in text

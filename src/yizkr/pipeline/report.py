@@ -1161,6 +1161,9 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
                     coverage.get("rejected_by_reason")
                 ),
                 "unread_objects": _count(coverage.get("unread_objects")),
+                "manifest_artifact_kind": _counted(
+                    coverage.get("manifest_artifact_kind")
+                ),
                 "fallback": sorted(
                     tier for tier in fallback if isinstance(tier, str)
                 )
@@ -2559,6 +2562,9 @@ def _aggregate_content(
     # extractions whose coverage counts none
     by_reason: Counter = Counter()
     reasons_absent = 0
+    # the entity-manifest answers refused for naming an artifact kind
+    # (ADR-0039 §10.1(b)), and the extractions whose coverage counts none
+    manifest_artifact_kind = artifact_kind_absent = 0
     record_extractions = records_given = recordless = notes_set_aside = 0
     records_set_aside = unsplit_forms = appellation_labels = 0
     appellation_parts = containers_checked = 0
@@ -2603,6 +2609,10 @@ def _aggregate_content(
                 reasons_absent += 1
             else:
                 by_reason.update(coverage["rejected_by_reason"])
+            if coverage.get("manifest_artifact_kind") is None:
+                artifact_kind_absent += 1
+            else:
+                manifest_artifact_kind += coverage["manifest_artifact_kind"]
             fallbacks.update(
                 _known(tier, FALLBACK_TIERS) for tier in coverage["fallback"]
             )
@@ -2688,6 +2698,8 @@ def _aggregate_content(
                 by_reason, lambda value: _known(value, REJECT_REASONS)
             ),
             "by_reason_absent": reasons_absent,
+            "manifest_artifact_kind": manifest_artifact_kind,
+            "manifest_artifact_kind_absent": artifact_kind_absent,
         },
         "quotes": {
             "extractions": quote_extractions,
@@ -3510,6 +3522,14 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
                         f" (extractions that count none: "
                         f"{_n(rejects['by_reason_absent'])})"
                         if rejects["by_reason_absent"]
+                        else ""
+                    ),
+                    "Entity-manifest answers refused for naming an "
+                    f"artifact kind: {_n(rejects['manifest_artifact_kind'])}"
+                    + (
+                        f" (extractions that count none: "
+                        f"{_n(rejects['manifest_artifact_kind_absent'])})"
+                        if rejects["manifest_artifact_kind_absent"]
                         else ""
                     ),
                     f"Fallback tiers taken: {_listed(content['fallbacks'])}",

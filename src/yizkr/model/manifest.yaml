@@ -624,9 +624,9 @@ properties:
     datatype: quantity
 
   # The subject is the source document itself, named by its content key
-  # as a claim's source is, an artifact it places, or the artifact its
-  # record makes or its text mentions (document_subject, ADR-0035 §3.4,
-  # ADR-0039 §10).
+  # as a claim's source is, an artifact it places, the artifact its
+  # record makes, or its own mention of one its text mentions
+  # (document_subject, ADR-0035 §3.4, ADR-0039 §10).
   issued_by:
     label: issued by
     description: >-

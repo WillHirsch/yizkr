@@ -143,7 +143,8 @@ CATEGORIES: dict[str, str] = {
     ),
     "excerpt_does_not_state": (
         "any other claim whose excerpt fails the support test, on its value "
-        "or on its times: name the claim. Such a claim that cites no "
+        "or on its times, or, for a claim about an artifact, on which "
+        "artifact it concerns: name the claim. Such a claim that cites no "
         "excerpt is not judged"
     ),
 }
@@ -668,16 +669,24 @@ def claim_of(
 ) -> int | None:
     """The index of the claim of `batch` the finding names, as the prompt
     lists it (listings, with `places`), when that claim names the
-    finding's entity; None otherwise."""
+    finding's entity; None otherwise. A subject named by an image's place
+    is matched whatever its case, as the transcription's markers write
+    "Page 6, image 1" where the rows write "page 6, image 1"."""
     if finding.claim is None:
         return None
+    named_places = {place.casefold() for place in (places or {}).values()}
+
+    def subject_key(subject: str) -> str:
+        folded = subject.casefold()
+        return folded if folded in named_places else subject
+
     wanted = (
-        finding.claim.subject,
+        subject_key(finding.claim.subject),
         finding.claim.property,
         finding.claim.value,
     )
-    for index, listing in enumerate(listings(batch, places)):
-        if listing == wanted:
+    for index, (subject, *rest) in enumerate(listings(batch, places)):
+        if (subject_key(subject), *rest) == wanted:
             claim = batch.claims[index]
             return index if finding.entity in named(claim) else None
     return None

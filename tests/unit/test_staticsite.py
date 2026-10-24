@@ -3233,3 +3233,29 @@ class TestWhatOtherSourcesSay:
             "</span>",
         ]
         assert not (site / f"artifacts/{ENCLOSED}.html").exists()
+
+    def test_a_mention_s_label_is_escaped(self, tmp_path, vocabulary):
+        hostile = {
+            **other_row(
+                ENCLOSED,
+                "shows",
+                uri(KLARA),
+                LETTER,
+                "c23",
+                value_label="Klara Löbig",
+            ),
+            "artifactLabel": literal('<img src=x onerror=alert(1)>"&'),
+        }
+        site, _ = build(
+            tmp_path,
+            vocabulary,
+            {
+                "?printedNumber": [hostile],
+                **RESPONSES,
+                "GROUP_CONCAT(DISTINCT ?alias": [*PEOPLE, KLARAS_ROW],
+                "?kind wdt:": self.ARTIFACTS,
+            },
+        )
+        page = (site / f"people/{KLARA}.html").read_text()
+        assert "<img src=x" not in page
+        assert "shown in &lt;img src=x onerror=alert(1)&gt;&quot;&amp;" in page
