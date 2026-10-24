@@ -1308,6 +1308,9 @@ class ChunkedClaimExtractor:
         # the trailing commas read in the manifest answer the extraction
         # used (scan_json_answer)
         self._trailing_commas = 0
+        # the entities the manifest dropped for a kind no extraction makes
+        # (`birth`, `death`), by id, with that kind (ADR-0040 §7)
+        self._dropped_kinds: dict[str, str] = {}
         # each claim whose excerpt the transcription does not hold
         # (excerpt_audit)
         self._quotes: list[dict] = []
@@ -1430,7 +1433,10 @@ class ChunkedClaimExtractor:
         stands, so no chunk is asked and no fallback tier is taken. A
         record of a kind that is no manifest item, or of an artifact kind,
         which no extraction names (ADR-0039 §10.1(b)), is a problem that
-        makes the answer unusable.
+        makes the answer unusable. A record of a kind only a curator makes
+        (`birth`, `death`, ADR-0040 §7) is dropped alone, never failing the
+        turn, and kept by id with its kind, so its claims are rejected
+        under a reason of their own (salvage_valid_claims).
 
         An entity's mention record or judgement note that fails validation
         is set aside, never repaired and never the reason the manifest is
@@ -1451,7 +1457,8 @@ class ChunkedClaimExtractor:
         bracket or brace is read as JSON syntax, and the manifest counts
         each one (scan_json_answer)."""
         _, item_keys = load_vocabulary()
-        artifact_kinds = load_acceptance().artifact_kinds
+        acceptance = load_acceptance()
+        artifact_kinds = acceptance.artifact_kinds
         scan = scan_json_answer(response)
         for obj in scan.objects:
             if "entities" not in obj:
@@ -1499,6 +1506,14 @@ class ChunkedClaimExtractor:
                 return None, [str(exc)[:300]]
             problems: list[str] = []
             seen: set[str] = set()
+            dropped = {
+                record.id: record.kind
+                for record in records
+                if record.kind in acceptance.unextracted_kinds
+            }
+            records = [
+                record for record in records if record.id not in dropped
+            ]
             for record in records:
                 if record.id in seen:
                     problems.append(f"duplicate entity id {record.id!r}")
@@ -1528,6 +1543,7 @@ class ChunkedClaimExtractor:
                     set_aside_records,
                     containers,
                     scan.trailing_commas,
+                    dropped,
                 ),
                 problems,
             )
@@ -1622,6 +1638,7 @@ class ChunkedClaimExtractor:
             self._set_aside_records = manifest.set_aside_records
             self._containers = manifest.containers
             self._trailing_commas = manifest.trailing_commas
+            self._dropped_kinds = manifest.dropped_kinds
             return manifest.entities, None, handle
         if not answered:
             raise RuntimeError(
@@ -1921,6 +1938,7 @@ class ChunkedClaimExtractor:
         self._set_aside_records = 0
         self._containers = []
         self._trailing_commas = 0
+        self._dropped_kinds = {}
         self._quotes = []
         self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
 
@@ -2245,7 +2263,11 @@ class ChunkedClaimExtractor:
         # from `source` (extract._normalize_claim_shape)
         moved = sum(language_on_source(claim) for claim in deduped)
         batch, rejects = salvage_valid_claims(
-            deduped, run, entities=entities_payload, placed=placed
+            deduped,
+            run,
+            entities=entities_payload,
+            placed=placed,
+            dropped=self._dropped_kinds,
         )
         rejects = transform_rejects + settled_rejects + rejects
         self._rejects = rejects
@@ -2288,6 +2310,11 @@ class ChunkedClaimExtractor:
             + sum(c.trailing_commas for c in outcomes if c is not None),
             "fallback": dict(self.fallback),
             "manifest_artifact_kind": self._manifest_artifact_kind,
+            # the manifest's entities dropped for a kind only a curator
+            # makes, by kind (ADR-0040 §7)
+            "manifest_vital_kind": dict(
+                sorted(Counter(self._dropped_kinds.values()).items())
+            ),
             "retried_chunks": self.retried_chunks,
             "excerpt_language_moved": moved,
         }
@@ -2636,8 +2663,9 @@ class _Manifest(NamedTuple):
     """An entity manifest as parsed: its entities; the mention records
     and judgement notes set aside, counted by the category of each
     reason; the number of entities whose mention record was set
-    aside; the audit of each place container checked; and the trailing
-    commas read as JSON syntax in its answer (scan_json_answer)."""
+    aside; the audit of each place container checked; the trailing
+    commas read as JSON syntax in its answer (scan_json_answer); and the
+    entities dropped for a kind only a curator makes."""
 
     entities: list[EntityRecord]
     set_aside: dict[str, int]
@@ -2647,6 +2675,9 @@ class _Manifest(NamedTuple):
     containers: list[dict]
     # the trailing commas read as JSON syntax (scan_json_answer)
     trailing_commas: int
+    # the entities dropped for a kind only a curator makes, by id, with
+    # that kind (ADR-0040 §7)
+    dropped_kinds: dict[str, str]
 
 
 def _set_aside_note(entity: dict) -> tuple[dict, list[str]]:

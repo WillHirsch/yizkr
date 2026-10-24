@@ -137,7 +137,7 @@ CERTIFICATE = {
     "kind": "unclassified_entity",
     "type_hint": "death certificate",
 }
-DEATH = {"id": "d1", "label": "death of Rudolf Löbig", "kind": "death"}
+RUDOLF = {"id": "d1", "label": "Rudolf Löbig", "kind": "human"}
 
 
 def translation() -> list[dict]:
@@ -175,7 +175,9 @@ def enclosure() -> dict:
     its own mention of it (ADR-0039 §10.1(c), route (c4))."""
     return claim(
         "main_subject",
-        item("d1", "death of Rudolf Löbig", "death"),
+        # ADR-0040 §2.9: the certificate is about Rudolf, a person, since
+        # no item stands for his death
+        item("d1", "Rudolf Löbig", "human"),
         local("u1", "death certificate", "unclassified_entity"),
         source=LETTER_1958_REF,
         excerpt=ENCLOSING,
@@ -288,9 +290,9 @@ class TestTheSubjectForms:
         """(c4): the letter's `main_subject` of the death certificate it
         encloses stands on its own mention item, an unclassified entity
         with the type hint "death certificate"."""
-        assert checked(enclosure(), entities=[CERTIFICATE, DEATH]) == []
+        assert checked(enclosure(), entities=[CERTIFICATE, RUDOLF]) == []
         refusals = pre_plan_refusals(
-            batch(enclosure(), entities=[CERTIFICATE, DEATH]), {}
+            batch(enclosure(), entities=[CERTIFICATE, RUDOLF]), {}
         )
         assert refusals == {}
 
@@ -314,7 +316,9 @@ class TestTheSubjectForms:
         assert checked(dated, entities=[photograph]) == []
         assert pre_plan_refusals(batch(dated, entities=[photograph]), {}) == {}
 
-    @pytest.mark.parametrize("kind", ["human", "artifact_fragment", "death"])
+    @pytest.mark.parametrize(
+        "kind", ["human", "artifact_fragment", "deportation"]
+    )
     def test_no_other_kind_of_entity_takes_one(self, kind):
         wrong = claim("inception", JULY_28, local("x1", "x", kind), page=None)
         (problem,) = [
@@ -367,7 +371,7 @@ class TestAConfirmedMention:
 
     def test_validation_and_the_writer_take_it(self):
         confirmed = self.confirmed(
-            enclosure(), entities=[CERTIFICATE, DEATH], approved={"u1": "Q41"}
+            enclosure(), entities=[CERTIFICATE, RUDOLF], approved={"u1": "Q41"}
         )
         assert confirmed.claims[0].subject.qid == self.HELD
         assert validate_against_manifest(confirmed) == []
@@ -384,7 +388,9 @@ class TestAConfirmedMention:
         assert validate_against_manifest(confirmed) == []
         assert pre_plan_refusals(confirmed, {}) == {}
 
-    @pytest.mark.parametrize("kind", ["human", "death", "artifact_fragment"])
+    @pytest.mark.parametrize(
+        "kind", ["human", "deportation", "artifact_fragment"]
+    )
     def test_no_other_confirmed_entity_takes_one(self, kind):
         wrong = claim("inception", JULY_28, local("x1", "x", kind), page=None)
         confirmed = self.confirmed(
@@ -416,7 +422,7 @@ class TestAConfirmedMention:
         confirmed = self.confirmed(
             enclosure(),
             outright,
-            entities=[CERTIFICATE, DEATH],
+            entities=[CERTIFICATE, RUDOLF],
             approved={"u1": "Q41"},
         )
         again = apply_equivalences(
@@ -431,7 +437,7 @@ class TestAConfirmedMention:
 
     def test_the_record_survives_a_round_trip_and_a_second_pass(self):
         confirmed = self.confirmed(
-            enclosure(), entities=[CERTIFICATE, DEATH], approved={"u1": "Q41"}
+            enclosure(), entities=[CERTIFICATE, RUDOLF], approved={"u1": "Q41"}
         )
         (former,) = (claim.confirmed_from for claim in confirmed.claims)
         assert (former.local_id, former.instance_of) == (
@@ -455,7 +461,7 @@ class TestAConfirmedMention:
             "subject": {"kind": "local", "local_id": "u1"},
         }
         confirmed = self.confirmed(
-            bare, entities=[CERTIFICATE, DEATH], approved={"u1": "Q41"}
+            bare, entities=[CERTIFICATE, RUDOLF], approved={"u1": "Q41"}
         )
         assert confirmed.claims[0].confirmed_from.instance_of == (
             "unclassified_entity"
@@ -481,7 +487,7 @@ class TestAConfirmedMention:
 
     def test_a_record_confirmed_as_another_item_is_refused(self):
         confirmed = self.confirmed(
-            enclosure(), entities=[CERTIFICATE, DEATH], approved={"u1": "Q41"}
+            enclosure(), entities=[CERTIFICATE, RUDOLF], approved={"u1": "Q41"}
         )
         moved = confirmed.model_copy(
             update={
@@ -522,7 +528,7 @@ class TestAConfirmedMention:
         confirmed = self.confirmed(
             enclosure(),
             twin,
-            entities=[CERTIFICATE, second, DEATH],
+            entities=[CERTIFICATE, second, RUDOLF],
             approved={"u1": "Q41", "u2": "Q41"},
         )
         (kept,) = confirmed.claims
@@ -537,7 +543,7 @@ class TestAConfirmedMention:
             },
         }
         confirmed = self.confirmed(
-            blank, entities=[CERTIFICATE, DEATH], approved={"u1": "Q41"}
+            blank, entities=[CERTIFICATE, RUDOLF], approved={"u1": "Q41"}
         )
         ((reason, warning),) = pre_plan_refusals(confirmed, {}).values()
         assert reason == "subject_rule"
@@ -545,7 +551,7 @@ class TestAConfirmedMention:
 
     def test_another_item_than_the_one_confirmed_is_refused(self):
         confirmed = self.confirmed(
-            enclosure(), entities=[CERTIFICATE, DEATH], approved={"u1": "Q41"}
+            enclosure(), entities=[CERTIFICATE, RUDOLF], approved={"u1": "Q41"}
         )
         moved = confirmed.model_copy(
             update={
@@ -569,7 +575,7 @@ class TestAConfirmedMention:
             "source": {"artifact": LETTER_1958_REF.model_dump()},
         }
         confirmed = self.confirmed(
-            bare, entities=[CERTIFICATE, DEATH], approved={"u1": "Q41"}
+            bare, entities=[CERTIFICATE, RUDOLF], approved={"u1": "Q41"}
         )
         (problem,) = validate_against_manifest(confirmed)
         assert problem.endswith("[excerpt_required]")
@@ -603,7 +609,7 @@ class TestAConfirmedMention:
         rival = getattr(self, other)()
         pair = [rival, enclosure()] if first else [enclosure(), rival]
         person = {"id": "p1", "label": "Rudolf Löbig", "kind": "human"}
-        extracted = batch(*pair, entities=[CERTIFICATE, DEATH, person])
+        extracted = batch(*pair, entities=[CERTIFICATE, RUDOLF, person])
         approved = {"u1": "Q41", "p1": "Q41"}
         confirmed = apply_equivalences(extracted, approved)
         again = apply_equivalences(
@@ -623,7 +629,7 @@ class TestAConfirmedMention:
         person = {"id": "p1", "label": "Rudolf Löbig", "kind": "human"}
         confirmed = self.confirmed(
             self.of_a_person(),
-            entities=[person, DEATH],
+            entities=[person, RUDOLF],
             approved={"p1": "Q41"},
         )
         (made,) = confirmed.claims
@@ -647,7 +653,7 @@ class TestAConfirmedMention:
         qids = registered(wiki, LETTER_1958_REF, CERTIFICATE_1941_REF)
         held = qids[CERTIFICATE_1941_REF.sha1]
         confirmed = self.confirmed(
-            enclosure(), entities=[CERTIFICATE, DEATH], approved={"u1": held}
+            enclosure(), entities=[CERTIFICATE, RUDOLF], approved={"u1": held}
         )
         result = write_mapped(BatchWriter(wiki), confirmed)
         assert (result.written, result.refused) == (1, [])
@@ -705,7 +711,7 @@ class TestTheExcerpt:
     )
     def test_a_claim_about_another_artifact_needs_its_excerpt(self, bare):
         entities = (
-            [CERTIFICATE, DEATH] if bare["property"] == "main_subject" else []
+            [CERTIFICATE, RUDOLF] if bare["property"] == "main_subject" else []
         )
         (problem,) = checked(bare, placed=PLACED, entities=entities)
         assert problem.endswith("[excerpt_required]")
@@ -1001,7 +1007,7 @@ class TestTheWriter:
         qids = registered(wiki, LETTER_1958_REF)
         result = write_mapped(
             BatchWriter(wiki),
-            batch(enclosure(), entities=[CERTIFICATE, DEATH]),
+            batch(enclosure(), entities=[CERTIFICATE, RUDOLF]),
         )
         assert (result.written, result.refused) == (1, [])
         mention = result.created_items["u1"]

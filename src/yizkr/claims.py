@@ -354,6 +354,19 @@ class QuantityValue(StrictModel):
         return {"amount": f"{self.amount:+g}", "unit": "1"}
 
 
+class UnknownValue(StrictModel):
+    """A value the source states exists but does not give: a death stated
+    without its date ("the late Felix", a GEDCOM `1 DEAT Y`), a burial
+    stated without its place. Written as Wikibase's "some value". Only
+    `date_of_death` and `burial_place` take it, as the claim's own value,
+    never a qualifier's; it carries the words that state the death or the
+    burial as its excerpt, and no earliest date, latest date or circa,
+    since the source states no limit (ADR-0040 §2.2). A blank field, "d. ?"
+    or "date unknown" gives no claim at all."""
+
+    type: Literal["unknown"] = "unknown"
+
+
 Value = Annotated[
     ItemValue
     | StringValue
@@ -361,7 +374,8 @@ Value = Annotated[
     | MonolingualValue
     | TimeValue
     | CoordinateValue
-    | QuantityValue,
+    | QuantityValue
+    | UnknownValue,
     Field(discriminator="type"),
 ]
 
@@ -879,7 +893,13 @@ def validate_against_manifest(
       own subject: the same local id, the same QID, the same vocabulary
       item, or a local ref resolved to the subject's QID. No property of
       the manifest takes its subject as its own value;
-    * a death's principal is never also its informant (ADR-0035 §3.2);
+    * the rules of deaths and births on the person (vital_problems,
+      ADR-0040): an entity of a kind no extraction makes (`birth`,
+      `death`), the unknown value's rules, a death or birth property on a
+      subject that is no person, `parentage` on a property that is no
+      parent's or child's, a union `ended_by_death_of` someone the batch
+      calls widowed or who is neither of the couple it names, and a value
+      naming a person the entity manifest leaves out;
     * a claim of a property the manifest marks `document_subject` has
       one of the subjects document_subject_form names: its own source,
       an artifact its source places, a batch entity of an artifact kind,
@@ -933,6 +953,12 @@ def validate_against_manifest(
             errors.append(
                 f"{where}: kind names unknown item key {entity.kind!r}"
             )
+        elif entity.kind in acceptance.unextracted_kinds:
+            errors.append(
+                f"{where}: kind {entity.kind!r} is made only by a curator, "
+                f"never by a batch: a source's {entity.kind} is statements "
+                f"on the person (ADR-0040 §3, §7) [{VITAL_KIND}]"
+            )
 
     def check_ref(ref, where: str) -> None:
         if isinstance(ref, VocabRef) and ref.key not in items:
@@ -982,6 +1008,9 @@ def validate_against_manifest(
                 f"the claim schema does not support yet"
             )
             return
+        if isinstance(value, UnknownValue):
+            # the unknown value's own rules are vital_problems'
+            return
         if value.type != expected:
             errors.append(
                 f"{where}: property {prop!r} ({datatype}) requires a "
@@ -1027,8 +1056,6 @@ def validate_against_manifest(
                 f"{subject_key}; a value is never its own subject"
             )
 
-    # roles each person holds in each death, across the batch's claims
-    death_roles: dict[tuple[str, str], set[str]] = {}
     for index, claim in enumerate(batch.claims):
         where = f"claims[{index}]"
         subject_kind = kind_of(claim.subject)
@@ -1086,26 +1113,8 @@ def validate_against_manifest(
                 subject_key,
                 f"{where}.qualifiers[{q_index}]",
             )
-        if (
-            claim.property == "participant"
-            and subject_kind == "death"
-            and isinstance(claim.value, ItemValue)
-        ):
-            roles = death_roles.setdefault(
-                (ref_key(claim.subject), ref_key(claim.value.value)), set()
-            )
-            roles.update(
-                qualifier.value.value.key
-                for qualifier in claim.qualifiers
-                if qualifier.property == "object_has_role"
-                and isinstance(qualifier.value, ItemValue)
-                and isinstance(qualifier.value.value, VocabRef)
-            )
-            if {"principal", "informant"} <= roles:
-                errors.append(
-                    f"{where}: a death's principal is never also its "
-                    f"informant (ADR-0035 §3.2)"
-                )
+    for index, problems in vital_problems(batch, acceptance).items():
+        errors.extend(f"claims[{index}]{problem}" for problem in problems)
 
     return errors
 
@@ -1396,8 +1405,35 @@ SUBJECT_REASONS = (
 # an extraction's claim names an artifact kind for an entity, which no
 # extraction may (artifact_kind_problems, ADR-0039 §10.1(b))
 ARTIFACT_KIND = "artifact_kind"
+# The reason codes of the rules of deaths and births on the person
+# (vital_problems, ADR-0040), each counted on its own: a reference to an
+# entity of a kind no extraction makes (`birth`, `death`); an unknown
+# value where it is not taken, or with a bound; an unknown value with no
+# excerpt (Q10); a death or birth property on a subject that is no person
+# (Q11); `parentage` on a property that is no parent's or child's; a union
+# `ended_by_death_of` someone who is neither of the couple the batch
+# names; one ended by the death of someone the batch calls widowed (§2.5's
+# guard); a value naming a person the entity manifest leaves out (§2.8).
+VITAL_KIND = "vital_kind"
+UNKNOWN_VALUE = "unknown_value"
+UNKNOWN_EXCERPT = "unknown_excerpt"
+VITAL_SUBJECT = "vital_subject"
+PARENTAGE_PROPERTY = "parentage_property"
+END_NOT_PARTNER = "end_not_partner"
+WIDOWED_END = "widowed_end"
+LEFT_OUT_PERSON = "left_out_person"
+VITAL_REASONS = (
+    VITAL_KIND,
+    UNKNOWN_VALUE,
+    UNKNOWN_EXCERPT,
+    VITAL_SUBJECT,
+    PARENTAGE_PROPERTY,
+    END_NOT_PARTNER,
+    WIDOWED_END,
+    LEFT_OUT_PERSON,
+)
 # the codes a problem ends in, so reject_reasons reads them back
-CODED_REASONS = (*SUBJECT_REASONS, ARTIFACT_KIND)
+CODED_REASONS = (*SUBJECT_REASONS, ARTIFACT_KIND, *VITAL_REASONS)
 # a reject's other reasons: its JSON did not parse as a claim, or the
 # manifest refused it otherwise
 SCHEMA_REASON = "schema"
@@ -1470,6 +1506,198 @@ def artifact_kind_problems(
                     f"§10.1(b)) [{ARTIFACT_KIND}]"
                 )
     return problems
+
+
+# the properties `parentage` qualifies (ADR-0040 §4)
+PARENTAGE_PROPERTIES = frozenset({"father", "mother", "child"})
+# the qualifiers that bound or approximate a value, which an unknown value
+# never carries: its source states no limit (ADR-0040 §2.2)
+UNKNOWN_BOUNDS = frozenset(
+    {"earliest_date", "latest_date", "sourcing_circumstances"}
+)
+
+
+def vital_problems(
+    batch: ClaimBatch, acceptance: Acceptance | None = None
+) -> dict[int, list[str]]:
+    """The problems of each claim of `batch` under the rules of deaths and
+    births on the person (ADR-0040), by the claim's place in the batch,
+    each a location within the claim (``.value``, ``.subject`` or empty)
+    and a reason ending in its code (VITAL_REASONS):
+
+    * a local ref, the subject or a value, of a kind no extraction makes
+      (`Acceptance.unextracted_kinds`: `birth`, `death`), §3, §7;
+    * an unknown value (UnknownValue) of a property the manifest does not
+      mark `unknown_value`, or as a qualifier's value, or with a bound
+      (UNKNOWN_BOUNDS), §2.2;
+    * an unknown value with no excerpt, the words that state the death
+      or the burial (Q10);
+    * a property the manifest gives `subjects` (the death and birth
+      properties) on a subject of any other kind, or on a vocabulary
+      item: a QID subject has no kind here, so it is not checked (Q11);
+    * a `parentage` qualifier on a property that is no parent's or
+      child's (PARENTAGE_PROPERTIES), §4;
+    * a union `ended_by_death_of` someone who is neither of the couple,
+      where the batch names its participants (Q2);
+    * a union `ended_by_death_of` someone whose `civil_status` the same
+      batch gives as `widowed`: §2.5's guard, which needs no excerpt
+      match, and fails closed in the rare record of a widower who later
+      died in a second marriage;
+    * an item value naming a person (`human`) the entity manifest marks
+      `extract` false: an official or a witness the record gives no other
+      role (§2.8).
+
+    The writer refuses the same claims (writer.pre_plan_refusals)."""
+    acceptance = acceptance if acceptance is not None else load_acceptance()
+    kinds = {entity.id: entity.kind for entity in batch.entities}
+    qids = {entity.id: entity.qid for entity in batch.entities if entity.qid}
+    left_out = {
+        entity.id
+        for entity in batch.entities
+        if not entity.extract and entity.kind == "human"
+    }
+
+    def kind_of(ref) -> str | None:
+        if isinstance(ref, LocalRef):
+            return kinds.get(ref.local_id, ref.instance_of)
+        if isinstance(ref, VocabRef):
+            return ref.key
+        return None
+
+    def key(ref) -> str:
+        if isinstance(ref, LocalRef):
+            if ref.local_id in qids:
+                return f"qid:{qids[ref.local_id]}"
+            return f"local:{ref.local_id}"
+        if isinstance(ref, QidRef):
+            return f"qid:{ref.qid}"
+        if isinstance(ref, ArtifactRef):
+            return str(ref)
+        return f"vocab:{ref.key}"
+
+    couples: dict[str, set[str]] = {}
+    widowed: set[str] = set()
+    for claim in batch.claims:
+        if not isinstance(claim.value, ItemValue):
+            continue
+        if claim.property == "participant":
+            couples.setdefault(key(claim.subject), set()).add(
+                key(claim.value.value)
+            )
+        elif (
+            claim.property == "civil_status"
+            and isinstance(claim.value.value, VocabRef)
+            and claim.value.value.key == "widowed"
+        ):
+            widowed.add(key(claim.subject))
+
+    found: dict[int, list[str]] = {}
+    for index, claim in enumerate(batch.claims):
+        problems: list[str] = []
+        refs = [(".subject", claim.subject)]
+        if isinstance(claim.value, ItemValue):
+            refs.append((".value", claim.value.value))
+        refs += [
+            (f".qualifiers[{q_index}].value", qualifier.value.value)
+            for q_index, qualifier in enumerate(claim.qualifiers)
+            if isinstance(qualifier.value, ItemValue)
+        ]
+        for where, ref in refs:
+            kind = kind_of(ref) if isinstance(ref, LocalRef) else None
+            if kind in acceptance.unextracted_kinds:
+                problems.append(
+                    f"{where}: {ref.local_id!r} is of the kind {kind!r}, "
+                    f"which only a curator makes: a source's {kind} is "
+                    f"statements on the person (ADR-0040 §3, §7) "
+                    f"[{VITAL_KIND}]"
+                )
+        if isinstance(claim.value, UnknownValue):
+            if claim.property not in acceptance.unknown_values:
+                problems.append(
+                    f".value: property {claim.property!r} takes no unknown "
+                    f"value; only "
+                    f"{', '.join(sorted(acceptance.unknown_values))} do "
+                    f"(ADR-0040 §2.2) [{UNKNOWN_VALUE}]"
+                )
+            else:
+                bounds = sorted(
+                    {
+                        qualifier.property
+                        for qualifier in claim.qualifiers
+                        if qualifier.property in UNKNOWN_BOUNDS
+                    }
+                )
+                if bounds:
+                    problems.append(
+                        f".value: an unknown value carries no "
+                        f"{', '.join(bounds)}: its source states no limit, "
+                        f"and a view derives any bound (ADR-0040 §2.2, "
+                        f"§2.4) [{UNKNOWN_VALUE}]"
+                    )
+                if not has_excerpt(claim):
+                    problems.append(
+                        f".value: an unknown value needs the words that "
+                        f"state it as its excerpt (ADR-0040 Q10) "
+                        f"[{UNKNOWN_EXCERPT}]"
+                    )
+        for q_index, qualifier in enumerate(claim.qualifiers):
+            if isinstance(qualifier.value, UnknownValue):
+                problems.append(
+                    f".qualifiers[{q_index}].value: a qualifier takes no "
+                    f"unknown value (ADR-0040 §2.2) [{UNKNOWN_VALUE}]"
+                )
+        takes = acceptance.subjects.get(claim.property)
+        if takes is not None:
+            subject_kind = (
+                kind_of(claim.subject)
+                if isinstance(claim.subject, (LocalRef, VocabRef))
+                else None
+            )
+            # a kind the manifest lacks has its own refusal
+            if isinstance(claim.subject, VocabRef) or (
+                subject_kind in acceptance.kind_keys
+                and subject_kind not in takes
+            ):
+                problems.append(
+                    f".subject: property {claim.property!r} is a person's, "
+                    f"not a {subject_kind!r}'s (ADR-0040 §5, Q11) "
+                    f"[{VITAL_SUBJECT}]"
+                )
+        if claim.property not in PARENTAGE_PROPERTIES and any(
+            qualifier.property == "parentage" for qualifier in claim.qualifiers
+        ):
+            problems.append(
+                f": parentage qualifies only "
+                f"{', '.join(sorted(PARENTAGE_PROPERTIES))}, not "
+                f"{claim.property!r} (ADR-0040 §4) [{PARENTAGE_PROPERTY}]"
+            )
+        value = (
+            claim.value.value if isinstance(claim.value, ItemValue) else None
+        )
+        if isinstance(value, LocalRef) and value.local_id in left_out:
+            problems.append(
+                f".value: {value.local_id!r} is a person the entity "
+                f"manifest leaves out (extract false): one who only "
+                f"certifies, registers, officiates, examines, reports or "
+                f"witnesses (ADR-0040 §2.8) [{LEFT_OUT_PERSON}]"
+            )
+        if claim.property == "ended_by_death_of" and value is not None:
+            late = key(value)
+            couple = couples.get(key(claim.subject))
+            if couple and late not in couple:
+                problems.append(
+                    f".value: names neither of the couple the batch gives "
+                    f"the union (ADR-0040 Q2) [{END_NOT_PARTNER}]"
+                )
+            if late in widowed:
+                problems.append(
+                    f".value: the same batch gives this partner the civil "
+                    f"status widowed, so they are the survivor, not the "
+                    f"partner who died (ADR-0040 §2.5) [{WIDOWED_END}]"
+                )
+        if problems:
+            found[index] = problems
+    return found
 
 
 def reject_reasons(problems: Iterable[str]) -> list[str]:

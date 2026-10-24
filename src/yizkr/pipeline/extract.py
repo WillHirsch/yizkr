@@ -40,6 +40,7 @@ from pydantic import ValidationError
 import yizkr
 from yizkr.claims import (
     SCHEMA_REASON,
+    VITAL_KIND,
     ArtifactRef,
     ClaimBatch,
     ExtractionRunMetadata,
@@ -48,6 +49,7 @@ from yizkr.claims import (
     placed_artifacts,
     reject_reasons,
     validate_against_manifest,
+    vital_problems,
 )
 from yizkr.model.schema import load_acceptance, load_manifest
 from yizkr.pipeline.llm import (
@@ -696,6 +698,7 @@ def salvage_valid_claims(
     extraction_run: dict,
     entities: list[dict] | None = None,
     placed: Mapping[str, Collection[str]] | None = None,
+    dropped: Mapping[str, str] | None = None,
 ) -> tuple[ClaimBatch, list[dict]]:
     """Partition raw claim dicts into a valid ClaimBatch and rejects.
 
@@ -716,6 +719,15 @@ def salvage_valid_claims(
     whose value is one, is a reject too, and an entity manifest that
     gives one is refused: an extraction may not name an artifact kind
     (claims.artifact_kind_problems, ADR-0039 §10.1(b)).
+
+    `dropped` names, by id, the entities the manifest's parse dropped for
+    a kind no extraction makes (`birth`, `death`), with that kind: a claim
+    whose local ref names one is a reject under VITAL_KIND (ADR-0040 §7),
+    as is one whose ref is of such a kind by its `instance_of`. The rules
+    that read the whole batch (claims.vital_problems: a union
+    `ended_by_death_of` someone the batch calls widowed, or someone who is
+    neither of the couple it names) are applied to the claims that pass
+    one by one, and a claim they refuse is a reject too.
 
     Each reject carries its reason codes (`reasons`, claims.REJECT_REASONS),
     for a report to count without quoting it: `schema` for a claim that
@@ -740,9 +752,29 @@ def salvage_valid_claims(
             )
     valid: list = []
     rejects: list[dict] = []
+    dropped = dropped or {}
     for claim in claims:
         if isinstance(claim, dict):
             claim = _normalize_claim_shape(claim)
+        named = sorted(
+            {local_id for local_id in _local_ids(claim) if local_id in dropped}
+        )
+        if named:
+            rejects.append(
+                {
+                    "claim": claim,
+                    "problems": [
+                        f"local id {local_id!r} names a "
+                        f"{dropped[local_id]!r} entity, which the entity "
+                        f"manifest drops: a source's {dropped[local_id]} is "
+                        f"statements on the person (ADR-0040 §7) "
+                        f"[{VITAL_KIND}]"
+                        for local_id in named
+                    ],
+                    "reasons": [VITAL_KIND],
+                }
+            )
+            continue
         try:
             batch = ClaimBatch.model_validate(
                 {
@@ -772,17 +804,55 @@ def salvage_valid_claims(
                 }
             )
         else:
-            valid.append(claim)
+            valid.append((claim, batch.claims[0]))
+    passed = ClaimBatch.model_validate(
+        {
+            "extraction_run": extraction_run,
+            "claims": [parsed for _, parsed in valid],
+            "entities": entities,
+        }
+    )
+    refused = vital_problems(passed, acceptance)
+    rejects += [
+        {
+            "claim": valid[index][0],
+            "problems": [f"claim{problem}" for problem in problems],
+            "reasons": reject_reasons(problems),
+        }
+        for index, problems in refused.items()
+    ]
     return (
         ClaimBatch.model_validate(
             {
                 "extraction_run": extraction_run,
-                "claims": valid,
+                "claims": [
+                    claim
+                    for index, (claim, _) in enumerate(valid)
+                    if index not in refused
+                ],
                 "entities": entities,
             }
         ),
         rejects,
     )
+
+
+def _local_ids(value: object) -> list[str]:
+    """The local ids a raw claim names, wherever in it a local ref stands
+    (its subject, its value, its qualifiers' values)."""
+    if isinstance(value, dict):
+        found = (
+            [value["local_id"]]
+            if value.get("kind") == "local"
+            and isinstance(value.get("local_id"), str)
+            else []
+        )
+        for item in value.values():
+            found += _local_ids(item)
+        return found
+    if isinstance(value, list):
+        return [found for item in value for found in _local_ids(item)]
+    return []
 
 
 def _one_line(text: str) -> str:
@@ -827,14 +897,15 @@ def entity_kind_prompt_lines() -> tuple[str, str]:
     """Render the entity kinds for the manifest pass (ADR-0007).
 
     Returns (bare comma-joined keys, described block). The kinds are the
-    manifest items flagged `entity_kind`, so the offerable set is
-    declared in one place rather than restated in the prompt.
+    manifest items flagged `entity_kind`, less those no extraction makes
+    (`extracted` false: `birth`, `death`, ADR-0040 §7), so the offerable
+    set is declared in one place rather than restated in the prompt.
     """
     kinds = sorted(
         (
             (key, spec)
             for key, spec in load_manifest().items.items()
-            if spec.entity_kind
+            if spec.entity_kind and spec.extracted
         ),
         key=lambda entry: entry[0],
     )

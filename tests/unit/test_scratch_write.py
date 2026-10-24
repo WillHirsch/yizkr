@@ -1693,6 +1693,7 @@ def test_the_record_counts_the_claims_naming_their_own_subjects_item(
     # and by reason, every reason in its order (#552)
     assert documents[letter.sha1]["refused_by_reason"] == {
         "retired_or_reference_property": 0,
+        "vital_rule": 0,
         "subject_rule": 1,
         "text": 0,
         "side_rule": 0,
@@ -1716,6 +1717,7 @@ def test_the_record_counts_the_claims_naming_their_own_subjects_item(
     assert content["write"]["claims_self_referencing"] == 1
     assert content["write"]["claims_refused_by_reason"] == {
         "retired_or_reference_property": 0,
+        "vital_rule": 0,
         "subject_rule": 1,
         "text": 0,
         "side_rule": 0,
@@ -1723,7 +1725,8 @@ def test_the_record_counts_the_claims_naming_their_own_subjects_item(
     }
     (section,) = report._write_sections(content)
     assert (
-        "2 refused: 0 for a retired or reference property, 1 for the "
+        "2 refused: 0 for a retired or reference property, 0 for the "
+        "rules of deaths and births on the person, 1 for the "
         "subject rules, 0 for a text the instance cannot hold, 0 for an "
         "entity the side rule blocks, 1 for an item value that is the "
         "subject's item; " in section.blocks[0][0]

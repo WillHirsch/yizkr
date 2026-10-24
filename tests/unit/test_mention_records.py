@@ -81,11 +81,10 @@ ACCEPTS = {
     "sex_or_gender": {"male", "female"},
     "sourcing_circumstances": {"circa"},
     "object_has_role": {
+        # ADR-0040 §3, §2.8 retire `parent` and `informant` as roles
         "principal",
-        "parent",
         "partner",
         "spouse",
-        "informant",
         "witness",
         "officiant",
     },
@@ -102,6 +101,9 @@ ACCEPTS = {
         "kin_child_in_law",
         "kin_sibling_in_law",
         "kin_relative",
+        "kin_step_parent",
+        "kin_step_child",
+        "kin_step_sibling",
     },
     "side": {"paternal", "maternal"},
     "civil_status": {"unmarried", "married", "widowed", "divorced"},
@@ -113,7 +115,10 @@ ACCEPTS = {
         "judgement_other",
     },
     "started_by": {"wedding", "civil_wedding", "religious_wedding"},
-    "ended_by": {"divorce", "annulment", "death", "event"},
+    # ADR-0040 §2.5: a partner's death ends a union by ended_by_death_of
+    "ended_by": {"divorce", "annulment", "event"},
+    "ended_by_death_of": {"human"},
+    "parentage": {"parentage_birth", "parentage_adoptive", "parentage_foster"},
     "stated_in": {"artifact", "artifact_fragment"},
     "inferred_from_extraction_run": {"extraction_run"},
 }
@@ -355,9 +360,7 @@ ENTITIES = [
     entity("floerburg", "Flörburg", "place"),
     entity("standesamt", "Standesamt Flörburg", "organization"),
     entity("gustav", "Gustav Löbig", "human"),
-    entity("birth", "Gustav's birth", "birth"),
     entity("cecilie", "Cäcilie Löbig", "human"),
-    entity("death", "Cäcilie's death", "death"),
     entity("eugen", "Eugen Löbig", "human"),
     entity("hint", "RMS Flund", "unclassified_entity", type_hint="ship"),
 ]
@@ -380,13 +383,14 @@ class TestTheRelationDecidesTheKind:
             claim("imprisonment", "location", item("prison")),
             # the register office issued the birth register extract, the
             # claim's own source document and so its subject
-            claim("birth", "issued_by", item("standesamt"))
+            claim("gustav", "issued_by", item("standesamt"))
             | {"subject": {"kind": "artifact", "sha1": SHA1}},
             # the escape hatch goes wherever a real kind does
             claim("leopold", "residence", item("hint")),
             claim("marriage", "started_by", item("wedding")),
             claim("marriage", "ended_by", item("divorce")),
-            claim("marriage", "ended_by", item("death")),
+            # ADR-0040 §2.5: "Witwer der Cäcilie"
+            claim("marriage", "ended_by_death_of", item("cecilie")),
             claim(
                 "marriage",
                 "participant",
@@ -425,9 +429,9 @@ class TestTheRelationDecidesTheKind:
             # a participant claim points from the event to the person,
             # never from the person to the event
             (
-                claim("gustav", "participant", item("birth")),
+                claim("gustav", "participant", item("imprisonment")),
                 "participant",
-                "birth",
+                "imprisonment",
             ),
             (
                 claim("marriage", "started_by", item("divorce")),
@@ -435,9 +439,15 @@ class TestTheRelationDecidesTheKind:
                 "divorce",
             ),
             (
-                claim("marriage", "ended_by", item("birth")),
+                claim("marriage", "ended_by", item("imprisonment")),
                 "ended_by",
-                "birth",
+                "imprisonment",
+            ),
+            # a partner's death is no event that ends it (ADR-0040 §2.5)
+            (
+                claim("marriage", "ended_by", item("cecilie")),
+                "ended_by",
+                "human",
             ),
             (
                 claim("leopold", "sex_or_gender", vocab("circa")),
@@ -460,7 +470,7 @@ class TestTheRelationDecidesTheKind:
         [
             (claim("gustav", "father", vocab("human")), "father", "human"),
             (
-                claim("birth", "participant", vocab("human")),
+                claim("imprisonment", "participant", vocab("human")),
                 "participant",
                 "human",
             ),
@@ -475,9 +485,9 @@ class TestTheRelationDecidesTheKind:
                 "organization",
             ),
             (
-                claim("marriage", "ended_by", vocab("death")),
+                claim("marriage", "ended_by", vocab("divorce")),
                 "ended_by",
-                "death",
+                "divorce",
             ),
         ],
     )
@@ -495,7 +505,7 @@ class TestTheRelationDecidesTheKind:
     def test_a_qualifier_is_checked_too(self):
         (problem,) = problems(
             claim(
-                "birth",
+                "imprisonment",
                 "participant",
                 item("gustav"),
                 qualifier("object_has_role", vocab("circa")),
@@ -643,73 +653,39 @@ class TestReferenceProperties:
 
 class TestClaimStructure:
     def test_participant_roles(self):
-        # Gustav's birth register extract: the boy is its principal, and
-        # Sebastian a parent and the informant, on one claim
+        # Leopold's imprisonment: Leopold is its principal, and a kin
+        # witness keeps that role (ADR-0040 §2.8)
         assert (
             problems(
                 claim(
-                    "birth",
+                    "imprisonment",
                     "participant",
-                    item("gustav"),
+                    item("leopold"),
                     qualifier("object_has_role", vocab("principal")),
                 ),
                 claim(
-                    "birth",
+                    "imprisonment",
                     "participant",
-                    item("sebastian"),
-                    qualifier("object_has_role", vocab("parent")),
-                    qualifier("object_has_role", vocab("informant")),
+                    item("klara"),
+                    qualifier("object_has_role", vocab("witness")),
                 ),
             )
             == []
         )
 
-    def test_a_deaths_principal_is_never_its_informant(self):
+    @pytest.mark.parametrize("role", ["parent", "informant"])
+    def test_the_retired_roles_are_refused(self, role):
+        # a parent is the child's father or mother, and an informant who
+        # has no other role is left out (ADR-0040 §3, §2.8)
         (problem,) = problems(
             claim(
-                "death",
+                "imprisonment",
                 "participant",
-                item("cecilie"),
-                qualifier("object_has_role", vocab("principal")),
-                qualifier("object_has_role", vocab("informant")),
+                item("sebastian"),
+                qualifier("object_has_role", vocab(role)),
             )
         )
-        assert "never also its informant" in problem
-
-    def test_a_births_principal_may_be_its_informant(self):
-        # only a death forbids it: a birth's principal cannot report it,
-        # but no rule reads that from the roles
-        assert (
-            problems(
-                claim(
-                    "birth",
-                    "participant",
-                    item("gustav"),
-                    qualifier("object_has_role", vocab("principal")),
-                    qualifier("object_has_role", vocab("informant")),
-                )
-            )
-            == []
-        )
-
-    def test_nor_across_two_claims(self):
-        principal = claim(
-            "death",
-            "participant",
-            item("cecilie"),
-            qualifier("object_has_role", vocab("principal")),
-        )
-        informant = claim(
-            "death",
-            "participant",
-            item("cecilie"),
-            qualifier("object_has_role", vocab("informant")),
-        )
-        (problem,) = problems(principal, informant)
-        assert problem.startswith("claims[1]:")
-        # another person may report the death
-        eugen = dict(informant, value=item("eugen"))
-        assert problems(principal, eugen) == []
+        assert f"'object_has_role' does not accept a {role!r}" in problem
 
     @pytest.mark.parametrize(
         ("term", "kin_class", "side", "degree"),

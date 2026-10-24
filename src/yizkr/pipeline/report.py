@@ -3886,6 +3886,7 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
 # (yizkr.pipeline.writer.REFUSAL_REASONS)
 _REFUSAL_NAMES = {
     "retired_or_reference_property": "a retired or reference property",
+    "vital_rule": "the rules of deaths and births on the person",
     "subject_rule": "the subject rules",
     "text": "a text the instance cannot hold",
     "side_rule": "an entity the side rule blocks",

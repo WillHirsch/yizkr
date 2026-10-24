@@ -68,7 +68,9 @@ mentions, never on clusters:
   claims; a date by its year, month, day,
   precision and calendar, every one kept as stated, so a narrowed or
   widened date has another fingerprint; a coordinate and a quantity by
-  their numbers, an integral float read as its integer;
+  their numbers, an integral float read as its integer; an unknown value
+  (ADR-0040 §2.2) by its tag alone, as it carries nothing else, so it
+  matches only another unknown value and never a date;
 - its **qualifiers**, each a property and a canonical value, sorted,
   each kept as often as it is given: the earliest and latest bounds of a
   date are qualifiers, and are never dropped or rounded;
@@ -116,6 +118,7 @@ from yizkr.claims import (
     QuantityValue,
     StringValue,
     TimeValue,
+    UnknownValue,
     VocabRef,
 )
 from yizkr.pipeline.stages import canonical_json, sha256_text
@@ -336,6 +339,8 @@ def canonical_value(value: object, mentions: dict[str, str]) -> list:
         ]
     if isinstance(value, QuantityValue):
         return ["quantity", _number(value.amount)]
+    if isinstance(value, UnknownValue):
+        return ["unknown"]
     raise TypeError(f"no fingerprint for a value {value!r}")
 
 

@@ -1,0 +1,438 @@
+"""Deaths and births on the person: what validation, salvage, the
+manifest parse and the writer refuse (ADR-0040 §2, §3, §5, §7, §8).
+
+Every example comes from the fictional universe (docs/EXAMPLES.md): the
+1909 burial register ("Witwer der Cäcilie Löbig geb. Tarle"), Gustav's
+birth register extract, Rudolf's 1941 death certificate and the 1958
+letter, and a hypothetical "der selige Felix".
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from tests.unit.test_pipeline import ITEMS, PROPERTIES, FakeWiki
+from tests.unit.test_writer_notes_unions import batch_of
+from yizkr.claims import (
+    END_NOT_PARTNER,
+    LEFT_OUT_PERSON,
+    PARENTAGE_PROPERTY,
+    REJECT_REASONS,
+    UNKNOWN_EXCERPT,
+    UNKNOWN_VALUE,
+    VITAL_KIND,
+    VITAL_REASONS,
+    VITAL_SUBJECT,
+    WIDOWED_END,
+    ClaimBatch,
+    UnknownValue,
+    reject_reasons,
+    validate_against_manifest,
+    vital_problems,
+)
+from yizkr.model.schema import load_acceptance
+from yizkr.pipeline.chunking import ChunkedClaimExtractor
+from yizkr.pipeline.extract import (
+    entity_kind_prompt_lines,
+    salvage_valid_claims,
+)
+from yizkr.pipeline.writer import BatchWriter, pre_plan_refusals
+
+RUN = {
+    "model_identifier": "fake-model",
+    "pipeline_version": "0.1",
+    "started_at": "2026-10-24T10:00:00+00:00",
+}
+BURIAL = "b" * 40
+WITWER = "Witwer der Cäcilie Löbig geb. Tarle"
+
+ENTITIES = [
+    {"id": "eugen", "label": "Eugen Löbig", "kind": "human"},
+    {"id": "caecilie", "label": "Cäcilie Löbig", "kind": "human"},
+    {"id": "felix", "label": "Felix Löbig", "kind": "human"},
+    {
+        "id": "marriage",
+        "label": "marriage of Eugen and Cäcilie Löbig",
+        "kind": "marriage",
+    },
+    {"id": "friedhof", "label": "Friedhof Flörburg", "kind": "place"},
+    {"id": "wedding", "label": "the 1905 wedding", "kind": "wedding"},
+    # the register's pastor, who only certifies the entry (§2.8)
+    {
+        "id": "pastor",
+        "label": "Pfarrer Gerlach",
+        "kind": "human",
+        "extract": False,
+    },
+]
+
+
+def local(local_id: str) -> dict:
+    return {"kind": "local", "local_id": local_id}
+
+
+def item(local_id: str) -> dict:
+    return {"type": "item", "value": local(local_id)}
+
+
+def vocab(key: str) -> dict:
+    return {"type": "item", "value": {"kind": "vocab", "key": key}}
+
+
+UNKNOWN = {"type": "unknown"}
+
+
+def claim(
+    subject: str,
+    prop: str,
+    value: dict,
+    *qualifiers: tuple[str, dict],
+    excerpt: str | None = WITWER,
+) -> dict:
+    source: dict = {"artifact": {"kind": "artifact", "sha1": BURIAL}}
+    if excerpt is not None:
+        source["transcription_excerpt"] = {"text": excerpt, "language": "de"}
+    return {
+        "subject": local(subject),
+        "property": prop,
+        "value": value,
+        "qualifiers": [
+            {"property": key, "value": given} for key, given in qualifiers
+        ],
+        "source": source,
+    }
+
+
+def batch(*claims: dict, entities=ENTITIES) -> ClaimBatch:
+    return ClaimBatch.model_validate(
+        {"extraction_run": RUN, "claims": list(claims), "entities": entities}
+    )
+
+
+def codes(*claims: dict, entities=ENTITIES) -> list[str]:
+    return reject_reasons(
+        validate_against_manifest(batch(*claims, entities=entities))
+    )
+
+
+def spouse(person: str) -> dict:
+    return claim(
+        "marriage",
+        "participant",
+        item(person),
+        ("object_has_role", vocab("spouse")),
+    )
+
+
+WIDOWED = claim("eugen", "civil_status", vocab("widowed"))
+ENDED = claim("marriage", "ended_by_death_of", item("caecilie"))
+
+
+class TestTheManifest:
+    def test_the_reasons_are_reject_reasons(self):
+        assert set(VITAL_REASONS) <= set(REJECT_REASONS)
+
+    def test_the_unknown_value_properties(self):
+        assert load_acceptance().unknown_values == {
+            "date_of_death",
+            "burial_place",
+        }
+
+    def test_the_death_and_birth_properties_are_a_persons(self):
+        subjects = load_acceptance().subjects
+        for prop in (
+            "date_of_death",
+            "place_of_death",
+            "cause_of_death",
+            "burial_place",
+            "age_at_death",
+            "date_of_birth",
+            "place_of_birth",
+        ):
+            assert subjects[prop] == {"human", "unclassified_entity"}, prop
+
+    def test_no_extraction_makes_a_birth_or_a_death(self):
+        assert load_acceptance().unextracted_kinds == {"birth", "death"}
+        kinds = entity_kind_prompt_lines()[0].split(", ")
+        assert "birth" not in kinds and "death" not in kinds
+        assert "deportation" in kinds
+
+
+class TestTheUnknownValue:
+    def test_a_death_stated_without_its_date(self):
+        # "der selige Felix" (hypothetical), with the words as excerpt
+        late = claim(
+            "felix", "date_of_death", UNKNOWN, excerpt="der selige Felix"
+        )
+        assert codes(late) == []
+        assert isinstance(batch(late).claims[0].value, UnknownValue)
+
+    def test_a_burial_stated_without_its_place(self):
+        buried = claim(
+            "eugen",
+            "burial_place",
+            UNKNOWN,
+            (
+                "point_in_time",
+                {"type": "time", "year": 1909, "month": 3, "day": 20},
+            ),
+            excerpt="Beerdigt: 20. März 1909.",
+        )
+        assert codes(buried) == []
+
+    @pytest.mark.parametrize("prop", ["date_of_birth", "place_of_death"])
+    def test_no_other_property_takes_one(self, prop):
+        assert codes(claim("felix", prop, UNKNOWN)) == [UNKNOWN_VALUE]
+
+    @pytest.mark.parametrize(
+        "bound", ["latest_date", "earliest_date", "sourcing_circumstances"]
+    )
+    def test_it_carries_no_bound(self, bound):
+        value = (
+            vocab("circa")
+            if bound == "sourcing_circumstances"
+            else {"type": "time", "year": 1938}
+        )
+        late = claim("felix", "date_of_death", UNKNOWN, (bound, value))
+        assert codes(late) == [UNKNOWN_VALUE]
+
+    def test_no_qualifier_takes_one(self):
+        dated = claim(
+            "wedding", "location", item("friedhof"), ("point_in_time", UNKNOWN)
+        )
+        assert codes(dated) == [UNKNOWN_VALUE]
+
+    def test_it_needs_its_excerpt(self):
+        # Q10: nothing else shows what the source said
+        late = claim("felix", "date_of_death", UNKNOWN, excerpt=None)
+        assert codes(late) == [UNKNOWN_EXCERPT]
+        blank = claim("felix", "date_of_death", UNKNOWN, excerpt=" ")
+        assert codes(blank) == [UNKNOWN_EXCERPT]
+
+
+class TestSubjects:
+    @pytest.mark.parametrize(
+        ("prop", "value"),
+        [
+            # Q11: the 1905 certificate's "geboren am 15. Februar 1862",
+            # put on the wedding rather than on Sebastian
+            (
+                "date_of_birth",
+                {"type": "time", "year": 1862, "month": 2, "day": 15},
+            ),
+            ("date_of_death", {"type": "time", "year": 1909}),
+            ("age_at_death", {"type": "string", "value": "73 Jahre"}),
+            ("burial_place", item("friedhof")),
+        ],
+    )
+    def test_a_death_or_birth_property_is_a_persons(self, prop, value):
+        assert codes(claim("wedding", prop, value)) == [VITAL_SUBJECT]
+        assert codes(claim("eugen", prop, value)) == []
+
+    def test_an_unclassified_entity_takes_one(self):
+        entities = [
+            *ENTITIES,
+            {"id": "u1", "label": "Löbig", "kind": "unclassified_entity"},
+        ]
+        found = codes(
+            claim("u1", "date_of_death", {"type": "time", "year": 1909}),
+            entities=entities,
+        )
+        assert found == []
+
+
+class TestAKindOnlyACuratorMakes:
+    @pytest.mark.parametrize("kind", ["birth", "death"])
+    def test_an_entity_of_it_is_refused(self, kind):
+        entities = [
+            *ENTITIES,
+            {"id": "d1", "label": "Death of Rudolf", "kind": kind},
+        ]
+        principal = claim(
+            "d1",
+            "participant",
+            item("eugen"),
+            ("object_has_role", vocab("principal")),
+        )
+        problems = validate_against_manifest(
+            batch(principal, entities=entities)
+        )
+        assert any(p.startswith("entities[") for p in problems)
+        assert reject_reasons(problems) == [VITAL_KIND]
+
+    def test_a_ref_typed_as_one_is_refused(self):
+        typed = claim("eugen", "residence", item("friedhof"))
+        typed["value"]["value"] = {
+            "kind": "local",
+            "local_id": "d9",
+            "instance_of": "death",
+        }
+        problems = vital_problems(batch(typed, entities=[]))
+        assert [p[-12:] for p in problems[0]] == [f"[{VITAL_KIND}]"]
+
+
+class TestUnionEnds:
+    def test_the_burial_registers_line(self):
+        # "Witwer der Cäcilie": the union ended by her death, his status
+        assert codes(spouse("eugen"), spouse("caecilie"), ENDED, WIDOWED) == []
+
+    def test_the_guard_refuses_the_survivor(self):
+        # the value the same batch calls widowed (§2.5)
+        wrong = claim("marriage", "ended_by_death_of", item("eugen"))
+        assert codes(spouse("eugen"), spouse("caecilie"), wrong, WIDOWED) == [
+            WIDOWED_END
+        ]
+
+    def test_the_guard_needs_no_couple(self):
+        wrong = claim("marriage", "ended_by_death_of", item("eugen"))
+        assert codes(wrong, WIDOWED) == [WIDOWED_END]
+
+    def test_one_of_the_couple(self):
+        stranger = claim("marriage", "ended_by_death_of", item("felix"))
+        assert codes(spouse("eugen"), spouse("caecilie"), stranger) == [
+            END_NOT_PARTNER
+        ]
+
+    def test_a_batch_that_names_no_couple_is_not_checked(self):
+        assert (
+            codes(claim("marriage", "ended_by_death_of", item("felix"))) == []
+        )
+
+    def test_salvage_applies_them_to_the_batch(self):
+        # one by one each claim passes; together the guard refuses one
+        wrong = claim("marriage", "ended_by_death_of", item("eugen"))
+        valid, rejects = salvage_valid_claims(
+            [spouse("eugen"), spouse("caecilie"), wrong, WIDOWED],
+            RUN,
+            entities=ENTITIES,
+        )
+        assert len(valid.claims) == 3
+        (reject,) = rejects
+        assert reject["claim"] == wrong
+        assert reject["reasons"] == [WIDOWED_END]
+
+
+class TestParentage:
+    def test_it_qualifies_a_parent(self):
+        adopted = claim(
+            "felix",
+            "father",
+            item("eugen"),
+            ("parentage", vocab("parentage_adoptive")),
+            ("kinship_type", {"type": "string", "value": "Adoptivvater"}),
+        )
+        assert codes(adopted) == []
+
+    def test_and_nothing_else(self):
+        wrong = claim(
+            "felix",
+            "sibling",
+            item("eugen"),
+            ("parentage", vocab("parentage_foster")),
+        )
+        assert codes(wrong) == [PARENTAGE_PROPERTY]
+
+
+class TestALeftOutPerson:
+    def test_no_claim_takes_one_as_its_value(self):
+        # the pastor who only certifies the entry is no author (Q6)
+        signed = {
+            **claim("eugen", "author", item("pastor")),
+            "subject": {"kind": "artifact", "sha1": BURIAL},
+        }
+        assert codes(signed) == [LEFT_OUT_PERSON]
+
+
+class TestTheManifestParse:
+    def test_a_death_entity_is_dropped_alone(self):
+        # Q8: the 1941 certificate's manifest lists "Death of Rudolf"
+        answer = json.dumps(
+            {
+                "entities": [
+                    {"id": "e1", "label": "Rudolf Löbig", "kind": "human"},
+                    {"id": "e2", "label": "Death of Rudolf", "kind": "death"},
+                ]
+            }
+        )
+        parsed, problems = ChunkedClaimExtractor._parse_entity_manifest(
+            answer, 4
+        )
+        assert problems == []
+        assert [entity.id for entity in parsed.entities] == ["e1"]
+        assert parsed.dropped_kinds == {"e2": "death"}
+
+    def test_its_claims_are_rejects_of_their_own(self):
+        principal = claim(
+            "d1",
+            "participant",
+            item("eugen"),
+            ("object_has_role", vocab("principal")),
+        )
+        valid, rejects = salvage_valid_claims(
+            [principal, WIDOWED],
+            RUN,
+            entities=ENTITIES,
+            dropped={"d1": "death"},
+        )
+        assert len(valid.claims) == 1
+        (reject,) = rejects
+        assert reject["reasons"] == [VITAL_KIND]
+
+
+class UnknownWiki(FakeWiki):
+    """The unit fake, with a date of death and a place of burial."""
+
+    def vocabulary(self):
+        return (
+            dict(PROPERTIES) | {"date_of_death": "P60", "burial_place": "P61"},
+            dict(ITEMS),
+        )
+
+
+class TestTheWriter:
+    def test_it_refuses_what_validation_refuses(self):
+        wrong = claim("marriage", "ended_by_death_of", item("eugen"))
+        refusals = pre_plan_refusals(batch(wrong, WIDOWED), {})
+        assert list(refusals) == [0]
+        assert refusals[0][0] == "vital_rule"
+        assert refusals[0][1].endswith(f"[{WIDOWED_END}]")
+
+    @staticmethod
+    def late_felix() -> dict:
+        source = {
+            "artifact": {"kind": "artifact", "sha1": "1" * 40},
+            "transcription_excerpt": {
+                "text": "der selige Felix",
+                "language": "de",
+            },
+        }
+        return {
+            "subject": {
+                "kind": "local",
+                "local_id": "e1",
+                "label": "Felix Löbig",
+                "instance_of": "human",
+            },
+            "property": "date_of_death",
+            "value": UNKNOWN,
+            "source": source,
+        }
+
+    def test_an_unknown_value_is_a_somevalue_snak(self):
+        from tests.fixtures.identity import write_mapped
+
+        wiki = UnknownWiki({"1" * 40: "Q900"}, detached=True)
+        given = batch_of(self.late_felix())
+        result = write_mapped(BatchWriter(wiki), given)
+        assert (result.written, result.refused) == (1, [])
+        felix = result.created_items["e1"]
+        (statement,) = wiki.wbi.item.get(felix).claims.get("P60")
+        assert statement.mainsnak.snaktype.value == "somevalue"
+        # a second write writes no copy
+        again = write_mapped(BatchWriter(wiki), batch_of(self.late_felix()))
+        assert (
+            len(wiki.wbi.item.get(again.created_items["e1"]).claims.get("P60"))
+            == 1
+        )

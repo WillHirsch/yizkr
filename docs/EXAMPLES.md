@@ -221,13 +221,12 @@ People, places, entities (organisations, occupations, a vessel,
 events) and sources are ground truth, so tests can check identity and
 containment decisions against it. Everything said *about* them is a
 source-attributed `Assertion` in the archive's own vocabulary: manifest
-property ids, entity kinds and artifact classes. Two values are planned
+property ids, entity kinds and artifact classes. One value is planned
 rather than in the manifest yet, which `PLANNED_VOCABULARY` names:
-`machine_assisted`, which ADR-0008's follow-up B adds, and
-`parentage_adoptive`, which ADR-0040's build (#687) adds with the
-properties `parentage` and `ended_by_death_of` that `PLANNED_PROPERTIES`
-names. An unknown value is `UNKNOWN`, on the properties
-`UNKNOWN_VALUE_PROPERTIES` names. `DERIVED_DIED_BY` gives the "died by"
+`machine_assisted`, which ADR-0008's follow-up B adds
+(`PLANNED_PROPERTIES` names any planned property, none at present). An
+unknown value is `UNKNOWN`, on the properties `UNKNOWN_VALUE_PROPERTIES`
+names, which the manifest marks `unknown_value`. `DERIVED_DIED_BY` gives the "died by"
 dates a view derives, and `NO_CLAIM` the passages that give no claim. `CONTRADICTIONS` and
 `REFINEMENTS` name the deliberate cases, and `NAMING_PATTERNS` names the
 passages that show each naming pattern mention records must handle

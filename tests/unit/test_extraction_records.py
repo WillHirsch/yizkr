@@ -1153,6 +1153,7 @@ class TestTheManifestsRecords:
         # the logistics line's "Dinner" names no entity, and nothing says so
         assert "Dinner" in DOC
         assert set(coverage) == {
+            "manifest_vital_kind",
             "strategy",
             "entities_total",
             "entities_not_extracted",

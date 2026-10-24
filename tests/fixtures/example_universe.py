@@ -1564,16 +1564,12 @@ SOURCES = (
 # ADR-0008 (as amended by #289) adds `machine_assisted`, the sourcing
 # circumstance of a text that its source says was prepared with machine
 # assistance, with the extraction change that sets it (its follow-up B).
-# ADR-0040 adds the qualifier `parentage` with its value
-# `parentage_adoptive`, and the property `ended_by_death_of`, with its
-# build (follow-up B, #687).
-PLANNED_VOCABULARY = ("machine_assisted", "parentage_adoptive")
-PLANNED_PROPERTIES = {
-    "ended_by_death_of": "wikibase-item",
-    "parentage": "wikibase-item",
-}
+PLANNED_VOCABULARY = ("machine_assisted",)
+# The properties the assertions use that the manifest does not hold yet,
+# by key, with their datatype: none at present.
+PLANNED_PROPERTIES: dict[str, str] = {}
 # The properties whose value may be unknown (ADR-0040 §2.2), which the
-# manifest marks from that build on.
+# manifest marks `unknown_value`.
 UNKNOWN_VALUE_PROPERTIES = ("date_of_death", "burial_place")
 
 ASSERTIONS = tuple(

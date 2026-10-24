@@ -8,7 +8,7 @@ against an edited copy.
 from __future__ import annotations
 
 import functools
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
 from types import MappingProxyType
@@ -89,6 +89,14 @@ class ManifestProperty(BaseModel):
     # source places, named by the SHA-1 of the artifact's bytes, and no
     # other subject (`caption`, ADR-0039 §2.1).
     placed_subject: bool = False
+    # Whether a claim of the property may give the unknown value (Wikibase
+    # "some value"): a source that states a death or a burial but not its
+    # date or place (ADR-0040 §2.2, Q3). No other property takes one.
+    unknown_value: bool = False
+    # The kinds a claim's subject may be, where the property takes only
+    # some (ADR-0040 §5, Q11: a death or birth property is a person's).
+    # None takes a subject of any kind.
+    subjects: list[str] | None = None
 
     @property
     def in_prompts(self) -> bool:
@@ -122,6 +130,10 @@ class ManifestItem(BaseModel):
     # (`circa`): each may be the one item a property accepts. The mark is
     # what tells them apart, so the loader cannot check it there.
     entity_class: bool = False
+    # False for an entity kind that only a curator makes and no extraction
+    # types an entity as (`birth`, `death`, ADR-0040 §3, §7): validation
+    # refuses an entity of it in a batch, and no prompt offers it.
+    extracted: bool = True
 
 
 class Manifest(BaseModel):
@@ -171,6 +183,24 @@ class Manifest(BaseModel):
                 seen[entry.label] = key
         self._check_classes()
         self._check_accepts()
+        for key, spec in self.properties.items():
+            for kind in spec.subjects or ():
+                if kind not in self.items:
+                    raise ValueError(
+                        f"properties.{key}.subjects names {kind!r}, which "
+                        f"is not an item key"
+                    )
+            if spec.unknown_value and (spec.reference or spec.retired):
+                raise ValueError(
+                    f"properties.{key} takes the unknown value, but it is "
+                    f"never a claim's property"
+                )
+        for key, item in self.items.items():
+            if not item.extracted and not item.entity_kind:
+                raise ValueError(
+                    f"items.{key} is marked extracted false, which only an "
+                    f"entity kind is"
+                )
         for key, spec in self.properties.items():
             if spec.document_subject and spec.placed_subject:
                 raise ValueError(
@@ -286,6 +316,15 @@ class Acceptance:
     placed_subjects: frozenset[str] = frozenset()
     # the artifact kinds: `artifact`, and each item a `subclass_of` it
     artifact_kinds: frozenset[str] = frozenset()
+    # the properties whose claims may give the unknown value
+    unknown_values: frozenset[str] = frozenset()
+    # property key -> the kinds its claim's subject may be, for the
+    # properties that take only some
+    subjects: MappingProxyType = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    # the entity kinds no extraction makes (`birth`, `death`)
+    unextracted_kinds: frozenset[str] = frozenset()
 
     @property
     def kind_keys(self) -> frozenset[str]:
@@ -402,6 +441,23 @@ def _acceptance(text: str) -> Acceptance:
             key
             for key, item in manifest.items.items()
             if key == "artifact" or item.subclass_of == "artifact"
+        ),
+        unknown_values=frozenset(
+            key
+            for key, spec in manifest.properties.items()
+            if spec.unknown_value
+        ),
+        subjects=MappingProxyType(
+            {
+                key: frozenset(spec.subjects)
+                for key, spec in manifest.properties.items()
+                if spec.subjects is not None
+            }
+        ),
+        unextracted_kinds=frozenset(
+            key
+            for key, item in manifest.items.items()
+            if item.entity_kind and not item.extracted
         ),
     )
 

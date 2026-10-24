@@ -43,6 +43,8 @@ NOTE_PROPERTIES = {
     "degree": "P49",
     "removes": "P50",
     "civil_status": "P51",
+    "ended_by_death_of": "P52",
+    "parentage": "P53",
 }
 NOTE_ITEMS = {
     **ITEMS,
@@ -62,6 +64,7 @@ NOTE_ITEMS = {
     "kin_aunt_or_uncle": "Q53",
     "widowed": "Q54",
     "wedding": "Q55",
+    "parentage_adoptive": "Q56",
 }
 
 JUDGMENT_SHA1 = hashlib.sha1(
@@ -658,14 +661,14 @@ class TestAUnion:
         again = write_mapped(BatchWriter(wiki), batch)
         assert (again.written, again.skipped, again.referenced) == (0, 8, 0)
 
-    def test_a_union_ended_by_a_partners_own_death(self):
+    def test_a_union_ended_by_a_partners_death(self):
         """The burial register's "Witwer der Cäcilie Löbig geb. Tarle":
-        Eugen and Cäcilie's marriage, ended by her own death event, whose
-        principal she is, and Eugen's civil status (ADR-0035 §3.1)."""
+        Eugen and Cäcilie's marriage, ended by the death of Cäcilie, and
+        Eugen's civil status; no event stands for her death, and the
+        line gives her no death statement (ADR-0040 §2.5, §2.7)."""
         eugen = local("b1", "Eugen Löbig", "human")
         caecilie = local("b2", "Cäcilie Löbig", "human")
         union = local("b3", "marriage of Eugen and Cäcilie Löbig", "marriage")
-        death = local("b4", "death of Cäcilie Löbig", "death")
         excerpt = "Witwer der Cäcilie Löbig geb. Tarle"
 
         def claim(subject, prop, value, qualifiers=()):
@@ -691,8 +694,7 @@ class TestAUnion:
         batch = batch_of(
             claim(union, "participant", item(eugen), role("spouse")),
             claim(union, "participant", item(caecilie), role("spouse")),
-            claim(union, "ended_by", item(death)),
-            claim(death, "participant", item(caecilie), role("principal")),
+            claim(union, "ended_by_death_of", item(caecilie)),
             claim(
                 eugen,
                 "civil_status",
@@ -702,18 +704,43 @@ class TestAUnion:
         assert validate_against_manifest(batch) == []
         wiki = NotedWiki()
         result = write_mapped(BatchWriter(wiki), batch)
-        assert (result.written, result.refused) == (5, [])
+        assert (result.written, result.refused) == (4, [])
         made = result.created_items
-        (ended,) = statements(wiki, made["b3"], "ended_by")
-        assert ended.mainsnak.datavalue["value"]["id"] == made["b4"]
-        (principal,) = statements(wiki, made["b4"], "participant")
-        assert principal.mainsnak.datavalue["value"]["id"] == made["b2"]
-        (snak,) = principal.qualifiers.get(NOTE_PROPERTIES["object_has_role"])
-        assert snak.datavalue["value"]["id"] == NOTE_ITEMS["principal"]
+        (ended,) = statements(wiki, made["b3"], "ended_by_death_of")
+        assert ended.mainsnak.datavalue["value"]["id"] == made["b2"]
+        assert statements(wiki, made["b3"], "ended_by") == []
         (status,) = statements(wiki, made["b1"], "civil_status")
         assert (
             status.mainsnak.datavalue["value"]["id"] == NOTE_ITEMS["widowed"]
         )
+
+    def test_the_guard_refuses_the_survivor_as_the_partner_who_died(self):
+        """§2.5's guard: the end names Eugen, whom the same batch calls a
+        widower, so the writer refuses it, as validation does."""
+        eugen = local("b1", "Eugen Löbig", "human")
+        union = local("b3", "marriage of Eugen and Cäcilie Löbig", "marriage")
+        excerpt = "Witwer der Cäcilie Löbig geb. Tarle"
+        widowed = {
+            "subject": eugen,
+            "property": "civil_status",
+            "value": {
+                "type": "item",
+                "value": {"kind": "vocab", "key": "widowed"},
+            },
+            "source": source(BURIAL_SHA1, excerpt=excerpt),
+        }
+        wrong = {
+            "subject": union,
+            "property": "ended_by_death_of",
+            "value": {"type": "item", "value": eugen},
+            "source": source(BURIAL_SHA1, excerpt=excerpt),
+        }
+        batch = batch_of(widowed, wrong)
+        (problem,) = validate_against_manifest(batch)
+        assert problem.endswith("[widowed_end]")
+        result = write_mapped(BatchWriter(NotedWiki()), batch)
+        assert result.refusal_reasons == ["vital_rule"]
+        assert result.written == 1
 
 
 class TestKinshipQualifiers:
