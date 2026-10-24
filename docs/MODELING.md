@@ -883,15 +883,20 @@ artifact a new QID, changes neither.
   - A marker adds nothing where the same source dates the death itself.
 - **"Died by" dates are derived, never stored** (ADR-0040 §2.4, its Q5).
   One shared derivation works them out when a view is built:
-  - A death statement of no date (an unknown value, or a place, cause or
-    burial with no dated death from the same source) died no later than
-    its document's own date, at that date's precision and never
-    narrower. The 1958 letter gives Rudolf "died by 25 December 1958",
-    beside the certificate's 6 March 1941; the two differ only in
-    resolution.
   - The late spouse of a stated union end died no later than the date
-    at which the same marker presents the survivor as widowed (its Q7:
-    the burial register's 16 March 1909 for Cäcilie).
+    at which the same marker presents the survivor as widowed (its Q7).
+    The burial register gives Cäcilie "died by 16 March 1909", at
+    Eugen's widowhood. The 1958 letter gives Rudolf "died by 25 December
+    1958", at Nina's, beside the certificate's 6 March 1941; the two
+    differ only in resolution.
+  - A death statement of no date (an unknown value, or a place, cause,
+    age or burial with no dated death from the same source) died no
+    later than its document's own date. A hypothetical dated postcard's
+    "der selige Felix", whose date is "before 19 August 1938", gives
+    Felix "died by 19 August 1938".
+  - Each bound is the latest date that any non-deprecated statement of
+    that date allows (a `point_in_time` with its `latest_date`, or every
+    `inception` of the document), at its precision and never narrower.
   - A derived date is labelled as derived, stores nothing, is never
     written, and is never death evidence of its own.
 - Ambiguous date formats (07-01-1919: 7 January or July 1?) must not be
@@ -931,7 +936,9 @@ artifact a new QID, changes neither.
     every death property.
   - Its `point_in_time` is the burial's own date as the source gives it
     ("Beerdigt: 20. März 1909"), never the document's date. No `date of
-    death` is derived from it.
+    death` is derived from the burial's own date; a burial with no date
+    is bounded by its document's date, as any death statement of no date
+    is (ADR-0040 §2.4).
   - A burial stated without its place gives a `place of burial` of
     unknown value, dated where dated.
 
@@ -1557,9 +1564,12 @@ primitive network and the *same* term set describes any pair:
     "a death's principal is never also its informant" goes.
   - A person who only certifies, registers, officiates, examines,
     reports or witnesses is left out, unless the same record gives them
-    another role (kin of someone it is about, or a party to it). A
-    wedding's registrar and non-kin witnesses are left out; a kin
-    witness or officiant stays, with that role.
+    another role (kin of someone it is about, or a party to it). The
+    rule covers a record's apparatus and persons only: organizations
+    stay `issued_by` or `carried_out_by`. A wedding's registrar and
+    non-kin witnesses are left out; a kin witness or officiant stays,
+    with that role. A person given only by the role in which they report
+    or certify, with no name ("Informant: husband"), is not made.
   - The GEDCOM adapter makes no death event.
   - Roles stay for the other events and for unions.
 - **A parent's kind** (ADR-0040 §4).

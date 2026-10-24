@@ -37,16 +37,20 @@ ADR-0040, describes the model from that build on.
   - an `age_at_death` "73 Jahre";
   - a `burial_place` of Friedhof Flörburg, dated 20 March 1909.
 - **A source's statement of a death with no date is a `date_of_death`
-  of unknown value** (Wikibase "some value"). Examples: a GEDCOM `1 DEAT
-  Y` (hypothetical), or "the late Felix", in an undated note or a dated
-  letter alike. A blank field, "d. ?" or "date unknown" gives no claim.
+  of unknown value** (Wikibase "some value"). The exceptions: the same
+  source gives another death claim, or the person is a widow marker's
+  late spouse (§2.2, §2.5).
+  - Examples: a GEDCOM `1 DEAT Y` (hypothetical), or "the late Felix",
+    in an undated note or a dated letter alike.
+  - A blank field, "d. ?" or "date unknown" gives no claim.
 - **"Died by" dates are derived, never stored** (Q5). A view works out
   that "the late X" died no later than the document's own date, and
   that a widow's late husband died no later than the date the source
   presents her as widowed. One shared derivation does this for the
   person page, the timeline, the disagreement report, clustering and
-  reconcile. The 1958 letter so gives Rudolf "died by 25 December 1958
-  (derived)", beside the certificate's 6 March 1941.
+  reconcile. The 1958 letter's widow phrase so gives Rudolf "died by 25
+  December 1958 (derived)", at Nina's widowhood, beside the
+  certificate's 6 March 1941.
 - **A union ended by a death points to the partner who died**
   (`ended_by_death_of`). It is written only where a source specifically
   states that the couple were married when that partner died: a
@@ -57,10 +61,11 @@ ADR-0040, describes the model from that build on.
 - **A birth is the same.** `date_of_birth` and `place_of_birth` go on
   the child, and its parents are `father` and `mother`, each cited. No
   item stands for the birth, and the `parent` role is retired.
-- **Only people the record is about, or kin of them, are extracted**
-  (Q6). A person who only certifies, registers, officiates, examines,
-  reports or witnesses is left out. Sebastian, who reports Gustav's
-  birth, stays as his father.
+- **Officials and witnesses with no other role are left out** (Q6). A
+  person who only certifies, registers, officiates, examines, reports
+  or witnesses a record is `extract` false, unless the same record
+  makes them kin of someone it is about, or a party to it. Sebastian,
+  who reports Gustav's birth, stays as his father.
 - **A parent's kind is stated only where the source states it.** A new
   qualifier, `parentage`, says birth, adoptive or foster, set only where
   the source's words or tags say so; the word itself stays in
@@ -137,7 +142,7 @@ left to this ADR is settled here. Its lean-only choices are accepted
 | ADR-0020: the #345 and #577 header lines; §2's "died, nothing else known … is simply a death event" and its #345 paragraph; §4's #577 bullet and its union-bounds bullet's "A partner's own `death` event"; Ruling 3; Consequences' "and undated death events" | superseded or amended (§2, §5). §2's list of death evidence stays, gaining `age_at_death` (Q1) and the value of `ended_by_death_of` (Q9) |
 | ADR-0021: the #323 header line, and its amendment's "a DEAT that states the death … is a `death` event" | superseded (§2, Q4) |
 | ADR-0023: the critic's fixed category list | amended: gains `vital_not_on_person` (§3) |
-| ADR-0033: the #547 parents row | amended: parents are compared within one kind, and an unknown value is set aside (§4) |
+| ADR-0033: the #547 parents row | amended: parents are compared within one kind, an unknown value is set aside, and derived bounds are compared through the shared derivation (§2.4, §4) |
 | ADR-0035: In brief (the "Witwer" bullet and "Everyone in an event gets a role"); the #409 amendment's "A birth or death with no principal …"; §3.1's three death rows; §3.2's births and deaths, its Standesbeamter bullet (Q6) and its role list; §3.3; §3.5's and §3.6's tables; §5's "a death's principal is not its informant"; §6's DEAT row; §7's rule 9 and the "one participant" row | superseded or amended (§2 to §4, §7) |
 | ADR-0036: the #410 header line; §1's `ended_by` row, its death bullet and its event bullet (Q6); §2's "Witwer der Cäcilie" row; §3's "A death stays its principal's own"; §5's `DIV Y` row (the undated divorce stays an event) and its partner's-DEAT row; §6's partner's death | superseded or amended (§2, §5) |
 | ADR-0039 §10.1(c): `main_subject` → "Rudolf's death", in the (c) paragraph and in option (c4) | amended: `main_subject` → Rudolf (§2.9) |
@@ -154,6 +159,10 @@ draft:
     (around :367-377);
   - the wedding bullet (around :384-387);
   - the union-end bullet (around :388-392);
+  - the residence rule's "the informant/applicant on a certificate"
+    (around :400-402), for Q6 (a);
+  - the kinship-word rule that makes a person from a kinship word alone
+    (around :719-724), for §2.8's unnamed reporter;
   - kinship.
 - `ENTITY_MANIFEST_PROMPT`:
   - births and deaths in its entity list;
@@ -200,7 +209,7 @@ of them preferred (rule 6).
   manifest marks both.
 - **When it is given.** Where a source says the person died and gives
   no date for that death, and that source's statement of the death
-  gives no other death claim (no place, cause or burial). This holds
+  gives no other death claim (no place, cause, age or burial). This holds
   whatever the document's own date (Q5: "the late X" gives X's
   `date_of_death` of unknown value, even in a dated document).
   - Examples: a GEDCOM `1 DEAT Y` (hypothetical: the GEDCOM export,
@@ -248,31 +257,56 @@ their own are covered by Q4.
 
 **One shared derivation** works out every "died by" date at view time.
 The person page, the timeline, the disagreement report, clustering's
-death comparison (`pipeline/clustering.py`, around :1082-1083 and
-:1668-1674) and reconcile's roster (`pipeline/reconcile.py`, around
-:204-211, which today reads a death date's value and precision but not
+death comparison (`pipeline/clustering.py`, around :1086-1087 and
+:1673-1677) and reconcile's roster (`pipeline/reconcile.py`, around
+:208-215, which today reads a death date's value and precision but not
 its `latest_date`) all use it.
 
-**The rule** (lean-only, raised with the owner's answers; the owner's merge accepts it):
+**The rule.** Deriving at view time is Q5's. The late-spouse bound is
+Q7's, and the precision rule is on the accepted list. The parts marked
+*new* are lean-only, raised with the owner's answers, and the owner's
+merge accepts them.
 
 - **The late spouse of a stated union end** (§2.5) died no later than
-  the date at which the same marker presents the survivor as widowed:
-  the survivor's `civil_status` `widowed` statement citing the same
-  excerpt, at its `point_in_time` (Q7). The burial register gives
-  Cäcilie "by 16 March 1909". Where the marker gives no such date, the
-  bound is the document's own date.
-- **A death statement of no date** dies by its document's own date.
-  This covers an unknown-value `date_of_death`, and a place, cause or
-  burial with no dated `date_of_death` from the same source. The bound
-  is the latest date the document's `inception` (ADR-0039) allows, at
-  that date's precision and never narrower.
-  - The 1958 letter gives Rudolf "by 25 December 1958".
-  - A postcard whose `inception` is "before 19 August 1938" gives "by
-    19 August 1938".
+  the date at which the same marker presents the survivor as widowed,
+  that is, the survivor's `civil_status` `widowed` statement citing the
+  same excerpt (Q7):
+  - The burial register gives Cäcilie "by 16 March 1909", at Eugen's
+    widowhood.
+  - The 1958 letter's "вдова Вашего покойного брата Рудольфа" gives
+    Rudolf "by 25 December 1958", at Nina's widowhood on the letter's
+    date.
+  - *New:* where the marker gives no such date, the bound is the
+    document's own date.
+- **A death statement of no date** dies no later than its document's
+  own date (`inception`, ADR-0039). This covers an unknown-value
+  `date_of_death` ("the late"). *New:* it also covers a place, cause,
+  age or burial with no dated `date_of_death` from the same source.
+  - A hypothetical dated postcard's "der selige Felix", whose
+    `inception` is "before 19 August 1938", gives Felix "by 19 August
+    1938", beside the GEDCOM export's 1931.
   - A document dated only "1890s" gives "by the 1890s", at decade
     precision.
-  - A document with no stated date, or one whose date is open at the
-    late end ("after 1945"), gives no bound.
+  - *New:* a document with no stated date, or one whose date is open at
+    the late end ("after 1945"), gives no bound.
+- **Never narrower** (rule 5). In both cases the bound is the latest
+  date that any non-deprecated statement of that date allows: a
+  `point_in_time` with its `latest_date`, or every `inception` the
+  document has. It is taken at its precision, never narrower than the
+  statements it comes from.
+- **A burial's own date** dates the burial, never the death: no
+  `date_of_death` is derived from a `burial_place`'s `point_in_time`
+  (Q3). A burial with no date, like any death statement of no date, is
+  bounded by its document's own date as above.
+
+**Its inputs.** The derivation is a pure function over claims, or query
+rows, with their references. It reads no wiki of its own.
+
+- Clustering runs before the write and reads no wiki (ADR-0025 §2). It
+  feeds the derivation from its batches: each document's `inception`,
+  the same-excerpt `civil_status`, and the union end.
+- The site, the disagreement report and reconcile's `fetch_roster` feed
+  it from the graph.
 
 **What a derived date is not:**
 
@@ -339,6 +373,14 @@ It gives no death statement for the spouse: the end is the evidence
   marriages so keeps a correct link: hypothetically, Eugen as "Witwer
   der Cäcilie", and a second marriage ended by his own death. The
   advisory critic checks it too.
+  - **What a refusal costs.** Under Q5 a widow marker gives no death
+    statement. So when the guard refuses a link, the late spouse keeps
+    no death evidence from that marker, and stays possibly living
+    (fails closed).
+  - **What it cannot check.** A death record's "Ehefrau des Eugen"
+    comes with no `civil_status` `widowed`, so the guard has nothing to
+    compare. The critic checks that the value is the person whose death
+    the record states.
 
 #### 2.6 The derived end of a union
 
@@ -348,7 +390,8 @@ partner's death statements and their sources.
 
 **Each partner's death span** is the hull of all their non-deprecated
 dated death statements (derived "died by" bounds included), each at its
-stated bounds. No one statement is picked (rule 6). From the spans:
+stated bounds. It is never narrower than the statements it comes from,
+and no one statement is picked (rule 6). From the spans:
 
 - Where one partner's span lies wholly before the other's, the union
   shows "ended by X's death (derived)".
@@ -390,6 +433,15 @@ same record gives them another role: kin of someone the record is
 about, or a party to it. A rank, a job, an address or a signature is
 not another role.
 
+**What it covers.** The rule covers a record's apparatus (certificates,
+registers, forms), and persons only.
+
+- Organizations are untouched. The issuing office stays `issued_by`,
+  and a court stays `carried_out_by`, as today's boilerplate rule's
+  issuing-authority exception keeps them (`pipeline/chunking.py`,
+  around :872-873; `claims.py`, around :756-757).
+- A neighbour or a teacher a letter names is no apparatus, and stays.
+
 **Who stays.** A person with another role is extracted, with what the
 record states of them: name, address, kinship. Sebastian, who "zeigte
 an" Gustav's birth, stays as Gustav's `father`, with his address. His
@@ -398,12 +450,14 @@ role as informant is not recorded.
 **Weddings.** A wedding's registrar and its non-kin witnesses are left
 out. A kin witness or officiant stays, with that role.
 
-**"Informant: husband" with no name** (Florence's 1963 certificate)
-records nothing (owner, 2026-10-24): no unnamed husband and no union is
-made.
+**A reporter given only by role.** A person the record gives only by
+the role in which they report or certify, with no name, is not made,
+even where the role word is a kinship word. So "Informant: husband"
+(Florence's 1963 certificate) records nothing (owner, 2026-10-24): no
+unnamed husband and no union is made.
 
-**Refusals.** Validation and the writer refuse a document claim whose
-value is an `extract` false person.
+**Refusals.** Validation and the writer refuse any claim in the batch
+whose value is an `extract` false person.
 
 **What is not added.** No cross-document matching, and no count of name
 matches.
@@ -552,6 +606,11 @@ reversed by the owner: "Sounds like proof that she died to me").
 - **Its risk.** A value misplaced on the survivor releases a widow or
   widower who may be living. §2.5's guard refuses the plain case, and
   the critic checks it.
+  - A refused link costs the late spouse that marker's death evidence,
+    which fails closed.
+  - The guard cannot check a death record's "Ehefrau des Eugen". There
+    the critic checks that the value is the person whose death the
+    record states.
 
 **Subjects.** Validation refuses `date_of_death`, `place_of_death`,
 `cause_of_death`, `burial_place`, `age_at_death`, `date_of_birth` and
@@ -577,9 +636,10 @@ today:
   from, labelled as derived. The privacy filter decides who is shown,
   as today.
 - **#624's criteria.** Each source shows what it says beside the dated
-  entry. In the universe, Rudolf's certificate gives 6 March 1941, and
-  the 1958 letter's union end gives "died by 25 December 1958
-  (derived)". The two show side by side, each with its source. The
+  entry. In the universe, once follow-up A removes its stored bound,
+  Rudolf's certificate gives 6 March 1941, and the 1958 letter's union
+  end gives "died by 25 December 1958 (derived)". The two show side by
+  side, each with its source. The
   unknown-value display is tested on a row of its own (follow-up A's
   case).
 - **Timeline.** `person-timeline.rq` lists only dated rows, so an
@@ -596,9 +656,9 @@ today:
   derived end (§2.6) where none is stated.
   - Today `STATEMENTS_QUERY` shows no union.
   - `person-timeline.rq` dates a marriage only through a `spouse`
-    statement's qualifiers (around :9-13 and :52-62), and reaches a
-    union's own observation through the event arm (around :83-104),
-    not its wedding, divorce or end.
+    statement's qualifiers (its qualifier arm, around :57-88), and
+    reaches a union's own observation through the event arm (around
+    :89-129), not its wedding, divorce or end.
   - So this lands with #520's readers or with build B.
 - **Events a curator makes** (Q5). The timeline's event arm reads
   `participant` at any role, so a dated birth or death event would show
@@ -662,7 +722,8 @@ Build B (the PR's follow-up) carries these changes. In brief:
   - an `ended_by_death_of` that names neither of the couple, where the
     batch names them;
   - §2.5's guard (the same excerpt);
-  - a document claim whose value is an `extract` false person (§2.8);
+  - any claim in the batch whose value is an `extract` false person
+    (§2.8);
   - the principal-and-informant check goes;
   - new reject reasons.
 - **Fingerprints** (`pipeline/fingerprints.py`): `canonical_value` gains
@@ -675,20 +736,27 @@ Build B (the PR's follow-up) carries these changes. In brief:
   - `EXTRACTION_PROMPT`'s union-end sentence and its "Dating a period"
     sentence stop making every end an event;
   - the widow-marker rules end the union by `ended_by_death_of`, and
-    give the late spouse no death statement (Q5);
+    give the late spouse no death statement (Q5); where one phrase is
+    both markers, it gives the union end alone (§2.5);
   - "the late" gives the unknown value (Q5);
   - each says that a marriage plus a partner's death gives no end of any
     kind, and offers `ended_by_death_of` only for §2.5's stated forms,
     listing their words;
   - Q6 (a): the boilerplate rule widens to a person who only certifies,
     registers, officiates, examines, reports or witnesses, with "unless
-    the same record gives them another role", and the events paragraph
-    and the wedding bullet follow.
+    the same record gives them another role", and the events paragraph,
+    the wedding bullet and the residence rule's informant clause
+    follow;
+  - a person the record gives only by the role in which they report or
+    certify, with no name, is not made, even where the role word is a
+    kinship word (§2.8).
 - **GEDCOM** (`pipeline/gedcom.py`):
   - `died` and `death_event` give way to an unknown-value
     `date_of_death` citing the DEAT (Q4);
   - a `BURI` without a place gives a `burial_place` of unknown value,
-    with its `point_in_time` where dated (Q3).
+    with its `point_in_time` where dated (Q3);
+  - `states_event` and its census take BURI, so that BURI follows DEAT's
+    rules (Q3, Q4).
 - **Critic** (`pipeline/critique.py`): `vital_not_on_person`, and rows
   that show an unknown value.
 - **The shared derivation** (§2.4, §2.6), a module of its own, read by
@@ -709,7 +777,10 @@ Build B (the PR's follow-up) carries these changes. In brief:
     derivation, the late spouse's from the union end and the widowhood's
     date included. Reading the end for a death span is not "lifting" it
     as a key: `ended_by_death_of` is not lifted, since the couple already
-    key the union, so the two do not conflict.
+    key the union, so the two do not conflict;
+  - the derived bounds feed each node's `deaths`, and so join its
+    evidence signature (`_signature`, which puts `dates(of.deaths)` in
+    each node's signature; `clustering.py`, around :2017), with a test.
 - **Adjudication, anomalies, review CSV, report:** an unknown value
   shown, skipped or counted; `parentage` shown.
 - **Writer** (`pipeline/writer.py`):
@@ -736,13 +807,14 @@ Build B (the PR's follow-up) carries these changes. In brief:
   - an unknown-value `date_of_death`, by kind of source;
   - `age_at_death`;
   - an unknown `burial_place`;
-  - a union `ended_by_death_of`, with counts of the people it alone
-    releases and of the links the guard refuses;
+  - a union `ended_by_death_of`, with a count of the people it alone
+    releases;
   - the birth cutoff.
 
   It also counts derived bounds by kind of source. All of these are
   counted on the written graph, as disagreements are, and the report
-  and the diff carry them. Today none of these tools counts
+  and the diff carry them. The links the guard refuses never reach the
+  graph, so they are counted with the reject reasons. Today none of these tools counts
   possibly-living people or releases.
 - **Disagreement** (`disagreement.py`, `disagreement-report.rq`):
   - an unknown value is set aside and never listed;
@@ -751,7 +823,10 @@ Build B (the PR's follow-up) carries these changes. In brief:
 - **Reconcile** (`ROSTER_QUERY`):
   - an unknown value;
   - death dates read through the shared derivation;
-  - the event arms stay, for events a curator makes (Q5).
+  - the event arms stay, for events a curator makes (Q5), but for a
+    birth or a death event they read the `principal` alone, as the
+    timeline's arm does, so a witness of a curator-made death event
+    gets no date from it.
 
 **Order and data.** B lands before the keeper run (#159), so no kept
 graph holds death or birth events from extraction. No graph migration is
@@ -844,7 +919,9 @@ comments). Each question keeps its alternatives as the record.
      März 1909".
      - It is never the document's date, because a document's date
        dates its making, not the burial.
-     - No `date_of_death` is derived from it.
+     - No `date_of_death` is derived from the burial's own date. A
+       burial with no date is bounded by its document's date, as any
+       death statement of no date is (§2.4).
    - **A burial stated without its place.** A `burial_place` of unknown
      value, with its `point_in_time` where dated.
      - A hypothetical `1 BURI` with `2 DATE 20 MAR 1909` and no PLAC
@@ -900,6 +977,8 @@ comments). Each question keeps its alternatives as the record.
        death statement for the spouse; one phrase that is both markers
        gives the union end alone; and every "died by" date is derived
        at view time by one shared derivation (§2.4).
+   - **Why derived, not stored.** A stored bound needs a rank change to
+     correct, while a derived bound follows the corrected date.
    - **Reversals.** This reverses two points decided earlier, the 1958
      letter's stored bound ("keeps today's form") and "the unknown value
      only where a source gives no limit" (§2.3).
@@ -931,7 +1010,8 @@ comments). Each question keeps its alternatives as the record.
        examines, reports or witnesses is `extract` false, unless the
        same record gives them another role (kin of someone it is about,
        or a party to it). A rank, a job, an address or a signature is
-       not another role.
+       not another role: a certifier's signature gives no `author`
+       (see the manifest's `author` description, around :734-740).
      - (b): keep such a person where their name matches a kept
        person's.
      - (c): keep everyone the record names, as today.
@@ -1036,9 +1116,14 @@ comments). Each question keeps its alternatives as the record.
 **Lean-only items raised with the owner's answers,** which the owner's
 merge accepts:
 
-- the derivation's rule (§2.4);
-- `ended_by_death_of` read at its truthy value, item values only, and
-  §2.5's guard (Q9).
+- the derivation's new parts (§2.4):
+  - the fallback to the document's date where the marker gives no date;
+  - a place, cause, age or burial bounded by its document's date;
+  - no bound where a document's date is open at its late end;
+- §2.5's same-excerpt guard (Q9);
+- `ended_by_death_of` read at its truthy value, item values only (§5,
+  Q9);
+- §2.3's placed death giving the place alone.
 
 ## Consequences
 

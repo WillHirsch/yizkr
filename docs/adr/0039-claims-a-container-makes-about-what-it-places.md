@@ -740,7 +740,7 @@ document and what that document places, by SHA-1. There are four
 routes:
 
 Amended by ADR-0040, 2026-10-24: "`main_subject` → Rudolf's death" reads
-"`main_subject` → Rudolf", since no death item exists (ADR-0040 §2.7).
+"`main_subject` → Rudolf", since no death item exists (ADR-0040 §2.9).
 
 - **(c1) A curator's record of what a document encloses**, by the two
   SHA-1s (`<source>=<sha1>`, as `--placed` takes a curator's placement,

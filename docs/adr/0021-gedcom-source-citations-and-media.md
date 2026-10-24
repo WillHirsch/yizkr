@@ -31,7 +31,8 @@ cases are as ADR-0040's Q4 decides:
   counted.
 
 A BURI follows the same rules. A BURI that states a burial without a
-place gives a `burial_place` of unknown value (ADR-0040's Q3).
+place gives a `burial_place` of unknown value, with its `point_in_time`
+where dated (ADR-0040's Q3).
 Amended by #324 and #350 (2026-09-29): a SOUR beneath a MARR or DIV is
 folded into the spouse claims it dates or places; a SOUR that no claim
 folds, an OBJE that no image claim maps (within a folded citation, a

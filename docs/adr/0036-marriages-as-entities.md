@@ -271,9 +271,9 @@ can still generate P26 so qualified. #394 adds the new classes' ids.
   derived spouses and partners, each with every source that states it
   (R6). Weddings and divorces reach the places map by their `location`.
   (Amended by ADR-0040, 2026-10-24: a union with no stated end shows
-  "no source states how it ended", with each partner's death statements,
-  or the end derived from the partners' death spans, labelled as derived
-  (ADR-0040 §2.6).)
+  "no source states how it ended", with each partner's death statements
+  and their sources, and beside them the end derived from the partners'
+  death spans, labelled as derived (ADR-0040 §2.6).)
 
 ### 7. Residences, occupations and other periods
 

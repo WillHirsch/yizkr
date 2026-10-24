@@ -340,7 +340,9 @@ Superseded by ADR-0040, 2026-10-24:
   simply a death event with the person as participant" no longer holds.
   A source's statement of a death with no date is a `date of death` of
   unknown value (Wikibase "some value"), "the late X" in a dated
-  document included. A blank field, "d. ?" or "date unknown" is never
+  document included. The exceptions: the same source gives another death
+  claim, or the person is a widow marker's late spouse (ADR-0040 §2.2,
+  §2.5). A blank field, "d. ?" or "date unknown" is never
   one. An unknown value is a truthy value, so it is death evidence as
   the four properties above read it, because the source stated the
   death. A deprecated one, or a "no value", releases no one.

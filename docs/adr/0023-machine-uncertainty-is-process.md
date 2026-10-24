@@ -62,7 +62,7 @@ says drop only when the source conveys it nowhere. A finding names a
 claim by its row's first three columns (§3), and a finding of either
 claim key that names no claim fails its checks.
 Amended by ADR-0040 (2026-10-24, the owner's decisions of 2026-10-24):
-the fixed list gains `vital_not_on_person` (lean name), a birth or a
+the fixed list gains `vital_not_on_person`, a birth or a
 death the page states whose date and place no claim gives to that
 person, judged on the numbered transcription the critic reads; it is
 advisory, as every finding is, and counted with the critic's
