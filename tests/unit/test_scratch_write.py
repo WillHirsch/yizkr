@@ -17,10 +17,14 @@ unit tests' in-memory instance, with no stack and no engine.
   nothing and writes nothing, until a write the stage did not make, or
   another key, voids the record.
 * The LAN site's header names the scratch run.
+* A self-loop the writer refuses, as a false merge of Eugen Löbig the
+  master hatter and his son of the same name makes one (#524), is kept
+  in the write record by its cluster and property, and raised as the
+  write's `self-reference` anomaly alert, ids and counts alone.
 
 Every document is fictional (docs/EXAMPLES.md): Leopold Löbig's birth
-register extract, a letter from his brother Gustav, and a photograph of
-the shop front at Brunnenring 35.
+register extract, a letter from his brother Gustav, a photograph of the
+shop front at Brunnenring 35, and a page of the 2008 family history.
 """
 
 from __future__ import annotations
@@ -1311,6 +1315,307 @@ def test_the_record_counts_only_the_items_a_document_s_write_made(
     # Gustav's item alone
     assert documents[letter.sha1]["items_minted"] == 1
     assert len(by_label(run.wiki, "Leopold Löbig")) == 1
+
+
+# -- a false merge's self-loops (#524) ----------------------------------------
+
+# a page of the 2008 family history, which names Eugen Löbig the master
+# hatter, born 1836, and his son of the same name, born 1870, with a
+# `father` claim between them: a homonym that clustering may merge
+HISTORY = b"\x89PNG synthetic scan of a page of the 2008 family history"
+EUGEN = "Eugen Löbig"
+
+
+class FamilyWiki(Wiki):
+    """The instance, with `father` in its vocabulary."""
+
+    PROPERTIES = {**Wiki.PROPERTIES, "father": "P76"}
+
+
+def eugen_born(local_id: str, year: int) -> dict:
+    return claim(
+        HISTORY,
+        person(local_id, EUGEN),
+        "date_of_birth",
+        {"type": "time", "year": year},
+    )
+
+
+def father_and_son() -> ClaimBatch:
+    return batch(
+        eugen_born("son", 1870),
+        claim(
+            HISTORY,
+            person("son", EUGEN),
+            "father",
+            {"type": "item", "value": person("father", EUGEN)},
+        ),
+        eugen_born("father", 1836),
+    )
+
+
+@pytest.fixture
+def eugens(tmp_path, monkeypatch):
+    made = Run(tmp_path, monkeypatch, wiki=FamilyWiki())
+    made.add("family-history-2008.png", HISTORY, father_and_son())
+    return made
+
+
+def merge_the_eugens(run, monkeypatch) -> str:
+    """Cluster the run, then put both Eugens in one cluster of the map,
+    as a false merge does; the merged cluster's id."""
+    from tests.fixtures.identity import joined
+
+    run.past_the_barrier(until="clustering")
+    identity = joined(scratchwrite.identity_map(run.context("write")), EUGEN)
+    monkeypatch.setattr(scratchwrite, "identity_map", lambda _: identity)
+    (cluster,) = [
+        cid
+        for cid, entry in identity.data["clusters"].items()
+        if len(entry["members"]) == 2
+    ]
+    return cluster
+
+
+def self_reference_alerts(run) -> list[dict]:
+    return [
+        alert
+        for alert in run.driver.rundir.alerts()
+        if alert["check"] == "self-reference"
+    ]
+
+
+class TestAFalseMerge:
+    """A self-loop the writer refuses points to a false merge in the
+    identity map: the write record keeps each refusal's cluster, and the
+    `self-reference` anomaly check, the write stage's first, raises an
+    alert of the write naming the cluster by its id and the property,
+    with counts alone (docs/ANOMALIES.md)."""
+
+    def test_the_record_counts_the_refusal_by_cluster_and_property(
+        self, eugens, monkeypatch
+    ):
+        cluster = merge_the_eugens(eugens, monkeypatch)
+        for stage in ("reset", "register", "write"):
+            eugens.stage(stage)
+        (doc,) = eugens.documents
+        written = eugens.record("write")["documents"][doc.sha1]
+        assert written["self_references"] == 1
+        assert written["self_reference_clusters"] == [
+            {"cluster": cluster, "property": "father", "claims": 1}
+        ]
+        # both births land on the one item, as the merge stands
+        assert written["written"] == 2
+
+    def test_it_raises_an_alert_of_the_write(self, eugens, monkeypatch):
+        cluster = merge_the_eugens(eugens, monkeypatch)
+        for stage in ("reset", "register", "write"):
+            eugens.stage(stage)
+        (doc,) = eugens.documents
+        (alert,) = self_reference_alerts(eugens)
+        assert (alert["stage"], alert["subject"], alert["status"]) == (
+            "write",
+            doc.sha1[:12],
+            "new",
+        )
+        assert (alert["cluster"], alert["property"], alert["value"]) == (
+            cluster,
+            "father",
+            1,
+        )
+        # ids and counts alone: no label of the cluster's people
+        alerts = (eugens.run_dir / "alerts.jsonl").read_text()
+        assert EUGEN not in alerts and "Löbig" not in alerts
+
+    def test_a_refusal_for_another_reason_is_no_self_loop(
+        self, tmp_path, monkeypatch
+    ):
+        """Beside the merged `father` claim, the father's pet name with a
+        line break in it, refused for its text: counted among the
+        refusals, never against a cluster, and raising no alert."""
+        run = Run(tmp_path, monkeypatch, wiki=FamilyWiki())
+        pet_name = claim(
+            HISTORY,
+            person("father", EUGEN),
+            "referred_to_as",
+            {
+                "type": "monolingual",
+                "value": {"text": "Muckel\nder Alte", "language": "de"},
+            },
+        )
+        run.add(
+            "family-history-2008.png",
+            HISTORY,
+            batch(*father_and_son().claims, pet_name),
+        )
+        cluster = merge_the_eugens(run, monkeypatch)
+        for stage in ("reset", "register", "write"):
+            run.stage(stage)
+        (doc,) = run.documents
+        written = run.record("write")["documents"][doc.sha1]
+        assert (written["refused"], written["self_references"]) == (2, 1)
+        assert written["self_reference_clusters"] == [
+            {"cluster": cluster, "property": "father", "claims": 1}
+        ]
+        (alert,) = self_reference_alerts(run)
+        assert (alert["cluster"], alert["property"]) == (cluster, "father")
+
+    def test_a_failure_to_count_them_fails_no_document(
+        self, eugens, monkeypatch
+    ):
+        merge_the_eugens(eugens, monkeypatch)
+
+        def failing(*args):
+            raise RuntimeError("Eugen Löbig")
+
+        monkeypatch.setattr(scratchwrite, "self_reference_clusters", failing)
+        for stage in ("reset", "register", "write"):
+            eugens.stage(stage)
+        (doc,) = eugens.documents
+        record = eugens.record("write")
+        assert record["failed"] == {}
+        written = record["documents"][doc.sha1]
+        assert written["self_references"] == 1
+        assert written["self_reference_clusters"] is None
+        assert self_reference_alerts(eugens) == []
+        assert any(
+            "self-loops not counted by cluster (RuntimeError)" in line
+            for line in eugens.lines
+        )
+
+    def test_two_clusters_raise_nothing(self, eugens):
+        eugens.past_the_barrier(until="write")
+        (doc,) = eugens.documents
+        written = eugens.record("write")["documents"][doc.sha1]
+        assert written["self_references"] == 0
+        assert written["self_reference_clusters"] == []
+        assert written["written"] == 3
+        assert self_reference_alerts(eugens) == []
+
+    def test_turned_off_it_raises_nothing_and_the_record_stands(
+        self, eugens, monkeypatch, tmp_path
+    ):
+        thresholds = tmp_path / "thresholds.yaml"
+        thresholds.write_text(
+            "checks:\n  self-reference:\n    enabled: false\n"
+        )
+        monkeypatch.setenv("YIZKR_ANOMALIES", str(thresholds))
+        cluster = merge_the_eugens(eugens, monkeypatch)
+        for stage in ("reset", "register", "write"):
+            eugens.stage(stage)
+        (doc,) = eugens.documents
+        written = eugens.record("write")["documents"][doc.sha1]
+        assert written["self_reference_clusters"] == [
+            {"cluster": cluster, "property": "father", "claims": 1}
+        ]
+        assert self_reference_alerts(eugens) == []
+
+
+class TestSelfReferenceClusters:
+    """scratchwrite.self_reference_clusters, on the family history's
+    batch and its map."""
+
+    def test_the_value_s_cluster_when_the_subject_has_none(self):
+        """The subject a QID, as an approved equivalence gives the
+        master hatter's record, and the son in its `father` value."""
+        from tests.fixtures.identity import mapped
+        from yizkr.pipeline.review import claim_id
+
+        written = batch(
+            claim(
+                HISTORY,
+                {"kind": "qid", "qid": "Q71"},
+                "father",
+                {"type": "item", "value": person("son", EUGEN)},
+            ),
+            eugen_born("son", 1870),
+        )
+        identity = mapped(written)
+        (son,) = {m["cluster"] for m in identity.data["mentions"].values()}
+        refused = [claim_id(written.claims[0])]
+        assert scratchwrite.self_reference_clusters(
+            written, written, identity, refused
+        ) == [{"cluster": son, "property": "father", "claims": 1}]
+
+    def test_a_qualifier_s_cluster_when_neither_value_has_one(self):
+        """The master hatter by a QID, his pet name, and the son in its
+        `perspective` qualifier."""
+        from tests.fixtures.identity import mapped
+        from yizkr.pipeline.review import claim_id
+
+        muckel = claim(
+            HISTORY,
+            {"kind": "qid", "qid": "Q71"},
+            "referred_to_as",
+            {
+                "type": "monolingual",
+                "value": {"text": "Muckel", "language": "de"},
+            },
+        )
+        muckel["qualifiers"] = [
+            {
+                "property": "perspective",
+                "value": {"type": "item", "value": person("son", EUGEN)},
+            }
+        ]
+        written = batch(muckel, eugen_born("son", 1870))
+        identity = mapped(written)
+        (son,) = {m["cluster"] for m in identity.data["mentions"].values()}
+        refused = [claim_id(written.claims[0])]
+        assert scratchwrite.self_reference_clusters(
+            written, written, identity, refused
+        ) == [{"cluster": son, "property": "referred_to_as", "claims": 1}]
+
+    def test_the_subject_s_cluster_comes_first(self):
+        """The son, and the master hatter by a QID as his `father`: the
+        son's cluster, though the value names an item too."""
+        from tests.fixtures.identity import mapped
+        from yizkr.pipeline.review import claim_id
+
+        written = batch(
+            claim(
+                HISTORY,
+                person("son", EUGEN),
+                "father",
+                {"type": "item", "value": {"kind": "qid", "qid": "Q71"}},
+            ),
+            eugen_born("son", 1870),
+        )
+        identity = mapped(written)
+        (son,) = {m["cluster"] for m in identity.data["mentions"].values()}
+        refused = [claim_id(written.claims[0])]
+        assert scratchwrite.self_reference_clusters(
+            written, written, identity, refused
+        ) == [{"cluster": son, "property": "father", "claims": 1}]
+
+    def test_a_self_loop_no_cluster_makes(self):
+        """The `human` vocabulary item named by its key and by its QID,
+        a loop no cluster makes. The claims are taken as `refused` names
+        them, never judged again."""
+        from tests.fixtures.identity import mapped
+        from yizkr.pipeline.review import claim_id
+
+        written = batch(
+            claim(
+                HISTORY,
+                {"kind": "vocab", "key": "human"},
+                "father",
+                {"type": "item", "value": {"kind": "qid", "qid": "Q9"}},
+            ),
+            eugen_born("son", 1870),
+        )
+        refused = [claim_id(written.claims[0])]
+        assert scratchwrite.self_reference_clusters(
+            written, written, mapped(written), refused
+        ) == [{"cluster": None, "property": "father", "claims": 1}]
+
+    def test_nothing_refused_reads_no_map(self):
+        assert (
+            scratchwrite.self_reference_clusters(
+                father_and_son(), father_and_son(), None, []
+            )
+            == []
+        )
 
 
 def test_the_record_counts_the_judgement_notes_written(run, monkeypatch):
