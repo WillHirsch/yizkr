@@ -9,7 +9,11 @@ as their plain forms, a soft hyphen dropped, every run of whitespace,
 line breaks among it, made one space, and a hyphen at a line's end
 joined to the next line's word, so "Drake-" on one line and "radiel" on
 the next read "Drakeradiel"; a soft hyphen at a line's end joins the
-same way. A hyphenated name the line breaks at its own hyphen
+same way. Only the hyphen, the typographic and the non-breaking hyphen
+and the soft hyphen break a word at a line's end: a dash there (figure,
+en or em dash, the horizontal bar, the minus sign) is a break between
+words, so "1912‒" on one line and "1926" on the next read
+"1912- 1926". A hyphenated name the line breaks at its own hyphen
 ("Mockburg-" then "Süd") is read a second way, the hyphen kept
 ("Mockburg-Süd"), and any line-end hyphen a third way, the hyphen kept
 with a space after it ("Mockburg- Süd"), as a quote copies the line's
@@ -35,8 +39,11 @@ from __future__ import annotations
 import re
 import unicodedata
 
-# the hyphen and the characters the fold reads as one (`_PLAIN`)
-_HYPHENS = "-\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
+# the hyphens that may break a word at a line's end: the hyphen, the
+# typographic hyphen and the non-breaking hyphen; a dash (figure, en, em,
+# the horizontal bar, the minus sign) ends a word, and at a line's end is
+# a break between words, though the fold reads it as "-" too
+_HYPHENS = "-\u2010\u2011"
 _SOFT_HYPHEN = "\u00ad"
 # a word that ends a line on a hyphen, and the word the next line opens
 # with; the hyphen and the line break are dropped
@@ -50,8 +57,7 @@ _WORDS = re.compile(r"\w+")
 # how a reading takes a hyphen at a line's end: joined away, kept, or
 # kept with a space after it
 _JOIN, _KEEP, _SPACE = "join", "keep", "space"
-# typographic punctuation, read as its plain form; each character it
-# reads as "-" is one of `_HYPHENS`
+# typographic punctuation, read as its plain form
 _PLAIN = str.maketrans(
     {
         "\u2018": "'",
@@ -97,21 +103,21 @@ def _flat(
     """The text as it is compared (the module's reading); for each of its
     characters the number of the line (from 1) it comes from; and the
     indexes of the hyphens at a line's end it keeps. A hyphen at a line's
-    end is joined away (`_JOIN`), stays with no space after it (`_KEEP`)
-    or stays with one space after it (`_SPACE`); a soft hyphen at a
-    line's end is joined away in every reading."""
+    end (one of `_HYPHENS` as written, after a word) is joined away
+    (`_JOIN`), stays with no space after it (`_KEEP`) or stays with one
+    space after it (`_SPACE`); a soft hyphen at a line's end is joined
+    away in every reading. A dash at a line's end is a break between
+    words in every reading: one space follows it."""
     chars: list[str] = []
     numbers: list[int] = []
     kept: set[int] = set()
-    soft = False
+    soft = hyphenated = False
     for number, line in enumerate(text.splitlines(), start=1):
         line = unicodedata.normalize("NFC", line).strip()
         if not line:
             continue
         if chars:
-            broken = (
-                chars[-1] == "-" and len(chars) > 1 and chars[-2].isalnum()
-            )
+            broken = hyphenated and len(chars) > 1 and chars[-2].isalnum()
             if broken and line[0].isalnum():
                 # a hyphen at the line's end joins the next line's word
                 if hyphen == _JOIN:
@@ -130,6 +136,8 @@ def _flat(
                 chars.append(" ")
                 numbers.append(number)
         soft = line.endswith(_SOFT_HYPHEN)
+        # tested as written: the fold reads a dash as "-" too
+        hyphenated = line[-1] in _HYPHENS
         for char in line:
             if char.isspace():
                 if chars and chars[-1] != " ":
