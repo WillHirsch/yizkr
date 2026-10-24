@@ -71,7 +71,9 @@ excuses a date conflict on its own pair, never stated sexes, civil
 statuses or kin that conflict, a place's containers or an
 organisation's places that differ, event kinds that cannot be one,
 events whose principals ended in clusters held apart, or unions whose
-couple members did), or two other members whose evidence says they
+couple members did or were kept apart by a contradiction, evidence that
+differs by more than their own dates, kin that conflict among it), or
+two other members whose evidence says they
 differ; then it falls
 back to its confident components, each merged or apart as without
 verdicts. A candidate cluster of two whose one pair no

@@ -374,7 +374,9 @@ components rather than merge. The narrower reading was chosen over
 reading kin through their clusters: it fails towards fewer merges, and
 the kin rule keeps reading what each source says. Two couple members of
 two candidate clusters were never set against each other, and do not
-count. In
+count: so a spouse is never set against the other record's partner of
+another name, and the rule only stops merges of unions whose spouses
+did not merge. In
 a development-stage run a candidate cluster of two whose one pair no
 `same` could merge is not asked, since no verdict on it changes a
 cluster, and is counted; in keeper mode it is asked, for the review

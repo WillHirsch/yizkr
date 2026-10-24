@@ -1822,6 +1822,7 @@ def wed(
     extracted: bool = True,
     agnes_extracted: bool = True,
     spouse: str = "Agnes Nertler",
+    agnes_born: int | None = None,
 ) -> Doc:
     """A register of Leopold Löbig and Agnes Nertler's union, a marriage
     with the two its spouses or a partnership with the two its partners,
@@ -1831,7 +1832,8 @@ def wed(
     universe shows; with `wedding`, the wedding's year as it reads it.
     Without `extracted`, Leopold's mention is not extracted, and without
     `agnes_extracted` Agnes's; `spouse` is the name it gives her, her
-    given name then her birth surname."""
+    given name then her birth surname, and `agnes_born` her birth year
+    as it reads it."""
     entities = [
         human("e1", "Leopold Löbig", extract=extracted),
         human(
@@ -1848,6 +1850,8 @@ def wed(
         ("e1", "date_of_birth", day(born)),
         *union_of("m1", "e1", "e2", couple),
     ]
+    if agnes_born:
+        claims.append(("e2", "date_of_birth", day(agnes_born)))
     truth = {
         "e1": "leopold-loebig",
         "e2": "agnes-loebig",
@@ -1992,6 +1996,39 @@ class TestCoupleHeldApart:
         assert {
             p["same_merges"] for p in entry["pairs"] if p["link"] == AMBIGUOUS
         } == {False}
+
+    def test_one_member_of_a_spouse_cluster_contradicts(self):
+        """The register's Agnes, born 1912, merges confidently with a
+        letter's Agnes Nertler, born 1912 and named with no kin. Only the
+        register's Agnes kin-conflicts with the postcard's (their
+        Leopolds born 1930 and 1910); the letter's does not. One member's
+        contradiction is enough: with every pair `same`, the postcard's
+        marriage stays apart from the register's."""
+        letter = register(
+            "letter",
+            [
+                human(
+                    "e2", "Agnes Nertler", givens=["Agnes"], birth=["Nertler"]
+                )
+            ],
+            [("e2", "date_of_birth", day(1912))],
+            {"e2": "agnes-loebig"},
+        )
+        postcard = wed("postcard", 1930)
+        register_ = wed("register", 1910, agnes_born=1912)
+        docs = [postcard, register_, letter]
+        settled = verdicts_by_name(docs, lambda pair: SAME)
+
+        def cluster(doc: Doc, local_id: str) -> str:
+            fingerprint = doc.fingerprint(local_id, settled)
+            return settled["mentions"][fingerprint]["cluster"]
+
+        assert cluster(register_, "e2") == cluster(letter, "e2")
+        assert cluster(postcard, "e2") != cluster(register_, "e2")
+        assert cluster(postcard, "e1") == cluster(register_, "e1")
+        assert cluster(postcard, "m1") != cluster(register_, "m1")
+        (entry,) = [e for e in settled["review"] if e["kind"] == "marriage"]
+        assert entry["contradiction"]["evidence"] == COUPLE_APART
 
     def test_a_spouse_of_another_candidate_cluster_is_not_kept_apart(self):
         """The postcard names Leopold's wife Hildegard Laudler, a name no

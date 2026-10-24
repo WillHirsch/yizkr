@@ -802,7 +802,9 @@ refuses). The module docstrings are the full account; in short:
   civil statuses or kin that conflict, a place's containers or an
   organisation's places that differ, event kinds that cannot be one,
   or events whose principals, or unions whose couple members, ended in
-  clusters held apart), or any two members whose evidence says they differ. A cluster
+  clusters held apart, or, for couple members, kept apart by a
+  contradiction (evidence that differs by more than their own dates, kin
+  that conflict among it)), or any two members whose evidence says they differ. A cluster
   of two whose one pair no `same` could merge is not asked in a
   development-stage run (no verdict changes a cluster), and is counted.
   A part that holds a pair contradicted falls back to its confident

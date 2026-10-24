@@ -253,7 +253,9 @@ be two people it keeps apart. A verdict excuses a date conflict on its
 own pair and nothing else: never stated sexes or civil statuses that
 cannot both hold, kin that conflict, a place's containers that differ,
 an organisation's places that differ, event kinds that cannot be one,
-or principals or couple members held apart. Each ambiguous review pair
+or principals or couple members held apart, or, for couple members,
+kept apart by a contradiction (evidence that differs by more than their
+own dates, kin that conflict among it). Each ambiguous review pair
 records whether a `same` could merge it (`same_merges`); a candidate
 cluster of two whose one pair could not (cannot_merge) is not pending
 in a run whose verdicts merge. Any other
@@ -429,7 +431,9 @@ SUMMARY_METHODS = (
 # a review entry of the mentions holding a hub key
 HUB = "hub"
 # the evidence of two events whose principals ended in clusters an
-# adjudicator held apart, and of two unions whose couple members did
+# adjudicator held apart, and of two unions whose couple members did or,
+# for couple members, were kept apart by a contradiction (evidence that
+# differs by more than their own dates, kin that conflict among it)
 PRINCIPALS_APART = "principals_apart"
 COUPLE_APART = "couple_apart"
 
@@ -2264,8 +2268,9 @@ def _adjudicated(
     differ by more than their own dates (stated sexes, civil statuses,
     kin), any other two members whose evidence says they differ, or two
     events with principals or two unions with couple members held apart,
-    couple members also by a contradiction (`apart`, which no verdict
-    excuses); then it falls back to its
+    or, for couple members, kept apart by a contradiction (evidence that
+    differs by more than their own dates, kin that conflict among it)
+    (`apart`, which no verdict excuses); then it falls back to its
     confident `components`, each merged or apart as it is without
     verdicts. A merged part's method is `adjudicated` when a `same` pair
     is among its links, `confident_component` when its confident links
@@ -2350,7 +2355,9 @@ def _settle(
     components (_confident_components), and by the adjudicator's
     `verdicts` where they settle it (_adjudicated), where two events
     whose principals, or two unions whose couple members, ended held
-    apart (`apart`) contradict."""
+    apart, or, for couple members, kept apart by a contradiction
+    (evidence that differs by more than their own dates, kin that
+    conflict among it) (`apart`), contradict."""
     candidates = _components(ids, links)
     pairs_of: dict[str, list[Pair]] = defaultdict(list)
     for pair in links:
@@ -2692,7 +2699,10 @@ def cluster_corpus(
         """Whether two clusters of one candidate cluster hold a member
         each whose evidence says they differ by more than their own dates
         (_Judge.contradicts without them), which no verdict excuses: no
-        `same` could merge the two."""
+        `same` could merge the two. Clusters of two candidate clusters
+        were never set against each other, so a spouse is never set
+        against the other record's partner of another name, and a union
+        pair this blocks is one whose spouses did not merge."""
         if candidate_of[min(one)] != candidate_of[min(other)]:
             return False
         return any(
