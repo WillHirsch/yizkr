@@ -240,22 +240,22 @@ members left apart. A pair contradicted is a `different` pair the
 closure joined another way (a `different` is a cannot-link), a `same`
 pair whose evidence says they differ by more than their own dates,
 two other members whose evidence says they differ (_Judge.contradicts),
-two events with principals (participants in the principal role) that
-ended in clusters held apart, a member of one said `different` from a
-member of the other (evidence `principals_apart`), or two unions with
-couple members (spouses or partners) that ended so, or that ended in
-two clusters of one candidate cluster a contradiction keeps apart, a
-member of one and a member of the other whose evidence says they
-differ by more than their own dates, as kin that conflict do
-(`couple_apart`; both people_apart): one event cannot happen to two
-people the identity map keeps apart, nor one union's spouse or partner
-be two people it keeps apart. A verdict excuses a date conflict on its
+two events with principals (participants in the principal role)
+(evidence `principals_apart`), or two unions with couple members
+(spouses or partners) (`couple_apart`; both people_apart), that ended in
+clusters held apart, a member of one said `different` from a member of
+the other, or in two clusters of one candidate cluster a contradiction
+keeps apart, a member of one and a member of the other whose evidence
+says they differ by more than their own dates, as kin that conflict
+do: one event cannot happen to two people the identity map keeps
+apart, nor one union's spouse or partner be two people it keeps
+apart. A verdict excuses a date conflict on its
 own pair and nothing else: never stated sexes or civil statuses that
 cannot both hold, kin that conflict, a place's containers that differ,
 an organisation's places that differ, event kinds that cannot be one,
-or principals or couple members held apart, or, for couple members,
-kept apart by a contradiction (evidence that differs by more than their
-own dates, kin that conflict among it). Each ambiguous review pair
+or principals or couple members held apart or kept apart by a
+contradiction (evidence that differs by more than their own dates, kin
+that conflict among it). Each ambiguous review pair
 records whether a `same` could merge it (`same_merges`); a candidate
 cluster of two whose one pair could not (cannot_merge) is not pending
 in a run whose verdicts merge. Any other
@@ -430,10 +430,10 @@ SUMMARY_METHODS = (
 )
 # a review entry of the mentions holding a hub key
 HUB = "hub"
-# the evidence of two events whose principals ended in clusters an
-# adjudicator held apart, and of two unions whose couple members did or,
-# for couple members, were kept apart by a contradiction (evidence that
-# differs by more than their own dates, kin that conflict among it)
+# the evidence of two events whose principals, and of two unions whose
+# couple members, ended in clusters an adjudicator held apart or a
+# contradiction kept apart (evidence that differs by more than their own
+# dates, kin that conflict among it)
 PRINCIPALS_APART = "principals_apart"
 COUPLE_APART = "couple_apart"
 
@@ -2267,10 +2267,10 @@ def _adjudicated(
     closure joined another way, a `same` pair whose evidence says they
     differ by more than their own dates (stated sexes, civil statuses,
     kin), any other two members whose evidence says they differ, or two
-    events with principals or two unions with couple members held apart,
-    or, for couple members, kept apart by a contradiction (evidence that
-    differs by more than their own dates, kin that conflict among it)
-    (`apart`, which no verdict excuses); then it falls back to its
+    events with principals or two unions with couple members held apart
+    or kept apart by a contradiction (evidence that differs by more than
+    their own dates, kin that conflict among it) (`apart`, which no
+    verdict excuses); then it falls back to its
     confident `components`, each merged or apart as it is without
     verdicts. A merged part's method is `adjudicated` when a `same` pair
     is among its links, `confident_component` when its confident links
@@ -2355,9 +2355,9 @@ def _settle(
     components (_confident_components), and by the adjudicator's
     `verdicts` where they settle it (_adjudicated), where two events
     whose principals, or two unions whose couple members, ended held
-    apart, or, for couple members, kept apart by a contradiction
-    (evidence that differs by more than their own dates, kin that
-    conflict among it) (`apart`), contradict."""
+    apart or kept apart by a contradiction (evidence that differs by
+    more than their own dates, kin that conflict among it) (`apart`),
+    contradict."""
     candidates = _components(ids, links)
     pairs_of: dict[str, list[Pair]] = defaultdict(list)
     for pair in links:
@@ -2681,18 +2681,6 @@ def cluster_corpus(
     def merged(first: str, second: str) -> bool:
         return first in together and together[first] == together.get(second)
 
-    def held_apart(first: str, second: str) -> bool:
-        """Whether two mentions ended in two clusters an adjudicator held
-        apart: a member of one said `different` from a member of the
-        other, whether or not that verdict settled their candidate
-        cluster."""
-        one, other = ended.get(first), ended.get(second)
-        if one is None or other is None or one == other:
-            return False
-        return any(
-            said_different.get(member, frozenset()) & other for member in one
-        )
-
     # read only once the people are settled, so its answers hold
     @functools.cache
     def contradicted(one: frozenset[str], other: frozenset[str]) -> bool:
@@ -2701,8 +2689,9 @@ def cluster_corpus(
         (_Judge.contradicts without them), which no verdict excuses: no
         `same` could merge the two. Clusters of two candidate clusters
         were never set against each other, so a spouse is never set
-        against the other record's partner of another name, and a union
-        pair this blocks is one whose spouses did not merge."""
+        against the other record's partner of another name, nor a
+        principal against the other record's other principal, and a pair
+        this blocks is one whose people did not merge."""
         if candidate_of[min(one)] != candidate_of[min(other)]:
             return False
         return any(
@@ -2713,30 +2702,35 @@ def cluster_corpus(
         )
 
     def kept_apart(first: str, second: str) -> bool:
-        """Whether two mentions ended in two clusters held apart
-        (held_apart) or kept apart by a contradiction (contradicted)."""
+        """Whether two mentions ended in two clusters held apart, a
+        member of one said `different` from a member of the other,
+        whether or not that verdict settled their candidate cluster, or
+        kept apart by a contradiction (contradicted)."""
         one, other = ended.get(first), ended.get(second)
         if one is None or other is None or one == other:
             return False
-        return held_apart(first, second) or contradicted(one, other)
+        return any(
+            said_different.get(member, frozenset()) & other for member in one
+        ) or contradicted(one, other)
 
     def people_apart(a: _Node, b: _Node) -> str | None:
-        """PRINCIPALS_APART when two events have principals that ended in
-        clusters held apart (held_apart), COUPLE_APART when two unions
-        have couple members that ended in clusters held apart or kept
-        apart by a contradiction (kept_apart), which no verdict on the
-        events or unions excuses: one event cannot happen to two people
-        the clusters keep apart, nor one union's spouse or partner be two
-        people they keep apart. None for any other pair."""
+        """PRINCIPALS_APART when two events have principals, COUPLE_APART
+        when two unions have couple members, that ended in clusters held
+        apart or kept apart by a contradiction (kept_apart), which no
+        verdict on the events or unions excuses: one event cannot happen
+        to two people the clusters keep apart, nor one union's spouse or
+        partner be two people they keep apart. None for any other
+        pair."""
         if a.kind in EVENT_KINDS and b.kind in EVENT_KINDS:
             ones, others = _principals(a), _principals(b)
-            evidence, apart = PRINCIPALS_APART, held_apart
+            evidence = PRINCIPALS_APART
         elif a.kind in UNION_KINDS and b.kind in UNION_KINDS:
-            ones, others = a.couple, b.couple
-            evidence, apart = COUPLE_APART, kept_apart
+            ones, others, evidence = a.couple, b.couple, COUPLE_APART
         else:
             return None
-        if any(apart(first, second) for first in ones for second in others):
+        if any(
+            kept_apart(first, second) for first in ones for second in others
+        ):
             return evidence
         return None
 

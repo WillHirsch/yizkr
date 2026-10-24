@@ -1464,12 +1464,19 @@ def test_a_same_verdict_overrides_a_date_contradiction():
 # -- events whose principals ended held apart (#610) -------------------------
 
 
-def emigrated(name: str, *, dated: bool, witness: bool = False) -> Doc:
+def emigrated(
+    name: str,
+    *,
+    dated: bool,
+    witness: bool = False,
+    father: int | None = None,
+) -> Doc:
     """A register of Klara Löbig's emigration, with Klara its principal:
     dated, her birth 1917 and the emigration 22 June 1938, or undated, as
     the postcard gives it. With `witness`, Gustav Löbig, undated, takes
     part too, as a witness, a placeholder pattern no source of the
-    universe shows."""
+    universe shows; with `father`, it names her father, Sebastian Löbig,
+    born in that year as it reads it (1862, or 1882 a misreading)."""
     entities = [
         human("e1", "Klara Löbig"),
         entity("v1", "Emigration of Klara Löbig", "migration"),
@@ -1485,6 +1492,13 @@ def emigrated(name: str, *, dated: bool, witness: bool = False) -> Doc:
         entities.append(human("e2", "Gustav Löbig"))
         claims.append(("v1", "participant", item("e2"), role("witness")))
         truth["e2"] = "gustav-loebig"
+    if father:
+        entities.append(human("e3", "Sebastian Löbig"))
+        claims += [
+            ("e1", "father", item("e3")),
+            ("e3", "date_of_birth", day(father)),
+        ]
+        truth["e3"] = "sebastian-loebig"
     return register(name, entities, claims, truth)
 
 
@@ -1719,6 +1733,41 @@ class TestPrincipalsHeldApart:
         assert cluster(postcard, "v1") != cluster(register_, "v1")
         (entry,) = [e for e in settled["review"] if e["kind"] == "migration"]
         assert entry["contradiction"]["evidence"] == PRINCIPALS_APART
+
+    def test_a_principal_kept_apart_by_the_kin_rule(self):
+        """Every pair `same` (#663): the postcard gives Klara's father
+        Sebastian born 1882, a misreading, the registers 1862. The
+        Sebastians merge, but the kin rule, reading their own births,
+        contradicts the postcard's Klara's `same` and keeps her apart
+        from the registers'. One emigration cannot happen to two Klaras
+        the identity map keeps apart, so the part `same` joins falls back
+        to its confident components: the registers' emigrations merge,
+        the postcard's stays apart."""
+        docs = [
+            emigrated("postcard", dated=False, father=1882),
+            emigrated("register", dated=True, father=1862),
+            emigrated("extract", dated=True, father=1862),
+        ]
+        settled = verdicts_by_name(docs, lambda pair: SAME)
+
+        def cluster(doc: Doc, local_id: str) -> str:
+            fingerprint = doc.fingerprint(local_id, settled)
+            return settled["mentions"][fingerprint]["cluster"]
+
+        postcard, register_, extract = docs
+        assert len({cluster(doc, "e3") for doc in docs}) == 1
+        assert cluster(register_, "e1") == cluster(extract, "e1")
+        assert cluster(postcard, "e1") != cluster(register_, "e1")
+        found = emigration_of(settled, docs)
+        assert found["postcard"]["method"] == AMBIGUOUS
+        assert found["register"]["method"] == CONFIDENT_COMPONENT
+        assert found["register"]["cluster"] == found["extract"]["cluster"]
+        assert found["postcard"]["cluster"] != found["register"]["cluster"]
+        (entry,) = [e for e in settled["review"] if e["kind"] == "migration"]
+        assert entry["contradiction"]["evidence"] == PRINCIPALS_APART
+        assert {
+            p["same_merges"] for p in entry["pairs"] if p["link"] == AMBIGUOUS
+        } == {False}
 
     def test_two_principals_one_held_apart(self):
         """One emigration with two principals, Klara and Gustav: the

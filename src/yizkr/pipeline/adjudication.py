@@ -70,8 +70,8 @@ evidence says they differ by more than their own dates (a verdict
 excuses a date conflict on its own pair, never stated sexes, civil
 statuses or kin that conflict, a place's containers or an
 organisation's places that differ, event kinds that cannot be one,
-events whose principals ended in clusters held apart, or unions whose
-couple members did or were kept apart by a contradiction, evidence that
+events whose principals, or unions whose couple members, ended in
+clusters held apart or kept apart by a contradiction, evidence that
 differs by more than their own dates, kin that conflict among it), or
 two other members whose evidence says they
 differ; then it falls
