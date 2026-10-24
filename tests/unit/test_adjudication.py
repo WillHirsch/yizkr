@@ -1791,13 +1791,14 @@ def wed(
     *,
     union: str = "marriage",
     witness: int | None = None,
+    wedding: int | None = None,
 ) -> Doc:
     """A register of Leopold Löbig and Agnes Nertler's union, a marriage
     with the two its spouses or a partnership with the two its partners,
     giving Leopold's birth year as it reads it (1930 or 1910 for 1914, a
     placeholder pattern). With `witness`, Gustav Löbig witnesses it, born
     in that year, or undated for 0, a placeholder pattern no source of the
-    universe shows."""
+    universe shows; with `wedding`, the wedding's year as it reads it."""
     entities = [
         human("e1", "Leopold Löbig"),
         human("e2", "Agnes Nertler", givens=["Agnes"], birth=["Nertler"]),
@@ -1819,6 +1820,13 @@ def wed(
         if witness:
             claims.append(("e3", "date_of_birth", day(witness)))
         truth["e3"] = "gustav-loebig"
+    if wedding:
+        entities.append(entity("w1", "Wedding", "wedding"))
+        claims += [
+            ("m1", "started_by", item("w1")),
+            ("w1", "point_in_time", day(wedding)),
+        ]
+        truth["w1"] = "leopold-and-agnes-wedding"
     return register(name, entities, claims, truth)
 
 
@@ -1905,11 +1913,12 @@ class TestCoupleHeldApart:
 
     def test_a_witness_held_apart_is_no_couple_member(self):
         """Gustav witnesses both marriages, never a spouse, and the two
-        Gustavs are said `different`: the marriages' couples merged, so a
-        `same` on the marriages merges them."""
+        Gustavs are said `different`; their weddings' years (1947, and
+        1974 a misreading) keep the marriages ambiguous once their
+        couples merged, so a `same` on the marriages merges them."""
         docs = [
-            wed("postcard", 1910, witness=1919),
-            wed("register", 1910, witness=0),
+            wed("postcard", 1910, witness=1919, wedding=1947),
+            wed("register", 1910, witness=0, wedding=1974),
         ]
         identity = cluster_corpus([doc.manifest for doc in docs])
         gustavs = {doc.fingerprint("e3", identity) for doc in docs}
@@ -1927,9 +1936,13 @@ class TestCoupleHeldApart:
             settled["mentions"][gustav]["cluster"] for gustav in gustavs
         }
         assert len(gustav_clusters) == 2
+        marriage = clustering._pair(
+            *(doc.fingerprint("m1", identity) for doc in docs)
+        )
+        assert verdicts[marriage] == SAME
         found = union_of_each(settled, docs)
         assert found["postcard"]["cluster"] == found["register"]["cluster"]
-        assert found["postcard"]["method"] in (ADJUDICATED, "confident")
+        assert {m["method"] for m in found.values()} == {ADJUDICATED}
 
     def test_the_stage_asks_the_unions_after_the_people(self):
         """The stage asks the people first; the engine, told the
