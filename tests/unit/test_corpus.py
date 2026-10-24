@@ -484,3 +484,91 @@ class TestSingleStepsFollowDecks:
             monkeypatch.setenv(CORPUS_DIR_VAR, str(tmp_path / "corpus"))
         assert self.transcribe(tmp_path, stand_alone).exists()
         assert capsys.readouterr().err == ""
+
+
+class TestOneDeckSelection:
+    """A run, the single-file steps and the transcription import select the
+    corpus's decks by one function, corpus.follow_decks (#685), so what
+    they ask of the list cannot drift apart."""
+
+    LISTED = ExclusionList.parse("image2.png\n")
+
+    @pytest.fixture
+    def calls(self, monkeypatch):
+        """Every call of follow_decks, by whichever path, recorded on its
+        way to the real function."""
+        import yizkr.core.corpus as corpus_module
+        import yizkr.pipeline.orchestrate as orchestrate
+
+        real = corpus_module.follow_decks
+        seen = []
+
+        def spy(exclusions, folder):
+            seen.append((exclusions, folder))
+            return real(exclusions, folder)
+
+        monkeypatch.setattr(corpus_module, "follow_decks", spy)
+        monkeypatch.setattr(orchestrate, "follow_decks", spy)
+        return seen
+
+    def test_every_path_holds_the_one_function(self):
+        import yizkr.core.corpus as corpus_module
+        import yizkr.pipeline.import_transcriptions as imports
+        import yizkr.pipeline.orchestrate as orchestrate
+
+        assert orchestrate.follow_decks is corpus_module.follow_decks
+        assert imports.follow_decks is corpus_module.follow_decks
+
+    def test_a_run_asks_it_of_its_folder(self, tmp_path, calls):
+        """The run's list is what follow_decks makes of it for the run's
+        folder, and a file of the bytes a glob names in a deck is left
+        out of the documents."""
+        from yizkr.pipeline.orchestrate import Orchestrator
+
+        folder = tmp_path / "corpus"
+        talk(folder)
+        (folder / "album-photograph.png").write_bytes(TALK_IMAGE)
+        orchestrator = Orchestrator(
+            folder,
+            tmp_path / "state",
+            exclusions=self.LISTED,
+            log=lambda *args, **kwargs: None,
+        )
+        names = [doc.source.name for doc in orchestrator.documents()]
+        assert calls == [(self.LISTED, folder)]
+        assert orchestrator.exclusions == follow_decks(self.LISTED, folder)
+        assert orchestrator.exclusions.embedded == {
+            hashlib.sha1(TALK_IMAGE).hexdigest()
+        }
+        assert names == [TALK]
+
+    def test_a_run_without_a_list_asks_nothing(self, tmp_path, calls):
+        from yizkr.pipeline.orchestrate import Orchestrator
+
+        talk(tmp_path / "corpus")
+        orchestrator = Orchestrator(
+            tmp_path / "corpus",
+            tmp_path / "state",
+            log=lambda *args, **kwargs: None,
+        )
+        orchestrator.documents()
+        assert calls == []
+        assert orchestrator.exclusions is None
+
+    def test_a_single_step_asks_it_of_the_corpus_folder(
+        self, env, tmp_path, monkeypatch, calls
+    ):
+        folder = tmp_path / "corpus"
+        talk(folder)
+        listed_file = tmp_path / "exclude.txt"
+        listed_file.write_text("image2.png\n")
+        monkeypatch.setenv(EXCLUDE_FILE_VAR, str(listed_file))
+        monkeypatch.setenv(CORPUS_DIR_VAR, str(folder))
+        scan = tmp_path / "album-photograph.png"
+        scan.write_bytes(TALK_IMAGE)
+        with pytest.raises(SystemExit, match="never-ingest"):
+            run_cli("ingest", "register", "--file", str(scan),
+                    "--type", "photograph", "--title", "Album")  # fmt: skip
+        assert [(listed.patterns, at) for listed, at in calls] == [
+            (self.LISTED.patterns, folder)
+        ]
