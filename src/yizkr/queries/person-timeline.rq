@@ -28,10 +28,11 @@
 # point in time's is unbound. The site shows the types, sorted, with the
 # time beside them ("imprisonment (start time)"). The event's
 # participants are read at any rank but deprecated too, so that a
-# preferred participant hides no other. ?circumstances holds the statement's sourcing circumstances
-# (circa), each by its English label (its id when it has none),
-# URI-encoded and "|"-separated: circa qualifies the whole statement, so
-# each of its rows carries it (docs/MODELING.md).
+# preferred participant hides no other. ?circumstances holds the
+# statement's sourcing circumstances (circa), each by its English label
+# (its id when it has none), URI-encoded and "|"-separated: circa
+# qualifies the whole statement, so each of its rows carries it
+# (docs/MODELING.md).
 # For a single person, append e.g.: FILTER(?person = wd:Q26)
 #defaultView:Timeline
 SELECT DISTINCT ?person ?personLabel ?what ?eventTypes ?date ?precision
