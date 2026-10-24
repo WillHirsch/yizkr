@@ -43,6 +43,8 @@ Amended by #670 (2026-10-24; the owner's decision on #670): a curator's
 confirmation that such a mention, or the artifact a structured record
 makes, is an existing item takes its document-subject claims onto that
 item (§10.1(c), "A confirmed mention or record's artifact").
+Amended by ADR-0040 (2026-10-24): §10.1(c)'s `main_subject` → "Rudolf's
+death" reads `main_subject` → Rudolf, since no death item exists.
 
 Revised 2026-10-16 on the owner's direction on #517, quoted: "Wait, are
 these fields about a source's relevance to its container, or independent
@@ -745,6 +747,9 @@ read the wiki, and a prompt names no artifact by QID, only its own
 document and what that document places, by SHA-1. There are four
 routes:
 
+Amended by ADR-0040, 2026-10-24: "`main_subject` → Rudolf's death" reads
+"`main_subject` → Rudolf", since no death item exists (ADR-0040 §2.9).
+
 - **(c1) A curator's record of what a document encloses**, by the two
   SHA-1s (`<source>=<sha1>`, as `--placed` takes a curator's placement,
   §2.1). It needs:
@@ -788,6 +793,8 @@ routes:
   cited to the letter with its passage. A curator, or later artifact
   matching (#162), links the mention item to the held scan; until then
   the claim sits on the letter's own record of what it encloses.
+  (Amended by ADR-0040, 2026-10-24: `main_subject` → Rudolf, not
+  "Rudolf's death", since no death item exists.)
   - It adds no item beyond the mention item today's prompt already
     makes, and needs no curator record before the write.
   - It widens the 2026-10-16 ruling to an artifact the source writes
@@ -826,8 +833,8 @@ claim's subject before confirmation was a (c4) mention or a (b)
 record's artifact, the confirmed item is its subject, and the claim is
 written there, cited to the source with its passage, as a confirmed
 person match moves a document's claims onto the existing person. So
-the 1958 letter's `main_subject` → Rudolf's death, on its mention of the
-enclosed death certificate, goes onto the held scan
+the 1958 letter's `main_subject`, on its mention of the enclosed death
+certificate, goes onto the held scan
 death-certificate-1941 once a curator confirms the mention is that
 scan's item.
 
