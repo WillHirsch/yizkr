@@ -13,8 +13,8 @@ same way. A hyphenated name the line breaks at its own hyphen
 ("Mockburg-" then "Süd") is read a second way, the hyphen kept
 ("Mockburg-Süd"), and any line-end hyphen a third way, the hyphen kept
 with a space after it ("Mockburg- Süd"), as a quote copies the line's
-end, and as a suspended hyphen broken at a line's end ("Brunnen-" then
-"und Gartenstraße") is quoted ("Brunnen- und Gartenstraße"). The second
+end, and as a suspended hyphen broken at a line's end ("Hut-" then "und
+Mützenmacherei") is quoted ("Hut- und Mützenmacherei"). The second
 and third readings are tried, in that order, when the joined reading
 holds no match, and only for an excerpt that crosses the hyphen: an
 excerpt that stops at the hyphen ("gemeente Drake", where a line breaks
@@ -35,20 +35,23 @@ from __future__ import annotations
 import re
 import unicodedata
 
+# the hyphen and the characters the fold reads as one (`_PLAIN`)
+_HYPHENS = "-\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
+_SOFT_HYPHEN = "\u00ad"
 # a word that ends a line on a hyphen, and the word the next line opens
 # with; the hyphen and the line break are dropped
 _LINE_END_HYPHEN = re.compile(
-    r"(?<=\w)[-\u00ad][^\S\r\n]*(?:\r\n|[\n\r])\s*(?=\w)"
+    rf"(?<=\w)[{_HYPHENS}{_SOFT_HYPHEN}][^\S\r\n]*(?:\r\n|[\n\r])\s*(?=\w)"
 )
 # a hyphen within a line with a space after it, between two words, as a
 # quote may copy a hyphen at a line's end
-_SPACED_HYPHEN = re.compile(r"(?<=\w)-[^\S\r\n]+(?=\w)")
+_SPACED_HYPHEN = re.compile(rf"(?<=\w)[{_HYPHENS}][^\S\r\n]+(?=\w)")
 _WORDS = re.compile(r"\w+")
-_SOFT_HYPHEN = "\u00ad"
 # how a reading takes a hyphen at a line's end: joined away, kept, or
 # kept with a space after it
 _JOIN, _KEEP, _SPACE = "join", "keep", "space"
-# typographic punctuation, read as its plain form
+# typographic punctuation, read as its plain form; each character it
+# reads as "-" is one of `_HYPHENS`
 _PLAIN = str.maketrans(
     {
         "\u2018": "'",
@@ -119,7 +122,9 @@ def _flat(
                     if hyphen == _SPACE:
                         chars.append(" ")
                         numbers.append(number)
-            elif not (soft and chars[-1].isalnum() and line[0].isalnum()):
+            elif chars[-1] != " " and not (
+                soft and chars[-1].isalnum() and line[0].isalnum()
+            ):
                 # a soft hyphen at the line's end, dropped, joins the next
                 # line's word; any other line break is a space
                 chars.append(" ")

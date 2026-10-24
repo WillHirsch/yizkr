@@ -116,6 +116,25 @@ class TestTheContainerItNames:
             Transcript(SENDER),
         ) == (None, (1, 2))
 
+    @pytest.mark.parametrize("hyphen", ["\u2010", "\u2011"])
+    @pytest.mark.parametrize("break_", [" ", "\n"])
+    @pytest.mark.parametrize("written", ["-", "\u2010"])
+    def test_typographic_hyphen_evidence_names_the_joined_word(
+        self, hyphen, break_, written
+    ):
+        # the evidence's words read its typographic hyphens as the
+        # transcript's reading does, so evidence found there names the word
+        assert container_problem(
+            Container(
+                name="Drakeradiel",
+                evidence=f"gemeente Drake{hyphen}{break_}radiel",
+            ),
+            Transcript(f"Snylsjum, gemeente Drake{written}\nradiel, Fryslân"),
+        ) == (None, (1, 2))
+
+    def test_an_unspaced_hyphen_within_a_line_is_not_joined(self):
+        assert word_readings("Brunnen-ring")[-1] == ["brunnen", "ring"]
+
     def test_a_hyphenated_name_spaced(self):
         assert container_problem(
             Container(name="Mockburg-Süd", evidence="Mockburg- Süd"),
@@ -178,6 +197,19 @@ class TestTheSoftHyphen:
         assert words("Brunnen\u00ad\nring 35") == ["brunnenring", "35"]
         # quoted with the soft hyphen too
         assert found.locate("Brunnen\u00ad\nring") == 1
+
+    def test_only_the_line_it_ends_is_joined(self):
+        found = Transcript(
+            "in Flörburg, Brunnen\u00ad\nring 35\nInh. Sebastian Löbig"
+        )
+        assert found.locate("Brunnenring 35 Inh. Sebastian Löbig") == 1
+
+    def test_before_a_line_that_opens_on_no_word_it_is_a_space(self):
+        assert Transcript("Brunnen\u00ad\n(35)").locate("Brunnen (35)") == 1
+
+    def test_after_a_space_it_adds_none(self):
+        found = Transcript("Hutmacherei \u00ad\nzum Blauen Hut")
+        assert found.locate("Hutmacherei zum Blauen Hut") == 1
 
     def test_part_of_the_word_is_no_match(self):
         found = Transcript("in Flörburg, Brunnen\u00ad\nring 35")

@@ -2231,8 +2231,8 @@ def excerpt_audit(claims: Iterable[Claim], transcript: Transcript) -> dict:
     """Each claim's `transcription_excerpt` looked for in the
     transcription it quotes, read as core/verbatim.py reads both (folded,
     whitespace and line breaks collapsed, a hyphen at a line's end
-    joined, or kept, for an excerpt that crosses it, whole words only;
-    ADR-0035 §5).
+    joined, kept, or kept with a space after it, for an excerpt that
+    crosses it, a soft hyphen dropped, whole words only; ADR-0035 §5).
 
     `counts`, for coverage.json: the claims checked, those with no
     excerpt (or one that holds no word, as a container's evidence that

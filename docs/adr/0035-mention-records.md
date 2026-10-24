@@ -1524,8 +1524,9 @@ surname types, roles, classes and note categories. Beyond the schema:
   the line's end, or a suspended hyphen a line breaks ("Hut-" then "und
   Mützenmacherei"), is (amended by #612); an excerpt that stops at such
   a hyphen or starts after it quotes part of a word and is no match
-  (`core/verbatim.py`); the evidence's own words are read the same
-  three ways when its name is looked for; `evidence-does-not-name`, the evidence does not
+  (`core/verbatim.py`); when its name is looked for, the evidence's
+  words are read with a hyphen at a line's end joined and kept, and
+  with a hyphen the evidence spaces ("Drake- radiel") joined too; `evidence-does-not-name`, the evidence does not
   hold the container's name, folded, as whole words; and `malformed`, the
   entry cannot become a container at all (neither an object nor a
   string, a key a container has not, no name or a name that is no
