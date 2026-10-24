@@ -535,12 +535,25 @@ def cmd_extract(args) -> int:
         # a failure, as a partial batch is, not a refusal: the same input
         # may extract on another run, from the LLM cache at no engine cost
         # for the calls that completed. No batch is written, so none reads
-        # as a claim-free document's.
-        print(
-            f"extraction failed: {' '.join(str(exc).split())}; "
-            f"{args.out} not written",
-            file=sys.stderr,
-        )
+        # as a claim-free document's, and an earlier run's batch at --out
+        # is moved aside to <out>.stale (replacing an older one there), so
+        # no later step reads it as this run's. Moved, not deleted: it may
+        # be the one copy of an earlier extraction.
+        reason = " ".join(str(exc).split())
+        outcome = f"{args.out} not written"
+        if args.out.exists():
+            stale = args.out.with_name(args.out.name + ".stale")
+            try:
+                args.out.replace(stale)
+            except OSError as move:
+                outcome += (
+                    f"; an earlier batch is still at {args.out} and could "
+                    f"not be moved aside ({move.strerror or move}): it is "
+                    f"not this run's"
+                )
+            else:
+                outcome += f"; the earlier batch there moved to {stale}"
+        print(f"extraction failed: {reason}; {outcome}", file=sys.stderr)
         return EXIT_FAILED
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(batch.model_dump_json(indent=2))

@@ -343,6 +343,68 @@ class TestIngestExtract:
         assert captured.out == ""
         assert not out.exists()
 
+    @staticmethod
+    def fail_extraction(monkeypatch) -> None:
+        from yizkr.pipeline import extract
+        from yizkr.pipeline.chunking import ExtractionFailed
+
+        def failed(self, transcription, artifact):
+            raise ExtractionFailed("no claims extracted: 1 of 1 chunks failed")
+
+        monkeypatch.setattr(extract.ClaimFileExtractor, "extract", failed)
+
+    def test_a_failed_extraction_moves_an_earlier_batch_aside(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """An earlier run's batch at --out is moved to <out>.stale, and
+        the one line says so: no later step reads it as this run's
+        (#639)."""
+        self.fail_extraction(monkeypatch)
+        earlier = '{"claims": []}'
+        out = tmp_path / "batch.json"
+        out.write_text(earlier)
+        stale = tmp_path / "batch.json.stale"
+        stale.write_text("an older stale batch")
+
+        status, _ = self.extract(tmp_path)
+
+        assert status == EXIT_FAILED
+        captured = capsys.readouterr()
+        _no_traceback(captured.err)
+        assert captured.err == (
+            "extraction failed: no claims extracted: 1 of 1 chunks failed; "
+            f"{out} not written; the earlier batch there moved to {stale}\n"
+        )
+        assert captured.out == ""
+        assert not out.exists()
+        assert stale.read_text() == earlier
+
+    def test_an_earlier_batch_that_cannot_be_moved_is_named(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """When the move fails, the line says the batch still at --out is
+        not this run's, and the step still fails in one line (#639)."""
+        self.fail_extraction(monkeypatch)
+        out = tmp_path / "batch.json"
+        out.write_text('{"claims": []}')
+
+        def refused(self, target):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(Path, "replace", refused)
+        status, _ = self.extract(tmp_path)
+
+        assert status == EXIT_FAILED
+        captured = capsys.readouterr()
+        _no_traceback(captured.err)
+        assert captured.err == (
+            "extraction failed: no claims extracted: 1 of 1 chunks failed; "
+            f"{out} not written; an earlier batch is still at {out} and "
+            "could not be moved aside (Permission denied): it is not this "
+            "run's\n"
+        )
+        assert out.exists()
+
     def test_a_claim_free_batch_says_why_it_is_empty(
         self, tmp_path, monkeypatch, capsys
     ):
