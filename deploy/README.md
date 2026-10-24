@@ -140,8 +140,23 @@ The list is a UTF-8 text file, one entry per line:
 An image a document embeds is matched too: a deck's image by its SHA-1
 and by its names in the archive (`image2.png`), a PDF's placed image by
 its SHA-1 alone, since its names are its places in the PDF, not files.
-A glob does not follow an image's bytes into other documents: to keep
-an image out of every document that holds it, list its SHA-1.
+A glob that names a deck's image follows its bytes: before any
+document's images are read, a run gathers the SHA-1s of the images the
+globs name in the corpus's decks, and keeps those bytes out of every
+deck and PDF that holds them, under whatever name or place, and out of
+the run as a file of their own. Only identical bytes are followed. A
+PDF keeps an image as it is only when it holds a JPEG file: with
+`image2.jpeg` listed, a booklet that places that same JPEG is read
+without it. An image a PDF holds as pixels (a PNG, say) has other bytes
+there and is not matched: to keep it out of that PDF, list the PDF. A
+deck the list excludes is opened too, in memory, to hash its members,
+and nothing of it is kept, so listing a deck never frees what a glob
+names in it. A deck that cannot be read as an archive stops the run
+before anything is read, while the list holds a glob, since what its
+globs would name cannot be known: repair it, or take it out of the
+corpus folder (PowerPoint's `~$` lock file beside an open deck is one).
+A glob does not reach a file's bytes otherwise: to keep a file's
+content out under any name, list its SHA-1.
 
 **It fails closed.**
 
@@ -152,7 +167,11 @@ an image out of every document that holds it, list its SHA-1.
   is not a SHA-1 (a pasted SHA-256), or a glob followed by an inline
   comment.
 - A listed document is dropped before any step reads it: no artifact, no
-  transcription, no state under `var/runs/`.
+  transcription, no state under `var/runs/`. An image a glob names in a
+  deck is never read, extracted, registered or uploaded, wherever its
+  bytes are (above), though a deck's record of its media keeps its bytes
+  beside the record, and a reading an earlier run kept of it stays on
+  disk, unused.
 - The single-file steps (`ingest register`, `transcribe`, `extract`,
   `gedcom`, `detect-faces`) are debugging tools and run without a list, but
   once one is configured they refuse a listed file. For `extract`, that is
@@ -160,6 +179,9 @@ an image out of every document that holds it, list its SHA-1.
   through `--media`, the media file, which must be the one the
   transcription names. A transcription keeps no file name, so with a list
   that names files by pattern, `extract` refuses to run without `--media`.
+  The single-file steps do not open the corpus's decks, so they do not
+  refuse a file whose bytes a glob names only inside a deck: to keep such
+  a file out of them, list its SHA-1.
 
 In the containerised CLI (`docker-compose.localhost.yml`), a set path that
 does not exist stops the container from starting; nothing is created in

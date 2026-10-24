@@ -238,7 +238,8 @@ and `yizkr.reset` for the reset.
   counting what the run and the cache hold as it reads them, and names
   who holds the runs directory and the cache. It makes no model call and
   asks the wiki nothing. It refuses what the run would refuse before its
-  first call: no never-ingest list, a runs directory the driver refuses
+  first call: no never-ingest list, a deck that cannot be read as an
+  archive while the list holds a glob, a runs directory the driver refuses
   (open to others, tracked by git, a file, one it cannot write), a model
   that is no full id, a pacing setting the engine refuses, a PDF without
   the renderer, anomaly thresholds the checks cannot load, other
