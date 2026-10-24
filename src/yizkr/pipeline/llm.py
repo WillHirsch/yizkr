@@ -973,6 +973,17 @@ def _last_event(
     )
 
 
+def is_api_error_event(event: Mapping[str, Any]) -> bool:
+    """Whether a stream-json event is an assistant event that stands for
+    an API error, not the model's words: one with an `error` (the error's
+    class, a string) or marked is_api_error_message. Its text is the CLI's
+    notice of the error, such as a refusal frame."""
+    return event.get("type") == "assistant" and (
+        isinstance(event.get("error"), str)
+        or event.get("is_api_error_message") is True
+    )
+
+
 def stream_report(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     """What a call's stream-json events report of the call: from its init
     event, the `model` it ran on, the `cli_version` and the `session_id`;
@@ -1641,14 +1652,7 @@ def unsupported_model(
     texts = [result.get("result")]
     for event in events:
         message = event.get("message")
-        if (
-            event.get("type") == "assistant"
-            and isinstance(message, dict)
-            and (
-                isinstance(event.get("error"), str)
-                or event.get("is_api_error_message") is True
-            )
-        ):
+        if isinstance(message, dict) and is_api_error_event(event):
             content = message.get("content")
             texts += [
                 block.get("text")
@@ -1734,14 +1738,7 @@ def classifier_refusal(
     for event in events:
         kind = event.get("type")
         message = event.get("message")
-        if (
-            kind == "assistant"
-            and isinstance(message, dict)
-            and (
-                isinstance(event.get("error"), str)
-                or event.get("is_api_error_message") is True
-            )
-        ):
+        if isinstance(message, dict) and is_api_error_event(event):
             if message.get("stop_reason") == REFUSAL_STOP:
                 blocked_by = blocked_by or REFUSAL_STOP
                 details = message.get("stop_details")
@@ -2889,10 +2886,7 @@ class ClaudeCodeClient:
                     and block.get("type") == "text"
                     and isinstance(block.get("text"), str)
                 ]
-                if (
-                    isinstance(event.get("error"), str)
-                    or event.get("is_api_error_message") is True
-                ):
+                if is_api_error_event(event):
                     notices += texts
                 elif texts:
                     spoke = True
