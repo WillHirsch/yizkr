@@ -572,3 +572,310 @@ class TestOneDeckSelection:
         assert [(listed.patterns, at) for listed, at in calls] == [
             (self.LISTED.patterns, folder)
         ]
+
+
+# -- the single vision step and a deck (#684) ---------------------------------
+
+
+class Reached(Exception):
+    """The vision engine was asked: the step got past every refusal."""
+
+
+class Engine:
+    """A vision client that records each file it is given, by name and
+    bytes, and then stops the step."""
+
+    model_identifier = "fictional-vision-model"
+
+    def __init__(self):
+        self.sent: list[tuple[str, bytes]] = []
+
+    def complete(self, prompt, files):
+        self.sent += [(path.name, path.read_bytes()) for path in files]
+        raise Reached
+
+
+# the talk under its own name, in another case, and renamed: with no
+# suffix, as another archive, as a macro deck and as an image
+DECK_NAMES = [
+    TALK,
+    "LIBRARY-TALK-2018.PPTX",
+    "library-talk-2018",
+    "library-talk-2018.zip",
+    "library-talk-2018.pptm",
+    "album-photograph.png",
+    "library-talk-2018.docx",
+]
+
+
+def forbid_reading(monkeypatch):
+    """Fail the test if anything opens an archive's members, hashes a
+    file or counts its pages."""
+    import yizkr.core.corpus as corpus_module
+    import yizkr.pipeline.transcribe as transcribe
+    from yizkr.claims import ArtifactRef
+
+    def never(what):
+        def fail(*args, **kwargs):
+            raise AssertionError(f"{what} before the refusal")
+
+        return fail
+
+    monkeypatch.setattr(zipfile, "ZipFile", never("an archive was opened"))
+    monkeypatch.setattr(
+        corpus_module, "file_sha1", never("the file was hashed")
+    )
+    monkeypatch.setattr(
+        ArtifactRef, "from_path", never("the artifact was hashed")
+    )
+    monkeypatch.setattr(
+        transcribe, "media_page_count", never("its pages were counted")
+    )
+
+
+class TestSingleVisionStepRefusesADeck:
+    """`ingest transcribe --engine llm` would give the vision engine its
+    file whole, embedded images and all, so it refuses a deck or any
+    other ZIP archive, whatever it is called, and names the run that
+    reads a deck slide by slide: nothing of it, and so nothing of a
+    member a never-ingest glob names in it, is read or sent."""
+
+    @pytest.fixture
+    def engine(self, env, monkeypatch):
+        import yizkr.pipeline.llm as llm
+
+        engine = Engine()
+        monkeypatch.setattr(llm, "make_client", lambda *a, **k: engine)
+        return engine
+
+    @pytest.fixture
+    def listed(self, tmp_path, monkeypatch):
+        """The list names the talk's image2.png, and the corpus folder
+        holds the talk."""
+        listed_file = tmp_path / "exclude.txt"
+        listed_file.write_text("image2.png\n")
+        monkeypatch.setenv(EXCLUDE_FILE_VAR, str(listed_file))
+        monkeypatch.setenv(CORPUS_DIR_VAR, str(tmp_path / "corpus"))
+        return talk(tmp_path / "corpus")
+
+    @staticmethod
+    def deck_as(tmp_path, name):
+        """The talk's bytes in a file of its own called `name`."""
+        deck = talk(tmp_path / "elsewhere")
+        renamed = tmp_path / "elsewhere" / name
+        if renamed != deck:
+            deck.rename(renamed)
+        return renamed
+
+    @staticmethod
+    def transcribe(tmp_path, media):
+        out = tmp_path / "transcription.json"
+        run_cli("ingest", "transcribe", "--engine", "llm",
+                "--file", str(media), "--out", str(out))  # fmt: skip
+        return out
+
+    @staticmethod
+    def assert_refused(refused, name):
+        message = str(refused.value.code)
+        assert name in message and "scratch run" in message
+        assert "\n" not in message
+
+    @pytest.mark.parametrize("name", DECK_NAMES)
+    def test_a_deck_whose_member_a_glob_names_is_refused(
+        self, engine, listed, tmp_path, name
+    ):
+        deck = self.deck_as(tmp_path, name)
+        with pytest.raises(SystemExit) as refused:
+            self.transcribe(tmp_path, deck)
+        self.assert_refused(refused, name)
+        assert engine.sent == []
+        assert not (tmp_path / "transcription.json").exists()
+
+    @pytest.mark.parametrize("name", DECK_NAMES)
+    def test_nothing_is_read_and_no_client_made_before_the_refusal(
+        self, env, listed, tmp_path, monkeypatch, name
+    ):
+        """The refusal comes before the list is followed into the
+        corpus's decks, before the file is hashed, and before any client
+        is made."""
+        import yizkr.pipeline.llm as llm
+
+        def no_client(*args, **kwargs):
+            raise AssertionError("a client was made before the refusal")
+
+        monkeypatch.setattr(llm, "make_client", no_client)
+        deck = self.deck_as(tmp_path, name)
+        forbid_reading(monkeypatch)
+        with pytest.raises(SystemExit) as refused:
+            self.transcribe(tmp_path, deck)
+        self.assert_refused(refused, name)
+
+    def test_an_unreadable_deck_is_refused_naming_the_run(
+        self, engine, listed, tmp_path
+    ):
+        """A deck that is not an archive is still refused as a deck, not
+        as a list that cannot be followed."""
+        deck = tmp_path / "corpus" / TALK
+        deck.write_bytes(b"not an archive")
+        with pytest.raises(SystemExit) as refused:
+            self.transcribe(tmp_path, deck)
+        self.assert_refused(refused, TALK)
+        assert engine.sent == []
+
+    @pytest.mark.parametrize("name", DECK_NAMES)
+    def test_a_deck_it_may_not_read_is_refused_naming_the_run(
+        self, engine, listed, tmp_path, name
+    ):
+        deck = self.deck_as(tmp_path, name)
+        deck.chmod(0)
+        try:
+            if os.access(deck, os.R_OK):
+                pytest.skip("this user reads any file")
+            with pytest.raises(SystemExit) as refused:
+                self.transcribe(tmp_path, deck)
+        finally:
+            deck.chmod(0o600)
+        self.assert_refused(refused, name)
+        assert engine.sent == []
+
+    def test_a_corpus_folder_that_cannot_be_listed_is_not_reached(
+        self, engine, listed, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv(CORPUS_DIR_VAR, str(tmp_path / "moved away"))
+        with pytest.raises(SystemExit) as refused:
+            self.transcribe(tmp_path, listed)
+        self.assert_refused(refused, TALK)
+        assert engine.sent == []
+
+    def test_a_deck_is_refused_with_no_list(self, engine, tmp_path):
+        deck = talk(tmp_path / "corpus")
+        with pytest.raises(SystemExit, match="deck"):
+            self.transcribe(tmp_path, deck)
+        assert engine.sent == []
+
+    def test_an_image_still_reaches_the_engine(self, engine, tmp_path):
+        """The refusal is the archive's alone: the talk's photograph as a
+        file of its own, on no list, is sent."""
+        scan = tmp_path / "album-photograph.png"
+        scan.write_bytes(TALK_IMAGE)
+        with pytest.raises(Reached):
+            self.transcribe(tmp_path, scan)
+        assert engine.sent == [("album-photograph.png", TALK_IMAGE)]
+
+    @pytest.mark.parametrize(
+        "checked", [True, False], ids=["checked", "unchecked"]
+    )
+    @pytest.mark.parametrize("name", DECK_NAMES)
+    def test_the_transcriber_never_sends_a_deck(
+        self, tmp_path, monkeypatch, name, checked
+    ):
+        """The vision transcriber refuses a deck or another archive
+        itself, whoever calls it and whatever it is called, before it
+        hashes, counts or sends anything."""
+        from yizkr.pipeline.transcribe import LlmVisionTranscriber
+
+        engine = Engine()
+        deck = self.deck_as(tmp_path, name)
+        forbid_reading(monkeypatch)
+        transcriber = LlmVisionTranscriber(engine)
+        read = (
+            transcriber.transcribe
+            if checked
+            else transcriber.transcribe_unchecked
+        )
+        with pytest.raises(ValueError, match="ZIP archive"):
+            read(deck)
+        assert engine.sent == []
+
+    @pytest.mark.parametrize("name", [TALK, "LIBRARY-TALK-2018.PPTX"])
+    def test_the_transcriber_refuses_a_deck_by_its_suffix(
+        self, tmp_path, monkeypatch, name
+    ):
+        """A deck that is not an archive, as a damaged one is, is known by
+        its suffix, in any case."""
+        from yizkr.pipeline.transcribe import LlmVisionTranscriber
+
+        engine = Engine()
+        deck = tmp_path / name
+        deck.write_bytes(b"not an archive")
+        forbid_reading(monkeypatch)
+        transcriber = LlmVisionTranscriber(engine)
+        for read in (transcriber.transcribe, transcriber.transcribe_unchecked):
+            with pytest.raises(ValueError, match="ZIP archive"):
+                read(deck)
+        assert engine.sent == []
+
+    @pytest.mark.parametrize(
+        "head",
+        [b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"],
+        ids=["member", "empty", "spanned"],
+    )
+    def test_each_zip_signature_is_an_archive(self, tmp_path, head):
+        from yizkr.pipeline.transcribe import is_archive
+
+        media = tmp_path / "album-photograph.png"
+        media.write_bytes(head + b"fictional rest of the archive")
+        assert is_archive(media)
+
+    @pytest.mark.parametrize(
+        "head", [b"\x89PNG", b"%PDF", b"PK\x01\x02", b"PK"], ids=repr
+    )
+    def test_other_leading_bytes_are_not(self, tmp_path, head):
+        from yizkr.pipeline.transcribe import is_archive
+
+        media = tmp_path / "album-photograph.png"
+        media.write_bytes(head + b" fictional scan")
+        assert not is_archive(media)
+
+    def test_only_four_bytes_are_read(self, tmp_path, monkeypatch):
+        """Telling an archive needs its four leading bytes, and nothing of
+        it is read beyond them."""
+        import builtins
+
+        import yizkr.pipeline.transcribe as transcribe
+
+        sizes = []
+
+        class Spy:
+            def __init__(self, file):
+                self.file = file
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self.file.close()
+
+            def read(self, size=-1):
+                sizes.append(size)
+                return self.file.read(size)
+
+        def spied_open(*args, **kwargs):
+            return Spy(builtins.open(*args, **kwargs))
+
+        monkeypatch.setattr(transcribe, "open", spied_open, raising=False)
+        deck = self.deck_as(tmp_path, "library-talk-2018")
+        assert transcribe.is_archive(deck)
+        assert sizes == [4]
+
+    def test_a_run_fails_a_renamed_deck_rather_than_send_it(self, tmp_path):
+        """A run routes a deck called as an image to vision, and the
+        transcriber's refusal fails that document closed."""
+        from tests.unit.test_orchestrate import ScriptedOrchestrator, quiet
+
+        engine = Engine()
+
+        class Run(ScriptedOrchestrator):
+            def _llm(self, role, doc):
+                return engine
+
+        folder = tmp_path / "docs"
+        self.deck_as(tmp_path, "album-photograph.png").rename(
+            folder.mkdir() or folder / "album-photograph.png"
+        )
+        orchestrator = Run(folder, tmp_path / "state", log=quiet)
+        orchestrator.run()
+        [doc] = orchestrator.documents()
+        assert doc.state.status == "failed"
+        assert "ZIP archive" in doc.state.error
+        assert engine.sent == []
