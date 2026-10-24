@@ -99,8 +99,10 @@ compared as alias hygiene compares names) keys nothing in reconcile's
 blocking, so a document's "Hildegard Löbig", aliased "Oma", never meets
 another grandmother by "Oma"; a record's nicknames still key, and a
 place, an organisation or a family keys on every name. Blocking without
-the batch keys every alias. The adjudication prompt shows an
-appellation, on either side, as "called: Oma", never among the aliases.
+the batch keys every alias. The adjudication prompts (reconcile's and
+reconcile-graph's) show a graph item's appellation as "called: Oma",
+never among its aliases; a document entity's appellation is left out of
+its aliases, and its facts show it as its `referred_to_as` claim.
 The serial sequencer's overlap signal (ADR-0019) still keys every
 alias.
 

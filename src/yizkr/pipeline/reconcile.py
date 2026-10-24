@@ -388,7 +388,9 @@ def _composed(record: PersonStructure) -> list[str]:
     ]
 
 
-def _not_appellations(names: Iterable[str], appellations: Iterable[str]):
+def _not_appellations(
+    names: Iterable[str], appellations: Iterable[str]
+) -> list[str]:
     """The names that are none of the appellations, as ``name_form_key``
     compares them, in order."""
     called = {name_form_key(form) for form in appellations}
@@ -859,11 +861,6 @@ def adjudicate(
                         entity.aliases, appellations.get(entity.id, ())
                     )
                 )
-                else ""
-            )
-            + (
-                f"; called: {', '.join(called)}"
-                if (called := appellations.get(entity.id))
                 else ""
             )
             + f"; kind: {entity.kind}"

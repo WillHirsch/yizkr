@@ -2137,7 +2137,8 @@ class TestDocumentAppellations:
         llm = ScriptedLlm(json.dumps({"done": True}))
         adjudicate(llm, [hildegard], {"e1": roster}, appellated)
         (prompt,) = llm.prompts
-        assert "- e1: Hildegard Löbig (aliases: Hilde); called: Oma;" in prompt
+        assert "- e1: Hildegard Löbig (aliases: Hilde); kind:" in prompt
+        assert "referred_to_as: Oma" in prompt
         assert "- for e1: Q40 'Hildegard Löbig'; called: Oma;" in prompt
 
     def test_the_adjudication_prompt_lists_an_unmarked_alias(self):
@@ -2181,4 +2182,49 @@ class TestDocumentAppellations:
         assert cli.cmd_reconcile(args) == 0
         assert "candidates for 0 of 1 document entities" in (
             capsys.readouterr().out
+        )
+
+    def test_an_entity_aliased_only_by_its_appellation_lists_no_aliases(
+        self,
+    ):
+        oma = EntityRecord(
+            id="e1", label="Hildegard Löbig", aliases=["Oma"], kind="human"
+        )
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        adjudicate(
+            llm,
+            [oma],
+            {"e1": self.sipkje()},
+            batch([name_claim("referred_to_as", "Oma")], [oma]),
+        )
+        (prompt,) = llm.prompts
+        (line,) = [x for x in prompt.splitlines() if x.startswith("- e1:")]
+        assert line == "- e1: Hildegard Löbig; kind: human"
+
+    def test_every_appellation_of_an_entity_keys_nothing(self):
+        hildegard = self.hildegard().model_copy(
+            update={"aliases": ["Oma", "Omama", "Hilde"]}
+        )
+        keys = entity_name_keys(hildegard, ["Oma", "Omama"])
+        assert "oma" not in keys
+        assert "omama" not in keys
+        assert "hilde" in keys
+        appellated = batch(
+            [
+                name_claim("referred_to_as", "Oma"),
+                name_claim("referred_to_as", "Omama"),
+            ],
+            [hildegard],
+        )
+        roster = [
+            RosterEntity(
+                qid="Q41",
+                label="Sipkje Faxridge",
+                aliases=["Omama"],
+                kind="human",
+            )
+        ]
+        assert (
+            block_candidates(appellated.entities, roster, batch=appellated)
+            == {}
         )
