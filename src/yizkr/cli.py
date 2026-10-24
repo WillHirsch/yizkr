@@ -706,7 +706,7 @@ def cmd_reconcile(args) -> int:
         )
     config = Config.load(args.env_file)
     roster = fetch_roster(WikiClient(config), config)
-    candidates = block_candidates(batch.entities, roster)
+    candidates = block_candidates(batch.entities, roster, batch=batch)
     print(
         f"roster: {len(roster)} graph entities; candidates for "
         f"{len(candidates)} of {len(batch.entities)} document entities"
