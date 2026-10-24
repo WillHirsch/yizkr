@@ -614,12 +614,13 @@ def hold(runs: Path) -> Iterator[None]:
 def runs_holder(runs: Path) -> str | None:
     """The driver that holds the runs directory now, described, as the
     record in its LOCK_FILE says (hold), read without taking the lock;
-    None when the record names no running process, or there is none. A
-    process on another host is taken to run, since this one cannot see
+    None when the record names no running process, or there is none or
+    none that reads (nested too deep to decode included). A process on
+    another host is taken to run, since this one cannot see
     it."""
     try:
         record = json.loads((Path(runs) / LOCK_FILE).read_text())
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     if not isinstance(record, dict):
         return None

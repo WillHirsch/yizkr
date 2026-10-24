@@ -15,6 +15,7 @@ universe's (docs/EXAMPLES.md).
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import itertools
 import json
@@ -82,6 +83,9 @@ SHA1 = re.compile(r"sha1\W*([0-9a-f]{40})")
 ENTRY = re.compile(r"^[0-9a-f]{64}\.json$")
 # a stamp, as the cache names what it moves aside
 REPLACED = "20260929T090000Z-1a2b3c4d"
+# a lock record nested too deep for json to decode: RecursionError
+# decoding it, never written by a holder (#533)
+NESTED = "[" * 100_000
 
 
 class Engine:
@@ -1382,6 +1386,53 @@ class TestCacheAsIs:
         assert f"process {os.getpid()} " in scratch.runs_holder(runs)
         assert f"process {os.getpid()} " in llm.cache_holder(cache)
 
+    def test_a_lock_record_nested_too_deep_holds_nothing(self, tmp_path):
+        """A lock file whose record nests too deep for json to decode, as
+        no writer makes it, raises RecursionError decoding: it names no
+        holder, for the runs directory as for the cache (#533)."""
+        runs, cache = tmp_path / "runs", tmp_path / "cache"
+        for folder in (runs, cache):
+            folder.mkdir()
+            (folder / ".lock").write_text(NESTED)
+        with pytest.raises(RecursionError):
+            json.loads(NESTED)
+        assert scratch.runs_holder(runs) is None
+        assert llm.cache_holder(cache) is None
+
+    @pytest.mark.parametrize("record", ["[]", "null", "7", '"a driver"'])
+    def test_a_lock_record_that_is_no_object_holds_nothing(
+        self, tmp_path, record
+    ):
+        """A lock record that decodes to no JSON object names no
+        holder, for the runs directory as for the cache."""
+        runs, cache = tmp_path / "runs", tmp_path / "cache"
+        for folder in (runs, cache):
+            folder.mkdir()
+            (folder / ".lock").write_text(record + "\n")
+        assert scratch.runs_holder(runs) is None
+        assert llm.cache_holder(cache) is None
+
+    def test_a_runs_lock_naming_no_holder_still_holds(self, tmp_path):
+        """A nested record names no holder, yet the lock is flock's, not
+        the record's: while it is held a driver is refused, and the next
+        driver to hold it replaces the record with its own (#533)."""
+        runs = tmp_path / "runs"
+        runs.mkdir(mode=0o700)
+        lock = runs / scratch.LOCK_FILE
+        lock.write_text(NESTED)
+        fd = os.open(lock, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            assert scratch.runs_holder(runs) is None
+            with pytest.raises(scratch.ScratchRunInUse), scratch.hold(runs):
+                pass
+        finally:
+            os.close(fd)
+        assert lock.read_text() == NESTED
+        with scratch.hold(runs):
+            assert f"process {os.getpid()} " in scratch.runs_holder(runs)
+        assert lock.read_text() == ""
+
 
 class TestNothingTouched:
     def test_it_writes_nothing_and_asks_nothing(
@@ -1431,6 +1482,20 @@ class TestNothingTouched:
             f"the LLM cache {cache}",
         ]
         assert all(f"process {pid} " in line for line in counted.holders)
+
+    def test_a_runs_lock_nested_too_deep_names_no_holder(
+        self, tmp_path, engine
+    ):
+        """The runs directory's lock file holds a record nested too deep
+        to decode: `yizkr scratch estimate` counts all the same and names
+        no holder (#533)."""
+        runs = runs_dir(tmp_path)
+        runs.mkdir(mode=0o700)
+        (runs / scratch.LOCK_FILE).write_text(NESTED)
+        counted = estimate_of(tmp_path, small(tmp_path), engine)
+        assert counted.total().engine_calls == 14
+        assert counted.holders == []
+        assert (runs / scratch.LOCK_FILE).read_text() == NESTED
 
     def test_an_estimator_never_runs_the_run(self, tmp_path, engine):
         corpus = small(tmp_path)
