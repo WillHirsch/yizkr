@@ -95,15 +95,15 @@ class TestTheManifestPrompt:
             '{"kind": "human", "status": "<status>",',
             '"surnames": [{"written": "...", "type": "<birth, married or '
             'other>"}]',
-            '"patronymics": [...], "nicknames": [...], "titles": [...], '
-            '"suffixes": [...], "unsplit": [...]',
+            '"patronymics": ["..."], "nicknames": ["..."], "suffixes": '
+            '["..."], "unsplit": ["..."], "titles": ["..."]}.',
             '{"kind": "place", "status": "<toponym, deictic, generic or '
             'adjective>",',
             '"names": [{"written": "...", "toponym": "...", "head": "..."}]',
             '"address": {"written": "...", "street": "...", "number": "..."}',
-            '{"kind": "organization", "names": [...], "kinds": [...], '
-            '"places": [...]}',
-            '{"kind": "family", "surnames": [...]}',
+            '{"kind": "organization", "names": ["..."], "kinds": ["..."], '
+            '"places": ["..."]}',
+            '{"kind": "family", "surnames": ["..."]}',
             '"structure": {<the mention record, for the four kinds above>}',
             '"note": {<only for a judgement call>}',
         ],
@@ -911,7 +911,6 @@ class TestTheManifestsRecords:
             "set_aside": {},
             "containers_checked": 0,
             "containers_dropped": {},
-            "containers_name_only": 0,
             "appellation_labels": 0,
             "appellation_label_names": 0,
             "appellation_parts": 0,
@@ -945,7 +944,6 @@ class TestTheManifestsRecords:
             "set_aside": {"addition": 1, "kind": 1, "schema": 1},
             "containers_checked": 0,
             "containers_dropped": {},
-            "containers_name_only": 0,
             "appellation_labels": 0,
             "appellation_label_names": 0,
             "appellation_parts": 0,
@@ -1036,7 +1034,6 @@ class TestTheManifestsRecords:
             },
             "containers_checked": 0,
             "containers_dropped": {},
-            "containers_name_only": 0,
         }
         assert "Klara" not in json.dumps(coverage)
 
@@ -1089,7 +1086,6 @@ class TestTheManifestsRecords:
             "set_aside": {"dropped": 3, "no toponym": 1},
             "containers_checked": 0,
             "containers_dropped": {},
-            "containers_name_only": 0,
             "appellation_labels": 0,
             "appellation_label_names": 0,
             "appellation_parts": 0,

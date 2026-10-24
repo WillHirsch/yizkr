@@ -37,6 +37,36 @@ as a bare string gives a name alone, no evidence, and is dropped as
 containers with no evidence. The GEDCOM adapter gives each container its
 PLAC's value as its evidence (§6).
 
+Amended by #607 (2026-10-24, the owner's decisions of 2026-10-23 on
+#589's questions 2 and 3): the critic reads each container's evidence
+where it stands in the document's numbered transcription, its lines
+shown beside it, and flags `evidence_does_not_state` when the evidence
+fails ADR-0003's test (a located passage that, read where it stands,
+does not convey the containment); "gives only the container's name,
+outside a field of a form about the place" is no longer a rule of its
+own, since a container's name alone is a fine citation where it stands
+in a field of a form about the place. The containers kept whose evidence
+is their name alone are no longer counted (`records.containers_name_only`
+goes), and the local audit no longer says whether the evidence names the
+place or is the container's name alone; no fixed name-only rule is
+added. A `within` entry of the wrong shape, one that cannot become a
+container (neither an object nor a string, an object with a key a
+container has not, `{"written": …}` among them, one with no name or a
+name that is no string, or one whose evidence is neither a string nor
+null), is dropped alone under a fourth counted reason, `malformed`, the
+record standing with its names, status and other containers; it is
+taken out of `within` after the empty strings are read and before the
+record is validated, so it neither sets the record aside as `schema`
+nor refuses the manifest, and #514's place container, which is not read
+as text, is no longer left to validation. Its audit entry keeps its
+field path, its index counting the entries left once the empty strings
+were dropped, as a kept or dropped entry's does, the entry as JSON,
+clipped, and its first validation error. It is counted only where the
+record stands. A `within` that is no list (a non-empty string, an
+object, null) is still `schema`: reading a lone object as a list would
+be repair by parsing. Null evidence, like omitted evidence, is still
+`no-evidence`.
+
 Amended by #571 (2026-10-23): §6's PLAC row. Each jurisdiction of a PLAC
 is a place entity of its own, one per distinct tail of components in the
 export, named by its own name as its label or an alias, and each link of
@@ -54,6 +84,20 @@ between them) are one place, labelled by its components comma-joined.
 Amended by #583 (2026-10-23): §6's OBJE DATE row. An object's own DATE is
 the `inception` of its media item (ADR-0039 §2.2), at the GEDCOM's
 precision, with its range and circa, never narrowed.
+
+Amended by #626 (2026-10-24; ADR-0039 §10): §3.4's document-subject
+properties take three subjects: the claim's own source, an artifact the
+source places by bytes, and a batch entity of an artifact kind (the
+artifact a source's own structured record makes), each only where the
+claim's passage, read where it stands, conveys the fact (ADR-0003's
+support test, as #607 writes it). An extraction may not name an
+artifact kind, in a manifest record or a `LocalRef`'s `instance_of`
+(ADR-0039 §10.1(b), on its lean). The general rule replaces #583's
+interim exception keyed on the adapter's model identifier: §6's OBJE
+DATE row needs no exception, and the adapter meets the support test
+through its mapping, since an OBJE's DATE stands in the object's own
+record and so conveys that object's date of making (ADR-0039 §10.4,
+§10.6).
 
 Amended by #386 (2026-09-29): the critic's findings are validated records
 that name their entity and claim by id and give their axis and a
@@ -131,6 +175,16 @@ the entity holds is an `addition`). An object holding anything else, a
 `written` that is no string, and a place's container (an object of its
 own, §2.2) are not read so. The entity-manifest prompt is
 unchanged, so cached answers are reused.
+
+Amended by #625 (2026-10-24, the owner's option (b), batched with
+#627): the entity-manifest prompt shows each of those lists as a list
+of strings (`"titles": ["..."]`), never as a bare `[...]` beside the
+`written` objects of a given name, a surname and a place's name, and
+the line that says an occupation beside a name is a claim, not a name
+part, sits next to `titles`, and now names an office beside a name as
+well as an occupation. #514's reading stays as the safety net, and its
+`read as text` count shows whether the prompt is followed. The change
+re-asks every manifest call and every chunk call that forks from it.
 
 Amended by #499 (2026-10-16): every form a source uses to name or
 address a person is an alias, and each that is no plain name form is
@@ -1193,6 +1247,15 @@ source's own key, and the writer the derived media registered for the source in
 the same write; a breach is a counted reject in validation and a
 refusal in the writer.
 
+Widened by #626, 2026-10-24 (ADR-0039 §10): "the subject is still the
+source artifact itself, and these properties take no other subject"
+holds until the build #626's draft names lands; from that build on it
+no longer holds. The document-subject properties take the claim's own
+source, an artifact the source places (checked against the same placed
+media as `caption`), or a batch entity of an artifact kind, each only
+where the passage, read where it stands, conveys the fact; `caption`
+stays the one `placed_subject` property.
+
 - **`issued_by`** (P2378): a document → the organisation that issued it.
   The claim's subject is the source artifact itself, named by the SHA-1
   of its media as a claim's source is (ADR-0010), and resolved to the
@@ -1456,19 +1519,23 @@ surname types, roles, classes and note categories. Beyond the schema:
   name a line breaks at its own hyphen is quoted; an excerpt that stops
   at such a hyphen or starts after it quotes part of a word and is no
   match (`core/verbatim.py`); `evidence-does-not-name`, the evidence does not
-  hold the container's name, folded, as whole words. Whether the evidence
-  states the containment, and not only names both places (a list of
-  towns) or gives the container's name alone, stays a judgement: the
-  critic may flag it (`evidence_does_not_state`), advisory and counted
-  with its findings, and the containers kept whose evidence is their name
-  alone are counted apart (`records.containers_name_only`). Each
-  container checked is kept, with its field path, evidence, reason, the
-  first and last transcription lines it was compared with, and whether
-  its evidence names the place itself or is the container's name alone,
-  in the extraction's local `containers.json`, so each reason's cases can
-  be sampled; report and diff carry counts alone. A stored batch's
-  container written as a bare string still reads as a container with no
-  evidence;
+  hold the container's name, folded, as whole words; and `malformed`, the
+  entry cannot become a container at all (neither an object nor a
+  string, a key a container has not, no name or a name that is no
+  string, or evidence that is neither a string nor null), which is
+  taken out before the record is validated, so it never sets the record
+  aside (amended by #607). Whether the evidence, read where it stands,
+  conveys the containment, and does not only name both places (a list
+  of towns), stays a judgement: the critic, shown the evidence's lines
+  in the numbered transcription, may flag it (`evidence_does_not_state`,
+  ADR-0003's test), advisory and counted with its findings (amended by
+  #607). Each container checked is kept, with its field path, evidence,
+  reason and the first and last transcription lines it was compared
+  with, or, for a malformed one, the entry as JSON, clipped, and its
+  first validation error, in the extraction's local `containers.json`,
+  so each reason's cases can be sampled; report and diff carry counts
+  alone. A stored batch's container written as a bare string still
+  reads as a container with no evidence;
 - a `name` status needs a name part, and a `toponym` status a name or an
   address;
 - a claim's value is of a kind its property accepts (§3.5), and a death's
@@ -1478,7 +1545,10 @@ surname types, roles, classes and note categories. Beyond the schema:
 An omitted optional field is empty. Two shapes are read structurally
 first, each counted, never a word (amended by #497 and #514): an empty
 string, and an entry of a list of strings written as an object holding
-its text. A structure that fails validation is
+its text. Then a place's container of the wrong shape is dropped alone
+and counted as `malformed`, the record standing, while a `within` that
+is no list still fails the record (amended by #607). A structure that
+fails validation is
 set aside, never the whole manifest: the entity keeps its label, aliases
 and kind, and the reason is counted in the extraction's `coverage.json`
 (`records.set_aside`, by category), as is the record

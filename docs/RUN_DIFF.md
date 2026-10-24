@@ -347,8 +347,14 @@ expects it and why:
 - mentions removed in bulk, or mention records set aside up
   (`content.records.set_aside_records`), recordless mentions up;
   place containers dropped up (`content.records.containers_dropped`, by
-  reason in `containers_dropped_by_reason`) where the change does not
-  touch what the manifest gives as a container's evidence;
+  reason in `containers_dropped_by_reason`, `malformed` among them since
+  #607) where the change does not touch what the manifest gives as a
+  container's evidence; a baseline from before #607 also carries
+  `containers_name_only`, which a later run no longer counts;
+- critiques recomputed where neither the batch nor the transcription
+  changed: since #607 the critique is made from both, so a transcription
+  that changed under an alike batch recomputes its critique, and is no
+  regression;
 - excerpts not in their source up (`content.quotes.not_in_source`,
   its `rate`, by property in `not_in_source_by_property`) where the
   change does not touch what a chunk is asked to quote; a change to the

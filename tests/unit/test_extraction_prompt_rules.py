@@ -555,96 +555,106 @@ class Recording:
         return json.dumps({"done": True})
 
 
-def containment_block(prompt: str) -> str:
-    return prompt.split(
-        "Each `part_of` claim above, with the time it carries and the "
-        "excerpt of\nthe source it cites:\n"
-    )[1].split("\nCheck each")[0]
+# a register's line that names Fläckfeld with its district, and one that
+# lists towns
+REGISTER = "\n".join(
+    [
+        "Geburtsregister Fläckfeld, Kreis Mockburg",  # 1
+        "Orte: Fläckfeld, Kreis Peiltal",  # 2
+    ]
+)
 
 
-def critic_prompt(batch_: ClaimBatch) -> str:
+def claim_rows(prompt: str) -> list[str]:
+    """The claims block's rows."""
+    block = prompt.split("\nClaims (subject | property | value | times | ")[1]
+    rows = block.split(":\n", 1)[1].split("\n\n")[0]
+    return rows.splitlines()
+
+
+def critic_prompt(batch_: ClaimBatch, text: str | None = None) -> str:
+    from yizkr.pipeline.transcribe import Transcription
+
     llm = Recording()
-    critique.run_critique(llm, batch_)
+    transcription = (
+        None
+        if text is None
+        else Transcription(artifact=SCAN, text=text, engine="test")
+    )
+    critique.run_critique(llm, batch_, transcription)
     (prompt,) = llm.prompts
     return prompt
 
 
 class TestTheCriticChecksContainment:
+    """Since #607 a `part_of` claim is checked by the one support test,
+    its citation shown where it stands in the claims block (ADR-0003)."""
+
     def test_the_category_names_the_check(self):
-        assert CONTAINMENT_CATEGORY.startswith(
-            "a place's `part_of` claim (its container, or its country) that "
-            "its excerpt does not state, neither in the place's mention, nor "
-            "in the fields a form gives that place, nor as a link of a chain "
-            "of containers"
-        )
-        assert "inferred from what is known of the place" in (
-            CONTAINMENT_CATEGORY
-        )
-        assert "carried over from another place's container" in (
-            CONTAINMENT_CATEGORY
-        )
-        assert (
-            '(Fläckfeld put in Kreis Peiltal on an excerpt that reads only "'
-            'Fläckfeld")'
-        ) in CONTAINMENT_CATEGORY
-        assert "is never written (ADR-0038): suggest drop" in (
-            CONTAINMENT_CATEGORY
+        assert flat(CONTAINMENT_CATEGORY) == (
+            "a place's `part_of` claim (its container, or its country) whose "
+            "citation fails the support test, its times included, or that "
+            "cites no excerpt, since then no passage conveys it: containment "
+            "the source does not convey is never written (ADR-0038); name the "
+            "claim"
         )
 
-    def test_the_category_names_an_unstated_time(self):
-        assert (
-            "Also a time a `part_of` claim carries (a point in time, a start "
-            "or end time, a bound of one, or circa) that its excerpt does not "
-            "state for the containment, such as the document's own date or "
-            "the date of an event at the place: suggest drop the qualifier"
-        ) in CONTAINMENT_CATEGORY
+    def test_the_special_cases_are_gone(self):
+        given = flat(f"{critique.CRITIQUE_PROMPT} {critique.CATEGORIES}")
+        for gone in (
+            "neither in the place's mention, nor in the fields a form gives "
+            "that place, nor as a link of a chain of containers",
+            "outside a field of a form",
+            "the container's name alone included",
+            "Also a time a `part_of` claim carries",
+            "Check each against its excerpt",
+        ):
+            assert gone not in given
 
-    def test_the_prompt_lists_the_category_and_asks_for_the_check(self):
+    def test_the_prompt_lists_the_category(self):
         prompt = critic_prompt(containment_batch(("e01", "e02", "Fläckfeld")))
         assert "- unsupported_containment: a place's `part_of` claim" in prompt
-        assert (
-            "Check each against its excerpt: a containment the excerpt does "
-            "not state (in the place's mention, in the fields a form gives "
-            "that place, or as a link of a chain of containers) is a concern "
-            "(unsupported_containment), and so is a time the excerpt does "
-            "not state for the containment."
-        ) in flat(prompt)
+        assert "Each `part_of` claim above" not in prompt
 
-    def test_each_part_of_claim_is_shown_with_its_excerpt(self):
+    def test_each_part_of_claim_is_shown_with_its_citation(self):
         prompt = critic_prompt(
             containment_batch(
                 ("e01", "e02", "Fläckfeld, Kreis Mockburg"),
                 ("e01", "e03", "Fläckfeld"),
-            )
+            ),
+            REGISTER,
         )
-        block = containment_block(prompt)
-        assert block.splitlines() == [
-            '- e01 part_of e02: "Fläckfeld, Kreis Mockburg"',
-            '- e01 part_of e03: "Fläckfeld"',
+        assert claim_rows(prompt)[:2] == [
+            'e01 | part_of | e02 | times: - | line 1: "Fläckfeld, Kreis '
+            'Mockburg"',
+            'e01 | part_of | e03 | times: - | lines 1; 2: "Fläckfeld"',
         ]
 
-    def test_a_claim_without_an_excerpt_says_so(self):
+    def test_a_claim_without_an_excerpt_shows_none(self):
         prompt = critic_prompt(containment_batch(("e01", "e03", None)))
-        assert "\n- e01 part_of e03: -\n" in prompt
+        assert "e01 | part_of | e03 | times: - | -" in claim_rows(prompt)
 
-    def test_a_batch_without_containment_shows_none(self):
+    def test_a_batch_shows_each_claim_once(self):
         prompt = critic_prompt(containment_batch())
-        assert (
-            "the excerpt of\nthe source it cites:\n(none)\nCheck each"
-        ) in prompt
+        assert len(claim_rows(prompt)) == 1
 
-    def test_an_excerpt_stays_on_its_line(self):
+    def test_an_excerpt_stays_on_its_row(self):
         prompt = critic_prompt(
-            containment_batch(("e01", "e02", "Fläckfeld,\nKreis Mockburg"))
+            containment_batch(("e01", "e02", "Fläckfeld,\nKreis Mockburg")),
+            REGISTER,
         )
-        assert '- e01 part_of e02: "Fläckfeld,\\nKreis Mockburg"' in prompt
+        assert (
+            'e01 | part_of | e02 | times: - | line 1: "Fläckfeld,\\nKreis '
+            'Mockburg"'
+        ) in claim_rows(prompt)
 
-    def test_a_containment_line_is_no_entity_row(self):
+    def test_a_claim_row_is_no_entity_row(self):
         """The recorded engine tells a critique's document by its entity
-        rows; a containment line, even one whose excerpt holds the claims
-        block's separator, is never taken for one."""
+        rows; a claim row, even one whose excerpt holds the separator, is
+        never taken for one."""
         prompt = critic_prompt(
-            containment_batch(("e01", "e02", "Fläckfeld | Kreis | Mockburg"))
+            containment_batch(("e01", "e02", "Fläckfeld | Kreis | Mockburg")),
+            REGISTER,
         )
         assert set(_ENTITY_ROW.findall(prompt)) == {
             ("e01", "Fläckfeld"),
@@ -652,15 +662,19 @@ class TestTheCriticChecksContainment:
             ("e03", "Kreis Peiltal"),
         }
 
-    def test_a_dated_claim_is_shown_with_its_time(self):
-        # Koshnovka (e01) in Kaldovsky District (e02) at a date, with a
-        # range and circa; an undated claim beside it shows no time
-        batch_ = containment_batch(
+    def dated(self, *qualifiers: dict) -> ClaimBatch:
+        given = containment_batch(
             ("e01", "e02", "in 1941 Koshnovka belonged to Kaldovsky District"),
             ("e01", "e03", "Koshnovka"),
-        )
-        dated = batch_.claims[0].model_dump(mode="json")
-        dated["qualifiers"] = [
+        ).model_dump(mode="json")
+        given["claims"][0]["qualifiers"] = list(qualifiers)
+        return ClaimBatch.model_validate(given)
+
+    def test_a_dated_claim_is_shown_with_its_time(self):
+        # Koshnovka (e01) in Kaldovsky District (e02) at a date, with a
+        # range and circa; an undated claim beside it shows no time, and
+        # a qualifier that is no time is not listed
+        batch_ = self.dated(
             {
                 "property": "point_in_time",
                 "value": {"type": "time", "year": 1941},
@@ -683,17 +697,13 @@ class TestTheCriticChecksContainment:
                     "value": {"kind": "local", "local_id": "e03"},
                 },
             },
-        ]
-        given = batch_.model_dump(mode="json")
-        given["claims"][0] = dated
-        block = containment_block(
-            critic_prompt(ClaimBatch.model_validate(given))
         )
-        assert block.splitlines() == [
-            "- e01 part_of e02, carrying point_in_time 1941; earliest_date "
-            '1940; sourcing_circumstances circa: "in 1941 Koshnovka belonged '
-            'to Kaldovsky District"',
-            '- e01 part_of e03: "Koshnovka"',
+        assert claim_rows(critic_prompt(batch_))[:2] == [
+            "e01 | part_of | e02 | times: point_in_time 1941; earliest_date "
+            "1940; sourcing_circumstances circa | not in the transcription: "
+            '"in 1941 Koshnovka belonged to Kaldovsky District"',
+            "e01 | part_of | e03 | times: - | not in the transcription: "
+            '"Koshnovka"',
         ]
 
     @pytest.mark.parametrize(
@@ -707,32 +717,35 @@ class TestTheCriticChecksContainment:
         ],
     )
     def test_every_dating_qualifier_is_shown(self, time):
-        given = containment_batch(("e01", "e02", "Fläckfeld")).model_dump(
-            mode="json"
-        )
-        given["claims"][0]["qualifiers"] = [
+        batch_ = self.dated(
             {"property": time, "value": {"type": "time", "year": 1905}}
-        ]
-        block = containment_block(
-            critic_prompt(ClaimBatch.model_validate(given))
         )
-        assert f"- e01 part_of e02, carrying {time} 1905: " in block
+        assert claim_rows(critic_prompt(batch_))[0].startswith(
+            f"e01 | part_of | e02 | times: {time} 1905 | "
+        )
 
-    def test_a_finding_on_a_dated_containment_names_its_claim(self):
-        # the block's listing of a dated claim, up to its time, is the
-        # claim as a finding names it
-        given = containment_batch(("e01", "e02", "Fläckfeld")).model_dump(
-            mode="json"
-        )
-        given["claims"][0]["qualifiers"] = [
+    def test_the_value_column_is_the_listing(self):
+        batch_ = self.dated(
             {
                 "property": "point_in_time",
                 "value": {"type": "time", "year": 1905},
             }
-        ]
-        batch_ = ClaimBatch.model_validate(given)
-        (line,) = containment_block(critic_prompt(batch_)).splitlines()
-        subject, prop, value = line[2:].split(", carrying")[0].split(" ")
+        )
+        rows = claim_rows(critic_prompt(batch_))
+        for row, listing in zip(rows, critique.listings(batch_), strict=True):
+            assert tuple(row.split(" | ")[:3]) == listing
+
+    def test_a_finding_on_a_dated_containment_names_its_claim(self):
+        # by its first three columns as listed, the times apart
+        batch_ = self.dated(
+            {
+                "property": "point_in_time",
+                "value": {"type": "time", "year": 1905},
+            }
+        )
+        subject, prop, value = claim_rows(critic_prompt(batch_))[0].split(
+            " | "
+        )[:3]
         finding = {
             "entity": "e01",
             "claim": {"subject": subject, "property": prop, "value": value},
@@ -760,16 +773,16 @@ class TestTheCriticChecksContainment:
     @pytest.mark.parametrize(
         "brk", ["\r", "\x0b", "\x0c", "\x1c", "\x85", "\u2028", "\u2029"]
     )
-    def test_no_line_break_splits_a_containment_line(self, brk):
+    def test_no_line_break_splits_a_claim_row(self, brk):
         """JSON leaves U+2028, U+2029 and NEL raw, and splitlines() breaks
-        at each: every break is escaped, so the line stays whole."""
+        at each: every break is escaped, so the row stays whole."""
         prompt = critic_prompt(
             containment_batch(("e01", "e02", f"Fläckfeld,{brk}Kreis Mockburg"))
         )
         (line,) = [
             line
             for line in prompt.splitlines()
-            if line.startswith("- e01 part_of e02: ")
+            if line.startswith("e01 | part_of | e02 | ")
         ]
         assert line.endswith('Kreis Mockburg"')
 
@@ -807,7 +820,7 @@ def test_no_line_break_splits_a_listed_claim(brk):
     )
     assert any(
         line.startswith("e01 | occupation | Hutmacher")
-        and line.endswith("Meister")
+        and line.endswith("Meister | times: - | -")
         for line in critic_prompt(batch_).splitlines()
     )
 
@@ -853,3 +866,129 @@ class TestCitizenshipIsARelationOfPlace:
             "`adjective` for a country given only by an adjective of "
             'nationality ("Australian"), which is no name of it.'
         ) in MANIFEST
+
+
+# -- string lists, couples in lists and completeness (#625, #627) ------------
+
+# the manifest prompt as the model reads it, its doubled braces single
+SHOWN = flat(
+    ENTITY_MANIFEST_PROMPT.format(
+        kinds="",
+        kind_descriptions="",
+        artifact_sha1=SCAN.sha1,
+        language="de",
+        numbered_text="",
+    )
+)
+
+_PERSON = SHOWN[
+    SHOWN.index('- A person: {"kind": "human"') : SHOWN.index(
+        '- A place: {"kind": "place"'
+    )
+]
+_RULES = SHOWN[SHOWN.index("Rules: ") : SHOWN.index("Entity kinds")]
+
+
+class TestStringListsAreShownAsStrings:
+    """Each list of strings a mention record holds is shown as one, so
+    the model is never led to copy the `written` object of a given name
+    or a place name into it (#625; ADR-0035 §5)."""
+
+    @pytest.mark.parametrize(
+        "shape",
+        [
+            '"patronymics": ["..."]',
+            '"nicknames": ["..."]',
+            '"suffixes": ["..."]',
+            '"unsplit": ["..."]',
+            '"titles": ["..."]',
+            '{"kind": "organization", "names": ["..."], "kinds": ["..."], '
+            '"places": ["..."]}',
+            '{"kind": "family", "surnames": ["..."]}',
+        ],
+    )
+    def test_each_string_list_is_a_list_of_strings(self, shape):
+        assert shape in SHOWN
+
+    def test_no_list_is_shown_without_its_items(self):
+        assert "[...]" not in SHOWN
+
+    def test_the_lists_of_objects_keep_their_objects(self):
+        for shape in (
+            '"given": [{"written": "...", "standard": "...", '
+            '"initial": false}]',
+            '"surnames": [{"written": "...", "type": "<birth, married or '
+            'other>"}]',
+            '"names": [{"written": "...", "toponym": "...", "head": "..."}]',
+            '"within": [{"name": "...", "evidence": "..."}]',
+        ):
+            assert shape in SHOWN, shape
+
+    def test_the_office_and_occupation_line_sits_next_to_titles(self):
+        """The person's shape ends with `titles`, and the bullet right
+        after it says what a title is and that an office or an
+        occupation is a claim, not a name part."""
+        assert (
+            '"titles": ["..."]}. * Titles are honorifics and ranks (Mrs, '
+            "Dr., Frau, Fräulein, Mefrou, Rabbi), never a kinship word. An "
+            'office or an occupation beside a name ("Standesbeamter", '
+            '"Hutmachermeister") is no name part: it is a claim at '
+            "extraction. * status says what the label is"
+        ) in _PERSON
+
+    def test_the_patronymic_bullet_keeps_its_markers(self):
+        assert (
+            "of its own, never a surname. Titles and suffixes (generational "
+            'and status words, such as "Wwe.") never name anyone. A word '
+            'that states a fact (a widow\'s marker, "the late") is no name '
+            "part: it becomes a claim at extraction."
+        ) in _PERSON
+
+    def test_the_line_is_said_once(self):
+        assert SHOWN.count("Titles are honorifics and ranks") == 1
+        assert SHOWN.count("an occupation beside a name") == 1
+
+
+class TestCouplesInAList:
+    """A spouse entry in a list with no marriage stated is a couple, a
+    partnership; a stated marriage stays a marriage (#627; ADR-0036)."""
+
+    SENTENCE = (
+        "A spouse entry in a list (a descendant list, a family register) "
+        "with no marriage stated presents a couple, given a `partnership`; "
+        "a stated marriage stays a `marriage`."
+    )
+
+    def test_the_partnership_rule_says_it(self):
+        assert self.SENTENCE in SHOWN
+
+    def test_it_sits_in_the_partnership_rule(self):
+        """After the rule's parents exception and before its events."""
+        assert (
+            "a `partnership` for a couple it presents as a couple without "
+            "saying they married (two people named only as a child's "
+            "parents are not thereby a couple). " + self.SENTENCE + " Its "
+            "wedding (a `wedding`"
+        ) in SHOWN
+
+
+class TestCompletenessComesFirst:
+    """The completeness rule opens the prompt and covers places (#627)."""
+
+    RULE = (
+        "Prefer completeness: an entity mentioned once still gets an "
+        "entry, and every place the document names, even once, gets a "
+        "`place` entity."
+    )
+
+    def test_the_opening_paragraph_says_it(self):
+        opening = SHOWN[: SHOWN.index("The relation decides the kind")]
+        assert (
+            "(kind occupation_class, label in the source's exact wording). "
+            + self.RULE
+            + " The document may be in any language"
+        ) in opening
+
+    def test_it_is_said_once_and_not_among_the_rules(self):
+        assert SHOWN.count("Prefer completeness") == 1
+        assert "mentioned once" not in _RULES
