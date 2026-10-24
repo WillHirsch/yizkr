@@ -933,6 +933,28 @@ Two Anthropic-backed providers, differing in how usage is billed:
   `rate_limit_event`'s `unifiedWindows`, whatever the thresholds; the
   engine does not read it.)
 
+  A call the platform's **safety classifier** refuses is no limit and no
+  login fault (#614). The engine reads it from the stream's structure,
+  never from the notice's text, as the CLI's own stream-json schema
+  describes it (each sign is enough alone): an API-error assistant
+  event whose message has the stop reason `refusal` (with the refusal's
+  `stop_details`), a `model_refusal_no_fallback` system event, or an
+  error result with the stop reason `refusal`; a server-side safety
+  monitor's block is an API error of class `safety_monitor_blocked`.
+  Such a call raises `ClassifierRefusal`, which names the refusal and
+  its category (`cyber`, `bio`, ...) where the CLI gives one as a plain
+  token, and carries neither the CLI's notice nor its explanation. The
+  engine does not ask it again, as it does a limit, and the LLM cache
+  keeps nothing for it, so the next run asks again. Its stage records
+  it as any failed call: a `call` event with outcome `error`, error
+  `ClassifierRefusal` and stop reason `refusal`, and the stage's own
+  handling of a failed call (the extractor's chunk retries ask a chunk
+  again, and a fork's failure drops the chunk to inline context; a
+  failed document's reason names `ClassifierRefusal`). A refusal a
+  fallback model then answered ends on a result that reports no error,
+  and is the answer. A call that exits with any other failure keeps the
+  hint that the CLI may not be logged in.
+
   A pass runs on one **pinned** CLI version (#133): the one installed
   when its first client starts. Install 2.1.309, which `claude-opus-5-5`
   needs (2.1.280 or newer; docs/runbooks/scratch-run.md). The engine
