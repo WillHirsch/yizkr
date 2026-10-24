@@ -68,7 +68,12 @@ JUDGMENT = "divorce-judgment-1957"
 
 # Duplicates merged into a universe item: a statement written before the
 # merge still points at the redirect.
-MERGED = {"Q9001": "floerburg", "Q9002": "sebastian-loebig"}
+MERGED = {
+    "Q9001": "floerburg",
+    "Q9002": "sebastian-loebig",
+    "Q9003": "rudolf-loebig",
+    "Q9005": "leopold-loebig",
+}
 
 
 def iri(key: str) -> str:
@@ -730,6 +735,201 @@ class TestComparisonKey:
             iri("sebastian-loebig"),
             iri("felix-loebig"),
         }
+
+
+class TestStatedTogether:
+    """A child may have two fathers or two mothers (a GEDCOM family of two
+    HUSBs or two WIFEs, #353), so two parents one artifact states both of
+    are compared only between artifacts that each state one and not the
+    other (#547). Here, as in test_gedcom.py's TestTwoOfOneTag, Leopold and
+    Rudolf are Eugen's two fathers, and Agnes and Klara his two mothers."""
+
+    PARENTS = {
+        "father": ("leopold-loebig", "rudolf-loebig", "felix-loebig"),
+        "mother": ("agnes-loebig", "klara-loebig", "ida-loebig"),
+    }
+
+    @pytest.mark.parametrize("prop", ["father", "mother"])
+    def test_one_sources_two_parents_never_disagree_with_themselves(
+        self, prop
+    ):
+        first, second, _ = self.PARENTS[prop]
+        statements = (
+            said("eugen-loebig", prop, first, TREE),
+            said("eugen-loebig", prop, second, TREE),
+        )
+        assert listed(*statements) == []
+
+    @pytest.mark.parametrize("prop", ["father", "mother"])
+    def test_a_source_naming_one_of_them_does_not_disagree(self, prop):
+        first, second, _ = self.PARENTS[prop]
+        for named in (first, second):
+            statements = (
+                said("eugen-loebig", prop, first, TREE),
+                said("eugen-loebig", prop, second, TREE),
+                said("eugen-loebig", prop, named, INTERVIEW),
+            )
+            assert listed(*statements) == []
+
+    @pytest.mark.parametrize("prop", ["father", "mother"])
+    def test_a_source_naming_another_parent_disagrees_with_each(self, prop):
+        first, second, other = self.PARENTS[prop]
+        statements = (
+            said("eugen-loebig", prop, first, TREE),
+            said("eugen-loebig", prop, second, TREE),
+            said("eugen-loebig", prop, first, INTERVIEW),
+            said("eugen-loebig", prop, other, GRAVESTONE),
+        )
+        rows = compare(statements, NOTHING)
+        assert sorted((shown(row.a), shown(row.b)) for row in rows) == sorted(
+            tuple(sorted((QIDS[other], QIDS[parent])))
+            for parent in (first, second)
+        )
+        # the other parent's source against both that state the first
+        (with_first,) = [
+            row for row in rows if QIDS[first] in (shown(row.a), shown(row.b))
+        ]
+        assert {
+            source.artifact
+            for side in (with_first.a, with_first.b)
+            for source in side.sources
+        } == {iri(TREE), iri(INTERVIEW), iri(GRAVESTONE)}
+
+    @pytest.mark.parametrize("prop", ["father", "mother"])
+    def test_two_sources_each_naming_one_of_them_still_disagree(self, prop):
+        # the tree names both; the interview names only the first and the
+        # gravestone only the second, so those two are still set side by
+        # side, and the tree on neither side
+        first, second, _ = self.PARENTS[prop]
+        statements = (
+            said("eugen-loebig", prop, first, TREE),
+            said("eugen-loebig", prop, second, TREE),
+            said("eugen-loebig", prop, first, INTERVIEW),
+            said("eugen-loebig", prop, second, GRAVESTONE),
+        )
+        (row,) = compare(statements, NOTHING)
+        assert {shown(row.a), shown(row.b)} == {QIDS[first], QIDS[second]}
+        assert {
+            source.artifact
+            for side in (row.a, row.b)
+            for source in side.sources
+        } == {iri(INTERVIEW), iri(GRAVESTONE)}
+
+    def test_a_parent_through_its_merge_redirect_is_stated_together(self):
+        # the interview's second father is a duplicate of Rudolf
+        statements = (
+            said("eugen-loebig", "father", "leopold-loebig", INTERVIEW),
+            said("eugen-loebig", "father", "Q9003", INTERVIEW),
+            said("eugen-loebig", "father", "rudolf-loebig", TREE),
+        )
+        merged = placed(redirects=[("Q9003", "rudolf-loebig")])
+        assert listed(*statements, containment=merged) == []
+        assert len(listed(*statements)) == 2
+
+    def test_a_redirect_on_the_lower_side_is_stated_together(self):
+        # the interview's father is a duplicate of Leopold, whom the tree
+        # names beside Rudolf
+        statements = (
+            said("eugen-loebig", "father", "Q9005", INTERVIEW),
+            said("eugen-loebig", "father", "leopold-loebig", TREE),
+            said("eugen-loebig", "father", "rudolf-loebig", TREE),
+        )
+        merged = placed(redirects=[("Q9005", "leopold-loebig")])
+        assert listed(*statements, containment=merged) == []
+
+    def test_a_deprecated_reading_is_not_stated(self):
+        # a curator corrected the tree's Rudolf to Leopold and deprecated
+        # the reading: the tree names Leopold only, against the interview
+        statements = (
+            said("eugen-loebig", "father", "leopold-loebig", TREE),
+            said(
+                "eugen-loebig",
+                "father",
+                "rudolf-loebig",
+                TREE,
+                rank=DEPRECATED,
+            ),
+            said("eugen-loebig", "father", "rudolf-loebig", INTERVIEW),
+        )
+        (row,) = compare(statements, NOTHING)
+        assert {shown(row.a), shown(row.b)} == {
+            QIDS["leopold-loebig"],
+            QIDS["rudolf-loebig"],
+        }
+        assert {
+            source.artifact
+            for side in (row.a, row.b)
+            for source in side.sources
+        } == {iri(TREE), iri(INTERVIEW)}
+
+    def test_a_statement_citing_two_artifacts_is_compared_through_either(
+        self,
+    ):
+        # the interview's Leopold statement also cites the tree, which
+        # names Rudolf too; the interview still disagrees with the
+        # gravestone's Rudolf
+        statements = (
+            said("eugen-loebig", "father", "leopold-loebig", TREE, INTERVIEW),
+            said("eugen-loebig", "father", "rudolf-loebig", TREE),
+            said("eugen-loebig", "father", "rudolf-loebig", GRAVESTONE),
+        )
+        (row,) = compare(statements, NOTHING)
+        assert {shown(row.a), shown(row.b)} == {
+            QIDS["leopold-loebig"],
+            QIDS["rudolf-loebig"],
+        }
+
+    def test_two_pages_of_one_artifact_state_its_parents_together(self):
+        statements = (
+            said(
+                "eugen-loebig",
+                "father",
+                "leopold-loebig",
+                source(TREE, "Q9101"),
+            ),
+            said(
+                "eugen-loebig",
+                "father",
+                "rudolf-loebig",
+                source(TREE, "Q9102"),
+            ),
+            said("eugen-loebig", "father", "leopold-loebig", INTERVIEW),
+        )
+        assert listed(*statements) == []
+
+    def test_what_an_artifact_states_is_read_per_child(self):
+        # the tree names Rudolf as Felix's father, not Eugen's
+        statements = (
+            said("eugen-loebig", "father", "leopold-loebig", TREE),
+            said("felix-loebig", "father", "rudolf-loebig", TREE),
+            said("eugen-loebig", "father", "rudolf-loebig", INTERVIEW),
+        )
+        assert len(listed(*statements)) == 1
+
+    @pytest.mark.parametrize(
+        ("prop", "first", "second"),
+        [
+            ("place_of_birth", "floerburg", "rekau"),
+            ("birth_name", text("Ida Sörne", "en"), text("Ida Löbig", "en")),
+        ],
+    )
+    def test_other_properties_still_disagree_with_one_of_two(
+        self, prop, first, second
+    ):
+        # one source's two values of a property with one true value still
+        # disagree with another source naming one of them
+        statements = (
+            said("ida-loebig", prop, first, TREE),
+            said("ida-loebig", prop, second, TREE),
+            said("ida-loebig", prop, first, CARD),
+        )
+        rows = compare(statements, NOTHING)
+        assert len(rows) == 1
+        assert {
+            source.artifact
+            for side in (rows[0].a, rows[0].b)
+            for source in side.sources
+        } == {iri(TREE), iri(CARD)}
 
 
 class TestSpans:

@@ -33,9 +33,10 @@ uv run yizkr publish-queries             # or: make publish-queries
   start date and earliest end date that bound a residence's or a
   marriage's start and end, and the artifact each source belongs to (a
   page fragment belongs to its artifact). The compared properties are the
-  single-valued ones (dates and places of birth and death, parents, birth
-  name, an entity's own point in time, start and end time, a document's
-  inception, a place's identity properties), and residence and spouse,
+  single-valued ones (dates and places of birth and death, birth name, an
+  entity's own point in time, start and end time, a document's inception,
+  a place's identity properties), the parents (a child may have two of one
+  gender, which one source states together), and residence and spouse,
   whose dates are compared. The query pairs and filters nothing (ADR-0033):
   `yizkr.disagreement` pairs the values
   that different artifacts attribute and sets aside differences of
