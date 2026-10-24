@@ -30,12 +30,15 @@ strict reading of #345's acceptance, the orchestrator's choice: the
 issue allowed a role-less death to count for its one participant "until
 roles exist", and roles exist now (ADR-0035). The export and the site
 read both with `yizkr.core.privacy.read_evidence` (§2, §4).
-Superseded by ADR-0040, 2026-10-24: there are no death or birth event
-items from extraction or the GEDCOM adapter. A death is a set of sourced
-statements on the person, "died, nothing else known" a `date of death`
-of unknown value, and a birth its `date of birth` and `place of birth`
-(ADR-0040 §2, §3). What a birth or a death event a curator makes still
-releases or holds back is ADR-0040's Q5 (lean: it releases no one, departing from ADR-0020 §2 for it and failing closed; a birth event's date still holds its participants back; and a narrowed display still shows a curator-made undated death on its principal's page and timeline, for rule 6).
+Superseded by ADR-0040, 2026-10-24: extraction and the GEDCOM adapter
+make no death or birth event items. A death is a set of sourced
+statements on the person, and a birth is its `date of birth` and
+`place of birth` (ADR-0040 §2, §3). "Died, nothing else known", and any
+death a source states without a date, is a `date of death` of unknown
+value. A death or a dated birth event that a curator makes still counts
+as this line says (ADR-0040's Q5): a death event releases its principal,
+and a dated birth event dates its principal's birth, for the badge and
+the export alike. The display exception of ADR-0040 §6 stands.
 Amended by #577 (2026-10-23): an event is no person on the death it
 states. An item typed, at normal or preferred rank, as an event (`event`
 or a class the manifest makes a subclass of it, read through redirects)
@@ -50,9 +53,10 @@ statement with no truthy value beside it (deprecated, or of no value), a
 `date of birth` and a `human` type at any rank included; nor is an item
 typed as a family too set aside, so it stays listed and badged (§4).
 Amended by ADR-0040, 2026-10-24: with no death events from extraction,
-the set-aside guards only an event a curator makes; it stays. A death
-property on anything but a person (`human` or `unclassified_entity`) is
-refused by validation and the writer (ADR-0040 §5).
+the set-aside guards only an event a curator makes, and it stays.
+Validation and the writer refuse a death property, and a birth property
+too (ADR-0040's Q11), on anything but a person (`human` or
+`unclassified_entity`) (ADR-0040 §5).
 Amended by [ADR-0035](0035-mention-records.md) (owner decision
 2026-09-29, #385): a stated
 civil status (`civil_status`) is person evidence for the check (ADR-0035
@@ -327,19 +331,25 @@ a death event with the person as participant. This is the affordance that
 replaces `living person = no`: to include someone, assert their death the
 ordinary source-first way, not by flipping a flag.
 
-Superseded by ADR-0040, 2026-10-24: "or is the principal of a `death`
-event" and "or an even-undated death event" (for an event a curator
-makes, on ADR-0040's Q5 lean), and "Death is an event like any other …, so 'died, nothing else
-known' is simply a death event with the person as participant" no longer
-hold. "Died, nothing else known" is a `date of death` of unknown value
-(Wikibase "some value"), given only where a source says the person died
-and gives no limit (a GEDCOM `1 DEAT Y`; "the late" in an undated
-document), never for a blank field, "d. ?" or "date unknown". An unknown
-value is a truthy value, so it is death evidence as the four properties
-above read it, because the source stated the death; a deprecated one, or
-a "no value", releases no one. The list of death evidence otherwise
-stays; whether `age at death` joins it is ADR-0040's Q1 (lean: yes, as a
-statement on the person).
+Superseded by ADR-0040, 2026-10-24:
+
+- "or is the principal of a `death` event" and "or an even-undated
+  death event" now hold only for an event a curator makes (ADR-0040's
+  Q5).
+- "Death is an event like any other …, so 'died, nothing else known' is
+  simply a death event with the person as participant" no longer holds.
+  A source's statement of a death with no date is a `date of death` of
+  unknown value (Wikibase "some value"), "the late X" in a dated
+  document included. A blank field, "d. ?" or "date unknown" is never
+  one. An unknown value is a truthy value, so it is death evidence as
+  the four properties above read it, because the source stated the
+  death. A deprecated one, or a "no value", releases no one.
+- The list of death evidence gains `age at death`, as a statement on the
+  person (ADR-0040's Q1). It also gains, on the object's side, being the
+  value of a union's `ended_by_death_of` (ADR-0040's Q9), read through
+  `read_evidence`.
+- "Died by" dates are derived when a view is built, never stored, and
+  are not death evidence of their own (ADR-0040 §2.4).
 
 Amended by #345 (2026-10-18): a death event marks dead only the one it
 happened to, read from the role qualifier (`object_has_role`) of each
@@ -364,9 +374,11 @@ who have a birth already, never giving anyone a birth, so it can only
 keep them possibly living. When in doubt, the person stays possibly
 living.
 
-Superseded by ADR-0040, 2026-10-24: no extraction or GEDCOM batch makes
-a birth or a death event, so the paragraph above reads only an event a
-curator makes, and what it reads of one is ADR-0040's Q5 (lean: it releases no one, departing from ADR-0020 §2 for it and failing closed; a birth event's date still holds its participants back; and a narrowed display still shows a curator-made undated death on its principal's page and timeline, for rule 6).
+Amended by ADR-0040, 2026-10-24: no extraction or GEDCOM batch makes a
+birth or a death event, so the paragraph above reads only an event a
+curator makes. It still reads one as it says (ADR-0040's Q5): a death
+event releases its principal, and a dated birth event dates its
+principal's birth, for the badge and the export alike.
 
 ### 3. No curation duty
 
@@ -451,7 +463,7 @@ from the database while the check reads the query service. Now:
   export keeps such an event as the event it is.
   Amended by ADR-0040, 2026-10-24: extraction makes no death event, and
   validation refuses a death property on a non-person, so this bullet
-  guards only an event a curator makes, and stays (ADR-0040 §5, Q5).
+  guards only an event a curator makes, and it stays (ADR-0040 §5, Q5).
 - **A non-person type outweighs a part in an event** (owner,
   2026-09-29). A ship or a firm takes part in a migration, so an item
   typed as a vessel, a military unit or an organization
@@ -673,10 +685,12 @@ keeps of the items it keeps follows:
   leaves out (the union's QID): it is the couple's"; `BOUND_LEFT_OUT`).
   A partner's own `death` event follows the person rule instead
   (ADR-0036 §6). (Superseded by ADR-0040, 2026-10-24: a union ended by
-  a death names the partner by `ended_by_death_of`, which is no bound:
-  it stays out of `UNION_BOUNDS`, joins `PERSON_VALUE_PROPERTIES`, and
-  the partner follows the person rule through it; ADR-0040 §5.) The
-  keys land with #394 (`backup.UNION_BOUNDS`); until
+  a death names the partner by `ended_by_death_of`, which is no bound.
+  It stays out of `UNION_BOUNDS` and joins `PERSON_VALUE_PROPERTIES`,
+  and the partner follows the person rule through it. It is death
+  evidence for that partner (ADR-0040's Q9), and a partner it alone
+  releases stays in the export when the union goes, without the
+  statement that released them; ADR-0040 §5.) The keys land with #394 (`backup.UNION_BOUNDS`); until
   then nothing is read. The rest of §6 is #410's: a union that names only
   one partner is withheld too, and with it its events; until then, a
   union is left out by the event rule, when one of the partners it names
@@ -721,11 +735,16 @@ is strictly safer, since the determination is now absence-of-death only.
    burial place, or a death event of which they are the principal (as
    amended by #345) each marks a person deceased; a bare death event
    needs no date or place.
-   Superseded by ADR-0040, 2026-10-24: a date, place or cause of death,
-   a burial place, or a `date of death` of unknown value where a source
-   states the death and gives no limit, each marks a person deceased;
-   there is no death event from extraction (ADR-0040 §2; `age at death`:
-   its Q1).
+   Superseded by ADR-0040, 2026-10-24: each of these marks a person
+   deceased:
+   - a date, place or cause of death, or a burial place;
+   - `age at death` (ADR-0040's Q1);
+   - a `date of death` of unknown value, where a source states the
+     death without a date;
+   - a union `ended_by_death_of` the person (ADR-0040's Q9);
+   - a death event a curator makes, for its principal (ADR-0040's Q5).
+
+   No extraction makes a death event (ADR-0040 §2).
 4. **No reviewer duty.** The review CSV has no `living` column; `warning`
    becomes `critique_notes`.
 5. **One predicate, shared.** `yizkr.core.privacy.is_possibly_living` is
@@ -757,8 +776,8 @@ is strictly safer, since the determination is now absence-of-death only.
   and undated death events, so genuinely-documented deaths are no longer
   spuriously excluded.
   (Amended by ADR-0040, 2026-10-24: "and undated death events" reads
-  "and deaths stated with no limit, as a `date of death` of unknown
-  value".)
+  "and deaths stated without a date, as a `date of death` of unknown
+  value, and death events a curator makes".)
 - Existing instances may carry legacy `living person` statements from the
   old flow; they are inert (ignored by the new code, skipped by the site).
   A one-off cleanup can delete them, but nothing requires it.

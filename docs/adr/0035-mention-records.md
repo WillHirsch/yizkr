@@ -5,13 +5,19 @@ and ADR-0036, the owner's merge of the PR that adds it records its
 acceptance; #385's implementation carries it out.
 
 Superseded in part by [ADR-0040](0040-deaths-and-births-are-statements-on-the-person.md)
-(2026-10-24, the owner's decisions of 2026-10-24): births and deaths are
-sourced statements on the person, never event items from extraction or
-the GEDCOM adapter; the `parent` role is retired; a parent's kind is a
-`parentage` qualifier set only where the source states it; and step
-terms gain kinship classes. Each passage it supersedes or amends keeps
-its text, followed by a dated line (In brief, the #409 amendment, §3.1
-to §3.3, §3.5, §3.6, §5, §6 and §7).
+(2026-10-24, the owner's decisions and answers of 2026-10-24):
+- births and deaths are sourced statements on the person, never event
+  items from extraction or the GEDCOM adapter;
+- the `parent` and `informant` roles are retired;
+- a person who only certifies, registers, officiates, examines, reports
+  or witnesses is left out unless the record gives them another role;
+- a parent's kind is a `parentage` qualifier, set only where the source
+  states it;
+- step terms gain kinship classes.
+
+Each passage it supersedes or amends keeps its text, followed by a dated
+line (In brief, the #409 amendment, §3.1 to §3.3, §3.5, §3.6, §5, §6
+and §7).
 
 Amended by #569 (2026-10-23, the owner's design): each container a
 place's `within` lists (§2.2) is a name and its `evidence`, a verbatim
@@ -525,7 +531,7 @@ and #420 counts the records and the judgement notes of §4 in it.
 Superseded by ADR-0040, 2026-10-24: "A birth or death with no
 principal, or several, … is nobody's own and meets nothing through its
 other participants" no longer applies to extraction or GEDCOM batches,
-which make no birth or death event; a birth's or a death's date is a
+which make no birth or death event. A birth's or a death's date is a
 statement on the person and clusters as any of their dates does.
 `principals_apart` (#610) still holds for other events.
 
@@ -803,10 +809,10 @@ Line numbers are those of main at 52e2a08, for paths under `src/yizkr/`.
 - **What a source does say becomes a claim.** The burial register's
   "Witwer der Cäcilie Löbig" gives Eugen's civil status (widowed),
   Cäcilie's death, and their marriage.
-  (Amended by ADR-0040, 2026-10-24: "Cäcilie's death" is her own
-  `date_of_death`, 16 March 1909 with that day its `latest_date`
-  (ADR-0040's Q7 lean), and the marriage is `ended_by_death_of` her
-  (its Q2).)
+  (Amended by ADR-0040, 2026-10-24: the marriage is `ended_by_death_of`
+  Cäcilie, since "Witwer der" states that they were married when she
+  died (its Q2). That end is the evidence of her death (Q9). Her "died by
+  16 March 1909" is derived when a view is built, not stored (Q7, Q5).)
 - **Everyone in an event gets a role.** In Gustav's birth register
   extract, Gustav is the one born (the event's *principal*), and his
   father Sebastian is both a parent and the informant who reported the
@@ -815,8 +821,9 @@ Line numbers are those of main at 52e2a08, for paths under `src/yizkr/`.
   death.
   (Superseded by ADR-0040, 2026-10-24: the extract gives Gustav a
   `date_of_birth` and a `place_of_birth`, and `father` → Sebastian and
-  `mother` → Hildegard, each cited; there is no birth event, and its
-  informant is not extracted. Roles stay for the other events.)
+  `mother` → Hildegard, each cited. There is no birth event, and
+  Sebastian's role as informant is not recorded; he stays as Gustav's
+  father (Q6). Roles stay for the other events.)
 - **A kinship term keeps its words and gains a class.** "Dad's cousin
   Leopold" gets the class cousin beside the word "cousin".
 - **The relation decides the kind.** The Landgericht Rekau, which divorces
@@ -1171,16 +1178,19 @@ carry the source's references.
 Marriages and partnerships: ADR-0036.
 
 Amended by ADR-0040, 2026-10-24: the three death rows give statements,
-not a `death` event. "dessen verstorbener Ehefrau Cäcilie" gives her
-`date_of_death` of 15 December 1905 with that day its `latest_date` (the
-certificate's date) and her marriage to Eugen, with no union end (its
-Q12, lean); "seine verstorbene Mutter Ida" gives `mother`, and the file's
-"1946 verstorben" her 1946 date, the marker adding nothing; "Witwer der
-Cäcilie Löbig geb. Tarle" gives Eugen's `civil_status` `widowed` at 16
-March 1909, Cäcilie's `date_of_death` 16 March 1909 with that day its
-`latest_date` (its Q7, lean) and their marriage `ended_by_death_of` her
-(its Q2). "The late" in a document with no date that bounds it gives a
-`date_of_death` of unknown value (ADR-0040 §2).
+not a `death` event, and every "died by" date is derived when a view is
+built (its Q5).
+- "dessen verstorbener Ehefrau Cäcilie" gives her `date_of_death` of
+  unknown value and her marriage to Eugen, with no union end. Its Q12:
+  views derive the end, its Q2.
+- "seine verstorbene Mutter Ida" gives `mother`. The file's "1946
+  verstorben" gives her 1946 date, and the marker adds nothing.
+- "Witwer der Cäcilie Löbig geb. Tarle" gives Eugen's `civil_status`
+  `widowed` at 16 March 1909 and their marriage `ended_by_death_of` her
+  (its Q2), and no death statement for her. Her "died by 16 March 1909"
+  is derived (its Q7, Q5).
+- "The late" gives a `date_of_death` of unknown value, in a dated
+  document too (ADR-0040 §2).
 
 A new property, `civil_status`, holds a civil status the source states:
 `unmarried` (never married), `married`, `widowed` or `divorced`, dated as
@@ -1216,6 +1226,14 @@ A `participant` claim gains a role, as Wikidata qualifies one with
   for those who only certify, and gives way where the source shows them
   acting: an officiant or a witness of the event, and the authority that
   issued the document (§3.4).
+  (Amended by ADR-0040, 2026-10-24, its Q6, rule (a): a person who only
+  certifies, registers, officiates, examines, reports or witnesses is
+  `extract` false, unless the same record gives them another role, as
+  kin of someone it is about or a party to it. A rank, a job, an address
+  or a signature is not another role. So a wedding's Standesbeamter and
+  its non-kin witnesses are left out, and a kin witness or officiant
+  stays, with that role. Validation and the writer refuse a document
+  claim whose value is an `extract` false person.)
 - **A birth or a death is its principal's own.** With no principal, or
   with several, it is nobody's own. Its date moves only onto its
   principal, and only where it does not conflict with the principal's own
@@ -1238,20 +1256,24 @@ A `participant` claim gains a role, as Wikidata qualifies one with
   already have.
 
 Superseded by ADR-0040, 2026-10-24: everything above about births and
-deaths. No extraction or GEDCOM batch makes a birth or a death event:
-the one born or who died is the subject of `date_of_birth`,
-`place_of_birth`, `father` and `mother`, or of `date_of_death`,
-`place_of_death`, `cause_of_death`, `burial_place` and `age_at_death`,
-each cited. Gustav's birth register extract gives Gustav his date and
-place of birth, `father` → Sebastian and `mother` → Hildegard; Sebastian
-as informant is not extracted. "A birth or a death is its principal's
-own", the principal-and-informant check, the GEDCOM bullet and the
-privacy bullet no longer apply to extraction or GEDCOM batches; what a
-birth or death event a curator makes reads as is ADR-0040's Q5. The role
-list loses `parent`, retired as the `spouse` property was (no longer
-accepted by `object_has_role`, offered by no prompt, its item kept), and
-`informant` on ADR-0040's Q6 lean. `principal` stays for the other
-events.
+deaths.
+- No extraction or GEDCOM batch makes a birth or a death event.
+- The one born is the subject of `date_of_birth`, `place_of_birth`,
+  `father` and `mother`. The one who died is the subject of
+  `date_of_death`, `place_of_death`, `cause_of_death`, `burial_place`
+  and `age_at_death`. Each statement is cited.
+- Gustav's birth register extract gives Gustav his date and place of
+  birth, `father` → Sebastian and `mother` → Hildegard. Sebastian's role
+  as informant is not recorded.
+- "A birth or a death is its principal's own", the
+  principal-and-informant check, the GEDCOM bullet and the privacy
+  bullet no longer apply to extraction or GEDCOM batches.
+- A birth or death event a curator makes still counts as the privacy
+  bullet says (ADR-0040's Q5).
+- The role list loses `parent` and `informant`. They are retired as the
+  `spouse` property was: `object_has_role` no longer accepts them, no
+  prompt offers them, and their items stay (ADR-0040's Q6).
+- `principal`, `witness` and `officiant` stay.
 
 #### 3.3 Kinship classes
 
@@ -1281,16 +1303,19 @@ a primitive stays one: "Dein Vater" is `father`. `queries/kinship.rq`
 then reads classes instead of its term table
 (`queries/kinship.rq:224-285`), a reader after write (§10).
 
-Amended by ADR-0040, 2026-10-24: the classes gain `kin_step_parent`,
-`kin_step_child` and `kin_step_sibling`, so a letter's "mein Stiefvater"
-(hypothetical) is `relative` with `kinship_class` `kin_step_parent` and
-`kinship_type` "Stiefvater"; a half term stays `sibling`, with the word
-("Halbbruder") in `kinship_type`, which `father`, `mother`, `child` and
-`sibling` may now carry. A new qualifier on `father`, `mother` and
-`child`, `parentage` (`parentage_birth`, `parentage_adoptive`,
-`parentage_foster`), says the parent's kind, set only where the source's
-words or tags state it, never inferred (ADR-0040 §4). Until
-`kinship.rq` reads classes, its term table gains the step and half words.
+Amended by ADR-0040, 2026-10-24:
+- **Step and half terms.** The classes gain `kin_step_parent`,
+  `kin_step_child` and `kin_step_sibling`, so a letter's "mein
+  Stiefvater" (hypothetical) is `relative` with `kinship_class`
+  `kin_step_parent` and `kinship_type` "Stiefvater". A half term stays
+  `sibling`, with the word ("Halbbruder") in `kinship_type`, which
+  `father`, `mother`, `child` and `sibling` may now carry.
+- **A parent's kind.** A new qualifier on `father`, `mother` and `child`,
+  `parentage` (`parentage_birth`, `parentage_adoptive`,
+  `parentage_foster`), says the parent's kind. It is set only where the
+  source's words or tags state it, never inferred (ADR-0040 §4).
+- **The kinship query.** Until `kinship.rq` reads classes, its term
+  table gains the step and half words.
 
 #### 3.4 `issued_by` and `carried_out_by`
 
@@ -1406,21 +1431,23 @@ and schema properties (`stated_in`,
 theirs too: an artifact, an extraction run, and a class.
 
 Amended by ADR-0040, 2026-10-24: `object_has_role` accepts the roles of
-§3.2 less `parent` (and `informant`, on ADR-0040's Q6 lean); `ended_by`
-no longer accepts `death`; and the table gains rows:
+§3.2 less `parent` and `informant` (ADR-0040's Q6), and `ended_by` no
+longer accepts `death`. The table gains these rows:
 
 | Property or qualifier | Accepts |
 |---|---|
-| `ended_by_death_of` (union → the partner who died; ADR-0040 Q2) | human |
+| `ended_by_death_of` (union → the partner who died, written only where a source states that the couple were married when that partner died; ADR-0040's Q2) | human |
 | `parentage` (on `father`, `mother`, `child`) | `parentage_birth`, `parentage_adoptive`, `parentage_foster` |
 | `kinship_class` | the classes of §3.3, the step classes included |
 
-A death property (`date_of_death`, `place_of_death`, `cause_of_death`,
-`burial_place`, and `age_at_death` on ADR-0040's Q1 lean) takes only a person (`human` or
-`unclassified_entity`) as its subject, and so do `date_of_birth` and
-`place_of_birth` on ADR-0040's Q11 lean; `date_of_death` alone may take
-an unknown value. Validation refuses an entity of kind `birth` or
-`death`.
+Subjects and values:
+- A death property (`date_of_death`, `place_of_death`, `cause_of_death`,
+  `burial_place`, `age_at_death`) takes only a person (`human` or
+  `unclassified_entity`) as its subject, and so do `date_of_birth` and
+  `place_of_birth` (ADR-0040's Q1, Q11).
+- `date_of_death`, and `burial_place` for a burial stated without its
+  place, may take an unknown value (ADR-0040's Q3).
+- Validation refuses an entity of kind `birth` or `death`.
 
 #### 3.6 The vocabulary this adds
 
@@ -1453,12 +1480,12 @@ Amended by ADR-0040, 2026-10-24: the vocabulary gains:
 
 | Key | What it is | Datatype | Wikidata |
 |---|---|---|---|
-| `ended_by_death_of` | union → the partner whose death ended it (Q2) | item | none (nearest: end cause, P1534) |
+| `ended_by_death_of` | union → the partner whose death ended it, written only where a source states that the couple were married when that partner died (Q2) | item | none (nearest: end cause, P1534) |
 | `parentage` | qualifier on `father`, `mother`, `child` | item | — (nearest: type of kinship, P1039) |
-| `parentage_birth`, `parentage_adoptive`, `parentage_foster` | its values, labelled "birth (parentage)" and so on (lean) | items | — |
+| `parentage_birth`, `parentage_adoptive`, `parentage_foster` | its values, labelled "birth (parentage)" and so on | items | — |
 | `kin_step_parent`, `kin_step_child`, `kin_step_sibling` | kinship classes | items | — (nearest for the first: stepparent, P3448) |
 
-`parent` stays as an item, retired from `object_has_role`.
+`parent` and `informant` stay as items, retired from `object_has_role`.
 
 ### 4. Judgement notes
 
@@ -1631,10 +1658,10 @@ surname types, roles, classes and note categories. Beyond the schema:
 - a claim's value is of a kind its property accepts (§3.5), and a death's
   principal is not its informant.
   (Superseded by ADR-0040, 2026-10-24: "and a death's principal is not
-  its informant" goes, since no extraction makes a death event; an
+  its informant" goes, since no extraction makes a death event. An
   entity of kind `birth` or `death` is dropped alone where the manifest
-  is first read, and its claims rejected and counted, never failing the
-  turn, on ADR-0040's Q8 lean.)
+  is first read, and its claims are rejected and counted; it never fails
+  the turn (ADR-0040's Q8).)
 
 **Omissions and inconsistencies are flagged, never repaired by parsing.**
 An omitted optional field is empty. Two shapes are read structurally
@@ -1682,7 +1709,7 @@ and brackets in a NAME value, which §10 names.
 | PLAC | its first component is the place's name and the rest are `within`, each as written, with no head or toponym split, and each with the PLAC's value as its evidence (amended by #569): GEDCOM lists jurisdictions from the lowest. Each jurisdiction is a place too, its record made the same way from the components from it on: one entity per distinct tail of components in the export, which is the place of a PLAC that names those components alone. Each place is labelled by its components, comma-joined, and its own name is its label or an alias. Each link of the chain, the place within its nearest jurisdiction and each jurisdiction within the next, is a `part_of` claim cited by the PLAC's line, with no time (ADR-0038 §2). An empty component, or one without a word ('?', '-'), names nothing and is left out wherever it stands, the latter counted (`PLAC component without a word`); a component with a word is kept as written. A placeholder word, one of the list in `pipeline/gedcom_placeholders.yaml` (German, English and Dutch; compared whole and folded, case and accents ignored), is record-only (owner decision on #582, 2026-10-23): in a jurisdiction's position it stays in `within` as written, with no entity and no `part_of` to or from it, and none across it, since the source states no link between the components beside it; the containers on either side keep their entities and links where the PLAC states one between two names. As the place's own name it is left out, and the place is the first jurisdiction named. Each is counted (`PLAC placeholder component`). A PLAC that names no place (no component with a word, or placeholders alone) gives no place, though a value still states its event (#571) |
 | HEAD.LANG | GEDCOM 5.5.1's language name, mapped to a BCP 47 code, sets the language of the adapter's texts instead of a fixed `en` (`GEDCOM_LANGUAGES`, `UNDETERMINED` in `pipeline/gedcom.py`); an absent or unknown one gives undetermined (`und`), counted |
 | a DEAT that states the death and gives no date, place or cause | a `death` event with the person as principal |
-| (superseded by ADR-0040, 2026-10-24) a DEAT that states the death and gives no date, place or cause | a `date_of_death` of unknown value on the person, citing the DEAT; which DEATs state it is ADR-0040's Q4 |
+| (superseded by ADR-0040, 2026-10-24) a DEAT that states the death and gives no date, place or cause | a `date_of_death` of unknown value on the person, citing the DEAT, as ADR-0040's Q4 decides |
 | OBJE's DATE | an `inception` claim on the object's un-held media item, each DATE a claim of its own, with the range (`earliest_date`, `latest_date`) and circa its phrase states, at its precision, never narrowed, citing the object's lines (ADR-0021, ADR-0039 §2.2; amended by #583); the person's `image` claim is undated |
 
 - **No NAME part is dropped without a count** (#352). A part the NAME's
@@ -1789,9 +1816,10 @@ and brackets in a NAME value, which §10 names.
    the naturalisation meet through him. Marriages, partnerships and their
    events follow ADR-0036. Other events meet through their participants,
    as in #361.
-   (Superseded by ADR-0040, 2026-10-24: there are no birth or death
-   events from extraction or GEDCOM batches; their dates are statements
-   on the person, read as any of the person's dates. Other events meet
+   (Superseded by ADR-0040, 2026-10-24: extraction and GEDCOM batches
+   make no birth or death events. Birth and death dates are statements
+   on the person, read as any of the person's dates, and "died by" dates
+   are read through ADR-0040's shared derivation. Other events meet
    through their participants, `principals_apart` included.)
 
 Everything else of #361 stays: dates as ranges at their precision, kin
@@ -1835,7 +1863,7 @@ is folded the same way.
 | `min-name-token`, `min-place-token`, the organisation token floor | token length (`pipeline/clustering.yaml:17`, 21; `pipeline/clustering.py:400`) | nothing: keys are whole parts |
 | prefix matching | Hilde meets Hildegard (658-680, 1213-1227) | standard forms |
 | one participant | a birth's or a death's date (956-970) | the principal |
-| (superseded by ADR-0040, 2026-10-24) one participant | a birth's or a death's date | the person's own `date_of_birth` and `date_of_death` statements; `ONE_PER_PERSON` and the principal pass go |
+| (superseded by ADR-0040, 2026-10-24) one participant | a birth's or a death's date | the person's own `date_of_birth` and `date_of_death` statements, and derived "died by" dates; `ONE_PER_PERSON` and the principal pass go |
 
 ### 8. Fingerprints and aliases
 

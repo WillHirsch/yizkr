@@ -200,8 +200,10 @@
   its wedding and ended by a divorce, an annulment or a partner's death
   (`started_by`, `ended_by`; ADR-0036)
   (Amended by ADR-0040, 2026-10-24: a union ended by a partner's death
-  is `ended_by_death_of` that partner, a person value, not `ended_by` a
-  death event.)
+  is `ended_by_death_of` that partner, a person value, written only where
+  a source states that the couple were married when that partner died.
+  Otherwise views derive the end, and nothing is written (ADR-0040's
+  Q2).)
 - artifact (subclasses: photograph, certificate, letter, census page,
   newspaper clipping, presentation, genealogical report, address
   book, ...)
@@ -259,18 +261,20 @@ their labels, so that no two items share a label (the bootstrap's key)
 and none reads as the property of the same name.
 
 Amended by ADR-0040 (2026-10-24), carried out by its build (until it
-lands, the text above holds): `birth` and `death` stay classes, for
-events a curator makes, but are kinds no extraction makes: validation
-refuses an entity of either kind, and the GEDCOM adapter makes none. A
-birth and a death are statements on the person ("Living persons and
-privacy" below). The participant roles lose `parent`, retired as the
-`spouse` property was (`object_has_role` no longer accepts it, no prompt
-offers it, the item stays), and `informant` on ADR-0040's Q6 lean. The
-kinship classes gain `kin_step_parent`, `kin_step_child` and
-`kin_step_sibling`; a new qualifier, `parentage`, takes
-`parentage_birth`, `parentage_adoptive` and `parentage_foster`, labelled
-"birth (parentage)" and so on, since the `birth` class owns the label
-"birth" ("Kinship" below).
+lands, the text above holds):
+- `birth` and `death` stay classes, for events a curator makes, but are
+  kinds no extraction makes. Validation refuses an entity of either
+  kind, and the GEDCOM adapter makes none. A birth and a death are
+  statements on the person ("Living persons and privacy" below).
+- The participant roles lose `parent` and `informant`. They are retired
+  as the `spouse` property was: `object_has_role` no longer accepts
+  them, no prompt offers them, and their items stay.
+- The kinship classes gain `kin_step_parent`, `kin_step_child` and
+  `kin_step_sibling`.
+- A new qualifier, `parentage`, takes `parentage_birth`,
+  `parentage_adoptive` and `parentage_foster`, labelled "birth
+  (parentage)" and so on, since the `birth` class owns the label
+  "birth" ("Kinship" below).
 
 **The relation decides the kind (ADR-0031, ADR-0035 §3.5).** Every
 item-valued property declares `accepts` in the manifest: the kinds its
@@ -854,29 +858,36 @@ artifact a new QID, changes neither.
 - Redundant-but-asserted values (e.g. "Alter: 73 Jahre" alongside a death
   date) are kept verbatim as qualifiers (`age at death`), never derived or
   dropped: sources assert them, so the archive records them.
-  (Amended by ADR-0040, 2026-10-24, on its Q1 lean: `age at death` is a
-  string statement on the person, kept verbatim with its own reference,
-  needing no date of death to sit on.)
-- **A death a document's date bounds** (ADR-0040 §2.3). "The late" ("der
-  selige", "покойного") states a death before the document: a `date of
-  death` whose value and `latest_date` are the latest date the
-  document's own `inception` allows, at that date's precision and never
-  narrower. The 1958 letter gives Rudolf 25 December 1958 with
-  `latest_date` 25 December 1958, beside the certificate's 6 March 1941;
-  the two differ only in resolution. A widow's or widower's marker that
-  names the late spouse bounds the spouse's death by the date at which
-  the source presents the widowhood as holding (ADR-0040's Q7 lean: the
-  burial register's 16 March 1909 for Cäcilie). A marker adds nothing
-  where the same source dates the death itself; one that places it
-  without a date keeps the bound beside the place.
-- **A death stated with no limit is an unknown value** (ADR-0040 §2.2).
-  A `date of death` of unknown value (Wikibase "some value") is given
-  only where a source says the person died and gives no limit (a GEDCOM
-  `1 DEAT Y`; "the late" in an undated document, or one whose date is
-  open at the late end), and only where that source's statement of the
-  death gives no other death claim. It carries no date qualifiers and an
-  excerpt that states the death (its Q10 lean). A blank field, "d. ?" or
-  "date unknown" gives no claim, never an unknown value.
+  (Amended by ADR-0040, 2026-10-24, its Q1: `age at death` is a string
+  statement on the person, kept verbatim with its own reference. It
+  needs no date of death to sit on.)
+- **A death stated without a date is an unknown value** (ADR-0040 §2.2,
+  §2.3).
+  - A `date of death` of unknown value (Wikibase "some value") is given
+    where a source says the person died and gives no date for that
+    death, and that source's statement of the death gives no other death
+    claim. Examples: a GEDCOM `1 DEAT Y`; "the late" ("der selige",
+    "покойного"), in a dated document too (ADR-0040's Q5).
+  - `place of burial` takes an unknown value for a burial stated without
+    its place (ADR-0040's Q3).
+  - An unknown value carries no date qualifiers, and an excerpt that
+    states the death (its Q10).
+  - A blank field, "d. ?" or "date unknown" gives no claim, never an
+    unknown value.
+  - A marker adds nothing where the same source dates the death itself.
+- **"Died by" dates are derived, never stored** (ADR-0040 §2.4, its Q5).
+  One shared derivation works them out when a view is built:
+  - A death statement of no date (an unknown value, or a place, cause or
+    burial with no dated death from the same source) died no later than
+    its document's own date, at that date's precision and never
+    narrower. The 1958 letter gives Rudolf "died by 25 December 1958",
+    beside the certificate's 6 March 1941; the two differ only in
+    resolution.
+  - The late spouse of a stated union end died no later than the date
+    at which the same marker presents the survivor as widowed (its Q7:
+    the burial register's 16 March 1909 for Cäcilie).
+  - A derived date is labelled as derived, stores nothing, is never
+    written, and is never death evidence of its own.
 - Ambiguous date formats (07-01-1919: 7 January or July 1?) must not be
   silently disambiguated; extraction should downgrade to the precision
   actually supported or leave the claim to a curator.
@@ -904,17 +915,19 @@ artifact a new QID, changes neither.
   any other: competing counts coexist, and corrections in the review
   CSV take a plain number. `age at death` stays a verbatim string
   qualifier (above) — it records wording, not arithmetic.
-  (Amended by ADR-0040, 2026-10-24, on its Q1 lean: a verbatim string
-  statement on the person, not a qualifier.)
+  (Amended by ADR-0040, 2026-10-24, its Q1: a verbatim string statement
+  on the person, not a qualifier.)
 - **place of burial** (P119) is an ordinary place-valued property;
   burial places join the place hierarchy pass (ADR-0009) like any
   other place.
-  Amended by ADR-0040, 2026-10-24: its subject is a person (`human` or
-  `unclassified_entity`), as for every death property, and its
-  `point_in_time` is the burial's own date as the source gives it ("Beerdigt:
-  20. März 1909"), never the document's date (ADR-0040's Q3 lean); no
-  `date of death` is derived from it. A burial stated without its place is ADR-0040's Q3
-  (lean: a `burial_place` of unknown value).
+  Amended by ADR-0040, 2026-10-24, its Q3:
+  - Its subject is a person (`human` or `unclassified_entity`), as for
+    every death property.
+  - Its `point_in_time` is the burial's own date as the source gives it
+    ("Beerdigt: 20. März 1909"), never the document's date. No `date of
+    death` is derived from it.
+  - A burial stated without its place gives a `place of burial` of
+    unknown value, dated where dated.
 
 ## Places
 
@@ -1530,28 +1543,37 @@ primitive network and the *same* term set describes any pair:
   several roles, but a death's principal is never also its informant.
   The GEDCOM adapter makes each death event it makes with the person as
   its `principal`, and each union's couple its `spouse`s or `partner`s.
-- **Amended by ADR-0040, 2026-10-24**, carried out by its build: births
-  and deaths have no event and no roles; the one born or who died is the
-  subject of their own statements, and a birth's parents are `father`
-  and `mother`, each cited. `parent` is retired as a role (and
-  `informant` on the Q6 lean), and "a death's principal is never also its
-  informant" goes. The GEDCOM adapter makes no death event. Roles stay
-  for the other events and for unions.
-- **A parent's kind** (ADR-0040 §4). `father`, `mother` and `child` take
-  a `parentage` qualifier, `parentage_birth`, `parentage_adoptive` or
-  `parentage_foster`, set only where the source's words or tags state
-  the kind ("Adoptivvater", "leiblicher Vater", "foster mother", a PEDI
-  tag), never inferred; a register's parents carry none (lean). The
-  word stays verbatim in `kinship_type`, which `father`, `mother`,
-  `child` and `sibling` may now carry. An adoption's date is a
-  `start_time` on each adoptive parent statement, a fostering's a
-  `start_time` and an `end_time`; the court is the order's `issued_by`
-  (lean). The kinship query labels adoptive paths and derives nothing
-  from a foster link. The GEDCOM `PEDI`, `_FREL`, `_MREL` and `ADOP` tags
-  are counted, not mapped, until a source carries them.
+- **Amended by ADR-0040, 2026-10-24**, carried out by its build:
+  - Births and deaths have no event and no roles. The one born or who
+    died is the subject of their own statements, and a birth's parents
+    are `father` and `mother`, each cited.
+  - `parent` and `informant` are retired as roles (ADR-0040's Q6), and
+    "a death's principal is never also its informant" goes.
+  - A person who only certifies, registers, officiates, examines,
+    reports or witnesses is left out, unless the same record gives them
+    another role (kin of someone it is about, or a party to it). A
+    wedding's registrar and non-kin witnesses are left out; a kin
+    witness or officiant stays, with that role.
+  - The GEDCOM adapter makes no death event.
+  - Roles stay for the other events and for unions.
+- **A parent's kind** (ADR-0040 §4).
+  - `father`, `mother` and `child` take a `parentage` qualifier:
+    `parentage_birth`, `parentage_adoptive` or `parentage_foster`.
+  - It is set only where the source's words or tags state the kind
+    ("Adoptivvater", "leiblicher Vater", "foster mother", a PEDI tag),
+    never inferred. A register's parents carry none.
+  - The word stays verbatim in `kinship_type`, which `father`, `mother`,
+    `child` and `sibling` may now carry.
+  - An adoption's date is a `start_time` on each adoptive parent
+    statement, and a fostering's a `start_time` and an `end_time`. The
+    court is the order's `issued_by`.
+  - The kinship query labels adoptive paths and derives nothing from a
+    foster link.
+  - The GEDCOM `PEDI`, `_FREL`, `_MREL` and `ADOP` tags are counted, not
+    mapped, until a source carries them.
 - **Step and half terms** (ADR-0040 §4). A step term is `relative` with
   `kinship_class` `kin_step_parent`, `kin_step_child` or
-  `kin_step_sibling` ("mein Stiefvater", hypothetical); a half term
+  `kin_step_sibling` ("mein Stiefvater", hypothetical). A half term
   stays `sibling`, with the word ("Halbbruder") in `kinship_type`.
 
 ## Residence and co-residence (see ADR-0014)
@@ -1588,14 +1610,25 @@ report, the timeline, the kinship query, reconciliation, clustering and
 the static site) still read them; extraction refuses and counts any
 spouse claim.
 
-Amended by ADR-0040 (2026-10-24), carried out by its build: "`ended_by`
-a divorce, an annulment, a partner's death" reads "`ended_by` a
-divorce, an annulment or an event of unstated kind, or
-`ended_by_death_of` the partner who died" (ADR-0040's Q2). The partner's
-own `date of death` statements date the end; nothing is copied. A
-widow's or widower's marker that names the late spouse gives the
-marked person's `civil_status` `widowed`, the spouse's own bounded
-`date of death` and the union `ended_by_death_of` that spouse.
+Amended by ADR-0040 (2026-10-24), carried out by its build:
+- "`ended_by` a divorce, an annulment, a partner's death" reads
+  "`ended_by` a divorce, an annulment or an event of unstated kind, or
+  `ended_by_death_of` the partner who died" (ADR-0040's Q2).
+- `ended_by_death_of` is written only where a source specifically
+  states that the couple were married when that partner died:
+  - a survivor's widow or widower word that names the late spouse
+    ("Witwer der Cäcilie Löbig geb. Tarle", "вдова Вашего покойного
+    брата Рудольфа");
+  - a death record that calls the deceased the survivor's spouse
+    ("Ehefrau des Eugen").
+- "His late wife", a card's "Husband: … died 1931", a GEDCOM family
+  plus a partner's DEAT, or a marriage and a death in two documents
+  give no end. Views derive the end from the partners' death spans,
+  labelled as derived, and never write it (ADR-0040 §2.6).
+- The link is death evidence for the partner it names (ADR-0040's Q9).
+- A widow's or widower's marker gives the survivor's `civil_status`
+  `widowed` and the union end, and no death statement for the late
+  spouse. The late spouse's "died by" date is derived (ADR-0040's Q5).
 
 **The GEDCOM adapter makes unions (ADR-0036 §5).** A family's couple
 are its first two `HUSB` and `WIFE` lines, in whatever combination (a
@@ -1746,9 +1779,10 @@ not a signal to grow the schema on.
   no principal, several, or one whose own date of that kind conflicts
   with it, is nobody's and merges with none.
   (Amended by ADR-0040, 2026-10-24: a birth's or a death's date is a
-  statement on the person, read as any of their dates; there is no birth
-  or death event to key, and a `date of death` of unknown value dates
-  nothing.)
+  statement on the person, read as any of their dates, and "died by"
+  dates are read through the shared derivation. There is no birth or
+  death event to key, and a `date of death` of unknown value dates
+  nothing of its own.)
 - Machine-proposed equivalences (within or across documents) are
   reviewed by a human before they take effect — identity is never
   auto-confirmed. Approved matches resolve new claims to the existing
@@ -1837,13 +1871,16 @@ not a signal to grow the schema on.
   start-time disagreement. A point in time on a residence or spouse
   statement dates an observation, not the residence or the marriage
   ("Marriages, residences and other periods"), and is not compared.
-- **Amended by ADR-0040, 2026-10-24**, carried out by its build: parents
-  are compared within one kind. A pair of parent values is set aside
-  when any non-deprecated statement gives either value a `parentage`
-  other than birth, so a birth father named by a register and an
-  adoptive father named by an adoption order never disagree; a parent
-  with no kind stated is compared as a birth parent. A `date of death`
-  of unknown value states no date, and is set aside and never listed.
+- **Amended by ADR-0040, 2026-10-24**, carried out by its build:
+  - Parents are compared within one kind. A pair of parent values is set
+    aside when any non-deprecated statement gives either value a
+    `parentage` other than birth, so a birth father named by a register
+    and an adoptive father named by an adoption order never disagree. A
+    parent with no kind stated is compared as a birth parent.
+  - A `date of death` of unknown value states no date, so it is set
+    aside and never listed.
+  - A derived "died by" date is compared, labelled as derived, as a
+    range open at its early end.
 - A date whose span lies inside another's and a place the graph records
   inside the other differ in resolution, not substance, and are not
   reported. A place lies inside another along a path of `location` and
@@ -1906,18 +1943,21 @@ not a signal to grow the schema on.
   death event each suffices. Death is an event like any other
   (ADR-0014), so "died, nothing else known" is a death event with the
   person as its principal participant.
-  Superseded by ADR-0040, 2026-10-24, carried out by its build: "or a
-  `death` event of which they are the principal" and "an undated death
-  event" (for an event a curator makes, on ADR-0040's Q5 lean), and "'died, nothing else known' is a death event" no longer
-  hold. Death evidence is a `date of death`, `place of death`, `cause of
-  death` or `place of burial` (and `age at death`, on ADR-0040's Q1
-  lean), each a statement on the person. "Died, nothing else known" is a
-  `date of death` of unknown value, given only where a source says the
-  person died and gives no limit ("Uncertainty and time"): a truthy
-  value, so it releases its person, as the site's `?deceased` and the
-  export's dump already read it, because a source stated the death. A
-  deprecated one, or a "no value", releases no one. `ended_by_death_of`
-  is not death evidence on its own (the Q9 lean).
+  Superseded by ADR-0040, 2026-10-24, carried out by its build:
+  - "or a `death` event of which they are the principal" and "an undated
+    death event" hold only for an event a curator makes (ADR-0040's Q5).
+  - "'died, nothing else known' is a death event" no longer holds.
+  - Death evidence is a `date of death`, `place of death`, `cause of
+    death`, `place of burial` or `age at death` (ADR-0040's Q1), each a
+    statement on the person.
+  - A death a source states without a date is a `date of death` of
+    unknown value ("Uncertainty and time"). It is a truthy value, so it
+    releases its person, as the site's `?deceased` and the export's dump
+    already read it, because a source stated the death. A deprecated
+    one, or a "no value", releases no one.
+  - A union `ended_by_death_of` a person is death evidence for that
+    person, read through `read_evidence` (ADR-0040's Q9).
+  - Derived "died by" dates are not death evidence.
 - **A birth or death event is its one principal's own** (ADR-0020, as
   amended by #345; ADR-0035 §3.2). A death event releases only the
   single participant its `participant` statements name in the role
@@ -1934,9 +1974,11 @@ not a signal to grow the schema on.
   a birth already, so it can only keep them possibly living. The export
   and the site read both through `yizkr.core.privacy.read_evidence`, so
   they decide each person alike.
-  (Superseded by ADR-0040, 2026-10-24: no extraction or GEDCOM batch
-  makes a birth or a death event. What one a curator makes releases or
-  holds back is ADR-0040's Q5; lean: it releases no one, departing from ADR-0020 §2 for it and failing closed; a birth event's date still holds its participants back; and a narrowed display still shows a curator-made undated death on its principal's page and timeline, for rule 6.)
+  (Amended by ADR-0040, 2026-10-24: no extraction or GEDCOM batch makes
+  a birth or a death event. One a curator makes counts as this bullet
+  says (ADR-0040's Q5): a death event releases its principal, and a
+  dated birth event dates its principal's birth, for the badge and the
+  export alike.)
 - **No curation duty.** There is no `living` column in the review CSV
   and nothing the reviewer must decide. Privacy falls out of what
   sources already assert; a curator who knows a person is dead records
@@ -2000,9 +2042,9 @@ not a signal to grow the schema on.
   statements stay on the event, and its principal's timeline shows it as
   before. (Amended by ADR-0040, 2026-10-24: with no death events from
   extraction, this set-aside guards only an event a curator makes, and
-  stays; validation and the writer refuse a death property on any
-  subject but a person, `human` or `unclassified_entity`, and on the Q11
-  lean a birth property too.) A family is not taken
+  it stays. Validation and the writer refuse a death or birth property
+  on any subject but a person, `human` or `unclassified_entity`
+  (ADR-0040's Q11).) A family is not taken
   at its type: its label is a surname, and a person known by a surname
   alone can be typed as one. The export reads this evidence from its own
   dump and **keeps a person only once the check has released them**: an
@@ -2083,10 +2125,11 @@ not a signal to grow the schema on.
   it leaves out go with the union (`started_by`, `ended_by`;
   ADR-0036 §6), a partner's own death aside.
   (Amended by ADR-0040, 2026-10-24: "a partner's own death aside" reads
-  "the partner named by `ended_by_death_of` aside": it is no bound and
+  "the partner named by `ended_by_death_of` aside". It is no bound and
   stays out of `UNION_BOUNDS`, and the partner follows the person rule
-  through `PERSON_VALUE_PROPERTIES`, so a released partner stays when
-  the union goes.)
+  through `PERSON_VALUE_PROPERTIES`. A partner released by that end
+  alone is kept when the union is left out, though the export then lacks
+  the statement that released them.)
 - **Everything about a released person stays, text included** (ADR-0020,
   as amended by #363). The owner decided (2026-09-29): "I don't intend
   to make a completely public copy, so any non-privileged view can
@@ -2169,18 +2212,28 @@ not a signal to grow the schema on.
   shown, never weighed, and the badge alone decides the export.
 - Superseded by ADR-0040, 2026-10-24, carried out by its build: the
   display above, which #623 built, is replaced (owner, 2026-10-24),
-  save the one exception below (ADR-0040's Q5 lean). Each `date of death` statement shows on the
-  person page with its own sources, an unknown value as "died (date not
-  stated)", and each source's statement shows beside the dated entry
-  (#624's criteria): Rudolf's certificate's 6 March 1941 and the 1958
-  letter's bound 25 December 1958, side by side. The timeline shows an
-  unknown value beside the person's dated death entry when a statement
-  dates that death (#624's criterion; hypothetical until follow-up A: a
-  certificate's date and a GEDCOM `1 DEAT Y` side by side, each with its
-  source), and under "No date stated" only when none does; a burial by
-  its `point_in_time`; the places map gains `place of birth`, `place of
-  death` and `place of burial` (lean). On ADR-0040's Q5 lean there is
-  the one exception, for the owner to confirm: `UNDATED_DEATHS_QUERY` stays as it is (reading the `principal` only), and after build B it meets only events a curator makes, so a curator-made undated death event still shows on
-  its principal's page and timeline, since rule 6 needs every source's
-  assertion shown whatever the release; the timeline shows a birth or
-  death event on its principal's timeline alone.
+  save the one exception below (ADR-0040's Q5).
+  - **Person page.** Each `date of death` statement shows with its own
+    sources, an unknown value as "died (date not stated)". Derived "died
+    by" dates show beside the statements they come from, labelled as
+    derived.
+  - **#624's criteria.** Each source's statement shows beside the dated
+    entry: Rudolf's certificate's 6 March 1941, and the 1958 letter's
+    derived "died by 25 December 1958", side by side.
+  - **Timeline.** An unknown value shows beside the person's dated death
+    entry when a statement dates that death (#624's criterion;
+    hypothetical until follow-up A: a certificate's date and a GEDCOM `1
+    DEAT Y` side by side, each with its source), and under "No date
+    stated" only when none does. A burial shows by its `point_in_time`.
+  - **Places map.** It gains `place of birth`, `place of death` and
+    `place of burial`.
+  - **Unions.** The person page and the timeline show each union with
+    its stated end and its sources, or the derived end where none is
+    stated (ADR-0040 §2.6).
+  - **The exception.** `UNDATED_DEATHS_QUERY` stays as it is (reading
+    the `principal` only). After the build it meets only events a
+    curator makes, so a curator-made undated death event still shows on
+    its principal's page and timeline: rule 6 needs every source's
+    assertion shown.
+  - **Curator-made events on the timeline.** A birth or death event
+    shows on its principal's timeline alone.
