@@ -53,6 +53,7 @@ from yizkr.pipeline.extract import (
     placed_by,
     run_metadata,
     salvage_valid_claims,
+    scan_json_answer,
     scan_json_objects,
     vocabulary_prompt_lines,
 )
@@ -931,10 +932,13 @@ def parse_chunk_response(
     included, or when it has no sentinel (silent truncation). Either
     raises ChunkIncomplete, which is cheap to retry, unlike a
     whole-document retry.
+
+    Like every reader of a chunk answer, it reads a single trailing comma
+    before a closing bracket or brace as JSON syntax (scan_json_answer).
     """
     claims: list[dict] = []
     finished = False
-    for obj in scan_json_objects(response):
+    for obj in scan_json_answer(response).objects:
         if obj.get("done") is True:
             finished = True
         elif "subject" in obj and "property" in obj:
@@ -966,7 +970,7 @@ def parse_chunk_gaps(response: str) -> list[dict]:
     the sentinel's job).
     """
     gaps: list[dict] = []
-    for obj in scan_json_objects(response):
+    for obj in scan_json_answer(response).objects:
         gap = obj.get("gap")
         if _gap_line(gap):
             gaps.append(
@@ -1040,7 +1044,7 @@ def parse_chunk_unread(response: str) -> list[dict]:
     (_refuse_empty) instead of passing for a claim-free document's.
     """
     unread = []
-    for obj in scan_json_objects(response):
+    for obj in scan_json_answer(response).objects:
         if obj.get("done") is True:
             carried = [
                 value
@@ -1292,6 +1296,9 @@ class ChunkedClaimExtractor:
         # each place container the manifest's records gave, checked and
         # kept or dropped alone (claims.drop_containers)
         self._containers: list[dict] = []
+        # the trailing commas read in the manifest answer the extraction
+        # used (scan_json_answer)
+        self._trailing_commas = 0
         # each claim whose excerpt the transcription does not hold
         # (excerpt_audit)
         self._quotes: list[dict] = []
@@ -1424,9 +1431,12 @@ class ChunkedClaimExtractor:
         dropped alone, its record standing (claims.drop_containers): its
         evidence is looked for in `text`,
         the transcription, when given, and each container checked is kept
-        for the local audit."""
+        for the local audit. A trailing comma before a closing bracket or
+        brace is read as JSON syntax, and the manifest counts each one
+        (scan_json_answer)."""
         _, item_keys = load_vocabulary()
-        for obj in scan_json_objects(response):
+        scan = scan_json_answer(response)
+        for obj in scan.objects:
             if "entities" not in obj:
                 continue
             listed = obj["entities"]
@@ -1474,7 +1484,13 @@ class ChunkedClaimExtractor:
                     if 1 <= number <= line_count
                 ]
             return (
-                _Manifest(records, set_aside, set_aside_records, containers),
+                _Manifest(
+                    records,
+                    set_aside,
+                    set_aside_records,
+                    containers,
+                    scan.trailing_commas,
+                ),
                 problems,
             )
         return None, ["no JSON object with an 'entities' array"]
@@ -1562,6 +1578,7 @@ class ChunkedClaimExtractor:
             self._set_aside = manifest.set_aside
             self._set_aside_records = manifest.set_aside_records
             self._containers = manifest.containers
+            self._trailing_commas = manifest.trailing_commas
             return manifest.entities, None, handle
         if not answered:
             raise RuntimeError(
@@ -1858,6 +1875,7 @@ class ChunkedClaimExtractor:
         self._set_aside = {}
         self._set_aside_records = 0
         self._containers = []
+        self._trailing_commas = 0
         self._quotes = []
         self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
 
@@ -1948,6 +1966,7 @@ class ChunkedClaimExtractor:
                 claims,
                 parse_chunk_gaps(response),
                 parse_chunk_unread(response),
+                scan_json_answer(response).trailing_commas,
             )
 
         try:
@@ -2206,14 +2225,18 @@ class ChunkedClaimExtractor:
         else:
             coverage = self._coverage(segmentation, batch, len(text_lines))
         # the extraction's health, on either tier, for the checks that read
-        # a stored batch: how many chunks it asked, what they came to, and
-        # each fallback tier it took, with the reason
+        # a stored batch: how many chunks it asked, what they came to, the
+        # trailing commas its manifest and chunk answers were read past
+        # (scan_json_answer), and each fallback tier it took, with the
+        # reason
         coverage |= {
             "chunks": len(chunk_ids),
             "claims": len(batch.claims),
             "rejected_claims": len(rejects),
             "rejected_by_reason": rejected_by_reason(rejects),
             "unread_objects": sum(len(found) for found in unread.values()),
+            "trailing_commas": self._trailing_commas
+            + sum(c.trailing_commas for c in outcomes if c is not None),
             "fallback": dict(self.fallback),
             "retried_chunks": self.retried_chunks,
         }
@@ -2562,14 +2585,17 @@ class _Manifest(NamedTuple):
     """An entity manifest as parsed: its entities; the mention records
     and judgement notes set aside, counted by the category of each
     reason; the number of entities whose mention record was set
-    aside; and the audit of each place container checked."""
+    aside; the audit of each place container checked; and the trailing
+    commas read as JSON syntax in its answer (scan_json_answer)."""
 
     entities: list[EntityRecord]
     set_aside: dict[str, int]
     set_aside_records: int
     # each place container checked, kept or dropped
     # (claims.drop_containers)
-    containers: list[dict] = []
+    containers: list[dict]
+    # the trailing commas read as JSON syntax (scan_json_answer)
+    trailing_commas: int
 
 
 def _set_aside_note(entity: dict) -> tuple[dict, list[str]]:
@@ -2593,8 +2619,11 @@ class _Chunk(NamedTuple):
     """One chunk's parsed claims and gaps, and the objects in its answer
     that held something the parser could not read (parse_chunk_unread):
     their count is what tells an unreadable answer from one with no
-    claims."""
+    claims; and the trailing commas read as JSON syntax in its answer
+    (scan_json_answer)."""
 
     claims: list[dict]
     gaps: list[dict]
     unread: list[dict]
+    # the trailing commas read as JSON syntax (scan_json_answer)
+    trailing_commas: int
