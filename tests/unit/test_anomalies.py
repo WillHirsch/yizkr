@@ -943,7 +943,7 @@ class TestExtraction:
             doc,
             "extraction",
             calls=["error"] * 6,
-            failed="RuntimeError: 2 chunks failed after retries (c001, c002)",
+            failed="RuntimeError: 2 chunks failed (c001, c002)",
         )
         checks.failed(doc, "extraction")
         assert only(run, "chunk-failures")["value"] == 1.0

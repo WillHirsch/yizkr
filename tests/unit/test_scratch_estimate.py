@@ -60,8 +60,7 @@ from yizkr.pipeline.estimate import FIRST_TURNS, Estimator, StageCalls
 from yizkr.pipeline.llmcache import CacheRefused
 from yizkr.pipeline.orchestrate import (
     CHECKED_ROUTES,
-    EXCERPT,
-    PAGED,
+    TRANSCRIBERS,
     Orchestrator,
 )
 from yizkr.pipeline.rundir import RunDir, RunSettingsConflict
@@ -1614,13 +1613,30 @@ class TestCheckedRoutes:
     CHECKED_ROUTES. Each looks the view up through a stand-in that notes
     whether it was handed a recheck; nothing is read or run."""
 
-    # every route the driver transcribes by (Orchestrator._transcribe)
-    ROUTES = ("vision", PAGED, "text-file", "correction", EXCERPT)
+    # every route the driver transcribes by (Orchestrator._transcribe),
+    # read from its dispatch map (#662)
+    ROUTES = tuple(TRANSCRIBERS)
+    # the dispatched routes whose transcribers do not check their output:
+    # a curator's correction is taken as it stands
+    UNCHECKED = frozenset({"correction"})
 
     def test_the_checked_routes_are_the_transcribers_that_check(self):
-        """Every route but a curator's correction checks its output."""
-        assert set(self.ROUTES) - CHECKED_ROUTES == {"correction"}
-        assert set(self.ROUTES) >= CHECKED_ROUTES
+        """Every dispatched route is checked or named as unchecked, and
+        every checked route is dispatched."""
+        assert set(self.ROUTES) == CHECKED_ROUTES | self.UNCHECKED
+        assert not CHECKED_ROUTES & self.UNCHECKED
+
+    def test_the_driver_dispatches_by_the_map(self, monkeypatch):
+        """Orchestrator._transcribe calls the method its route names."""
+        called = []
+        for name in TRANSCRIBERS.values():
+            monkeypatch.setattr(
+                Orchestrator, name, lambda self, doc, n=name: called.append(n)
+            )
+        driver = object.__new__(Orchestrator)
+        for route in self.ROUTES:
+            driver._transcribe(None, route)
+        assert called == [TRANSCRIBERS[r] for r in self.ROUTES]
 
     @pytest.mark.parametrize("route", ROUTES)
     def test_the_estimate_rechecks_where_the_driver_does(

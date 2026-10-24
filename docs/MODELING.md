@@ -1414,7 +1414,12 @@ as "geb."), so "Omama" beside "Oma Hildegard" becomes "Hildegard". For
 identity, a recordless person never keys on a form its document gives as
 an appellation, as label or alias; a person with a record keys on its
 name parts; and a pet name the person is called by anyone stays a record
-nickname and keys as one (ADR-0035 §7). Places, organisations and
+nickname and keys as one (ADR-0035 §7). Reconcile's blocking against
+the graph (ADR-0007) keys the same way on both sides: a person's label
+or alias that its batch, or the item's own `referred_to_as` statements,
+give as an appellation keys nothing, a typed or record nickname keys,
+and the adjudicator reads an appellation as what the entity is called
+("called: Oma"), not as an alias. Places, organisations and
 families, never persons, key on marked forms as on any other name;
 persons and the kinds that may be persons (an unclassified entity, a ref
 with no kind) never do. Appellations

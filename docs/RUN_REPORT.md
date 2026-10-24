@@ -323,6 +323,16 @@ writer refused, count here too, under their check and the stage
   counted in coverage: it is counted with the call errors, by its
   error's class (`ClassifierRefused`), and a refusal that fails a chunk
   or the extraction is named in the document's failure reason;
+- trailing commas read as JSON syntax (#654): a single trailing comma
+  before a closing `]` or `}` in the manifest answer an extraction used
+  or a chunk's accepted answer, which the extraction reads past and
+  counts (`coverage.json`'s
+  `trailing_commas`), summed over the extractions, with the extractions
+  that read one, and those whose coverage predates the count counted
+  apart, never as zero (`aggregate.content.trailing_commas`: `read`,
+  `extractions`, `absent`). A document's own count is in `report.json`
+  and its drill-down in `report.html` (`coverage.trailing_commas`, null,
+  and "not counted", for a coverage that predates it);
 - marriages and their weddings (#656, ADR-0036): each extraction batch's
   marriages it extracts, a partnership left out, by whether a
   `started_by` claim links the marriage to a wedding of any kind

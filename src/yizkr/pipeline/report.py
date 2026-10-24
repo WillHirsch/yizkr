@@ -1164,6 +1164,7 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
                     coverage.get("rejected_by_reason")
                 ),
                 "unread_objects": _count(coverage.get("unread_objects")),
+                "trailing_commas": _counted(coverage.get("trailing_commas")),
                 "fallback": sorted(
                     tier for tier in fallback if isinstance(tier, str)
                 )
@@ -1193,6 +1194,24 @@ def _retried_line(retried: Mapping[str, int]) -> str:
         line += (
             f" (extractions whose coverage predates the count: "
             f"{_n(retried['absent'])})"
+        )
+    return line + "."
+
+
+def _trailing_commas_line(counts: Mapping[str, int]) -> str:
+    """The trailing commas read as JSON syntax, a single one before a
+    closing bracket or brace in a manifest or chunk answer
+    (extract.scan_json_answer), as the report's Content section gives
+    them."""
+    extractions = counts["extractions"]
+    line = (
+        f"Trailing commas read as JSON syntax: {_n(counts['read'])}, in "
+        f"{_n(extractions)} extraction" + ("" if extractions == 1 else "s")
+    )
+    if counts["absent"]:
+        line += (
+            f" (extractions whose coverage predates the count: "
+            f"{_n(counts['absent'])})"
         )
     return line + "."
 
@@ -2654,6 +2673,10 @@ def _aggregate_content(
     quotes_missing: Counter = Counter()
     quote_extractions = quotes_checked = quotes_without = 0
     quote_documents = quotes_absent = quotes_not_in_source = 0
+    # the trailing commas the extractions' answers were read past
+    # (extract.scan_json_answer), the extractions with one, and those
+    # whose coverage gives no count
+    trailing_commas = trailing_extractions = trailing_absent = 0
     batches = not_extracted = zero_entities = 0
     # the extractions' marriages by their weddings (`_marriages`)
     marriages: Counter = Counter()
@@ -2702,6 +2725,12 @@ def _aggregate_content(
             fallbacks.update(
                 _known(tier, FALLBACK_TIERS) for tier in coverage["fallback"]
             )
+            commas = coverage.get("trailing_commas")
+            if commas is None:
+                trailing_absent += 1
+            else:
+                trailing_commas += commas
+                trailing_extractions += bool(commas)
             quotes = coverage.get("quotes")
             if quotes is None:
                 quotes_absent += 1
@@ -2820,6 +2849,11 @@ def _aggregate_content(
             "absent": retried_absent,
         },
         "fallbacks": _by_count(fallbacks),
+        "trailing_commas": {
+            "read": trailing_commas,
+            "extractions": trailing_extractions,
+            "absent": trailing_absent,
+        },
         "records": {
             "extractions": record_extractions,
             "given": records_given,
@@ -3498,6 +3532,7 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
                 f"extractions and GEDCOM adapters; {_n(content['chunks'])} "
                 "chunks.",
                 _retried_line(content["retried_chunks"]),
+                _trailing_commas_line(content["trailing_commas"]),
             ],
         ),
         _Section(
@@ -4422,6 +4457,11 @@ def _html_document(document: Mapping[str, Any]) -> str:
             f"{coverage['rejected_claims']}; unread objects: "
             f"{coverage['unread_objects']}; fallback tiers: "
             f"{', '.join(coverage['fallback']) or 'none'}"
+        )
+        commas = coverage.get("trailing_commas")
+        items.append(
+            "Trailing commas read as JSON syntax: "
+            + ("not counted" if commas is None else str(commas))
         )
         quotes = coverage.get("quotes")
         items.append(

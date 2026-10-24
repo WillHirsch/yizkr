@@ -324,14 +324,14 @@ def _holder(fd: int, sleep: Callable[[float], None]) -> dict[str, Any] | None:
     """The record in the lock file open as `fd`: the first one read that
     names a running process or, when no read finds one, the last record
     read, the reads `sleep`ing RECORD_INTERVAL apart. None when no read
-    finds a record."""
+    finds a record, as when each is nested too deep to decode."""
     found = None
     for attempt in range(RECORD_READS):
         if attempt:
             sleep(RECORD_INTERVAL)
         try:
             record = json.loads(os.pread(fd, 1 << 20, 0))
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
         if not isinstance(record, dict):
             continue

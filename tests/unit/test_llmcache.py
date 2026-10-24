@@ -42,7 +42,7 @@ from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import llm, llmcache
 from yizkr.pipeline.chunking import ChunkedClaimExtractor
 from yizkr.pipeline.critique import run_critique
-from yizkr.pipeline.extract import LlmClaimExtractor
+from yizkr.pipeline.extract import ExtractionFailed, LlmClaimExtractor
 from yizkr.pipeline.llm import (
     ConversationalLlmClient,
     ConversationChanged,
@@ -4154,7 +4154,7 @@ class TestTheSingleCallExtractor:
     def test_an_unusable_answer_fails_and_is_rejected(
         self, tmp_path, answer, reason
     ):
-        with pytest.raises(ValueError):
+        with pytest.raises(ExtractionFailed):
             self.extract(tmp_path, Engine(answering(answer)))
         (rejected,) = self.rejected(tmp_path)
         assert reason in rejected
@@ -4192,7 +4192,7 @@ class TestTheSingleCallExtractor:
         # an earlier extractor kept the answer: it rejected nothing
         lenient = client(tmp_path, Engine(answering(answer)))
         lenient.reject = lambda response, why: False
-        with contextlib.suppress(ValueError):
+        with contextlib.suppress(ExtractionFailed):
             LlmClaimExtractor(lenient).extract(transcription, LETTER_REF)
         assert self.rejected(tmp_path) == []
         engine = Engine(answering(WHOLE))
@@ -4221,9 +4221,43 @@ class TestTheSingleCallExtractor:
         transcription = Transcription(
             artifact=LETTER_REF, text="Klara Löbig b. 1917", engine="test"
         )
-        with pytest.raises(ValueError, match="no claim JSON"):
+        with pytest.raises(ExtractionFailed, match="no claim JSON"):
             LlmClaimExtractor(engine).extract(transcription, LETTER_REF)
         assert engine.asked == 2
+
+    def test_a_bug_while_parsing_rejects_no_answer(self, monkeypatch):
+        """A bare ValueError while the answer is parsed is a bug, not an
+        answer without claim JSON: it comes out as it is, and the answer
+        is neither rejected nor asked for again (#650)."""
+
+        class Recording:
+            model_identifier = "scripted/model-a"
+
+            def __init__(self):
+                self.asked = 0
+                self.rejected = []
+
+            def complete(self, prompt, image_paths=()):
+                self.asked += 1
+                return WHOLE
+
+            def reject(self, response, reason):
+                self.rejected.append(reason)
+                return True
+
+        def broken(*args, **kwargs):
+            raise ValueError("an unexpected bug")
+
+        monkeypatch.setattr("yizkr.pipeline.extract.scan_json_objects", broken)
+        engine = Recording()
+        transcription = Transcription(
+            artifact=LETTER_REF, text="Klara Löbig b. 1917", engine="test"
+        )
+        with pytest.raises(ValueError, match="an unexpected bug") as raised:
+            LlmClaimExtractor(engine).extract(transcription, LETTER_REF)
+        assert not isinstance(raised.value, ExtractionFailed)
+        assert engine.rejected == []
+        assert engine.asked == 1
 
     def test_a_whole_answer_is_served_again(self, tmp_path):
         first = self.extract(tmp_path, Engine(answering(WHOLE)))
