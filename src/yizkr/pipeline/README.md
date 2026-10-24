@@ -172,7 +172,8 @@ The chunk and single-call prompts show the excerpt's shape
 (`"transcription_excerpt": {"text": "<verbatim>", "language": "<code>"}`)
 and name the transcription's language as the excerpt's, unless the
 excerpt's own words are in another (#668). A claim that gives the
-language on `source`, beside an excerpt that gives none, has it moved
+language on `source`, beside an excerpt that gives none (no key, null or
+the empty string), has it moved
 into the excerpt before validation (`extract._normalize_claim_shape`),
 and `coverage.json` counts the claims so repaired
 (`excerpt_language_moved`), which the run report sums. The value is the

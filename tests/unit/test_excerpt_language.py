@@ -57,12 +57,18 @@ RUN = {
     "started_at": "2026-07-16T09:00:00Z",
 }
 
-SHAPE = (
-    '"transcription_excerpt": {"text": "<verbatim>", "language": "<code>"} '
-    "on every claim, the language inside the excerpt and never on source: "
-    "the language of the excerpt's own words, de (the transcription's) "
-    "unless it is written in another."
-)
+
+def shape(language: str) -> str:
+    """The source rule's excerpt sentence, rendered for `language`."""
+    return (
+        '"transcription_excerpt": {"text": "<verbatim>", "language": '
+        '"<code>"} on every claim, the language inside the excerpt and '
+        "never on source: the language of the excerpt's own words, "
+        f"{language} (the transcription's) unless it is written in another."
+    )
+
+
+SHAPE = shape("de")
 
 
 def flat(text: str) -> str:
@@ -70,19 +76,29 @@ def flat(text: str) -> str:
 
 
 def german() -> Transcription:
+    return in_language("de")
+
+
+def in_language(language: str) -> Transcription:
     return Transcription(
-        artifact=DOC_REF, text=DOC, engine="test", language="de"
+        artifact=DOC_REF, text=DOC, engine="test", language=language
     )
 
 
-def on_source(local_id: str, label: str, year: int) -> dict:
+def on_source(
+    local_id: str,
+    label: str,
+    year: int,
+    language: str = "de",
+    text: str | None = None,
+) -> dict:
     """A claim that closed its excerpt one key early: the excerpt's
     language stands on `source`."""
     slipped = claim(local_id, label, year)
     slipped["source"] = {
         "artifact": DOC_REF.model_dump(),
-        "transcription_excerpt": {"text": f"geb. {year}"},
-        "language": "de",
+        "transcription_excerpt": {"text": text or f"geb. {year}"},
+        "language": language,
     }
     return slipped
 
@@ -110,6 +126,23 @@ class TestThePrompts:
         assert len(forks) == 2
         assert all(SHAPE in flat(prompt) for prompt in forks)
 
+    def test_an_inline_chunk_prompt_names_it(self, tmp_path):
+        """A client with no conversations gets each chunk prompt inline,
+        with the transcription's language, whatever it is."""
+        llm = PlainLlm(
+            [
+                entity_manifest_json(),
+                ndjson([claim("e1", "Hildegard Löbig", 1876)]),
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),
+            ]
+        )
+        ChunkedClaimExtractor(
+            llm, state_dir=tmp_path / "state", budget=LINE_LENGTH
+        ).extract(in_language("ru"), DOC_REF)
+        chunks = [prompt for _, prompt in llm.calls[1:]]
+        assert len(chunks) == 2
+        assert all(shape("ru") in flat(prompt) for prompt in chunks)
+
     def test_the_single_call_prompt_names_it(self):
         llm = PlainLlm([ndjson([claim("e1", "Hildegard Löbig", 1876)])])
         LlmClaimExtractor(llm).extract(german(), DOC_REF)
@@ -131,6 +164,27 @@ class TestTheRepair:
             "artifact": DOC_REF.model_dump(),
             "transcription_excerpt": {"text": "geb. 1876", "language": "de"},
         }
+
+    def test_the_language_given_is_the_one_moved(self):
+        fixed = _normalize_claim_shape(
+            on_source("e1", "Себастьян", 1862, language="ru", text="1862")
+        )
+        assert fixed["source"]["transcription_excerpt"] == {
+            "text": "1862",
+            "language": "ru",
+        }
+
+    def test_a_long_excerpt_is_clipped_with_its_moved_language(self):
+        long = " ".join(["Hutmacherei zum Blauen Hut, Flörburg."] * 20)
+        assert len(long) > 400
+        fixed = _normalize_claim_shape(
+            on_source("e1", "Hildegard", 1876, text=long)
+        )
+        excerpt = fixed["source"]["transcription_excerpt"]
+        assert excerpt["language"] == "de"
+        assert len(excerpt["text"]) <= 400
+        assert excerpt["text"].endswith("…")
+        assert "language" not in fixed["source"]
 
     @pytest.mark.parametrize("given", [None, ""])
     def test_an_excerpt_with_an_empty_language_takes_it(self, given):
@@ -172,6 +226,26 @@ class TestTheRepair:
         slipped["source"] = {"artifact": DOC_REF.model_dump(), **source}
         assert not language_on_source(slipped)
         assert _normalize_claim_shape(slipped)["source"] == slipped["source"]
+
+    @pytest.mark.parametrize("given", [False, 0, [], {}, "  "])
+    def test_an_invalid_excerpt_language_stays_a_reject(self, given):
+        """Only a missing, null or empty language is filled: any other
+        value the excerpt gives is left, and the claim fails the schema."""
+        slipped = on_source("e1", "Hildegard", 1876)
+        slipped["source"]["transcription_excerpt"]["language"] = given
+        assert not language_on_source(slipped)
+        assert _normalize_claim_shape(slipped)["source"] == slipped["source"]
+        batch, rejects = salvage_valid_claims([slipped], RUN)
+        assert batch.claims == []
+        assert [r["reasons"] for r in rejects] == [["schema"]]
+
+    @pytest.mark.parametrize("blank", ["", "  "])
+    def test_a_blank_source_language_is_not_moved(self, blank):
+        slipped = on_source("e1", "Hildegard", 1876, language=blank)
+        assert not language_on_source(slipped)
+        assert _normalize_claim_shape(slipped)["source"] == slipped["source"]
+        _, rejects = salvage_valid_claims([slipped], RUN)
+        assert [r["reasons"] for r in rejects] == [["schema"]]
 
     @pytest.mark.parametrize("given", [None, [], "claim", {"source": "x"}])
     def test_no_claim_shape_is_none(self, given):

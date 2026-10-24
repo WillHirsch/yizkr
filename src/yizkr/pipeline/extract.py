@@ -605,22 +605,26 @@ def printed_page_number(
 
 def language_on_source(claim: object) -> bool:
     """Whether `claim` gives its excerpt's language on `source` instead:
-    a text `language` beside a `transcription_excerpt` object that gives
-    none (no key, null or empty). _normalize_claim_shape moves it into
-    the excerpt, and an extraction's coverage counts the claims it moved
-    (`excerpt_language_moved`). A `language` on a source whose excerpt
-    gives its own, or that has no excerpt object, is left where it is,
-    and the claim fails validation as written."""
+    a `language` of non-blank text beside a `transcription_excerpt`
+    object that gives none (no key, null or the empty string).
+    _normalize_claim_shape moves it into the excerpt, and an extraction's
+    coverage counts the claims it moved (`excerpt_language_moved`). A
+    `language` on a source whose excerpt gives any other value (its own
+    code, or an invalid one such as false, 0 or a list), on a source with
+    no excerpt object, or one that is blank or no text, is left where it
+    is, and the claim fails validation as written."""
     if not isinstance(claim, dict):
         return False
     source = claim.get("source")
     if not isinstance(source, dict):
         return False
     excerpt = source.get("transcription_excerpt")
+    language = source.get("language")
     return (
-        isinstance(source.get("language"), str)
+        isinstance(language, str)
+        and bool(language.strip())
         and isinstance(excerpt, dict)
-        and not excerpt.get("language")
+        and excerpt.get("language") in (None, "")
     )
 
 
