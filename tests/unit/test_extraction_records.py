@@ -95,15 +95,15 @@ class TestTheManifestPrompt:
             '{"kind": "human", "status": "<status>",',
             '"surnames": [{"written": "...", "type": "<birth, married or '
             'other>"}]',
-            '"patronymics": [...], "nicknames": [...], "titles": [...], '
-            '"suffixes": [...], "unsplit": [...]',
+            '"patronymics": ["..."], "nicknames": ["..."], "suffixes": '
+            '["..."], "unsplit": ["..."], "titles": ["..."]}.',
             '{"kind": "place", "status": "<toponym, deictic, generic or '
             'adjective>",',
             '"names": [{"written": "...", "toponym": "...", "head": "..."}]',
             '"address": {"written": "...", "street": "...", "number": "..."}',
-            '{"kind": "organization", "names": [...], "kinds": [...], '
-            '"places": [...]}',
-            '{"kind": "family", "surnames": [...]}',
+            '{"kind": "organization", "names": ["..."], "kinds": ["..."], '
+            '"places": ["..."]}',
+            '{"kind": "family", "surnames": ["..."]}',
             '"structure": {<the mention record, for the four kinds above>}',
             '"note": {<only for a judgement call>}',
         ],
