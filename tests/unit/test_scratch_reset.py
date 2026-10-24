@@ -641,6 +641,18 @@ class TestTheInstanceContentsRecord:
         stood = recorded_contents(stack_.client(), root=stack_.records)
         assert stood.key is None
 
+    def test_a_record_nested_too_deep_does_not_stand(self, stack_):
+        """It cannot be read, and says so, rather than raising out of the
+        reader (#615)."""
+        path = instance.contents_path(CONFIG, stack_.records)
+        path.parent.mkdir(parents=True)
+        path.write_text("[" * 100_000)
+        with pytest.raises(RecursionError):
+            read_record(CONFIG, stack_.records)
+        stood = recorded_contents(stack_.client(), root=stack_.records)
+        assert stood.key is None
+        assert stood.why.startswith(f"{path} cannot be read")
+
     def test_a_record_names_a_key(self, stack_):
         with pytest.raises(ValueError, match="not empty"):
             record_contents(stack_.client(), "", "run-1", root=stack_.records)
@@ -732,7 +744,9 @@ class TestTheKeptStateMarker:
             )
         assert host_kept_marker(CONFIG, stack_.records) is not None
 
-    @pytest.mark.parametrize("text", ["", "{not json", '{"kept": "yes"}'])
+    @pytest.mark.parametrize(
+        "text", ["", "{not json", '{"kept": "yes"}', "[" * 100_000]
+    )
     def test_a_host_marker_that_cannot_be_read_still_marks_it_kept(
         self, stack_, text
     ):

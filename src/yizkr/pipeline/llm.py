@@ -690,7 +690,8 @@ def check_global_config(config_dir: Path | None) -> None:
     so those variables would shape every call without showing in
     ``config_hash``. Raises ``CliConfigEnvironment`` when the map is not
     empty, naming the file and the variables but never their values, or
-    when the file cannot be read as JSON. A file caught mid-write is read
+    when the file cannot be read as JSON, nested too deep to decode
+    included. A file caught mid-write is read
     once more.
     """
     path = claude_global_config_path(config_dir)
@@ -700,7 +701,7 @@ def check_global_config(config_dir: Path | None) -> None:
             config = json.loads(path.read_text(encoding="utf-8-sig"))
         except FileNotFoundError:
             return
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, RecursionError) as exc:
             if attempt == 2:
                 raise CliConfigEnvironment(
                     f"the claude CLI's global config {path} cannot be read "
