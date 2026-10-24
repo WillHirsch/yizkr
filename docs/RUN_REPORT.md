@@ -319,14 +319,15 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   source does not tell apart, ADR-0035 §2.1); the recordless mentions;
   the records set aside; the place containers checked, and those
   dropped alone from records that stand, by reason (`no-evidence`,
-  `evidence-not-in-source`, `evidence-does-not-name`;
-  `claims.CONTAINER_REASONS`, ADR-0035 §5 as amended by #569), a drop
-  being no record set aside and no reason among theirs, and those kept
-  whose evidence is the container's name alone (`containers_name_only`),
-  never quoted
-  (each container checked, with its evidence and the transcription line
-  it was compared with, stays in the extraction's local
-  `containers.json`); the reasons records were set aside by, by
+  `evidence-not-in-source`, `evidence-does-not-name`, `malformed`;
+  `claims.CONTAINER_REASONS`, ADR-0035 §5 as amended by #569 and #607),
+  a drop being no record set aside and no reason among theirs, never
+  quoted (each container checked, with its evidence and the
+  transcription line it was compared with, or a malformed one's entry
+  and its validation error, stays in the extraction's local
+  `containers.json`; a coverage written before #607 may also count the
+  containers kept whose evidence is their name alone, which the report
+  no longer reads); the reasons records were set aside by, by
   category (`schema`, `dropped`, `read as text`, `kind`, `addition`,
   `initial`, `no name part`, `no toponym`; `report.SET_ASIDE_REASONS`);
   the notes by category (`kind`, `relation`, `date_reading`,
@@ -400,8 +401,7 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   `recordless`, `by_status`, `unsplit_forms`, `set_aside_records`,
   `appellation_labels`, `appellation_parts`, `set_aside_reasons`,
   `set_aside_by_reason`, `containers_checked`, `containers_dropped`,
-  `containers_dropped_by_reason`, `containers_name_only`,
-  `absent.predating`,
+  `containers_dropped_by_reason`, `absent.predating`,
   `absent.line_range`, `absent.set_aside_records`,
   `absent.unsplit_forms`, `absent.appellation_labels`,
   `absent.appellation_parts`, `absent.containers`) and
@@ -411,8 +411,12 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   with the other extraction counts;
 - critic findings by axis and by category: the statement-part each
   doubts (subject, predicate, value or existence, ADR-0023) and its
-  category from the critic's fixed list (`critique.CATEGORIES`), and the
-  findings that failed their checks, counted apart as invalid;
+  category from the critic's fixed list (`critique.CATEGORIES`; the
+  three that apply ADR-0003's support test to a citation read where it
+  stands are `unsupported_containment`, `evidence_does_not_state` and,
+  since #607, `excerpt_does_not_state`), and the findings that failed
+  their checks, counted apart as invalid (a finding of a claim key that
+  names no claim among them);
 - clusters, from the clustering stage's identity map: confident merges
   (whole confident candidate clusters), confident component merges (the
   confident components of ambiguous candidate clusters, #568) and their

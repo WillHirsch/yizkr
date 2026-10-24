@@ -463,9 +463,6 @@ class EvidencePages:
         self._transcript = (
             verbatim.Transcript(transcription.text) if self._pages else None
         )
-        self._lines = (
-            transcription.text.splitlines(keepends=True) if self._pages else []
-        )
         self._printed = transcription.printed_pages() if self._pages else {}
         self._found: dict[str, tuple[str | None, str | None]] = {}
 
@@ -482,13 +479,12 @@ class EvidencePages:
         number = self._transcript.locate(evidence)
         if number is None:
             return None, None
-        start = sum(len(line) for line in self._lines[: number - 1])
-        for page in self._pages:
-            if page.start <= start <= page.end:
-                return str(page.page), printed_page_number(
-                    str(page.page), self._printed
-                )
-        return None, None
+        page = self._transcript.page(number, self._pages)
+        if page is None:
+            return None, None
+        return str(page.page), printed_page_number(
+            str(page.page), self._printed
+        )
 
 
 def evidence_page(

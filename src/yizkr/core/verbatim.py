@@ -17,7 +17,11 @@ only: it may not start or end inside a word of the transcription.
 Nothing else is
 forgiven: a word the transcription does not hold, or holds in another
 order, is no match. A mention record's container evidence is checked
-this way, and so is each claim's excerpt (pipeline.chunking.excerpt_audit).
+this way, and so is each claim's excerpt (pipeline.chunking.excerpt_audit);
+the critic is shown each citation at every place it occurs
+(Transcript.spans, pipeline.critique), and the place stage cites a
+container's evidence by the page its first line lies on
+(Transcript.page, pipeline.places.EvidencePages).
 """
 
 from __future__ import annotations
@@ -96,14 +100,12 @@ def _flat(
     return "".join(chars), numbers, frozenset(kept)
 
 
-def _whole(
-    flat: str, wanted: str, kept: frozenset[int] = frozenset()
-) -> int | None:
-    """Where `wanted` first occurs in `flat` neither starting nor ending
-    inside a word, or None. Where `flat` keeps hyphens at a line's end
-    (`kept`, their indexes), a match must cross one, and may neither
-    start just after nor end just before one: elsewhere the reading that
-    joins them decides."""
+def _wholes(flat: str, wanted: str, kept: frozenset[int] = frozenset()):
+    """Each index, in order, at which `wanted` occurs in `flat` neither
+    starting nor ending inside a word. Where `flat` keeps hyphens at a
+    line's end (`kept`, their indexes), a match must cross one, and may
+    neither start just after nor end just before one: elsewhere the
+    reading that joins them decides."""
     start = flat.find(wanted)
     while start >= 0:
         end = start + len(wanted)
@@ -119,9 +121,8 @@ def _whole(
         )
         closes = not wanted[-1].isalnum() or not flat[end : end + 1].isalnum()
         if opens and closes:
-            return start
+            yield start
         start = flat.find(wanted, start + 1)
-    return None
 
 
 def joined(text: str) -> str:
@@ -146,7 +147,10 @@ class Transcript:
     """A transcription as excerpts are compared with it."""
 
     def __init__(self, text: str) -> None:
+        self._text = text
         self._lines = text.splitlines()
+        # where each line opens in `text`, worked out on the first `page`
+        self._offsets: list[int] | None = None
         # the joined reading first, then the one that keeps a hyphen at a
         # line's end
         self._readings = [_flat(text), _flat(text, keep_hyphen=True)]
@@ -160,20 +164,48 @@ class Transcript:
             return self._lines[number - 1]
         return ""
 
-    def span(self, excerpt: str) -> tuple[int, int] | None:
-        """The numbers of the first and the last line (from 1) of the
-        first place `excerpt` occurs in the transcription, compared as
-        the module reads both, whole words only; None when it does not
-        occur, or holds nothing to compare. Each reading of the excerpt
-        is looked for in each of the transcription's, joined first."""
+    def spans(self, excerpt: str) -> list[tuple[int, int]]:
+        """The numbers of the first and the last line (from 1) of each
+        place `excerpt` occurs in the transcription, in order, compared
+        as the module reads both, whole words only, each pair once;
+        empty when it does not occur, or holds nothing to compare. Each
+        reading of the excerpt is looked for in each of the
+        transcription's, joined first, and the first that finds it gives
+        every place."""
         readings = (_flat(excerpt)[0], _flat(excerpt, keep_hyphen=True)[0])
         for wanted in dict.fromkeys(readings):
             if not wanted:
                 continue
             for flat, numbers, kept in self._readings:
-                start = _whole(flat, wanted, kept)
-                if start is not None:
-                    return numbers[start], numbers[start + len(wanted) - 1]
+                found = dict.fromkeys(
+                    (numbers[start], numbers[start + len(wanted) - 1])
+                    for start in _wholes(flat, wanted, kept)
+                )
+                if found:
+                    return list(found)
+        return []
+
+    def span(self, excerpt: str) -> tuple[int, int] | None:
+        """The first place `excerpt` occurs in the transcription
+        (`spans`); None when it does not."""
+        found = self.spans(excerpt)
+        return found[0] if found else None
+
+    def page(self, number: int, pages) -> object | None:
+        """The page of `pages` (each with the `start` and `end` of its
+        text in the transcription, as a transcription's pages give them)
+        that line `number` (from 1) opens on; None for a line before,
+        between or after them, or one the transcription does not have."""
+        if not 1 <= number <= len(self._lines):
+            return None
+        if self._offsets is None:
+            self._offsets = [0]
+            for line in self._text.splitlines(keepends=True):
+                self._offsets.append(self._offsets[-1] + len(line))
+        start = self._offsets[number - 1]
+        for page in pages:
+            if page.start <= start <= page.end:
+                return page
         return None
 
     def locate(self, excerpt: str) -> int | None:

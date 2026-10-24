@@ -1199,10 +1199,10 @@ def _records(coverage: dict) -> dict[str, Any]:
     aside and the reasons they were set aside by, by category, and the
     labels that were appellations and became names, and the record name
     parts that are appellations (ADR-0018); the place containers checked,
-    those dropped alone, their records standing, by reason, and those kept
-    whose evidence is the container's name alone; and the
-    notes by category, and the notes set aside. Each name is folded into
-    the report's fixed vocabulary, OTHER for one it does not know.
+    and those dropped alone, their records standing, by reason
+    (`malformed` among them); and the notes by category, and the notes
+    set aside. Each name is folded into the report's fixed vocabulary,
+    OTHER for one it does not know.
 
     The coverage's `set_aside` counts reasons, not records: a record that
     does not parse counts once, as `schema` (besides any `read as text`
@@ -1239,9 +1239,6 @@ def _records(coverage: dict) -> dict[str, Any]:
                 reasons, lambda value: _known(value, SET_ASIDE_REASONS)
             ),
             "containers_checked": _counted(records.get("containers_checked")),
-            "containers_name_only": _counted(
-                records.get("containers_name_only")
-            ),
             "containers_dropped_by_reason": (
                 None
                 if dropped is None
@@ -2554,7 +2551,7 @@ def _aggregate_content(
     reasons_absent = 0
     record_extractions = records_given = recordless = notes_set_aside = 0
     records_set_aside = unsplit_forms = appellation_labels = 0
-    appellation_parts = containers_checked = containers_name_only = 0
+    appellation_parts = containers_checked = 0
     # the place containers dropped alone from records that stand, by
     # reason (claims.drop_containers)
     containers_dropped: Counter = Counter()
@@ -2640,9 +2637,6 @@ def _aggregate_content(
                         records["containers_dropped_by_reason"]
                     )
                     containers_checked += records["containers_checked"] or 0
-                    containers_name_only += (
-                        records["containers_name_only"] or 0
-                    )
                 notes.update(noted["by_category"])
                 notes_set_aside += noted["set_aside"]
         failed_rejecting += document.unusable is not None
@@ -2721,7 +2715,6 @@ def _aggregate_content(
             "containers_checked": containers_checked,
             "containers_dropped": containers_dropped.total(),
             "containers_dropped_by_reason": _by_count(containers_dropped),
-            "containers_name_only": containers_name_only,
             "absent": {
                 "predating": absent["predating"],
                 "line_range": absent["line_range"],
@@ -3689,9 +3682,7 @@ def _records_blocks(
             "Place containers checked: "
             f"{_n(records['containers_checked'])}; dropped alone, their "
             "records standing, so counted apart from records set aside: "
-            f"{_n(records['containers_dropped'])}; kept whose evidence is "
-            "the container's name alone: "
-            f"{_n(records['containers_name_only'])}",
+            f"{_n(records['containers_dropped'])}",
             f"Judgement notes: {_n(notes['total'])}; notes set aside: "
             f"{_n(notes['set_aside'])}",
             "Extractions not counted: "
@@ -4311,9 +4302,7 @@ def _html_document(document: Mapping[str, Any]) -> str:
                 "aside: "
                 f"{_listed(_by_count(records['set_aside_by_reason']))}; "
                 "place containers checked: "
-                f"{_absent(records['containers_checked'])}; kept whose "
-                "evidence is the name alone: "
-                f"{_absent(records['containers_name_only'])}; dropped: "
+                f"{_absent(records['containers_checked'])}; dropped: "
                 + (
                     "not counted"
                     if records["containers_dropped_by_reason"] is None

@@ -48,7 +48,7 @@ up to date once per run, each after the view it is made from:
 |---|---|---|
 | `transcription.json` | `transcription`, `transcribe` | the correction `transcription.corrected.txt`, when there is one; otherwise the source, routed (vision, paged, text file): a PDF with a text layer page by page, and a deck slide by slide (below) |
 | `batch.json` | `extraction`, `extract` (a GEDCOM file: `gedcom`) | `transcription.json`, by its canonical content (text, language, the artifact's key, the SHA-1 of its media, and the transcription record's fields, ADR-0037: the document's class, and each page's place in the text, printed page number, status, languages and notes); what stays out is its provenance (the engine, each page's method and engine) and the check's flag; a GEDCOM file: the source alone |
-| `critique.json` | `critique`, `critique` | `batch.json`, by its canonical content (without its run stamps) |
+| `critique.json` | `critique`, `critique` | `batch.json`, by its canonical content (without its run stamps), and `transcription.json`, by its canonical content, since the critic reads each citation where it stands (ADR-0003, as amended by #607) |
 
 The source is not recorded: the directory is kept for one source's bytes,
 and a changed source sets it aside (below). Each view is recorded in
