@@ -129,16 +129,16 @@ class TestTheFold:
     @pytest.mark.parametrize(
         ("typographic", "plain"),
         [
-            ("„zum Blauen Hut“", '"zum Blauen Hut"'),
-            ("„zum Blauen Hut‟", '"zum Blauen Hut"'),
-            ("‚zum Blauen Hut‘", "'zum Blauen Hut'"),
-            ("‛zum Blauen Hut’", "'zum Blauen Hut'"),
-            ("«zum Blauen Hut»", '"zum Blauen Hut"'),
-            ("‹zum Blauen Hut›", "'zum Blauen Hut'"),
-            ("Mockburg‑Süd", "Mockburg-Süd"),
-            ("1912‒1926", "1912-1926"),
-            ("1912―1926", "1912-1926"),
-            ("−7", "-7"),
+            ("\u201ezum Blauen Hut\u201c", '"zum Blauen Hut"'),
+            ("\u201ezum Blauen Hut\u201f", '"zum Blauen Hut"'),
+            ("\u201azum Blauen Hut\u2018", "'zum Blauen Hut'"),
+            ("\u201bzum Blauen Hut\u2019", "'zum Blauen Hut'"),
+            ("\u00abzum Blauen Hut\u00bb", '"zum Blauen Hut"'),
+            ("\u2039zum Blauen Hut\u203a", "'zum Blauen Hut'"),
+            ("Mockburg\u2011Süd", "Mockburg-Süd"),
+            ("1912\u20121926", "1912-1926"),
+            ("1912\u20151926", "1912-1926"),
+            ("\u22127", "-7"),
         ],
     )
     def test_each_reads_plain(self, typographic, plain):
@@ -151,9 +151,11 @@ class TestTheFold:
         )
 
     def test_a_quote_of_the_firm_s_name(self):
-        found = Transcript("Hutmacherei „zum Blauen Hut“, gegr. 1863")
+        found = Transcript(
+            "Hutmacherei \u201ezum Blauen Hut\u201c, gegr. 1863"
+        )
         assert found.locate('Hutmacherei "zum Blauen Hut"') == 1
-        assert found.locate("Hutmacherei «zum Blauen Hut»") == 1
+        assert found.locate("Hutmacherei \u00abzum Blauen Hut\u00bb") == 1
 
 
 class TestTheSoftHyphen:
@@ -161,22 +163,24 @@ class TestTheSoftHyphen:
     line's word."""
 
     def test_dropped_within_a_line(self):
-        assert fold("Brunnen­ring") == "brunnenring"
-        assert words("Brunnen­ring 35") == ["brunnenring", "35"]
+        assert fold("Brunnen\u00adring") == "brunnenring"
+        assert words("Brunnen\u00adring 35") == ["brunnenring", "35"]
         assert (
-            Transcript("in Flörburg, Brunnen­ring 35").locate("Brunnenring 35")
+            Transcript("in Flörburg, Brunnen\u00adring 35").locate(
+                "Brunnenring 35"
+            )
             == 1
         )
 
     def test_joined_at_a_line_s_end(self):
-        found = Transcript("in Flörburg, Brunnen­\nring 35")
+        found = Transcript("in Flörburg, Brunnen\u00ad\nring 35")
         assert found.span("Flörburg, Brunnenring 35") == (1, 2)
-        assert words("Brunnen­\nring 35") == ["brunnenring", "35"]
+        assert words("Brunnen\u00ad\nring 35") == ["brunnenring", "35"]
         # quoted with the soft hyphen too
-        assert found.locate("Brunnen­\nring") == 1
+        assert found.locate("Brunnen\u00ad\nring") == 1
 
     def test_part_of_the_word_is_no_match(self):
-        found = Transcript("in Flörburg, Brunnen­\nring 35")
+        found = Transcript("in Flörburg, Brunnen\u00ad\nring 35")
         assert found.locate("in Flörburg, Brunnen") is None
         assert found.locate("ring 35") is None
         # an invisible break is no hyphen: none of the hyphen's readings
