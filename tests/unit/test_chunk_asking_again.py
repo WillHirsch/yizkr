@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from tests.unit.test_chunking import (
+    DOC,
     DOC_REF,
     LINE_LENGTH,
     Attempting,
@@ -774,6 +775,52 @@ class TestTheStageNamesTheRefusal:
         (doc,) = orchestrator.documents()
         assert doc.state.status == FAILED
         assert doc.state.error.startswith(reason)
+
+    def test_a_refused_chunk_beside_an_answered_one(
+        self, tmp_path, monkeypatch
+    ):
+        """A refused chunk is never asked again, so the reason does not
+        say it failed after retries (#659); it keeps the refusal's class
+        name."""
+        from yizkr.pipeline import chunking
+
+        class OneChunkPerPerson(chunking.ChunkedClaimExtractor):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, budget=LINE_LENGTH, **kwargs)
+
+        monkeypatch.setattr(
+            chunking, "ChunkedClaimExtractor", OneChunkPerPerson
+        )
+        orchestrator = TestTheExtractionStage.orchestrator(
+            tmp_path, DOC, {"manifest": entity_manifest_json()}
+        )
+        scripted = orchestrator._llm
+
+        def llm(role, doc):
+            model = scripted(role, doc)
+            complete = model.complete
+
+            def answer(prompt, image_paths=()):
+                if not prompt.startswith("You extract source-attributed"):
+                    return complete(prompt, image_paths)
+                model.calls.append(f"chunk:{model.name}")
+                if "- e1:" in prompt:
+                    raise refused()
+                return ndjson([claim(*SEBASTIAN)])
+
+            model.complete = answer
+            return model
+
+        orchestrator._llm = llm
+        assert orchestrator.run() == 1
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == FAILED
+        assert doc.state.error.startswith(
+            "RuntimeError: 1 chunks failed (c001; c001: ClassifierRefused: "
+        )
+        assert doc.state.error.endswith("); re-run to retry them")
+        assert "after retries" not in doc.state.error
+        assert orchestrator.calls.count("chunk:page.txt") == 2
 
 
 class TestThroughTheCache:
