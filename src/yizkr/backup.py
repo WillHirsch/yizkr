@@ -1254,8 +1254,7 @@ def statements_left_out(
     placed: PlacedSubjectRule | None = None,
 ) -> tuple[set[str], set[tuple[str, str, str, str]], set[tuple[str, str]]]:
     """The statements of the dump that go whole, the truthy triples that
-    go with them, and the links to references that go from statements
-    that stay.
+    go with them, and the links from statements to references that go.
 
     A statement goes whole when its value, or the value of any of its
     qualifiers, is an item of `excluded`, at any rank, or when it is a
@@ -1387,7 +1386,6 @@ def statements_left_out(
             gone.add(given)
         elif value != "_:":
             kept.add(given)
-    unlinked = {link for link in unlinked if link[0] not in left_out}
     return left_out, gone - kept, unlinked
 
 
