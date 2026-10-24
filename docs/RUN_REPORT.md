@@ -322,8 +322,9 @@ writer refused, count here too, under their check and the stage
   error's class (`ClassifierRefused`), and a refusal that fails a chunk
   or the extraction is named in the document's failure reason;
 - trailing commas read as JSON syntax (#654): a single trailing comma
-  before a closing `]` or `}` in an entity manifest or a chunk's answer,
-  which the extraction reads past and counts (`coverage.json`'s
+  before a closing `]` or `}` in the manifest answer an extraction used
+  or a chunk's accepted answer, which the extraction reads past and
+  counts (`coverage.json`'s
   `trailing_commas`), summed over the extractions, with the extractions
   that read one, and those whose coverage predates the count counted
   apart, never as zero (`aggregate.content.trailing_commas`: `read`,

@@ -1296,8 +1296,8 @@ class ChunkedClaimExtractor:
         # each place container the manifest's records gave, checked and
         # kept or dropped alone (claims.drop_containers)
         self._containers: list[dict] = []
-        # the trailing commas the manifest the extraction used was read
-        # past (scan_json_answer)
+        # the trailing commas read in the manifest answer the extraction
+        # used (scan_json_answer)
         self._trailing_commas = 0
         # each claim whose excerpt the transcription does not hold
         # (excerpt_audit)
@@ -2585,16 +2585,17 @@ class _Manifest(NamedTuple):
     """An entity manifest as parsed: its entities; the mention records
     and judgement notes set aside, counted by the category of each
     reason; the number of entities whose mention record was set
-    aside; and the audit of each place container checked."""
+    aside; the audit of each place container checked; and the trailing
+    commas read as JSON syntax in its answer (scan_json_answer)."""
 
     entities: list[EntityRecord]
     set_aside: dict[str, int]
     set_aside_records: int
     # each place container checked, kept or dropped
     # (claims.drop_containers)
-    containers: list[dict] = []
+    containers: list[dict]
     # the trailing commas read as JSON syntax (scan_json_answer)
-    trailing_commas: int = 0
+    trailing_commas: int
 
 
 def _set_aside_note(entity: dict) -> tuple[dict, list[str]]:
@@ -2618,10 +2619,11 @@ class _Chunk(NamedTuple):
     """One chunk's parsed claims and gaps, and the objects in its answer
     that held something the parser could not read (parse_chunk_unread):
     their count is what tells an unreadable answer from one with no
-    claims."""
+    claims; and the trailing commas read as JSON syntax in its answer
+    (scan_json_answer)."""
 
     claims: list[dict]
     gaps: list[dict]
     unread: list[dict]
     # the trailing commas read as JSON syntax (scan_json_answer)
-    trailing_commas: int = 0
+    trailing_commas: int

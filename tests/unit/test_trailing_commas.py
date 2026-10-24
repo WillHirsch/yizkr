@@ -40,6 +40,7 @@ from yizkr.pipeline.chunking import (
 )
 from yizkr.pipeline.extract import (
     JsonScan,
+    _trailing_comma,
     scan_json_answer,
     scan_json_objects,
 )
@@ -96,6 +97,10 @@ class TestTheScan:
             "{,}",
             '{"label":,}',  # a comma after a key's colon
             '{"label",}',  # a comma after a key with no value
+            # a comma before a value, after a key's colon or the key
+            '{"label":, "Flörburg"}',
+            '{"label",: "Flörburg"}',
+            '{"aliases": ["Hilde", ,]}',  # two commas, spaced apart
             '{"aliases": ["Hilde" "Hildegard"]}',  # a missing comma
             '{"aliases": ["Hilde",}}',  # the wrong closer
             # the wrong closer, with no comma before it: blanking the
@@ -135,6 +140,31 @@ class TestTheScan:
         for any undecodable span, and counts what it reads there."""
         answer = '{"e": [{"id": "e1",}], "x" 1}'
         assert scan_json_answer(answer) == JsonScan([{"id": "e1"}], 1)
+
+    @pytest.mark.parametrize(
+        ("text", "stop", "comma"),
+        [
+            # the decoder stops at the comma (3.13+) or at its closer
+            ('["a" ,\n ]', 5, 5),
+            ('["a" ,\n ]', 8, 5),
+            ('{"a": 1 ,}', 8, 8),
+            ('{"a": 1 ,}', 9, 8),
+            # a comma before a value, after a colon, or after another
+            ('["a" , "b"]', 5, None),
+            ('{"a":, "b"}', 5, None),
+            ('{"a":,}', 5, None),
+            ('{"a":,}', 6, None),
+            ('["a",,]', 5, None),
+            ("[,]", 1, None),
+            ("[,]", 2, None),
+            # a stop at anything else
+            ('["a" "b"]', 5, None),
+            ('["a"}', 4, None),
+            ('["a",', 5, None),
+        ],
+    )
+    def test_the_comma_the_decoder_stopped_at(self, text, stop, comma):
+        assert _trailing_comma(text, stop) == comma
 
     def test_other_readers_still_refuse_it(self):
         """scan_json_objects, the readers of the other stages' answers,
@@ -223,14 +253,15 @@ class TestTheExtraction:
                         trailing(json.dumps({"done": True})),
                     ]
                 ),
-                ndjson([claim("e2", "Sebastian Löbig", 1862)]),
+                trailing(ndjson([claim("e2", "Sebastian Löbig", 1862)])),
             ],
         )
         assert [call[0] for call in llm.calls] == ["open", "fork", "fork"]
         assert not extractor.used_fallback_manifest
         assert {c.subject.local_id for c in batch.claims} == {"e1", "e2"}
         coverage = side_output(tmp_path, "coverage.json")
-        assert coverage["trailing_commas"] == 2 + 2
+        # the manifest's two, the first chunk's two, the second's one
+        assert coverage["trailing_commas"] == 2 + 2 + 1
         assert coverage["fallback"] == {}
 
     def test_a_clean_extraction_counts_none(self, tmp_path):

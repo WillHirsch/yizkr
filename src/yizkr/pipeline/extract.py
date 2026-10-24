@@ -352,7 +352,7 @@ def _scan(response: str, *, read_trailing_commas: bool) -> JsonScan:
             break
         try:
             if read_trailing_commas:
-                obj, end, text, read = _decode_past_trailing_commas(
+                obj, end, read = _decode_past_trailing_commas(
                     decoder, text, start
                 )
                 commas += read
@@ -369,16 +369,12 @@ def _scan(response: str, *, read_trailing_commas: bool) -> JsonScan:
 
 def _decode_past_trailing_commas(
     decoder: json.JSONDecoder, text: str, start: int
-) -> tuple[Any, int, str, int]:
-    """(value, end, text, commas read): the value decoded at `start`, with
-    each trailing comma the decoder stops at blanked to a space, and the
-    text it was decoded from. The decoder stops either at the comma or at
-    the bracket after it, depending on the Python version; either way the
-    stop is outside any string. The comma must have only whitespace
-    before the closing bracket or brace, and no comma, `[` or `{` before
-    it, and the value must then decode whole: a comma after a key or its
-    colon leaves that key without a value, which the decoder refuses.
-    Raises json.JSONDecodeError otherwise, and nothing it read counts."""
+) -> tuple[Any, int, int]:
+    """(value, end, commas read): the value decoded at `start`, each
+    trailing comma the decoder stops at (_trailing_comma) blanked to a
+    space in a copy of the text, so `end` stands in the text as given. The
+    value must then decode whole: raises json.JSONDecodeError otherwise,
+    and nothing it read counts."""
     read = 0
     while True:
         try:
@@ -390,27 +386,30 @@ def _decode_past_trailing_commas(
             text = f"{text[:comma]} {text[comma + 1 :]}"
             read += 1
             continue
-        return obj, end, text, read
+        return obj, end, read
 
 
 def _trailing_comma(text: str, stop: int) -> int | None:
-    """The index of the trailing comma the decoder stopped at, at `stop`
-    or just before it, or None when it stopped for anything else."""
+    """The index of the trailing comma the decoder stopped at, or None
+    when it stopped for anything else. The decoder stops at the comma or
+    at the closing bracket or brace after it, depending on the Python
+    version, and either stop is outside any string. One rule then holds:
+    the stop, or the first character before a closer stop that is not
+    whitespace, is a comma; the first after the comma that is not
+    whitespace is `]` or `}`; and the first before it is not `,`, `[`,
+    `{` or `:`, so a value precedes it."""
     if stop >= len(text):
         return None
-    if text[stop] == ",":
-        closer = _skip_space(text, stop + 1, 1)
-        if closer is None or text[closer] not in "]}":
-            return None
-        comma = stop
-    elif text[stop] in "]}":
+    comma = stop
+    if text[stop] in "]}":
         comma = _skip_space(text, stop - 1, -1)
-        if comma is None or text[comma] != ",":
-            return None
-    else:
+    if comma is None or text[comma] != ",":
+        return None
+    closer = _skip_space(text, comma + 1, 1)
+    if closer is None or text[closer] not in "]}":
         return None
     before = _skip_space(text, comma - 1, -1)
-    if before is None or text[before] in ",[{":
+    if before is None or text[before] in ",[{:":
         return None
     return comma
 

@@ -160,8 +160,9 @@ The readers of the entity manifest and of the chunks' answers
 (`extract.scan_json_answer`) read a single trailing comma directly
 before a closing `]` or `}`, outside any string, as JSON syntax: the
 object decodes as it would without the comma, and `coverage.json`
-counts each one so read (`trailing_commas`: those of the manifest the
-extraction used and of each chunk's accepted answer). It is a syntax
+counts each one so read (`trailing_commas`: the commas read anywhere in
+the manifest answer the extraction used and in each chunk's accepted
+answer, a stray object in prose included). It is a syntax
 slip, not a content repair: no value is added, changed or guessed. Any
 other defect still leaves the object unread: two commas, a comma before
 a value or after a key, a missing comma, a mismatched closer. The other
