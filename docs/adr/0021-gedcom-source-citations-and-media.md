@@ -45,6 +45,9 @@ Amended by #353 (2026-10-23): a family's first two HUSB and WIFE lines,
 in either combination, are its couple and its children's parents as
 their tags state, so two HUSBs are two fathers; a further one is
 counted: see Amendments.
+Amended by #583 (2026-10-23): an object's own DATE is when it was made,
+an `inception` claim on its media item (ADR-0039 §2.2), not a date of a
+person's `image` of it: see Amendments.
 
 ## Context
 
@@ -126,8 +129,9 @@ media object's item carries **no `media file` and no `media SHA-1`**
 way, ` [not an artifact]`, one tag for every kind, its name an alias;
 amended by #444, 2026-10-03) — the absence
 of a content hash *is* the un-held marker. The person links to it with the
-new **`image`** property (P18 semantics: media of the subject),
-`point_in_time`-qualified when the object is dated. Objects are deduped by
+new **`image`** property (P18 semantics: media of the subject), undated;
+the object's own DATE is its media item's `inception` (amended by #583).
+Objects are deduped by
 xref so several people share one item. `image` is used, not `depicts`,
 because `depicts` is the faces-confirmation predicate (ADR-0005) that must
 never be auto-written (CLAUDE.md), and an attached obituary is not a facial
@@ -223,7 +227,9 @@ with its own date, place and circa, so that the alternatives coexist
   block for each citation (#335);
 - where one claim holds both an event's date and its place (BURI, RESI,
   OCCU, MARR), each of the event's dates is paired with each of its
-  places, and each DATE of an OBJE dates an image claim of its own;
+  places, and each DATE of an OBJE dates an image claim of its own
+  (each is now an `inception` claim of its own on the object's media
+  item: amended by #583);
 - a family's first marriage (a date with a place) and its first divorce
   date one pair of spouse claims, as a family's only MARR and DIV do, and
   every other marriage or divorce dates a pair of its own (docs/MODELING.md,
@@ -542,3 +548,23 @@ one before it (same tag, same person) is counted and passed over; a
 family whose two
 partner lines are a HUSB and a WIFE naming one person still gives no
 union and no parent claim, counted.
+
+Amended by #583 (2026-10-23): **an object's own DATE is its
+inception.** An OBJE's DATE says when the photograph or document the
+export describes was made, which ADR-0039 §2.2 makes a source's
+`inception`; it is not a date of the person's association with the
+medium. Each DATE of an object is an `inception` claim on the object's
+media item, its value and the range and circa its phrase states as
+`parse_gedcom_date` reads them, at the GEDCOM's precision, never
+narrowed (CLAUDE.md rule 5). The claim cites the object: its excerpt is
+the object's lines alone and the object's own citations fold into it,
+so the several people who link one object give one claim; a citation
+beneath a person's OBJE link folds into that person's `image` claim
+only, which is undated. A DATE the grammar cannot parse gives no claim
+and a warning (`unparsed media date … — inception omitted`), given once
+however many people link the object. ADR-0039 §2.2's subject rule admits
+the media item as the subject as an interim exception keyed on the
+adapter's model identifier (`STRUCTURED_ADAPTERS`, owner decision
+2026-10-24): a model's batch never gives an artifact entity a
+document-subject claim, pending an ADR-0039 amendment the owner has asked
+for.

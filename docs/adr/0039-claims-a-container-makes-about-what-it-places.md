@@ -12,6 +12,11 @@ Amended by #554 (2026-10-23): the critic's `relation_kind_mismatch`
 category names `author` and `addressee`, as relations of authorship or
 address, with the kinds they take (a person, an organization or a
 family), as ADR-0031 records for the relations of agency.
+Amended by #583 (2026-10-23; owner decision 2026-10-24, interim): on a
+structured adapter's batch alone, §2.2's properties also take, as their
+subject, a batch entity of an artifact kind, an un-held media item
+(ADR-0021): the GEDCOM adapter gives an OBJE's own DATE as the
+`inception` of the object's media item.
 
 Revised 2026-10-16 on the owner's direction on #517, quoted: "Wait, are
 these fields about a source's relevance to its container, or independent
@@ -210,6 +215,21 @@ claim's own source, and these properties take no other subject.
   unapproved one anyway (ADR-0005, as amended by #226). The faces flow
   may later read a `shows` statement or a caption as a hint for whom to
   propose, outside the graph until a person confirms it.
+- **An export's own record of an object, an interim exception**
+  (amended by #583; owner decision 2026-10-24). An export's structured
+  OBJE record is the export's own record of the object it links (ADR-0021),
+  not words a container places beside an image, so the GEDCOM adapter
+  gives an OBJE's own DATE as the `inception` of the object's un-held
+  media item, with the range and circa the date states, citing the
+  export. Validation and the writer take such a subject, a batch entity
+  of an artifact kind (`artifact` or a `subclass_of` it), on these
+  properties only on a structured adapter's batch: one whose extraction
+  run's model identifier is in `STRUCTURED_ADAPTERS` (`claims.py`), which
+  code sets and no model does. A model's batch keeps the rule above
+  exactly, whatever kind its entity manifest gives an entity. The owner
+  has asked for an amendment that would make this the general rule: a
+  source may state these properties about an artifact it places or
+  describes, cited to itself, where its passage conveys the fact.
 - **A container never gives these about what it places.** The caption's
   facts stay its text (§2.1). From the keeper run on, a curator may
   promote one (§4).

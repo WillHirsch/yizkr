@@ -8,7 +8,8 @@ with their child (#353).
 A source citation (SOUR) must fold into the birth statement's reference
 as a page-number locator, and a multimedia object (OBJE) must become an
 un-held media item the person `image`s — an ordinary `artifact` with NO
-content hash (its bytes are referenced, never fetched). A residence's
+content hash (its bytes are referenced, never fetched) — whose own DATE
+is the item's `inception`, the `image` statement undated (#583). A residence's
 date period (FROM x TO y) must become the residence statement's start and
 end time, each with the range its own phrase states (docs/MODELING.md,
 "Marriages, residences and other periods"). A repeated BIRT or MARR, as
@@ -245,6 +246,41 @@ def test_gedcom_sour_folds_and_obje_becomes_unheld_media(
         for snak in ref["snaks"].get(properties["stated_in"], [])
     }
     assert stated_in == {export_qid}
+
+
+def test_gedcom_objects_date_is_its_media_items_inception(
+    client, gedcom_artifact
+):
+    """The portrait's own DATE 1956 is one `inception` statement on its
+    media item, at year precision, stated in the export, and the person's
+    `image` statement carries no date (ADR-0039 §2.2; #583)."""
+    export_qid, export = gedcom_artifact
+    write = write_mapped(
+        BatchWriter(client), adapt_gedcom(GEDCOM, artifact=export).batch
+    )
+    person_qid = write.created_items["i1"]
+    media_qid = write.created_items["md1"]
+    properties, _ = client.vocabulary()
+    (made,) = _statements(client, media_qid, "inception")
+    value = made["mainsnak"]["datavalue"]["value"]
+    assert (value["time"], value["precision"]) == (
+        "+1956-00-00T00:00:00Z",
+        9,
+    )
+    assert made["rank"] == "normal"
+    assert not made.get("qualifiers")
+    stated_in = {
+        snak["datavalue"]["value"]["id"]
+        for reference in made.get("references", [])
+        for snak in reference["snaks"].get(properties["stated_in"], [])
+    }
+    assert stated_in == {export_qid}
+    (image,) = [
+        statement
+        for statement in _statements(client, person_qid, "image")
+        if statement["mainsnak"]["datavalue"]["value"]["id"] == media_qid
+    ]
+    assert not image.get("qualifiers")
 
 
 def test_gedcom_residence_period_is_a_start_and_an_end(

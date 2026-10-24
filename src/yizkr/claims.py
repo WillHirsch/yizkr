@@ -56,9 +56,12 @@ as its source is, by an ``artifact`` reference (ADR-0035 §3.4): the
 document itself is what a register office issued, what a letter's writer
 dated. Only a property the manifest marks `document_subject` takes such a
 subject, it must be the claim's own source, and such a property takes no
-other subject. A claim's subject may otherwise be an artifact its source
-places, named by the SHA-1 of its bytes, on the one property the manifest
-marks `placed_subject` (`caption`, ADR-0039 §2.1), which takes no other
+other subject, save on a structured adapter's batch (STRUCTURED_ADAPTERS)
+a batch entity of an artifact kind: an un-held media item, such as a
+GEDCOM object, whose making the export dates (ADR-0039 §2.2). A claim's
+subject may otherwise be an artifact its source places, named by the
+SHA-1 of its bytes, on the one property the manifest marks
+`placed_subject` (`caption`, ADR-0039 §2.1), which takes no other
 subject: a container's words about an image on its page. A claim's
 subject is so its own source, or an artifact its source places by bytes,
 never one it only writes about. The writer checks the same rules and
@@ -860,13 +863,15 @@ def validate_against_manifest(
     * a claim whose subject is a document (an artifact reference) names
       its own source, by a property the manifest marks
       `document_subject`, and a claim of such a property has that
-      subject and no other (ADR-0035 §3.4); or it names an artifact its
-      source places, by a property the manifest marks `placed_subject`
-      (`caption`), and a claim of such a property has such a subject and
-      no other (ADR-0039 §2.1). `placed` gives, by the SHA-1 of a
-      source's media, the SHA-1s of the artifacts that source places
-      (`placed_artifacts`); a source it does not name places none, so
-      without it every `caption` claim is refused;
+      subject, or on a structured adapter's batch a batch entity of an
+      artifact kind (an un-held media item, ADR-0039 §2.2), and no other
+      (ADR-0035 §3.4); or it names
+      an artifact its source places, by a property the manifest marks
+      `placed_subject` (`caption`), and a claim of such a property has
+      such a subject and no other (ADR-0039 §2.1). `placed` gives, by
+      the SHA-1 of a source's media, the SHA-1s of the artifacts that
+      source places (`placed_artifacts`); a source it does not name
+      places none, so without it every `caption` claim is refused;
     * a `name` claim, a name form of no stated type, is a person's or an
       unclassified entity's, never a vocabulary item's, and never
       restates its subject's label (ADR-0011): both are compared by
@@ -1001,13 +1006,16 @@ def validate_against_manifest(
 
     # roles each person holds in each death, across the batch's claims
     death_roles: dict[tuple[str, str], set[str]] = {}
+    structured = structured_batch(batch)
     for index, claim in enumerate(batch.claims):
         where = f"claims[{index}]"
         subject_kind = kind_of(claim.subject)
         check_ref(claim.subject, f"{where}.subject")
         errors.extend(
             f"{where}.subject: {problem}"
-            for problem in subject_problems(claim, acceptance, placed)
+            for problem in subject_problems(
+                claim, acceptance, placed, subject_kind, structured
+            )
         )
         check_property_value(claim.property, claim.value, where, subject_kind)
         subject_key = entity_key(claim.subject)
@@ -1174,10 +1182,26 @@ def unplaced_hint(count: int) -> str:
     )
 
 
+# the model identifier the GEDCOM adapter sets on its batches
+GEDCOM_ADAPTER = "gedcom-adapter"
+# the model identifiers of the structured adapters, which code sets on
+# their batches and no model does: on their batches alone a
+# document-subject property takes an un-held media item as its subject,
+# an interim rule (ADR-0039 §2.2)
+STRUCTURED_ADAPTERS = frozenset({GEDCOM_ADAPTER})
+
+
+def structured_batch(batch: ClaimBatch) -> bool:
+    """Is `batch` a structured adapter's (STRUCTURED_ADAPTERS)?"""
+    return batch.extraction_run.model_identifier in STRUCTURED_ADAPTERS
+
+
 def subject_problems(
     claim: Claim,
     acceptance: Acceptance,
     placed: Mapping[str, Collection[str]] | None = None,
+    subject_kind: str | None = None,
+    structured: bool = False,
 ) -> list[str]:
     """Why the claim's subject breaks the subject rules of ADR-0035 §3.4
     and ADR-0039 §2, each ending in its reason code (SUBJECT_REASONS), or
@@ -1185,7 +1209,12 @@ def subject_problems(
     marks `document_subject`, an artifact its source places on one it
     marks `placed_subject`, and on any other property neither: no
     property takes an artifact subject but those, and those take no other
-    subject. `placed` is as validate_against_manifest takes it."""
+    subject. On a structured adapter's batch (`structured`,
+    structured_batch) a document-subject property also takes a batch
+    entity of an artifact kind (`subject_kind`, the kind of a local
+    subject), an un-held media item such as a GEDCOM object, which the
+    export describes with its own date (ADR-0039 §2.2); a model's batch
+    never does. `placed` is as validate_against_manifest takes it."""
     prop, subject = claim.property, claim.subject
     source = claim.source.artifact
     if prop in acceptance.placed_subjects:
@@ -1204,6 +1233,12 @@ def subject_problems(
             ]
         return []
     if prop in acceptance.document_subjects:
+        if (
+            structured
+            and isinstance(subject, LocalRef)
+            and subject_kind in acceptance.artifact_kinds
+        ):
+            return []
         if not isinstance(subject, ArtifactRef):
             return [
                 f"property {prop!r} takes only the claim's own source "
