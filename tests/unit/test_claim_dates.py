@@ -116,6 +116,25 @@ def test_a_claims_date_renders_as_its_stamp_does(
     assert time_text(stamp, precision, "a date") == shown
 
 
+@pytest.mark.parametrize(
+    "fields, stamp, precision",
+    [
+        ({"year": 1911}, "+1911-01-01T00:00:00Z", 9),
+        ({"year": 1938, "month": 8}, "+1938-08-01T00:00:00Z", 10),
+        ({"year": 1919, "month": 1, "day": 7}, "+1919-01-07T00:00:00Z", 11),
+    ],
+    ids=["year", "month", "day"],
+)
+def test_a_date_built_without_a_precision_takes_its_finest_field(
+    fields, stamp, precision
+):
+    # validation fills the precision in; a value built without it (a
+    # model_construct) states none, and is given its finest field
+    value = TimeValue.model_construct(**fields)
+    assert value.precision is None
+    assert time_stamp(value) == (stamp, precision)
+
+
 def facts_of(value: TimeValue) -> str:
     claim = Claim(
         subject=LocalRef(local_id="e1", label="Gustav Löbig"),
