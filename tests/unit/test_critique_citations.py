@@ -348,20 +348,23 @@ class TestOccurrences:
         ]
 
     def test_an_occurrence_holding_a_mention_line_comes_first(self):
+        # the occurrence over lines 2-4 holds the mention line, 4, though
+        # it opens further from it than the one on line 5
         text = "\n".join(
             [
-                "Hutmacher Löbig",  # 1
-                "Eugen Löbig,",  # 2
-                "Hutmacher",  # 3
+                "Nr. 14.",  # 1
+                "Hutmacher",  # 2
+                "",  # 3
                 "Löbig.",  # 4
+                "Hutmacher Löbig",  # 5
             ]
         )
         prompt = prompt_of(
-            eugen_batch(place_of_death("Hutmacher Löbig"), mention_lines=[3]),
+            eugen_batch(place_of_death("Hutmacher Löbig"), mention_lines=[4]),
             transcription(text),
         )
         assert rows(prompt) == [
-            "e01 | place_of_death | e02 | times: - | lines 3-4; 1: "
+            "e01 | place_of_death | e02 | times: - | lines 2-4; 5: "
             '"Hutmacher Löbig"'
         ]
 
