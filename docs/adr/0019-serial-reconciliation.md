@@ -20,6 +20,12 @@ the whole name forms reconcile blocks on (`reconcile.entity_name_keys`,
 ADR-0007 as amended by #388), read through each entity's mention
 record, not name tokens: two documents connect on a name they share, never on a surname
 or a prefix alone.
+Amended by #681 and #683 (2026-10-24): the sequencer keys each
+document's entities as reconcile does given the batch: a person's
+label or alias that the batch gives as an appellation keys nothing
+(ADR-0018), so two documents that share only "Oma" do not connect by
+it, and a place's written name that is its label and one of its own
+containers keys as the label (ADR-0035 §7).
 
 Amended by #109 (2026-10-06): a later artifact no longer finds an
 earlier one's item by its label in the resolve step, which matches
