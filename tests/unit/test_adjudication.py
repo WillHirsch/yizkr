@@ -1565,6 +1565,21 @@ class TestPrincipalsHeldApart:
         assert entry["status"] == AMBIGUOUS
         assert entry["contradiction"] is None
 
+    def test_principals_left_apart_unsettled_are_not_held_apart(self):
+        """The postcard's Klara is `uncertain`: she stays apart from the
+        registers', but no adjudicator held her apart, so a `same` on the
+        emigrations still merges all three."""
+        docs = emigrations()
+        settled = postcard_verdicts(docs, UNCERTAIN, SAME)
+        klaras = {
+            settled["mentions"][doc.fingerprint("e1", settled)]["cluster"]
+            for doc in docs
+        }
+        assert len(klaras) == 2
+        found = emigration_of(settled, docs)
+        assert {m["method"] for m in found.values()} == {ADJUDICATED}
+        assert len({m["cluster"] for m in found.values()}) == 1
+
     def test_a_participant_held_apart_in_another_role_is_no_principal(self):
         """Gustav takes part in both emigrations, but not as principal,
         and the two Gustavs are said `different`: the emigrations' one
