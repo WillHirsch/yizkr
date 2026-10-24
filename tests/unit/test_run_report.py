@@ -2263,6 +2263,8 @@ class TestContent:
                 "addition": 1,
                 "no toponym": 1,
             },
+            "readings": 0,
+            "readings_by_reason": {},
             # the certificate's containers dropped alone (#569), counted
             # apart from the records set aside
             "containers_checked": 4,
@@ -2304,6 +2306,10 @@ class TestContent:
             "record gives: 2; record name parts that are appellations: 1\n"
             "- Records set aside: 2; reasons records were set aside: 4 (a "
             "record can give several)\n"
+            "- Fields read so their record could stand (a name part "
+            "dropped for an empty string, an entry read as its text), "
+            "setting nothing aside, so counted apart from the reasons "
+            "records were set aside: 0\n"
             "- Place containers checked: 4; dropped alone, their records "
             "standing, so counted apart from records set aside: 3\n"
             "- Judgement notes: 7; notes set aside: 5\n"
@@ -2346,6 +2352,7 @@ class TestContent:
             "appellation_labels": 2,
             "appellation_parts": 1,
             "set_aside_by_reason": {"initial": 2, "addition": 1},
+            "readings_by_reason": {},
             "containers_checked": 4,
             "containers_dropped_by_reason": {
                 "evidence-not-in-source": 2,
@@ -2366,6 +2373,7 @@ class TestContent:
             "appellation_labels": None,
             "appellation_parts": None,
             "set_aside_by_reason": {},
+            "readings_by_reason": {},
             "containers_checked": None,
             "containers_dropped_by_reason": None,
         }
@@ -2379,7 +2387,8 @@ class TestContent:
             "unsplit name forms: 3; appellation labels: 2; appellation "
             "parts: 1; recordless: 1; "
             "records set aside: 1; reasons set aside: initial 2, addition 1; "
-            "place containers checked: 4; dropped: evidence-not-in-source "
+            "readings, nothing set aside: none; place containers checked: "
+            "4; dropped: evidence-not-in-source "
             "2, no-evidence 1; judgement notes: "
             "date_reading 3, identity 2; notes set aside: 3"
         ) in drilled(made, CERT)
@@ -2389,7 +2398,8 @@ class TestContent:
             f"forms: {predates}; appellation labels: {predates}; "
             f"appellation parts: {predates}; "
             "recordless: 0; records set aside: "
-            f"{predates}; reasons set aside: none; place containers "
+            f"{predates}; reasons set aside: none; readings, nothing set "
+            "aside: none; place containers "
             f"checked: {predates}; dropped: not counted; judgement notes: "
             "none; notes set aside: 0"
         ) in drilled(made, DECK)
@@ -2398,7 +2408,8 @@ class TestContent:
             f"{predates}; appellation labels: {predates}; appellation parts: "
             f"{predates}; recordless: 1; "
             "records set aside: 1; reasons set "
-            "aside: no toponym 1; place containers checked: "
+            "aside: no toponym 1; readings, nothing set aside: none; place "
+            "containers checked: "
             f"{predates}; dropped: not counted; judgement notes: kind 1, "
             "relation 1; notes set aside: 2"
         ) in drilled(made, POSTCARD)
@@ -2473,6 +2484,8 @@ class TestContent:
             "appellation_parts": 0,
             "set_aside_reasons": 2,
             "set_aside_by_reason": {"addition": 2},
+            "readings": 0,
+            "readings_by_reason": {},
             "containers_checked": 0,
             "containers_dropped": 0,
             "containers_dropped_by_reason": {},
@@ -2500,6 +2513,10 @@ class TestContent:
             "record gives: 0; record name parts that are appellations: 0\n"
             "- Records set aside: 1; reasons records were set aside: 2 (a "
             "record can give several)\n"
+            "- Fields read so their record could stand (a name part "
+            "dropped for an empty string, an entry read as its text), "
+            "setting nothing aside, so counted apart from the reasons "
+            "records were set aside: 0\n"
             "- Place containers checked: 0; dropped alone, their records "
             "standing, so counted apart from records set aside: 0\n"
             "- Judgement notes: 1; notes set aside: 1\n"
@@ -2528,7 +2545,8 @@ class TestContent:
             "Mention records given: 1, by status: name 1; unsplit name "
             "forms: 2; appellation labels: 0; appellation parts: 0; "
             "recordless: 1; records set "
-            "aside: 1; reasons set aside: addition 2; place containers "
+            "aside: 1; reasons set aside: addition 2; readings, nothing set "
+            "aside: none; place containers "
             "checked: 0; dropped: none; judgement notes: "
             "identity 1; notes set aside: 1"
         ) in drilled(made, CERT)
@@ -2612,6 +2630,103 @@ class TestContent:
             "| kind | 1 |\n\n"
         ) in render_markdown(made["aggregate"])
 
+    def test_readings_and_containers_are_counted_apart_from_set_aside(
+        self, tmp_path
+    ):
+        """`dropped` and `read as text` set nothing aside (#611): the
+        headline counts only the reasons that set a record aside, and the
+        readings are shown apart, in a line and a table of their own. A
+        container's reasons (`malformed` among them, #607) are shown in
+        theirs, never among the records' reasons or readings."""
+        path = record(tmp_path / "run")
+        name = slugify(Path(FILES[POSTCARD][0]).stem)
+        target = path / name / "extraction" / "coverage.json"
+        value = json.loads(target.read_text())
+        value.update(
+            records=records(
+                1,
+                1,
+                {
+                    "no toponym": 1,
+                    "schema": 1,
+                    "dropped": 2,
+                    "read as text": 4,
+                    "note": 1,
+                },
+                {"toponym": 1},
+                set_aside_records=2,
+                containers_checked=2,
+                containers_dropped={"malformed": 1},
+            ),
+            notes={"relation": 1},
+        )
+        target.write_text(json.dumps(value))
+        made = build(path, now=NOW)
+        counted = made["aggregate"]["content"]["records"]
+        # the certificate's initial 2 and addition 1, and the postcard's
+        # no toponym 1 and schema 1: never its six readings
+        assert counted["set_aside_reasons"] == 5
+        assert counted["set_aside_by_reason"] == {
+            "initial": 2,
+            "addition": 1,
+            "no toponym": 1,
+            "schema": 1,
+        }
+        assert counted["readings"] == 6
+        assert list(counted["readings_by_reason"].items()) == [
+            ("read as text", 4),
+            ("dropped", 2),
+        ]
+        assert counted["containers_dropped"] == 4
+        assert counted["containers_dropped_by_reason"] == {
+            "evidence-not-in-source": 2,
+            "malformed": 1,
+            "no-evidence": 1,
+        }
+        postcard = document(made, POSTCARD)["coverage"]["records"]
+        assert postcard["set_aside_by_reason"] == {
+            "no toponym": 1,
+            "schema": 1,
+        }
+        assert postcard["readings_by_reason"] == {
+            "read as text": 4,
+            "dropped": 2,
+        }
+        assert postcard["containers_dropped_by_reason"] == {"malformed": 1}
+        markdown = render_markdown(made["aggregate"])
+        assert (
+            "- Records set aside: 3; reasons records were set aside: 5 (a "
+            "record can give several)\n"
+            "- Fields read so their record could stand (a name part "
+            "dropped for an empty string, an entry read as its text), "
+            "setting nothing aside, so counted apart from the reasons "
+            "records were set aside: 6\n"
+            "- Place containers checked: 6; dropped alone, their records "
+            "standing, so counted apart from records set aside: 4\n"
+        ) in markdown
+        assert (
+            "| Set-aside reason | Reasons |\n"
+            "|---|---:|\n"
+            "| initial | 2 |\n"
+            "| addition | 1 |\n"
+            "| no toponym | 1 |\n"
+            "| schema | 1 |\n\n"
+            "| Reading (nothing set aside) | Fields |\n"
+            "|---|---:|\n"
+            "| read as text | 4 |\n"
+            "| dropped | 2 |\n\n"
+            "| Container dropped reason | Containers |\n"
+            "|---|---:|\n"
+            "| evidence-not-in-source | 2 |\n"
+            "| malformed | 1 |\n"
+            "| no-evidence | 1 |\n\n"
+        ) in markdown
+        assert (
+            "records set aside: 2; reasons set aside: no toponym 1, schema "
+            "1; readings, nothing set aside: read as text 4, dropped 2; "
+            "place containers checked: 2; dropped: malformed 1; "
+        ) in drilled(made, POSTCARD)
+
     def test_a_coverage_that_counts_zero_is_not_absent(self, tmp_path):
         """Records and notes that count nothing are counted as zero; a
         coverage with records but no notes, or notes but no records,
@@ -2660,6 +2775,8 @@ class TestContent:
             "appellation_parts": 0,
             "set_aside_reasons": 0,
             "set_aside_by_reason": {},
+            "readings": 0,
+            "readings_by_reason": {},
             "containers_checked": 0,
             "containers_dropped": 0,
             "containers_dropped_by_reason": {},
@@ -2688,6 +2805,10 @@ class TestContent:
             "record gives: 0; record name parts that are appellations: 0\n"
             "- Records set aside: 0; reasons records were set aside: 0 (a "
             "record can give several)\n"
+            "- Fields read so their record could stand (a name part "
+            "dropped for an empty string, an entry read as its text), "
+            "setting nothing aside, so counted apart from the reasons "
+            "records were set aside: 0\n"
             "- Place containers checked: 0; dropped alone, their records "
             "standing, so counted apart from records set aside: 0\n"
             "- Judgement notes: 0; notes set aside: 0\n"
@@ -2713,6 +2834,7 @@ class TestContent:
             "appellation_labels": 0,
             "appellation_parts": 0,
             "set_aside_by_reason": {},
+            "readings_by_reason": {},
             "containers_checked": 0,
             "containers_dropped_by_reason": {},
         }
@@ -2782,6 +2904,7 @@ class TestContent:
             "appellation_labels": None,
             "appellation_parts": None,
             "set_aside_by_reason": {"kind": 1, "addition": 0},
+            "readings_by_reason": {},
             "containers_checked": None,
             "containers_dropped_by_reason": None,
         }
@@ -2801,6 +2924,8 @@ class TestContent:
             "appellation_parts": 0,
             "set_aside_reasons": 1,
             "set_aside_by_reason": {"kind": 1, "addition": 0},
+            "readings": 0,
+            "readings_by_reason": {},
             "containers_checked": 0,
             "containers_dropped": 0,
             "containers_dropped_by_reason": {},
@@ -2872,6 +2997,8 @@ class TestContent:
             "appellation_parts": 0,
             "set_aside_reasons": 0,
             "set_aside_by_reason": {},
+            "readings": 0,
+            "readings_by_reason": {},
             "containers_checked": 0,
             "containers_dropped": 0,
             "containers_dropped_by_reason": {},
@@ -2939,7 +3066,7 @@ class TestContent:
             {**person, "structure": {"kind": "human", "status": 7}}
         )
         reasons |= {reason.split(":", 1)[0] for reason in found}
-        assert reasons == report.SET_ASIDE_REASONS
+        assert reasons == report.SET_ASIDE_REASONS | report.READING_REASONS
         _, found = _set_aside_note({**person, "note": {"category": "?"}})
         assert [r.split(":", 1)[0] for r in found] == [report.NOTE_SET_ASIDE]
         # every reason label the checks' source writes, so a new one fails
@@ -2955,7 +3082,7 @@ class TestContent:
                 r"""f?["']([a-z ]+): """, inspect.getsource(check)
             )
         }
-        assert written == report.SET_ASIDE_REASONS
+        assert written == report.SET_ASIDE_REASONS | report.READING_REASONS
         # the record statuses are those the records allow, all ten
         statuses = {
             "name",
@@ -3787,6 +3914,8 @@ class TestAScratchRun:
             "appellation_parts": 0,
             "set_aside_reasons": 0,
             "set_aside_by_reason": {},
+            "readings": 0,
+            "readings_by_reason": {},
             "containers_checked": 0,
             "containers_dropped": 0,
             "containers_dropped_by_reason": {},
