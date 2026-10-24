@@ -634,3 +634,18 @@ class TestTheRunReport:
         assert "Machine-assisted preparation: unread" in drilled(
             made, DIRECTORY
         )
+
+        # two readings unread are two
+        covered = (
+            path
+            / slugify(Path(FILES[CERT][0]).stem)
+            / "extraction"
+            / "coverage.json"
+        )
+        written = json.loads(covered.read_text())
+        covered.write_text(
+            json.dumps(written | {"machine_assisted": readings[DIRECTORY]})
+        )
+        again = build(path, now=NOW)["aggregate"]["content"]
+        assert again["machine_assisted"]["unread"] == 2
+        assert again["machine_assisted"]["statements"] == 0
