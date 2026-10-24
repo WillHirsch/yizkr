@@ -366,15 +366,14 @@ class TestValidation:
     @pytest.mark.parametrize(
         "claim",
         [
-            # the booklet never dates the letter's image: the caption's
-            # "July 1939" stays its text (ADR-0039 §1)
+            # the booklet dates no image it does not place (#646)
             itself(
                 "inception",
                 {"type": "time", "year": 1939, "month": 7},
                 source=BOOKLET_REF,
-                subject=LETTER_REF.model_dump(),
+                subject=STRAY_REF.model_dump(),
             ),
-            # nor names its writer
+            # nor names the writer of one
             itself(
                 "author",
                 {
@@ -382,7 +381,7 @@ class TestValidation:
                     "value": local("e1", "Sebastian Löbig", "human"),
                 },
                 source=BOOKLET_REF,
-                subject=LETTER_REF.model_dump(),
+                subject=STRAY_REF.model_dump(),
             ),
             # a document's own attribute is never a person's
             itself(
@@ -458,7 +457,8 @@ class TestThePrompts:
         block = flat(document_block(booklet(), BOOKLET_REF))
         assert "as ONE `caption` claim" in block
         assert "its value the passage exactly as written" in block
-        assert "Give nothing else about an image" in block
+        # beside the caption, what the passage conveys of the image (#646)
+        assert "conveys what a listed image is, give that too" in block
         # named by its bytes, never by a QID
         assert LETTER_REF.sha1 in block and "Q" not in block.split("sha1")[0]
 
@@ -492,8 +492,11 @@ class TestThePrompts:
     def test_the_chunks_own_what_a_document_says_of_itself(self):
         lines = flat(LINE_ASSIGNMENT_BLOCK)
         assert (
-            "A claim about the document itself, and a `caption` claim, "
-            "belongs to the unit whose lines hold the passage that states it"
+            "A claim about the document itself, a claim about an image it "
+            "places (a `caption`, or one of the properties on what a "
+            "document is), and a claim about a document it mentions belong "
+            "to the unit whose lines hold the passage that states or "
+            "conveys it"
         ) in lines
         entities = flat(
             ENTITY_ASSIGNMENT_BLOCK.format(
@@ -501,7 +504,7 @@ class TestThePrompts:
             )
         )
         assert (
-            "and every `caption` claim, belongs to the chunk assigned e1, "
+            "and every `caption` claim) belongs to the chunk assigned e1, "
             "the first entity assigned for extraction, whatever its value"
         ) in entities
 
@@ -720,16 +723,18 @@ class TestTheWriter:
                 (BOOKLET_REF, LETTER_REF),
                 "its property takes only an artifact its source places",
             ),
+            # an image the booklet does not place (#646)
             (
                 itself(
                     "inception",
                     JULY_28,
                     source=BOOKLET_REF,
-                    subject=LETTER_REF.model_dump(),
+                    subject=STRAY_REF.model_dump(),
                 ),
                 PLACED,
-                (BOOKLET_REF, LETTER_REF),
-                "its subject is a document other than its own source",
+                (BOOKLET_REF, LETTER_REF, STRAY_REF),
+                "its subject is neither its own source nor an artifact "
+                "given to this write as placed by its source",
             ),
         ],
     )

@@ -179,9 +179,17 @@ content out under any name, list its SHA-1.
   through `--media`, the media file, which must be the one the
   transcription names. A transcription keeps no file name, so with a list
   that names files by pattern, `extract` refuses to run without `--media`.
-  The single-file steps do not open the corpus's decks, so they do not
-  refuse a file whose bytes a glob names only inside a deck: to keep such
-  a file out of them, list its SHA-1.
+  A glob follows a deck's image into the single-file steps too, as in a
+  run: with `YIZKR_CORPUS_DIR` set, they open the corpus folder's decks
+  in memory to hash the members its globs name, and refuse a file that
+  is those bytes, under whatever name and wherever it lies. A deck there
+  that cannot be read as an archive, or a corpus folder that cannot be
+  listed, refuses the step. With no corpus folder set, a step cannot
+  find the decks: it says so on stderr and goes on, so a file whose
+  bytes a glob names only inside a deck is not refused. Set
+  `YIZKR_CORPUS_DIR`, or list the file's SHA-1, to keep such a file out.
+  `scratch import-transcriptions` takes the corpus folder it is given
+  and follows the globs into its decks before it reads the archive.
 
 In the containerised CLI (`docker-compose.localhost.yml`), a set path that
 does not exist stops the container from starting; nothing is created in

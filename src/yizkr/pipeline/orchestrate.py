@@ -162,6 +162,7 @@ from typing import Any
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.core.config import Config
 from yizkr.core.corpus import (
+    DECK_SUFFIXES,
     MISSING_LIST,
     ExclusionConfigError,
     ExclusionList,
@@ -198,7 +199,7 @@ from yizkr.pipeline.stages import (
 GEDCOM_SUFFIXES = {".ged"}
 TEXT_SUFFIXES = {".txt", ".md"}
 MEDIA_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff"}
-PRESENTATION_SUFFIXES = {".pptx"}
+PRESENTATION_SUFFIXES = DECK_SUFFIXES
 SUPPORTED_SUFFIXES = (
     GEDCOM_SUFFIXES | TEXT_SUFFIXES | MEDIA_SUFFIXES | PRESENTATION_SUFFIXES
 )
@@ -2173,15 +2174,37 @@ class Orchestrator:
         statement-part it doubts (ADR-0023) and its category, and each
         finding that failed its checks on the first row, marked unchecked.
         `rows` is the batch the sheet lists, the extraction's batch
-        resolved."""
+        resolved; a finding names an image the document places by its
+        place, read from the transcription view (critique.artifact_places).
+        """
         if not doc.critique.exists() or not doc.batch.exists():
             return {}
-        from yizkr.pipeline.critique import entries, sheet_notes
+        from yizkr.pipeline.critique import (
+            artifact_places,
+            entries,
+            sheet_notes,
+        )
 
         extracted = ClaimBatch.model_validate_json(doc.batch.read_text())
         return sheet_notes(
-            entries(json.loads(doc.critique.read_text())), extracted, rows
+            entries(json.loads(doc.critique.read_text())),
+            extracted,
+            rows,
+            artifact_places(self._transcription_view(doc)),
         )
+
+    @staticmethod
+    def _transcription_view(doc: DocumentRun):
+        """The document's transcription view as it stands, or None when it
+        is missing or cannot be read: read only, never made."""
+        from yizkr.pipeline.transcribe import Transcription
+
+        try:
+            return Transcription.model_validate_json(
+                doc.transcription.read_text()
+            )
+        except (OSError, ValueError):
+            return None
 
     # the command an artifact's description says ingested it
     command = "yizkr ingest run"

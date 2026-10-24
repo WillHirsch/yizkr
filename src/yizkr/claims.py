@@ -51,27 +51,32 @@ Entity references (subjects and item values) come in three kinds:
   the extractor proposes; entity resolution replaces it with a ``qid``
   reference or leaves it for item creation during the write step.
 
-A claim's subject may also be the document the claim comes from, named
-as its source is, by an ``artifact`` reference (ADR-0035 §3.4): the
-document itself is what a register office issued, what a letter's writer
-dated. Only a property the manifest marks `document_subject` takes such a
-subject, it must be the claim's own source, and such a property takes no
-other subject, save on a structured adapter's batch (STRUCTURED_ADAPTERS)
-a batch entity of an artifact kind: an un-held media item, such as a
-GEDCOM object, whose making the export dates (ADR-0039 §2.2). A claim's
-subject may otherwise be an artifact its source places, named by the
-SHA-1 of its bytes, on the one property the manifest marks
-`placed_subject` (`caption`, ADR-0039 §2.1), which takes no other
-subject: a container's words about an image on its page. A claim's
-subject is so its own source, or an artifact its source places by bytes,
-never one it only writes about. The writer checks the same rules and
-resolves either subject to the artifact item as it resolves the source.
+A claim's subject may also be an artifact, named as a source is, by an
+``artifact`` reference, on the properties that say what an artifact is
+(ADR-0035 §3.4, ADR-0039 §2 and §10). A property the manifest marks
+`document_subject` (`issued_by`, `author`, `inception` and the others)
+takes the document the claim comes from (what a register office issued,
+what a letter's writer dated), an artifact its source places by bytes
+(the letter's image a booklet's translation dates), a batch entity of an
+artifact kind (the un-held media item a GEDCOM object makes) or an
+unclassified entity of the batch (a letter's mention of the certificate
+it encloses), and no other subject; one whose subject is not its own
+source carries the passage that conveys it as its excerpt. The one
+property the manifest marks `placed_subject` (`caption`, ADR-0039 §2.1)
+takes an artifact its source places, and no other subject: a
+container's words about an image on its page. No other property takes
+an artifact as its subject. An extraction never names an artifact kind
+for an entity (artifact_kind_problems, ADR-0039 §10.1(b)), so an entity
+of one is a structured record's or a hand-written batch's. The writer
+checks the same rules and resolves an artifact subject to the artifact
+item as it resolves the source.
 
 CLI:
     python3 claims.py --json-schema  # print JSON Schema (for LLM prompts)
     python3 claims.py --validate batch.json  # parse + manifest-check a file
     python3 claims.py --validate batch.json --placed derived-media.json
-        # ... with the artifacts a container places, for its captions
+        # ... with the artifacts a container places, for its claims
+        # about them
 """
 
 from __future__ import annotations
@@ -860,18 +865,18 @@ def validate_against_manifest(
       item, or a local ref resolved to the subject's QID. No property of
       the manifest takes its subject as its own value;
     * a death's principal is never also its informant (ADR-0035 §3.2);
-    * a claim whose subject is a document (an artifact reference) names
-      its own source, by a property the manifest marks
-      `document_subject`, and a claim of such a property has that
-      subject, or on a structured adapter's batch a batch entity of an
-      artifact kind (an un-held media item, ADR-0039 §2.2), and no other
-      (ADR-0035 §3.4); or it names
-      an artifact its source places, by a property the manifest marks
-      `placed_subject` (`caption`), and a claim of such a property has
-      such a subject and no other (ADR-0039 §2.1). `placed` gives, by
-      the SHA-1 of a source's media, the SHA-1s of the artifacts that
-      source places (`placed_artifacts`); a source it does not name
-      places none, so without it every `caption` claim is refused;
+    * a claim of a property the manifest marks `document_subject` has
+      one of the subjects document_subject_form names: its own source,
+      an artifact its source places, a batch entity of an artifact kind
+      or an unclassified entity of the batch, and a claim whose subject
+      is not its own source carries an excerpt (ADR-0035 §3.4, ADR-0039
+      §10); a claim of a property the manifest marks `placed_subject`
+      (`caption`) has an artifact its source places as its subject and
+      no other (ADR-0039 §2.1); and no other property takes an artifact
+      as its subject. `placed` gives, by the SHA-1 of a source's media,
+      the SHA-1s of the artifacts that source places
+      (`placed_artifacts`); a source it does not name places none, so
+      without it every claim about an artifact it places is refused;
     * a `name` claim, a name form of no stated type, is a person's or an
       unclassified entity's, never a vocabulary item's, and never
       restates its subject's label (ADR-0011): both are compared by
@@ -1006,7 +1011,6 @@ def validate_against_manifest(
 
     # roles each person holds in each death, across the batch's claims
     death_roles: dict[tuple[str, str], set[str]] = {}
-    structured = structured_batch(batch)
     for index, claim in enumerate(batch.claims):
         where = f"claims[{index}]"
         subject_kind = kind_of(claim.subject)
@@ -1014,7 +1018,7 @@ def validate_against_manifest(
         errors.extend(
             f"{where}.subject: {problem}"
             for problem in subject_problems(
-                claim, acceptance, placed, subject_kind, structured
+                claim, acceptance, placed, subject_kind
             )
         )
         check_property_value(claim.property, claim.value, where, subject_kind)
@@ -1152,20 +1156,22 @@ def read_placed(values: Iterable[str]) -> dict[str, frozenset[str]]:
     return {source: frozenset(found) for source, found in placed.items()}
 
 
-def unplaced_captions(
+def unplaced_claims(
     batch: ClaimBatch,
     placed: Mapping[str, Collection[str]] | None,
     acceptance: Acceptance | None = None,
 ) -> int:
-    """How many claims of `batch`, of a property the manifest marks
-    `placed_subject` (`caption`), whose subject is an artifact other than
-    their source, cite a source `placed` gives no placed media for: each
-    is refused, by validation and the writer, until its source's placed
-    media are given. A caption of anything else is refused whatever is
-    given, so it is not counted."""
+    """How many claims of `batch` whose subject is an artifact other than
+    their source, of a property the manifest marks `placed_subject`
+    (`caption`) or `document_subject`, cite a source `placed` gives no
+    placed media for: each is refused, by validation and the writer,
+    until its source's placed media are given (ADR-0039 §2.1, §10.1(a)).
+    A claim of any other property about an artifact is refused whatever
+    is given, so it is not counted."""
     acceptance = acceptance if acceptance is not None else load_acceptance()
+    takes_placed = acceptance.placed_subjects | acceptance.document_subjects
     return sum(
-        claim.property in acceptance.placed_subjects
+        claim.property in takes_placed
         and isinstance(claim.subject, ArtifactRef)
         and claim.subject.sha1 != claim.source.artifact.sha1
         and claim.source.artifact.sha1 not in (placed or {})
@@ -1174,26 +1180,67 @@ def unplaced_captions(
 
 
 def unplaced_hint(count: int) -> str:
-    """What a command line says of `count` captions (unplaced_captions)
-    refused for want of their sources' placed media."""
+    """What a command line says of `count` claims about an artifact
+    (unplaced_claims) refused for want of their sources' placed media."""
     return (
-        f"{count} caption claim(s) cite a source whose placed media were not "
-        f"given, so each is refused: give them with {PLACED_OPTION}"
+        f"{count} claim(s) about an artifact other than their source cite "
+        f"a source whose placed media were not given, so each is refused: "
+        f"give them with {PLACED_OPTION}"
     )
 
 
-# the model identifier the GEDCOM adapter sets on its batches
-GEDCOM_ADAPTER = "gedcom-adapter"
-# the model identifiers of the structured adapters, which code sets on
-# their batches and no model does: on their batches alone a
-# document-subject property takes an un-held media item as its subject,
-# an interim rule (ADR-0039 §2.2)
-STRUCTURED_ADAPTERS = frozenset({GEDCOM_ADAPTER})
+# The subject forms a document-subject claim takes (ADR-0039 §10.1), as
+# document_subject_form names them and a run report counts them: the
+# claim's own source; an artifact its source places by bytes; a batch
+# entity of an artifact kind, the artifact a structured record makes
+# (an un-held media item); an unclassified entity of the batch, the
+# source's own mention of an artifact it only writes about, such as an
+# enclosure (§10.1(c), route (c4)).
+SOURCE_FORM = "source"
+PLACED_FORM = "placed"
+RECORD_FORM = "record"
+MENTION_FORM = "mention"
+SUBJECT_FORMS = (SOURCE_FORM, PLACED_FORM, RECORD_FORM, MENTION_FORM)
+# the kind of an entity a source mentions without a kind of its own,
+# which (c4) takes as the subject of its claim about an enclosure
+MENTION_KIND = "unclassified_entity"
 
 
-def structured_batch(batch: ClaimBatch) -> bool:
-    """Is `batch` a structured adapter's (STRUCTURED_ADAPTERS)?"""
-    return batch.extraction_run.model_identifier in STRUCTURED_ADAPTERS
+def document_subject_form(
+    claim: Claim,
+    acceptance: Acceptance,
+    placed: Mapping[str, Collection[str]] | None = None,
+    subject_kind: str | None = None,
+) -> str | None:
+    """Which of SUBJECT_FORMS the subject of `claim` is, as the subject
+    of a document-subject property, or None for a subject that property
+    does not take (ADR-0035 §3.4, ADR-0039 §10.1): the claim's own source;
+    an artifact `placed` names for the claim's source; a batch entity
+    (a local ref, its kind `subject_kind`) of an artifact kind
+    (`Acceptance.artifact_kinds`); or one of MENTION_KIND. An extraction
+    names no artifact kind (artifact_kind_problems), so an entity
+    of one is a structured record's or a hand-written batch's."""
+    subject = claim.subject
+    source = claim.source.artifact.sha1
+    if isinstance(subject, ArtifactRef):
+        if subject.sha1 == source:
+            return SOURCE_FORM
+        if subject.sha1 in (placed or {}).get(source, ()):
+            return PLACED_FORM
+        return None
+    if isinstance(subject, LocalRef):
+        if subject_kind in acceptance.artifact_kinds:
+            return RECORD_FORM
+        if subject_kind == MENTION_KIND:
+            return MENTION_FORM
+    return None
+
+
+def has_excerpt(claim: Claim) -> bool:
+    """Does the claim's source block carry a transcription excerpt with
+    any text, the passage a support test reads (ADR-0039 §10.4)?"""
+    excerpt = claim.source.transcription_excerpt
+    return excerpt is not None and bool(excerpt.text.strip())
 
 
 def subject_problems(
@@ -1201,20 +1248,17 @@ def subject_problems(
     acceptance: Acceptance,
     placed: Mapping[str, Collection[str]] | None = None,
     subject_kind: str | None = None,
-    structured: bool = False,
 ) -> list[str]:
     """Why the claim's subject breaks the subject rules of ADR-0035 §3.4
-    and ADR-0039 §2, each ending in its reason code (SUBJECT_REASONS), or
-    none. A claim's subject is its own source on a property the manifest
-    marks `document_subject`, an artifact its source places on one it
-    marks `placed_subject`, and on any other property neither: no
-    property takes an artifact subject but those, and those take no other
-    subject. On a structured adapter's batch (`structured`,
-    structured_batch) a document-subject property also takes a batch
-    entity of an artifact kind (`subject_kind`, the kind of a local
-    subject), an un-held media item such as a GEDCOM object, which the
-    export describes with its own date (ADR-0039 §2.2); a model's batch
-    never does. `placed` is as validate_against_manifest takes it."""
+    and ADR-0039 §2 and §10, each ending in its reason code
+    (SUBJECT_REASONS), or none. A property the manifest marks
+    `placed_subject` takes an artifact its source places, and no other
+    subject. A property it marks `document_subject` takes a subject of one
+    of the forms document_subject_form names (`subject_kind` is the kind
+    of a local subject), and a claim whose subject is not its own source
+    carries an excerpt, the passage that conveys the fact. No other
+    property takes an artifact as its subject. `placed` is as
+    validate_against_manifest takes it."""
     prop, subject = claim.property, claim.subject
     source = claim.source.artifact
     if prop in acceptance.placed_subjects:
@@ -1233,61 +1277,143 @@ def subject_problems(
             ]
         return []
     if prop in acceptance.document_subjects:
-        if (
-            structured
-            and isinstance(subject, LocalRef)
-            and subject_kind in acceptance.artifact_kinds
-        ):
-            return []
-        if not isinstance(subject, ArtifactRef):
+        form = document_subject_form(claim, acceptance, placed, subject_kind)
+        if form is None:
+            if isinstance(subject, ArtifactRef):
+                return [
+                    f"a document subject names the claim's own source, "
+                    f"{source}, or an artifact it places, and {source} "
+                    f"places no {subject} (ADR-0035 §3.4, ADR-0039 "
+                    f"§10.1) [{DOCUMENT_SUBJECT}]"
+                ]
             return [
-                f"property {prop!r} takes only the claim's own source "
-                f"document, {source}, as its subject (ADR-0035 §3.4) "
-                f"[{DOCUMENT_SUBJECT}]"
+                f"property {prop!r} takes as its subject the claim's own "
+                f"source, {source}, an artifact it places, a batch entity "
+                f"of an artifact kind or an unclassified entity of the "
+                f"batch (ADR-0035 §3.4, ADR-0039 §10.1) [{DOCUMENT_SUBJECT}]"
             ]
-        if subject.sha1 != source.sha1:
+        if form != SOURCE_FORM and not has_excerpt(claim):
             return [
-                f"a document subject names the claim's own source, "
-                f"{source}, not {subject} (ADR-0035 §3.4) "
-                f"[{DOCUMENT_SUBJECT}]"
+                f"property {prop!r} about an artifact other than the "
+                f"claim's own source needs the passage that conveys it as "
+                f"its excerpt (ADR-0039 §10.4) [{EXCERPT_REQUIRED}]"
             ]
         return []
     if isinstance(subject, ArtifactRef):
         return [
             f"property {prop!r} does not take an artifact as its subject: "
-            f"only the document-subject properties take the source "
-            f"document, and `caption` an artifact the source places "
-            f"(ADR-0035 §3.4, ADR-0039 §2) [{ARTIFACT_SUBJECT}]"
+            f"only the document-subject properties and `caption` do "
+            f"(ADR-0035 §3.4, ADR-0039 §2, §10) [{ARTIFACT_SUBJECT}]"
         ]
     return []
 
 
 # The reason codes of the subject rules, which end each problem
 # subject_problems gives, so a run report can count rejects by reason
-# without quoting one: a document-subject property's subject is not its
-# source; a placed-subject property's is not an artifact its source
+# without quoting one: a document-subject property's subject is of no
+# form it takes; one about an artifact other than its source carries no
+# excerpt; a placed-subject property's is not an artifact its source
 # places; another property names an artifact as its subject.
 DOCUMENT_SUBJECT = "document_subject"
+EXCERPT_REQUIRED = "excerpt_required"
 PLACED_SUBJECT = "placed_subject"
 ARTIFACT_SUBJECT = "artifact_subject"
-SUBJECT_REASONS = (DOCUMENT_SUBJECT, PLACED_SUBJECT, ARTIFACT_SUBJECT)
+SUBJECT_REASONS = (
+    DOCUMENT_SUBJECT,
+    EXCERPT_REQUIRED,
+    PLACED_SUBJECT,
+    ARTIFACT_SUBJECT,
+)
+# an extraction's claim names an artifact kind for an entity, which no
+# extraction may (artifact_kind_problems, ADR-0039 §10.1(b))
+ARTIFACT_KIND = "artifact_kind"
+# the codes a problem ends in, so reject_reasons reads them back
+CODED_REASONS = (*SUBJECT_REASONS, ARTIFACT_KIND)
 # a reject's other reasons: its JSON did not parse as a claim, or the
 # manifest refused it otherwise
 SCHEMA_REASON = "schema"
 MANIFEST_REASON = "manifest"
-REJECT_REASONS = (*SUBJECT_REASONS, SCHEMA_REASON, MANIFEST_REASON)
+REJECT_REASONS = (*CODED_REASONS, SCHEMA_REASON, MANIFEST_REASON)
+
+
+# the properties whose claims give an entity a class: one whose value is an
+# artifact kind makes its subject an artifact (artifact_kind_problems)
+CLASSING_PROPERTIES = frozenset({"instance_of", "subclass_of"})
+
+
+def artifact_kind_problems(
+    batch: ClaimBatch, acceptance: Acceptance | None = None
+) -> list[str]:
+    """Where `batch`, as an extraction gives it, names an artifact kind
+    (`Acceptance.artifact_kinds`) for an entity: an entity record of such
+    a kind; a local ref, a claim's subject or an item value of its own
+    or of a qualifier, whose kind (its record's, or else its own
+    `instance_of`) is one; or a claim of a classing property
+    (CLASSING_PROPERTIES: `instance_of`, `subclass_of`) whose value is
+    one. Each problem ends in ARTIFACT_KIND. An
+    extraction may not name one (ADR-0039 §10.1(b)): a document it
+    mentions is an unclassified entity with a type hint, and an entity of
+    an artifact kind is the artifact a structured record or a hand-written
+    batch makes. Validation does not apply this, since those batches take
+    such an entity; the extraction stage does, where model output is first
+    read (extract.salvage_valid_claims, and the entity manifest's parse).
+    """
+    acceptance = acceptance if acceptance is not None else load_acceptance()
+    kinds = acceptance.artifact_kinds
+    records = {entity.id: entity.kind for entity in batch.entities}
+    problems = [
+        f"entities[{index}]: kind {entity.kind!r} is an artifact kind, "
+        f"which no extraction names (ADR-0039 §10.1(b)) [{ARTIFACT_KIND}]"
+        for index, entity in enumerate(batch.entities)
+        if entity.kind in kinds
+    ]
+    for index, claim in enumerate(batch.claims):
+        if (
+            claim.property in CLASSING_PROPERTIES
+            and isinstance(claim.value, ItemValue)
+            and isinstance(claim.value.value, VocabRef)
+            and claim.value.value.key in kinds
+        ):
+            problems.append(
+                f"claims[{index}].value: {claim.property!r} names the "
+                f"artifact kind {claim.value.value.key!r}, which no "
+                f"extraction names (ADR-0039 §10.1(b)) [{ARTIFACT_KIND}]"
+            )
+        refs = [
+            (f"claims[{index}].subject", claim.subject),
+            (f"claims[{index}].value", getattr(claim.value, "value", None)),
+        ]
+        refs += [
+            (
+                f"claims[{index}].qualifiers[{q_index}].value",
+                getattr(qualifier.value, "value", None),
+            )
+            for q_index, qualifier in enumerate(claim.qualifiers)
+        ]
+        for where, ref in refs:
+            if not isinstance(ref, LocalRef):
+                continue
+            kind = records.get(ref.local_id, ref.instance_of)
+            if kind in kinds:
+                problems.append(
+                    f"{where}: {ref.local_id!r} is of the artifact kind "
+                    f"{kind!r}, which no extraction names (ADR-0039 "
+                    f"§10.1(b)) [{ARTIFACT_KIND}]"
+                )
+    return problems
 
 
 def reject_reasons(problems: Iterable[str]) -> list[str]:
     """The reason codes of a manifest reject's problems
-    (validate_against_manifest), each once in REJECT_REASONS order: a
-    subject rule's own code, MANIFEST_REASON for any other problem."""
+    (validate_against_manifest, artifact_kind_problems), each once in
+    REJECT_REASONS order: the code a problem ends in (CODED_REASONS),
+    MANIFEST_REASON for any other problem."""
     found = set()
     for problem in problems:
         code = next(
             (
                 reason
-                for reason in SUBJECT_REASONS
+                for reason in CODED_REASONS
                 if problem.endswith(f"[{reason}]")
             ),
             MANIFEST_REASON,
@@ -1337,6 +1463,40 @@ def _occurs(part: str, forms: list[list[str]], open_end: bool = False) -> bool:
     return False
 
 
+def label_container(
+    written: str, label: str, containers: Iterable[Container]
+) -> bool:
+    """Whether a place's written name is its label and then one of the
+    record's own containers, written as the record writes it, each
+    folded, as whole words ("Snylsjum, Fryslân" of the label "Snylsjum",
+    within Fryslân). Only the words are compared, never what stands
+    between them."""
+    name, head = _words(written), _words(label)
+    return bool(head) and any(
+        (tail := _words(container.name)) and name == head + tail
+        for container in containers
+    )
+
+
+def structure_readings(entity: EntityRecord) -> list[str]:
+    """The readings of an entity's mention record that set nothing aside
+    (ADR-0035 §5), each its label first: for a place record of a place,
+    one `label and container` for each written name that is its label
+    and one of its containers (`label_container`) and that no form of
+    the entity holds, which the no-addition check lets stand."""
+    structure = entity.structure
+    if not isinstance(structure, PlaceStructure) or entity.kind != "place":
+        return []
+    forms = [_words(form) for form in (entity.label, *entity.aliases)]
+    return [
+        f"label and container: structure.place.names.{index}.written: "
+        f"the label and one of its containers"
+        for index, name in enumerate(structure.names)
+        if label_container(name.written, entity.label, structure.within)
+        and not _occurs(name.written, forms)
+    ]
+
+
 def structure_problems(entity: EntityRecord) -> list[str]:
     """Why an entity's mention record cannot stand (ADR-0035 §5), each
     reason first: empty when it can, or when it has none.
@@ -1347,7 +1507,11 @@ def structure_problems(entity: EntityRecord) -> list[str]:
       to it. A given name's standard form is exempt, as are an
       organisation's places, which its `location` claims may name, and a
       place's containers, which carry their own evidence and are checked
-      one by one (`container_problem`);
+      one by one (`container_problem`). A place's written name that is
+      its label and then one of its own containers (`label_container`)
+      adds only that container, and stands, counted as a reading
+      (`structure_readings`); any other addition still sets the record
+      aside;
     * `initial`: an initial gives a standard form;
     * `no name part`: a person whose status is `name` has no name part;
     * `no toponym`: a place whose status is `toponym` has no name and no
@@ -1386,7 +1550,10 @@ def structure_problems(entity: EntityRecord) -> list[str]:
             problems.append("no name part: a name status with no name part")
     elif isinstance(structure, PlaceStructure):
         for name in structure.names:
-            parts += [name.written]
+            if not label_container(
+                name.written, entity.label, structure.within
+            ):
+                parts += [name.written]
             parts += [part for part in (name.toponym, name.head) if part]
         if structure.address is not None:
             address = structure.address
@@ -1580,7 +1747,9 @@ def set_aside_structure(
     list of strings written as an object holding its text is that text,
     giving the reason `read as text`; an optional field written as "" is
     absent, and a name part that is "", or whose required field is, is
-    dropped, each giving the reason `dropped`. Then each of a place's
+    dropped, each giving the reason `dropped`. A place's written name
+    that is its label and one of its containers gives the reading
+    `label and container` (`structure_readings`). Then each of a place's
     containers of the wrong shape is taken out (`_take_malformed`), so
     that it is dropped alone rather than setting the record aside; when
     `malformed` is given, it receives each one's audit entry
@@ -1617,6 +1786,7 @@ def set_aside_structure(
         first = exc.errors()[0]
         location = ".".join(str(step) for step in first["loc"])
         return rest, [*dropped, f"schema: {location}: {first['msg']}"]
+    dropped += structure_readings(record)
     problems = structure_problems(record)
     return (rest, dropped + problems) if problems else (entity, dropped)
 
@@ -1809,8 +1979,9 @@ def main() -> int:
         action="append",
         default=[],
         metavar="RECORD|SOURCE=SHA1,...",
-        help="the artifacts a source places, which its captions may take "
-        "as their subject (ADR-0039 §2.1): a container's derived-media "
+        help="the artifacts a source places, which its captions and "
+        "document-subject claims may take as their subject (ADR-0039 §2.1, "
+        "§10.1): a container's derived-media "
         "record, or a source's SHA-1 and theirs; repeatable",
     )
     args = parser.parse_args()
@@ -1838,7 +2009,7 @@ def main() -> int:
     )
     for problem in problems:
         print(f"manifest check: {problem}", file=sys.stderr)
-    unplaced = unplaced_captions(batch, placed, acceptance)
+    unplaced = unplaced_claims(batch, placed, acceptance)
     if unplaced:
         print(unplaced_hint(unplaced), file=sys.stderr)
     if problems:

@@ -78,10 +78,12 @@ class ManifestProperty(BaseModel):
     # A retired or reference property is never offered, whatever this
     # says.
     offered: bool = True
-    # Whether a claim of the property has its own source document as its
-    # subject, named by the document's content key, and no other subject
+    # Whether a claim of the property states what an artifact is
     # (`issued_by`, `author` and the other document-subject properties,
-    # ADR-0035 §3.4, ADR-0039 §2.2).
+    # ADR-0035 §3.4, ADR-0039 §2.2, §10): its subject is its own source
+    # document, named by the document's content key, an artifact its
+    # source places, named by the SHA-1 of its bytes, a batch entity of an
+    # artifact kind, or an unclassified entity of the batch, and no other.
     document_subject: bool = False
     # Whether a claim of the property has as its subject an artifact its
     # source places, named by the SHA-1 of the artifact's bytes, and no
@@ -276,7 +278,8 @@ class Acceptance:
     # the properties written only in references
     references: frozenset[str] = frozenset()
     # the properties whose claims take their source document as subject,
-    # or an un-held media item of an artifact kind the batch makes
+    # an artifact it places, a batch entity of an artifact kind (an un-held
+    # media item) or an unclassified entity of the batch (ADR-0039 §10.1)
     document_subjects: frozenset[str] = frozenset()
     # the properties whose claims take an artifact their source places, and
     # only such an artifact, as subject

@@ -275,12 +275,16 @@ The corpus lives outside the repository, in the private folder named by
   and by name and hash through `--media`, the media file, which must be
   the one the transcription names. A transcription keeps no file name,
   so with a list that names files by pattern, `extract` refuses to run
-  without `--media`. The registrar asks `is_excluded()` too, as the
-  write begins: a listed file is refused before anything of the wiki
-  is asked, so it is never registered or uploaded, and an embedded
-  medium the list names is left out. New entry points must call it
-  too: transcription import (#104), the run driver (#118) and faces
-  (#160).
+  without `--media`. A glob that names a deck's image names its bytes
+  in the single-file steps too, as in a run, when `YIZKR_CORPUS_DIR`
+  names the corpus folder whose decks they open
+  (`yizkr.core.corpus.follow_decks`); without it they say on stderr
+  that they cannot follow the globs into decks. The registrar asks
+  `is_excluded()` too, as the write begins: a listed file is refused
+  before anything of the wiki is asked, so it is never registered or
+  uploaded, and an embedded medium the list names is left out. New
+  entry points must call it too: transcription import (#104), the run
+  driver (#118) and faces (#160).
 
 ## The stages, individually
 
@@ -802,7 +806,9 @@ refuses). The module docstrings are the full account; in short:
   civil statuses or kin that conflict, a place's containers or an
   organisation's places that differ, event kinds that cannot be one,
   or events whose principals, or unions whose couple members, ended in
-  clusters held apart), or any two members whose evidence says they differ. A cluster
+  clusters held apart or kept apart by a contradiction (evidence that
+  differs by more than their own dates, kin that conflict among it)), or
+  any two members whose evidence says they differ. A cluster
   of two whose one pair no `same` could merge is not asked in a
   development-stage run (no verdict changes a cluster), and is counted.
   A part that holds a pair contradicted falls back to its confident

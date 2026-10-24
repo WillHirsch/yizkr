@@ -3155,3 +3155,170 @@ class TestAnUndatedDeath:
         paths = re.findall(r"\S+/\S+", UNDATED_DEATHS_QUERY)
         assert paths
         assert [path for path in paths if "?" in path] == []
+
+
+# an un-held media item a GEDCOM export makes (ADR-0021), the export, and
+# a source's mention of a photograph it only writes about (ADR-0039
+# §10.1(c)), each with a QID of its own
+UNHELD, EXPORT_FILE, ENCLOSED = "Q54", "Q55", "Q56"
+OTHER_TITLES = {
+    UNHELD: "Studio portrait of the Löbig family",
+    EXPORT_FILE: "Löbig family tree",
+    ENCLOSED: "photograph",
+}
+
+
+def other_row(
+    artifact: str, key: str, value: dict, source: str, st: str, **more
+):
+    """said_row for an artifact or a source TITLES does not hold."""
+    row = said_row(LETTER, key, value, LETTER, st, **more)
+    return row | {
+        "artifact": uri(artifact),
+        "artifactLabel": literal(
+            OTHER_TITLES.get(artifact) or TITLES[artifact]
+        ),
+        "source": uri(source),
+        "sourceLabel": literal(OTHER_TITLES.get(source) or TITLES[source]),
+    }
+
+
+class TestWhatOtherSourcesSay:
+    """What a source states of another artifact, beside what the artifact
+    states of itself: a container's claim about an image it places, an
+    export's about the un-held media item its record makes, a letter's
+    about an enclosure it mentions (#646, ADR-0039 §10.2)."""
+
+    ROWS = [
+        *SOURCES_SAY,
+        # the booklet's caption conveys the letter's addressee
+        said_row(
+            LETTER,
+            "addressee",
+            uri(KLARA),
+            BOOKLET,
+            "c20",
+            value_label="Klara Löbig",
+            page="6",
+            printed="4",
+        ),
+        # the export dates the object its record makes
+        other_row(
+            UNHELD,
+            "inception",
+            time_literal("+1890-01-01T00:00:00Z"),
+            EXPORT_FILE,
+            "c21",
+            precision="8",
+        ),
+        # (here) a letter says whom the photograph it encloses shows
+        other_row(
+            ENCLOSED,
+            "shows",
+            uri(KLARA),
+            LETTER,
+            "c22",
+            value_label="Klara Löbig",
+        ),
+    ]
+    ARTIFACTS = [
+        *SAID_ARTIFACTS,
+        {
+            "artifact": uri(UNHELD),
+            "artifactLabel": literal(OTHER_TITLES[UNHELD]),
+            "kindLabel": literal("photograph"),
+        },
+    ]
+
+    @pytest.fixture
+    def site(self, tmp_path, vocabulary):
+        site, _ = build(
+            tmp_path,
+            vocabulary,
+            {
+                "?printedNumber": self.ROWS,
+                **RESPONSES,
+                "GROUP_CONCAT(DISTINCT ?alias": [*PEOPLE, KLARAS_ROW],
+                "?kind wdt:": self.ARTIFACTS,
+            },
+        )
+        return site
+
+    def test_the_sub_heading_names_other_sources(self, site):
+        page = (site / f"artifacts/{LETTER}.html").read_text()
+        assert (
+            "what the artifact states of itself, and what other sources "
+            "state of it, each with its page."
+        ) in page
+
+    def test_another_source_s_value_stands_beside_the_artifact_s_own(
+        self, site
+    ):
+        entries = TestWhatSourcesSay().entries(site, LETTER)
+        assert entries["addressee"] == [
+            f'<a href="../people/{KLARA}.html">Klara Löbig</a>'
+            '<span class="source">'
+            f'<a href="../artifacts/{BOOKLET}.html">{TITLES[BOOKLET]}</a>'
+            ", page 6 (printed 4)</span>",
+            f'<a href="../people/{KLARA}.html">Klara Löbig</a>'
+            '<span class="source">this artifact</span>',
+        ]
+
+    def test_an_unheld_media_item_s_page_shows_its_inception(self, site):
+        entries = TestWhatSourcesSay().entries(site, UNHELD)
+        assert entries == {
+            "inception": [
+                '1890s<span class="source">'
+                f'<a href="../artifacts/{EXPORT_FILE}.html">'
+                f"{OTHER_TITLES[EXPORT_FILE]}</a></span>"
+            ]
+        }
+        page = (site / f"artifacts/{UNHELD}.html").read_text()
+        assert "download the original" not in page
+
+    def test_named_in_labels_each_value_by_its_source(self, site):
+        page = (site / f"people/{KLARA}.html").read_text()
+        section = TestWhatSourcesSay.section(page, "Named in artifacts")
+        assert (
+            "each labelled by the source that says it, with its page"
+        ) in section
+        assert re.findall(r"<li>(.*?)</li>", section) == [
+            f'addressee of <a href="../artifacts/{LETTER}.html">'
+            f'{TITLES[LETTER]}</a><span class="source">'
+            f'<a href="../artifacts/{BOOKLET}.html">{TITLES[BOOKLET]}</a>'
+            ", page 6 (printed 4)</span>",
+            f'addressee of <a href="../artifacts/{LETTER}.html">'
+            f'{TITLES[LETTER]}</a><span class="source">the artifact '
+            "itself</span>",
+            # a mention item has no artifact page, so it is named alone
+            'shown in photograph<span class="source">'
+            f'<a href="../artifacts/{LETTER}.html">{TITLES[LETTER]}</a>'
+            "</span>",
+        ]
+        assert not (site / f"artifacts/{ENCLOSED}.html").exists()
+
+    def test_a_mention_s_label_is_escaped(self, tmp_path, vocabulary):
+        hostile = {
+            **other_row(
+                ENCLOSED,
+                "shows",
+                uri(KLARA),
+                LETTER,
+                "c23",
+                value_label="Klara Löbig",
+            ),
+            "artifactLabel": literal('<img src=x onerror=alert(1)>"&'),
+        }
+        site, _ = build(
+            tmp_path,
+            vocabulary,
+            {
+                "?printedNumber": [hostile],
+                **RESPONSES,
+                "GROUP_CONCAT(DISTINCT ?alias": [*PEOPLE, KLARAS_ROW],
+                "?kind wdt:": self.ARTIFACTS,
+            },
+        )
+        page = (site / f"people/{KLARA}.html").read_text()
+        assert "<img src=x" not in page
+        assert "shown in &lt;img src=x onerror=alert(1)&gt;&quot;&amp;" in page

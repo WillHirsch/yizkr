@@ -188,9 +188,10 @@ of `yizkr.pipeline.writer.REFUSAL_REASONS`, in that order, each refused
 claim counted under the first that refused it, so they sum to the claims
 refused: `retired_or_reference_property` (a retired or reference
 property, ADR-0036, ADR-0035 §4), `subject_rule` (a document-subject
-claim whose subject is not its own source, a caption whose subject its
+claim whose subject is of no form it takes or, about an artifact other
+than its source, carries no excerpt, a caption whose subject its
 source does not place, or an artifact subject on a property that takes
-none: ADR-0035 §3.4, ADR-0039 §2), `text` (a text the instance cannot
+none: ADR-0035 §3.4, ADR-0039 §2, §10), `text` (a text the instance cannot
 hold as it is, the claim's own, a locator's or a mentioned entity's
 label), `side_rule` (an entity the side rule blocks, ADR-0010) and
 `self_reference` (an item value that is the subject's item, counted
@@ -278,13 +279,26 @@ writer refused, count here too, under their check and the stage
   stays with its document, in `report.html` and `report.json`. The
   rejects are counted by reason too (#456), from each coverage's
   `rejected_by_reason`: the codes of `claims.REJECT_REASONS`,
-  `document_subject` (a document-subject property whose subject is not
-  its own source), `placed_subject` (a caption whose subject is no
-  artifact its source places), `artifact_subject` (another property
-  with an artifact subject), `schema` (a claim that does not parse) and
-  `manifest` (any other manifest problem), with the extractions whose
+  `document_subject` (a document-subject property whose subject is of
+  no form it takes: its own source, an artifact it places, a batch
+  entity of an artifact kind or an unclassified entity of the batch;
+  ADR-0039 §10.1), `excerpt_required` (a document-subject claim about an
+  artifact other than its source with no excerpt, ADR-0039 §10.4; #646),
+  `placed_subject` (a caption whose subject is no artifact its source
+  places), `artifact_subject` (another property with an artifact
+  subject), `artifact_kind` (an extraction's claim that names an
+  artifact kind for an entity, in a local ref's `instance_of` or as the
+  value of an `instance_of` or `subclass_of` claim, ADR-0039 §10.1(b);
+  #646), `schema` (a
+  claim that does not parse) and `manifest` (any other manifest
+  problem), with the extractions whose
   coverage counts none (`aggregate.content.rejects.by_reason`,
-  `by_reason_absent`);
+  `by_reason_absent`); and the entity-manifest answers refused for
+  naming an artifact kind, whether a later attempt mended the turn or
+  the extraction fell back (ADR-0039 §10.1(b); #646), from each
+  coverage's `manifest_artifact_kind`, with the extractions whose
+  coverage counts none (`manifest_artifact_kind`,
+  `manifest_artifact_kind_absent`);
 - excerpts not in their source (#580): the claims each extraction kept
   whose `transcription_excerpt` its transcription does not hold,
   compared as core/verbatim.py compares a container's evidence (folded,
@@ -307,9 +321,15 @@ writer refused, count here too, under their check and the stage
   extraction's local `quotes.json`, never in a report;
 - what sources say of the artifacts themselves (ADR-0039): the captions
   given, a container's verbatim words about an image it places, and the
-  claims a document gives about itself, by property
+  claims of what an artifact is (the document-subject properties), by
+  property and by the form of their subject (#646, ADR-0039 §10.1): about
+  the source itself (`source`), an artifact it places (`placed`), the
+  artifact its structured record makes (`record`, a GEDCOM object's
+  un-held media item) or its mention of an artifact it only writes
+  about (`mention`, an enclosure), each counted, 0 included, and
+  `other`, only when counted, for a subject validation would refuse
   (`aggregate.content.container_claims`: `captions`,
-  `document_subject_by_property`);
+  `document_subject_by_property`, `document_subject_by_form`);
 - zero-claim documents, by kind, and batches with no entity; the chunks
   and the fallback tiers taken;
 - the chunks asked again because every claim of their answer lacked the
@@ -367,7 +387,8 @@ writer refused, count here too, under their check and the stage
   no longer reads); the reasons records were set aside by, by
   category (`schema`, `kind`, `addition`, `initial`, `no name part`,
   `no toponym`; `report.SET_ASIDE_REASONS`); the readings that set
-  nothing aside, by category (`dropped`, `read as text`;
+  nothing aside, by category (`dropped`, `read as text`,
+  `label and container`;
   `report.READING_REASONS`), counted apart from those reasons (#611);
   the notes by category (`kind`, `relation`, `date_reading`,
   `identity`, `other`, the categories of `claims.JudgementNote`); and
@@ -384,10 +405,16 @@ writer refused, count here too, under their check and the stage
   `dropped` reason counts a name part dropped for an empty string
   (ADR-0035 §5, #497), and the record it leaves often stands. A
   `read as text` reason counts an entry of a list of strings written as
-  an object holding its text, read as that text (ADR-0035 §5, #514).
-  Neither sets anything aside: the record then stands or is set aside on
-  its other reasons. `coverage.json` counts both among `set_aside`, but
-  the report counts them apart, as readings (#611): the headline
+  an object holding its text, read as that text (ADR-0035 §5, #514). A
+  `label and container` reason counts a place's written name that is its
+  label and then one of its own `within` containers ("Snylsjum,
+  Fryslân" beside the label "Snylsjum", within Fryslân), which the
+  no-addition check lets stand (ADR-0035 §5, #655); its record stands
+  unless another reason sets it aside, or the container it holds is
+  dropped, which sets it aside by `addition`. None of them sets
+  anything aside: the record then stands or is set aside on its other
+  reasons. `coverage.json` counts them among `set_aside`, but the
+  report counts them apart, as readings (#611): the headline
   "reasons records were set aside" (`set_aside_reasons`,
   `set_aside_by_reason`) counts only the reasons that set a record
   aside, and the readings have a line ("Fields read so their record

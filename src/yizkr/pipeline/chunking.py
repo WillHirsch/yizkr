@@ -29,6 +29,7 @@ from typing import Any, NamedTuple
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from yizkr.claims import (
+    ARTIFACT_KIND,
     MANIFEST_REASON,
     REJECT_REASONS,
     SCHEMA_REASON,
@@ -42,8 +43,10 @@ from yizkr.claims import (
     drop_containers,
     load_vocabulary,
     set_aside_structure,
+    structure_problems,
 )
 from yizkr.core.verbatim import Transcript, words
+from yizkr.model.schema import load_acceptance
 from yizkr.pipeline.extract import (
     ExtractionFailed,
     _normalize_claim_shape,
@@ -518,8 +521,10 @@ of an assigned unit belongs to you, including relations to entities
 outside the unit — a unit person's father/mother from the enclosing tree
 structure or the unit's context line, their unions, their instance_of,
 and the `issued_by` claim of an issuer the unit names. A claim about the
-document itself, and a `caption` claim, belongs to the unit whose lines
-hold the passage that states it.
+document itself, a claim about an image it places (a `caption`, or one
+of the properties on what a document is), and a claim about a document
+it mentions belong to the unit whose lines hold the passage that states
+or conveys it.
 Do not skip a claim because its object or evidence lies partly outside
 your units.
 
@@ -538,11 +543,14 @@ Emit every claim whose SUBJECT is one of your ASSIGNED entities below —
 and only those. Relations to entities outside your assignment (their
 parents, unions, locations) still belong to you when your entity is
 the subject; refer to the other entity by its manifest id. Every claim
-whose subject is the document itself (`issued_by`, `author`,
-`addressee`, `inception`, `location_of_creation`, `main_subject`,
-`shows`), and every `caption` claim, belongs to the chunk assigned
-{first_entity}, the first entity assigned for extraction, whatever its
-value. Do not emit claims whose
+whose subject is the document itself or an image it places (`issued_by`,
+`author`, `addressee`, `inception`, `location_of_creation`,
+`main_subject`, `shows`, and every `caption` claim) belongs to the chunk
+assigned {first_entity}, the first entity assigned for extraction,
+whatever its value. A claim about a document the text mentions, whose
+subject is that document's manifest entity, belongs to the chunk that
+entity is assigned to, as any claim whose subject it is. Do not emit
+claims whose
 subject is not assigned to you, and do not emit instance_of claims (the
 manifest's kind already records it).
 
@@ -1414,7 +1422,10 @@ class ChunkedClaimExtractor:
         no entity list. Only a list, or null, is one, and any other value
         is unusable. An empty one, or null, is the engine's word that the
         document names nothing: a manifest of no entities, accepted as it
-        stands, so no chunk is asked and no fallback tier is taken.
+        stands, so no chunk is asked and no fallback tier is taken. A
+        record of a kind that is no manifest item, or of an artifact kind,
+        which no extraction names (ADR-0039 §10.1(b)), is a problem that
+        makes the answer unusable.
 
         An entity's mention record or judgement note that fails validation
         is set aside, never repaired and never the reason the manifest is
@@ -1427,10 +1438,15 @@ class ChunkedClaimExtractor:
         dropped alone, its record standing (claims.drop_containers): its
         evidence is looked for in `text`,
         the transcription, when given, and each container checked is kept
-        for the local audit. A trailing comma before a closing bracket or
-        brace is read as JSON syntax, and the manifest counts each one
-        (scan_json_answer)."""
+        for the local audit. A record that stood only by a name read as
+        its label and a container (claims.label_container) is checked
+        again once its containers are, and set aside, its containers left
+        out of the audit, when that container was dropped: the container
+        must stand on its evidence. A trailing comma before a closing
+        bracket or brace is read as JSON syntax, and the manifest counts
+        each one (scan_json_answer)."""
         _, item_keys = load_vocabulary()
+        artifact_kinds = load_acceptance().artifact_kinds
         scan = scan_json_answer(response)
         for obj in scan.objects:
             if "entities" not in obj:
@@ -1456,6 +1472,19 @@ class ChunkedClaimExtractor:
                     data, checked = drop_containers(
                         data, transcript, malformed
                     )
+                    if "structure" in data and (
+                        late := structure_problems(
+                            EntityRecord.model_validate(data)
+                        )
+                    ):
+                        # a name read as its label and a container that
+                        # was then dropped
+                        data = {
+                            k: v for k, v in data.items() if k != "structure"
+                        }
+                        more += late
+                        set_aside_records += 1
+                        checked = []
                     containers += checked
                     for reason in reasons + more:
                         category = reason.split(":", 1)[0]
@@ -1472,6 +1501,14 @@ class ChunkedClaimExtractor:
                 if record.kind not in item_keys:
                     problems.append(
                         f"entity {record.id}: unknown kind {record.kind!r}"
+                    )
+                elif record.kind in artifact_kinds:
+                    # a document the text mentions is an unclassified
+                    # entity with a type hint (ADR-0039 §10.1(b))
+                    problems.append(
+                        f"entity {record.id}: artifact kind "
+                        f"{record.kind!r}, which no extraction names "
+                        f"[{ARTIFACT_KIND}]"
                     )
                 # mention lines are best-effort: clamp, don't reject
                 record.mention_lines = [
@@ -1569,6 +1606,11 @@ class ChunkedClaimExtractor:
         self._log("  scanning document for entities...")
         manifest, handle, reasons, answered = self._entity_manifest(
             transcription, artifact
+        )
+        # the manifest answers refused for naming an artifact kind, whether
+        # a later attempt mended the turn or not (ADR-0039 §10.1(b))
+        self._manifest_artifact_kind = sum(
+            f"[{ARTIFACT_KIND}]" in reason for reason in reasons
         )
         if manifest is not None:
             self._set_aside = manifest.set_aside
@@ -1867,6 +1909,7 @@ class ChunkedClaimExtractor:
         self.used_fallback_manifest = False
         self.used_fallback_segmentation = False
         self._refusals = {}
+        self._manifest_artifact_kind = 0
         self._unread = {}
         self._set_aside = {}
         self._set_aside_records = 0
@@ -2234,6 +2277,7 @@ class ChunkedClaimExtractor:
             "trailing_commas": self._trailing_commas
             + sum(c.trailing_commas for c in outcomes if c is not None),
             "fallback": dict(self.fallback),
+            "manifest_artifact_kind": self._manifest_artifact_kind,
             "retried_chunks": self.retried_chunks,
         }
         if quotes is not None:

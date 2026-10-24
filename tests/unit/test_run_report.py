@@ -56,6 +56,7 @@ from yizkr.claims import (
     _clear_empty,
     set_aside_structure,
     structure_problems,
+    structure_readings,
 )
 from yizkr.pipeline import llm, report
 from yizkr.pipeline.chunking import _set_aside_note
@@ -2307,7 +2308,8 @@ class TestContent:
             "- Records set aside: 2; reasons records were set aside: 4 (a "
             "record can give several)\n"
             "- Fields read so their record could stand (a name part "
-            "dropped for an empty string, an entry read as its text), "
+            "dropped for an empty string, an entry read as its text, a "
+            "place's name that is its label and one of its containers), "
             "setting nothing aside, so counted apart from the reasons "
             "records were set aside: 0\n"
             "- Place containers checked: 4; dropped alone, their records "
@@ -2514,7 +2516,8 @@ class TestContent:
             "- Records set aside: 1; reasons records were set aside: 2 (a "
             "record can give several)\n"
             "- Fields read so their record could stand (a name part "
-            "dropped for an empty string, an entry read as its text), "
+            "dropped for an empty string, an entry read as its text, a "
+            "place's name that is its label and one of its containers), "
             "setting nothing aside, so counted apart from the reasons "
             "records were set aside: 0\n"
             "- Place containers checked: 0; dropped alone, their records "
@@ -2709,7 +2712,8 @@ class TestContent:
             "- Records set aside: 3; reasons records were set aside: 5 (a "
             "record can give several)\n"
             "- Fields read so their record could stand (a name part "
-            "dropped for an empty string, an entry read as its text), "
+            "dropped for an empty string, an entry read as its text, a "
+            "place's name that is its label and one of its containers), "
             "setting nothing aside, so counted apart from the reasons "
             "records were set aside: 7\n"
             "- Place containers checked: 6; dropped alone, their records "
@@ -2737,6 +2741,45 @@ class TestContent:
             "1; readings, nothing set aside: read as text 4, dropped 2; "
             "place containers checked: 2; dropped: malformed 1; "
         ) in drilled(made, POSTCARD)
+
+    def test_a_label_and_container_is_a_reading(self, tmp_path):
+        """A place's written name that is its label and one of its
+        containers sets nothing aside (ADR-0035 §5, #655): it is counted
+        among the readings, beside `dropped` and `read as text`, never
+        among the reasons records were set aside by."""
+        path = record(tmp_path / "run")
+        name = slugify(Path(FILES[POSTCARD][0]).stem)
+        target = path / name / "extraction" / "coverage.json"
+        value = json.loads(target.read_text())
+        value.update(
+            records=records(
+                1,
+                1,
+                {"label and container": 3, "addition": 1, "dropped": 1},
+                {"toponym": 1},
+                set_aside_records=1,
+            ),
+            notes={"relation": 1},
+        )
+        target.write_text(json.dumps(value))
+        made = build(path, now=NOW)
+        postcard = document(made, POSTCARD)["coverage"]["records"]
+        assert postcard["set_aside_by_reason"] == {"addition": 1}
+        assert postcard["readings_by_reason"] == {
+            "label and container": 3,
+            "dropped": 1,
+        }
+        counted = made["aggregate"]["content"]["records"]
+        assert counted["readings_by_reason"]["label and container"] == 3
+        assert "label and container" not in counted["set_aside_by_reason"]
+        assert (
+            "| Reading (nothing set aside) | Fields |\n"
+            "|---|---:|\n"
+            "| label and container | 3 |\n"
+        ) in render_markdown(made["aggregate"])
+        assert "readings, nothing set aside: label and container 3, " in (
+            drilled(made, POSTCARD)
+        )
 
     def test_a_coverage_that_counts_zero_is_not_absent(self, tmp_path):
         """Records and notes that count nothing are counted as zero; a
@@ -2817,7 +2860,8 @@ class TestContent:
             "- Records set aside: 0; reasons records were set aside: 0 (a "
             "record can give several)\n"
             "- Fields read so their record could stand (a name part "
-            "dropped for an empty string, an entry read as its text), "
+            "dropped for an empty string, an entry read as its text, a "
+            "place's name that is its label and one of its containers), "
             "setting nothing aside, so counted apart from the reasons "
             "records were set aside: 0\n"
             "- Place containers checked: 0; dropped alone, their records "
@@ -3081,6 +3125,18 @@ class TestContent:
             {**person, "structure": {"kind": "human", "status": 7}}
         )
         reasons |= {reason.split(":", 1)[0] for reason in found}
+        # a place's name that is its label and one of its containers
+        _, found = set_aside_structure(
+            {
+                **town,
+                "structure": {
+                    "kind": "place",
+                    "names": [{"written": "Flörburg, Hesse"}],
+                    "within": ["Hesse"],
+                },
+            }
+        )
+        reasons |= {reason.split(":", 1)[0] for reason in found}
         assert reasons == report.SET_ASIDE_REASONS | report.READING_REASONS
         # a reading sets nothing aside, so it is never a reason that does
         # (#611)
@@ -3093,6 +3149,7 @@ class TestContent:
             label
             for check in (
                 structure_problems,
+                structure_readings,
                 set_aside_structure,
                 _clear_empty,
             )
@@ -4008,11 +4065,35 @@ class TestWhatSourcesSayOfArtifacts:
         path = record(tmp_path / RUN_ID)
         directory = path / slugify(Path(FILES[CERT][0]).stem)
         view = json.loads((directory / "batch.json").read_text())
+        image = {"kind": "artifact", "sha1": "ab" * 20}
+        itself = {"kind": "artifact", "sha1": CERT}
+        view["entities"] += [
+            {"id": "md1", "label": "Studio portrait", "kind": "photograph"},
+            {
+                "id": "u1",
+                "label": "death certificate",
+                "kind": "unclassified_entity",
+            },
+        ]
         view["claims"] += [
             claim("e1", "caption", "Wastl to Klara, July 1939.", CERT),
-            claim("e1", "inception", "28. Juli 1939", CERT),
-            claim("e1", "inception", "1905", CERT),
-            claim("e1", "shows", "Muckel", CERT),
+            # the source itself; an image it places; the media item its
+            # record makes; its mention of an enclosure (#646)
+            {
+                **claim("e1", "inception", "28. Juli 1939", CERT),
+                "subject": itself,
+            },
+            {**claim("e1", "inception", "1905", CERT), "subject": image},
+            {
+                **claim("e1", "shows", "Muckel", CERT),
+                "subject": {"kind": "local", "local_id": "md1"},
+            },
+            {
+                **claim("e1", "main_subject", "seine Sterbeurkunde", CERT),
+                "subject": {"kind": "local", "local_id": "u1"},
+            },
+            # a subject of no form validation lets through
+            claim("e1", "author", "Wastl", CERT),
         ]
         (directory / "batch.json").write_text(json.dumps(view))
         covered = directory / "extraction" / "coverage.json"
@@ -4022,6 +4103,7 @@ class TestWhatSourcesSayOfArtifacts:
             "schema": 1,
             HOSTILE: 1,
         }
+        counts["manifest_artifact_kind"] = 2
         covered.write_text(json.dumps(counts))
         return build(path, now=NOW)
 
@@ -4029,7 +4111,19 @@ class TestWhatSourcesSayOfArtifacts:
         content = counted["aggregate"]["content"]
         assert content["container_claims"] == {
             "captions": 1,
-            "document_subject_by_property": {"inception": 2, "shows": 1},
+            "document_subject_by_property": {
+                "author": 1,
+                "inception": 2,
+                "main_subject": 1,
+                "shows": 1,
+            },
+            "document_subject_by_form": {
+                "source": 1,
+                "placed": 1,
+                "record": 1,
+                "mention": 1,
+                "other": 1,
+            },
         }
 
     def test_rejects_by_reason(self, counted):
@@ -4042,16 +4136,26 @@ class TestWhatSourcesSayOfArtifacts:
         # the other extractions' coverage, written before it counted
         # reasons, counts none
         assert rejects["by_reason_absent"] == rejects["extractions"] - 1
+        # the entity-manifest answers refused for an artifact kind (#646)
+        assert rejects["manifest_artifact_kind"] == 2
+        assert rejects["manifest_artifact_kind_absent"] == (
+            rejects["extractions"] - 1
+        )
 
     def test_report_md_gives_them_by_name_alone(self, counted):
         text = render_markdown(counted["aggregate"])
         assert (
             "Captions given, a container's words about an image it places: "
-            "1. Claims a document gives about itself, by property: "
-            "inception 2, shows 1."
+            "1. Claims of what an artifact is, by property: inception 2, "
+            "author 1, main_subject 1, shows 1; by their subject: the "
+            "source itself 1, an artifact it places 1, an artifact its "
+            "record makes 1, an artifact it mentions 1, other 1."
         ) in text
         assert "Rejects by reason: placed_subject 2, other 1, schema 1" in (
             text
         )
+        assert (
+            "Entity-manifest answers refused for naming an artifact kind: 2"
+        ) in text
         assert leaks(text) == []
         assert "Wastl" not in text and HOSTILE not in text

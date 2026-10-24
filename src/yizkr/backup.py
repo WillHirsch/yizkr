@@ -1214,6 +1214,10 @@ _CLAIM_NORMALIZED = re.compile(
 _TRUTHY = re.compile(r"<[^<>]*/prop/direct(-normalized)?/(P[1-9]\d*)>")
 _NO_VALUE = re.compile(r"<[^<>]*/prop/novalue/(P[1-9]\d*)>")
 _TYPE = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"
+# a statement's link to each of its references, and a reference's value
+# of a property (``pr:``), as the placed-subject rule reads them
+_DERIVED_FROM = "<http://www.w3.org/ns/prov#wasDerivedFrom>"
+_REFERENCE_VALUE = re.compile(r"<[^<>]*/prop/reference/(P[1-9]\d*)>")
 
 
 def _unknown(term: str) -> bool:
@@ -1245,6 +1249,7 @@ def statements_left_out(
     full_dump: Path,
     excluded: set[str],
     left_out_pids: frozenset[str] | set[str] = frozenset(),
+    placed: PlacedSubjectRule | None = None,
 ) -> tuple[set[str], set[tuple[str, str, str, str]]]:
     """The statements of the dump that go whole, and the truthy triples
     that go with them.
@@ -1252,7 +1257,15 @@ def statements_left_out(
     A statement goes whole when its value, or the value of any of its
     qualifiers, is an item of `excluded`, at any rank, or when it is a
     statement of a property of `left_out_pids` (a caption's, ADR-0039
-    §7), whatever its value: its node and every triple that holds it (the
+    §7), whatever its value, or, under `placed`, when it is a statement
+    of a document-subject property whose entity carries a `media SHA-1`
+    and one of whose references is `stated in` another item, or whose
+    entity is `part of` (at any rank) an item one of its references is
+    `stated in` (_placed_subject_statements): a source's claim about an
+    image it places, whose excerpt may be a caption's own text (ADR-0039
+    §10.5), so it fails closed, the image's own reference too when the
+    two agree and the writer made them one statement. Each such
+    statement goes with its node and every triple that holds it (the
     returned node IRIs). A truthy triple goes
     with it when it gave it, and no statement that stays gives it too:
     when the entity, the property and the value (the normalized value,
@@ -1284,12 +1297,26 @@ def statements_left_out(
     left_out: set[str] = set()
     links: dict[str, tuple[str, str] | None] = {}
     no_values: dict[str, bool] = {}  # a type -> whether it is "no value"
+    # for the placed-subject rule: each statement's references, each
+    # reference's `stated in` items, and each `part of` statement's items
+    references: dict[str, set[str]] = {}
+    stated_in: dict[str, set[str]] = {}
+    part_of: dict[str, set[str]] = {}
     with gzip.open(full_dump, "rt", encoding="utf-8", newline="\n") as source:
         for line in source:
             triple = _TRIPLE.fullmatch(line.removesuffix("\n"))
             if triple is None:
                 continue
             subject, predicate, value = triple.groups()
+            if placed is not None:
+                if predicate == _DERIVED_FROM:
+                    references.setdefault(subject, set()).add(value)
+                    continue
+                cited = _REFERENCE_VALUE.fullmatch(predicate)
+                if cited is not None:
+                    if cited.group(1) == placed.stated_in and _item(value):
+                        stated_in.setdefault(subject, set()).add(_item(value))
+                    continue
             if predicate not in links:
                 links[predicate] = _statement_link(predicate)
             link = links[predicate]
@@ -1315,11 +1342,22 @@ def statements_left_out(
                     continue
                 if role == "value":
                     valued.add(subject)
+                    if (
+                        placed is not None
+                        and placed.part_of is not None
+                        and pid == placed.part_of
+                        and _item(value)
+                    ):
+                        part_of.setdefault(subject, set()).add(_item(value))
                 if _unknown(value):
                     value = "_:"
                 form = "-normalized" if role == "normalized" else ""
                 values.add((subject, form, value))
 
+    if placed is not None:
+        left_out |= _placed_subject_statements(
+            placed, owners, references, stated_in, part_of
+        )
     # what the statements that go give their entities, and what those that
     # stay at normal or preferred rank do; an unknown value is no other
     # statement's, so a kept one keeps no truthy triple of one that goes
@@ -1340,6 +1378,68 @@ def statements_left_out(
         elif value != "_:":
             kept.add(given)
     return left_out, gone - kept
+
+
+@dataclass(frozen=True)
+class PlacedSubjectRule:
+    """What statements_left_out reads to leave out a container's claims
+    about an image it places (ADR-0039 §10.5): the instance's ids of the
+    document-subject properties, of `part of`, of `stated in` and of
+    `media SHA-1` (None for a property the instance does not hold)."""
+
+    document_subjects: frozenset[str]
+    part_of: str | None
+    stated_in: str
+    media_sha1: str | None = None
+
+
+def _placed_subject_statements(
+    placed: PlacedSubjectRule,
+    owners: Mapping[str, tuple[str, str]],
+    references: Mapping[str, set[str]],
+    stated_in: Mapping[str, set[str]],
+    part_of: Mapping[str, set[str]],
+) -> set[str]:
+    """The statements of a document-subject property that one source makes
+    about another artifact it places: those whose entity carries a `media
+    SHA-1` (an artifact registered by its bytes, as every artifact a
+    source places is, whoever gave the placement) and one of whose
+    references is `stated in` an item other than that entity; and those
+    whose entity is `part of` an item one of their references is `stated
+    in`. `owners` gives each statement's entity and property, `references`
+    each statement's reference nodes, `stated_in` each reference's items,
+    and `part_of` each `part of` statement's items. Every statement counts,
+    whatever its rank. An un-held media item and a source's mention of an
+    enclosure carry no SHA-1, so their statements are not among them."""
+    containers: dict[str, set[str]] = {}
+    for statement, items in part_of.items():
+        if statement in owners:
+            entity = _item(owners[statement][0])
+            containers.setdefault(entity, set()).update(items)
+    hashed = {
+        _item(entity)
+        for entity, pid in owners.values()
+        if placed.media_sha1 is not None and pid == placed.media_sha1
+    }
+
+    def placed_by_another(statement: str, entity: str | None) -> bool:
+        cited = set().union(
+            *(
+                stated_in.get(ref, set())
+                for ref in references.get(statement, ())
+            )
+        )
+        return bool(
+            (entity in hashed and cited - {entity})
+            or containers.get(entity, set()) & cited
+        )
+
+    return {
+        statement
+        for statement, (entity, pid) in owners.items()
+        if pid in placed.document_subjects
+        and placed_by_another(statement, _item(entity))
+    }
 
 
 # How the query service's munger reads a dump: entity by entity, in
@@ -1398,12 +1498,36 @@ DROPPED_PROPERTIES = ("judgement", "judgement_note")
 LEFT_OUT_PROPERTIES = ("caption",)
 
 
+def placed_subject_rule(
+    properties: Mapping[str, str],
+) -> PlacedSubjectRule | None:
+    """The export's rule for a container's claims about an image it places
+    (PlacedSubjectRule), from the instance's property ids by manifest key,
+    or None when the instance holds no `stated in` property, when no
+    statement names its source."""
+    from yizkr.model.schema import load_acceptance
+
+    if "stated_in" not in properties:
+        return None
+    return PlacedSubjectRule(
+        document_subjects=frozenset(
+            properties[key]
+            for key in load_acceptance().document_subjects
+            if key in properties
+        ),
+        part_of=properties.get("part_of"),
+        stated_in=properties["stated_in"],
+        media_sha1=properties.get("media_sha1"),
+    )
+
+
 def filter_nonprivileged_export(
     full_dump: Path,
     nonprivileged_dump: Path,
     excluded: set[str],
     dropped_pids: frozenset[str] | set[str] = frozenset(),
     left_out_pids: frozenset[str] | set[str] = frozenset(),
+    placed: PlacedSubjectRule | None = None,
 ) -> tuple[int, int]:
     """Produce the export's dump: five filters over N-triples. `excluded`
     holds every item to drop: for the export, every item with person
@@ -1411,7 +1535,9 @@ def filter_nonprivileged_export(
     ``nonprivileged_exclusions`` names. `dropped_pids` holds the properties
     whose snaks are dropped: for the export, those of ``DROPPED_PROPERTIES``.
     `left_out_pids` holds the properties whose statements go whole: for
-    the export, those of ``LEFT_OUT_PROPERTIES``.
+    the export, those of ``LEFT_OUT_PROPERTIES``. `placed`, when given,
+    leaves out whole a container's document-subject statements about an
+    image it places (``PlacedSubjectRule``, ``statements_left_out``).
 
     1. Drop every line that is not a triple as dumpRdf.php writes one
        (``_TRIPLE``): what the filter cannot read, it does not pass on.
@@ -1428,7 +1554,9 @@ def filter_nonprivileged_export(
        its qualifiers (a wedding's date, say) and its references. Every
        triple whose subject or object is such a node goes, and so does a
        truthy triple that only such a statement gave. So does every
-       statement of a property of `left_out_pids`, whatever its value.
+       statement of a property of `left_out_pids`, whatever its value,
+       and, under `placed`, every document-subject statement about an
+       artifact that is `part of` the item it is stated in.
     4. Drop every triple of a property of `dropped_pids`, in any form: a
        statement's value, a qualifier's, a reference's, or a truthy one.
     5. Sweep orphaned provenance nodes. Reference/value nodes are
@@ -1466,8 +1594,8 @@ def filter_nonprivileged_export(
     """
     dropped_predicates = tuple(f"/{pid}>" for pid in dropped_pids)
     left_out, truthy_left_out = (
-        statements_left_out(full_dump, excluded, left_out_pids)
-        if excluded or left_out_pids
+        statements_left_out(full_dump, excluded, left_out_pids, placed)
+        if excluded or left_out_pids or placed is not None
         else (set(), set())
     )
     # what each predicate of a truthy triple gives, and whether each type
@@ -1712,7 +1840,12 @@ def export_nonprivileged(
     Either refusal writes nothing. Every item with person evidence that
     the check did not release is then dropped (``nonprivileged_exclusions``),
     and so are the judgement notes, every caption statement, whole
-    (``LEFT_OUT_PROPERTIES``), and every statement whose value or a
+    (``LEFT_OUT_PROPERTIES``), every document-subject statement about an
+    artifact registered by its bytes that another item states (a source's
+    claim about an image it places, by a record of derived media or a
+    curator's `--placed`), or about one `part of` the item that states it,
+    whole (``placed_subject_rule``), and
+    every statement whose value or a
     qualifier's value is an item dropped, whole
     (``filter_nonprivileged_export``, ``statements_left_out``). The queries
     go to the instance's query service, with its vocabulary,
@@ -1788,6 +1921,7 @@ def export_nonprivileged(
                 for key in LEFT_OUT_PROPERTIES
                 if key in properties
             },
+            placed=placed_subject_rule(properties),
         )
         exclusions_partial.write_text(
             json.dumps(

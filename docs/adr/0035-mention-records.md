@@ -162,6 +162,25 @@ stands after a drop is not counted in `records.set_aside_records`. The
 entity-manifest prompt says to omit a field the model cannot fill,
 never to write it as "".
 
+Amended by #655 (2026-10-24): a place record's written name that is
+the entity's label and then one of the record's own `within`
+containers, the container written as the record writes it, each
+compared folded, as whole words ("Snylsjum, Fryslân" beside the label
+"Snylsjum", within Fryslân), adds only that container and no longer
+sets the record aside by `addition` (§5), so the place keeps its record
+and its containers. Only the record's shape is read: the words of the
+label followed by those of a container, never what stands between them
+or any other word. Each such name gives the reading
+`label and container`, counted in `coverage.json` (`records.set_aside`)
+and, apart from the reasons records were set aside by, among the run
+report's readings, beside `dropped` and `read as text`, when no form
+of the entity already holds the name. The container must stand on its
+evidence: a record whose matched container is then dropped is checked
+again and set aside by `addition`, its containers left out of the
+audit. Any other addition still sets the record aside. §8's alias hygiene reads such a
+name as the label. No prompt changes, so cached answers are reused and
+only the records' reading changes.
+
 Amended by #514 (2026-10-23, option (a) of its reopening): an entry of a
 list of strings that is written as an object holding only a string
 `written`, the shape of a given name, a person's surname or a place's
@@ -1508,9 +1527,15 @@ surname types, roles, classes and note categories. Beyond the schema:
   word, as in "the Löbigs"). The model may divide and label a name, never
   add to it: ADR-0022 §4's hallucination check, made structural. Standard
   forms are exempt, and so are a place's containers, which are checked by
-  their evidence instead (below). A record that gives the
-  naturalisation's Gustave the surname Sörne, which no form of his holds,
-  is set aside;
+  their evidence instead (below). A place's written name that is its
+  label and then one of its own containers, folded, as whole words
+  ("Snylsjum, Fryslân" beside the label "Snylsjum", within Fryslân),
+  adds only that container: it stands, giving the reading
+  `label and container`, counted beside `dropped` and `read as text`,
+  never a reason the record is set aside by, so long as that container
+  stands on its evidence (amended by #655). A record
+  that gives the naturalisation's Gustave the surname Sörne, which no
+  form of his holds, is set aside;
 - **a container stands on its evidence** (amended by #569, the owner's
   option B): each container of a place's `within` is checked on its own,
   and one that fails is dropped alone, the record standing with its

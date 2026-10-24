@@ -17,7 +17,9 @@ add something, in their order and verbatim spelling:
   alias;
 * an entity whose record stands (`claims.structure_problems` finds
   nothing): an alias's parts are the record's name parts that occur in
-  it, folded, as whole words (the no-addition test of ADR-0035 §5):
+  it, folded, as whole words (the no-addition test of ADR-0035 §5), a
+  place's written name that is its label and one of its containers read
+  as the label:
   - a person: an alias that gives no part names no one (a kinship term or
     a role that slipped through) and is dropped, unless the document
     gives it as an appellation (below); one whose parts the
@@ -91,6 +93,7 @@ from yizkr.claims import (
     PlaceStructure,
     _occurs,
     _words,
+    label_container,
     structure_problems,
 )
 
@@ -103,9 +106,12 @@ APPELLATION = "referred_to_as"
 NOT_PERSONS = frozenset({"place", "organization", "family"})
 
 
-def _parts(record) -> list[tuple[str, bool]]:
+def _parts(record, label: str | None = None) -> list[tuple[str, bool]]:
     """A record's name parts, each with whether it may end inside a word
-    (a family's surname does, as in "the Löbigs")."""
+    (a family's surname does, as in "the Löbigs"). A place's written name
+    that is the entity's `label` and one of its containers
+    (`label_container`) gives the label as its part, as the no-addition
+    check reads it."""
     if isinstance(record, PersonStructure):
         return [
             (part, False)
@@ -121,7 +127,13 @@ def _parts(record) -> list[tuple[str, bool]]:
         names = [
             part
             for name in record.names
-            for part in (name.written, name.toponym)
+            for part in (
+                label
+                if label is not None
+                and label_container(name.written, label, record.within)
+                else name.written,
+                name.toponym,
+            )
             if part
         ]
         if record.address is not None:
@@ -183,7 +195,7 @@ def normalize_aliases(
     are the forms the document gives as appellations of the entity."""
     from yizkr.pipeline.writer import stored_term
 
-    parts = _parts(record)
+    parts = _parts(record, label)
     marked = {stored_term(form).lower() for form in appellations}
     name_words = _name_words(parts)
     in_label = _given(label, parts)

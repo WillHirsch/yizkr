@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 
 from yizkr.claims import (
-    STRUCTURED_ADAPTERS,
     ArtifactRef,
     ClaimBatch,
     LocalRef,
@@ -943,24 +942,26 @@ def refused(batch) -> tuple[list[str], dict]:
 
 
 class TestInceptionSubject:
-    """On the adapter's batch alone a document-subject property takes an
-    un-held media item as subject (ADR-0039 §2.2, interim; #583): a
-    model's batch keeps the rule that it takes only its own source."""
+    """A document-subject property takes a batch entity of an artifact
+    kind, an un-held media item, as its subject on any batch (ADR-0039
+    §10.1(b), §10.6; #646): the rule keys on the subject's kind, not the
+    batch's model, and no extraction may make such an entity (tested in
+    test_document_subject_forms)."""
 
-    def test_the_adapter_is_a_structured_adapter(self):
-        assert ADAPTER_IDENTIFIER in STRUCTURED_ADAPTERS
+    def test_the_adapter_s_identifier_stays(self):
+        assert ADAPTER_IDENTIFIER == "gedcom-adapter"
 
     @pytest.mark.parametrize("kind", ["artifact", "photograph", "letter"])
     def test_the_adapters_media_item_takes_an_inception(self, kind):
         assert refused(adapted_inception(kind)) == ([], {})
 
+    @pytest.mark.parametrize("model", ["manual", "scripted"])
     @pytest.mark.parametrize("kind", ["artifact", "photograph", "letter"])
-    def test_a_models_artifact_entity_takes_none(self, kind):
-        # a letter's batch that dates "the enclosed photograph" 1895
-        problems, refusals = refused(adapted_inception(kind, "scripted"))
-        (problem,) = problems
-        assert problem.endswith("[document_subject]")
-        assert [reason for reason, _ in refusals.values()] == ["subject_rule"]
+    def test_a_batch_the_adapter_did_not_make_takes_one(self, kind, model):
+        # a hand-written batch ("manual", `yizkr ingest extract --engine
+        # file`) that dates the photograph's media item, through
+        # validation and the writer's pre_plan_refusals alike
+        assert refused(adapted_inception(kind, model)) == ([], {})
 
     @pytest.mark.parametrize("kind", ["human", "artifact_fragment"])
     def test_no_other_kind_takes_one(self, kind):
@@ -1007,13 +1008,11 @@ class TestInceptionSubject:
         )
         refusals = pre_plan_refusals(unlisted, {})
         assert refusals.get(0, (None,))[0] == expected
-        assert subject_refusal(made, {}, (), instance_of, structured=True) == (
+        refusal = subject_refusal(made, {}, (), instance_of)
+        assert (refusal and refusal[0].split(",")[0]) == (
             None
             if expected is None
-            else (
-                "its property takes only its source document",
-                "ADR-0035 §3.4",
-            )
+            else "its property takes only its source document"
         )
 
 

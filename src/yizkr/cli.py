@@ -91,12 +91,14 @@ def _add_placed(parser) -> None:
         action="append",
         default=[],
         metavar="RECORD|SOURCE=SHA1,...",
-        help="the artifacts a source places, which its caption claims may "
-        "take as their subject (ADR-0039 §2.1): the record of a "
+        help="the artifacts a source places, which its caption and "
+        "document-subject claims may take as their subject (ADR-0039 "
+        "§2.1, §10.1): the record of a "
         "container's derived media the pipeline keeps in its document "
         "directory (derived-media.json, or that directory), or a source's "
         "SHA-1, '=', and the SHA-1s of what it places, comma-separated; "
-        "repeatable. Without it every caption is refused",
+        "repeatable. Without it every claim about an artifact a source "
+        "places is refused",
     )
 
 
@@ -112,14 +114,31 @@ def _refuse_if_excluded(
     source file too when it is given one. Without a file only the list's
     SHA-1 entries can be checked, so a list that names files by pattern
     fails closed. The extract-all command, `ingest run`, requires the
-    list (cmd_run)."""
-    from yizkr.core.corpus import is_excluded, load_exclusions
+    list (cmd_run).
+
+    A glob also names the bytes of an image it names inside one of the
+    corpus's decks, as in a run: with the corpus folder set
+    ($YIZKR_CORPUS_DIR), its decks are opened in memory to hash the
+    members the globs name (corpus.follow_decks), and a deck or a folder
+    that cannot be read refuses the step. With no corpus folder set, the
+    globs cannot be followed into decks, and the step says so on stderr
+    before it goes on."""
+    from yizkr.core.corpus import (
+        CORPUS_DIR_VAR,
+        corpus_dir,
+        follow_decks,
+        is_excluded,
+        load_exclusions,
+    )
 
     if path is None and sha1 is None:
         return
     exclusions = load_exclusions(required=False, env_file=args.env_file)
     if exclusions is None:
         return
+    folder = corpus_dir(args.env_file)
+    if folder is not None:
+        exclusions = follow_decks(exclusions, folder)
     if is_excluded(exclusions, path, sha1=sha1):
         what = path.name if path is not None else f"SHA-1 {sha1[:12]}"
         sys.exit(f"{what} is on the never-ingest list; refusing")
@@ -128,6 +147,13 @@ def _refuse_if_excluded(
             "the never-ingest list names files by pattern, and no file was "
             "given to match them against: give the transcribed media file "
             "(--media); refusing"
+        )
+    if exclusions.patterns and folder is None:
+        print(
+            f"note: {CORPUS_DIR_VAR} is not set, so the never-ingest list's "
+            "globs are not followed into the corpus's decks: a file whose "
+            "bytes a glob names only inside a deck is not refused",
+            file=sys.stderr,
         )
 
 
@@ -342,7 +368,7 @@ def cmd_claims(args) -> int:
     from pydantic import ValidationError
 
     from yizkr.claims import (
-        unplaced_captions,
+        unplaced_claims,
         unplaced_hint,
         validate_against_manifest,
     )
@@ -359,7 +385,7 @@ def cmd_claims(args) -> int:
     problems = validate_against_manifest(batch, placed=placed)
     for problem in problems:
         print(f"manifest check: {problem}", file=sys.stderr)
-    unplaced = unplaced_captions(batch, placed)
+    unplaced = unplaced_claims(batch, placed)
     if unplaced:
         print(unplaced_hint(unplaced), file=sys.stderr)
     if problems:
@@ -813,7 +839,7 @@ def cmd_accept_all(args) -> int:
 def cmd_write(args) -> int:
     from pydantic import ValidationError
 
-    from yizkr.claims import unplaced_captions, unplaced_hint
+    from yizkr.claims import unplaced_claims, unplaced_hint
     from yizkr.pipeline.clustering import UnmappedMention
     from yizkr.pipeline.review import unapproved_depicts
     from yizkr.pipeline.writer import (
@@ -860,7 +886,7 @@ def cmd_write(args) -> int:
     ) as exc:
         sys.exit(str(exc))
     print(json.dumps(dataclasses.asdict(result), indent=2))
-    unplaced = unplaced_captions(batch, placed)
+    unplaced = unplaced_claims(batch, placed)
     if unplaced:
         print(unplaced_hint(unplaced), file=sys.stderr)
     if args.dry_run:

@@ -595,19 +595,28 @@ did so on 2026-09-29, in the review of its PR.
   memory and nothing of it kept, so listing a deck never frees what a
   glob names in it. So a PDF that holds the same bytes, a deck that
   embeds them under another name, and a file that is them all leave
-  them out, and the run's record of the list is still the file's. Only
+  them out, and the run's record of the list is still the file's. The
+  single-file steps (`ingest transcribe`, `ingest register` and the
+  others) and the transcription import ask the same of the corpus
+  folder's decks, found as a run finds them (`corpus.follow_decks`,
+  #640): a step refuses a file that is such bytes, whatever it is
+  called and wherever it lies, and the import excludes a transcription
+  of them. A single-file step knows the corpus folder only through
+  `$YIZKR_CORPUS_DIR`; without it the step says on stderr that it
+  cannot follow the globs into decks, and goes on. Only
   identical bytes are followed: a PDF holds the same bytes only for a
   JPEG it keeps as a file, and an image it holds as pixels, written as a
   PNG of its own, is not matched by a deck's PNG of it. A deck that
   cannot be read as an archive, while the list holds a glob, refuses the
-  run: the bytes its globs would name cannot be known, and the list
-  fails closed. A PDF's image is read by a vision call of its own, once
-  however many times the PDF places it, and its transcription, which
-  names it by its SHA-1, is kept beside its bytes. An image on a page
-  read by vision is read with that page, as the compilation's page. An
-  image the never-ingest list names on such a page, or in a PDF read
-  whole, reaches the engine with the page: the owner decided that the
-  case will never arise and is not worth handling.
+  run, a single-file step and the import alike: the bytes its globs
+  would name cannot be known, and the list fails closed. A PDF's image
+  is read by a vision call of its own, once however many times the PDF
+  places it, and its transcription, which names it by its SHA-1, is kept
+  beside its bytes. An image on a page read by vision is read with that
+  page, as the compilation's page. An image the never-ingest list names
+  on such a page, or in a PDF read whole, reaches the engine with the
+  page: the owner decided that the case will never arise and is not
+  worth handling.
 - **Determinism.** PDFium is started afresh for each PDF and draws a font
   the PDF does not embed with a built-in one, never the host's, so
   a page's text layer, its rendering and an image's bytes, and so the keys

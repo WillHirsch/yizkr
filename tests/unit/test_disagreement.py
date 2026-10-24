@@ -364,6 +364,7 @@ class TestComparedValues:
         (own,) = [
             said(a.subject, a.property, a.value, a.source)
             for a in u.about("letter-excerpt-1939", "inception")
+            if a.source == a.subject
         ]
         caption = said(
             "letter-excerpt-1939",
@@ -384,6 +385,35 @@ class TestComparedValues:
         (row,) = compare([own, caption], NOTHING)
         assert {s.qid for s in row.a.sources} == {QIDS["family-booklet-2011"]}
         assert {s.qid for s in row.b.sources} == {QIDS["letter-excerpt-1939"]}
+
+    def test_two_sources_inceptions_of_one_artifact_are_compared(self):
+        # the letter's image dates itself 28 July 1939, and the booklet's
+        # translation dates the image it places the same day: two sources'
+        # inceptions on one item, compared, and agreeing (ADR-0039 §10.2,
+        # #646); a month a third source gives is set aside, as its
+        # resolution holds the day; a misread year is listed
+        statements = [
+            said(a.subject, a.property, a.value, a.source)
+            for a in u.about("letter-excerpt-1939", "inception")
+        ]
+        assert len(statements) == 2
+        assert listed(*statements) == []
+        july = said(
+            "letter-excerpt-1939", "inception", u.Date(1939, 7), INTERVIEW
+        )
+        assert listed(*statements, july) == []
+        misread = said(
+            "letter-excerpt-1939",
+            "inception",
+            u.Date(1937, 7, 28),
+            "family-booklet-2011",
+        )
+        (own,) = [
+            said(a.subject, a.property, a.value, a.source)
+            for a in u.about("letter-excerpt-1939", "inception")
+            if a.source == a.subject
+        ]
+        assert len(listed(own, misread)) == 1
 
     def test_a_date_of_making_inside_the_other_is_not_listed(self):
         # the caption's "July 1939" holds the letter's 28 July 1939, and
@@ -418,6 +448,7 @@ class TestComparedValues:
         (own,) = [
             said(a.subject, a.property, a.value, a.source)
             for a in u.about("letter-excerpt-1939", "inception")
+            if a.source == a.subject
         ]
         caption = said(
             "letter-excerpt-1939",
