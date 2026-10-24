@@ -38,7 +38,7 @@ from yizkr import cli
 from yizkr.claims import (
     PLACED_OPTION,
     read_placed,
-    unplaced_captions,
+    unplaced_claims,
     unplaced_hint,
 )
 from yizkr.core.exits import EXIT_OK
@@ -144,30 +144,44 @@ class TestReadPlaced:
 
     def test_the_captions_left_without_their_placed_media(self):
         batch = batch_of(caption(), caption(text="Wastl to Klara."))
-        assert unplaced_captions(batch, None) == 2
-        assert unplaced_captions(batch, {DECK_REF.sha1: set()}) == 2
+        assert unplaced_claims(batch, None) == 2
+        assert unplaced_claims(batch, {DECK_REF.sha1: set()}) == 2
         # a source named as placing nothing has its placed media given
-        assert unplaced_captions(batch, {BOOKLET_REF.sha1: set()}) == 0
+        assert unplaced_claims(batch, {BOOKLET_REF.sha1: set()}) == 0
         assert "--placed" in unplaced_hint(2)
         assert PLACED_OPTION in unplaced_hint(2)
 
-    def test_only_a_caption_of_another_artifact_wants_them(self):
-        """A batch without captions wants no placed media, and a caption
-        of anything but another artifact is refused whatever is given."""
+    def test_a_document_subject_claim_about_a_placed_image_wants_them(
+        self,
+    ):
+        """A document-subject claim about the image the booklet places
+        wants the booklet's placed media as a caption does (ADR-0039
+        §10.5); one about the claim's own source wants none (#646)."""
         assert (
-            unplaced_captions(batch_of(itself("inception", JULY_28)), None)
-            == 0
+            unplaced_claims(batch_of(itself("inception", JULY_28)), None) == 0
         )
-        # another property's claim about the image the booklet places
         dated = itself(
             "inception",
             JULY_28,
             source=BOOKLET_REF,
             subject=LETTER_REF.model_dump(),
         )
-        assert unplaced_captions(batch_of(dated), None) == 0
+        assert unplaced_claims(batch_of(dated), None) == 1
+        assert unplaced_claims(batch_of(dated), {BOOKLET_REF.sha1: set()}) == 0
+
+    def test_only_a_claim_about_another_artifact_wants_them(self):
+        """A caption of its own source, or a claim of a property that
+        takes no artifact, is refused whatever is given, so it is not
+        counted."""
+        shown = itself(
+            "residence",
+            JULY_28,
+            source=BOOKLET_REF,
+            subject=LETTER_REF.model_dump(),
+        )
+        assert unplaced_claims(batch_of(shown), None) == 0
         of_itself = caption(BOOKLET_REF.model_dump())
-        assert unplaced_captions(batch_of(of_itself), None) == 0
+        assert unplaced_claims(batch_of(of_itself), None) == 0
 
 
 class TestValidate:

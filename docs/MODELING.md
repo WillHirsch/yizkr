@@ -378,6 +378,21 @@ batch) of an artifact it only writes about, such as an enclosure held
 as a scan of its own; a curator, or later artifact matching, links that
 mention item to the held scan.
 
+Built by #646 (2026-10-24), with the owner's answers to ADR-0039's
+questions 5 to 10: the #626 rule and #645's (c4) subject above are what
+validation and the writer apply; under (c4) the 1958 letter gives its
+enclosed death certificate's `main_subject` on the letter's own mention
+item. A claim whose subject is not its own source carries the passage
+that conveys it as its excerpt: validation rejects one without it
+(`excerpt_required`) and the writer refuses it (ADR-0039 §10.4). The
+extraction stage's kind check also rejects an extraction's
+`instance_of` or `subclass_of` claim whose value is an artifact kind
+(`artifact_kind`), beside a manifest record or a `LocalRef` of one. An
+approved equivalence turns a local subject into a QID reference, which
+no subject form takes, so a document-subject claim on a mention or
+media item a curator approves as an existing item is refused from then
+on (an owner question, #661).
+
 **A retired property** stays in the instance and takes no new claim: it
 accepts nothing, validation refuses every claim of it, and no prompt that
 the manifest renders offers it. `spouse` is retired (ADR-0036): the spouse
@@ -2011,8 +2026,17 @@ not a signal to grow the schema on.
   item its reference's `stated in` names, as a placed image is of its
   container, goes whole too, failing closed, since its excerpt may be a
   caption's text; a statement about an artifact a GEDCOM's record makes
-  leaves as any of that export's statements does. A line the export
-  cannot read as a triple is dropped, and a dump that holds a sitelink,
+  leaves as any of that export's statements does. As built by #646, the
+  rule keys on what such a statement is in the graph: a document-subject
+  statement whose subject carries a media SHA-1 and that is stated in
+  another item, or whose subject is `part of` an item it is stated in,
+  at any rank, goes whole, so a placement a curator gave with
+  `--placed` is covered too; a container's agreeing value, which the
+  writer folds into the image's own statement, takes that statement
+  with it. A (c4) statement on a mention item, which carries no SHA-1,
+  leaves with its excerpt as any of its source's statements do. A line
+  the export cannot read as a triple is dropped, and a dump that holds a
+  sitelink,
   whose page's own triples never name its entity, or a property of a
   type the model does not use (a URL, a media file, a shape) makes the
   export refuse to run.

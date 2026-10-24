@@ -124,7 +124,13 @@ from typing import Any, get_args
 
 from yizkr.claims import (
     CONTAINER_REASONS,
+    MENTION_FORM,
+    MENTION_KIND,
+    PLACED_FORM,
+    RECORD_FORM,
     REJECT_REASONS,
+    SOURCE_FORM,
+    SUBJECT_FORMS,
     JudgementNote,
     PersonStructure,
     PlaceStructure,
@@ -1146,6 +1152,7 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
             "entities": Counter(_text(e.get("kind")) or "?" for e in entities),
             "not_extracted": sum(e.get("extract") is False for e in entities),
             "claims": Counter(_text(c.get("property")) or "?" for c in claims),
+            "subject_forms": _subject_forms(claims, entities),
         }
         coverage = _json(directory / "extraction" / "coverage.json")
         if stage == "extraction" and isinstance(coverage, dict):
@@ -1161,6 +1168,9 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
                     coverage.get("rejected_by_reason")
                 ),
                 "unread_objects": _count(coverage.get("unread_objects")),
+                "manifest_artifact_kind": _counted(
+                    coverage.get("manifest_artifact_kind")
+                ),
                 "trailing_commas": _counted(coverage.get("trailing_commas")),
                 "fallback": sorted(
                     tier for tier in fallback if isinstance(tier, str)
@@ -2592,6 +2602,9 @@ def _aggregate_content(
     # the `name` claims, name forms of no stated type (ADR-0011), by the
     # kind of the document that gives them
     untyped_names: Counter = Counter()
+    # the document-subject claims by the form of their subject
+    # (claims.SUBJECT_FORMS)
+    subject_forms: Counter = Counter()
     fallbacks: Counter = Counter()
     by_axis: Counter = Counter()
     by_category: Counter = Counter()
@@ -2605,6 +2618,9 @@ def _aggregate_content(
     # extractions whose coverage counts none
     by_reason: Counter = Counter()
     reasons_absent = 0
+    # the entity-manifest answers refused for naming an artifact kind
+    # (ADR-0039 §10.1(b)), and the extractions whose coverage counts none
+    manifest_artifact_kind = artifact_kind_absent = 0
     record_extractions = records_given = recordless = notes_set_aside = 0
     records_set_aside = unsplit_forms = appellation_labels = 0
     appellation_parts = containers_checked = 0
@@ -2635,6 +2651,7 @@ def _aggregate_content(
             batches += 1
             entities.update(batch["entities"])
             claims.update(batch["claims"])
+            subject_forms.update(batch["subject_forms"])
             not_extracted += batch["not_extracted"]
             if not batch["claims"].total():
                 zero_claims[_kind(document.kind)] += 1
@@ -2660,6 +2677,10 @@ def _aggregate_content(
                 reasons_absent += 1
             else:
                 by_reason.update(coverage["rejected_by_reason"])
+            if coverage.get("manifest_artifact_kind") is None:
+                artifact_kind_absent += 1
+            else:
+                manifest_artifact_kind += coverage["manifest_artifact_kind"]
             fallbacks.update(
                 _known(tier, FALLBACK_TIERS) for tier in coverage["fallback"]
             )
@@ -2752,6 +2773,8 @@ def _aggregate_content(
                 by_reason, lambda value: _known(value, REJECT_REASONS)
             ),
             "by_reason_absent": reasons_absent,
+            "manifest_artifact_kind": manifest_artifact_kind,
+            "manifest_artifact_kind_absent": artifact_kind_absent,
         },
         "quotes": {
             "extractions": quote_extractions,
@@ -2766,7 +2789,9 @@ def _aggregate_content(
             ),
             "absent": quotes_absent,
         },
-        "container_claims": _container_claims(claims, vocabulary),
+        "container_claims": _container_claims(
+            claims, subject_forms, vocabulary
+        ),
         "zero_claims": {
             "documents": zero_claims.total(),
             "share": _share(zero_claims.total(), batches),
@@ -2839,14 +2864,61 @@ def _aggregate_content(
     }
 
 
+def _subject_forms(claims: list[dict], entities: list[dict]) -> Counter:
+    """A batch's document-subject claims by the form of their subject
+    (claims.SUBJECT_FORMS, ADR-0039 §10.1), read from the claims as the
+    batch view holds them: an artifact subject is its source, or else an
+    artifact the source places, which validation let through; a local
+    subject is the artifact a structured record makes when its kind
+    (its entity's, or its own `instance_of`) is an artifact kind, and the
+    source's mention of an artifact when it is an unclassified entity. A
+    subject of any other form, which validation refuses, is `other`. The
+    counts name no document."""
+    acceptance = load_acceptance()
+    kinds = {_text(e.get("id")): _text(e.get("kind")) for e in entities if e}
+    forms: Counter = Counter()
+    for claim in claims:
+        if _text(claim.get("property")) not in acceptance.document_subjects:
+            continue
+        subject = claim.get("subject")
+        subject = subject if isinstance(subject, dict) else {}
+        source = claim.get("source")
+        artifact = source.get("artifact") if isinstance(source, dict) else None
+        own = artifact.get("sha1") if isinstance(artifact, dict) else None
+        if subject.get("kind") == "artifact":
+            form = SOURCE_FORM if subject.get("sha1") == own else PLACED_FORM
+        elif subject.get("kind") == "local":
+            kind = kinds.get(
+                _text(subject.get("local_id")),
+                _text(subject.get("instance_of")),
+            )
+            form = (
+                RECORD_FORM
+                if kind in acceptance.artifact_kinds
+                else MENTION_FORM
+                if kind == MENTION_KIND
+                else "other"
+            )
+        else:
+            form = "other"
+        forms[form] += 1
+    return forms
+
+
 def _container_claims(
-    claims: Mapping[str, int], vocabulary: _Vocabulary
+    claims: Mapping[str, int],
+    subject_forms: Mapping[str, int],
+    vocabulary: _Vocabulary,
 ) -> dict[str, Any]:
     """What sources say of the artifacts themselves (ADR-0039), from the
     batches' claims by property: the captions given, a container's words
-    about an image it places (`placed_subject`), and the claims a document
-    gives about itself, by property (`document_subject`). The properties
-    are the manifest's own, so the counts name no document."""
+    about an image it places (`placed_subject`), the document-subject
+    claims by property (`document_subject`), and those claims by the form
+    of their subject (claims.SUBJECT_FORMS, ADR-0039 §10.1): about the
+    source itself, an artifact it places, the artifact its structured
+    record makes, or its mention of an artifact it only writes about
+    (each counted, 0 included), and `other` for any other subject. The
+    properties are the manifest's own, so the counts name no document."""
     acceptance = load_acceptance()
     return {
         "captions": sum(
@@ -2860,7 +2932,34 @@ def _container_claims(
             },
             lambda value: _known(value, vocabulary.properties),
         ),
+        "document_subject_by_form": {
+            **{form: subject_forms.get(form, 0) for form in SUBJECT_FORMS},
+            **(
+                {"other": subject_forms["other"]}
+                if subject_forms.get("other")
+                else {}
+            ),
+        },
     }
+
+
+# how report.md names each subject form (claims.SUBJECT_FORMS)
+SUBJECT_FORM_NAMES = {
+    SOURCE_FORM: "the source itself",
+    PLACED_FORM: "an artifact it places",
+    RECORD_FORM: "an artifact its record makes",
+    MENTION_FORM: "an artifact it mentions",
+    "other": "other",
+}
+
+
+def _subject_form_counts(forms: Mapping[str, int]) -> str:
+    """The document-subject claims by subject form, each named
+    (SUBJECT_FORM_NAMES) with its count, in SUBJECT_FORMS order."""
+    return ", ".join(
+        f"{SUBJECT_FORM_NAMES.get(form, form)} {_n(count)}"
+        for form, count in forms.items()
+    )
 
 
 def _aggregate_clusters(
@@ -3514,6 +3613,14 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
                         if rejects["by_reason_absent"]
                         else ""
                     ),
+                    "Entity-manifest answers refused for naming an "
+                    f"artifact kind: {_n(rejects['manifest_artifact_kind'])}"
+                    + (
+                        f" (extractions that count none: "
+                        f"{_n(rejects['manifest_artifact_kind_absent'])})"
+                        if rejects["manifest_artifact_kind_absent"]
+                        else ""
+                    ),
                     f"Fallback tiers taken: {_listed(content['fallbacks'])}",
                 ]
             ],
@@ -3529,9 +3636,13 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
             [
                 f"Captions given, a container's words about an image it "
                 f"places: {_n(content['container_claims']['captions'])}. "
-                "Claims a document gives about itself, by property: "
+                "Claims of what an artifact is, by property: "
                 + _listed(
                     content["container_claims"]["document_subject_by_property"]
+                )
+                + "; by their subject: "
+                + _subject_form_counts(
+                    content["container_claims"]["document_subject_by_form"]
                 )
                 + "."
             ],

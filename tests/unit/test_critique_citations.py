@@ -580,8 +580,9 @@ class TestTheOneTest:
         )
         assert flat(CATEGORIES["excerpt_does_not_state"]) == (
             "any other claim whose excerpt fails the support test, on its "
-            "value or on its times: name the claim. Such a claim that cites "
-            "no excerpt is not judged"
+            "value or on its times, or, for a claim about an artifact, on "
+            "which artifact it concerns: name the claim. Such a claim that "
+            "cites no excerpt is not judged"
         )
         # a part_of with no excerpt stays a concern
         assert (

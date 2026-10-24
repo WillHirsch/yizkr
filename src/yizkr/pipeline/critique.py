@@ -58,6 +58,7 @@ from yizkr.pipeline.llm import (
     reject_response,
 )
 from yizkr.pipeline.review import describe_value
+from yizkr.pipeline.transcribe import DECK_ENGINE
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +143,8 @@ CATEGORIES: dict[str, str] = {
     ),
     "excerpt_does_not_state": (
         "any other claim whose excerpt fails the support test, on its value "
-        "or on its times: name the claim. Such a claim that cites no "
+        "or on its times, or, for a claim about an artifact, on which "
+        "artifact it concerns: name the claim. Such a claim that cites no "
         "excerpt is not judged"
     ),
 }
@@ -231,25 +233,27 @@ excerpt, or the evidence of a container in a place's mention record,
 listed below with the lines (and the page) where it stands in the
 numbered transcription. Read where it stands in the source, does the
 passage convey the fact the claim or container states, its value and any
-time it carries? The passage itself must carry what the statement adds,
-such as the container's name or the value; its context says how to read
-it: which document or form, which field, whose entry. So a form's field
-line conveys the containment of the place the form gives it for, by its
-place in the form. It passes: on the 1941 death certificate's line
-"Место смерти: город, селение д. Кошновка; район Калдовский; область,
-край Чадская; республика РСФСР.", the evidence "район Калдовский" stands
-in the district slot of a place of death whose village is Koshnovka, and
-conveys that Koshnovka is in Kaldovsky District; so does "District:
-Kaldovsky District" in the district field of a form, one field a line,
-whose village field is Koshnovka. It fails: a passage that only names
-both places (a list of towns); a bare "Fläckfeld" beside "Flörburg, Kreis
-Peiltal", where "Kreis Peiltal" is about Flörburg, so Fläckfeld put in
-Kreis Peiltal on an excerpt that reads only "Fläckfeld" fails. A
-citation passes when any one of its occurrences conveys the fact; for a
-row that names a page, the occurrence must be on that page. You may
-read any occurrence in the numbered transcription, not only those
-listed. A citation not in the transcription is judged on its words
-alone.
+time it carries? For a claim about an artifact (this document, an image
+it places, or a document it mentions), the fact includes which artifact:
+the passage must convey it of that one. The passage itself must carry
+what the statement adds, such as the container's name or the value; its
+context says how to read it: which document or form, which field, whose
+entry. So a form's field line conveys the containment of the place the
+form gives it for, by its place in the form. It passes: on the 1941
+death certificate's line "Место смерти: город, селение д. Кошновка;
+район Калдовский; область, край Чадская; республика РСФСР.", the
+evidence "район Калдовский" stands in the district slot of a place of
+death whose village is Koshnovka, and conveys that Koshnovka is in
+Kaldovsky District; so does "District: Kaldovsky District" in the
+district field of a form, one field a line, whose village field is
+Koshnovka. It fails: a passage that only names both places (a list of
+towns); a bare "Fläckfeld" beside "Flörburg, Kreis Peiltal", where
+"Kreis Peiltal" is about Flörburg, so Fläckfeld put in Kreis Peiltal on
+an excerpt that reads only "Fläckfeld" fails. A citation passes when any
+one of its occurrences conveys the fact; for a row that names a page,
+the occurrence must be on that page. You may read any occurrence in the
+numbered transcription, not only those listed. A citation not in the
+transcription is judged on its words alone.
 
 When a citation fails, the suggestion's note names, by its lines,
 another passage of the source that conveys the fact ("re-cite line 3"),
@@ -280,7 +284,9 @@ else what its label is instead (role, kinship, courtesy, placeholder or
 description):
 {entities_block}
 
-Claims (subject | property | value | times | citation): the times a claim
+Claims (subject | property | value | times | citation): a subject is an
+entity id, "this document" for the source itself, or an image the
+document places by its place ("page 6, image 1"); the times a claim
 carries ("-" for none), and its citation, the excerpt it cites with where
 it occurs: a row that names a page lists only the occurrences on that
 page, and otherwise every occurrence is listed, nearest the subject's
@@ -344,11 +350,24 @@ def _entities_block(batch: ClaimBatch) -> str:
     return "\n".join(lines)
 
 
-def _ref_id(ref: Any) -> str:
+# how the prompt names the claim's own source document as a subject
+THIS_DOCUMENT = "this document"
+
+
+def _ref_id(
+    ref: Any,
+    source: str | None = None,
+    places: Mapping[str, str] | None = None,
+) -> str:
     """A reference as the prompt lists it: its local id, QID or
-    vocabulary key, or a document subject by its content key."""
+    vocabulary key; an artifact subject as THIS_DOCUMENT when it is the
+    claim's own source (`source`, its SHA-1), by its place ("page 6,
+    image 1") when it is an image the document places (`places`,
+    artifact_places), else by its content key (ADR-0039 §10.4)."""
     if isinstance(ref, ArtifactRef):
-        return str(ref)
+        if ref.sha1 == source:
+            return THIS_DOCUMENT
+        return (places or {}).get(ref.sha1) or str(ref)
     for name in ("local_id", "qid", "key"):
         value = getattr(ref, name, None)
         if value:
@@ -393,16 +412,34 @@ def _value(claim: Claim) -> str:
     )
 
 
-def listings(batch: ClaimBatch) -> list[tuple[str, str, str]]:
+def artifact_places(transcription: Any) -> dict[str, str]:
+    """The place of each image the transcription places, by its SHA-1, as
+    the extraction prompts list it (extract.placed_lines): its first
+    place, "page 6, image 1" or "slide 2, image 1". None places none."""
+    if transcription is None:
+        return {}
+    unit = "slide" if transcription.engine == DECK_ENGINE else "page"
+    places: dict[str, str] = {}
+    for page in transcription.pages or ():
+        for place, sha1 in enumerate(page.images, start=1):
+            places.setdefault(sha1, f"{unit} {page.page}, image {place}")
+    return places
+
+
+def listings(
+    batch: ClaimBatch, places: Mapping[str, str] | None = None
+) -> list[tuple[str, str, str]]:
     """(subject, property, value) for each claim of the batch, in order:
-    each claim as the prompt lists it, and as a finding names it. A claim
-    that lists as an earlier listing does has its value numbered
-    (`... (#n)`), with the first number free, so that every listing names
-    one claim."""
+    each claim as the prompt lists it, and as a finding names it, an
+    artifact subject named as _ref_id names it, with `places` the places
+    of the images the document places (artifact_places). A claim that
+    lists as an earlier listing does has its value numbered (`... (#n)`),
+    with the first number free, so that every listing names one claim."""
     taken: set[tuple[str, str, str]] = set()
     found = []
     for claim in batch.claims:
-        listing = (_ref_id(claim.subject), claim.property, _value(claim))
+        subject = _ref_id(claim.subject, claim.source.artifact.sha1, places)
+        listing = (subject, claim.property, _value(claim))
         numbered, n = listing, 1
         while numbered in taken:
             n += 1
@@ -566,7 +603,10 @@ def _claims_block(batch: ClaimBatch, located: _Located) -> str:
     nearest the subject's mention lines first."""
     lines_of = {entity.id: entity.mention_lines for entity in batch.entities}
     rows = []
-    for claim, listing in zip(batch.claims, listings(batch), strict=True):
+    places = artifact_places(located.transcription)
+    for claim, listing in zip(
+        batch.claims, listings(batch, places), strict=True
+    ):
         excerpt = claim.source.transcription_excerpt
         citation = located.citation(
             excerpt.text if excerpt is not None else None,
@@ -622,19 +662,31 @@ def named(claim: Claim) -> list[str]:
     return [ref.local_id for ref in refs if isinstance(ref, LocalRef)]
 
 
-def claim_of(finding: Finding, batch: ClaimBatch) -> int | None:
+def claim_of(
+    finding: Finding,
+    batch: ClaimBatch,
+    places: Mapping[str, str] | None = None,
+) -> int | None:
     """The index of the claim of `batch` the finding names, as the prompt
-    lists it, when that claim names the finding's entity; None
-    otherwise."""
+    lists it (listings, with `places`), when that claim names the
+    finding's entity; None otherwise. A subject named by an image's place
+    is matched whatever its case, as the transcription's markers write
+    "Page 6, image 1" where the rows write "page 6, image 1"."""
     if finding.claim is None:
         return None
+    named_places = {place.casefold() for place in (places or {}).values()}
+
+    def subject_key(subject: str) -> str:
+        folded = subject.casefold()
+        return folded if folded in named_places else subject
+
     wanted = (
-        finding.claim.subject,
+        subject_key(finding.claim.subject),
         finding.claim.property,
         finding.claim.value,
     )
-    for index, listing in enumerate(listings(batch)):
-        if listing == wanted:
+    for index, (subject, *rest) in enumerate(listings(batch, places)):
+        if (subject_key(subject), *rest) == wanted:
             claim = batch.claims[index]
             return index if finding.entity in named(claim) else None
     return None
@@ -644,9 +696,11 @@ def check(
     obj: Mapping[str, Any],
     batch: ClaimBatch,
     vocabulary: tuple[Mapping[str, str], Iterable[str]],
+    places: Mapping[str, str] | None = None,
 ) -> Finding | Invalid:
     """The finding `obj` gives when every check passes; else `obj`
-    verbatim, with each reason it fails."""
+    verbatim, with each reason it fails. `places` names the images the
+    document places, as the prompt lists them (artifact_places)."""
     raw = dict(obj)
     try:
         finding = Finding.model_validate(raw)
@@ -666,7 +720,7 @@ def check(
     entity = entities.get(finding.entity)
     if entity is None:
         why.append(f"entity {finding.entity!r} is not in the manifest")
-    if finding.claim is not None and claim_of(finding, batch) is None:
+    if finding.claim is not None and claim_of(finding, batch, places) is None:
         why.append("no claim is listed as given that names the entity")
     if (
         finding.alias is not None
@@ -785,12 +839,17 @@ def run_critique(
         listed = list(properties)
     vocabulary = (properties, frozenset(items))
     prompt = critique_prompt(batch, transcription, listed, vocabulary[1])
+    places = artifact_places(transcription)
     try:
         response = client.complete(prompt)
-        findings, unfinished = _read(client, response, batch, vocabulary)
+        findings, unfinished = _read(
+            client, response, batch, vocabulary, places
+        )
         if unfinished and _reject(client, response, unfinished):
             response = client.complete(prompt)
-            findings, unfinished = _read(client, response, batch, vocabulary)
+            findings, unfinished = _read(
+                client, response, batch, vocabulary, places
+            )
             if unfinished:
                 _reject(client, response, unfinished)
     except OutputLimitReached:
@@ -806,12 +865,13 @@ def _read(
     response: str,
     batch: ClaimBatch,
     vocabulary: tuple[Mapping[str, str], Iterable[str]],
+    places: Mapping[str, str] | None = None,
 ) -> tuple[list[Finding | Invalid], str]:
     """(the findings a critique answer holds, why the answer is unfinished,
     or "" when it is not): the engine stopped it at its output limit
     (llm.at_output_limit), or it has no terminal sentinel. `response` is
     the answer `client` has just given."""
-    findings, finished = _parse_critique(response, batch, vocabulary)
+    findings, finished = _parse_critique(response, batch, vocabulary, places)
     if at_output_limit(client, response):
         return findings, f"critique: {CUT_OFF_AT_LIMIT}"
     if not finished:
@@ -823,6 +883,7 @@ def _parse_critique(
     response: str,
     batch: ClaimBatch,
     vocabulary: tuple[Mapping[str, str], Iterable[str]],
+    places: Mapping[str, str] | None = None,
 ) -> tuple[list[Finding | Invalid], bool]:
     """(the findings a critique answer holds, each checked against the
     batch and the manifest, whether it has its terminal sentinel, a line
@@ -836,7 +897,7 @@ def _parse_critique(
             continue
         if FINDING_FIELDS.isdisjoint(obj):
             continue
-        findings.append(check(obj, batch, vocabulary))
+        findings.append(check(obj, batch, vocabulary, places))
     return findings, finished
 
 
@@ -941,13 +1002,17 @@ def _resolved_as(claim: Claim, row: Claim) -> bool:
 
 
 def attach(
-    findings: Iterable[Finding], extracted: ClaimBatch, rows: ClaimBatch
+    findings: Iterable[Finding],
+    extracted: ClaimBatch,
+    rows: ClaimBatch,
+    places: Mapping[str, str] | None = None,
 ) -> dict[int, list[Finding]]:
     """Each finding by the index of the review row it goes on, each on
     exactly one row. `extracted` is the batch the critic reviewed, and
     `rows` the batch the review sheet lists, `extracted` resolved
     (`counterparts`), so that a finding reaches its row whichever of its
-    entities resolved to a QID.
+    entities resolved to a QID. `places` names the images the document
+    places, as the prompt listed them (artifact_places).
 
     A finding that names a claim goes on that claim's row. One about an
     entity goes on the row of the first claim whose subject is the
@@ -960,7 +1025,7 @@ def attach(
     where = counterparts(extracted, rows)
     attached: dict[int, list[Finding]] = {}
     for finding in findings:
-        index = claim_of(finding, extracted)
+        index = claim_of(finding, extracted, places)
         row = where[index] if index is not None else None
         if row is None:
             row = _entity_row(finding.entity, extracted, where)
@@ -994,18 +1059,19 @@ def sheet_notes(
     entries: Iterable[Finding | Invalid],
     extracted: ClaimBatch,
     rows: ClaimBatch,
+    places: Mapping[str, str] | None = None,
 ) -> dict[int, str]:
     """review row index -> the notes on that row, joined: each valid
-    finding on its row (`attach`), and each finding that failed its checks
-    on the first row, marked unchecked, since it names nothing a row can
-    be matched by. With no rows, there are no notes."""
+    finding on its row (`attach`, with `places`), and each finding that
+    failed its checks on the first row, marked unchecked, since it names
+    nothing a row can be matched by. With no rows, there are no notes."""
     if not rows.claims:
         return {}
     entries = list(entries)
     valid = [entry for entry in entries if isinstance(entry, Finding)]
     notes = {
         row: list(map(note, attached))
-        for row, attached in attach(valid, extracted, rows).items()
+        for row, attached in attach(valid, extracted, rows, places).items()
     }
     for entry in entries:
         if isinstance(entry, Invalid):

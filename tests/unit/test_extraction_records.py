@@ -316,10 +316,10 @@ class TestTheChunkPrompt:
             )
         )
         assert (
-            "Their subject is the document, given exactly as the source's "
-            f'artifact: {{"kind": "artifact", "sha1": "{DOC_REF.sha1}"}}, '
-            "and never anything else"
+            "Their subject is THIS document, given exactly as the source's "
+            f'artifact: {{"kind": "artifact", "sha1": "{DOC_REF.sha1}"}}; '
         ) in rendered
+        assert "and never anything else" in rendered
         assert "`issued_by`: the organization that issued it" in rendered
         properties, _items = vocabulary_prompt_lines()
         assert re.search(r"^\s*issued_by:", properties, re.M)
@@ -338,12 +338,11 @@ class TestTheChunkPrompt:
             )
         )
         assert (
-            "The document itself: these properties state what THIS document is"
+            "What a document is: these properties state who made a document"
         ) in rendered
         assert (
-            "Their subject is the document, given exactly as the source's "
-            f'artifact: {{"kind": "artifact", "sha1": "{DOC_REF.sha1}"}}, '
-            "and never anything else"
+            "Their subject is THIS document, given exactly as the source's "
+            f'artifact: {{"kind": "artifact", "sha1": "{DOC_REF.sha1}"}}; '
         ) in rendered
 
     def test_judgement_notes_only_where_a_reader_could_differ(self):
@@ -363,7 +362,8 @@ class TestTheChunkPrompt:
     def test_one_chunk_emits_issued_by(self):
         # every claim about the document itself has one owner chunk (#456)
         assert (
-            "Every claim whose subject is the document itself (`issued_by`,"
+            "Every claim whose subject is the document itself or an image it "
+            "places (`issued_by`,"
         ) in flat(ENTITY_ASSIGNMENT_BLOCK)
         assert "the `issued_by` claim of an issuer the unit names" in flat(
             LINE_ASSIGNMENT_BLOCK
@@ -1165,6 +1165,7 @@ class TestTheManifestsRecords:
             "rejected_claims",
             "rejected_by_reason",
             "unread_objects",
+            "manifest_artifact_kind",
             # trailing commas read as JSON syntax (#654)
             "trailing_commas",
             "fallback",
@@ -1313,7 +1314,7 @@ class TestTheDocumentAsSubject:
             {"extraction_run": run(), "claims": [person_issued]}
         )
         (problem,) = validate_against_manifest(batch)
-        assert "takes only the claim's own source document" in problem
+        assert "takes as its subject the claim's own source" in problem
         kept, rejects = salvage_valid_claims([person_issued], run())
         assert kept.claims == []
         (reject,) = rejects
@@ -1409,13 +1410,14 @@ class TestTheWriter:
                 OTHER_REF,
                 "point_in_time",
                 {"type": "time", "year": 1941},
-                "its subject is a document other than its own source",
+                "its property does not take an artifact as its subject",
             ),
             (
                 OTHER_REF,
                 "issued_by",
                 item("e9", "Standesamt Flörburg", "organization"),
-                "its subject is a document other than its own source",
+                "its subject is neither its own source nor an artifact given "
+                "to this write as placed by its source",
             ),
             (
                 DOC_REF,
@@ -1499,10 +1501,10 @@ class TestTheWriter:
 
 
 class TestTheCritic:
-    def test_it_lists_a_document_subject_by_its_content_key(self):
-        """The critic lists each claim by its subject's id; a document
-        subject has none, so it is listed by its content key, as the
-        prompts name a document."""
+    def test_it_lists_the_document_itself_as_this_document(self):
+        """The critic lists each claim by its subject's id; the claim's own
+        source has none, so it is listed as "this document" (ADR-0039
+        §10.4, #646)."""
         batch = ClaimBatch.model_validate(
             {
                 "extraction_run": run(),
@@ -1511,7 +1513,7 @@ class TestTheCritic:
             }
         )
         (listing,) = critique.listings(batch)
-        assert listing == (f"sha1:{DOC_REF.sha1}", "issued_by", "e9")
+        assert listing == ("this document", "issued_by", "e9")
 
     def test_its_agency_relations_include_issued_by(self):
         mismatch = critique.CATEGORIES["relation_kind_mismatch"]

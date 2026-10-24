@@ -122,20 +122,31 @@ class TestIntegrity:
 
     def test_a_claim_about_a_document_follows_the_subject_rules(self):
         # ADR-0035 §3.4 as amended by ADR-0039: a document-subject property
-        # is its own source's claim about itself, a caption its source's
-        # words about an artifact it places, and part_of the composition
-        # link a container states (ADR-0008)
+        # is its own source's claim about itself, or, with an excerpt, its
+        # claim about an artifact it places or the artifact its record
+        # makes (§10.1, #646); a caption its source's words about an
+        # artifact it places, and part_of the composition link a
+        # container states (ADR-0008)
         acceptance = load_acceptance()
         placed = {
             (a.subject, a.value)
             for a in u.ASSERTIONS
             if a.property == "part_of" and a.value == a.source
         }
+        entities = {entity.key: entity.kind for entity in u.ENTITIES}
         about_documents = [a for a in u.ASSERTIONS if a.subject in SOURCES]
         assert about_documents
+        for a in u.ASSERTIONS:
+            if a.property in acceptance.document_subjects:
+                assert (
+                    a.subject == a.source
+                    or (a.subject, a.source) in placed
+                    or entities.get(a.subject) in acceptance.artifact_kinds
+                ), a
+                assert a.subject == a.source or a.excerpt, a
         for a in about_documents:
             if a.property in acceptance.document_subjects:
-                assert a.subject == a.source, a
+                continue
             elif a.property in acceptance.placed_subjects:
                 assert (a.subject, a.source) in placed, a
             else:
@@ -351,6 +362,7 @@ class TestNames:
             a
             for a in u.ASSERTIONS
             if a.excerpt in ("Liebes Pünktchen!", "Dear Pünktchen!")
+            and a.property != "addressee"
         ]
         assert {a.source for a in greetings} == {
             "postcard-1938",
@@ -724,9 +736,29 @@ class TestEventsAndDates:
         made = {a.subject for a in u.ASSERTIONS if a.property == "inception"}
         assert made == set(self.SELF_DATED)
         for key in made:
-            (stated,) = u.about(key, "inception")
-            assert stated.source == key
+            (stated,) = [
+                a for a in u.about(key, "inception") if a.source == key
+            ]
             assert (stated.value, stated.excerpt) == self.SELF_DATED[key]
+
+    def test_the_booklet_dates_the_letter_it_places_from_its_translation(
+        self,
+    ):
+        # beside the letter's own dateline, the booklet's translation of it
+        # dates the image it places on page 6, machine-assisted; its
+        # caption's "July 1939" dates nothing (ADR-0039 §10.2, §10.4; #646)
+        others = [
+            a
+            for a in u.about("letter-excerpt-1939", "inception")
+            if a.source != "letter-excerpt-1939"
+        ]
+        (booklet,) = others
+        assert booklet.source == "family-booklet-2011"
+        assert booklet.value == u.Date(1939, 7, 28)
+        assert ("sourcing_circumstances", "machine_assisted") in (
+            booklet.qualifiers
+        )
+        assert "July 1939." not in booklet.excerpt
 
     def test_no_document_states_a_point_in_time_of_itself(self):
         # a date a document gives for anything else is that thing's own:

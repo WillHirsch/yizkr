@@ -43,6 +43,7 @@ from yizkr.claims import (
     ArtifactRef,
     ClaimBatch,
     ExtractionRunMetadata,
+    artifact_kind_problems,
     load_vocabulary,
     placed_artifacts,
     reject_reasons,
@@ -170,16 +171,24 @@ Transcription of artifact sha1:{artifact_sha1} (language: {language}):
 """
 
 
-# The paragraph on the document itself, in both extraction prompts
-# (ADR-0035 §3.4, ADR-0039 §2.2): the document-subject properties, each
-# given only where the document states it of itself.
+# The paragraph on what a document is, in both extraction prompts
+# (ADR-0035 §3.4, ADR-0039 §2.2, §10): the document-subject properties,
+# each given about the document itself only where it states it of itself,
+# and about an image it places or a document it mentions only where its
+# passage conveys it, with that passage as the excerpt.
 DOCUMENT_ITSELF = """\
-- The document itself: these properties state what THIS document is,
-  each only where the document states it of itself, never from what
-  another document says of it. Their subject is the document, given
-  exactly as the source's artifact:
-  {{"kind": "artifact", "sha1": "{artifact_sha1}"}}, and never anything
-  else:
+- What a document is: these properties state who made a document, for
+  whom, when, where, what it is about, whom it shows and who issued it.
+  Their subject is THIS document, given exactly as the source's
+  artifact: {{"kind": "artifact", "sha1": "{artifact_sha1}"}}; an image
+  this document places, by its artifact reference exactly as listed
+  below; or a document this text mentions (a letter's enclosure), by its
+  local reference, an `unclassified_entity` whose type_hint (in the
+  entity manifest) or label says what it is ("death certificate",
+  "photograph"); and never anything else. Never
+  give an entity an artifact kind (`photograph`, `letter`, `certificate`
+  and the like): a document the text mentions is an
+  `unclassified_entity` with a type_hint.
   * `issued_by`: the organization that issued it, where the source shows
     it issuing (the register office of a certificate, the court of a
     judgment);
@@ -192,13 +201,22 @@ DOCUMENT_ITSELF = """\
   * `location_of_creation`: where it was made (a letter's heading);
   * `main_subject`: what it is about (a letter's topic, the district a
     map covers);
-  * `shows`: whom or what an image shows, as its own content names them
-    (an inscription on a print: one claim per name, no position read
-    into their order); never `depicts`, which only the faces flow
-    gives.
-  No other property takes the document as its subject."""
+  * `shows`: whom or what an image shows, as its content or the passage
+    names them (an inscription on a print: one claim per name, no
+    position read into their order); never `depicts`, which only the
+    faces flow gives.
+  About THIS document, give each only where the document states it of
+  itself, never from what another document says of it. About an image it
+  places or a document it mentions, give one only where a passage of
+  THIS document, read where it stands, conveys that fact of that image or
+  document, with that passage as the claim's transcription excerpt and
+  its page number the page the passage stands on: a claim about another
+  document always carries its excerpt. A letter that says it encloses a
+  man's death certificate conveys what the certificate is about: its
+  `main_subject` is his death. No other property takes a document as its
+  subject."""
 
-# The paragraph on what the document places (ADR-0039 §3), in both
+# The paragraph on what the document places (ADR-0039 §3, §10.5), in both
 # extraction prompts: the images its pages or slides place, each by its
 # artifact reference and its place, or that it places none.
 PLACED_ARTIFACTS = """\
@@ -214,15 +232,30 @@ PLACED_ARTIFACTS = """\
   number the page the passage stands on. A passage that speaks of two
   images gives one claim for each. Where the text does not say plainly
   that the passage speaks of the image (a slide's title over its one
-  image), add a judgement note of category `relation`. Give nothing
-  else about an image: who made it, for whom, when, where, what it is
-  about or whom it shows is the image's own claim, read from the image
-  apart. The people a caption names are entities of this document, with
-  what it says of them, as anywhere else."""
+  image), add a judgement note of category `relation`.
+  Where a passage of THIS document, read where it stands, conveys what a
+  listed image is, give that too, by the properties on what a document
+  is, its subject the image's artifact reference, the passage its
+  excerpt, with the same judgement note where the caption has one: the
+  image stands for the original it reproduces, so "Wastl to Klara" under
+  a letter's image gives the letter's `author` (Wastl) and `addressee`
+  (Klara), and a slide's title over its one photograph gives one `shows`
+  per person it names. Give none the passage does not convey: the
+  caption's "July 1939" does not say whether the letter was written,
+  sent or received then, so it gives no `inception`; a line on the
+  reproduction ("Scanned by Nicholas for this booklet, 2010.") says who
+  copied the image and when, not who made the original or when, so it
+  gives none of these properties; where it speaks of the image it stays a
+  caption. A translation of the image's own text is no caption: it conveys
+  what that text states (its dateline, its place, its greeting), so it
+  gives those claims, its subject the image, and no `caption`. The people
+  a passage names are entities of this document, with what it says of
+  them, as anywhere else."""
 
 NO_PLACED_ARTIFACTS = """\
 - This document places no image read on its own: give no `caption`
-  claim."""
+  claim, and no claim whose subject is an artifact reference other than
+  this document's."""
 
 
 def placed_lines(transcription: Transcription) -> list[str]:
@@ -629,8 +662,13 @@ def salvage_valid_claims(
     With `entities` (an entity manifest, ADR-0007), local refs naming
     ids outside the manifest are rejected, and the manifest travels in
     the returned batch. `placed` names the artifacts each source places
-    (validate_against_manifest): a `caption` claim whose subject is none
-    of its source's is a reject (ADR-0039 §2.1).
+    (validate_against_manifest): a `caption` or document-subject claim
+    whose subject is an artifact other than its source and none of its
+    source's is a reject (ADR-0039 §2.1, §10.1). A claim whose local ref
+    is of an artifact kind, or a claim of `instance_of` or `subclass_of`
+    whose value is one, is a reject too, and an entity manifest that
+    gives one is refused: an extraction may not name an artifact kind
+    (claims.artifact_kind_problems, ADR-0039 §10.1(b)).
 
     Each reject carries its reason codes (`reasons`, claims.REJECT_REASONS),
     for a report to count without quoting it: `schema` for a claim that
@@ -647,7 +685,7 @@ def salvage_valid_claims(
         )
         manifest_problems = validate_against_manifest(
             manifest_only, vocabulary=vocabulary, acceptance=acceptance
-        )
+        ) + artifact_kind_problems(manifest_only, acceptance)
         if manifest_problems:
             raise ValueError(
                 "entity manifest failed validation:\n  "
@@ -677,7 +715,7 @@ def salvage_valid_claims(
             continue
         problems = validate_against_manifest(
             batch, vocabulary=vocabulary, acceptance=acceptance, placed=placed
-        )
+        ) + artifact_kind_problems(batch, acceptance)
         if problems:
             rejects.append(
                 {

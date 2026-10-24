@@ -91,12 +91,14 @@ def _add_placed(parser) -> None:
         action="append",
         default=[],
         metavar="RECORD|SOURCE=SHA1,...",
-        help="the artifacts a source places, which its caption claims may "
-        "take as their subject (ADR-0039 §2.1): the record of a "
+        help="the artifacts a source places, which its caption and "
+        "document-subject claims may take as their subject (ADR-0039 "
+        "§2.1, §10.1): the record of a "
         "container's derived media the pipeline keeps in its document "
         "directory (derived-media.json, or that directory), or a source's "
         "SHA-1, '=', and the SHA-1s of what it places, comma-separated; "
-        "repeatable. Without it every caption is refused",
+        "repeatable. Without it every claim about an artifact a source "
+        "places is refused",
     )
 
 
@@ -366,7 +368,7 @@ def cmd_claims(args) -> int:
     from pydantic import ValidationError
 
     from yizkr.claims import (
-        unplaced_captions,
+        unplaced_claims,
         unplaced_hint,
         validate_against_manifest,
     )
@@ -383,7 +385,7 @@ def cmd_claims(args) -> int:
     problems = validate_against_manifest(batch, placed=placed)
     for problem in problems:
         print(f"manifest check: {problem}", file=sys.stderr)
-    unplaced = unplaced_captions(batch, placed)
+    unplaced = unplaced_claims(batch, placed)
     if unplaced:
         print(unplaced_hint(unplaced), file=sys.stderr)
     if problems:
@@ -837,7 +839,7 @@ def cmd_accept_all(args) -> int:
 def cmd_write(args) -> int:
     from pydantic import ValidationError
 
-    from yizkr.claims import unplaced_captions, unplaced_hint
+    from yizkr.claims import unplaced_claims, unplaced_hint
     from yizkr.pipeline.clustering import UnmappedMention
     from yizkr.pipeline.review import unapproved_depicts
     from yizkr.pipeline.writer import (
@@ -884,7 +886,7 @@ def cmd_write(args) -> int:
     ) as exc:
         sys.exit(str(exc))
     print(json.dumps(dataclasses.asdict(result), indent=2))
-    unplaced = unplaced_captions(batch, placed)
+    unplaced = unplaced_claims(batch, placed)
     if unplaced:
         print(unplaced_hint(unplaced), file=sys.stderr)
     if args.dry_run:

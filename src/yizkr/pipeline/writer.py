@@ -23,25 +23,28 @@ Per batch, the writer:
    to the artifact item carrying that `media SHA-1` (ADR-0010). This
    happens before anything is written: a batch that cites media no item
    carries is refused whole, since its statements would have no source
-   to reference. A claim whose subject is its own source document (an
-   `artifact` subject, such as an `issued_by` or an `inception` claim;
-   ADR-0035 §3.4) is written on that artifact item. A claim whose subject
-   is an artifact its source places, on the one property the manifest
-   marks `placed_subject` (a `caption`, ADR-0039 §2.1), is written on
-   that artifact's item, resolved by its media SHA-1 as a source is: the
-   artifact must be among the media the caller gives as that source's
-   placed media (`placed`), and must have an item. The pipeline gives the
-   derived media it registers for the source in the same write; `yizkr
-   ingest write` those its `--placed` names, from a container's
-   derived-media record or by their SHA-1s. A document subject that names
-   any other document, an artifact subject on a property the manifest
-   marks neither way, a placed subject that names no artifact given as
-   its source's in this write, or one no item carries, and a claim of
-   either kind of property with any other subject, save, on a structured
-   adapter's batch (STRUCTURED_ADAPTERS), a document-subject claim on a
-   batch entity of an artifact kind (an un-held media item, such as a
-   GEDCOM object the export dates, ADR-0039 §2.2), which is written on
-   that entity's item, are refused before the
+   to reference. A claim of a property the manifest marks
+   `document_subject` (`issued_by`, `inception` and the others; ADR-0035
+   §3.4, ADR-0039 §10.1) is written on its subject's item: its own source
+   document's (an `artifact` subject naming the source); an artifact its
+   source places, named by its media SHA-1, resolved as a source is; the
+   item of a batch entity of an artifact kind (an un-held media item,
+   such as a GEDCOM object the export dates); or the item of an
+   unclassified entity of its batch (a source's mention of an enclosure).
+   A claim whose subject is an artifact its source places, on a
+   document-subject property or on the one property the manifest marks
+   `placed_subject` (a `caption`, ADR-0039 §2.1), names an artifact among
+   the media the caller gives as that source's placed media (`placed`),
+   which must have an item. The pipeline gives the derived media it
+   registers for the source in the same write; `yizkr ingest write` those
+   its `--placed` names, from a container's derived-media record or by
+   their SHA-1s. A document-subject claim whose subject is not its own
+   source carries the passage that conveys it as its excerpt (ADR-0039
+   §10.4). A subject of any other form, an artifact subject on a property
+   the manifest marks neither way, a placed subject that names no
+   artifact given as its source's in this write, or one no item carries,
+   and a document-subject claim about another artifact with no excerpt
+   are refused before the
    first write, as a claim whose text the instance cannot hold is
    (below). So is a claim of a property the
    manifest marks retired (`spouse`, which takes no new claim: a marriage
@@ -445,6 +448,8 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from yizkr.claims import (
+    PLACED_FORM,
+    SOURCE_FORM,
     ArtifactRef,
     Claim,
     ClaimBatch,
@@ -462,7 +467,8 @@ from yizkr.claims import (
     StringValue,
     TimeValue,
     VocabRef,
-    structured_batch,
+    document_subject_form,
+    has_excerpt,
 )
 from yizkr.core.dates import UnsupportedDate
 from yizkr.core.wiki import ItemLabels, WikiClient
@@ -1417,18 +1423,21 @@ def subject_refusal(
     placed: Mapping[str, Collection[str]],
     resolved: Collection[str] = (),
     subject_kind: str | None = None,
-    structured: bool = False,
 ) -> tuple[str, str] | None:
     """Why the writer refuses the claim's subject, with the decision that
-    gives the rule, or None (the module docstring, step 0): a
-    document-subject property's subject is the claim's own source
-    (ADR-0035 §3.4), or, on a structured adapter's batch (`structured`,
-    structured_batch), a batch entity of an artifact kind (`subject_kind`,
-    the kind of a local subject), an un-held media item (ADR-0039 §2.2);
-    a placed-subject property's is an artifact among the
-    derived media `placed` names for the claim's source, by their SHA-1s,
-    whose media SHA-1 an item carries (`resolved`, the SHA-1s resolved);
-    and no other property takes an artifact subject (ADR-0039 §2)."""
+    gives the rule, or None (the module docstring, step 0). A
+    placed-subject property's subject is an artifact among the derived
+    media `placed` names for the claim's source, by their SHA-1s, whose
+    media SHA-1 an item carries (`resolved`, the SHA-1s resolved;
+    ADR-0039 §2.1). A document-subject property's is one of the forms
+    claims.document_subject_form names (`subject_kind` is the kind of a
+    local subject): the claim's own source (ADR-0035 §3.4), an artifact
+    `placed` names for it that an item carries, a batch entity of an
+    artifact kind or an unclassified entity of the batch; and a claim
+    whose subject is not its own source carries the passage that conveys
+    it as its excerpt, one that is not blank as the instance keeps text
+    (_locator_text; ADR-0039 §10.1, §10.4). No other property takes an
+    artifact subject (ADR-0039 §2)."""
     acceptance = load_acceptance()
     prop, subject = claim.property, claim.subject
     source = claim.source.artifact.sha1
@@ -1445,25 +1454,41 @@ def subject_refusal(
         else:
             return None
         return reason, "ADR-0039 §2.1"
-    if isinstance(subject, ArtifactRef):
-        reasons = []
-        if subject.sha1 != source:
-            reasons.append(
-                "its subject is a document other than its own source"
-            )
-        if prop not in acceptance.document_subjects:
-            reasons.append(
-                "its property does not take an artifact as its subject"
-            )
-        return ("; ".join(reasons), "ADR-0035 §3.4") if reasons else None
     if prop in acceptance.document_subjects:
-        if (
-            structured
-            and isinstance(subject, LocalRef)
-            and subject_kind in acceptance.artifact_kinds
+        form = document_subject_form(claim, acceptance, placed, subject_kind)
+        if form is None:
+            if isinstance(subject, ArtifactRef):
+                return (
+                    "its subject is neither its own source nor an artifact "
+                    "given to this write as placed by its source",
+                    "ADR-0039 §10.1",
+                )
+            return (
+                "its property takes only its source document, an artifact "
+                "its source places, a batch entity of an artifact kind or "
+                "an unclassified entity of its batch",
+                "ADR-0039 §10.1",
+            )
+        if form == PLACED_FORM and subject.sha1 not in resolved:
+            return (
+                "no item carries its subject's media SHA-1",
+                "ADR-0039 §10.1",
+            )
+        excerpt = claim.source.transcription_excerpt
+        if form != SOURCE_FORM and not (
+            has_excerpt(claim) and _locator_text(excerpt.text)
         ):
-            return None
-        return "its property takes only its source document", "ADR-0035 §3.4"
+            return (
+                "its subject is not its own source, and it carries no "
+                "excerpt of the passage that conveys it",
+                "ADR-0039 §10.4",
+            )
+        return None
+    if isinstance(subject, ArtifactRef):
+        return (
+            "its property does not take an artifact as its subject",
+            "ADR-0035 §3.4",
+        )
     return None
 
 
@@ -1486,15 +1511,14 @@ def pre_plan_refusals(
       batch without validating it (`retired_or_reference_property`);
     * a subject the subject rules refuse (subject_refusal, with `placed`,
       the artifacts given as each source's placed media, and
-      `resolved`, the artifact SHA-1s an item carries): a document
-      subject that is not the claim's own source, an artifact subject on
-      a property that takes none, a caption whose subject is no artifact
-      this write is given as placed by its source, and a claim of a
-      document-subject or placed-subject property with any other subject,
-      save, on a structured adapter's batch, a document-subject claim on
-      a batch entity of an artifact kind (ADR-0035 §3.4, ADR-0039 §2):
-      the statement would go on the wrong
-      item (`subject_rule`);
+      `resolved`, the artifact SHA-1s an item carries): an artifact
+      subject on a property that takes none, a caption whose subject is
+      no artifact this write is given as placed by its source, a claim of a
+      placed-subject property with any other subject, a claim of a
+      document-subject property whose subject is of no form it takes, and
+      one about an artifact other than its source with no excerpt
+      (ADR-0035 §3.4, ADR-0039 §2, §10): the statement would go on the
+      wrong item, or stand on no passage (`subject_rule`);
     * a claim whose own text the instance cannot hold as it is: for
       each of its texts, its value or a qualifier's, what keeps the
       instance from holding it in the form the writer sends it in
@@ -1514,7 +1538,6 @@ def pre_plan_refusals(
     The warning quotes none of the texts."""
     acceptance = load_acceptance()
     kinds = {entity.id: entity.kind for entity in batch.entities}
-    structured = structured_batch(batch)
     refusals = {}
     for index, claim in enumerate(batch.claims):
         uses = [
@@ -1548,7 +1571,6 @@ def pre_plan_refusals(
             kinds.get(subject.local_id, subject.instance_of)
             if isinstance(subject, LocalRef)
             else None,
-            structured,
         )
         if refusal is not None:
             reason, rule = refusal
