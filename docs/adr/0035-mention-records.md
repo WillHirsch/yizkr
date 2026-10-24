@@ -98,6 +98,10 @@ DATE row needs no exception, and the adapter meets the support test
 through its mapping, since an OBJE's DATE stands in the object's own
 record and so conveys that object's date of making (ADR-0039 §10.4,
 §10.6).
+Widened by #645, 2026-10-24 (ADR-0039 §10.1(c), (c4)): §3.4's
+document-subject properties also take the source's own mention item
+(an `unclassified_entity` of the claim's batch) of an artifact it only
+writes about, linked to the held scan later.
 
 Amended by #386 (2026-09-29): the critic's findings are validated records
 that name their entity and claim by id and give their axis and a
