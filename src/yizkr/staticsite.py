@@ -1242,9 +1242,12 @@ class SiteBuilder:
     def sources_say_html(self, said: list[Said]) -> str:
         """An artifact page's "What sources say about this artifact": its
         captions, each with the container and page that give it, then
-        its own statements, each property's values with their sources,
-        values that disagree listed together and none preferred (CLAUDE.md
-        rule 6); "" when no source says anything of the artifact."""
+        what sources state of what it is, its own statements and other
+        sources' (a container that places it, an export whose record makes
+        it) alike, each property's values with their sources, values that
+        disagree listed together and none preferred (CLAUDE.md rule 6,
+        ADR-0039 §10.2); "" when no source says anything of the
+        artifact."""
         if not said:
             return ""
         grouped: dict[tuple[bool, str], list[Said]] = defaultdict(list)
@@ -1256,8 +1259,9 @@ class SiteBuilder:
             "<h2>What sources say about this artifact</h2>",
             '<p class="sub">what each source says of this artifact, '
             "labelled by the source that says it: a container's caption "
-            "with the page it stands on, and what the artifact states of "
-            "itself. Values that disagree are listed together; none is "
+            "with the page it stands on, what the artifact states of "
+            "itself, and what other sources state of it, each with its "
+            "page. Values that disagree are listed together; none is "
             "preferred.</p>",
             '<dl class="statements">',
         ]
@@ -1286,14 +1290,23 @@ class SiteBuilder:
         """A person page's "Named in artifacts": each document-subject
         statement whose value is the person, as the artifact it is about
         and what it names them as ("shown in" the portrait), with its
-        qualifiers and its sources; "" for none."""
+        qualifiers and its sources, each labelled by its source and page
+        as on the artifact's page, the artifact's own statements as the
+        artifact itself; "" for none. An artifact links to its page where
+        it has one; a source's mention of an artifact it only writes about
+        (an enclosure, ADR-0039 §10.1(c)) has none, and is named by its
+        label alone."""
         if not naming:
             return ""
         entries = reading_order(
             (
                 f"{esc(NAMED_AS.get(each.key, each.property_label))} "
-                + self.artifact_links(
-                    [(each.artifact, each.artifact_label or each.artifact)]
+                + (
+                    self.artifact_links(
+                        [(each.artifact, each.artifact_label or each.artifact)]
+                    )
+                    if each.artifact in self.artifact_qids
+                    else esc(each.artifact_label or each.artifact)
                 )
                 + qualifier_span(
                     self.qualifier_text(
@@ -1309,7 +1322,9 @@ class SiteBuilder:
             "<h2>Named in artifacts</h2>"
             '<p class="sub">what sources say of an artifact that names '
             "this person, such as its author, its addressee or whom it "
-            "shows, each with its source</p><ul>"
+            "shows, each labelled by the source that says it, with its "
+            "page: the artifact itself, a container that places it, or "
+            "another source that writes of it</p><ul>"
             + "".join(f"<li>{entry}</li>" for entry in entries)
             + "</ul>"
         )
