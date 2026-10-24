@@ -385,20 +385,56 @@ class TestNoExtractionNamesAnArtifactKind:
         _, problems = ChunkedClaimExtractor._parse_entity_manifest(response, 1)
         assert problems == []
 
-    @pytest.mark.parametrize("where", ["subject", "value"])
+    @pytest.mark.parametrize(
+        "where",
+        ["subject", "value", "qualifier", "instance_of", "subclass_of"],
+    )
     def test_a_claim_whose_ref_names_one_is_a_counted_reject(self, where):
         photo = local("p1", "portret", "photograph")
         nicholas = item("e2", "Nicholas", "human")
-        shows = claim("shows", nicholas, photo)
-        if where == "value":
-            shows = claim(
+        mention = local("u1", "portret", "unclassified_entity")
+        shows = {
+            "subject": claim("shows", nicholas, photo),
+            "value": claim(
                 "main_subject", {"type": "item", "value": photo}, LETTER
-            )
+            ),
+            "qualifier": {
+                **claim("shows", nicholas, LETTER),
+                "qualifiers": [
+                    {
+                        "property": "location",
+                        "value": {"type": "item", "value": photo},
+                    }
+                ],
+            },
+            # a mention classed as an artifact by a claim of its own
+            "instance_of": claim(
+                "instance_of",
+                {
+                    "type": "item",
+                    "value": {"kind": "vocab", "key": "photograph"},
+                },
+                mention,
+            ),
+            "subclass_of": claim(
+                "subclass_of",
+                {"type": "item", "value": {"kind": "vocab", "key": "letter"}},
+                mention,
+            ),
+        }[where]
         kept, rejects = salvage_valid_claims([shows], run(), placed=PLACED)
         assert kept.claims == []
         (reject,) = rejects
         assert "artifact_kind" in reject["reasons"]
         assert rejected_by_reason(rejects)["artifact_kind"] == 1
+
+    def test_a_class_that_is_no_artifact_kind_passes_the_check(self):
+        classed = claim(
+            "instance_of",
+            {"type": "item", "value": {"kind": "vocab", "key": "human"}},
+            local("u1", "portret", "unclassified_entity"),
+        )
+        assert artifact_kind_problems(batch(classed)) == []
 
     def test_a_manifest_of_one_poisons_salvage(self):
         with pytest.raises(ValueError, match=r"\[artifact_kind\]"):
@@ -626,9 +662,24 @@ class TestThePrompts:
             )
         )
         assert (
-            "give no `caption` claim, and no claim whose subject is an image"
-            in block
+            "give no `caption` claim, and no claim whose subject is an "
+            "artifact reference other than this document's."
+        ) in block
+
+    def test_a_photograph_that_places_nothing_still_states_itself(self):
+        # a studio portrait's scan places no image, and still gives its
+        # own `author` and `shows`: the paragraph on what it places
+        # forbids no claim about the document itself
+        block = flat(
+            document_block(
+                Transcription(artifact=LETTER_REF, text="x", engine="t"),
+                LETTER_REF,
+            )
         )
+        assert "* `shows`: whom or what an image shows" in block
+        assert "no claim whose subject is an image" not in block
+        forbidding = block.split("places no image read on its own")[1]
+        assert "other than this document's" in forbidding
 
     def test_the_chunks_assign_these_claims(self):
         lines = flat(LINE_ASSIGNMENT_BLOCK)
@@ -711,26 +762,150 @@ class TestTheCritic:
         assert isinstance(unresolved, critique.Invalid)
 
 
+class FindingLlm:
+    """A critic that answers one finding on the letter image's `author`
+    claim, named by the image's place, as the prompt lists it."""
+
+    model_identifier = "fake-critic"
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def complete(self, prompt, image_paths=()):
+        self.prompts.append(prompt)
+        return "\n".join(
+            [json.dumps(ON_THE_IMAGE), json.dumps({"done": True})]
+        )
+
+
+ON_THE_IMAGE = {
+    "entity": "e3",
+    "claim": {
+        "subject": "page 6, image 1",
+        "property": "author",
+        "value": "e3",
+    },
+    "axis": "value",
+    "category": "excerpt_does_not_state",
+    "issue": "the caption names a writer",
+    "suggestion": {"note": "keep"},
+}
+
+
+class TestTheCriticWiring:
+    """A finding that names a placed image's claim by its place resolves
+    to that claim when the critic runs and on the review sheet."""
+
+    def claims(self) -> ClaimBatch:
+        """The caption's claims after one of the booklet's own that names
+        Wastl too, so that a finding which does not resolve to the image's
+        `author` claim falls on the first row naming its entity."""
+        return batch(
+            claim(
+                "main_subject",
+                item("e3", "Wastl", "human"),
+                BOOKLET_REF.model_dump(),
+                excerpt="Our Family from Germany",
+                page="1",
+            ),
+            *caption_claims(),
+            entities=[WASTL, KLARA],
+        )
+
+    def test_the_critique_run_reads_the_places(self):
+        llm = FindingLlm()
+        (found,) = critique.run_critique(llm, self.claims(), booklet())
+        assert isinstance(found, critique.Finding), found
+        assert "page 6, image 1 | author | e3" in llm.prompts[0]
+
+    def test_the_sheet_note_lands_on_the_image_claim_s_row(self):
+        finding = critique.Finding.model_validate(ON_THE_IMAGE)
+        places = critique.artifact_places(booklet())
+        claims = self.claims()
+        assert list(
+            critique.sheet_notes([finding], claims, claims, places)
+        ) == [1]
+        assert list(critique.attach([finding], claims, claims, places)) == [1]
+        # without the places it names no claim, and falls on its entity's
+        # first row
+        assert list(critique.sheet_notes([finding], claims, claims)) == [0]
+
+    def notes(self, tmp_path, transcription: str | None) -> dict[int, str]:
+        from types import SimpleNamespace
+
+        from yizkr.pipeline.orchestrate import Orchestrator
+
+        (tmp_path / "critique.json").write_text(json.dumps([ON_THE_IMAGE]))
+        (tmp_path / "batch.json").write_text(self.claims().model_dump_json())
+        if transcription is not None:
+            (tmp_path / "transcription.json").write_text(transcription)
+        doc = SimpleNamespace(
+            critique=tmp_path / "critique.json",
+            batch=tmp_path / "batch.json",
+            transcription=tmp_path / "transcription.json",
+        )
+        runner = SimpleNamespace(
+            _transcription_view=Orchestrator._transcription_view
+        )
+        return Orchestrator._critique_notes(runner, doc, self.claims())
+
+    def test_the_review_sheet_reads_the_transcription_view(self, tmp_path):
+        notes = self.notes(tmp_path, booklet().model_dump_json())
+        assert list(notes) == [1]
+        assert "unchecked" not in notes[1]
+
+    @pytest.mark.parametrize("transcription", [None, "{not json"])
+    def test_without_a_readable_view_it_names_no_place(
+        self, tmp_path, transcription
+    ):
+        # no places, and no raise: the finding's claim, named by a place,
+        # is none the sheet lists, so the note goes on its entity's row
+        assert list(self.notes(tmp_path, transcription)) == [0]
+
+
 # -- the export ---------------------------------------------------------------
 
 W = "http://w.lan"
 DERIVED_FROM = "<http://www.w3.org/ns/prov#wasDerivedFrom>"
 PART_OF, STATED_IN, AUTHOR, INCEPTION = "P27", "P2", "P95", "P92"
+MEDIA_SHA1 = "P6"
 REF_BOOKLET = "b1" * 20  # stated in the booklet (Q20), page 6
 REF_LETTER = "c2" * 20  # stated in the letter's image (Q10) itself
 REF_EXPORT = "d3" * 20  # stated in the export (Q31)
+REF_IMAGE = "e4" * 20  # stated in the image Q14 itself
+NORMAL = "<http://wikiba.se/ontology#NormalRank>"
+DEPRECATED = "<http://wikiba.se/ontology#DeprecatedRank>"
 
 
-def st(entity: str, name: str, pid: str, value: str, ref: str) -> list[str]:
+def st(
+    entity: str,
+    name: str,
+    pid: str,
+    value: str,
+    *refs: str,
+    rank: str = NORMAL,
+) -> list[str]:
+    """A statement's triples, its truthy one unless it is deprecated."""
     node = f"<{W}/entity/statement/{entity}-{name}>"
-    return [
+    lines = [
         f"<{W}/entity/{entity}> <{W}/prop/{pid}> {node} .",
         f"{node} <{W}/prop/statement/{pid}> {value} .",
-        f"<{W}/entity/{entity}> <{W}/prop/direct/{pid}> {value} .",
-        f"{node} <http://wikiba.se/ontology#rank> "
-        "<http://wikiba.se/ontology#NormalRank> .",
-        f"{node} {DERIVED_FROM} <{W}/reference/{ref}> .",
+        f"{node} <http://wikiba.se/ontology#rank> {rank} .",
+        *(f"{node} {DERIVED_FROM} <{W}/reference/{ref}> ." for ref in refs),
     ]
+    if rank == NORMAL:
+        lines.append(
+            f"<{W}/entity/{entity}> <{W}/prop/direct/{pid}> {value} ."
+        )
+    return lines
+
+
+def cited_in(ref: str, qid: str) -> str:
+    return f"<{W}/reference/{ref}> <{W}/prop/reference/{STATED_IN}> <{W}/entity/{qid}> ."  # noqa: E501
+
+
+def hashed(entity: str) -> list[str]:
+    return st(entity, "sha1", MEDIA_SHA1, f'"{entity}-bytes"', REF_IMAGE)
 
 
 LINES = [
@@ -744,32 +919,46 @@ LINES = [
     *st("Q30", "made", INCEPTION, '"+1895-00-00T00:00:00Z"', REF_EXPORT),
     # the booklet's date of itself stays
     *st("Q20", "own", INCEPTION, '"+2011-00-00T00:00:00Z"', REF_BOOKLET),
-    f"<{W}/reference/{REF_BOOKLET}> <{W}/prop/reference/{STATED_IN}> <{W}/entity/Q20> .",  # noqa: E501
+    cited_in(REF_BOOKLET, "Q20"),
     f'<{W}/reference/{REF_BOOKLET}> <{W}/prop/reference/P3> "6" .',
-    f"<{W}/reference/{REF_LETTER}> <{W}/prop/reference/{STATED_IN}> <{W}/entity/Q10> .",  # noqa: E501
-    f"<{W}/reference/{REF_EXPORT}> <{W}/prop/reference/{STATED_IN}> <{W}/entity/Q31> .",  # noqa: E501
+    cited_in(REF_LETTER, "Q10"),
+    cited_in(REF_EXPORT, "Q31"),
+    cited_in(REF_IMAGE, "Q14"),
 ]
 RULE = PlacedSubjectRule(
     document_subjects=frozenset({AUTHOR, INCEPTION}),
     part_of=PART_OF,
     stated_in=STATED_IN,
+    media_sha1=MEDIA_SHA1,
+)
+# the rule as an instance without a `media SHA-1` property reads it
+PART_OF_ONLY = PlacedSubjectRule(
+    frozenset({AUTHOR, INCEPTION}), PART_OF, STATED_IN
 )
 
 
-def filtered(tmp_path: Path, placed: PlacedSubjectRule | None) -> str:
+def filtered(
+    tmp_path: Path, placed: PlacedSubjectRule | None, *more: str
+) -> str:
     full = tmp_path / "full.nt.gz"
     public = tmp_path / "nonprivileged.nt.gz"
     with gzip.open(full, "wt", encoding="utf-8") as handle:
-        handle.write("\n".join(LINES) + "\n")
+        handle.write("\n".join([*LINES, *more]) + "\n")
     filter_nonprivileged_export(full, public, set(), placed=placed)
     with gzip.open(public, "rt", encoding="utf-8") as handle:
         return handle.read()
 
 
+def node(name: str) -> str:
+    return f"<{W}/entity/statement/{name}>"
+
+
 class TestTheExport:
     """The non-privileged export leaves out whole a document-subject
-    statement whose subject is `part of` the item its reference's `stated
-    in` names, failing closed (Q9, ADR-0039 §10.5)."""
+    statement that one source makes about another artifact it places,
+    failing closed (Q9, ADR-0039 §10.5): one whose subject carries a
+    media SHA-1 and that is stated in another item, or whose subject is
+    `part of` the item it is stated in."""
 
     def test_a_container_s_claim_about_its_image_goes_whole(self, tmp_path):
         content = filtered(tmp_path, RULE)
@@ -778,22 +967,104 @@ class TestTheExport:
         # the image's own statement, the export's, the booklet's of
         # itself, and the composition link stay
         for kept in ("Q10-own", "Q30-made", "Q20-own", "Q10-part"):
-            assert f"<{W}/entity/statement/{kept}>" in content, kept
+            assert node(kept) in content, kept
         assert REF_BOOKLET in content
 
     def test_without_the_rule_it_would_leave(self, tmp_path):
         assert "Q10-author" in filtered(tmp_path, None)
 
+    def test_an_image_placed_by_a_curator_s_pair_goes_whole(self, tmp_path):
+        # the image carries its media SHA-1 and no `part of`: the booklet
+        # placed it by `--placed <booklet>=<image>`
+        content = filtered(
+            tmp_path,
+            RULE,
+            *hashed("Q14"),
+            *st("Q14", "author", AUTHOR, f"<{W}/entity/Q3>", REF_BOOKLET),
+            *st("Q14", "own", INCEPTION, '"+1939-00-00T00:00:00Z"', REF_IMAGE),
+        )
+        assert "Q14-author" not in content
+        assert node("Q14-own") in content and node("Q14-sha1") in content
+        assert "Q14-author" in filtered(
+            tmp_path,
+            PART_OF_ONLY,
+            *hashed("Q14"),
+            *st("Q14", "author", AUTHOR, f"<{W}/entity/Q3>", REF_BOOKLET),
+        )
+
+    def test_an_image_part_of_another_container_goes_whole(self, tmp_path):
+        content = filtered(
+            tmp_path,
+            RULE,
+            *hashed("Q14"),
+            *st("Q14", "part", PART_OF, f"<{W}/entity/Q40>", REF_IMAGE),
+            *st("Q14", "author", AUTHOR, f"<{W}/entity/Q3>", REF_BOOKLET),
+        )
+        assert "Q14-author" not in content
+        assert node("Q14-part") in content
+
+    def test_a_deprecated_part_of_still_counts(self, tmp_path):
+        content = filtered(
+            tmp_path,
+            PART_OF_ONLY,
+            *st(
+                "Q13",
+                "part",
+                PART_OF,
+                f"<{W}/entity/Q20>",
+                REF_BOOKLET,
+                rank=DEPRECATED,
+            ),
+            *st("Q13", "author", AUTHOR, f"<{W}/entity/Q3>", REF_BOOKLET),
+        )
+        assert "Q13-author" not in content
+
+    def test_a_deprecated_claim_about_the_image_goes_too(self, tmp_path):
+        content = filtered(
+            tmp_path,
+            RULE,
+            *st(
+                "Q10",
+                "dep",
+                AUTHOR,
+                f"<{W}/entity/Q4>",
+                REF_BOOKLET,
+                rank=DEPRECATED,
+            ),
+        )
+        assert "Q10-dep" not in content
+
+    def test_a_merged_statement_goes_whole(self, tmp_path):
+        # the writer folds the booklet's agreeing date into the image's own
+        # statement: one statement, stated in the image and in the booklet,
+        # left out whole, the image's own reference with it
+        content = filtered(
+            tmp_path,
+            RULE,
+            *hashed("Q14"),
+            *st(
+                "Q14",
+                "both",
+                INCEPTION,
+                '"+1939-07-28T00:00:00Z"',
+                REF_IMAGE,
+                REF_BOOKLET,
+            ),
+        )
+        assert "Q14-both" not in content
+        assert node("Q14-sha1") in content
+
     def test_the_rule_reads_the_instance_s_ids(self):
         properties = {
             "part_of": "P27",
             "stated_in": "P2",
+            "media_sha1": "P6",
             "inception": "P92",
             "author": "P95",
             "caption": "P91",
         }
         rule = placed_subject_rule(properties)
         assert rule == PlacedSubjectRule(
-            frozenset({"P92", "P95"}), "P27", "P2"
+            frozenset({"P92", "P95"}), "P27", "P2", "P6"
         )
-        assert placed_subject_rule({"stated_in": "P2"}) is None
+        assert placed_subject_rule({"part_of": "P27"}) is None

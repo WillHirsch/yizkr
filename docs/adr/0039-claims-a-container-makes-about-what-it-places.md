@@ -703,6 +703,10 @@ artifact kind: an un-held media item (ADR-0021 §2).
     first read: `_parse_entity_manifest` treats such a kind as it treats
     an unknown kind, and `extract.salvage_valid_claims` rejects a claim
     whose reference names one, counted under a reason of its own;
+    as built (#646, 2026-10-24), the check also covers a claim of
+    `instance_of` or `subclass_of` whose value is an artifact kind,
+    which would make its subject an artifact item, beside the manifest
+    record and the `LocalRef`'s `instance_of`;
   - the subject rule (`claims.subject_problems`,
     `writer.subject_refusal`) then stays keyed on the subject's kind. An
     artifact-kind batch entity exists only where a structured record or

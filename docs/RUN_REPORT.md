@@ -285,7 +285,9 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
   `placed_subject` (a caption whose subject is no artifact its source
   places), `artifact_subject` (another property with an artifact
   subject), `artifact_kind` (an extraction's claim that names an
-  artifact kind for an entity, ADR-0039 §10.1(b); #646), `schema` (a
+  artifact kind for an entity, in a local ref's `instance_of` or as the
+  value of an `instance_of` or `subclass_of` claim, ADR-0039 §10.1(b);
+  #646), `schema` (a
   claim that does not parse) and `manifest` (any other manifest
   problem), with the extractions whose
   coverage counts none (`aggregate.content.rejects.by_reason`,

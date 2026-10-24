@@ -1258,10 +1258,13 @@ def statements_left_out(
     qualifiers, is an item of `excluded`, at any rank, or when it is a
     statement of a property of `left_out_pids` (a caption's, ADR-0039
     §7), whatever its value, or, under `placed`, when it is a statement
-    of a document-subject property whose entity is `part of` (at any
-    rank) an item that one of its references says it is `stated in`: a
-    container's claim about an image it places, whose excerpt may be the
-    caption's own text (ADR-0039 §10.5), so it fails closed. Each such
+    of a document-subject property whose entity carries a `media SHA-1`
+    and one of whose references is `stated in` another item, or whose
+    entity is `part of` (at any rank) an item one of its references is
+    `stated in` (_placed_subject_statements): a source's claim about an
+    image it places, whose excerpt may be a caption's own text (ADR-0039
+    §10.5), so it fails closed, the image's own reference too when the
+    two agree and the writer made them one statement. Each such
     statement goes with its node and every triple that holds it (the
     returned node IRIs). A truthy triple goes
     with it when it gave it, and no statement that stays gives it too:
@@ -1341,6 +1344,7 @@ def statements_left_out(
                     valued.add(subject)
                     if (
                         placed is not None
+                        and placed.part_of is not None
                         and pid == placed.part_of
                         and _item(value)
                     ):
@@ -1380,11 +1384,13 @@ def statements_left_out(
 class PlacedSubjectRule:
     """What statements_left_out reads to leave out a container's claims
     about an image it places (ADR-0039 §10.5): the instance's ids of the
-    document-subject properties, of `part of` and of `stated in`."""
+    document-subject properties, of `part of`, of `stated in` and of
+    `media SHA-1` (None for a property the instance does not hold)."""
 
     document_subjects: frozenset[str]
-    part_of: str
+    part_of: str | None
     stated_in: str
+    media_sha1: str | None = None
 
 
 def _placed_subject_statements(
@@ -1394,25 +1400,45 @@ def _placed_subject_statements(
     stated_in: Mapping[str, set[str]],
     part_of: Mapping[str, set[str]],
 ) -> set[str]:
-    """The statements of a document-subject property whose entity is
-    `part of` an item a reference of theirs is `stated in`: `owners`
-    gives each statement's entity and property, `references` each
-    statement's reference nodes, `stated_in` each reference's items, and
-    `part_of` each `part of` statement's items."""
+    """The statements of a document-subject property that one source makes
+    about another artifact it places: those whose entity carries a `media
+    SHA-1` (an artifact registered by its bytes, as every artifact a
+    source places is, whoever gave the placement) and one of whose
+    references is `stated in` an item other than that entity; and those
+    whose entity is `part of` an item one of their references is `stated
+    in`. `owners` gives each statement's entity and property, `references`
+    each statement's reference nodes, `stated_in` each reference's items,
+    and `part_of` each `part of` statement's items. Every statement counts,
+    whatever its rank. An un-held media item and a source's mention of an
+    enclosure carry no SHA-1, so their statements are not among them."""
     containers: dict[str, set[str]] = {}
     for statement, items in part_of.items():
         if statement in owners:
             entity = _item(owners[statement][0])
             containers.setdefault(entity, set()).update(items)
+    hashed = {
+        _item(entity)
+        for entity, pid in owners.values()
+        if placed.media_sha1 is not None and pid == placed.media_sha1
+    }
+
+    def placed_by_another(statement: str, entity: str | None) -> bool:
+        cited = set().union(
+            *(
+                stated_in.get(ref, set())
+                for ref in references.get(statement, ())
+            )
+        )
+        return bool(
+            (entity in hashed and cited - {entity})
+            or containers.get(entity, set()) & cited
+        )
+
     return {
         statement
         for statement, (entity, pid) in owners.items()
         if pid in placed.document_subjects
-        and containers.get(_item(entity))
-        and any(
-            containers[_item(entity)] & stated_in.get(reference, set())
-            for reference in references.get(statement, ())
-        )
+        and placed_by_another(statement, _item(entity))
     }
 
 
@@ -1477,11 +1503,11 @@ def placed_subject_rule(
 ) -> PlacedSubjectRule | None:
     """The export's rule for a container's claims about an image it places
     (PlacedSubjectRule), from the instance's property ids by manifest key,
-    or None when the instance holds no `part of` or `stated in` property,
-    when no statement can be one."""
+    or None when the instance holds no `stated in` property, when no
+    statement names its source."""
     from yizkr.model.schema import load_acceptance
 
-    if "part_of" not in properties or "stated_in" not in properties:
+    if "stated_in" not in properties:
         return None
     return PlacedSubjectRule(
         document_subjects=frozenset(
@@ -1489,8 +1515,9 @@ def placed_subject_rule(
             for key in load_acceptance().document_subjects
             if key in properties
         ),
-        part_of=properties["part_of"],
+        part_of=properties.get("part_of"),
         stated_in=properties["stated_in"],
+        media_sha1=properties.get("media_sha1"),
     )
 
 
@@ -1813,8 +1840,11 @@ def export_nonprivileged(
     Either refusal writes nothing. Every item with person evidence that
     the check did not release is then dropped (``nonprivileged_exclusions``),
     and so are the judgement notes, every caption statement, whole
-    (``LEFT_OUT_PROPERTIES``), every document-subject statement a container
-    makes about an image it places, whole (``placed_subject_rule``), and
+    (``LEFT_OUT_PROPERTIES``), every document-subject statement about an
+    artifact registered by its bytes that another item states (a source's
+    claim about an image it places, by a record of derived media or a
+    curator's `--placed`), or about one `part of` the item that states it,
+    whole (``placed_subject_rule``), and
     every statement whose value or a
     qualifier's value is an item dropped, whole
     (``filter_nonprivileged_export``, ``statements_left_out``). The queries

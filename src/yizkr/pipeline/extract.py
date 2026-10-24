@@ -248,7 +248,8 @@ PLACED_ARTIFACTS = """\
 
 NO_PLACED_ARTIFACTS = """\
 - This document places no image read on its own: give no `caption`
-  claim, and no claim whose subject is an image."""
+  claim, and no claim whose subject is an artifact reference other than
+  this document's."""
 
 
 def placed_lines(transcription: Transcription) -> list[str]:

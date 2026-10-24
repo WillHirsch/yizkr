@@ -1336,14 +1336,21 @@ MANIFEST_REASON = "manifest"
 REJECT_REASONS = (*CODED_REASONS, SCHEMA_REASON, MANIFEST_REASON)
 
 
+# the properties whose claims give an entity a class: one whose value is an
+# artifact kind makes its subject an artifact (artifact_kind_problems)
+CLASSING_PROPERTIES = frozenset({"instance_of", "subclass_of"})
+
+
 def artifact_kind_problems(
     batch: ClaimBatch, acceptance: Acceptance | None = None
 ) -> list[str]:
     """Where `batch`, as an extraction gives it, names an artifact kind
     (`Acceptance.artifact_kinds`) for an entity: an entity record of such
-    a kind, or a local ref, a claim's subject or an item value of its own
+    a kind; a local ref, a claim's subject or an item value of its own
     or of a qualifier, whose kind (its record's, or else its own
-    `instance_of`) is one. Each problem ends in ARTIFACT_KIND. An
+    `instance_of`) is one; or a claim of a classing property
+    (CLASSING_PROPERTIES: `instance_of`, `subclass_of`) whose value is
+    one. Each problem ends in ARTIFACT_KIND. An
     extraction may not name one (ADR-0039 §10.1(b)): a document it
     mentions is an unclassified entity with a type hint, and an entity of
     an artifact kind is the artifact a structured record or a hand-written
@@ -1361,6 +1368,17 @@ def artifact_kind_problems(
         if entity.kind in kinds
     ]
     for index, claim in enumerate(batch.claims):
+        if (
+            claim.property in CLASSING_PROPERTIES
+            and isinstance(claim.value, ItemValue)
+            and isinstance(claim.value.value, VocabRef)
+            and claim.value.value.key in kinds
+        ):
+            problems.append(
+                f"claims[{index}].value: {claim.property!r} names the "
+                f"artifact kind {claim.value.value.key!r}, which no "
+                f"extraction names (ADR-0039 §10.1(b)) [{ARTIFACT_KIND}]"
+            )
         refs = [
             (f"claims[{index}].subject", claim.subject),
             (f"claims[{index}].value", getattr(claim.value, "value", None)),
