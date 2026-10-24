@@ -35,8 +35,7 @@ items from extraction or the GEDCOM adapter. A death is a set of sourced
 statements on the person, "died, nothing else known" a `date of death`
 of unknown value, and a birth its `date of birth` and `place of birth`
 (ADR-0040 §2, §3). What a birth or a death event a curator makes still
-releases or holds back is ADR-0040's Q5 (lean: it releases no one and
-dates no one; a birth event's date still holds its participants back).
+releases or holds back is ADR-0040's Q5 (lean: it releases no one, departing from ADR-0020 §2 for it and failing closed; a birth event's date still holds its participants back; and a narrowed display still shows a curator-made undated death on its principal's page and timeline, for rule 6).
 Amended by #577 (2026-10-23): an event is no person on the death it
 states. An item typed, at normal or preferred rank, as an event (`event`
 or a class the manifest makes a subclass of it, read through redirects)
@@ -329,7 +328,7 @@ replaces `living person = no`: to include someone, assert their death the
 ordinary source-first way, not by flipping a flag.
 
 Superseded by ADR-0040, 2026-10-24: "or is the principal of a `death`
-event" and "Death is an event like any other …, so 'died, nothing else
+event", "or an even-undated death event" and "Death is an event like any other …, so 'died, nothing else
 known' is simply a death event with the person as participant" no longer
 hold. "Died, nothing else known" is a `date of death` of unknown value
 (Wikibase "some value"), given only where a source says the person died
@@ -366,9 +365,7 @@ living.
 
 Superseded by ADR-0040, 2026-10-24: no extraction or GEDCOM batch makes
 a birth or a death event, so the paragraph above reads only an event a
-curator makes, and what it reads of one is ADR-0040's Q5 (lean: the
-death-event release and a dated birth event's release go; a birth
-event's date still holds its participants back).
+curator makes, and what it reads of one is ADR-0040's Q5 (lean: it releases no one, departing from ADR-0020 §2 for it and failing closed; a birth event's date still holds its participants back; and a narrowed display still shows a curator-made undated death on its principal's page and timeline, for rule 6).
 
 ### 3. No curation duty
 

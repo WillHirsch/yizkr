@@ -804,8 +804,9 @@ Line numbers are those of main at 52e2a08, for paths under `src/yizkr/`.
   "Witwer der Cäcilie Löbig" gives Eugen's civil status (widowed),
   Cäcilie's death, and their marriage.
   (Amended by ADR-0040, 2026-10-24: "Cäcilie's death" is her own
-  `date_of_death`, 16 March 1909 with that day its `latest_date`, and
-  the marriage is `ended_by_death_of` her.)
+  `date_of_death`, 16 March 1909 with that day its `latest_date`
+  (ADR-0040's Q7 lean), and the marriage is `ended_by_death_of` her
+  (its Q2).)
 - **Everyone in an event gets a role.** In Gustav's birth register
   extract, Gustav is the one born (the event's *principal*), and his
   father Sebastian is both a parent and the informant who reported the
@@ -1415,7 +1416,7 @@ no longer accepts `death`; and the table gains rows:
 | `kinship_class` | the classes of §3.3, the step classes included |
 
 A death property (`date_of_death`, `place_of_death`, `cause_of_death`,
-`burial_place`, `age_at_death`) takes only a person (`human` or
+`burial_place`, and `age_at_death` on ADR-0040's Q1 lean) takes only a person (`human` or
 `unclassified_entity`) as its subject, and so do `date_of_birth` and
 `place_of_birth` on ADR-0040's Q11 lean; `date_of_death` alone may take
 an unknown value. Validation refuses an entity of kind `birth` or

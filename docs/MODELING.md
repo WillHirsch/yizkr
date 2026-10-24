@@ -867,7 +867,8 @@ artifact a new QID, changes neither.
   names the late spouse bounds the spouse's death by the date at which
   the source presents the widowhood as holding (ADR-0040's Q7 lean: the
   burial register's 16 March 1909 for Cäcilie). A marker adds nothing
-  where the same source dates or places the death itself.
+  where the same source dates the death itself; one that places it
+  without a date keeps the bound beside the place.
 - **A death stated with no limit is an unknown value** (ADR-0040 §2.2).
   A `date of death` of unknown value (Wikibase "some value") is given
   only where a source says the person died and gives no limit (a GEDCOM
@@ -911,8 +912,8 @@ artifact a new QID, changes neither.
   Amended by ADR-0040, 2026-10-24: its subject is a person (`human` or
   `unclassified_entity`), as for every death property, and its
   `point_in_time` is the burial's own date as the source gives it ("Beerdigt:
-  20. März 1909"), never the document's date; no `date of death` is
-  derived from it. A burial stated without its place is ADR-0040's Q3
+  20. März 1909"), never the document's date (ADR-0040's Q3 lean); no
+  `date of death` is derived from it. A burial stated without its place is ADR-0040's Q3
   (lean: a `burial_place` of unknown value).
 
 ## Places
@@ -1935,9 +1936,7 @@ not a signal to grow the schema on.
   they decide each person alike.
   (Superseded by ADR-0040, 2026-10-24: no extraction or GEDCOM batch
   makes a birth or a death event. What one a curator makes releases or
-  holds back is ADR-0040's Q5; lean: it releases no one and dates no
-  one, the death-event release and a dated birth event's release go, and
-  a birth event's date still holds its participants back.)
+  holds back is ADR-0040's Q5; lean: it releases no one, departing from ADR-0020 §2 for it and failing closed; a birth event's date still holds its participants back; and a narrowed display still shows a curator-made undated death on its principal's page and timeline, for rule 6.)
 - **No curation duty.** There is no `living` column in the review CSV
   and nothing the reviewer must decide. Privacy falls out of what
   sources already assert; a curator who knows a person is dead records
@@ -2174,8 +2173,14 @@ not a signal to grow the schema on.
   person page with its own sources, an unknown value as "died (date not
   stated)", and each source's statement shows beside the dated entry
   (#624's criteria): Rudolf's certificate's 6 March 1941 and the 1958
-  letter's bound 25 December 1958, side by side. The timeline lists an
-  unknown value under "No date stated", and a burial by its
-  `point_in_time`; the places map gains `place of birth`, `place of
-  death` and `place of burial` (lean). Whether a curator-made undated
-  death event still shows is ADR-0040's Q5 (lean: nothing needs it).
+  letter's bound 25 December 1958, side by side. The timeline shows an
+  unknown value beside the person's dated death entry when a statement
+  dates that death (#624: a certificate's date and a GEDCOM `1 DEAT Y`
+  side by side, each with its source), and under "No date stated" only
+  when none does; a burial by its `point_in_time`; the places map gains `place of birth`, `place of
+  death` and `place of burial` (lean). A curator-made undated
+  death event still shows, on ADR-0040's Q5 lean, through a narrowed
+  `UNDATED_DEATHS_QUERY` for curator-made events only, on its
+  principal's page and timeline, since rule 6 needs every source's
+  assertion shown whatever the release; the timeline shows a birth or
+  death event on its principal's timeline alone.

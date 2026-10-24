@@ -164,6 +164,9 @@ person may have many of each, side by side, none preferred (rule 6).
   judges that excerpt as any other.
 
 GEDCOM DEATs that state the death without a claim of their own are Q4.
+"That source's statement of the death" is, in a GEDCOM export, the DEAT
+(each DEAT with its own citation, so `1 DEAT Y` beside a dated DEAT
+gives both), and in a document, the document.
 
 #### 2.3 The bounded form
 
@@ -177,16 +180,22 @@ it is both the value and the `latest_date`.
   records it.
 - The 1905 certificate's "dessen verstorbener Ehefrau Cäcilie": 15
   December 1905 with `latest_date` 15 December 1905, beside the
-  gravestone's and the GEDCOM export's 1902.
+  gravestone's and the GEDCOM export's 1902. (The universe does not yet
+  record the certificate's `inception` or this bound; follow-up A adds
+  them.)
 - Hypothetical: "der selige Felix" on the postcard, whose `inception` is
   "before 19 August 1938", gives 19 August 1938 with `latest_date` 19
   August 1938, beside the GEDCOM export's 1931. A document dated only
   "1890s" gives that decade, at decade precision, as both.
 - A document whose own date is open at the late end ("after 1945"), or
   that states none, gives the unknown value.
-- A marker adds nothing where the same source dates or places that
-  death itself: the compensation file's "seine verstorbene Mutter Ida …
-  1946 verstorben" gives only the 1946 date (and `mother`).
+- A marker adds nothing where the same source dates that death itself:
+  the compensation file's "seine verstorbene Mutter Ida … 1946
+  verstorben" gives only the 1946 date (and `mother`). A source that
+  places the death but does not date it keeps the bound beside the
+  place: a hypothetical dated letter's "der selige Felix … in Peiltal
+  verstorben" gives a `place_of_death` of Peiltal and the bounded
+  `date_of_death`.
 
 #### 2.4 A widow's or widower's marker that names the late spouse
 
@@ -221,7 +230,12 @@ cites its own line:
 
 #### 2.6 Informants and witnesses
 
-The informants and witnesses of a death are not extracted. Whether a
+The role of an informant or a witness of a birth or a death is not
+recorded (decided, 2026-10-24: informants are not extracted by
+default). The person is still extracted, with what the record states of
+them: their name, their address (the chunk prompt's residence rule for
+the informant or applicant on a certificate), their kinship (Sebastian,
+who "zeigte an" Gustav's birth, is still Gustav's `father`). Whether a
 record states its own informant as a claim about itself is Q6.
 
 #### 2.7 ADR-0039 §10.1(c)
@@ -249,8 +263,8 @@ migrates it.
   curator makes (Q5), and are marked as kinds no extraction makes.
 - **The critic checks that a stated birth or death reaches its person**:
   a new category, `vital_not_on_person` (lean name), for a birth or a
-  death the page states whose date and place no claim gives to that
-  person. It reads the numbered transcription the critic reads (#607).
+  death the page states with a date or a place, where no claim gives
+  that person either. It reads the numbered transcription the critic reads (#607).
   Its findings stay advisory (ADR-0013, ADR-0023), and are counted with
   the critic's categories; the two births lost on one form page are the
   case it is for.
@@ -282,8 +296,8 @@ migrates it.
   Leopold and Agnes Löbig adopt a boy whose own birth register names his
   birth parents. The order gives the boy `father` → Leopold and `mother`
   → Agnes, each with `parentage` adoptive, a `start_time` of the order's
-  date, and the order's own word ("an Kindes Statt angenommen", say) in
-  `kinship_type`. The register gives his birth parents, with no kind
+  date, and the order's own word for the relation ("Adoptivvater",
+  "Adoptivmutter", say) in `kinship_type`. The register gives his birth parents, with no kind
   stated. The report lists none of them as disagreeing.
 - **Disagreement.** Parents are compared within one kind, so a birth
   father and an adoptive father never disagree. A pair is set aside
@@ -338,13 +352,16 @@ migrates it.
 - `ended_by_death_of` is not death evidence on its own (Q9, lean): the
   partner's own death statement, which the marker now always gives,
   is.
-- If `age_at_death` becomes a statement (Q1), `PERSON_SUBJECT_PROPERTIES`
-  gains it, which `read_dump`'s `subject_links` reuse.
+- If `age_at_death` becomes a statement (on Q1's lean),
+  `PERSON_SUBJECT_PROPERTIES` gains it, which `read_dump`'s `subject_links` reuse.
 - Validation refuses `date_of_death`, `place_of_death`,
-  `cause_of_death`, `burial_place` and `age_at_death` on a subject that
+  `cause_of_death`, `burial_place` and `age_at_death` (on Q1's lean) on
+  a subject that
   is neither `human` nor `unclassified_entity`, and `date_of_birth` and
   `place_of_birth` too (Q11, lean).
-- Events a curator makes: Q5.
+- Events a curator makes: Q5. Their release goes on its lean, which
+  departs from ADR-0020 §2's "any death-presupposing assertion" for
+  them and fails closed.
 - ADR-0028 (reserved; #67, #120) will read the same death evidence.
 
 ### 6. Display
@@ -358,10 +375,22 @@ migrates it.
   shown side by side, each with its source. The unknown-value display is
   tested on a row of its own (follow-up A's case).
 - **Timeline.** `person-timeline.rq` lists only dated rows, so an
-  unknown value needs its own reader, under "No date stated". A burial
-  is placed by its `point_in_time`.
-- `UNDATED_DEATHS_QUERY` and its entries go, and with them the
-  undated-death display #623 built.
+  unknown value needs its own reader. It shows beside the person's
+  dated death entry when a statement dates that death (#624: a
+  certificate's dated death and a GEDCOM `1 DEAT Y` show side by side,
+  each with its source), and under "No date stated" only when no
+  statement dates it. A burial is placed by its `point_in_time`.
+- **Events a curator makes** (Q5). The timeline's event arm reads
+  `participant` at any role, so a dated birth or death event would show
+  on every participant's timeline, an informant's included. Lean: for
+  a `birth` or `death` event it reads the `principal` alone, so the
+  event shows on its principal's timeline only; other events keep every
+  participant.
+- `UNDATED_DEATHS_QUERY` and its entries give way to the statements.
+  On Q5's lean a narrowed form stays, for curator-made death events
+  only, so that such an undated death still shows as "died (date not
+  stated)" with its sources on its principal's page and timeline (rule
+  6), however the release is settled.
 - **Places map.** It gains `place_of_birth`, `place_of_death` and
   `burial_place` (lean), since a death's place no longer reaches it
   through an event's `location`.
@@ -398,8 +427,14 @@ Build B (the PR's follow-up) carries them; in brief:
   descriptions of `kinship_type`, `age_at_death`, `principal` and
   `marriage`; `birth` and `death` marked as kinds no extraction makes;
 - **claims and validation** (`claims.py`): an unknown-value type, the
-  refusals of §2, §3, §5 and §7, the principal-and-informant check gone,
-  new reject reasons;
+  refusals of §2, §3, §5 and §7 (`parentage` on anything but `father`,
+  `mother` and `child`; an `ended_by_death_of` that names neither of the
+  couple, where the batch names them), the principal-and-informant check
+  gone, new reject reasons;
+- **fingerprints** (`pipeline/fingerprints.py`): `canonical_value` gains
+  a print for an unknown value (a tag, no payload), with its docstring
+  and a unit test, since the run diff matches claims through
+  `claim_prints`;
 - **prompts** (§1's constants);
 - **GEDCOM** (`pipeline/gedcom.py`): `died` and `death_event` give way to
   an unknown-value `date_of_death` citing the DEAT (Q4), a `BURI`
@@ -420,107 +455,220 @@ Build B (the PR's follow-up) carries them; in brief:
   `pre_plan_refusals` refuses what validation refuses;
 - **privacy and the export** (`core/privacy.py`, `backup.py`): §5;
 - **site** (`staticsite.py`) and **queries** (`person-timeline.rq`,
-  `places-map.rq`, `kinship.rq`): §4, §6;
+  `places-map.rq`, `kinship.rq`): §4, §6; the artifact page's
+  `ASSERTIONS_QUERY` rows, which would print an unknown value as its
+  blank-node id, with a test;
+- **run evidence** (`scratchwrite.run_site`, `report.py`,
+  docs/RUN_REPORT.md, docs/RUN_DIFF.md): the site stage's record, from
+  `publish_site`'s summary, gains the possibly-living count and the
+  releases by cause (a dated or other death property, an unknown-value
+  `date_of_death` by kind of source, `age_at_death`, an unknown
+  `burial_place`, the birth cutoff), counted on the written graph as
+  disagreements are, and the report and the diff carry them. Today none
+  of them counts possibly-living people or releases;
 - **disagreement** (`disagreement.py`, `disagreement-report.rq`): an
   unknown value set aside and never listed; parents within one kind;
 - **reconcile** (`ROSTER_QUERY`): an unknown value; Q5's event arms.
 
+**Order and data.** B lands before the keeper run (#159), so no kept
+graph holds death or birth events from extraction; no graph migration is
+needed, since every scratch run resets the instance (ADR-0025). If the
+keeper run came first, B would need a reader for kept events, which
+this ADR does not give.
+
 ### 9. Owner questions, with leans
 
-Until the owner answers, the leans stand; the owner's merge with them
-answered accepts this ADR.
+Until the owner answers, the leans stand. The owner's merge, with the
+questions answered, accepts this ADR. **Decided** (owner, 2026-10-24),
+and so not asked:
 
-1. **`age_at_death`.** Lean: a string statement on the person, verbatim,
-   with its own reference, as the universe records "Alter: 73 Jahre"; it
-   needs no date of death to hang on, and it is death evidence (ADR-0020
-   §2's "any death-presupposing assertion"), joining
-   `DEATH_EVIDENCE_PROPERTIES` (and so `EVENT_DEATH_PROPERTIES`, its
-   alias), `PERSON_SUBJECT_PROPERTIES` and the written-out arms of
-   `PEOPLE_QUERY` and `PERSON_FACTS_QUERY`. Alternatives: (a) a statement
-   that is person evidence only, which withholds someone known only by
-   "Alter: 73 Jahre" and departs from ADR-0020 §2; (b) a qualifier on
-   `date_of_death`, as the manifest and MODELING.md say today, which then
-   needs a `date_of_death`, dated or unknown, to sit on. Either statement
-   form rewrites `privacy.py`'s comment.
-2. **How a union ends by a death.** Lean: a new property
-   `ended_by_death_of` (union → `human` or `unclassified_entity`), with
-   `ended_by` no longer accepting `death`; where the batch names the
-   couple, validation checks that the value is one of them.
-   Alternative: `ended_by` with a person value, one property with two
-   kinds of value, on which every reader of `ended_by` branches.
-3. **Dating `burial_place`, and a burial with no place.** Lean: its
-   `point_in_time` is the burial's own date as the source gives it, with
-   its range and circa (the GEDCOM export's `2 DATE 20 MAR 1909` beneath
-   `BURI`, the register's "Beerdigt: 20. März 1909"), never the
-   document's date, and no `date_of_death` is derived from it. A burial
-   stated without its place (today the adapter warns and writes
-   nothing): lean, a `burial_place` of unknown value, dated where dated
-   (`1 BURI Y` undated); this widens the unknown value to a second
-   property and releases people withheld today, so the owner confirms
-   it, and the scratch diff counts them by kind of source. Alternatives:
-   a `date_of_burial` (P4602) for a dated burial and nothing for `1 BURI
-   Y`; or no claim, as today.
-4. **GEDCOM DEATs that state the death but give no claim** (`states_event`
-   today: a `Y`, an unparsed DATE on a DEAT line with no value, or a PLAC
-   with any value). Leans: `1 DEAT Y`, and `1 DEAT Y` with `2 DATE ?`,
-   give the unknown value; a DATE that says the date is unknown ('?',
-   'UNKNOWN', '(date unknown)') gives no claim, counted, as the owner
-   ruled; any other DATE the grammar cannot read (hypothetical "Spring
-   1900") gives no claim, counted, since its limit may exist
-   (alternative: the unknown value with the DATE in the excerpt, which
-   widens decision 1); a PLAC with no word (`2 PLAC ?, -`) gives no
-   claim, counted, as a blank place field (alternative: the unknown
-   value, since GEDCOM 5.5.1 has a PLAC with a value assert the event).
-   People released today only by such DEATs become possibly living; the
-   scratch diff counts them.
-5. **Birth and death events a curator makes** (the classes stay). Lean:
-   they release no one and date no one. `event_principal`'s release in
-   `read_evidence` goes, and so does a dated birth event's release of a
-   principal born only by it; a birth event's date still holds its
-   participants back; the event arms of `ROSTER_QUERY` go; #577's
-   set-aside stays; nothing needs the undated-death display.
-   Alternative: keep both arms of `read_evidence` and the roster's event
-   arms, and then, for rule 6, a narrowed `UNDATED_DEATHS_QUERY` that
-   shows a curator-made undated death as "died (date not stated)".
-6. **Informants.** Lean: they stay unextracted; follow-up C, an ADR-0039
-   amendment issue, decides whether a record states its own informant,
-   parked until a source needs it, and any property it adopts joins
-   `PERSON_VALUE_PROPERTIES`. Lean: `informant` leaves `object_has_role`
-   and the prompts, as `parent` does; the item stays. Alternative: keep
-   accepting it, for events a curator makes and for C. `witness` and
-   `officiant` stay.
-7. **What bounds a widowhood marker's death.** Lean: the date at which
-   the source presents the widowhood as holding, the `civil_status`
-   statement's `point_in_time` (the burial register: 16 March 1909; a
-   letter: its own date, as the 1958 letter's 25 December 1958).
-   Alternative: always the document's own date, as "the late" takes it
-   (the register's 1909, at year precision).
-8. **A `birth` or `death` entity in a manifest.** Lean: dropped alone and
-   counted, never failing the turn (§7). Alternative: fail the turn, as
-   ADR-0039 §10.1(b) does for an artifact kind; the scratch diff then
-   counts manifest fallbacks.
-9. **`ended_by_death_of` as death evidence.** Lean: no; the spouse's own
-   `date_of_death` from the same marker releases them. Alternative: yes,
-   for its value.
-10. **An unknown value with no excerpt.** Lean: refused and counted,
-    since nothing else shows what the source said. Alternative: accepted
-    like any claim.
-11. **Birth properties on a non-person.** Lean: refused, as the death
-    properties are. Alternative: the owner's death-only rule.
-12. **"His late wife" with no widowhood marked** (raised by this draft).
-    The 1905 certificate's "dessen verstorbener Ehefrau Cäcilie" names
-    Cäcilie as Eugen's late wife. Lean: her bounded death and the
-    marriage, and no `ended_by_death_of`, since only a survivor's
-    widowhood is the marker that ends a union (§2.4), as a partner's
-    DEAT ends none in GEDCOM (ADR-0036 §5). Alternative: the union
-    `ended_by_death_of` Cäcilie, as for a widower's marker.
+- `1 DEAT Y` gives a `date_of_death` of unknown value;
+- a DATE that says the date is unknown ("d. ?", "date unknown") gives
+  no claim;
+- informants are not extracted by default.
 
-Lean-only choices beyond the 2026-10-24 decisions, listed with these in
-the PR: the `parentage` keys and labels; a register's parents with no
-kind; the court as the order's `issued_by`; the critic's category name;
-the places map; clustering reading kin of every kind; `ended_by_death_of`
-not lifted; adoptive path labels; the bounded form's precision rule
-(§2.3); the two manifest checks kept separate (§7).
+1. **`age_at_death`.**
+   - *Lean:* a string statement on the person, verbatim, with its own
+     reference. The burial register's "Alter: 73 Jahre" gives Eugen
+     `age_at_death` "73 Jahre". It needs no date of death to hang on.
+     It is death evidence, because ADR-0020 §2 counts "any
+     death-presupposing assertion" and an age at death presupposes
+     the death. So it joins `DEATH_EVIDENCE_PROPERTIES` (and
+     `EVENT_DEATH_PROPERTIES`, its alias), `PERSON_SUBJECT_PROPERTIES`,
+     and the written-out arms of `PEOPLE_QUERY` and
+     `PERSON_FACTS_QUERY`.
+   - *The risk:* the model can misplace an age. An age that a census, a
+     passport or a letter gives for a living person, put in
+     `age_at_death`, would release that person on that statement
+     alone. The critic's `excerpt_does_not_state` is the only check on
+     it, and it is advisory.
+   - *Alternatives:*
+     - (a) a statement that is person evidence only. It withholds
+       someone known only by "Alter: 73 Jahre", and departs from
+       ADR-0020 §2.
+     - (b) a qualifier on `date_of_death`, as the manifest and
+       MODELING.md say today. It then needs a `date_of_death`, dated
+       or unknown, to sit on.
+   - Either statement form rewrites `privacy.py`'s comment.
+   - *Lean-only:* a GEDCOM `DEAT.AGE` stays counted and unmapped. The
+     alternative maps it to `age_at_death`, but only beneath a DEAT
+     that states the death.
+2. **How a union ends by a death.**
+   - *Lean:* a new property `ended_by_death_of` (union → `human` or
+     `unclassified_entity`), and `ended_by` no longer accepts `death`.
+     Eugen and Cäcilie's marriage is `ended_by_death_of` Cäcilie. Where
+     the batch names the couple, validation checks that the value is
+     one of them. Reason: each property then has one kind of value.
+   - *Alternative:* `ended_by` with a person value. That is one
+     property with two kinds of value, and every reader of `ended_by`
+     has to branch on the kind: clustering's union lifting, the
+     export's `UNION_BOUNDS`, the timeline.
+3. **Dating `burial_place`, and a burial with no place.**
+   - *Dating, lean:* its `point_in_time` is the burial's own date as the
+     source gives it, with its range and circa: the GEDCOM export's
+     `2 DATE 20 MAR 1909` beneath `BURI`, the register's "Beerdigt: 20.
+     März 1909". It is never the document's date, because a
+     document's date dates its making, not the burial. No
+     `date_of_death` is derived from it.
+   - *A burial stated without its place, lean:* a `burial_place` of
+     unknown value, with its `point_in_time` where dated.
+     - A `1 BURI` with `2 DATE 20 MAR 1909` and no PLAC gives that;
+       `1 BURI Y` gives it undated.
+     - Reason: a stated burial presupposes the death, as ADR-0020 §2
+       counts a burial place. Today the adapter warns and writes
+       nothing.
+     - BURI follows DEAT's rules, Q4 included.
+     - This widens the unknown value to a second property and releases
+       people who are withheld today, so the owner confirms it. The
+       scratch diff counts them by kind of source.
+   - *Alternatives:*
+     - a burial stated with no place gives an unknown-value
+       `date_of_death` instead, keeping the unknown value to one
+       property;
+     - a `date_of_burial` (P4602) for a dated burial, and nothing for
+       `1 BURI Y`;
+     - no claim, as today.
+4. **GEDCOM DEATs that state the death but give no claim.** Today
+   `states_event` (`pipeline/gedcom.py`) takes a DEAT as stating the
+   death by a `Y`, by a DATE the grammar cannot parse (when the DEAT's
+   own line has no value), or by a PLAC with any value. The cases
+   below are leans; the decided ones are listed above.
+   - `1 DEAT Y` with `2 DATE ?` gives the unknown value. Reason: a `Y`
+     states the death whatever its DATE holds, unlike "d. ?", which the
+     owner ruled gives no claim.
+   - Any other DATE the grammar cannot read (hypothetical: "Spring
+     1900") gives no claim, counted, since its limit may exist.
+     Alternative: the unknown value, with the DATE kept as written in
+     the excerpt. That widens decision 1, so only the owner can take
+     it.
+   - A PLAC with no word (`2 PLAC ?, -`) gives no claim, counted, as a
+     blank place field does. So does a PLAC of placeholder words only
+     (`2 PLAC unbekannt`, which `_names_a_place` passes through
+     `gedcom_placeholders.yaml`). Alternative: the unknown value, since
+     GEDCOM 5.5.1 has a PLAC with a value assert the event.
+   - `states_event` is unchanged for MARR, DIV and ANUL.
+   - People who are released today only by such DEATs become possibly
+     living. The scratch diff counts them.
+5. **Birth and death events a curator makes** (the classes stay). There
+   are two choices.
+   - **Release.**
+     - *Lean:* such an event releases no one.
+     - What goes: the death-event release (`event_principal` in
+       `read_evidence`), a dated birth event's release of a principal
+       born only by it, and the event arms of `ROSTER_QUERY`.
+     - What stays: a birth event's date still holds its participants
+       back, and #577's set-aside stays.
+     - This departs from ADR-0020 §2's "any death-presupposing
+       assertion" for curator-made events. It fails closed, and a
+       curator who knows of a death can record it as a statement.
+     - *Alternative:* keep both arms of `read_evidence` and the
+       roster's event arms.
+   - **Display.**
+     - *Lean:* keep a narrowed `UNDATED_DEATHS_QUERY`, for curator-made
+       death events only. It shows "died (date not stated)" with its
+       sources on the principal's page and timeline. Reason: rule 6
+       needs every source's assertion shown, whatever the release
+       (#354: "only shown, never weighed").
+     - The timeline's event arm reads a birth or a death event's
+       `principal` alone (§6).
+     - *Alternative:* drop the display. A curator-made undated death
+       would then show on no page, and rule 6 would not be met for it.
+6. **Informants.** PR #633 merged with no informant rule, so "a record
+   states its own informant" has no home.
+   - *Lean:* follow-up C, an ADR-0039 amendment issue, decides it,
+     parked until a source needs it. If a property is ever adopted, it
+     joins `PERSON_VALUE_PROPERTIES`.
+   - *Lean:* `informant` leaves `object_has_role`'s accepted values and
+     the prompts, as `parent` does, since no extracted event has one
+     now; the item stays. Sebastian, who "zeigte an" Gustav's birth, is
+     still extracted as Gustav's `father`, with his address.
+   - *Alternative:* keep accepting it as a role, for events a curator
+     makes and for C.
+   - `witness` and `officiant` stay.
+7. **What bounds the death that a widow's or widower's marker states.**
+   - *Lean:* the date at which the source presents the widowhood as
+     holding, which is also the `civil_status` statement's
+     `point_in_time`.
+     - The burial register presents Eugen as a widower at his death, so
+       Cäcilie's bound is 16 March 1909.
+     - A letter presents its writer's widowhood at its own date: the
+       1958 letter gives 25 December 1958.
+     - Reason: it is what the source says, and it is tighter than the
+       document's date.
+   - *Alternative:* always the document's own date, as "the late" takes
+     it (the register's 1909, at year precision).
+8. **A `birth` or `death` entity in a manifest.** For example, a 1941
+   certificate's manifest that lists "Death of Rudolf".
+   - *Lean:* it is dropped alone and counted, and never fails the
+     manifest turn (§7). Reason: failing the turn would send the
+     document to line-range segmentation with no manifest, and a death
+     certificate makes such an entity likely.
+   - *Alternative:* fail the turn, as ADR-0039 §10.1(b) does for an
+     artifact kind, so the two behave alike. The scratch diff then
+     counts manifest fallbacks.
+9. **`ended_by_death_of` as death evidence.**
+   - *Lean:* no. The marker that gives Eugen and Cäcilie's marriage
+     `ended_by_death_of` Cäcilie also gives Cäcilie's own
+     `date_of_death`, and that statement releases her.
+   - *Alternative:* yes, for its value. That releases a partner whose
+     only death mention is a union end.
+10. **An unknown value with no excerpt.**
+    - *Lean:* refused and counted, since nothing else shows what the
+      source said. For example, "the late Felix" given as an unknown
+      value with no excerpt is refused.
+    - *Alternative:* accepted like any claim.
+11. **Birth properties on a non-person.**
+    - *Lean:* refused, as the death properties are, so it fails closed.
+      `date_of_birth` is person evidence (`PERSON_SUBJECT_PROPERTIES`),
+      so an event or a family that carries one is taken for a person.
+    - *Alternative:* the owner's death-only rule.
+12. **"His late wife" with no widowhood marked** (raised by this
+    draft). The 1905 certificate's "dessen verstorbener Ehefrau
+    Cäcilie" names Cäcilie as Eugen's late wife.
+    - *Lean:* her bounded death and the marriage, with no
+      `ended_by_death_of`. Reasons: ADR-0035 §3.1's row for these words
+      already gives her marriage with no end; only a survivor's
+      widowhood is the marker that ends a union (§2.4); and in GEDCOM a
+      partner's DEAT ends no union (ADR-0036 §5).
+    - *Alternative:* the union `ended_by_death_of` Cäcilie, as for a
+      widower's marker.
+
+These lean-only choices beyond the 2026-10-24 decisions are listed with
+the questions in the PR:
+
+- the `parentage` keys and labels;
+- a register's parents with no kind;
+- the court as the order's `issued_by`;
+- the critic category's name;
+- the places map;
+- clustering reading kin of every kind;
+- `ended_by_death_of` not lifted;
+- the adoptive path labels;
+- the bounded form's precision rule (§2.3);
+- the two manifest checks kept separate (§7);
+- `DEAT.AGE` left unmapped (Q1);
+- the timeline's event arm reading a birth's or a death's principal
+  alone (§6, Q5).
 
 ## Consequences
 

@@ -22,10 +22,11 @@ its parts; and a nickname that several NAMEs give is a claim of each: see
 Amendments.
 Superseded by ADR-0040 (2026-10-24): a DEAT that states the death with
 no date, place or cause gives a `date_of_death` of unknown value citing
-that DEAT, not a `death` event; which DEATs state the death so is
-ADR-0040's Q4 (lean: a `Y`, with or without a DATE of `?`; a DATE that
-says the date is unknown, one the grammar cannot read, and a PLAC with
-no word give no claim, counted).
+that DEAT, not a `death` event. `1 DEAT Y` gives it, and a DATE that
+says the date is unknown gives no claim (owner, 2026-10-24); the other
+cases are ADR-0040's Q4 (lean: `1 DEAT Y` with `2 DATE ?` gives it; a
+DATE the grammar cannot read, and a PLAC with no word or of placeholder
+words only, give no claim, counted).
 Amended by #324 and #350 (2026-09-29): a SOUR beneath a MARR or DIV is
 folded into the spouse claims it dates or places; a SOUR that no claim
 folds, an OBJE that no image claim maps (within a folded citation, a
