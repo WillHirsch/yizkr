@@ -372,6 +372,11 @@ or a `LocalRef`'s `instance_of`, so only a structured record or a
 hand-written batch makes an artifact-kind entity (ADR-0039 §10.1(b),
 §10.6). `placed_subject` stays `caption`'s alone. This and every other
 line dated #626 in this file describe the model from that build on.
+Widened by #645, 2026-10-24 (ADR-0039 §10.1(c), (c4)): a fourth subject,
+the source's own mention item (an `unclassified_entity` of the claim's
+batch) of an artifact it only writes about, such as an enclosure held
+as a scan of its own; a curator, or later artifact matching, links that
+mention item to the held scan.
 
 **A retired property** stays in the instance and takes no new claim: it
 accepts nothing, validation refuses every claim of it, and no prompt that

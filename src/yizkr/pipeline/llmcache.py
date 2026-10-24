@@ -143,6 +143,7 @@ from yizkr.pipeline.llm import (
     COMPLETE,
     FORK,
     OPEN,
+    ClassifierRefused,
     ConversationalLlmClient,
     ConversationChanged,
     OutputLimitReached,
@@ -1730,7 +1731,11 @@ class ConversationalCachingClient(CachingClient):
         answer, or replayed and found the same; a replay that differs
         raises ConversationChanged. A replay that fails raises, and the
         failure is remembered: the conversation's later forks raise it
-        again at once, rather than asking the engine once per fork.
+        again at once, rather than asking the engine once per fork. A
+        replay the safety classifier refused (ClassifierRefused) raises a
+        RuntimeError that names the refusal, as every later fork's does:
+        it is a failure of the conversation's session, which a fork's
+        caller falls back from, never the refusal of the fork itself.
 
         A replay is asked through the client's replay_conversation where
         it has one (a client that reports its calls: the replay's call
@@ -1775,6 +1780,15 @@ class ConversationalCachingClient(CachingClient):
             self.cache.check_storable(key)
             try:
                 response, session = replay(conversation.prompt)
+            except ClassifierRefused as exc:
+                # the refusal is of the replay, not of the fork that needed
+                # it: every fork of the conversation sees the same failure
+                # of its session, which its caller can fall back from
+                conversation.failed = f"{type(exc).__name__}: {exc}"
+                raise RuntimeError(
+                    f"the replay of the conversation opened under {key} "
+                    f"was refused: {exc}"
+                ) from exc
             except Exception as exc:
                 conversation.failed = f"{type(exc).__name__}: {exc}"
                 raise

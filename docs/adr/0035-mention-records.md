@@ -12,9 +12,10 @@ no-addition check (§5) no longer reads containers, which a form gives in
 fields of their own and so never in the place's label; each container is
 checked on its own, with three reasons each counted apart: `no-evidence`,
 `evidence-not-in-source` (compared folded, typographic punctuation read
-plain, every run of whitespace and line breaks made one space, a hyphen
-at a line's end joined, or kept, for an excerpt that crosses the
-hyphen, where the name is hyphenated, and whole words only; `core/verbatim.py`, the comparison claims' excerpts can
+plain, a soft hyphen dropped, every run of whitespace and line breaks
+made one space, a hyphen at a line's end joined, or kept, with no space
+after it or with one, for an excerpt that crosses the hyphen, and whole
+words only; `core/verbatim.py`, the comparison claims' excerpts can
 share) and
 `evidence-does-not-name` (the evidence does not hold the container's
 name, folded, as whole words). By the owner's option B, a container that
@@ -98,6 +99,10 @@ DATE row needs no exception, and the adapter meets the support test
 through its mapping, since an OBJE's DATE stands in the object's own
 record and so conveys that object's date of making (ADR-0039 §10.4,
 §10.6).
+Widened by #645, 2026-10-24 (ADR-0039 §10.1(c), (c4)): §3.4's
+document-subject properties also take the source's own mention item
+(an `unclassified_entity` of the claim's batch) of an artifact it only
+writes about, linked to the held scan later.
 
 Amended by #386 (2026-09-29): the critic's findings are validated records
 that name their entity and claim by id and give their axis and a
@@ -171,7 +176,9 @@ has none. Each entry read gives the reason
 `read as text`, counted in `coverage.json` (`records.set_aside`) and the
 run report beside `dropped`; it sets nothing aside, and what is left
 stands or is set aside as any record does (a text read that no form of
-the entity holds is an `addition`). An object holding anything else, a
+the entity holds is an `addition`). The run report counts `dropped` and
+`read as text` apart, as readings, never among the reasons records were
+set aside by (#611). An object holding anything else, a
 `written` that is no string, and a place's container (an object of its
 own, §2.2) are not read so. The entity-manifest prompt is
 unchanged, so cached answers are reused.
@@ -1513,12 +1520,19 @@ surname types, roles, classes and note categories. Beyond the schema:
   string, a name alone, among them); `evidence-not-in-source`, the
   evidence does not occur in the transcription as whole words, the two
   compared folded, typographic quotes, apostrophes and dashes read
-  plain, with every run of whitespace and line breaks made one space and
-  a hyphen at a line's end joined, or, where the joined reading finds
-  nothing, kept, for an excerpt that crosses the hyphen, as a hyphenated
-  name a line breaks at its own hyphen is quoted; an excerpt that stops
-  at such a hyphen or starts after it quotes part of a word and is no
-  match (`core/verbatim.py`); `evidence-does-not-name`, the evidence does not
+  plain (low and angle quotes, the non-breaking hyphen, the figure dash
+  and the minus sign among them) and a soft hyphen dropped, with every
+  run of whitespace and line breaks made one space and a hyphen at a
+  line's end joined (a soft hyphen at a line's end too), or, where the
+  joined reading finds nothing, kept, for an excerpt that crosses the
+  hyphen, as a hyphenated name a line breaks at its own hyphen is
+  quoted, and then kept with a space after it, as a quote that copies
+  the line's end, or a suspended hyphen a line breaks ("Hut-" then "und
+  Mützenmacherei"), is (amended by #612); an excerpt that stops at such
+  a hyphen or starts after it quotes part of a word and is no match
+  (`core/verbatim.py`); when its name is looked for, the evidence's
+  words are read with a hyphen at a line's end joined and kept, and
+  with a hyphen the evidence spaces ("Drake- radiel") joined too; `evidence-does-not-name`, the evidence does not
   hold the container's name, folded, as whole words; and `malformed`, the
   entry cannot become a container at all (neither an object nor a
   string, a key a container has not, no name or a name that is no
