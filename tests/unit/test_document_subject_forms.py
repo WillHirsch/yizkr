@@ -1036,7 +1036,11 @@ REF_IMAGE = "e4" * 20  # stated in the image Q14 itself
 # stated in the booklet (Q20), page 6, its translation as the excerpt
 REF_TRANSLATION = "f5" * 20
 REF_RUN = "a6" * 20  # inferred from the extraction run Q50
-EXCERPT, RUN = "P90", "P96"
+EXCERPT, RUN, CAPTION_PID = "P90", "P96", "P91"
+# a second reference stated in a container: the booklet's page 7, or the
+# album Q21
+REF_PAGE_7 = "a7" * 20
+CAPTION_TEXT = "Wastl to Klara, July 1939."
 TRANSLATION = "Flörburg, Brunnenring 35, 28 July 1939"
 NORMAL = "<http://wikiba.se/ontology#NormalRank>"
 DEPRECATED = "<http://wikiba.se/ontology#DeprecatedRank>"
@@ -1378,6 +1382,99 @@ class TestTheExport:
         with gzip.open(public, "rt", encoding="utf-8") as handle:
             content = handle.read()
         assert "Q14-both" not in content and TRANSLATION not in content
+
+    @pytest.mark.parametrize(
+        ("entity", "own", "rule"),
+        [
+            ("Q14", REF_IMAGE, RULE),  # by its media SHA-1
+            ("Q10", REF_LETTER, PART_OF_ONLY),  # `part of` the booklet
+        ],
+    )
+    @pytest.mark.parametrize(
+        "qualifier",
+        [
+            f'<{W}/prop/qualifier/{CAPTION_PID}> "{CAPTION_TEXT}"@en',
+            f'<{W}/prop/qualifier/{EXCERPT}> "{CAPTION_TEXT}"@en',
+            f'<{W}/prop/qualifier/{EXCERPT}> "{CAPTION_TEXT}"',
+        ],
+    )
+    def test_a_merged_statement_with_a_qualifier_of_text_goes_whole(
+        self, tmp_path, entity, own, rule, qualifier
+    ):
+        # the writer merges claims whose qualifiers match, so the
+        # booklet's caption may stand in a qualifier of the merged
+        # statement: which claim's words it is cannot be told (#695)
+        content = filtered(
+            tmp_path,
+            rule,
+            *hashed("Q14"),
+            *merged(entity, own),
+            f"{node(entity + '-both')} {qualifier} .",
+            *translated(),
+        )
+        assert f"{entity}-both" not in content
+        assert CAPTION_TEXT not in content and TRANSLATION not in content
+        # its truthy triple goes, unless another statement gives it: the
+        # letter's image Q10 states the same date once more of itself
+        truthy = f"<{W}/entity/{entity}> <{W}/prop/direct/{INCEPTION}>"
+        assert (truthy in content) == (entity == "Q10")
+
+    def test_a_qualifier_of_no_text_keeps_the_statement(self, tmp_path):
+        content = filtered(
+            tmp_path,
+            RULE,
+            *hashed("Q14"),
+            *merged("Q14", REF_IMAGE),
+            f"{node('Q14-both')} <{W}/prop/qualifier/{PART_OF}> "
+            f"<{W}/entity/Q20> .",
+            f"{node('Q14-both')} <{W}/prop/qualifier/P93> "
+            '"+1939-07-01T00:00:00Z"^^'
+            "<http://www.w3.org/2001/XMLSchema#dateTime> .",
+            *translated(),
+        )
+        both = node("Q14-both")
+        assert f"{both} <{W}/prop/statement/{INCEPTION}>" in content
+        assert f"{both} <{W}/prop/qualifier/P93>" in content
+        assert TRANSLATION not in content
+
+    def test_each_reference_of_the_container_goes(self, tmp_path):
+        # two references stated in the booklet, on pages 6 and 7: both go
+        page_7 = f"<{W}/reference/{REF_PAGE_7}>"
+        content = filtered(
+            tmp_path,
+            RULE,
+            *hashed("Q14"),
+            *merged("Q14", REF_IMAGE, REF_PAGE_7),
+            *translated(),
+            cited_in(REF_PAGE_7, "Q20"),
+            f'{page_7} <{W}/prop/reference/P3> "7" .',
+            f'{page_7} <{W}/prop/reference/{EXCERPT}> "{CAPTION_TEXT}"@en .',
+        )
+        both = node("Q14-both")
+        assert f"{both} <{W}/prop/statement/{INCEPTION}>" in content
+        assert REF_PAGE_7 not in content and REF_TRANSLATION not in content
+        assert CAPTION_TEXT not in content and TRANSLATION not in content
+
+    def test_each_container_an_image_is_part_of_counts(self, tmp_path):
+        # the letter's image is `part of` the booklet and of the album
+        # Q21 too: each one's reference goes
+        album = f"<{W}/reference/{REF_PAGE_7}>"
+        content = filtered(
+            tmp_path,
+            PART_OF_ONLY,
+            *st("Q10", "album", PART_OF, f"<{W}/entity/Q21>", REF_LETTER),
+            *merged("Q10", REF_LETTER, REF_PAGE_7),
+            *translated(),
+            cited_in(REF_PAGE_7, "Q21"),
+            f'{album} <{W}/prop/reference/{EXCERPT}> "{CAPTION_TEXT}"@en .',
+        )
+        both = node("Q10-both")
+        assert f"{both} <{W}/prop/statement/{INCEPTION}>" in content
+        assert f"{both} {DERIVED_FROM} <{W}/reference/{REF_LETTER}>" in (
+            content
+        )
+        assert REF_PAGE_7 not in content and REF_TRANSLATION not in content
+        assert CAPTION_TEXT not in content and TRANSLATION not in content
 
     def test_the_rule_reads_the_instance_s_ids(self):
         properties = {

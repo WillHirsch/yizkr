@@ -108,7 +108,7 @@ import shutil
 import subprocess
 import time
 import warnings
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1222,6 +1222,13 @@ _DERIVED_FROM = "<http://www.w3.org/ns/prov#wasDerivedFrom>"
 _REFERENCE_VALUE = re.compile(r"<[^<>]*/prop/reference/(P[1-9]\d*)>")
 
 
+def _text(term: str) -> bool:
+    """Whether `term` is a literal of text: a plain or language-tagged
+    one, as a string or a monolingual text value is written, not one of
+    a datatype (a time, a quantity, a coordinate)."""
+    return term.startswith('"') and not term.endswith(">")
+
+
 def _unknown(term: str) -> bool:
     """Whether `term` is an unknown value: a blank node, as dumpRdf.php
     writes one, or a skolem IRI, as the query service writes one."""
@@ -1271,15 +1278,16 @@ def statements_left_out(
     agrees with the image's own and the writer made them one statement,
     the statement stays with the image's own reference, and only the
     link to the container's goes (the returned (statement node,
-    reference node) pairs). Each statement that goes, goes with its node
-    and every triple that holds it (the returned node IRIs). A truthy
-    triple goes
-    with it when it gave it, and no statement that stays gives it too:
-    when the entity, the property and the value (the normalized value,
-    for a normalized truthy triple; the "no value" class, for a statement
-    of no value, one with no value triple) are those of a statement that
-    goes at normal or preferred rank, and of no statement of that entity
-    and property that stays at normal or preferred rank. A deprecated
+    reference node) pairs), unless a qualifier of the statement holds
+    text, which may be the container's words: then it goes whole. Each
+    statement that goes, goes with its node and every triple that holds
+    it (the returned node IRIs). A truthy triple goes with it when it
+    gave it, and no statement that stays gives it too: when the entity,
+    the property and the value (the normalized value, for a normalized
+    truthy triple; the "no value" class, for a statement of no value,
+    one with no value triple) are those of a statement that goes at
+    normal or preferred rank, and of no statement of that entity and
+    property that stays at normal or preferred rank. A deprecated
     statement gives no truthy triple, so one that goes takes none.
     An unknown value is a blank node (or a skolem IRI) of its statement's
     own, and so is the one its truthy triple holds, under another label.
@@ -1309,6 +1317,7 @@ def statements_left_out(
     references: dict[str, set[str]] = {}
     stated_in: dict[str, set[str]] = {}
     part_of: dict[str, set[str]] = {}
+    worded: set[str] = set()  # statements with a qualifier of text
     with gzip.open(full_dump, "rt", encoding="utf-8", newline="\n") as source:
         for line in source:
             triple = _TRIPLE.fullmatch(line.removesuffix("\n"))
@@ -1346,6 +1355,8 @@ def statements_left_out(
                 if role in ("value", "qualifier") and _item(value) in excluded:
                     left_out.add(subject)
                 if role == "qualifier":
+                    if _text(value):
+                        worded.add(subject)
                     continue
                 if role == "value":
                     valued.add(subject)
@@ -1364,7 +1375,7 @@ def statements_left_out(
     unlinked: set[tuple[str, str]] = set()
     if placed is not None:
         whole, unlinked = _placed_subject_statements(
-            placed, owners, references, stated_in, part_of
+            placed, owners, references, stated_in, part_of, worded
         )
         left_out |= whole
     # what the statements that go give their entities, and what those that
@@ -1408,6 +1419,7 @@ def _placed_subject_statements(
     references: Mapping[str, set[str]],
     stated_in: Mapping[str, set[str]],
     part_of: Mapping[str, set[str]],
+    worded: Collection[str] = frozenset(),
 ) -> tuple[set[str], set[tuple[str, str]]]:
     """What the export leaves out of the document-subject statements that
     one source makes about another artifact it places: (the statements
@@ -1422,12 +1434,18 @@ def _placed_subject_statements(
     stays names it too, its excerpt included. A statement that keeps no
     reference `stated in` an item once its container's references go,
     the container's own claim, goes whole: what stays of its references
-    names no source of its value. `owners` gives each statement's entity
-    and property, `references` each statement's reference nodes,
-    `stated_in` each reference's items, and `part_of` each `part of`
-    statement's items. Every statement counts, whatever its rank. An
-    un-held media item and a source's mention of an enclosure carry no
-    SHA-1, so their statements keep every reference."""
+    names no source of its value. So does one of `worded`, a statement
+    with a qualifier of text (a string or a monolingual text, an excerpt
+    or a caption say): the writer merges only claims whose qualifiers
+    match, so a merged statement's qualifiers are the container's as much
+    as the image's, and their text may be the container's own words,
+    which the export cannot tell apart, so it fails closed. `owners`
+    gives each statement's entity and property, `references` each
+    statement's reference nodes, `stated_in` each reference's items,
+    `part_of` each `part of` statement's items, and `worded` the
+    statements with a qualifier of text. Every statement counts, whatever
+    its rank. An un-held media item and a source's mention of an
+    enclosure carry no SHA-1, so their statements keep every reference."""
     containers: dict[str, set[str]] = {}
     for statement, items in part_of.items():
         if statement in owners:
@@ -1456,7 +1474,9 @@ def _placed_subject_statements(
         theirs = {ref for ref in refs if a_container_s(ref, item)}
         if not theirs:
             continue
-        if any(stated_in.get(ref) for ref in refs - theirs):
+        if statement not in worded and any(
+            stated_in.get(ref) for ref in refs - theirs
+        ):
             links.update((statement, ref) for ref in theirs)
         else:
             whole.add(statement)

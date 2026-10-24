@@ -1124,7 +1124,14 @@ to the held scan. The rule admits forms (a), (b) and (c4).
     Juli 1939*), and the booklet's reference and translation stay out.
     The run references stay on a statement that stays, the container's
     run's included, as they hold no source text
-    (`backup._placed_subject_statements`).
+    (`backup._placed_subject_statements`). A statement with a qualifier
+    of text (a string or a monolingual text, such as a `caption` or a
+    `transcription_excerpt` qualifier) still goes whole: the writer
+    merges only claims whose qualifiers match, so the qualifier is the
+    container's as much as the image's, and its text may be the
+    container's own words, which the export cannot tell apart (review of
+    PR #695). A qualifier of an item, a time or a quantity stays with the
+    statement, as its value does.
 - **The site.** `named_in_html` names a (c4) mention item, which has no
   artifact page, by its label, unlinked.
 - **Chunk ownership.** Under entity assignment a (c4) claim belongs to

@@ -2213,7 +2213,9 @@ not a signal to grow the schema on.
   from such a statement: one that keeps a reference stated in another
   item, as the image's own statement does when the writer folds the
   container's agreeing value into it, stays with that reference, and
-  one that keeps none, an extraction run's reference aside, goes whole. A (c4) statement on a mention item, which carries no SHA-1,
+  one that keeps none, an extraction run's reference aside, or that has
+  a qualifier of text (a string or a monolingual text, which may be the
+  container's words), goes whole. A (c4) statement on a mention item, which carries no SHA-1,
   leaves with its excerpt as any of its source's statements do. A line
   the export cannot read as a triple is dropped, and a dump that holds a
   sitelink,
