@@ -31,7 +31,8 @@ removed when its transcription is counted.
 **Estimated calls.** A call's key can depend on an answer the engine has
 yet to give: an extraction after a transcription the engine makes, the
 chunks after an entity manifest it answers, the forks after a replayed
-conversation, and the critique of a batch that holds chunks it answers.
+conversation, and the critique of a batch that holds chunks it answers,
+or of a transcription it makes, since the critique reads both.
 Each such call is counted as the engine's, since a new answer changes
 the keys after it: an extraction as the latest run to make it measured
 it (llm.run_calls), else by the mean for its kind over the runs
@@ -162,7 +163,7 @@ HIT, MISS, REPLAY = "cache-hit", "cache-miss", "cache-replay"
 # how a stale stage's calls are counted without their keys: an
 # extraction after a transcription the engine makes, the chunks of one
 # after an entity manifest it answers, and a critique of a batch that
-# holds chunks it answers
+# holds chunks it answers, or of a transcription it makes
 WHOLE = "whole"
 CHUNKS = "chunks"
 CRITIQUE = "critique"
@@ -764,12 +765,18 @@ class Estimator(ScratchDriver):
         count = {
             "transcription": self._transcription,
             "extraction": self._extraction,
-            "critique": self._critique,
         }
         before = _Made()
         for stage in planned:
             self._tally = _Tally(self._asked)
-            before = made[stage] = count[stage](doc, fresh, before)
+            if stage == "critique":
+                # the critique reads the batch and the transcription
+                found = self._critique(
+                    doc, fresh, before, made.get("transcription", _Made())
+                )
+            else:
+                found = count[stage](doc, fresh, before)
+            before = made[stage] = found
             if before.fails:
                 break
         return made
@@ -869,11 +876,23 @@ class Estimator(ScratchDriver):
             made.changed = self._batch_changed(doc, batch)
         return made
 
-    def _critique(self, doc: DocumentRun, fresh: bool, before: _Made) -> _Made:
+    def _critique(
+        self,
+        doc: DocumentRun,
+        fresh: bool,
+        before: _Made,
+        transcribed: _Made,
+    ) -> _Made:
+        """The critique of the batch `before` holds, which reads the
+        transcription `transcribed` holds, as the driver builds its prompt
+        (Orchestrator._step_critique): reused only when neither changed
+        and the view stands, and estimated when either is not in hand."""
         if (
             not fresh
             and before.view is not None
             and not before.changed
+            and transcribed.view is not None
+            and not transcribed.changed
             and self._stands(
                 doc, doc.critique, _findings, _unreadable_critique
             )
@@ -881,11 +900,13 @@ class Estimator(ScratchDriver):
         ):
             return _Made(reused=True)
         self._engine_for("critique")
-        if before.view is None:
+        if before.view is None or transcribed.view is None:
             return _Made(estimated=CRITIQUE)
         made = _Made(tally=self._tally)
         with contextlib.suppress(_Unanswered):
-            run_critique(self._llm("critique", doc), before.view)
+            run_critique(
+                self._llm("critique", doc), before.view, transcribed.view
+            )
         return made
 
     def _batch_changed(self, doc: DocumentRun, batch: ClaimBatch) -> bool:

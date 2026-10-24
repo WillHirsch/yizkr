@@ -649,7 +649,9 @@ class DocumentRun:
                 # the directory is kept for (a changed source sets it
                 # aside)
                 self.batch: () if gedcom else (self.transcription,),
-                self.critique: (self.batch,),
+                # the critic reads each citation where it stands in the
+                # transcription (ADR-0003)
+                self.critique: (self.batch, self.transcription),
                 self.equivalences: (self.batch,),
                 self.resolved: (self.batch, self.equivalences_reviewed),
                 self.review: (self.resolved, self.critique),
@@ -2131,18 +2133,23 @@ class Orchestrator:
                 )
 
     def _step_critique(self, doc: DocumentRun, batch: ClaimBatch):
-        """The extraction critic's findings on the batch. A critique the
-        engine gave up on at its output limit has none, and needs
-        attention, so that neither this run nor one that reuses the view
-        takes it for a sound extraction's."""
+        """The extraction critic's findings on the batch, each citation
+        read where it stands in the document's transcription (ADR-0003).
+        A critique the engine gave up on at its output limit has none, and
+        needs attention, so that neither this run nor one that reuses the
+        view takes it for a sound extraction's."""
         from yizkr.pipeline.critique import run_critique
 
         attention: list[str] = []
+        transcription = self._transcription(doc)
         return self._run_stage(
             doc,
             "critique",
             lambda: run_critique(
-                self._llm("critique", doc), batch, attention=attention
+                self._llm("critique", doc),
+                batch,
+                transcription,
+                attention=attention,
             ),
             attention=lambda _findings: attention,
         )
